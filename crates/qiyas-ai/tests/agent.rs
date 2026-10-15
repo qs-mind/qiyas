@@ -1309,3 +1309,48 @@ async fn a_call_waiting_through_a_tab_switch_is_not_run_on_the_new_drawing() {
     );
     assert_eq!(items, 0);
 }
+
+/// Reproduce the recorded failure boundary: find_entities succeeds, then request 2 fails.
+/// This verifies the current request and diagnostic log, not a live provider fix.
+#[tokio::test]
+async fn rejected_request_after_find_entities_is_logged_without_retry() {
+    let mock = serve(|n| match n {
+        0 => Reply::Data(vec![
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_446341","type":"function","function":{"name":"find_entities","arguments":"{\"layer\":\"A-WALL\"}"}}]},"finish_reason":"tool_calls"}]}).to_string(),
+            "[DONE]".into(),
+        ]),
+        _ => Reply::Status(400, vec![], json!({"error":{"message":"The request was rejected","type":"invalid_request_error","param":null,"code":"invalid_value"}}).to_string()),
+    }).await;
+    let (dir, session) = sample();
+    let log_path = dir.path().join("agent.log");
+    let mut agent = Agent::new(
+        Box::new(OpenAiCompatible::new(&mock.base, Some(KEY.into()))),
+        session,
+        AgentSettings::default(),
+    )
+    .with_log(qiyas_ai::AgentLog::new(log_path.clone()));
+    let (result, _) = turn(
+        &mut agent,
+        "Measure every wall on A-WALL and add it as length",
+    )
+    .await;
+    assert!(matches!(result, Err(AiError::Api { status: 400, .. })));
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2, "a rejected request must not be retried");
+    let messages = requests[1].body["messages"].as_array().unwrap();
+    let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
+    assert_eq!(assistant["content"], "");
+    assert_eq!(assistant["tool_calls"][0]["id"], "call_446341");
+    assert_eq!(
+        assistant["tool_calls"][0]["function"]["arguments"],
+        r#"{"layer":"A-WALL"}"#
+    );
+    let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
+    assert_eq!(tool["tool_call_id"], "call_446341");
+    assert!(tool["content"].is_string());
+    let log = std::fs::read_to_string(log_path).unwrap();
+    assert!(log.contains("The request: {"));
+    assert!(log.contains("invalid_value"));
+    assert!(log.contains("call_446341"));
+    assert!(!log.contains(KEY));
+}
