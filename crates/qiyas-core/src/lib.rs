@@ -86,7 +86,10 @@ pub use sheetset::{sheet_set_entries, sheet_set_entry, SheetSet, SheetSetDrawing
 pub use snap::{Drafting, Snap, SnapKind, SnapModes};
 pub use table::TableInfo;
 pub use tables::Schedule;
-pub use takeoff::{Kind, Measurement, Source, Takeoff, Total};
+pub use takeoff::{
+    AreaOrigin, Kind, Measurement, MeasurementBasis, Source, Takeoff, Total,
+    INSERT_COUNT_LIMITATIONS, INSERT_COUNT_SCOPE,
+};
 pub use text::{TextMatch, TextScope};
 pub use ucs::Ucs;
 pub use underlay::{AttachMode, PictureSource, PreparedPdf, UnderlayImage, UNDERLAY_LAYER};

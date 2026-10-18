@@ -129,7 +129,11 @@ pub fn execute(
         "block_summary" => {
             let SheetInput { sheet, offset } = parse(input)?;
             let block = sheet_block(session, sheet.as_deref())?;
-            (page(session.block_summary(Some(&block)), offset), offset)
+            let mut out = page(session.block_summary(Some(&block)), offset);
+            out["count_scope"] = json!(qiyas_core::INSERT_COUNT_SCOPE);
+            out["visibility_policy"] = json!("as_shown");
+            out["limitations"] = json!(qiyas_core::INSERT_COUNT_LIMITATIONS);
+            (out, offset)
         }
         "measure_length" => (measure(session, parse(input)?, Kind::Length, source)?, 0),
         "measure_area" => (measure(session, parse(input)?, Kind::Area, source)?, 0),

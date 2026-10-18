@@ -657,7 +657,7 @@ fn room_areas_of_the_test_plan_match_its_documented_numbers() {
 }
 
 #[test]
-fn label_spaces_writes_the_net_areas_under_the_room_names_and_a_schedule_follows() {
+fn label_spaces_writes_unapproved_candidate_areas_under_names_and_a_schedule_follows() {
     let (_dir, mut s) = test_plan();
     let before_steps = steps(&mut s);
     let names = run(&mut s, "read_text", json!({})).unwrap();
@@ -668,6 +668,13 @@ fn label_spaces_writes_the_net_areas_under_the_room_names_and_a_schedule_follows
     )
     .unwrap();
     assert_eq!(out["labels_written"], 3, "{out}");
+    for row in out["rooms"].as_array().unwrap() {
+        assert_eq!(row["measurement_basis"], "unapproved_net");
+        assert_eq!(row["area_origin"], "manual_or_entity");
+        assert_eq!(row["region_method"], "enclosed_drawn_linework");
+        assert_eq!(row["net_accuracy_eligible"], false);
+        assert_eq!(row["room_type_status"], "unapproved");
+    }
     assert_eq!(out["layer"], "A-AREA");
     assert_eq!(out["layer_created"], true);
     assert_eq!(
@@ -681,7 +688,7 @@ fn label_spaces_writes_the_net_areas_under_the_room_names_and_a_schedule_follows
     let label = living["label_handle"].as_u64().unwrap();
     let info = s.entity_info(label, &[]).unwrap();
     assert_eq!(info.layer_short, "A-AREA");
-    assert_eq!(info.text.as_deref(), Some("51.21 m²"));
+    assert_eq!(info.text.as_deref(), Some("Unapproved candidate 51.21 m²"));
     // Under the name: same start, lower down.
     let name_row = names["rows"]
         .as_array()
@@ -798,4 +805,40 @@ fn a_batch_is_one_step_takes_drawing_commands_only_and_fails_whole() {
     }))
     .unwrap();
     assert!(matches!(cmd, Command::Batch { .. }));
+}
+
+#[test]
+fn candidate_labels_follow_request_language_without_net_approval() {
+    for (name, language, expected) in [
+        ("LIVING", Some("ar"), "مساحة مرشحة غير معتمدة 51.21 م²"),
+        ("غرفة", Some("en"), "Unapproved candidate 51.21 m²"),
+        ("غرفة", None, "مساحة مرشحة غير معتمدة 51.21 م²"),
+        ("LIVING", None, "Unapproved candidate 51.21 m²"),
+    ] {
+        let (_dir, mut s) = test_plan();
+        let texts = run(&mut s, "read_text", json!({})).unwrap();
+        let at = texts["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["text"] == "LIVING")
+            .unwrap()["at"]
+            .clone();
+        let mut input = json!({"seeds": [{"name": name, "point": at}], "layer": "A-AREA"});
+        if let Some(language) = language {
+            input["language"] = json!(language);
+        }
+        let out = run(&mut s, "label_spaces", input).unwrap();
+        assert_eq!(out["labels_written"], 1, "{out}");
+        let row = &out["rooms"][0];
+        assert_eq!(row["measurement_basis"], "unapproved_net");
+        assert_eq!(row["net_accuracy_eligible"], false);
+        let handle = row["label_handle"].as_u64().unwrap();
+        assert_eq!(
+            s.entity_info(handle, &[]).unwrap().text.as_deref(),
+            Some(expected)
+        );
+    }
+    let (_dir, mut s) = test_plan();
+    assert!(run(&mut s, "label_spaces", json!({"language": "fr"})).is_err());
 }

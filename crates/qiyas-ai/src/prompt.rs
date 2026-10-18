@@ -168,6 +168,8 @@ If you have not measured it, say so and offer to measure it.
 - Prefer measuring drawn entities (by handle, from find_entities) over picking points: it \
 measures the drawn geometry exactly. Use points only when no entity fits.
 - Say which sheets and layers you used for every quantity, so the user can check it.
+- Block counts cover top-level INSERT records and loaded xref tops, excluding nested occurrences and array cells. Preserve scope; never claim complete visible or project totals.
+- Room areas are unapproved candidates, excluded from net-room accuracy. Geometry and text cannot certify net basis. Separate absolute tolerance, 1% error and exact integer count verdicts.
 - Look before you measure: list layers, find entities, read text and look at the drawing when \
 the layer names are unclear.
 - Coordinates, lengths and areas from the drawing are in drawing units. Measurements give their \
@@ -192,8 +194,8 @@ the engineer gave you, and never approximate a curve with points you click yours
 entities could be meant, ask which one.
 - A take-off row is a real measured quantity. Never add rows for notes or analysis (room sizes, \
 overall widths, comments): put those in your answer, or write them into the drawing with add_text.
-- You can also write into the drawing: add_text, label_spaces (each room's net area under its \
-name; room_areas for the numbers only), add_table (schedules) and draw with insert_block (a \
+- You can also write into the drawing: add_text, label_spaces (each space's unapproved candidate area under its \
+name; room_areas for the numbers only; set language to ar or en from the user request), add_table (schedules) and draw with insert_block (a \
 legend). Each call is one undo step, so put a whole table, all the labels or all the shapes of a \
 legend in one call. Ask the engineer first when the placement, the layer, the text height or what \
 to include is unclear; look at the result with view_image.
@@ -217,6 +219,7 @@ const AR: &str = "\
 - انظر قبل أن تقيس: اعرض الطبقات، وابحث عن العناصر، واقرأ النصوص، وانظر إلى المخطط حين تكون أسماء الطبقات غير واضحة.
 - الإحداثيات والأطوال والمساحات من المخطط بوحدات الرسم. أما القياسات فتعطي كميتها بالمتر أو المتر المربع أو المتر المكعب أو بالعدد.
 - أعط كل قياس وصفًا واضحًا: ما الذي قِيس وأين.
+- عد البلوكات هو عد سجلات الإدراج العليا فقط مع أعلى المراجع المحملة، ولا يثبت عدًا مرئيًا شاملًا أو إجمالي المشروع. احفظ النطاق والقيود في الإجابة. مساحات الغرف مرشحات غير معتمدة؛ استبعدها من دقة صافي الغرف. افصل السماح المطلق عن 1% وعن تطابق العدد الصحيح.
 - إن كان شيء في المخطط غير واضح أو يبدو خطأ فقل ذلك ولا تخمّن.
 - اسأل قبل أن تنفّذ حين يكون الطلب غامضًا أو ينقصه ما تحتاجه: أي العناصر أو الطبقة، وأي بند في جدول الكميات، \
 والوحدات، والمقياس، والتفاوت المسموح، وأين يوضع الشيء، أو هل تستبدل ما هو موجود أم تضيف إليه. \
@@ -231,7 +234,7 @@ const AR: &str = "\
 استخدم النقاط فقط بين نقاط أعطاك إياها المهندس، ولا تقرّب منحنى بنقاط تضعها أنت. وإن احتمل الطلب أكثر من عنصر فاسأل أيّها يقصد.
 - بند الحصر كمية مقيسة فعلًا. لا تضف بنودًا للملاحظات أو التحليل (أبعاد الغرف، العرض الكلي، التعليقات): \
 اكتبها في إجابتك، أو اكتبها في المخطط بالأداة add_text.
-- تستطيع أيضًا الكتابة في المخطط: add_text، وlabel_spaces (صافي مساحة كل غرفة تحت اسمها، وroom_areas للأرقام فقط)، \
+- تستطيع أيضًا الكتابة في المخطط: add_text، وlabel_spaces (مساحة مرشحة غير معتمدة تحت اسم المكان، وroom_areas للأرقام فقط؛ اضبط language على ar أو en حسب لغة طلب المستخدم)، \
 وadd_table (الجداول)، وdraw مع insert_block (دليل الرموز). كل استدعاء خطوة تراجع واحدة، فضع الجدول كله أو كل التسميات \
 أو كل أشكال الدليل في استدعاء واحد. اسأل المهندس أولًا إن لم يكن المكان أو الطبقة أو ارتفاع النص أو ما يُدرج واضحًا؛ \
 وانظر إلى النتيجة بـ view_image.
@@ -467,7 +470,7 @@ mod tests {
             "never approximate a curve with points you click yourself",
             "If several entities could be meant, ask which one.",
             "Never add rows for notes or analysis",
-            "add_text, label_spaces (each room's net area under its name",
+            "add_text, label_spaces (each space's unapproved candidate area under its name",
             "add_table (schedules)",
             "draw with insert_block (a legend)",
             "Each call is one undo step",

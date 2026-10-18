@@ -129,6 +129,9 @@ pub struct BlockCount {
     pub count: usize,
     /// The distinct attribute values (trimmed, not empty) of the references counted, sorted.
     pub attributes: Vec<String>,
+    pub count_scope: &'static str,
+    pub visibility_policy: &'static str,
+    pub limitations: &'static str,
 }
 
 /// A reference on a sheet to a loaded xref, placed by its first cell.
@@ -330,8 +333,13 @@ impl Session {
         self.block_counts(sheet, false)
     }
 
-    /// `block_summary` when `as_shown`, else `block_summary_in_file`.
-    fn block_counts(&self, sheet: Option<&str>, as_shown: bool) -> Vec<BlockCount> {
+    /// Shared bounded enumeration. An array INSERT is one record, not its visible cells.
+    pub(crate) fn visit_countable_inserts(
+        &self,
+        sheet: Option<&str>,
+        as_shown: bool,
+        mut visit: impl FnMut(&Insert, &CadDocument, &str, Option<&Xform>),
+    ) {
         let sheet = self.sheet_block(sheet);
         let host = &self.drawing.doc;
         let xrefs = self.xref_docs();
@@ -342,30 +350,34 @@ impl Session {
                 layer_on_in_file_with(host, &xrefs, layer)
             }
         };
-        // Each top-level insert with its drawing and the layer it is drawn on.
-        let mut inserts: Vec<(&Insert, &CadDocument, Cow<str>)> = Vec::new();
         for e in self.drawing.entities_in(&sheet) {
             if let EntityType::Insert(insert) = e {
-                inserts.push((insert, host, Cow::Borrowed(&insert.common.layer)));
+                if !insert.common.invisible && counted(&insert.common.layer) {
+                    visit(insert, host, &insert.common.layer, None);
+                }
             }
         }
         for x in self.sheet_xrefs(&sheet) {
-            if !counted(&x.insert.common.layer) {
+            if x.insert.common.invisible || !counted(&x.insert.common.layer) {
                 continue;
             }
             for e in x.doc.entities_in_block("*Model_Space") {
                 if let EntityType::Insert(insert) = e {
-                    inserts.push((insert, x.doc, Cow::Owned(x.layer_of(e))));
+                    let layer = x.layer_of(e);
+                    if !insert.common.invisible && counted(&layer) {
+                        visit(insert, x.doc, &layer, Some(&x.xf));
+                    }
                 }
             }
         }
+    }
+
+    /// `block_summary` when `as_shown`, else `block_summary_in_file`.
+    fn block_counts(&self, sheet: Option<&str>, as_shown: bool) -> Vec<BlockCount> {
         // (block, layer, attribute values when split by them) -> (count, attribute values).
         type Key = (String, String, Vec<String>);
         let mut counts: HashMap<Key, (usize, BTreeSet<String>)> = HashMap::new();
-        for (insert, doc, layer) in inserts {
-            if insert.common.invisible || !counted(&layer) {
-                continue;
-            }
+        self.visit_countable_inserts(sheet, as_shown, |insert, doc, layer, _| {
             let values: BTreeSet<String> = insert
                 .attributes
                 .iter()
@@ -378,12 +390,10 @@ impl Session {
                 values.iter().cloned().collect()
             };
             let block = effective_block_name(doc, insert);
-            let entry = counts
-                .entry((block, layer.into_owned(), split))
-                .or_default();
+            let entry = counts.entry((block, layer.to_string(), split)).or_default();
             entry.0 += 1;
             entry.1.extend(values);
-        }
+        });
         let mut summary: Vec<BlockCount> = counts
             .into_iter()
             .map(|((block_name, layer, _), (count, values))| BlockCount {
@@ -391,6 +401,9 @@ impl Session {
                 layer,
                 count,
                 attributes: values.into_iter().collect(),
+                count_scope: crate::INSERT_COUNT_SCOPE,
+                visibility_policy: if as_shown { "as_shown" } else { "in_file" },
+                limitations: crate::INSERT_COUNT_LIMITATIONS,
             })
             .collect();
         summary.sort_by(|a, b| {

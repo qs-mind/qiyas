@@ -7,7 +7,6 @@ use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{object_to_world, Path};
-use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
 use crate::drawing::short_layer_name;
@@ -1043,6 +1042,7 @@ impl Session {
                     closed: true,
                 };
                 let mut m = self.measurement(Kind::Area, ring.area(), "Area", "");
+                m.area_origin = crate::AreaOrigin::ManualOrEntity;
                 m.self_intersecting = ring.self_intersects();
                 m.points = ring.points;
                 m.auto_description = true;
@@ -1824,6 +1824,13 @@ impl Session {
         if kind == Kind::Item {
             m.unit = unit.unwrap_or_default();
         }
+        if matches!(kind, Kind::Area | Kind::Volume) {
+            m.area_origin = if points.is_empty() {
+                crate::AreaOrigin::ExistingBoundary
+            } else {
+                crate::AreaOrigin::ManualOrEntity
+            };
+        }
         m.height = height;
         m.self_intersecting = self_intersecting;
         m.points = points;
@@ -1867,6 +1874,7 @@ impl Session {
             match (extent.area, extent.length) {
                 (Some(area), _) => {
                     let mut m = self.measurement(Kind::Area, area, &description, layer);
+                    m.area_origin = crate::AreaOrigin::ExistingBoundary;
                     m.self_intersecting = extent.self_intersecting;
                     m
                 }
@@ -1892,45 +1900,21 @@ impl Session {
     fn count_block(&self, block_name: String, layer: Option<String>) -> Measurement {
         let block = normalize_name(&block_name);
         let only_on = layer.as_deref().map(normalize_name);
-        let doc = &self.drawing.doc;
-        let xrefs = self.xref_docs();
-        let shown = |layer: &str| layer_shown_with(doc, &xrefs, &self.visibility, layer);
         let wanted = |layer: &str| only_on.as_ref().is_none_or(|l| *l == normalize_name(layer));
-        let handles: Vec<u64> = self
-            .drawing
-            .entities_in(&self.sheet)
-            .filter_map(|e| match e {
-                EntityType::Insert(insert)
-                    if normalize_name(&effective_block_name(doc, insert)) == block =>
-                {
-                    Some(e.common())
-                }
-                _ => None,
-            })
-            .filter(|c| !c.invisible && shown(&c.layer) && wanted(&c.layer))
-            .map(|c| c.handle.value())
-            .collect();
+        let mut handles = Vec::new();
         let mut points = Vec::new();
-        for x in self.sheet_xrefs(&self.sheet) {
-            if !shown(&x.insert.common.layer) {
-                continue;
+        self.visit_countable_inserts(Some(&self.sheet), true, |insert, doc, on, xf| {
+            if normalize_name(&effective_block_name(doc, insert)) != block || !wanted(on) {
+                return;
             }
-            for e in x.doc.entities_in_block("*Model_Space") {
-                let EntityType::Insert(insert) = e else {
-                    continue;
-                };
-                let on = x.layer_of(e);
-                let counted = !e.common().invisible
-                    && normalize_name(&effective_block_name(x.doc, insert)) == block
-                    && shown(&on)
-                    && wanted(&on);
-                if counted {
-                    let p = insert.insert_point;
-                    let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
-                    points.push(x.xf.apply(on_plan));
-                }
+            if let Some(xf) = xf {
+                let p = insert.insert_point;
+                let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
+                points.push(xf.apply(on_plan));
+            } else {
+                handles.push(insert.common.handle.value());
             }
-        }
+        });
         let description = format!("{block_name} count");
         let mut m = self.measurement(
             Kind::Count,
@@ -1941,6 +1925,8 @@ impl Session {
         m.handles = handles;
         m.points = points;
         m.block_name = Some(block_name);
+        m.count_scope = Some(crate::INSERT_COUNT_SCOPE.to_string());
+        m.note = crate::INSERT_COUNT_LIMITATIONS.to_string();
         m
     }
 

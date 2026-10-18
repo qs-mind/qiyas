@@ -76,6 +76,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
         size: 120,
         minSize: 80,
         grow: true,
+        cellClass: () => "takeoff-description",
         sortValue: (m) => m.description,
         cell: (m) => (
           <div className="desc">
@@ -105,6 +106,10 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                 <bdi>{m.description}</bdi>
               </button>
             )}
+            {(m.kind === "area" || m.kind === "volume") && (
+              <small>{t(`takeoff.origin.${m.area_origin ?? "unspecified"}`)} · {t(`takeoff.basis.${m.measurement_basis ?? "unspecified"}`)}</small>
+            )}
+            {m.kind === "count" && <small title={m.note}>{t(m.count_scope ? "takeoff.insertScope" : "takeoff.unknownScope")}</small>}
             {m.self_intersecting && (
               <span className="warn-icon" role="img" aria-label={t("selfCrossing")} title={t("selfCrossing")}>
                 <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -166,6 +171,8 @@ export const TakeoffPanel = memo(function TakeoffPanel({
           rows={items}
           rowKey={rowId}
           storageKey="takeoff"
+          rowHeight={72}
+          autoRowHeight
           onRowClick={(m) => onSelect(m.id)}
           isCurrent={(m) => m.id === selectedId}
           actions={(m) => {

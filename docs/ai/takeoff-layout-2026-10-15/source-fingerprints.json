@@ -1,0 +1,6 @@
+{
+  "src/shell/TakeoffPanel.tsx": "90bba8b4ba3abeab373cd6701258f6b58fa5692ead1a19ec9bc2bb9541530d5c",
+  "src/shell/TakeoffPanel.test.tsx": "908ad3aa156937e1d73e05db9afd20bdaa5f371d7c0f27be5421de6ba066d68f",
+  "src/shell/theme.css": "4ba615a3a08528dab61e3b0c0298b1a4b1c8f72ef74aad18fa16405757025b84",
+  "src/ui/DataGrid.tsx": "095f850d9761c795cb4f62b235ebc7c5beefec4872900dbd95135b26a6b3d3f6"
+}

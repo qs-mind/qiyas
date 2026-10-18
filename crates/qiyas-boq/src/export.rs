@@ -32,7 +32,7 @@ impl From<XlsxError> for BoqError {
     }
 }
 
-const ITEM_HEADER: [&str; 8] = [
+const ITEM_HEADER: [&str; 11] = [
     "Description",
     "Kind",
     "Quantity",
@@ -41,6 +41,9 @@ const ITEM_HEADER: [&str; 8] = [
     "Sheet",
     "Note",
     "Id",
+    "Area origin",
+    "Measurement basis",
+    "Count scope",
 ];
 const TOTAL_HEADER: [&str; 4] = ["Kind", "Unit", "Count", "Sum"];
 
@@ -73,6 +76,9 @@ pub fn export_takeoff(
         sheet.write_string(row, 5, &m.sheet)?;
         sheet.write_string(row, 6, &m.note)?;
         sheet.write_string(row, 7, &m.id)?;
+        sheet.write_string(row, 8, m.area_origin.name())?;
+        sheet.write_string(row, 9, m.measurement_basis.name())?;
+        sheet.write_string(row, 10, m.count_scope.as_deref().unwrap_or("unspecified"))?;
         row += 1;
     }
     write_totals(sheet, row + 1, totals, &bold)?;

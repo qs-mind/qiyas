@@ -306,10 +306,20 @@ body {
   height: var(--rb-std-icon);
 }
 .rb.primary {
-  width: var(--rb-pri);
-  height: var(--rb-pri);
+  flex-direction: column;
+  gap: 2px;
+  width: calc(var(--rb-pri) * 1.9);
+  height: calc(var(--rb-std) * 2 + var(--rb-gap));
+  padding: 2px 4px;
+}
+.rb-label {
+  font-size: 11px;
+  line-height: 13px;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 .rb.primary .ic {
+  flex-shrink: 0;
   width: var(--rb-pri-icon);
   height: var(--rb-pri-icon);
 }
@@ -385,7 +395,7 @@ body {
   gap: var(--rb-gap);
 }
 .ribbon-group-buttons.primary {
-  grid-template-rows: var(--rb-pri);
+  grid-template-rows: calc(var(--rb-std) * 2 + var(--rb-gap));
 }
 .ribbon-group-label {
   font-size: 11px;
@@ -1374,22 +1384,34 @@ span.grid-sort {
   padding: 0 10px 8px;
   color: var(--muted);
 }
+.takeoff .takeoff-description {
+  padding-block: 5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
 .takeoff .desc {
   display: flex;
-  align-items: center;
-  gap: 2px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
   min-width: 0;
 }
 .takeoff .desc button {
-  flex: 1;
   min-width: 0;
   padding: 0;
   border: 0;
-  line-height: 26px;
+  line-height: inherit;
   text-align: start;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.takeoff .desc small {
+  display: block;
+  color: var(--muted);
+  line-height: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .takeoff .desc button:hover {
   background: none;

@@ -1,0 +1,1356 @@
+{
+  "real-a": [
+    {
+      "entity": "37D5",
+      "type": "Arc",
+      "qiyas": 0.3015928947469823,
+      "independent": 0.30159289474195583,
+      "absolute_error": 5.026479232839165e-12,
+      "absolute_pass": true,
+      "relative_error": 1.666643783879538e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "40BB",
+      "type": "Arc",
+      "qiyas": 0.020000461424533832,
+      "independent": 0.020000461424201005,
+      "absolute_error": 3.3282751554786216e-13,
+      "absolute_pass": true,
+      "relative_error": 1.6640991849574702e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "792B",
+      "type": "Arc",
+      "qiyas": 0.9192071566000537,
+      "independent": 0.9192071565847278,
+      "absolute_error": 1.532585169883305e-11,
+      "absolute_pass": true,
+      "relative_error": 1.6672902934933134e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "36EE>25C",
+      "type": "Arc",
+      "qiyas": 1.1889337675165708,
+      "independent": 1.1889337674967515,
+      "absolute_error": 1.9819257346398444e-11,
+      "absolute_pass": true,
+      "relative_error": 1.666977411881154e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "40D2>9A9",
+      "type": "Arc",
+      "qiyas": 0.001358061355137965,
+      "independent": 0.0013580613551103348,
+      "absolute_error": 2.763024184448959e-14,
+      "absolute_pass": true,
+      "relative_error": 2.034535607726264e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "7A8C>B13",
+      "type": "Arc",
+      "qiyas": 0.0007659902898400859,
+      "independent": 0.0007659902898359641,
+      "absolute_error": 4.121811399138142e-15,
+      "absolute_pass": true,
+      "relative_error": 5.381023041455034e-12,
+      "relative_pass": true
+    },
+    {
+      "entity": "3841",
+      "type": "Circle",
+      "qiyas": 0.18095573684960664,
+      "independent": 0.1809557368676451,
+      "absolute_error": 1.8038459614899693e-11,
+      "absolute_pass": true,
+      "relative_error": 9.968437545637698e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "4184",
+      "type": "Circle",
+      "qiyas": 0.1232008162167243,
+      "independent": 0.12320081621089685,
+      "absolute_error": 5.827449633954984e-12,
+      "absolute_pass": true,
+      "relative_error": 4.730041417890833e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "7ABE",
+      "type": "Circle",
+      "qiyas": 0.12086602334168636,
+      "independent": 0.12086602330543883,
+      "absolute_error": 3.624753275310866e-11,
+      "absolute_pass": true,
+      "relative_error": 2.9989844756874334e-10,
+      "relative_pass": true
+    },
+    {
+      "entity": "36EE>259",
+      "type": "Circle",
+      "qiyas": 0.0018095573684960668,
+      "independent": 0.0018095573739174142,
+      "absolute_error": 5.421347398781862e-12,
+      "absolute_pass": true,
+      "relative_error": 2.995952201861097e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A6F>1E8A",
+      "type": "Circle",
+      "qiyas": 0.06514406526585835,
+      "independent": 0.06514406526571292,
+      "absolute_error": 1.454253384380877e-13,
+      "absolute_pass": true,
+      "relative_error": 2.23236511023559e-12,
+      "relative_pass": true
+    },
+    {
+      "entity": "7701>2DF>259",
+      "type": "Circle",
+      "qiyas": 0.0022340214425876355,
+      "independent": 0.002234021438766831,
+      "absolute_error": 3.820804349990992e-12,
+      "absolute_pass": true,
+      "relative_error": 1.7102809685210796e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "3AA4",
+      "type": "Dimension",
+      "qiyas": 3.3647228971728396,
+      "independent": 3.3647228971728396,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "430E",
+      "type": "Dimension",
+      "qiyas": 2.6944102704211446,
+      "independent": 2.6944102704211446,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "7D9E",
+      "type": "Dimension",
+      "qiyas": 2.8800000000000097,
+      "independent": 2.8800000000000097,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "39E7>1EB1",
+      "type": "Dimension",
+      "qiyas": 0.9585867739114272,
+      "independent": 0.9585867739114272,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A6F>1EB1",
+      "type": "Dimension",
+      "qiyas": 0.9585867739114272,
+      "independent": 0.9585867739114272,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "771B>1EB1",
+      "type": "Dimension",
+      "qiyas": 0.9585867739114272,
+      "independent": 0.9585867739114272,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3AB4>20DE",
+      "type": "Ellipse",
+      "qiyas": 0.08568163037956246,
+      "independent": 0.08579787790095741,
+      "absolute_error": 0.00011624752139495487,
+      "absolute_pass": true,
+      "relative_error": 0.001354899727580065,
+      "relative_pass": true
+    },
+    {
+      "entity": "3EEE>1E21",
+      "type": "Ellipse",
+      "qiyas": 0.009770200582282606,
+      "independent": 0.00989333591760055,
+      "absolute_error": 0.0001231353353179452,
+      "absolute_pass": true,
+      "relative_error": 0.012446290750007145,
+      "relative_pass": false
+    },
+    {
+      "entity": "79C1>1D7E",
+      "type": "Ellipse",
+      "qiyas": 0.023183709193354933,
+      "independent": 0.02322005744725567,
+      "absolute_error": 3.634825390073579e-05,
+      "absolute_pass": true,
+      "relative_error": 0.0015653817387532654,
+      "relative_pass": true
+    },
+    {
+      "entity": "3C12>1861",
+      "type": "Face3D",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "78AF>1861",
+      "type": "Face3D",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "7AE9>1861",
+      "type": "Face3D",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "3627",
+      "type": "Hatch",
+      "qiyas": 0.32297127023759786,
+      "independent": 0.3229712702375309,
+      "absolute_error": 6.694644838489694e-14,
+      "absolute_pass": true,
+      "relative_error": 2.0728298320671316e-13,
+      "relative_pass": true
+    },
+    {
+      "entity": "3920",
+      "type": "Hatch",
+      "qiyas": 0.057600000000454565,
+      "independent": 0.05759999999986576,
+      "absolute_error": 5.888067811099518e-13,
+      "absolute_pass": true,
+      "relative_error": 1.0222339949849375e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "7443",
+      "type": "Hatch",
+      "qiyas": 0.4147200000042415,
+      "independent": 0.41472000000339904,
+      "absolute_error": 8.424372310855688e-13,
+      "absolute_pass": true,
+      "relative_error": 2.031339774012983e-12,
+      "relative_pass": true
+    },
+    {
+      "entity": "39AE>52C",
+      "type": "Hatch",
+      "qiyas": 0.035598956585820456,
+      "independent": 0.03559895658855794,
+      "absolute_error": 2.7374838507121524e-12,
+      "absolute_pass": true,
+      "relative_error": 7.689786760750236e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "3B96>1A5F",
+      "type": "Hatch",
+      "qiyas": 2.6942564051295346e-05,
+      "independent": 2.6942564147702797e-05,
+      "absolute_error": 9.640745030092303e-14,
+      "absolute_pass": true,
+      "relative_error": 3.578258170692451e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "7994>B3C",
+      "type": "Hatch",
+      "qiyas": 0.0020560290930674227,
+      "independent": 0.0020560290931825875,
+      "absolute_error": 1.1516482212314827e-13,
+      "absolute_pass": true,
+      "relative_error": 5.601322593391968e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "363D",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "4050",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "7909",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3987>743",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3987>7BC",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "76B4>760",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "362F",
+      "type": "Line",
+      "qiyas": 0.2400000000000091,
+      "independent": 0.2400000000000091,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3E05",
+      "type": "Line",
+      "qiyas": 1.2474725401876707,
+      "independent": 1.2474725401876707,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "7687",
+      "type": "Line",
+      "qiyas": 0.09000786250582778,
+      "independent": 0.09000786250582778,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "363D>2D3",
+      "type": "Line",
+      "qiyas": 0.8640000000067453,
+      "independent": 0.8640000000067403,
+      "absolute_error": 4.9960036108132044e-15,
+      "absolute_pass": true,
+      "relative_error": 5.782411586544247e-15,
+      "relative_pass": true
+    },
+    {
+      "entity": "404B>9E4",
+      "type": "Line",
+      "qiyas": 0.010998196432838912,
+      "independent": 0.010998196432839042,
+      "absolute_error": 1.3010426069826053e-16,
+      "absolute_pass": true,
+      "relative_error": 1.1829599652338251e-14,
+      "relative_pass": true
+    },
+    {
+      "entity": "79C1>1E04",
+      "type": "Line",
+      "qiyas": 0.01187456938491309,
+      "independent": 0.011874569384911004,
+      "absolute_error": 2.086872341600099e-15,
+      "absolute_pass": true,
+      "relative_error": 1.7574299108916609e-13,
+      "relative_pass": true
+    },
+    {
+      "entity": "3628",
+      "type": "LwPolyline",
+      "qiyas": 0.3229712702375309,
+      "independent": 0.3229712702375309,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "4015",
+      "type": "LwPolyline",
+      "qiyas": 1.3917072471492287,
+      "independent": 1.3917072471492287,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "78B8",
+      "type": "LwPolyline",
+      "qiyas": 0.5645607809938156,
+      "independent": 0.5645607809938156,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "363D>2D7",
+      "type": "LwPolyline",
+      "qiyas": 0.0055296000481518046,
+      "independent": 0.0055296000000453205,
+      "absolute_error": 4.8106484074050826e-11,
+      "absolute_pass": true,
+      "relative_error": 8.699812657996338e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "40D2>994",
+      "type": "LwPolyline",
+      "qiyas": 0.03141384555012292,
+      "independent": 0.03141384555012469,
+      "absolute_error": 1.7694179454963432e-15,
+      "absolute_pass": true,
+      "relative_error": 5.632605351271041e-14,
+      "relative_pass": true
+    },
+    {
+      "entity": "7AD6>9B9",
+      "type": "LwPolyline",
+      "qiyas": 0.01263121935040999,
+      "independent": 0.012631219350407816,
+      "absolute_error": 2.1736085153989393e-15,
+      "absolute_pass": true,
+      "relative_error": 1.7208223965556908e-13,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A8D",
+      "type": "MultiLeader",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "41B6",
+      "type": "MultiLeader",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "79A5",
+      "type": "MultiLeader",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8A45",
+      "type": "Point",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8AB4",
+      "type": "Point",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8ACE",
+      "type": "Point",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8AB1",
+      "type": "Solid",
+      "qiyas": 0.005400000000008731,
+      "independent": 0.005400000000008731,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "8AB2",
+      "type": "Solid",
+      "qiyas": 0.005400000000008731,
+      "independent": 0.005400000000008731,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "8ACB",
+      "type": "Solid",
+      "qiyas": 0.005400000000008731,
+      "independent": 0.005400000000008731,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3ABB>F37",
+      "type": "Solid",
+      "qiyas": 0.0015157868747337488,
+      "independent": 0.0015157868747337488,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "782C>F41",
+      "type": "Solid",
+      "qiyas": 0.0012120182564103743,
+      "independent": 0.0012120182564103743,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "7B3F>F65",
+      "type": "Solid",
+      "qiyas": 0.00019915810594284267,
+      "independent": 0.00019915810594284267,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A85>1D22",
+      "type": "Spline",
+      "qiyas": 0.02102582324391469,
+      "independent": 0.021100516249281945,
+      "absolute_error": 7.469300536725593e-05,
+      "absolute_pass": true,
+      "relative_error": 0.0035398662518410064,
+      "relative_pass": true
+    },
+    {
+      "entity": "40FF>9CA",
+      "type": "Spline",
+      "qiyas": 0.044651423819366265,
+      "independent": 0.04471522798208006,
+      "absolute_error": 6.380416271379447e-05,
+      "absolute_pass": true,
+      "relative_error": 0.001426900087356469,
+      "relative_pass": true
+    },
+    {
+      "entity": "799D>1D56",
+      "type": "Spline",
+      "qiyas": 0.039139880435207164,
+      "independent": 0.03915234527080301,
+      "absolute_error": 1.2464835595846213e-05,
+      "absolute_pass": true,
+      "relative_error": 0.00031836753353167805,
+      "relative_pass": true
+    },
+    {
+      "entity": "3AB8>1A61",
+      "type": "Wipeout",
+      "qiyas": 0.0010439671585231736,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "3F46>FE1",
+      "type": "Wipeout",
+      "qiyas": 0.34014692617176934,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "79CE>1A49",
+      "type": "Wipeout",
+      "qiyas": 0.3045186822009782,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    }
+  ],
+  "real-b": [
+    {
+      "entity": "37D5",
+      "type": "Arc",
+      "qiyas": 0.3015928947469823,
+      "independent": 0.3015928947419558,
+      "absolute_error": 5.026534743990396e-12,
+      "absolute_pass": true,
+      "relative_error": 1.6666621898672786e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "B35F",
+      "type": "Arc",
+      "qiyas": 0.2356194490192345,
+      "independent": 0.2356194490153074,
+      "absolute_error": 3.927108638279719e-12,
+      "absolute_pass": true,
+      "relative_error": 1.6667166716040443e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "B864",
+      "type": "Arc",
+      "qiyas": 1.00893456374903,
+      "independent": 1.0089345637322147,
+      "absolute_error": 1.6815215886367696e-11,
+      "absolute_pass": true,
+      "relative_error": 1.6666309680347802e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "36EE>25C",
+      "type": "Arc",
+      "qiyas": 1.1889337675165708,
+      "independent": 1.188933767496752,
+      "absolute_error": 1.9818813257188594e-11,
+      "absolute_pass": true,
+      "relative_error": 1.666940059993101e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "FFED>AD0D",
+      "type": "Arc",
+      "qiyas": 0.11229644527142157,
+      "independent": 0.112296445269539,
+      "absolute_error": 1.8825774272812623e-12,
+      "absolute_pass": true,
+      "relative_error": 1.6764354586314955e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "1199A>AEFA>2384",
+      "type": "Arc",
+      "qiyas": 0.11372407028528325,
+      "independent": 0.11372407028340296,
+      "absolute_error": 1.880287592292973e-12,
+      "absolute_pass": true,
+      "relative_error": 1.653376974291593e-11,
+      "relative_pass": true
+    },
+    {
+      "entity": "3841",
+      "type": "Circle",
+      "qiyas": 0.18095573684960664,
+      "independent": 0.18095573687423894,
+      "absolute_error": 2.4632296202753423e-11,
+      "absolute_pass": true,
+      "relative_error": 1.361233229089191e-10,
+      "relative_pass": true
+    },
+    {
+      "entity": "11196",
+      "type": "Circle",
+      "qiyas": 0.053092915845667506,
+      "independent": 0.05309291441881214,
+      "absolute_error": 1.4268553630292224e-09,
+      "absolute_pass": true,
+      "relative_error": 2.6874685231512775e-08,
+      "relative_pass": true
+    },
+    {
+      "entity": "128CC",
+      "type": "Circle",
+      "qiyas": 0.053092915845667506,
+      "independent": 0.053092916392415646,
+      "absolute_error": 5.467481398180318e-10,
+      "absolute_pass": true,
+      "relative_error": 1.0297948897305915e-08,
+      "relative_pass": true
+    },
+    {
+      "entity": "36EE>259",
+      "type": "Circle",
+      "qiyas": 0.0018095573684960668,
+      "independent": 0.0018095573550453992,
+      "absolute_error": 1.34506676630064e-11,
+      "absolute_pass": true,
+      "relative_error": 7.4331259108772165e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "103B4>AA68>2C9",
+      "type": "Circle",
+      "qiyas": 0.0014657414684818167,
+      "independent": 0.0014657415376859717,
+      "absolute_error": 6.920415499336863e-11,
+      "absolute_pass": true,
+      "relative_error": 4.7214432568121224e-08,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>A806>2C5",
+      "type": "Circle",
+      "qiyas": 0.0027739433977855142,
+      "independent": 0.0027739436482079327,
+      "absolute_error": 2.5042241847891833e-10,
+      "absolute_pass": true,
+      "relative_error": 9.027667834589942e-08,
+      "relative_pass": true
+    },
+    {
+      "entity": "3AA4",
+      "type": "Dimension",
+      "qiyas": 3.364722897172811,
+      "independent": 3.364722897172811,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "4314",
+      "type": "Dimension",
+      "qiyas": 6.261455637045852,
+      "independent": 6.261455637045852,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "7DA6",
+      "type": "Dimension",
+      "qiyas": 2.930213597214319,
+      "independent": 2.930213597214319,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "39E7>1EB1",
+      "type": "Dimension",
+      "qiyas": 0.9585867739114272,
+      "independent": 0.9585867739114272,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A6F>1EB1",
+      "type": "Dimension",
+      "qiyas": 0.9585867739114272,
+      "independent": 0.9585867739114272,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "771B>1EB1",
+      "type": "Dimension",
+      "qiyas": 0.9585867739114272,
+      "independent": 0.9585867739114272,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3AB4>20DE",
+      "type": "Ellipse",
+      "qiyas": 0.08568163037958307,
+      "independent": 0.08579787790097988,
+      "absolute_error": 0.00011624752139681449,
+      "absolute_pass": true,
+      "relative_error": 0.0013548997276013844,
+      "relative_pass": true
+    },
+    {
+      "entity": "103B4>AE95>1E0E",
+      "type": "Ellipse",
+      "qiyas": 0.16393450476304924,
+      "independent": 0.1640411585810883,
+      "absolute_error": 0.00010665381803906526,
+      "absolute_pass": true,
+      "relative_error": 0.0006501649888454334,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>AB4D>1E26",
+      "type": "Ellipse",
+      "qiyas": 0.009770200582761996,
+      "independent": 0.009893335918089465,
+      "absolute_error": 0.00012313533532746883,
+      "absolute_pass": true,
+      "relative_error": 0.012446290750354699,
+      "relative_pass": false
+    },
+    {
+      "entity": "3C12>1861",
+      "type": "Face3D",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "103B4>AA95>18EA",
+      "type": "Face3D",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "11BE5>AA94>1973",
+      "type": "Face3D",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "3627",
+      "type": "Hatch",
+      "qiyas": 0.32297127023759786,
+      "independent": 0.3229712702377583,
+      "absolute_error": 1.6042722705833512e-13,
+      "absolute_pass": true,
+      "relative_error": 4.96722903372288e-13,
+      "relative_pass": true
+    },
+    {
+      "entity": "BC63",
+      "type": "Hatch",
+      "qiyas": 18.860000000000582,
+      "independent": 18.860000000000582,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "112EC",
+      "type": "Hatch",
+      "qiyas": 0.061229349181303405,
+      "independent": 0.061229349181303405,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "39AE>52C",
+      "type": "Hatch",
+      "qiyas": 0.035598956585820456,
+      "independent": 0.03559895630041865,
+      "absolute_error": 2.854018063547237e-10,
+      "absolute_pass": true,
+      "relative_error": 8.017139714609197e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "103B4>A925>52C",
+      "type": "Hatch",
+      "qiyas": 0.03134575205627089,
+      "independent": 0.03134575221884006,
+      "absolute_error": 1.6256917340085053e-10,
+      "absolute_pass": true,
+      "relative_error": 5.186322289089617e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>A922>52C",
+      "type": "Hatch",
+      "qiyas": 0.03134575205627089,
+      "independent": 0.0313457509764703,
+      "absolute_error": 1.0798005892209694e-09,
+      "absolute_pass": true,
+      "relative_error": 3.444806889557447e-08,
+      "relative_pass": true
+    },
+    {
+      "entity": "363D",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "403B",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "78AF",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3987>743",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "1073F>AC39",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>AE4E",
+      "type": "Insert",
+      "qiyas": 1.0,
+      "independent": 1.0,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "362F",
+      "type": "Line",
+      "qiyas": 0.2400000000000091,
+      "independent": 0.2400000000000091,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "D573",
+      "type": "Line",
+      "qiyas": 0.3199999999999932,
+      "independent": 0.3199999999999932,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "11C4C",
+      "type": "Line",
+      "qiyas": 0.9500000000000028,
+      "independent": 0.9500000000000028,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "363D>2D3",
+      "type": "Line",
+      "qiyas": 0.8640000000067453,
+      "independent": 0.8640000000067403,
+      "absolute_error": 4.9960036108132044e-15,
+      "absolute_pass": true,
+      "relative_error": 5.782411586544247e-15,
+      "relative_pass": true
+    },
+    {
+      "entity": "103B4>A8D3>892",
+      "type": "Line",
+      "qiyas": 0.006523726124184556,
+      "independent": 0.006523726124168467,
+      "absolute_error": 1.6089560239684886e-14,
+      "absolute_pass": true,
+      "relative_error": 2.4663144855327153e-12,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>A785>4A5",
+      "type": "Line",
+      "qiyas": 0.017496000810865407,
+      "independent": 0.017496000810751866,
+      "absolute_error": 1.1354112094963398e-13,
+      "absolute_pass": true,
+      "relative_error": 6.489547078659212e-12,
+      "relative_pass": true
+    },
+    {
+      "entity": "3628",
+      "type": "LwPolyline",
+      "qiyas": 0.3229712702377583,
+      "independent": 0.3229712702377583,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "D2FE",
+      "type": "LwPolyline",
+      "qiyas": 0.25,
+      "independent": 0.25,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "11E9E",
+      "type": "LwPolyline",
+      "qiyas": 15.000000000000007,
+      "independent": 15.000000000000007,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "363D>2D7",
+      "type": "LwPolyline",
+      "qiyas": 0.0055296000481518046,
+      "independent": 0.005529600000954815,
+      "absolute_error": 4.71969893722779e-11,
+      "absolute_pass": true,
+      "relative_error": 8.535335171464162e-09,
+      "relative_pass": true
+    },
+    {
+      "entity": "103B4>ACF3>E9F",
+      "type": "LwPolyline",
+      "qiyas": 0.09490899357347032,
+      "independent": 0.09490899357343724,
+      "absolute_error": 3.3084646133829665e-14,
+      "absolute_pass": true,
+      "relative_error": 3.4859337232598434e-13,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>AC70>9DD",
+      "type": "LwPolyline",
+      "qiyas": 0.026083136498676617,
+      "independent": 0.026083136498619264,
+      "absolute_error": 5.73534275627452e-14,
+      "absolute_pass": true,
+      "relative_error": 2.198870046391133e-12,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A8D",
+      "type": "MultiLeader",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "41B6",
+      "type": "MultiLeader",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "79A5",
+      "type": "MultiLeader",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8D05>8C99",
+      "type": "Ole2Frame",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "C930>8C99",
+      "type": "Ole2Frame",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "10C69>8C99",
+      "type": "Ole2Frame",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8A45",
+      "type": "Point",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8AB4",
+      "type": "Point",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8ACE",
+      "type": "Point",
+      "qiyas": null,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "8AB1",
+      "type": "Solid",
+      "qiyas": 0.005400000000008731,
+      "independent": 0.005400000000008731,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "8AB2",
+      "type": "Solid",
+      "qiyas": 0.005400000000008731,
+      "independent": 0.005400000000008731,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "8ACB",
+      "type": "Solid",
+      "qiyas": 0.0053999999990992364,
+      "independent": 0.0053999999990992364,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3ABB>F37",
+      "type": "Solid",
+      "qiyas": 0.0015157868756432435,
+      "independent": 0.0015157868756432435,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "103B4>ACFA>F41",
+      "type": "Solid",
+      "qiyas": 0.0010392723706900142,
+      "independent": 0.0010392723706900142,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "11BE5>ABE7>F65",
+      "type": "Solid",
+      "qiyas": 0.0005398046469053952,
+      "independent": 0.0005398046469053952,
+      "absolute_error": 0.0,
+      "absolute_pass": true,
+      "relative_error": 0.0,
+      "relative_pass": true
+    },
+    {
+      "entity": "3A85>1D22",
+      "type": "Spline",
+      "qiyas": 0.021025823243908726,
+      "independent": 0.02110051624927495,
+      "absolute_error": 7.46930053662255e-05,
+      "absolute_pass": true,
+      "relative_error": 0.0035398662517933453,
+      "relative_pass": true
+    },
+    {
+      "entity": "FFED>A9EB>1A13",
+      "type": "Spline",
+      "qiyas": 0.09285951509681087,
+      "independent": 0.09286022826443302,
+      "absolute_error": 7.131676221516781e-07,
+      "absolute_pass": true,
+      "relative_error": 7.680011512795655e-06,
+      "relative_pass": true
+    },
+    {
+      "entity": "1199A>AC70>9C9",
+      "type": "Spline",
+      "qiyas": 0.09372396252892137,
+      "independent": 0.09398274820483553,
+      "absolute_error": 0.00025878567591415547,
+      "absolute_pass": true,
+      "relative_error": 0.002753544462757481,
+      "relative_pass": true
+    },
+    {
+      "entity": "3AB8>1A61",
+      "type": "Wipeout",
+      "qiyas": 0.0010439671541462303,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "103B4>ACD0>FE1",
+      "type": "Wipeout",
+      "qiyas": 0.30673951903372654,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    },
+    {
+      "entity": "11BE5>AAE2>FE1",
+      "type": "Wipeout",
+      "qiyas": 0.3067395190264506,
+      "independent": null,
+      "absolute_error": null,
+      "absolute_pass": false,
+      "relative_error": null,
+      "relative_pass": null
+    }
+  ]
+}

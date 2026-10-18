@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 import type { Boq, Measurement, Total } from "../api";
 import { boqItem } from "../boq/testItems";
+import { LanguageProvider } from "../i18n";
 import { TakeoffPanel } from "./TakeoffPanel";
 
 afterEach(cleanup);
@@ -173,4 +174,45 @@ test("the layer column shows a bound xref's layer by its own name, the full name
   const shown = screen.getByText("A-WALL");
   expect(shown.tagName).toBe("BDI");
   expect(shown.closest('[role="cell"]')!.getAttribute("title")).toBe("01-IVORY$0$A-WALL");
+});
+
+test("area basis and bounded count remain visible, including legacy rows", () => {
+  render(<TakeoffPanel
+    items={[
+      item("a", "Boundary", 12, { kind: "area", area_origin: "existing_boundary", measurement_basis: "gross" }),
+      item("b", "Wall", 12, { kind: "area", area_origin: "wall_face", measurement_basis: "wall_face" }),
+      item("c", "Old", 12, { kind: "area" }),
+      item("d", "Doors", 3, { kind: "count", count_scope: "top_level_insert_records_with_loaded_xref_tops" }),
+    ]}
+    totals={[]} selectedId={null} onSelect={() => {}} onRemove={() => {}}
+    onRename={() => {}} boq={null} onLink={() => {}}
+  />);
+  expect(screen.getByText("Existing boundary · Gross")).toBeTruthy();
+  expect(screen.getByText("Wall face · Wall face basis")).toBeTruthy();
+  expect(screen.getByText("Area source unspecified · Basis unspecified")).toBeTruthy();
+  expect(screen.getByText("Top-level insert records; incomplete visible count")).toBeTruthy();
+});
+
+
+test.each(["en", "ar"])("full names and quantity limits remain separate in %s", (lang) => {
+  localStorage.setItem("qiyas.lang", lang);
+  const description = "Doors / أبواب الدور الأرضي — long measurement description";
+  render(<LanguageProvider><TakeoffPanel
+    items={[
+      item("a", description, 4, { kind: "count", count_scope: "top_level_insert_records_with_loaded_xref_tops" }),
+      item("b", "Legacy area / مساحة قديمة", 12, { kind: "area" }),
+    ]}
+    totals={[]} selectedId={null} onSelect={() => {}} onRemove={() => {}}
+    onRename={() => {}} boq={null} onLink={() => {}}
+  /></LanguageProvider>);
+  const name = screen.getByRole("button", { name: description });
+  const limit = name.parentElement!.querySelector("small")!;
+  expect(limit.textContent).toBe(lang === "en"
+    ? "Top-level insert records; incomplete visible count"
+    : "إدراجات عليا؛ ليس عدًا مرئيًا شاملًا");
+  expect(screen.getByText(lang === "en"
+    ? "Area source unspecified · Basis unspecified"
+    : "مصدر المساحة غير محدد · أساس غير محدد")).toBeTruthy();
+  expect(name.closest(".grid-row")!.getAttribute("data-index")).toBe("0");
+  localStorage.removeItem("qiyas.lang");
 });

@@ -43,6 +43,9 @@ fn blocks(counts: &[(&str, usize)]) -> Vec<BlockCount> {
     counts
         .iter()
         .map(|(name, count)| BlockCount {
+            count_scope: qiyas_core::INSERT_COUNT_SCOPE,
+            visibility_policy: "in_file",
+            limitations: qiyas_core::INSERT_COUNT_LIMITATIONS,
             block_name: name.to_string(),
             layer: "0".to_string(),
             count: *count,
@@ -54,6 +57,9 @@ fn blocks(counts: &[(&str, usize)]) -> Vec<BlockCount> {
 /// References of `name` tagged with `attributes`.
 fn tagged(name: &str, count: usize, attributes: &[&str]) -> BlockCount {
     BlockCount {
+        count_scope: qiyas_core::INSERT_COUNT_SCOPE,
+        visibility_policy: "in_file",
+        limitations: qiyas_core::INSERT_COUNT_LIMITATIONS,
         block_name: name.to_string(),
         layer: "0".to_string(),
         count,

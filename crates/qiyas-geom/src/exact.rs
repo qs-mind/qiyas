@@ -15,8 +15,9 @@ const MIN_BULGE: f64 = 1e-12;
 const UNIFORM: f64 = 1e-9;
 
 /// The plan length of `entity` after `xf`, worked out exactly: Line, LwPolyline and Polyline2D
-/// (bulged segments as arcs), Polyline, Arc, Circle and a full Ellipse (Ramanujan's second
-/// approximation). `None` for any other entity, a stretching `xf`, a tilted extrusion normal or
+/// (bulged segments as arcs), Polyline, Arc, Circle and Ellipse (numerical integration for
+/// arcs, Ramanujan's second approximation for full ellipses). `None` for any other entity,
+/// a stretching `xf`, a tilted extrusion normal or
 /// a closed polyline of two straight segments or fewer: measure the flattened paths then.
 pub fn exact_length(entity: &EntityType, xf: &Xform) -> Option<f64> {
     let s = uniform_scale(xf)?;
@@ -57,7 +58,26 @@ pub fn exact_length(entity: &EntityType, xf: &Xform) -> Option<f64> {
             TAU * e.radius
         }
         EntityType::Ellipse(e) => {
-            let (a, b) = full_ellipse(e)?;
+            flat(&e.normal)?;
+            if e.major_axis.z.abs() > 1e-12 {
+                return None;
+            }
+            let a = e.major_axis.x.hypot(e.major_axis.y);
+            let b = a * e.minor_axis_ratio.abs();
+            let span = sweep(e.start_parameter, e.end_parameter);
+            if span != TAU {
+                // Integrate speed, independent of display tolerance and drawing scale.
+                // Translation does not enter the derivative, avoiding cancellation.
+                const N: usize = 1024;
+                let step = span / N as f64;
+                let speed = |t: f64| (a * t.sin()).hypot(b * t.cos());
+                let mut sum = speed(e.start_parameter) + speed(e.start_parameter + span);
+                for i in 1..N {
+                    sum += if i % 2 == 0 { 2.0 } else { 4.0 }
+                        * speed(e.start_parameter + i as f64 * step);
+                }
+                return Some(s * sum * step / 3.0);
+            }
             let h = ((a - b) / (a + b)).powi(2);
             PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (4.0 - 3.0 * h).sqrt()))
         }
@@ -67,7 +87,7 @@ pub fn exact_length(entity: &EntityType, xf: &Xform) -> Option<f64> {
 }
 
 /// The plan area of each boundary path of a hatch after `xf`, in path order, worked out exactly
-/// when every path is one polyline edge (bulged segments as arcs, as Qiyas draws them). `None`
+/// for polyline boundaries and boundaries made of lines, circular or elliptic arcs. `None`
 /// for any other hatch or entity, a stretching `xf` or a tilted normal: measure the flattened
 /// paths then. Each area is positive; the caller takes islands away.
 pub fn exact_hatch_areas(entity: &EntityType, xf: &Xform) -> Option<Vec<f64>> {
@@ -83,9 +103,69 @@ pub fn exact_hatch_areas(entity: &EntityType, xf: &Xform) -> Option<Vec<f64>> {
                 let vertices: Vec<_> = e.vertices.iter().map(|v| ([v.x, v.y], v.z)).collect();
                 Some(bulge_area(&vertices) * s * s)
             }
+            edges if !edges.is_empty() => {
+                // Green's theorem: sum integral(x dy - y dx), then halve it. Keeping the
+                // signed integral until the whole ring is summed preserves concave boundaries.
+                let origin = match &edges[0] {
+                    BoundaryEdge::Line(e) => [e.start.x, e.start.y],
+                    BoundaryEdge::CircularArc(e) => [e.center.x, e.center.y],
+                    BoundaryEdge::EllipticArc(e) => [e.center.x, e.center.y],
+                    _ => return None,
+                };
+                let twice = edges
+                    .iter()
+                    .map(|edge| edge_integral(edge, origin))
+                    .sum::<Option<f64>>()?;
+                Some(twice.abs() * 0.5 * s * s)
+            }
             _ => None,
         })
         .collect()
+}
+
+/// Signed boundary integral in a translated frame, to avoid cancellation far from (0, 0).
+fn edge_integral(edge: &BoundaryEdge, origin: [f64; 2]) -> Option<f64> {
+    let (center, major, minor, start, end, ccw) = match edge {
+        BoundaryEdge::Line(e) => {
+            return Some(
+                (e.start.x - origin[0]) * (e.end.y - origin[1])
+                    - (e.end.x - origin[0]) * (e.start.y - origin[1]),
+            );
+        }
+        BoundaryEdge::CircularArc(e) => (
+            [e.center.x, e.center.y],
+            [e.radius, 0.0],
+            [0.0, e.radius],
+            e.start_angle,
+            e.end_angle,
+            e.counter_clockwise,
+        ),
+        BoundaryEdge::EllipticArc(e) => {
+            let u = [e.major_axis_endpoint.x, e.major_axis_endpoint.y];
+            (
+                [e.center.x, e.center.y],
+                u,
+                [-u[1] * e.minor_axis_ratio, u[0] * e.minor_axis_ratio],
+                e.start_angle,
+                e.end_angle,
+                e.counter_clockwise,
+            )
+        }
+        _ => return None,
+    };
+    // Clockwise DXF hatch edges store mirrored angles, as in flatten::edge_points.
+    let (a, delta) = if ccw {
+        (start, sweep(start, end))
+    } else {
+        (-start, -sweep(-end, -start))
+    };
+    let b = a + delta;
+    let dx = major[0] * (b.cos() - a.cos()) + minor[0] * (b.sin() - a.sin());
+    let dy = major[1] * (b.cos() - a.cos()) + minor[1] * (b.sin() - a.sin());
+    Some(
+        (center[0] - origin[0]) * dy - (center[1] - origin[1]) * dx
+            + (major[0] * minor[1] - major[1] * minor[0]) * delta,
+    )
 }
 
 /// The plan area of a closed `entity` after `xf`, worked out exactly: a closed LwPolyline or

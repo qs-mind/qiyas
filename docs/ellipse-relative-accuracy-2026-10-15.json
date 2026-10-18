@@ -1,0 +1,72 @@
+{
+  "real-a": [
+    {
+      "entity": "3AB4>20DE",
+      "type": "Ellipse",
+      "qiyas": 0.08579787792134598,
+      "independent": 0.08579787790095741,
+      "absolute_error": 2.0388565835638417e-11,
+      "absolute_pass": true,
+      "relative_error": 2.3763484988724766e-10,
+      "relative_pass": true,
+      "previous_qiyas": 0.08568163037956246
+    },
+    {
+      "entity": "3EEE>1E21",
+      "type": "Ellipse",
+      "qiyas": 0.009893335917769587,
+      "independent": 0.00989333591760055,
+      "absolute_error": 1.6903665966960801e-13,
+      "absolute_pass": true,
+      "relative_error": 1.708591127173662e-11,
+      "relative_pass": true,
+      "previous_qiyas": 0.009770200582282606
+    },
+    {
+      "entity": "79C1>1D7E",
+      "type": "Ellipse",
+      "qiyas": 0.023220057447637752,
+      "independent": 0.02322005744725567,
+      "absolute_error": 3.820832539247476e-13,
+      "absolute_pass": true,
+      "relative_error": 1.6454879786264493e-11,
+      "relative_pass": true,
+      "previous_qiyas": 0.023183709193354933
+    }
+  ],
+  "real-b": [
+    {
+      "entity": "3AB4>20DE",
+      "type": "Ellipse",
+      "qiyas": 0.08579787792134598,
+      "independent": 0.08579787790097988,
+      "absolute_error": 2.0366097697177565e-11,
+      "absolute_pass": true,
+      "relative_error": 2.3737297699463225e-10,
+      "relative_pass": true,
+      "previous_qiyas": 0.08568163037958307
+    },
+    {
+      "entity": "103B4>AE95>1E0E",
+      "type": "Ellipse",
+      "qiyas": 0.16404115858383148,
+      "independent": 0.1640411585810883,
+      "absolute_error": 2.7431668048194524e-12,
+      "absolute_pass": true,
+      "relative_error": 1.6722430081249753e-11,
+      "relative_pass": true,
+      "previous_qiyas": 0.16393450476304924
+    },
+    {
+      "entity": "11BE5>AB4D>1E26",
+      "type": "Ellipse",
+      "qiyas": 0.009893335918363983,
+      "independent": 0.009893335918089465,
+      "absolute_error": 2.7451825534985375e-13,
+      "absolute_pass": true,
+      "relative_error": 2.7747794841162825e-11,
+      "relative_pass": true,
+      "previous_qiyas": 0.009770200582761996
+    }
+  ]
+}

@@ -668,3 +668,94 @@ fn a_saved_dwg_leaves_out_an_erased_dimensions_block_and_a_grouped_lines_handle(
         2
     );
 }
+
+#[test]
+fn embedded_count_rows_keep_zero_scope_note_and_source_in_dwg_and_dxf() {
+    for ext in ["dwg", "dxf"] {
+        let dir = tempfile::tempdir().unwrap();
+        let source = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+        let mut session = Session::open(&source).unwrap();
+        session
+            .run(Command::CountBlock {
+                block_name: "DOOR".into(),
+                layer: None,
+            })
+            .unwrap();
+        let mut count = session.takeoff.items[0].clone();
+        count.source = "mcp".into();
+        count.note = "Top-level references only; nested references are excluded. حدود العد".into();
+        let mut zero = count.clone();
+        zero.id = "zero-count".into();
+        zero.value = 0.0;
+        zero.shown = 0.0;
+        zero.handles.clear();
+        zero.points.clear();
+        session.takeoff.items = vec![count.clone(), zero.clone()];
+        let out = dir.path().join(format!("counts.{ext}"));
+        for _ in 0..2 {
+            session.save_as(&out).unwrap();
+            std::fs::remove_file(project_path(&out)).unwrap();
+            session = Session::open(&out).unwrap();
+            assert_eq!(session.takeoff.items.len(), 2);
+            for expected in [&count, &zero] {
+                let actual = session
+                    .takeoff
+                    .items
+                    .iter()
+                    .find(|m| m.id == expected.id)
+                    .unwrap();
+                assert_eq!(actual.value, expected.value);
+                assert_eq!(actual.note, expected.note);
+                assert_eq!(actual.source, "mcp");
+                assert_eq!(actual.count_scope, expected.count_scope);
+                assert_eq!(actual.points.len(), if actual.value == 0.0 { 0 } else { 3 });
+            }
+            let carriers: Vec<_> = session
+                .drawing
+                .doc
+                .entities()
+                .filter(|e| e.common().layer == "QIYAS-COUNT")
+                .collect();
+            assert_eq!(carriers.len(), 4);
+            assert_eq!(carriers.iter().filter(|e| e.common().invisible).count(), 1);
+        }
+    }
+}
+
+#[test]
+fn legacy_embedded_count_metadata_remains_unspecified() {
+    for len in [7, 8, 9, 10] {
+        let mut doc = qiyas_core::fixtures::sample_doc();
+        let mut m = user_length();
+        m.kind = Kind::Count;
+        m.points = vec![[1.0, 2.0]];
+        embed_measurements(&mut doc, &[m]);
+        let handles: Vec<_> = doc
+            .entities()
+            .filter(|e| e.common().layer == "QIYAS-COUNT")
+            .map(|e| e.common().handle)
+            .collect();
+        for handle in handles {
+            let entity = doc.get_entity_mut(handle).unwrap();
+            let mut record = entity
+                .common()
+                .extended_data
+                .get_record("QIYAS")
+                .unwrap()
+                .clone();
+            record.values.truncate(len);
+            if len == 10 {
+                record.values[9] = XDataValue::String(
+                    r#"{"area_origin":null,"measurement_basis":null,"count_scope":null}"#.into(),
+                );
+            }
+            entity.common_mut().extended_data.add_record(record);
+        }
+        let read = read_embedded(&doc);
+        assert_eq!(read.len(), 1, "legacy length {len}");
+        assert_eq!(read[0].source, "user");
+        assert!(read[0].note.is_empty());
+        assert!(read[0].count_scope.is_none());
+        assert_eq!(read[0].points, vec![[1.0, 2.0]]);
+    }
+}

@@ -17,7 +17,26 @@ fn export_is_readable_by_calamine() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("villa-takeoff.xlsx");
     let mut takeoff = Takeoff::default();
-    takeoff.add(item(Kind::Area, 12.0, "Slab"));
+    let mut boundary = item(Kind::Area, 12.0, "Slab");
+    boundary.area_origin = qiyas_core::AreaOrigin::ExistingBoundary;
+    boundary.measurement_basis = qiyas_core::MeasurementBasis::Gross;
+    takeoff.add(boundary);
+    let mut wall = item(Kind::Area, 12.0, "Wall face");
+    wall.area_origin = qiyas_core::AreaOrigin::WallFace;
+    wall.measurement_basis = qiyas_core::MeasurementBasis::WallFace;
+    // Verified separately below, without changing the existing totals fixture.
+    let wall_path = dir.path().join("wall-face.xlsx");
+    qiyas_boq::export_takeoff(&wall_path, &[wall], &[], "Wall face").unwrap();
+    let mut wall_book: Xlsx<_> = open_workbook(&wall_path).unwrap();
+    let wall_sheet = wall_book.worksheet_range("Take-off").unwrap();
+    assert_eq!(
+        wall_sheet.get((1, 8)),
+        Some(&Data::String("wall_face".into()))
+    );
+    assert_eq!(
+        wall_sheet.get((1, 9)),
+        Some(&Data::String("wall_face".into()))
+    );
     takeoff.add(item(Kind::Length, 7.0, "Wall"));
     takeoff.add(item(Kind::Count, 3.0, "Doors"));
 
@@ -46,6 +65,15 @@ fn export_is_readable_by_calamine() {
             "Note",
             "Id"
         ]
+    );
+    assert_eq!(
+        sheet.get((1, 8)),
+        Some(&Data::String("existing_boundary".into()))
+    );
+    assert_eq!(sheet.get((1, 9)), Some(&Data::String("gross".into())));
+    assert_eq!(
+        sheet.get((3, 10)),
+        Some(&Data::String("unspecified".into()))
     );
     assert_eq!(sheet.get((1, 0)), Some(&Data::String("Slab".into())));
     assert_eq!(sheet.get((1, 1)), Some(&Data::String("area".into())));

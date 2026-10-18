@@ -259,3 +259,40 @@ async fn ten_takeoff_questions_with_independent_answers() {
     println!("PASS 10/10 BOQ: A.4 (30 vs 22.09 m2), B.2 (4 vs 5 pcs)");
     println!("Offline scripted-model evaluation: 10/10 passed; live model not evaluated.");
 }
+
+/// Private fixtures are supplied locally. Default CI never receives customer drawings.
+#[tokio::test]
+#[ignore = "requires QIYAS_REAL_EVAL_REFERENCES and private DWG files"]
+async fn two_private_drawing_reference_answers() {
+    let reference =
+        std::env::var("QIYAS_REAL_EVAL_REFERENCES").expect("private reference JSON path");
+    let cases: Vec<Value> = serde_json::from_slice(&std::fs::read(reference).unwrap()).unwrap();
+    assert_eq!(cases.len(), 2);
+    let dir = tempfile::tempdir().unwrap();
+    for case in cases {
+        let path = dir
+            .path()
+            .join(format!("{}.dwg", case["id"].as_str().unwrap()));
+        std::fs::copy(case["path"].as_str().unwrap(), &path).unwrap();
+        let mut session = Session::open(&path).unwrap();
+        session.takeoff.items.clear();
+        let session = ask(
+            session,
+            case["question"].as_str().unwrap(),
+            vec![("measure_length".into(), json!({"handle":case["handle"]}))],
+        )
+        .await;
+        assert_eq!(session.takeoff.items.len(), 1);
+        let measured = &session.takeoff.items[0];
+        assert_eq!(measured.unit, case["unit"].as_str().unwrap());
+        assert_eq!(measured.source, "ai");
+        let expected = case["expected"].as_f64().unwrap();
+        assert!(expected.is_finite() && expected > 0.0);
+        assert_eq!(case["tolerance"].as_f64().unwrap(), 0.001);
+        assert!((measured.shown - expected).abs() <= 0.001);
+        println!(
+            "PASS {} independent length = {expected} m (expert review: {})",
+            case["id"], case["expert_review"]
+        );
+    }
+}

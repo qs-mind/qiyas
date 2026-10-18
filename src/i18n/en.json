@@ -173,7 +173,7 @@
   "unit.centimetres": "centimetres",
   "unit.metres": "metres",
   "takeoff": "Take-off",
-  "takeoffEmpty": "No measurements yet",
+  "takeoffEmpty": "No measurements yet. Choose Select, click a wall line or a closed room outline, then press Enter. The measurement is added here.",
   "totals": "Totals",
   "remove": "Remove",
   "rename": "Rename",
@@ -1439,5 +1439,16 @@
   "props.totalArea": "Total area",
   "props.varies": "Varies",
   "props.copy": "Click to copy",
-  "props.copied": "Copied"
+  "props.copied": "Copied",
+  "takeoff.origin.unspecified": "Area source unspecified",
+  "takeoff.origin.existing_boundary": "Existing boundary",
+  "takeoff.origin.wall_face": "Wall face",
+  "takeoff.origin.manual_or_entity": "Manual / entity",
+  "takeoff.basis.unspecified": "Basis unspecified",
+  "takeoff.basis.gross": "Gross",
+  "takeoff.basis.wall_face": "Wall face basis",
+  "takeoff.basis.unapproved_net": "Net candidate — unapproved",
+  "takeoff.basis.approved_net": "Approved net",
+  "takeoff.insertScope": "Top-level insert records; incomplete visible count",
+  "takeoff.unknownScope": "Count scope unspecified"
 }

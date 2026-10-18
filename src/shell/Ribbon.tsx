@@ -227,7 +227,7 @@ function RibbonBody(props: Props) {
     };
   }
 
-  /** An icon button: its name is its `aria-label`, its tooltip says the rest. */
+  /** Headline tools show their names; compact tools keep the name in their tooltip. */
   function iconButton(b: RibbonButton, key: string, primary: boolean) {
     const r = resolve(b);
     const name = t(r.label);
@@ -246,6 +246,7 @@ function RibbonBody(props: Props) {
             onKeyUp={ignoreSpace}
           >
             <RibbonIcon name={b.command} />
+            {primary && <span className="rb-label">{name}</span>}
           </button>
         )}
       </Tip>

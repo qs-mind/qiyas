@@ -337,6 +337,9 @@ mod tests {
 
     fn block(name: &str, attributes: &[&str]) -> BlockCount {
         BlockCount {
+            count_scope: qiyas_core::INSERT_COUNT_SCOPE,
+            visibility_policy: "in_file",
+            limitations: qiyas_core::INSERT_COUNT_LIMITATIONS,
             block_name: name.to_string(),
             layer: "0".to_string(),
             count: 1,

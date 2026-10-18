@@ -530,6 +530,10 @@ test("the Measure tab is first: Measure, Inquiry, Take-off, Dimensions and Marku
   const group = screen.getByRole("group", { name: "Take-off" });
   const buttons = within(group).getAllByRole("button");
   expect(buttons).toHaveLength(4);
+  // The first-use actions can be identified without waiting for a tooltip.
+  for (const button of buttons) {
+    expect(button.querySelector(".rb-label")?.textContent).toBe(button.getAttribute("aria-label"));
+  }
   buttons.forEach((b) => fireEvent.click(b));
   for (const h of Object.values(handlers)) expect(h).toHaveBeenCalledTimes(1);
   // The headline groups are one row of primary buttons.
@@ -563,6 +567,9 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
     expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(names);
     expect(screen.getAllByRole("group").map((g) => g.lastElementChild!.textContent)).toEqual(names);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["القياسات", "رسم", "التعليقات", "المزيد"]);
+    for (const button of document.querySelectorAll(".rb.primary")) {
+      expect(button.querySelector(".rb-label")?.textContent).toBe(button.getAttribute("aria-label"));
+    }
   } finally {
     cleanup();
     localStorage.clear();

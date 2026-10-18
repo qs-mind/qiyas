@@ -84,6 +84,8 @@ export type GridProps<Row extends object> = {
   empty?: ReactNode;
   /** A row's height in pixels; 27 by default. */
   rowHeight?: number;
+  /** Measure each row after wrapping; rowHeight is the initial estimate and minimum. */
+  autoRowHeight?: boolean;
 };
 
 const ROW_HEIGHT = 27;
@@ -323,7 +325,7 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
           <div className="grid-body" style={{ height: virtual.getTotalSize() }}>
             {virtual.getVirtualItems().map((v) => {
               const item = items[v.index];
-              const at = { transform: `translateY(${v.start}px)`, height: v.size };
+              const at = { transform: `translateY(${v.start}px)`, ...(props.autoRowHeight && item.kind === "row" ? { minHeight: rowHeight } : { height: v.size }) };
               if (item.kind === "section") {
                 return (
                   <div key={item.key} className="grid-row grid-section" role="row" aria-rowindex={v.index + 2} style={at}>
@@ -350,6 +352,8 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
                   aria-rowindex={v.index + 2}
                   aria-current={current || undefined}
                   aria-disabled={disabled || undefined}
+                  data-index={v.index}
+                  ref={props.autoRowHeight ? virtual.measureElement : undefined}
                   data-row-key={item.key}
                   tabIndex={item.key === tabStop ? 0 : -1}
                   style={at}

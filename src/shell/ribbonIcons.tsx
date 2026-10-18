@@ -39,8 +39,8 @@ export const ICON_BODIES: Record<string, string> = {
   measureAlong: '<path d="M3 16c5 0 5-9 9-9s4 9 9 9"/><path d="M7 21v-2M12 21v-2M17 21v-2"/>',
   idPoint: '<circle cx="12" cy="12" r="3"/><path d="M12 3v5M12 16v5M3 12h5M16 12h5"/>',
   extract: '<rect x="3" y="4" width="13" height="16" rx="1"/><path d="M3 9h13M8 9v11M14 14h8M19 11l3 3-3 3"/>',
-  exportTakeoff: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M12 17v-6M9 14l3-3 3 3"/>',
-  importBoq: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M12 11v6M9 14l3 3 3-3"/>',
+  exportTakeoff: '<rect x="3" y="3" width="14" height="18" rx="1"/><path d="M3 8h14M8 8v13M3 13h10M3 17h10M14 13h8M19 10l3 3-3 3"/>',
+  importBoq: '<rect x="7" y="3" width="14" height="18" rx="1"/><path d="M7 8h14M12 8v13M12 13h9M12 17h9M2 13h8M7 10l3 3-3 3"/>',
   compare: '<rect x="3" y="5" width="7.5" height="14"/><rect x="13.5" y="5" width="7.5" height="14"/><path d="M5.5 10h2.5M5.5 14h2.5M16 10h2.5M16 14h2.5"/>',
   exportConflicts: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M12 11v4.5M12 18.3v.2"/>',
 

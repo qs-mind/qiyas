@@ -173,7 +173,7 @@
   "unit.centimetres": "سنتيمتر",
   "unit.metres": "متر",
   "takeoff": "الحصر",
-  "takeoffEmpty": "لا توجد قياسات بعد",
+  "takeoffEmpty": "لا توجد قياسات بعد. اختر تحديد، وانقر خط حائط أو حدود غرفة مغلقة، ثم اضغط Enter. يُضاف القياس هنا.",
   "totals": "الإجماليات",
   "remove": "حذف",
   "rename": "إعادة تسمية",
@@ -1439,5 +1439,16 @@
   "props.totalArea": "المساحة الإجمالية",
   "props.varies": "متنوّع",
   "props.copy": "انقر للنسخ",
-  "props.copied": "تم النسخ"
+  "props.copied": "تم النسخ",
+  "takeoff.origin.unspecified": "مصدر المساحة غير محدد",
+  "takeoff.origin.existing_boundary": "حدود جاهزة",
+  "takeoff.origin.wall_face": "وجه حائط",
+  "takeoff.origin.manual_or_entity": "رسم يدوي / كيان",
+  "takeoff.basis.unspecified": "أساس غير محدد",
+  "takeoff.basis.gross": "إجمالي",
+  "takeoff.basis.wall_face": "أساس وجه حائط",
+  "takeoff.basis.unapproved_net": "مرشح صافي غير معتمد",
+  "takeoff.basis.approved_net": "صافي معتمد",
+  "takeoff.insertScope": "إدراجات عليا؛ ليس عدًا مرئيًا شاملًا",
+  "takeoff.unknownScope": "نطاق العد غير محدد"
 }

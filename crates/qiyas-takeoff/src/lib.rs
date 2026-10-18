@@ -2,11 +2,13 @@
 //! the block counts into conflicts and gaps (`compare`), and runs it on a session
 //! (`compare_session`).
 
+mod accuracy;
 mod compare;
 mod matching;
 
 use qiyas_core::{Command, Conflict, CoreError, Session, Source};
 
+pub use accuracy::{accuracy, net_room_accuracy, Accuracy, NetRoomAccuracy};
 pub use compare::{compare, CompareInputs};
 
 /// Allowed difference, in percent, for BOQ items with none of their own when the user has set

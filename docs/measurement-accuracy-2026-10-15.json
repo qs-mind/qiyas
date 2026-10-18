@@ -1,0 +1,86 @@
+{
+  "tolerance": 0.001,
+  "total_matches": 200,
+  "inputs": [
+    {
+      "fixture": "real-a",
+      "matches": 54,
+      "differences": 0,
+      "not_comparable": 12
+    },
+    {
+      "fixture": "real-b",
+      "matches": 54,
+      "differences": 0,
+      "not_comparable": 15
+    },
+    {
+      "fixture": "test-plan",
+      "matches": 39,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "hatch",
+      "matches": 2,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "nested",
+      "matches": 10,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "units_0",
+      "matches": 6,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "units_1",
+      "matches": 6,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "units_2",
+      "matches": 6,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "units_4",
+      "matches": 6,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "units_5",
+      "matches": 6,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "units_6",
+      "matches": 6,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "xr",
+      "matches": 2,
+      "differences": 0,
+      "not_comparable": 0
+    },
+    {
+      "fixture": "xref",
+      "matches": 3,
+      "differences": 0,
+      "not_comparable": 0
+    }
+  ],
+  "independent_dwg_reader": false,
+  "review_status": "pending"
+}

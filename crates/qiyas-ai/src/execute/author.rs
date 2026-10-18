@@ -51,6 +51,14 @@ pub(super) struct RoomsInput {
     layer: Option<String>,
     height: Option<f64>,
     decimals: Option<usize>,
+    language: Option<LabelLanguage>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LabelLanguage {
+    Ar,
+    En,
 }
 
 #[derive(Deserialize)]
@@ -578,6 +586,20 @@ pub(super) fn room_areas(
                 None => (label_height.unwrap_or(default), room.point),
             };
             label_points.push(at);
+            let language = input.language.unwrap_or_else(|| {
+                let has_arabic = room.name.as_deref().unwrap_or_default().chars().any(|c| {
+                    matches!(c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')
+                });
+                if has_arabic {
+                    LabelLanguage::Ar
+                } else {
+                    LabelLanguage::En
+                }
+            });
+            let (prefix, unit) = match language {
+                LabelLanguage::Ar => ("مساحة مرشحة غير معتمدة", "م²"),
+                LabelLanguage::En => ("Unapproved candidate", "m²"),
+            };
             commands.push(Command::Text {
                 at,
                 height,
@@ -585,9 +607,11 @@ pub(super) fn room_areas(
                 // The number the answer reports (rounded as every result is), so the label and
                 // the list agree even on a value that ends in 5.
                 value: format!(
-                    "{:.*} m²",
+                    "{} {:.*} {}",
+                    prefix,
                     decimals,
-                    (room.net() * sq * DECIMALS).round() / DECIMALS
+                    (room.net() * sq * DECIMALS).round() / DECIMALS,
+                    unit
                 ),
                 style: None,
             });
@@ -611,7 +635,14 @@ pub(super) fn room_areas(
         .map(|(i, room)| {
             let mut row = json!({
                 "name": room.name,
+                // Compatibility field; the status below controls its meaning.
                 "net_area_m2": room.net() * sq,
+                "candidate_area_m2": room.net() * sq,
+                "area_origin": "manual_or_entity",
+                "region_method": "enclosed_drawn_linework",
+                "measurement_basis": "unapproved_net",
+                "room_type_status": "unapproved",
+                "net_accuracy_eligible": false,
                 "enclosed_area_m2": room.gross * sq,
                 "islands": room.islands.iter().map(|i| json!({
                     "area_m2": i.area * sq,

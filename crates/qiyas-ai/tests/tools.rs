@@ -950,3 +950,19 @@ fn add_comment_draws_a_cloud_and_list_comments_reads_it() {
     let list = run(&mut session, "list_comments", json!({})).unwrap();
     assert!(list["comments"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn zero_count_and_empty_summary_keep_scope_and_limits() {
+    let (_dir, mut s) = sample();
+    s.set_layer_hidden("A-DOOR", true);
+    let summary = run(&mut s, "block_summary", json!({})).unwrap();
+    assert_eq!(summary["count_scope"], qiyas_core::INSERT_COUNT_SCOPE);
+    assert_eq!(summary["visibility_policy"], "as_shown");
+    assert!(summary["limitations"]
+        .as_str()
+        .unwrap()
+        .contains("Not a complete visible count"));
+    let count = run(&mut s, "count_blocks", json!({"block_name":"DOOR"})).unwrap();
+    assert!(count.to_string().contains(qiyas_core::INSERT_COUNT_SCOPE));
+    assert!(count.to_string().contains("Not a complete visible count"));
+}

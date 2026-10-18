@@ -141,7 +141,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
         tool(
             "block_summary",
             "How many references of each block sit on each layer of a sheet, visible layers \
-             only, most first. Use it to see what can be counted before count_blocks.",
+             only, most first. Counts top-level INSERT records, including loaded xref tops; not nested occurrences or array cells. Not a complete visible count or project total. See result scope and limitations before count_blocks.",
             json!({
                 "sheet": sheet("Sheet name or block name; the sheet shown when left out."),
                 "offset": offset()
@@ -175,7 +175,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
              the place or on the layer, or get_entity) and give its handle: that measures the \
              drawn geometry exactly, arcs and bulges included. Give points only for corners the \
              user gave you; never approximate a curve with points you chose yourself. If several \
-             entities could be meant, ask the user which. To get the net area of an enclosed \
+             entities could be meant, ask the user which. To get a candidate area of an enclosed \
              space bounded by several entities, use room_areas. Give handle or points, not \
              both. Returns the measurement with its id; shown is in square metres.",
             json!({
@@ -191,7 +191,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
             "count_blocks",
             "Count the references of a block on the sheet shown, on visible layers only, and add \
              the count to the take-off in pieces. Block names come from block_summary or \
-             find_entities.",
+             find_entities. Counts top-level INSERT records, including loaded xref tops; not nested occurrences or array cells. Not a complete visible count or project total. Complete parent visibility, cycles, unavailable xrefs, dynamic visibility and clipping are not resolved.",
             json!({
                 "block_name": { "type": "string", "description": "The block to count, in any case." },
                 "layer": { "type": "string", "description": "Only count references on this layer." }
@@ -583,7 +583,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
             "room_areas",
             "Find the enclosed spaces (rooms) of the drawing and their areas in square metres, \
              without changing anything. Each space is the smallest closed region the drawn line \
-             work makes round a seed point, the same finder the Hatch tool uses; its net area is \
+             work makes round a seed point, the same finder the Hatch tool uses; its candidate area is \
              the region's area less the closed shapes inside it (columns, shafts, a fountain) \
              unless subtract_islands is false. Seeds are the room-name texts already in the \
              drawing (all of them, or those on text_layer, or those matching names) or points you \
@@ -591,7 +591,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
              work encloses, columns that overlap the walls already cut out), the islands taken \
              off (area and bounds) and the point; and the texts that fell in no closed region. \
              Check the result against the drawing (view_image) before you write it anywhere; \
-             label_spaces writes it into the drawing.",
+             label_spaces writes it into the drawing. These are unapproved geometric candidates, not certified net rooms. Text, layer, hatch or closed boundary alone does not establish room type or net basis. Exclude them from net-room accuracy.",
             json!({
                 "seeds": seeds_schema(),
                 "text_layer": { "type": "string", "description": "Take the room names from the Text and MText on this layer." },
@@ -608,7 +608,7 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "label_spaces",
-            "Do room_areas and write each net area into the drawing as text, like \"58.29 m²\", \
+            "Do room_areas and write each unapproved candidate area into the drawing as text, like \"Unapproved candidate 58.29 m²\", \
              just under the room name (or at the seed point when it has no name), one undo step \
              for all the labels. Same inputs as room_areas, plus: layer (the labels' layer, \
              created if missing; the current layer when left out), height in metres (the room \
@@ -627,7 +627,8 @@ pub fn catalogue() -> Vec<ToolSpec> {
                 "subtract_islands": { "type": "boolean", "description": "Take the closed shapes inside a space off its area. Default true." },
                 "layer": { "type": "string", "description": "The labels' layer; the current layer when left out." },
                 "height": { "type": "number", "description": "Label height in metres; the room name's own height when left out." },
-                "decimals": { "type": "integer", "description": "Decimal places, 0 to 6. Default 2." }
+                "decimals": { "type": "integer", "description": "Decimal places, 0 to 6. Default 2." },
+                "language": { "type": "string", "enum": ["ar", "en"], "description": "Label language. Set from the user request, regardless of UI or seed language. When omitted, Arabic seed names use Arabic; other names use English. This never approves net area." }
             }),
             &[],
             true,

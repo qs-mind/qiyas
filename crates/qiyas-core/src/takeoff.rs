@@ -38,6 +38,57 @@ impl Source {
     }
 }
 
+/// Origin of an area, separate from the actor (`source`). No origin proves net area.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AreaOrigin {
+    #[default]
+    Unspecified,
+    ExistingBoundary,
+    WallFace,
+    ManualOrEntity,
+}
+
+impl AreaOrigin {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::ExistingBoundary => "existing_boundary",
+            Self::WallFace => "wall_face",
+            Self::ManualOrEntity => "manual_or_entity",
+        }
+    }
+}
+
+/// Professional measurement basis. Geometry alone never grants net approval.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementBasis {
+    #[default]
+    Unspecified,
+    Gross,
+    WallFace,
+    UnapprovedNet,
+    ApprovedNet,
+}
+
+impl MeasurementBasis {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Gross => "gross",
+            Self::WallFace => "wall_face",
+            Self::UnapprovedNet => "unapproved_net",
+            Self::ApprovedNet => "approved_net",
+        }
+    }
+}
+
+/// Current enumeration contract, shared by command measurements and block summary results.
+/// One INSERT record is one count, including an array record. No recursive occurrence claim.
+pub const INSERT_COUNT_SCOPE: &str = "top_level_insert_records_with_loaded_xref_tops";
+pub const INSERT_COUNT_LIMITATIONS: &str = "Not a complete visible count or project total. Nested occurrences, array cells, complete parent visibility, cycles, unavailable xrefs, dynamic visibility and clipping are not resolved.";
+
 /// One take-off line. `value` is in drawing units (units² for areas, units³ for volumes, pieces
 /// for counts, the item's own unit for items); `shown` is the same quantity in `unit`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +136,13 @@ pub struct Measurement {
     /// `handles` are the xref drawing's); `None` for the drawing's own entities and drawn shapes.
     #[serde(default)]
     pub xref: Option<String>,
+    #[serde(default)]
+    pub area_origin: AreaOrigin,
+    #[serde(default)]
+    pub measurement_basis: MeasurementBasis,
+    /// None for legacy counts and individual entity measurements; never infer a visible total.
+    #[serde(default)]
+    pub count_scope: Option<String>,
 }
 
 impl Measurement {
@@ -124,6 +182,9 @@ impl Measurement {
             chain: Vec::new(),
             xref: None,
             block_path: Vec::new(),
+            area_origin: AreaOrigin::Unspecified,
+            measurement_basis: MeasurementBasis::Unspecified,
+            count_scope: None,
         }
     }
 }

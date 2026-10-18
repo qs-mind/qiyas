@@ -689,3 +689,179 @@ fn a_hatch_with_an_island_measures_without_it_and_after_a_move() {
     let row = s.takeoff.items.iter().find(|r| r.handles == [h]).unwrap();
     assert!((row.value - 96.0).abs() < 1e-9, "{}", row.value);
 }
+
+#[test]
+fn quantity_provenance_survives_json_and_embedded_drawing_without_net_inference() {
+    use qiyas_core::{AreaOrigin, MeasurementBasis, Units};
+    let (_dir, mut session) = sample_session();
+    let original = measure(&mut session, area(&RECT_4X3));
+    assert_eq!(original.area_origin, AreaOrigin::ManualOrEntity);
+    assert_eq!(original.measurement_basis, MeasurementBasis::Unspecified);
+    let mut rows = Vec::new();
+    for (origin, basis) in [
+        (AreaOrigin::ExistingBoundary, MeasurementBasis::Gross),
+        (AreaOrigin::WallFace, MeasurementBasis::WallFace),
+    ] {
+        let mut m = Measurement::new(
+            Kind::Area,
+            12.0,
+            Units::Metres,
+            "Same region".into(),
+            "0".into(),
+            "*Model_Space".into(),
+        );
+        m.points = RECT_4X3.to_vec();
+        m.area_origin = origin;
+        m.measurement_basis = basis;
+        rows.push(m);
+    }
+    qiyas_core::embed_measurements(&mut session.drawing.doc, &rows);
+    let read = qiyas_core::read_embedded(&session.drawing.doc);
+    assert_eq!(read.len(), 2);
+    for (a, b) in rows.iter().zip(&read) {
+        assert_eq!(a.area_origin, b.area_origin);
+        assert_eq!(a.measurement_basis, b.measurement_basis);
+        let restored: Measurement =
+            serde_json::from_value(serde_json::to_value(a).unwrap()).unwrap();
+        assert_eq!(restored.area_origin, a.area_origin);
+    }
+    let mut legacy = serde_json::to_value(&original).unwrap();
+    for key in ["area_origin", "measurement_basis", "count_scope"] {
+        legacy.as_object_mut().unwrap().remove(key);
+    }
+    let old: Measurement = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.area_origin, AreaOrigin::Unspecified);
+    assert_eq!(old.measurement_basis, MeasurementBasis::Unspecified);
+    assert_eq!(old.count_scope, None);
+}
+
+#[test]
+fn count_results_keep_a_bounded_scope_even_for_unsupported_occurrences() {
+    let (_dir, mut session) = sample_session();
+    let m = measure(
+        &mut session,
+        Command::CountBlock {
+            block_name: "DOOR".into(),
+            layer: None,
+        },
+    );
+    assert_eq!(
+        m.count_scope.as_deref(),
+        Some(qiyas_core::INSERT_COUNT_SCOPE)
+    );
+    for limitation in [
+        "Nested", "array", "parent", "cycles", "xrefs", "dynamic", "clipping",
+    ] {
+        assert!(m.note.contains(limitation), "{limitation}: {}", m.note);
+    }
+    let summary = session.block_summary(None);
+    assert!(summary
+        .iter()
+        .all(|r| r.count_scope == qiyas_core::INSERT_COUNT_SCOPE
+            && r.visibility_policy == "as_shown"));
+    assert!(session
+        .block_summary_in_file(None)
+        .iter()
+        .all(|r| r.visibility_policy == "in_file"));
+    qiyas_core::embed_measurements(&mut session.drawing.doc, &[m]);
+    assert_eq!(
+        qiyas_core::read_embedded(&session.drawing.doc)[0]
+            .count_scope
+            .as_deref(),
+        Some(qiyas_core::INSERT_COUNT_SCOPE)
+    );
+}
+
+#[test]
+fn nested_layer_zero_array_cycle_and_missing_xref_remain_bounded_records() {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{BlockRecord, Vector3};
+    let dir = tempfile::tempdir().unwrap();
+    for invisible in [false, true] {
+        let mut doc = qiyas_core::fixtures::sample_doc();
+        let mut block = BlockRecord::new("PARENT");
+        block.handle = doc.allocate_handle();
+        block.block_entity_handle = doc.allocate_handle();
+        block.block_end_handle = doc.allocate_handle();
+        let owner = block.handle;
+        doc.block_records.add(block).unwrap();
+        let mut child = Insert::new("DOOR", Vector3::new(0.0, 0.0, 0.0));
+        child.common.owner_handle = owner;
+        child.common.layer = "0".into();
+        child.column_count = 2;
+        child.row_count = 3;
+        doc.add_entity(EntityType::Insert(child)).unwrap();
+        let mut cycle = Insert::new("PARENT", Vector3::new(0.0, 0.0, 0.0));
+        cycle.common.owner_handle = owner;
+        doc.add_entity(EntityType::Insert(cycle)).unwrap();
+        let mut parent = Insert::new("PARENT", Vector3::new(20.0, 0.0, 0.0));
+        parent.common.invisible = invisible;
+        parent.common.layer = "A-WALL".into();
+        doc.add_entity(EntityType::Insert(parent)).unwrap();
+        let mut array = Insert::new("DOOR", Vector3::new(30.0, 0.0, 0.0));
+        array.column_count = 2;
+        array.row_count = 3;
+        array.common.layer = "A-DOOR".into();
+        doc.add_entity(EntityType::Insert(array)).unwrap();
+        qiyas_core::fixtures::add_xref(&mut doc, "MISSING", "absent.dxf", [0.0, 0.0], 0.0);
+        let path = dir.path().join(format!("bounded-{invisible}.dxf"));
+        DxfWriter::new(&doc).write_to_file(&path).unwrap();
+        let mut session = Session::open(&path).unwrap();
+        let count = |s: &mut Session| {
+            measure(
+                s,
+                Command::CountBlock {
+                    block_name: "DOOR".into(),
+                    layer: None,
+                },
+            )
+        };
+        let m = count(&mut session);
+        // Three plain records plus one array record. Neither the six nested cells nor
+        // the six top-level array occurrences are claimed as enumerated visible objects.
+        assert_eq!(m.value, 4.0);
+        assert_eq!(
+            m.count_scope.as_deref(),
+            Some(qiyas_core::INSERT_COUNT_SCOPE)
+        );
+        assert!(m.note.contains("Not a complete visible count"));
+        session.set_layer_hidden("A-WALL", true);
+        assert_eq!(count(&mut session).value, 4.0);
+        session.set_layer_hidden("A-DOOR", true);
+        assert_eq!(count(&mut session).value, 0.0);
+        assert_eq!(
+            session
+                .block_summary_in_file(None)
+                .iter()
+                .find(|r| r.block_name == "DOOR")
+                .unwrap()
+                .count,
+            4
+        );
+    }
+}
+
+#[test]
+fn file_off_and_frozen_layers_are_excluded_from_both_policies() {
+    use qiyas_core::LayerProp;
+    for (prop, value) in [(LayerProp::On, false), (LayerProp::Frozen, true)] {
+        let (_dir, mut session) = sample_session();
+        session
+            .run(Command::SetLayer {
+                name: "A-DOOR".into(),
+                prop,
+                value: serde_json::json!(value),
+            })
+            .unwrap();
+        let m = measure(
+            &mut session,
+            Command::CountBlock {
+                block_name: "DOOR".into(),
+                layer: None,
+            },
+        );
+        assert_eq!(m.value, 0.0);
+        assert!(session.block_summary(None).is_empty());
+        assert!(session.block_summary_in_file(None).is_empty());
+    }
+}

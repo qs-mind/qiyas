@@ -8,7 +8,10 @@
 //! `Real(height)` and, for an item only, `String(unit)`. A measurement of an entity inside blocks
 //! adds a 9th value, `String(chain)`: the block-reference handles, outermost first, as decimal
 //! numbers joined by commas; its 8th value is then `String("")` for a length, area or count. Readers
-//! take records of 7, 8 or 9 values. A count writes one point per counted
+//! take legacy records of 7, 8 or 9 values. New records pad to 9 and append a tenth
+//! JSON string with area_origin, measurement_basis, count_scope, note and source.
+//! Counts without locations use an invisible record-only point, never a counted location. Missing metadata
+//! stays unspecified, never certified net. A count writes one point per counted
 //! reference, each with the whole count's record. A volume is drawn like an area, on
 //! `QIYAS-AREA`; an item with geometry is drawn like a length, on `QIYAS-ITEM` (a markup, an item
 //! with unit "markup", on `QIYAS-MARKUP`), and an item without geometry is not written.
@@ -126,6 +129,11 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
                     })
                     .chain(m.points.iter().map(|p| Vector3::new(p[0], p[1], 0.0)))
                     .collect();
+                if locations.is_empty() {
+                    let mut point = Point::new();
+                    point.common.invisible = true;
+                    shapes.push((EntityType::Point(point), m));
+                }
                 for location in locations {
                     let mut point = Point::new();
                     point.location = location;
@@ -141,7 +149,8 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
         if let Some(owner) = owner {
             common.owner_handle = owner;
         }
-        common.extended_data.add_record(record(m));
+        let record_only = m.kind == Kind::Count && common.invisible;
+        common.extended_data.add_record(record(m, record_only));
         doc.add_entity(entity)
             .expect("a new entity is always added");
     }
@@ -177,7 +186,7 @@ fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
         .collect()
 }
 
-fn record(m: &Measurement) -> ExtendedDataRecord {
+fn record(m: &Measurement, record_only: bool) -> ExtendedDataRecord {
     let mut record = ExtendedDataRecord::new(APP);
     for value in [
         XDataValue::String(m.id.clone()),
@@ -202,6 +211,20 @@ fn record(m: &Measurement) -> ExtendedDataRecord {
         let chain: Vec<String> = m.chain.iter().map(u64::to_string).collect();
         record.add_value(XDataValue::String(chain.join(",")));
     }
+    while record.values.len() < 9 {
+        record.add_value(XDataValue::String(String::new()));
+    }
+    record.add_value(XDataValue::String(
+        serde_json::json!({
+            "area_origin": m.area_origin,
+            "measurement_basis": m.measurement_basis,
+            "count_scope": m.count_scope,
+            "note": m.note,
+            "source": m.source,
+            "record_only": record_only,
+        })
+        .to_string(),
+    ));
     record
 }
 
@@ -232,7 +255,7 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
         });
         let m = &mut items[i];
         match entity {
-            EntityType::Point(p) if m.kind == Kind::Count => {
+            EntityType::Point(p) if m.kind == Kind::Count && !is_record_only(record) => {
                 m.points.push([p.location.x, p.location.y]);
             }
             EntityType::LwPolyline(line) if m.kind != Kind::Count && m.points.is_empty() => {
@@ -265,6 +288,16 @@ pub fn read_embedded(doc: &CadDocument) -> Vec<Measurement> {
     items
 }
 
+fn is_record_only(record: &ExtendedDataRecord) -> bool {
+    let Some(XDataValue::String(text)) = record.values.get(9) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|meta| meta.get("record_only").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
 /// True when the description is one Qiyas makes up for a new measurement.
 fn is_default_description(m: &Measurement) -> bool {
     let d = m.description.as_str();
@@ -286,6 +319,17 @@ fn is_default_description(m: &Measurement) -> bool {
 /// A measurement from one record, made now by the user, with no points or handles yet.
 fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     let values = record.values.as_slice();
+    let (values, metadata) = if values.len() == 10 {
+        let XDataValue::String(text) = &values[9] else {
+            return None;
+        };
+        (
+            &values[..9],
+            Some(serde_json::from_str::<serde_json::Value>(text).ok()?),
+        )
+    } else {
+        (values, None)
+    };
     let (head, extra, chain) = match values.len() {
         7 => (values, None, None),
         8 => (&values[..7], Some(&values[7]), None),
@@ -294,6 +338,7 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     };
     let chain: Vec<u64> = match chain {
         None => Vec::new(),
+        Some(XDataValue::String(list)) if list.is_empty() => Vec::new(),
         Some(XDataValue::String(list)) => list
             .split(',')
             .map(|h| h.trim().parse().ok())
@@ -302,7 +347,7 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     };
     // A chain record pads the 8th value of kinds that have none.
     let extra = match extra {
-        Some(XDataValue::String(s)) if s.is_empty() && !chain.is_empty() => None,
+        Some(XDataValue::String(s)) if s.is_empty() => None,
         other => other,
     };
     let [XDataValue::String(id), XDataValue::String(kind), XDataValue::Real(value), XDataValue::String(description), XDataValue::String(layer), XDataValue::String(sheet), XDataValue::String(block_name)] =
@@ -328,6 +373,18 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
     );
     m.id = id.clone();
     m.block_name = (!block_name.is_empty()).then(|| block_name.clone());
+    if let Some(meta) = metadata {
+        m.area_origin = serde_json::from_value(meta.get("area_origin")?.clone()).ok()?;
+        m.measurement_basis =
+            serde_json::from_value(meta.get("measurement_basis")?.clone()).ok()?;
+        m.count_scope = serde_json::from_value(meta.get("count_scope")?.clone()).ok()?;
+        if let Some(note) = meta.get("note") {
+            m.note = serde_json::from_value(note.clone()).ok()?;
+        }
+        if let Some(source) = meta.get("source") {
+            m.source = serde_json::from_value(source.clone()).ok()?;
+        }
+    }
     m.chain = chain;
     match extra {
         Some(XDataValue::Real(height)) => m.height = Some(*height),
