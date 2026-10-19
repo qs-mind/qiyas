@@ -294,16 +294,49 @@ pub async fn recoverable_drawings(paths: Vec<String>) -> Result<Vec<Recoverable>
         .collect())
 }
 
+/// The untitled drawings (`tabs::untitled_path`) not open here whose autosave is still in the
+/// app's folder: Qiyas closed before their first Save As. The window asks about them at launch
+/// with the recent drawings.
+#[tauri::command]
+pub async fn untitled_autosaves(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dir = state.config_dir.join("untitled");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let open: Vec<String> = tabs::snapshot(&state)
+        .tabs
+        .into_iter()
+        .map(|t| t.path)
+        .collect();
+    let mut found: Vec<String> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sv$")))
+        .filter_map(|p| {
+            let drawing = p.with_extension("");
+            let shown = drawing.display().to_string();
+            let untitled = drawing
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("Untitled-"));
+            (untitled && !open.contains(&shown)).then_some(shown)
+        })
+        .collect();
+    found.sort();
+    Ok(found)
+}
+
 /// Opens the autosave of the drawing `path` (or, for an older copy's path, that copy) in a new
 /// tab as a new drawing with unsaved changes beside it (`Session::open_autosave`); the window
-/// then offers Save As.
+/// then offers Save As. An untitled drawing's autosave stays untitled.
 #[tauri::command]
 pub async fn recover_autosave<R: Runtime>(
     path: String,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
-    let session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
+    let mut session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
+    if Path::new(&path).starts_with(state.config_dir.join("untitled")) {
+        session.mark_untitled();
+    }
     let info = session.info();
     new_conversation(&app, &state);
     tabs::add(&state, session);

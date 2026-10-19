@@ -223,9 +223,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Units (Kareem's ruling: AutoCAD level in every unit; `qiyas-core/tests/units.rs` runs one plan in
   mm, cm, m and inches and must stay green). Nothing is a bare length in drawing units:
   - The screen draws curves within 0.05 mm whatever the units (`Session::batch_tol`,
-    `batch_tol_for`); a metre drawing once drew a 1 m circle as a 10-gon. Every arc, circle and
-    ellipse gets 64 segments at least (`qiyas-geom` `MAX_STEP`), and an arc of exactly whole steps
-    gains none from rounding (a hatch traced round a circle would leave slivers).
+    `batch_tol_for`); a metre drawing once drew a 1 m circle as a 10-gon. Every circle gets 16
+    segments at least (`qiyas-geom` `MAX_STEP`; 64 made the DWG corpus 6.6 times heavier, and
+    the zoom regen below already rounds what is zoomed into), and an arc of exactly whole steps
+    gains none from rounding (a hatch traced round a circle would leave slivers). The DWG corpus
+    gives 22,672 segments (`docs/dwg-corpus.md`).
   - Zoomed in past that, the sheet on screen draws its curves again within a quarter pixel
     (`ZOOM_TOL_PX`, `zoom_tol`, `Session::screen_tol`; part of `batch_version`), and lets them go
     zoomed out: the batch carries `curve_tol` and `base_tol` (atlas section, 40 bytes) and the
@@ -246,8 +248,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
     (`size_stock_dim_styles`): at 1:100 in metres it gave 18 m text and 125 m extension lines.
   - Tables: when Qiyas draws a table again (`rebuild_table`), each row grows to hold its cells'
     text as the text engine wraps it (`qiyas_geom::fit_rows`, `mtext_height`); rows never shrink.
-  - Not yet: tolerances relative to huge survey coordinates (`modify2` `TOL`, `SAME_POINT` are
-    absolute; fine in every unit, marginal past 1e9).
+  - Survey coordinates: the edit tolerance (`modify2` `TOL`, 1e-6) and the same-point test
+    (`qiyas-geom` `SAME_POINT`) grow with the coordinates' size past a million (`tol_near`,
+    1e-12 of it; `SAME_POINT_REL` 1e-13), as float steps there exceed them: JOIN once refused two
+    walls meeting at a 3.3e9 mm UTM northing.
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,
@@ -996,8 +1000,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   refused (`UNTITLED`), so the window's Save, and the save of "Save changes?", go through Save As
   (just the name offered); `save_project` writes nothing beside the placeholder; no "no geometry"
   warning; not a recent drawing until its first Save As. Its autosave works as any other's, in
-  the placeholder folder, but the launch recovery question (recents only) never offers it: a crash
-  before the first save leaves it there, unoffered.
+  the placeholder folder; at launch `untitled_autosaves` lists the ones left there (Qiyas closed
+  before their first Save As) with the recent drawings for the recovery question, and a recovered
+  one stays untitled (`Session::mark_untitled`).
 - Recent drawings: `recents` in `settings.json` (10 at most, newest first, kept by the app on every
   open and Save As; the Settings dialog never changes them); the arrow beside Open lists them,
   greyed "(missing)" when the file is gone, then Clear recents.
@@ -1359,6 +1364,6 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Plan (Phase 4, output): `docs/superpowers/plans/2026-10-08-qiyas-phase4-output.md`
 - Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`,
   `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`,
-  `docs/2026-10-12-qiyas-phase4-check.md`
+  `docs/2026-10-12-qiyas-phase4-check.md`, `docs/2026-10-19-qiyas-units-mizan-check.md`
 - Deferred (Phase 3, left for later): `docs/2026-10-09-qiyas-phase3-deferred.md`
 - Deferred (Phase 4, left for later): `docs/2026-10-12-qiyas-phase4-deferred.md`

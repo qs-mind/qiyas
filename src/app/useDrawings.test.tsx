@@ -26,6 +26,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     switch (cmd) {
       case "recents":
         return recoverable.recents.map((path) => ({ path }));
+      case "untitled_autosaves":
+        return recoverable.untitled;
       case "recoverable_drawings":
         return recoverable.found;
       case "take_open_requests":
@@ -64,7 +66,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
-const recoverable = vi.hoisted(() => ({ recents: [] as string[], found: [] as unknown[] }));
+const recoverable = vi.hoisted(() => ({ recents: [] as string[], found: [] as unknown[], untitled: [] as string[] }));
 const dialogs = vi.hoisted(() => ({ save: vi.fn(async (_options: { defaultPath?: string }): Promise<string | null> => null) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(async () => null),
@@ -89,6 +91,7 @@ afterEach(() => {
   core.refuseDiscard = null;
   recoverable.recents = [];
   recoverable.found = [];
+  recoverable.untitled = [];
   dialogs.save.mockClear();
 });
 
@@ -163,6 +166,13 @@ async function launch(notices: string[] = []) {
   await act(async () => {});
   return view;
 }
+
+test("at launch an untitled drawing's crash autosave is asked about with the recent drawings", async () => {
+  recoverable.recents = [VILLA];
+  recoverable.untitled = [UNTITLED];
+  await launch();
+  expect(core.calls).toContain(`recoverable_drawings {"paths":["${VILLA}","${UNTITLED}"]}`);
+});
 
 test("Mizan's requests: a drawing it put on screen is shown; closing unsaved work asks, keeping its conversation", async () => {
   const { result } = await launch();

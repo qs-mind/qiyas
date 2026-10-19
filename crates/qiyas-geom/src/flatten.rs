@@ -20,10 +20,11 @@ use crate::{Path, Xform};
 const MAX_DEPTH: usize = 32;
 /// Upper bound on segments per curve, so a zero or tiny `tol` cannot exhaust memory.
 const MAX_SEGMENTS: usize = 1 << 16;
-/// Largest angle one segment of an arc, circle or ellipse spans: a full circle gets at least 64,
-/// so a small circle (a 12 mm bar, a pipe) stays round when zoomed in close, whatever `tol`
-/// allows (a chord then strays 0.12% of the radius).
-const MAX_STEP: f64 = TAU / 64.0;
+/// Largest angle one segment of an arc, circle or ellipse spans: a full circle gets at least 16,
+/// so a circle far smaller than `tol` never draws as a triangle or a square. Rounder than that
+/// when zoomed in is the screen's zoom regen (`qiyas_core::zoom_tol`), not more segments here: a
+/// floor of 64 made a millimetre drawing full of small circles 6.6 times heavier.
+const MAX_STEP: f64 = TAU / 16.0;
 /// Most block instances plus paths one `flatten` call produces; past it, output stops.
 /// Keeps a block that inserts itself, or a huge nested array, from hanging the app. A caller
 /// flattening many entities shares one budget through `flatten_within`.
@@ -1343,20 +1344,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_small_circle_still_gets_64_segments() {
-        // A 12 mm bar at 0.05 mm: the tolerance alone would give 22.
-        assert_eq!(segment_count(6.0, TAU, 0.05), 64);
-        // A big one keeps what its tolerance needs.
+    fn a_tiny_circle_still_gets_16_segments() {
+        // A 0.4 mm dot at 0.05 mm: the tolerance alone would give 5.
+        assert_eq!(segment_count(0.2, TAU, 0.05), 16);
+        // A 12 mm bar keeps what its tolerance needs (25), a big one more.
+        assert_eq!(segment_count(6.0, TAU, 0.05), 25);
         assert!(segment_count(1000.0, TAU, 0.05) > 300);
     }
 
     #[test]
     fn an_arc_of_exactly_whole_steps_gains_no_piece_from_rounding() {
-        let step = TAU / 64.0;
-        for k in 1..=64 {
+        let step = TAU / 16.0;
+        for k in 1..=16 {
             // Swept angles worked out from points, a hair over the exact multiple.
             let sweep = k as f64 * step * (1.0 + 1e-15);
-            assert_eq!(segment_count(6.0, sweep, 0.05), k);
+            // Small enough for the floor to set the step.
+            assert_eq!(segment_count(0.2, sweep, 0.05), k);
         }
     }
 }

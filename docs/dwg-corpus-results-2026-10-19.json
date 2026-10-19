@@ -1,0 +1,238 @@
+{
+  "source_revision": "f860b0fb76d5f8effb5a70769a3389cb1e0308c8",
+  "measurement": {
+    "measured_at_utc": "2026-10-19T18:27:46.539734+00:00",
+    "platform": "linux",
+    "scope": "Session::open plus first CPU render batch",
+    "rss": "fresh parent getrusage(RUSAGE_CHILDREN), KiB on Linux"
+  },
+  "results": [
+    {
+      "fixture": "example_2000.dwg",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2000.dwg",
+      "bytes": 582572,
+      "sha256": "34574244d7556d1ef7b437443d9b3d1ad8662e1c669c42d80cff6a8a19799be9",
+      "layers": 5,
+      "open_ms": 13.586070000000001,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 25.18066,
+      "report": {
+        "decoded": 721,
+        "dropped": [],
+        "entities": 211,
+        "records": 750,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22672,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 20844,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "example_2004.dwg",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2004.dwg",
+      "bytes": 187890,
+      "sha256": "e72d5e86d5d36d64b08822fb25a46079f592fd895a6157b1b8d9b07775e06108",
+      "layers": 5,
+      "open_ms": 7.909627,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 16.15046,
+      "report": {
+        "decoded": 707,
+        "dropped": [],
+        "entities": 211,
+        "records": 735,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22672,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 20160,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "example_2007.dwg",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2007.dwg",
+      "bytes": 456000,
+      "sha256": "fe2d27229f67ae801b64cc01b50d4f7cdf53770de3e23640be9c24a14de5bc12",
+      "layers": 5,
+      "open_ms": 8.04561,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 15.986621999999999,
+      "report": {
+        "decoded": 512,
+        "dropped": [],
+        "entities": 211,
+        "records": 540,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22672,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 20708,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "example_2010.dwg",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2010.dwg",
+      "bytes": 450071,
+      "sha256": "457fb3d06cacd16dd945b7342651bebdefde03d7eca0d1bd5743c6730e436634",
+      "layers": 5,
+      "open_ms": 8.324703,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 16.247425,
+      "report": {
+        "decoded": 508,
+        "dropped": [],
+        "entities": 211,
+        "records": 536,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22672,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 19184,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "example_2013.dwg",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2013.dwg",
+      "bytes": 146906,
+      "sha256": "ce80953e4881899cde8c42b97919feb2697259554ca54dc4005b19068a12c18f",
+      "layers": 5,
+      "open_ms": 7.986961000000001,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 16.932518,
+      "report": {
+        "decoded": 453,
+        "dropped": [],
+        "entities": 211,
+        "records": 481,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22672,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 18168,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "example_2018.dwg",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2018.dwg",
+      "bytes": 149218,
+      "sha256": "7bc7721224003062b237845842b7a976e46771c37eba6833b9ed3712e7a5a65a",
+      "layers": 5,
+      "open_ms": 6.226235,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 14.742403,
+      "report": {
+        "decoded": 446,
+        "dropped": [],
+        "entities": 211,
+        "records": 474,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22672,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 18368,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "example_2018.dxf",
+      "source": "https://raw.githubusercontent.com/LibreDWG/libredwg/f860b0fb76d5f8effb5a70769a3389cb1e0308c8/test/test-data/example_2018.dxf",
+      "bytes": 845818,
+      "sha256": "e64b0cfb6e1587f9d2bb4387d59064efa5bc667cda9ecbc00313459b304bb997",
+      "layers": 5,
+      "open_ms": 22.128586,
+      "opened": true,
+      "ranges": 194,
+      "ready_ms": 30.098412,
+      "report": {
+        "decoded": 284,
+        "dropped": [],
+        "entities": 211,
+        "records": 284,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 22751,
+      "sheets": 3,
+      "warnings": [],
+      "peak_rss_kib": 18968,
+      "exit_code": 0,
+      "content_checks": true
+    },
+    {
+      "fixture": "host.dxf",
+      "source": "Qiyas generated missing-reference fixture",
+      "bytes": 47984,
+      "layers": 3,
+      "open_ms": 2.478867,
+      "opened": true,
+      "ranges": 1,
+      "ready_ms": 2.510571,
+      "report": {
+        "decoded": 38,
+        "dropped": [],
+        "entities": 2,
+        "records": 38,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 1,
+      "sheets": 2,
+      "warnings": [
+        "Xref plan-arch not found; tried: <corpus-cache>/references-l3mrwc3g/drawings/plan-arch.dxf, <corpus-cache>/references-l3mrwc3g/drawings/xrefs/plan-arch.dxf, <corpus-cache>/references-l3mrwc3g/drawings/x-refs/plan-arch.dxf"
+      ],
+      "peak_rss_kib": 12340,
+      "exit_code": 0,
+      "expected_warning": true
+    },
+    {
+      "fixture": "missing-image.dxf",
+      "source": "Qiyas generated missing-reference fixture",
+      "bytes": 50966,
+      "layers": 9,
+      "open_ms": 2.549284,
+      "opened": true,
+      "ranges": 7,
+      "ready_ms": 2.908129,
+      "report": {
+        "decoded": 54,
+        "dropped": [],
+        "entities": 9,
+        "records": 54,
+        "recovered_errors": 0,
+        "skipped": 0
+      },
+      "segments": 235,
+      "sheets": 2,
+      "warnings": [
+        "Image pic.png not found"
+      ],
+      "peak_rss_kib": 12472,
+      "exit_code": 0,
+      "expected_warning": true
+    }
+  ]
+}

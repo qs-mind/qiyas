@@ -405,6 +405,10 @@ export const closeTab = (id: number, force = false, keepConversation = false) =>
 export type Recent = { path: string; name: string; folder: string; missing: boolean };
 
 /** The recent drawings, most recent first (at most 10). */
+/** Untitled drawings whose autosave is still in the app's folder (Qiyas closed before their
+ *  first Save As): asked about at launch with the recent drawings. */
+export const untitledAutosaves = () => invoke<string[]>("untitled_autosaves");
+
 export const recents = () => invoke<Recent[]>("recents");
 
 export const clearRecents = () => invoke<void>("clear_recents");

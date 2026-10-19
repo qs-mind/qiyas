@@ -328,6 +328,43 @@ mod tests {
         assert_eq!(generation(&app), before, "the conversation went on");
     }
 
+    /// Qiyas closed before an untitled drawing's first Save As: at the next launch its autosave
+    /// is found in the app's folder, and recovered it is still untitled (Save goes to Save As).
+    #[test]
+    fn an_untitled_drawings_crash_autosave_is_found_and_recovered_untitled() {
+        let (dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+        };
+        host.new_drawing("m").unwrap();
+        let state = app.state::<AppState>();
+        let placeholder = with_session(&state, |s| {
+            s.run(Command::Draw(DrawSpec::Line {
+                a: [0.0, 0.0],
+                b: [1.0, 0.0],
+            }))?;
+            s.autosave()?;
+            Ok(s.drawing.path.clone())
+        })
+        .unwrap();
+        drop(app);
+
+        // The next launch, on the same config folder.
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        app.manage(AppState::new(dir.path().join("config")));
+        let state = app.state::<AppState>();
+        let found = tauri::async_runtime::block_on(crate::files::untitled_autosaves(state.clone()))
+            .unwrap();
+        assert_eq!(found, [placeholder.display().to_string()]);
+        let info = tauri::async_runtime::block_on(crate::files::recover_autosave(
+            found[0].clone(),
+            app.handle().clone(),
+            state,
+        ))
+        .unwrap();
+        assert!(info.untitled, "recovered, still untitled");
+    }
+
     #[test]
     fn an_untitled_drawing_never_writes_its_project_file_beside_the_placeholder() {
         let (_dir, app) = app();

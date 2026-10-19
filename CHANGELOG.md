@@ -36,6 +36,8 @@ section below, so add the section before pushing the tag.
 - Mizan's picture of the drawing now shows its text and solid fills, so it no longer writes labels
   over labels it could not see; it can change a text in place.
 - Table rows grow to hold text that wraps, instead of running over the next row.
+- A new drawing's autosave is offered back after a crash, even before its first save.
+- JOIN, trim and duplicate points work at large survey coordinates.
 
 ## [0.0.1] - 2026-10-12
 

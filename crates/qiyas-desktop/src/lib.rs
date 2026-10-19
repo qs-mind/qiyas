@@ -67,6 +67,7 @@ pub fn run() {
             files::paper_views,
             files::autosave_drawings,
             files::recoverable_drawings,
+            files::untitled_autosaves,
             files::recover_autosave,
             files::discard_autosave,
             files::recover_drawing,

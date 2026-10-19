@@ -696,6 +696,12 @@ impl Session {
         self.zoom_tol.get().unwrap_or_else(|| self.batch_tol())
     }
 
+    /// Makes this an untitled drawing (see `new_blank`): an untitled drawing's autosave recovered
+    /// after a crash is still one, Save going through Save As.
+    pub fn mark_untitled(&mut self) {
+        self.untitled = true;
+    }
+
     /// A new drawing never saved yet (see `new_blank`).
     pub fn is_untitled(&self) -> bool {
         self.untitled

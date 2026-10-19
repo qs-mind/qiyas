@@ -287,3 +287,39 @@ fn a_stock_dimension_style_is_sized_on_open_and_its_giant_dimensions_redrawn() {
         y1 - y0
     );
 }
+
+/// At a UTM northing in millimetres (3.3e9) float steps are 5e-7: two walls whose ends meet
+/// differ there by a few steps, more than the old fixed 1e-6, and JOIN refused them. The
+/// tolerance now grows with the coordinates.
+#[test]
+fn join_works_at_survey_coordinates() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("site.dwg"), 4);
+    let (x, y): (f64, f64) = (3.3e9, 1.1e9);
+    let meet = x + 5000.0;
+    // The second wall starts three float steps past where the first ends.
+    let mut start = meet;
+    for _ in 0..3 {
+        start = f64::from_bits(start.to_bits() + 1);
+    }
+    assert!(start - meet > 1e-6, "more than the old tolerance apart");
+    let mut line =
+        |a: [f64; 2], b: [f64; 2]| match s.run(Command::Draw(DrawSpec::Line { a, b })).unwrap() {
+            Outcome::Added { handles } => Target {
+                handle: handles[0],
+                chain: Vec::new(),
+            },
+            other => panic!("{other:?}"),
+        };
+    let first = line([x, y], [meet, y]);
+    let second = line([start, y], [start, y + 4000.0]);
+    let outcome = s
+        .run(Command::Edit(qiyas_core::EditSpec::Join {
+            targets: vec![first, second],
+        }))
+        .unwrap();
+    match outcome {
+        Outcome::Edited { removed, .. } => assert_eq!(removed.len(), 1, "joined into one"),
+        other => panic!("{other:?}"),
+    }
+}

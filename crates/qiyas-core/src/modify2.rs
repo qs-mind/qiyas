@@ -32,8 +32,18 @@ use crate::session::variant_name;
 use crate::{CoreError, Outcome, Session, Target};
 
 /// Points closer than this, in drawing units, are the same point; crossings closer than it
-/// to an end are at that end.
+/// to an end are at that end. Far from the origin it grows with the coordinates (`tol_near`).
 const TOL: f64 = 1e-6;
+/// Past a million or so, `TOL` is a few float steps of the coordinates (a UTM northing in
+/// millimetres, 3.3e9, has steps of 5e-7): two ends that meet may differ by more. There the
+/// tolerance is this share of the coordinates' size instead (3 µm at 3.3e9 mm), still far below
+/// anything drawn.
+const REL_TOL: f64 = 1e-12;
+
+/// `TOL` near the point `p`: never less than `REL_TOL` of its coordinates' size.
+fn tol_near(p: [f64; 2]) -> f64 {
+    TOL.max(p[0].abs().max(p[1].abs()) * REL_TOL)
+}
 
 /// What `Command::Edit` does. Points are in drawing coordinates; a pick point (`at_point`,
 /// `at_end`, `at_a`...) is where the entity was clicked, which says which piece, end or side is
@@ -200,8 +210,9 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
     }
 }
 
-fn tol() -> Tolerance {
-    Tolerance::new(TOL)
+/// The kernel's tolerance for curves near `p` (`tol_near`).
+fn tol(p: [f64; 2]) -> Tolerance {
+    Tolerance::new(tol_near(p))
 }
 
 /// "Line 2A": how a message names an entity.
@@ -239,7 +250,7 @@ fn unit(v: [f64; 2]) -> Option<[f64; 2]> {
 }
 
 fn same(a: [f64; 2], b: [f64; 2]) -> bool {
-    dist(a, b) <= TOL
+    dist(a, b) <= tol_near(a)
 }
 
 /// The normal points straight up (+Z): object coordinates are world coordinates on plan.
@@ -867,7 +878,7 @@ impl Session {
         let mut cuts: Vec<f64> = self
             .edge_curves(edges)
             .iter()
-            .flat_map(|c| intersect(&curve, c, tol()))
+            .flat_map(|c| intersect(&curve, c, tol(at)))
             .map(|x| x.t_a)
             .collect();
         let picked = curve.parameter_at(at);
@@ -900,7 +911,7 @@ impl Session {
                     named(&e)
                 )));
             }
-            trim_spans(&curve, &cuts, picked, tol())
+            trim_spans(&curve, &cuts, picked, tol(at))
         };
         if spans.is_empty() {
             return Err(invalid(format!(
@@ -942,7 +953,7 @@ impl Session {
         let reach = self
             .edge_curves(edges)
             .iter()
-            .flat_map(|c| intersect(&carrier, c, tol()))
+            .flat_map(|c| intersect(&carrier, c, tol(at)))
             .map(|x| match end.way {
                 Way::Straight { .. } => x.t_a,
                 Way::Round {
@@ -975,7 +986,7 @@ impl Session {
         let e = self.entity(h).clone();
         let curve = curve_of(&e)?;
         let (t1, t2) = (curve.parameter_at(p1), curve.parameter_at(p2));
-        let spans = break_spans(&curve, t1, t2, tol())
+        let spans = break_spans(&curve, t1, t2, tol(p1))
             .ok_or_else(|| invalid(format!("{} can't be broken there", named(&e))))?;
         if spans.is_empty() {
             return Err(invalid(format!(

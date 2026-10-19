@@ -36,8 +36,10 @@ Do not equate these results with AutoCAD verification or complete rendering.
 The report includes skipped records and all reader warnings. An opened file
 with skipped data must be reviewed before claiming full compatibility.
 The public corpus must retain 211 entities, 194 render ranges, five layers,
-and three sheets. All DWG versions must produce 11,767 line segments.
-The DXF produces 11,846 segments. Its segment count can differ in this check.
+and three sheets. All DWG versions must produce 22,672 line segments.
+The DXF produces 22,751 segments. Its segment count can differ in this check.
+(11,767 and 11,846 until 2026-10-19, when a circle got 16 segments at least: the corpus's small
+circles had as few as 4. See `docs/2026-10-19-qiyas-units-mizan-check.md`.)
 These counts check consistency across formats. They do not prove that every
 element has the same appearance in AutoCAD.
 The runner returns a failure if a drawing cannot open or a missing-reference

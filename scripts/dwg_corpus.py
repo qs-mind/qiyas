@@ -93,7 +93,7 @@ def main():
             and report.get("recovered_errors") == 0 and not report.get("dropped")
             and row.get("ranges") == 194 and row.get("layers") == 5
             and row.get("sheets") == 3 and not row.get("warnings")
-            and (signature is None or row.get("segments") == 11767)
+            and (signature is None or row.get("segments") == 22672)
         )
         results.append(row)
         print(name, row.get("opened"), round(row.get("ready_ms", 0)), flush=True)

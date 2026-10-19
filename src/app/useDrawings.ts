@@ -37,6 +37,7 @@ import {
   sheetSetOpen,
   sheetSetSave,
   tabs as readTabs,
+  untitledAutosaves,
   type Drafting,
   type DrawingInfo,
   type EntityFilter,
@@ -245,10 +246,12 @@ export function useDrawings({
     };
   }, []);
 
-  // On launch: the recent drawings' autosaves newer than them, or left by a crash, are offered back.
+  // On launch: the recent drawings' autosaves newer than them, or left by a crash, are offered back,
+  // and those of untitled drawings Qiyas closed on before their first Save As.
   useEffect(() => {
     (async () => {
-      const paths = (await readRecents()).map((r) => r.path);
+      const untitled = (await untitledAutosaves().catch(() => null)) ?? [];
+      const paths = [...(await readRecents()).map((r) => r.path), ...untitled];
       const found = atLaunch(await recoverableDrawings(paths));
       if (found.length > 0) setRecoveries((q) => enqueue(q, found, null, true));
     })().catch(() => {});
