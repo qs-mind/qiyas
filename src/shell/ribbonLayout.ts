@@ -37,14 +37,14 @@ const dimensions = () => [
   action("dimStyle", "dim.styleButton"),
 ];
 
-/** The quick-access bar on the ribbon's tabs row (`Ribbon.tsx`): Open, Save, Save as, Undo and
- *  Redo, always shown, never part of a layout. */
-export const QUICK_ACCESS: RibbonButton[] = [action("open"), action("save"), action("saveAs"), action("undo"), action("redo")];
+/** The quick-access bar on the ribbon's tabs row (`Ribbon.tsx`): New, Open, Save, Save as, Undo
+ *  and Redo, always shown, never part of a layout. */
+export const QUICK_ACCESS: RibbonButton[] = [action("new"), action("open"), action("save"), action("saveAs"), action("undo"), action("redo")];
 
 /** The ribbon Qiyas ships: the same as the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`);
  *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`).
  *  Measure first, then Draw (the tab with id "home"), then Annotate; `Ribbon.tsx` shows those
- *  three and puts the rest of the tabs under "More". Open, Save, Save as, Undo and Redo are not
+ *  three and puts the rest of the tabs under "More". New, Open, Save, Save as, Undo and Redo are not
  *  in it: `Ribbon.tsx` keeps them in the quick-access bar beside the tabs. */
 export const DEFAULT_RIBBON: RibbonLayout = {
   tabs: [
@@ -172,7 +172,7 @@ export const DEFAULT_RIBBON: RibbonLayout = {
         action("ucsWorld", "ucs.world"),
         action("sheetSet", "sheetSet.button"),
       ]),
-      group("display", "ribbon.display", [toggle("arabicReversed")]),
+      group("display", "ribbon.display", [toggle("arabicReversed"), toggle("ucsIcon")]),
     ]),
     tab("manage", [
       group("scripts", "ribbon.scripts", [action("runScript", "script.run")]),

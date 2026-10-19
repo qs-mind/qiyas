@@ -181,6 +181,7 @@ export function WorkArea({
     syncPictures,
     syncAtlas,
     chooseSheet,
+    ucsIcon,
   } = sheets;
   const { pending } = attach;
   const { closeBlockEdit } = blocks;
@@ -234,6 +235,7 @@ export function WorkArea({
             }}
             grid={drafting?.grid ? drafting.grid_spacing : null}
             ucs={info?.ucs}
+            ucsIcon={ucsIcon}
             inset={inset}
             onMove={measure.onMove}
             onWindowZoomed={measure.cancel}
@@ -296,6 +298,7 @@ export function WorkArea({
             theme={theme}
             colours={colours}
             ucs={info.ucs}
+            ucsIcon={ucsIcon}
             syncAtlas={syncAtlas}
             onError={(e) => setError(String(e))}
             onClose={() => setSplit(false)}

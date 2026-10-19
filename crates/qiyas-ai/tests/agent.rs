@@ -1354,3 +1354,130 @@ async fn rejected_request_after_find_entities_is_logged_without_retry() {
     assert!(log.contains("call_446341"));
     assert!(!log.contains(KEY));
 }
+
+/// The app's drawings, faked: `new_drawing` puts a new blank session in the shared slot (a new
+/// epoch, as a new tab does), `save_drawing` asks the user, and every call is recorded.
+struct FakeHost {
+    session: Arc<Mutex<Option<Session>>>,
+    dir: std::path::PathBuf,
+    calls: Mutex<Vec<String>>,
+}
+
+impl qiyas_ai::DrawingHost for FakeHost {
+    fn list(&self) -> Result<Value, String> {
+        self.calls.lock().unwrap().push("list".into());
+        Ok(json!({ "open": [], "recent": [] }))
+    }
+    fn new_drawing(&self, units: &str) -> Result<Value, String> {
+        self.calls.lock().unwrap().push(format!("new {units}"));
+        let blank = Session::new_blank(&self.dir.join("Untitled-1.dwg"), 6);
+        *self.session.lock().unwrap() = Some(blank);
+        Ok(json!({ "message": "New drawing Untitled-1.dwg on screen" }))
+    }
+    fn open(&self, path: &str, user_named: bool) -> Result<Value, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("open {path} {user_named}"));
+        Ok(json!({}))
+    }
+    fn switch(&self, id: u32) -> Result<Value, String> {
+        self.calls.lock().unwrap().push(format!("switch {id}"));
+        Ok(json!({}))
+    }
+    fn save(&self) -> Result<Value, String> {
+        self.calls.lock().unwrap().push("save".into());
+        Ok(qiyas_ai::host::asked(
+            "The Save dialog is open for the user",
+        ))
+    }
+    fn close(&self, id: Option<u32>) -> Result<Value, String> {
+        self.calls.lock().unwrap().push(format!("close {id:?}"));
+        Ok(json!({}))
+    }
+}
+
+#[tokio::test]
+async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_the_user() {
+    let mock = serve(|n| match n {
+        0 => tool_turn(&[("toolu_1", "new_drawing", &[r#"{"units":"m"}"#])]),
+        1 => tool_turn(&[(
+            "toolu_2",
+            "draw",
+            &[r#"{"shapes":[{"kind":"line","a":[0,0],"b":[5,0]}]}"#],
+        )]),
+        2 => tool_turn(&[
+            ("toolu_3", "save_drawing", &[]),
+            (
+                "toolu_4",
+                "open_drawing",
+                &[r#"{"path":"/jobs/villa.dwg"}"#],
+            ),
+        ]),
+        _ => text_turn(&["Drawn; choose where to save it."]),
+    })
+    .await;
+    // A drawing is open when the turn starts: the new one replaces it on screen.
+    let (dir, session) = sample();
+    let host = Arc::new(FakeHost {
+        session: session.clone(),
+        dir: dir.path().to_path_buf(),
+        calls: Mutex::new(Vec::new()),
+    });
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session.clone(),
+        AgentSettings::default(),
+    )
+    .with_host(host.clone());
+
+    let (result, events) = turn(&mut agent, "new drawing in metres, draw a line, save it").await;
+    result.unwrap();
+
+    let results: Vec<(String, bool, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolResult {
+                id,
+                is_error,
+                summary,
+                ..
+            } => Some((id.clone(), *is_error, summary.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(results.iter().all(|(_, err, _)| !err), "{results:?}");
+    assert_eq!(results[0].2, "New drawing Untitled-1.dwg on screen");
+    assert_eq!(results[2].2, "The Save dialog is open for the user");
+
+    // The line is in the new drawing, which is still untitled: nothing saved it.
+    let guard = session.lock().unwrap();
+    let s = guard.as_ref().unwrap();
+    assert!(s.is_untitled());
+    assert_eq!(s.drawing.doc.entities_in_block("*Model_Space").count(), 1);
+    // The path was not in the user's message, so it is not counted as named by the user.
+    assert_eq!(
+        *host.calls.lock().unwrap(),
+        ["new m", "save", "open /jobs/villa.dwg false"]
+    );
+}
+
+#[tokio::test]
+async fn file_tools_without_a_host_say_to_use_the_app() {
+    let mock = serve(|n| match n {
+        0 => tool_turn(&[("toolu_1", "new_drawing", &[r#"{"units":"m"}"#])]),
+        _ => text_turn(&["Use New in Qiyas."]),
+    })
+    .await;
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        Arc::new(Mutex::new(None)),
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "make a new drawing").await;
+    result.unwrap();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        AgentEvent::ToolResult { is_error: true, summary, .. } if summary == qiyas_ai::host::NO_HOST
+    )));
+}

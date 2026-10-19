@@ -149,6 +149,11 @@ pub struct Batch {
     pub atlas_pages: u32,
     /// The zoom the glyphs were drawn for, in screen pixels per drawing unit; 0 without texts.
     pub px_per_unit: f64,
+    /// The tolerance curves were flattened within, and the drawing's own screen tolerance (0.05
+    /// mm in its units), in drawing units: the window asks for finer curves when zoomed in past
+    /// what `curve_tol` draws cleanly. Set by the session; 0 when not known.
+    pub curve_tol: f64,
+    pub base_tol: f64,
     /// The texts laid out, to place their glyphs again at another zoom (`place_text`). Not part
     /// of `to_bytes`.
     pub texts: Vec<LaidText>,
@@ -862,11 +867,13 @@ impl Batch {
             quads.extend(q.page.to_le_bytes());
             quads.extend(q.flags.to_le_bytes());
         }
-        let mut atlas = Vec::with_capacity(24);
+        let mut atlas = Vec::with_capacity(40);
         atlas.extend(self.atlas_version.to_le_bytes());
         atlas.extend(self.atlas_pages.to_le_bytes());
         atlas.extend([0u8; 4]);
         atlas.extend(self.px_per_unit.to_le_bytes());
+        atlas.extend(self.curve_tol.to_le_bytes());
+        atlas.extend(self.base_tol.to_le_bytes());
         let mut sections: Vec<(u32, Vec<u8>)> = vec![
             (section::RANGES, ranges_bytes(&self.ranges)),
             (section::CHAINS, chains),

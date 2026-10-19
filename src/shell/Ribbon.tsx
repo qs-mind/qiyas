@@ -19,6 +19,8 @@ export type { Tool };
 type Props = {
   active: Tool;
   onTool(t: Tool): void;
+  /** New drawing (asks its units); disabled when left out. */
+  onNew?(): void;
   onOpen(): void;
   /** The recent drawings beside Open (see `RecentsMenu`); without them Open is a plain button. */
   loadRecents?(): Promise<Recent[]>;
@@ -68,6 +70,9 @@ type Props = {
   /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
   arabicReversed?: boolean;
   onArabicReversed?(on: boolean): void;
+  /** The UCS icon shows on the canvas (UCSICON); the toggle is disabled without a handler. */
+  ucsIcon?: boolean;
+  onUcsIcon?(on: boolean): void;
   /** The View tab's named views (see `ViewsMenu`); without them Views is disabled. */
   loadViews?(): Promise<NamedView[]>;
   onGoToView?(view: NamedView): void;
@@ -112,6 +117,7 @@ const ignoreSpace = (e: KeyboardEvent) => {
 /** The handler each action button runs, by its command; a missing one shows it disabled. */
 function actions(props: Props): Record<string, (() => void) | undefined> {
   return {
+    new: props.onNew,
     open: props.onOpen,
     save: props.onSave,
     saveAs: props.onSaveAs,
@@ -204,9 +210,11 @@ function RibbonBody(props: Props) {
       };
     }
     if (b.kind === "toggle") {
-      const groupSelect = b.command === "groupSelect";
-      const on = groupSelect ? (props.groupSelect ?? true) : (props.arabicReversed ?? false);
-      const set = groupSelect ? props.onGroupSelect : props.onArabicReversed;
+      const toggles: Record<string, [boolean, ((on: boolean) => void) | undefined]> = {
+        groupSelect: [props.groupSelect ?? true, props.onGroupSelect],
+        ucsIcon: [props.ucsIcon ?? true, props.onUcsIcon],
+      };
+      const [on, set] = toggles[b.command] ?? [props.arabicReversed ?? false, props.onArabicReversed];
       return { label: b.label, pressed: on, run: set && (() => set(!on)) };
     }
     // Two viewports, or back to one: the default label says which.

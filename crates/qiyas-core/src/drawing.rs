@@ -87,6 +87,20 @@ impl Drawing {
         })
     }
 
+    /// A new, empty drawing in memory, not yet on disk: `path` is where it stands until its first
+    /// Save As. `insunits` is the header's INSUNITS (6 metres, 5 centimetres, 4 millimetres).
+    pub fn blank(path: &Path, insunits: i16) -> Drawing {
+        let mut doc = CadDocument::new();
+        doc.header.insertion_units = insunits;
+        Drawing {
+            path: path.to_path_buf(),
+            units: Units::from_header(insunits),
+            doc,
+            problems: Vec::new(),
+            report: crate::ReadReport::default(),
+        }
+    }
+
     /// Model first, then each paper layout in tab order.
     pub fn sheets(&self) -> Vec<Sheet> {
         let blocks: HashMap<u64, &str> = self

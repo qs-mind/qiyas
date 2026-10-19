@@ -1,6 +1,7 @@
 mod ai;
 mod blocks;
 mod commands;
+mod drawing_host;
 mod files;
 mod launch;
 mod mcp;
@@ -46,6 +47,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_drawing,
+            commands::new_drawing,
             commands::recents,
             commands::clear_recents,
             commands::views,

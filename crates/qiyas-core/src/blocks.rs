@@ -29,6 +29,7 @@ use crate::drawing::Drawing;
 use crate::modify::{add_fresh_to, place, Placing};
 use crate::text::mark_logical;
 use crate::undo::{DocChange, TablesSnapshot};
+use crate::units::insert_unit_factor;
 use crate::{Command, CoreError, Outcome, Session, Target};
 
 /// Characters AutoCAD refuses in a block name.
@@ -560,7 +561,7 @@ impl Session {
             &self.drawing.doc,
             &record.name,
             &qiyas_render::Visibility::default(),
-            crate::session::BATCH_TOL,
+            self.batch_tol(),
         ))
     }
 
@@ -713,13 +714,23 @@ impl Session {
             self.register_text_app();
         }
         let name = name.trim();
+        // The drawing a block came from: its INSUNITS stand in for a block without units.
+        let mut source_units = None;
         if let (Some(path), false) = (from_path, self.drawing.doc.block_records.contains(name)) {
             let other = Drawing::open(Path::new(path))?;
             named_block(&other.doc, name)?;
             Importer::new(&other.doc, &mut self.drawing.doc).block(name)?;
+            source_units = Some(other.doc.header.insertion_units);
         }
         let doc = &self.drawing.doc;
         let record = named_block(doc, name)?;
+        // As AutoCAD's INSERT: a block drawn in other units comes in at this drawing's size (a
+        // 900 mm door from a millimetre library is 0.9 m in a metre plan, not 900 m).
+        let block_units = match record.units {
+            0 => source_units.unwrap_or(0),
+            units => units,
+        };
+        let scale = scale * insert_unit_factor(block_units, doc.header.insertion_units);
         let mut insert = Insert::new(record.name.clone(), v3(at))
             .with_uniform_scale(scale)
             .with_rotation(rotation.to_radians());

@@ -60,13 +60,15 @@ export function Header({
   const { theme, chooseTheme, setAboutOpen, setSettingsOpen, viewport, focusDrawing } = shell;
   const { tool, chooseTool } = toolChoice;
   const { apply, history } = commands;
-  const { batch, split, setSplit, arabicReversed, chooseArabicReversed, saveView, deleteView } = sheets;
+  const { batch, split, setSplit, arabicReversed, chooseArabicReversed, ucsIcon, chooseUcsIcon, saveView, deleteView } =
+    sheets;
   const { setLayerStatesOpen, setTranslatorOpen, groupSelect, setGroupSelect } = layers;
   const { setAttachOpen, setAttachImageOpen, setPending, setPickedInsert } = attach;
   const { setBlockPaletteOpen, openAttributeManager, openDesignCenter, openToolPalettes } = blocks;
   const { setFindOpen, openDimStyle, updateFields } = annotate;
   const {
     openFile,
+    setNewOpen,
     openPath,
     saveFile,
     saveFileAs,
@@ -86,6 +88,7 @@ export function Header({
       <Ribbon
         active={tool}
         onTool={chooseTool}
+        onNew={() => setNewOpen(true)}
         onOpen={openFile}
         loadRecents={readRecents}
         onOpenRecent={openPath}
@@ -162,6 +165,8 @@ export function Header({
         aliases={shell.commandAliases}
         arabicReversed={arabicReversed}
         onArabicReversed={info ? chooseArabicReversed : undefined}
+        ucsIcon={ucsIcon}
+        onUcsIcon={chooseUcsIcon}
         {...(onModel && {
           loadViews: readViews,
           onGoToView: (v: NamedView) => {

@@ -28,7 +28,7 @@ use qiyas_geom::{flatten_with, snap_shapes, Xform};
 use qiyas_render::layer_shown;
 use serde::{Deserialize, Serialize};
 
-use crate::session::{variant_name, MEASURE_TOL};
+use crate::session::variant_name;
 use crate::{CoreError, Outcome, Session, Target};
 
 /// Points closer than this, in drawing units, are the same point; crossings closer than it
@@ -817,11 +817,11 @@ impl Session {
             let Some(e) = doc.get_entity(h) else {
                 continue;
             };
-            let shapes = snap_shapes(doc, e, &Xform::identity(), MEASURE_TOL);
+            let shapes = snap_shapes(doc, e, &Xform::identity(), self.measure_tol());
             if !shapes.is_empty() {
                 out.extend(shapes.into_iter().flat_map(|s| s.pieces));
             } else if matches!(e, EntityType::Insert(_)) {
-                let drawn = flatten_with(doc, &xrefs, e, &Xform::identity(), MEASURE_TOL);
+                let drawn = flatten_with(doc, &xrefs, e, &Xform::identity(), self.measure_tol());
                 out.extend(drawn.into_paths().into_iter().map(|path| {
                     Curve::Polyline(Polyline {
                         vertices: path

@@ -75,8 +75,11 @@ pub fn restart<R: Runtime>(app: &AppHandle<R>) {
     });
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let host: Arc<dyn qiyas_ai::DrawingHost> =
+            Arc::new(crate::drawing_host::AppHost { app: app.clone() });
         let result = serve(
             session,
+            Some(host),
             settings.mcp_port,
             settings.mcp_token,
             shutdown.clone(),

@@ -2446,15 +2446,18 @@ span.grid-sort {
   gap: 6px;
   padding: 6px 8px 2px;
 }
-.model-badge {
-  padding: 0 6px;
-  font-size: 11px;
-  color: var(--muted);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.assistant-head .new-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.assistant-head .new-chat svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 /* The thread and the button that jumps to its end, over its bottom edge. */
 .assistant-thread {

@@ -237,6 +237,10 @@ export type Batch = {
   atlasPages: number;
   /** The zoom the glyphs were drawn for, in screen pixels per drawing unit; 0 without texts. */
   pxPerUnit: number;
+  /** The tolerance its curves were flattened within, and the drawing's own (0.05 mm in its
+   *  units), in drawing units; 0 or left out when not known (see `curvesNeedRedraw`). */
+  curveTol?: number;
+  baseTol?: number;
   /** Underlay pictures, drawn under the lines. */
   images: ImageQuads;
   /** One per picture id the image quads use. */
@@ -356,13 +360,17 @@ export function parseBatch(buf: ArrayBuffer): Batch {
   );
   const t = sections.has(SECTION.textRanges) ? section(SECTION.textRanges, 32) : empty;
   const textRanges = readRanges(SECTION.textRanges, t, quads.length);
-  let [atlasVersion, atlasPages, pxPerUnit] = [0, 0, 0];
+  let [atlasVersion, atlasPages, pxPerUnit, curveTol, baseTol] = [0, 0, 0, 0, 0];
   const a = sections.get(SECTION.atlas);
   if (a) {
     if (a.length < 24) throw new Error(`Render batch section ${SECTION.atlas} too short`);
     atlasVersion = Number(v.getBigUint64(a.at, true));
     atlasPages = v.getUint32(a.at + 8, true);
     pxPerUnit = v.getFloat64(a.at + 16, true);
+    if (a.length >= 40) {
+      curveTol = v.getFloat64(a.at + 24, true);
+      baseTol = v.getFloat64(a.at + 32, true);
+    }
   }
 
   const im = sections.has(SECTION.images) ? section(SECTION.images, 40) : empty;
@@ -405,6 +413,8 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     atlasVersion,
     atlasPages,
     pxPerUnit,
+    curveTol,
+    baseTol,
     images,
     imageTable,
     fills,
@@ -622,6 +632,20 @@ export function pictureNeedsRedraw(drawnFor: number, now: number, picture: Pictu
 
 /** Whether glyphs drawn for `drawnFor` screen pixels per drawing unit look poor at `now`: more than
  *  twice as big or small. */
+/** Screen pixels a chord may stray from its curve when zoomed in past the drawing's own
+ *  tolerance (`qiyas_core::ZOOM_TOL_PX`). */
+export const ZOOM_TOL_PX = 0.25;
+
+/** Whether curves drawn within `current` drawing units should be drawn again at `pxPerUnit` screen
+ *  pixels per drawing unit, as the core's `zoom_tol` decides: more than twice too coarse (a
+ *  corner could show), or eight times finer than needed while finer than the drawing's own
+ *  `base`. False when either is not known. */
+export function curvesNeedRedraw(base: number, current: number, pxPerUnit: number): boolean {
+  if (!(base > 0) || !(current > 0) || !(pxPerUnit > 0) || !Number.isFinite(pxPerUnit)) return false;
+  const want = Math.min(ZOOM_TOL_PX / pxPerUnit, base);
+  return current > 2 * want || (current < want / 8 && current < base);
+}
+
 export function glyphsNeedRedraw(drawnFor: number, now: number): boolean {
   if (!(drawnFor > 0) || !(now > 0)) return false;
   const ratio = now / drawnFor;

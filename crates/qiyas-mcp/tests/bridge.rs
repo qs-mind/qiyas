@@ -25,6 +25,7 @@ async fn app(shutdown: &CancellationToken) -> (tempfile::TempDir, String) {
     let session = Arc::new(Mutex::new(Some(Session::open(&path).unwrap())));
     let addr = qiyas_ai::mcp::serve(
         session,
+        None,
         0,
         TOKEN.into(),
         shutdown.clone(),
@@ -55,7 +56,7 @@ async fn lists_and_calls_through_the_bridge() {
     let client = bridge(&url, TOKEN).await;
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 43);
+    assert_eq!(tools.len(), 54);
 
     let result = client
         .call_tool(CallToolRequestParams::new("list_sheets"))

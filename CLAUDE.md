@@ -20,7 +20,7 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
-    qiyas-ai        the 43 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        the 54 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
@@ -191,6 +191,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Snaps (end, mid, centre, node, intersection, nearest, perpendicular), ortho, polar and the dot
   grid: status bar toggles, F3 / F8 / F10 / F7, settings under the gear. Saved per drawing in the
   project file.
+- The UCS icon (`src/viewport/ucsIcon.ts`, an SVG over the canvas moved on every frame without a
+  React render): an L of X and Y arrows on the UCS origin (0,0 without a UCS), turned with its x
+  axis, a small square marking the point; when the whole icon would not fit on screen it parks
+  bottom left (AutoCAD's UCSICON ON, ORigin). Drawn in the canvas's ink or paper at 70%, never
+  mirrored in Arabic. UCSICON ON / OFF (bare flips it) and View, Display, "Origin icon"; kept on
+  this computer in `localStorage` `qiyas.ucsIcon`, on by default; the split view follows.
 - Xrefs are read-only: loaded from the stored path, beside the drawing, `xrefs/` or `x-refs/`
   (depth 4); View tab, External references to reload or locate one (kept in the project file).
 - Command line (Ctrl+9 shows or hides it): AutoCAD-style words and aliases (DI, AA, COUNT, DIV,
@@ -214,6 +220,34 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   sums, but a hatch and its boundary both count) and the General fields they share ("Varies"
   otherwise), read-only. A drawing's own entity is edited there (see Layers, groups and
   properties).
+- Units (Kareem's ruling: AutoCAD level in every unit; `qiyas-core/tests/units.rs` runs one plan in
+  mm, cm, m and inches and must stay green). Nothing is a bare length in drawing units:
+  - The screen draws curves within 0.05 mm whatever the units (`Session::batch_tol`,
+    `batch_tol_for`); a metre drawing once drew a 1 m circle as a 10-gon. Every arc, circle and
+    ellipse gets 64 segments at least (`qiyas-geom` `MAX_STEP`), and an arc of exactly whole steps
+    gains none from rounding (a hatch traced round a circle would leave slivers).
+  - Zoomed in past that, the sheet on screen draws its curves again within a quarter pixel
+    (`ZOOM_TOL_PX`, `zoom_tol`, `Session::screen_tol`; part of `batch_version`), and lets them go
+    zoomed out: the batch carries `curve_tol` and `base_tol` (atlas section, 40 bytes) and the
+    viewport's `checkGlyphs` asks through the glyph zoom hint (`curvesNeedRedraw`), as AutoCAD
+    regenerates.
+  - Measuring flattens within 1 µm (`measure_tol`, `measure_tol_of`).
+  - A new drawing takes AutoCAD's metric template in its units at 1:100 (`metric_template`): dimension
+    text 2.5 mm on paper (0.25 m in metres), the grid a metre (`Drafting::grid_spacing` from the
+    units when there is no project file), MLINE 20 mm, AUTOCONSTRAIN welding within 0.05 mm
+    (`distance_tolerance` left out), Mizan's ANSI hatches at the Hatch tool's 0.025 / metres per
+    unit, a table cell without a height at half its row, an image on an empty sheet 10 m wide.
+  - INSERT scales a block by its block units (or its source drawing's INSUNITS) to the drawing's
+    (`insert_unit_factor`), as AutoCAD; xrefs are not scaled again (AutoCAD bakes that into the
+    reference's scale on attach). The last text height used is kept per drawing (`useAnnotate`).
+  - On open, a dimension style nobody sized (the codec's stock Standard: text 0.18, offset 0.625,
+    extension 1.25; AutoCAD's imperial Standard differs) takes the metric template's sizes in a
+    drawing not in inches or feet, and Qiyas's dimensions in it are drawn again
+    (`size_stock_dim_styles`): at 1:100 in metres it gave 18 m text and 125 m extension lines.
+  - Tables: when Qiyas draws a table again (`rebuild_table`), each row grows to hold its cells'
+    text as the text engine wraps it (`qiyas_geom::fit_rows`, `mtext_height`); rows never shrink.
+  - Not yet: tolerances relative to huge survey coordinates (`modify2` `TOL`, `SAME_POINT` are
+    absolute; fine in every unit, marginal past 1e9).
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,
@@ -252,7 +286,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   undo; Esc keeps what is drawn), Rectangle, Circle (2P, 3P, typed radius), Arc (three points,
   or C centre first), Ellipse, Spline, Point, Hatch, Revision cloud, Wipeout.
 - Hatch: click inside. `Session::boundary_at` runs `arrangement::bounded_faces` over the entities
-  drawn in a box about 50 screen pixels across, flattened again at `MEASURE_TOL` (f64), growing
+  drawn in a box about 50 screen pixels across, flattened again at the measuring tolerance (1 µm in any unit, `Session::measure_tol`), growing
   the box 4 times until the region found fits inside it; regions inside it become islands. An
   edge along a drawn circle or arc comes back as that arc (`Boundary::Ring::bulges`, passed on
   as `DrawSpec::Hatch::bulges`). An entity inside an arrayed reference keeps its drawn
@@ -280,7 +314,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   the reference's; visible attributes become texts holding their values; polylines and
   multilines; anything else is left as it is, `Outcome::Exploded { left_alone }` says how many).
   One undo step. Wire form `{"type":"modify","kind":"move","targets":[...],...}`, angles in
-  degrees. Erase is `DeleteEntities`. Not an AI tool yet.
+  degrees. Erase is `DeleteEntities`. Mizan's `modify`, `edit` and `erase` run them
+  (`qiyas-ai/src/execute/edit.rs`), and `undo_last` takes back only its own newest step.
 - Targets as for delete: the drawing's own entities at the top of the sheet, all or nothing.
   Changes in place keep handles; copies get new ones (attributes too; vertex, face and sequence
   end handles are nulled for the writers to give) and drop reactors, extension dictionaries and
@@ -776,7 +811,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (`RibbonFlyout.tsx`, a Base UI Menu) are placed on the window, so the scroll never clips them, and take the
   keyboard (Left and Right move between their columns). Views (and Open's recents menu) are drop-downs, still
   our own, placed the same way; Views never goes
-  behind a "⋯". Open (with its recents arrow), Save, Save as, Undo and Redo are not in the data:
+  behind a "⋯". New, Open (with its recents arrow), Save, Save as, Undo and Redo are not in the data:
   they are the quick-access bar on the tabs' row after the app name (`QUICK_ACCESS` in
   `ribbonLayout.ts`; logical sides, so Arabic mirrors it), always shown, a `role="toolbar"` with
   one tab stop and arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways
@@ -949,8 +984,20 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   screen is `AppState::session`, so every IPC command, the assistant and MCP act on it; the others
   are parked (`AppState::parked`, without their batch and pick index) and swapped in by
   `activate_tab`. Lock order: `tabs`, `session`,
-  `parked`. Switching or closing the tab on screen starts a new assistant conversation. Opening a
-  file that is open already shows its tab. Closing (or quitting) with unsaved drawing changes asks.
+  `parked`. Switching or closing the tab on screen starts a new assistant conversation, unless
+  Mizan did it (`keep_conversation`, see the AI section). Opening a file that is open already
+  shows its tab. Closing (or quitting) with unsaved drawing changes asks.
+- New drawing (quick-access New, Ctrl+N, NEW / QNEW): `NewDrawingDialog` asks metres,
+  centimetres or millimetres (the last choice kept in `localStorage` `qiyas.newUnits`), then IPC
+  `new_drawing { units }`: `Session::new_blank` (`CadDocument::new()`, INSUNITS 6, 5 or 4) in a
+  new tab at a placeholder `<config>/untitled/Untitled-N.dwg` (`tabs::untitled_path`: the
+  smallest N no tab uses and no autosave holds). It is clean until it changes (closing it untouched
+  asks nothing) and untitled (`is_untitled`, `DrawingInfo`/`TabInfo` `untitled`): `save()` is
+  refused (`UNTITLED`), so the window's Save, and the save of "Save changes?", go through Save As
+  (just the name offered); `save_project` writes nothing beside the placeholder; no "no geometry"
+  warning; not a recent drawing until its first Save As. Its autosave works as any other's, in
+  the placeholder folder, but the launch recovery question (recents only) never offers it: a crash
+  before the first save leaves it there, unoffered.
 - Recent drawings: `recents` in `settings.json` (10 at most, newest first, kept by the app on every
   open and Save As; the Settings dialog never changes them); the arrow beside Open lists them,
   greyed "(missing)" when the file is gone, then Clear recents.
@@ -980,7 +1027,35 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   when the request is clear it acts. The question is a plain text answer: the turn ends
   (`StopReason::EndTurn`, `AgentEvent::Done`), the question stays in the history and the next
   message is the answer (`agent.rs` test `a_question_ends_the_turn_cleanly...`). The fixed prompt
-  stays under 700 words (a test).
+  stays under 800 words (a test).
+- The panel's header has New chat (`ai.newChat`, `assistant.clear`): a new conversation, disabled
+  while Mizan works or the thread is empty.
+- Mizan never explains how Qiyas draws or fails unless a tool result shows it, and writes formulas
+  as plain text; a stray TeX formula in an answer reads as text anyway (`ai/plainMath.ts`). It
+  fixes what it drew by changing it (`set_text`: words, height in metres, rotation, layer;
+  `modify`, `erase`), never by drawing it again, never hides layers to hide a mistake, and
+  dimensions only with `add_dimension`.
+- view_image draws what the engineer sees: `Session::picture_batch` (the sheet drawn afresh for the
+  picture's zoom, nothing cached, so the window's batch and curves stay) and
+  `render_png_with_text`: solid fills under the lines, the text as its glyphs from the atlas
+  (the text boxes left out). Mizan once saw no text at all and drew labels over labels.
+- Looking at a user's drawing from the command line: `cargo run -p qiyas-plot --example plot_file
+  -- <drawing> <out.pdf>` (fit on A1; `pdftoppm -png` for a picture) and `cargo run -p qiyas-ai
+  --example inspect -- <drawing> [tool[={json}] …]` (read-only tools' JSON; a picture tool writes
+  `<drawing>.<tool>.png`).
+- Mizan's file tools (`qiyas-ai/src/host.rs`, the first six of the catalogue): `list_drawings`
+  (tabs and recents), `new_drawing { units }` (ask when not given), `open_drawing { path }`,
+  `switch_drawing { id }`, `save_drawing`, `close_drawing { id? }`. They run through the
+  `DrawingHost` trait (`Agent::with_host`, `mcp::serve`'s `host`), outside the session's lock,
+  implemented by `qiyas-desktop/src/drawing_host.rs` over the tabs. The assistant chose the
+  drawing, so its conversation goes on (`tabs::activate`/`add`/`close` `keep_conversation`) and the
+  turn's epoch moves to the drawing now on screen; the answer summarises it (the system prompt's
+  is the earlier one's). The window follows `drawing:shown`. The user decides what could lose work
+  or pick a new file: a path that is not an open tab, a recent drawing or written in the user's
+  message (never for MCP) is confirmed in a native dialog; one with an autosave to decide about is
+  refused (`script::open`); an untitled or repaired drawing's save is the window's Save
+  (`drawing:save`); closing unsaved changes is the window's question (`drawing:close`, keeping the
+  conversation). Without a host they answer `NO_HOST`.
 - Measuring a drawn thing is by handle (find_entities / get_entity, then `measure_length` /
   `measure_area`): exact for lines, arcs, circles, LWPOLYLINE and heavy POLYLINE with bulges
   (tested in DXF and DWG). Points are for points the engineer gave. A points measurement whose
@@ -988,7 +1063,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   and `candidates` (handle, kind, layer, length, area) so Mizan removes it and measures the
   handle. `add_measurement` refuses a no-geometry item of quantity 0 (notes, analysis) unless
   `empty_item` is true; `add_markup` is unaffected.
-- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 43 tools in all): `add_text`
+- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 54 tools in all): `add_text`
   (TEXT, or MTEXT for several lines or a width; height in metres, default 2.5 mm x annotation
   scale), `room_areas` and `label_spaces` (the smallest closed region round each room-name text
   or seed via `Session::boundary_at`, like Hatch: `enclosed_area_m2` is what the line work

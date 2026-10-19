@@ -144,7 +144,7 @@ fn dimensions() -> Vec<RibbonButton> {
 /// (geometric and dimensional constraints, Parameters manager, Delete constraints, the constraint
 /// bar), Insert, View, Manage (Run script; Audit, Purge and Recover; Options, Customize and
 /// Aliases) and Output (Plot, Quick print, Print all layouts, Plot styles), as `Ribbon.tsx` draws
-/// them. Labels are i18n keys. Open, Save, Save as, Undo and Redo are not here: they are the
+/// them. Labels are i18n keys. New, Open, Save, Save as, Undo and Redo are not here: they are the
 /// window's quick-access bar beside the tabs, always shown.
 pub fn default_ribbon() -> RibbonLayout {
     use ButtonKind::Toggle;
@@ -337,7 +337,10 @@ pub fn default_ribbon() -> RibbonLayout {
             group(
                 "display",
                 "ribbon.display",
-                vec![button(Toggle, "arabicReversed", "arabicReversed")],
+                vec![
+                    button(Toggle, "arabicReversed", "arabicReversed"),
+                    button(Toggle, "ucsIcon", "ucsIcon"),
+                ],
             ),
         ],
     );

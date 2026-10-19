@@ -4,10 +4,11 @@ import { useT } from "../i18n";
 import type { WorldBounds } from "../viewport/batch";
 import type { Point } from "../viewport/camera";
 
-/** The width a new image gets: a tenth of the sheet's extents, or 10 units on an empty sheet. */
-export function defaultImageWidth(bounds: WorldBounds | null): number {
+/** The width a new image gets: a tenth of the sheet's extents, or 10 m on an empty sheet (in
+ *  drawing units, `metresPerUnit` metres each). */
+export function defaultImageWidth(bounds: WorldBounds | null, metresPerUnit = 1): number {
   const width = bounds ? bounds[1][0] - bounds[0][0] : 0;
-  return width > 0 && Number.isFinite(width) ? width / 10 : 10;
+  return width > 0 && Number.isFinite(width) ? width / 10 : 10 / metresPerUnit;
 }
 
 export type AttachImageRequest = { path: string; at: Point; width: number };

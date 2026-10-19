@@ -140,6 +140,8 @@ export type DrawingInfo = {
   ucs?: Ucs;
   /** The drawing has (or had) parametric constraints (left out: none). */
   has_constraints?: boolean;
+  /** A new drawing never saved yet: `path` is a placeholder, Save goes through Save As. */
+  untitled?: boolean;
 };
 
 /** A user coordinate system: an origin and a unit x axis in the plan (`qiyas_core::Ucs`). */
@@ -372,22 +374,32 @@ export type BlockCount = { block_name: string; layer: string; count: number; att
 /** Opens the drawing in a new tab, or shows its tab when it is open already. */
 export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path });
 
+/** A new drawing's units: metres, centimetres or millimetres (INSUNITS 6, 5, 4). */
+export type NewUnits = "m" | "cm" | "mm";
+
+/** A new, empty drawing in a new tab, untitled until its first Save As; its info. The assistant
+ *  starts a new conversation. */
+export const newDrawing = (units: NewUnits) => invoke<DrawingInfo>("new_drawing", { units });
+
 /** One file tab (`qiyas_desktop::tabs::TabInfo`). */
-export type TabInfo = { id: number; path: string; title: string; dirty: boolean };
+export type TabInfo = { id: number; path: string; title: string; dirty: boolean; untitled?: boolean };
 
 /** Every open drawing's tab, in order, and the one on screen (null when none is open). */
 export type Tabs = { tabs: TabInfo[]; active: number | null };
 
 export const tabs = () => invoke<Tabs>("tabs");
 
-/** Shows the drawing of tab `id`; its info. The assistant starts a new conversation. */
-export const activateTab = (id: number) => invoke<DrawingInfo>("activate_tab", { id });
+/** Shows the drawing of tab `id`; its info. The assistant starts a new conversation, unless
+ *  `keepConversation` (Mizan asked to close it, and it is shown first). */
+export const activateTab = (id: number, keepConversation = false) =>
+  invoke<DrawingInfo>("activate_tab", { id, keepConversation });
 
 /** What `closeTab` refuses with for a drawing with unsaved changes, without `force`. */
 export const UNSAVED = "unsaved";
 
-/** Closes tab `id`; the tabs left. */
-export const closeTab = (id: number, force = false) => invoke<Tabs>("close_tab", { id, force });
+/** Closes tab `id`; the tabs left. `keepConversation` as for `activateTab`. */
+export const closeTab = (id: number, force = false, keepConversation = false) =>
+  invoke<Tabs>("close_tab", { id, force, keepConversation });
 
 /** A drawing opened or saved lately. */
 export type Recent = { path: string; name: string; folder: string; missing: boolean };
@@ -1626,6 +1638,14 @@ export const OPEN_REQUESTED = "open:requested";
 
 /** The drawings the OS asked to open, oldest first; the queue is empty after. */
 export const takeOpenRequests = () => invoke<string[]>("take_open_requests");
+
+/** Sent when Mizan (or an MCP client) put another drawing on screen, or closed the last one. */
+export const DRAWING_SHOWN = "drawing:shown";
+/** Sent when Mizan asked to save a drawing the window asks about first (untitled, or repaired on
+ *  open): the window runs its Save. */
+export const DRAWING_SAVE = "drawing:save";
+/** Sent with a tab id when Mizan asked to close a drawing with unsaved changes: the window asks. */
+export const DRAWING_CLOSE = "drawing:close";
 
 /** Sent when an outside AI app changed the take-off through the MCP server. */
 export const TAKEOFF_CHANGED = "takeoff:changed";

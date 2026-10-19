@@ -238,7 +238,7 @@ fn on_screen_tab(state: &AppState) -> Option<u32> {
 }
 
 /// How many records the failsafe reader dropped or repaired reading `session`'s drawing.
-fn read_problems(session: &Session) -> usize {
+pub(crate) fn read_problems(session: &Session) -> usize {
     session.drawing.report.dropped.iter().map(|d| d.count).sum()
 }
 
@@ -271,7 +271,7 @@ fn run_step<R: Runtime>(
         Action::Delay(ms) => (wait(*ms, DELAY_CAP_MS, stop)?, false),
         Action::Echo(text) => (text.clone(), false),
         Action::Zoom => ("zoom: nothing to do in a script".to_string(), false),
-        Action::Open(path) => (open(app, state, path)?, true),
+        Action::Open(path) => (open(app, state, path, false)?, true),
         Action::SaveAs(path) => {
             with_session(state, |s| s.save_as(path))?;
             remember_recent(state, &path.display().to_string());
@@ -333,11 +333,18 @@ fn run_step<R: Runtime>(
 }
 
 /// OPEN: the drawing's tab is shown when it is open already; else it opens in a new tab, as the
-/// Open button does (the assistant starts a new conversation, the file goes first in recents).
-fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result<String, String> {
+/// Open button does (the assistant starts a new conversation unless `keep_conversation`, the
+/// assistant's own open; the file goes first in recents). A drawing whose autosave the user must
+/// decide about first is refused (see below); so is it for the assistant (`drawing_host`).
+pub(crate) fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    path: &Path,
+    keep_conversation: bool,
+) -> Result<String, String> {
     let shown = path.display().to_string();
     if let Some(id) = tabs::find_path(state, path) {
-        tabs::activate(app, state, id)?;
+        tabs::activate(app, state, id, keep_conversation)?;
         remember_recent(state, &shown);
         return Ok(format!("showed {shown}, open already"));
     }
@@ -370,7 +377,9 @@ fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result
     }
     let session = Session::open(path).map_err(|e| e.to_string())?;
     let problems = read_problems(&session);
-    new_conversation(app, state);
+    if !keep_conversation {
+        new_conversation(app, state);
+    }
     tabs::add(state, session);
     remember_recent(state, &shown);
     Ok(match problems {

@@ -12,6 +12,7 @@ import { useDrawings, type Drawings } from "./useDrawings";
 
 const VILLA = "/jobs/villa.dwg";
 const RECOVERED = "/jobs/villa (recovered).dwg";
+const UNTITLED = "/home/qs/.config/com.qsmind.qiyas/untitled/Untitled-1.dwg";
 
 const core = vi.hoisted(() => ({
   calls: [] as string[],
@@ -35,6 +36,16 @@ vi.mock("@tauri-apps/api/core", () => ({
         return info(RECOVERED);
       case "open_drawing":
         return info(args!.path as string);
+      case "new_drawing":
+        return { ...info(UNTITLED), untitled: true };
+      case "tabs":
+        return { tabs: [{ id: 2, path: VILLA, title: "villa.dwg", dirty: true }], active: 2 };
+      case "drawing_info":
+        return info(VILLA);
+      case "activate_tab":
+        return info(VILLA);
+      case "close_tab":
+        return { tabs: [], active: null };
       case "discard_autosave":
         if (core.refuseDiscard) throw core.refuseDiscard;
         return null;
@@ -43,7 +54,13 @@ vi.mock("@tauri-apps/api/core", () => ({
     }
   }),
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+const events = vi.hoisted(() => ({ handlers: new Map<string, (e: { payload: unknown }) => void>() }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
+    events.handlers.set(name, handler);
+    return () => {};
+  }),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
@@ -146,6 +163,35 @@ async function launch(notices: string[] = []) {
   await act(async () => {});
   return view;
 }
+
+test("Mizan's requests: a drawing it put on screen is shown; closing unsaved work asks, keeping its conversation", async () => {
+  const { result } = await launch();
+  await act(async () => events.handlers.get("drawing:shown")!({ payload: null }));
+  expect(core.calls).toContain("drawing_info null");
+
+  core.calls.length = 0;
+  // Don't Save (the faked dialog answers No): the tab closes, the conversation goes on.
+  await act(async () => events.handlers.get("drawing:close")!({ payload: 2 }));
+  expect(core.calls).toContain(`activate_tab {"id":2,"keepConversation":true}`);
+  expect(core.calls).toContain(`close_tab {"id":2,"force":true,"keepConversation":true}`);
+  expect(result.current.newOpen).toBe(false);
+});
+
+test("New makes an untitled drawing in the units chosen; its Save asks where (just its name offered), never saves over the placeholder", async () => {
+  const { result } = await launch();
+  await act(() => result.current.newDrawing("cm"));
+  expect(core.calls).toContain(`new_drawing {"units":"cm"}`);
+  expect(result.current.newOpen).toBe(false);
+
+  await act(() => result.current.saveFile());
+  expect(dialogs.save).toHaveBeenCalledTimes(1);
+  expect(dialogs.save.mock.calls[0][0].defaultPath).toBe("Untitled-1.dwg");
+  expect(core.calls.some((c) => c.startsWith("save_drawing "))).toBe(false);
+
+  dialogs.save.mockResolvedValueOnce("/jobs/new.dwg");
+  await act(() => result.current.saveFile());
+  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/new.dwg"}`);
+});
 
 test("Recover at launch, nothing open: Save As is offered with the recovered drawing's name; cancelled, the notice says where it came from", async () => {
   const notices: string[] = [];

@@ -12,9 +12,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::image::{height_for, normalized, render_png, MAX_SIDE};
+use crate::image::{height_for, normalized, render_png_with_text, MAX_SIDE};
 
 mod author;
+mod edit;
 
 /// Largest JSON result, in bytes. Longer results lose rows (or have their strings cut).
 const MAX_OUTPUT: usize = 40_960;
@@ -230,6 +231,14 @@ pub fn execute(
         "edit_table_cell" => (author::edit_table_cell(session, parse(input)?, source)?, 0),
         "draw" => (author::draw(session, parse(input)?, source)?, 0),
         "insert_block" => (author::insert_block(session, parse(input)?, source)?, 0),
+        "modify" => (edit::modify(session, parse(input)?, source)?, 0),
+        "edit" => (edit::edit(session, parse(input)?, source)?, 0),
+        "erase" => (edit::erase(session, parse(input)?, source)?, 0),
+        "set_text" => (edit::set_text(session, parse(input)?, source)?, 0),
+        "undo_last" => {
+            parse::<NoInput>(input)?;
+            (edit::undo_last(session, source)?, 0)
+        }
         "set_annotation_scale" => {
             let ScaleInput { scale } = parse(input)?;
             session.run_as(Command::AnnotationScale { name: scale }, source)?;
@@ -1090,15 +1099,18 @@ fn view_image(session: &Session, input: ImageInput) -> Result<ToolOutput, ToolEr
         .width
         .unwrap_or(DEFAULT_WIDTH)
         .clamp(MIN_WIDTH, MAX_SIDE);
-    let batch = session.batch();
+    let screen = session.batch();
     let bounds = match input.bounds {
         Some(b) => normalized(b),
-        None if batch.segments.is_empty() => {
+        None if screen.segments.is_empty() => {
             return Err(bad("Nothing is drawn on the sheet shown"));
         }
-        None => with_margin(batch.bounds),
+        None => with_margin(screen.bounds),
     };
     let bounds = fit(bounds, width);
+    // Drawn afresh for this picture's zoom, its text as glyphs: what the engineer sees.
+    let px_per_unit = f64::from(width) / (bounds[1][0] - bounds[0][0]).max(f64::MIN_POSITIVE);
+    let (batch, pages) = session.picture_batch(px_per_unit);
     let measurements: Vec<_> = session
         .takeoff
         .items
@@ -1106,12 +1118,12 @@ fn view_image(session: &Session, input: ImageInput) -> Result<ToolOutput, ToolEr
         .filter(|m| m.sheet == session.sheet)
         .cloned()
         .collect();
-    let png = render_png(&batch, &measurements, bounds, width);
+    let png = render_png_with_text(&batch, &pages, &measurements, bounds, width);
     let [lo, hi] = bounds;
     let height = height_for(hi[0] - lo[0], hi[1] - lo[1], width);
     let caption = format!(
         "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in drawing units ({}), {width} x {height} px. \
-         Lines in their colours on white (white lines drawn black); the take-off in violet.",
+         Lines, fills and text in their colours on white (white drawn black); the take-off in violet.",
         session.sheet,
         lo[0],
         lo[1],

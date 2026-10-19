@@ -396,6 +396,123 @@ fn draw_builds_a_legend_in_one_undo_step_on_a_layer_and_colour() {
     assert_eq!(count_entities(&s), before + 7);
 }
 
+/// Mizan's edit tools: an offset wall, a moved copy, an erase, each one undo step it can take
+/// back itself, never the user's.
+#[test]
+fn modify_edit_erase_and_undo_last_are_steps_of_the_assistants_own() {
+    let (_dir, mut s) = open(&sample_doc(), "edit.dxf");
+    let before = count_entities(&s);
+    let drawn = run(
+        &mut s,
+        "draw",
+        json!({ "shapes": [{ "kind": "line", "a": [40, 0], "b": [45, 0] }] }),
+    )
+    .unwrap();
+    let wall = drawn["shapes"][0].as_u64().unwrap();
+
+    let offset = run(
+        &mut s,
+        "edit",
+        json!({ "kind": "offset", "handle": wall, "distance": 0.2, "point": [42, 1] }),
+    )
+    .unwrap();
+    assert_eq!(offset["message"], "1 added");
+    assert_eq!(count_entities(&s), before + 2);
+
+    let copied = run(
+        &mut s,
+        "modify",
+        json!({ "kind": "copy", "handles": [wall], "delta": [0, 5], "count": 2 }),
+    )
+    .unwrap();
+    assert_eq!(copied["message"], "2 added");
+    assert_eq!(count_entities(&s), before + 4);
+
+    run(&mut s, "erase", json!({ "handles": [wall] })).unwrap();
+    assert_eq!(count_entities(&s), before + 3);
+
+    // Back, one step at a time: the erase, then the copies.
+    run(&mut s, "undo_last", json!({})).unwrap();
+    assert_eq!(count_entities(&s), before + 4);
+    run(&mut s, "undo_last", json!({})).unwrap();
+    assert_eq!(count_entities(&s), before + 2);
+
+    // A step of the user's on top is never Mizan's to undo.
+    s.run(Command::Draw(qiyas_core::DrawSpec::Line {
+        a: [0.0, 50.0],
+        b: [1.0, 50.0],
+    }))
+    .unwrap();
+    let err = run(&mut s, "undo_last", json!({})).unwrap_err();
+    assert!(err.to_string().contains("only the user"), "{err}");
+    assert_eq!(count_entities(&s), before + 3);
+
+    // Bad input names what is missing.
+    let err = run(
+        &mut s,
+        "modify",
+        json!({ "kind": "rotate", "handles": [wall] }),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("base"), "{err}");
+}
+
+/// Fixing a label is changing it: its words and height (metres) in place, no second text.
+#[test]
+fn set_text_changes_a_label_in_place() {
+    let (_dir, mut s) = open(&sample_doc(), "label.dxf");
+    let out = run(
+        &mut s,
+        "add_text",
+        json!({ "texts": [{ "text": "MAJLIS", "point": [40, 40], "height": 0.25 }] }),
+    )
+    .unwrap();
+    let h = out["texts"][0]["handle"].as_u64().unwrap();
+    let before = count_entities(&s);
+    let changed = run(
+        &mut s,
+        "set_text",
+        json!({ "handle": h, "text": "MAJLIS / LIVING", "height": 0.3 }),
+    )
+    .unwrap();
+    assert_eq!(changed["message"], "Changed text, height");
+    assert_eq!(count_entities(&s), before, "no second text");
+    let info = s.entity_info(h, &[]).unwrap();
+    assert_eq!(info.text.as_deref(), Some("MAJLIS / LIVING"));
+    assert!(
+        (info.height.unwrap() - 0.3).abs() < 1e-9,
+        "metres in a metre drawing"
+    );
+    assert!(run(&mut s, "set_text", json!({ "handle": h })).is_err());
+}
+
+/// A pattern hatch Mizan draws is scaled as the Hatch tool's default (0.025 / metres per unit):
+/// at scale 1 its millimetre pattern would put lines 3 m apart in a metre plan.
+#[test]
+fn a_pattern_hatch_is_scaled_for_the_drawings_units() {
+    for (insunits, scale) in [(6, 0.025), (4, 25.0)] {
+        let mut doc = sample_doc();
+        doc.header.insertion_units = insunits;
+        let (_dir, mut s) = open(&doc, "hatch.dxf");
+        let out = run(
+            &mut s,
+            "draw",
+            json!({ "shapes": [{ "kind": "hatch", "points": [[31, 1], [33, 1], [33, 2], [31, 2]], "pattern": "ansi31" }] }),
+        )
+        .unwrap();
+        let h = out["shapes"][0].as_u64().unwrap();
+        let Some(EntityType::Hatch(hatch)) = s.drawing.doc.get_entity(opencadcodec::Handle::new(h))
+        else {
+            panic!("a hatch");
+        };
+        assert!(
+            (hatch.pattern_scale - scale).abs() < 1e-12,
+            "INSUNITS {insunits}: scale {}",
+            hatch.pattern_scale
+        );
+    }
+}
+
 #[test]
 fn draw_names_what_a_shape_is_missing() {
     let (_dir, mut s) = open(&sample_doc(), "drawbad.dxf");

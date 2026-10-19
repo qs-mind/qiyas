@@ -47,7 +47,16 @@ test("empty state offers three examples; one fills the box", () => {
   expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe(
     "Count the doors on this sheet",
   );
-  expect((screen.getByText("Clear") as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("New chat in the header starts a new conversation; not while Mizan works", () => {
+  const { assistant } = setup({ items: [{ kind: "user", text: "Measure the wall" }] });
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  expect(assistant.clear).toHaveBeenCalledTimes(1);
+  cleanup();
+  setup({ items: [{ kind: "user", text: "Measure the wall" }] }, true);
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("a transcript shows messages, Markdown and a tool card with Show and Undo", () => {

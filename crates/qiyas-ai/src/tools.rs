@@ -22,6 +22,61 @@ pub struct ToolSpec {
 pub fn catalogue() -> Vec<ToolSpec> {
     vec![
         tool(
+            "list_drawings",
+            "List the drawings open in Qiyas (tab id, title, path, unsaved changes, untitled, on \
+             screen) and the recent drawings. Works with no drawing open: use it to offer the \
+             user a recent drawing or a new one.",
+            json!({}),
+            &[],
+            false,
+        ),
+        tool(
+            "new_drawing",
+            "Make a new, empty drawing in a new tab and put it on screen, untitled until the user \
+             saves it. units: \"m\", \"cm\" or \"mm\"; when the user has not said, ask which \
+             before calling. The drawing summary in the system prompt is then of the earlier \
+             drawing (or none): trust this tool's answer and the [state] block.",
+            json!({ "units": { "type": "string", "enum": ["m", "cm", "mm"], "description": "The drawing's units." } }),
+            &["units"],
+            false,
+        ),
+        tool(
+            "open_drawing",
+            "Open a DWG or DXF drawing in a tab (or show its tab when it is open already) and put \
+             it on screen. Use a path from list_drawings (open or recent) or one the user wrote; \
+             any other path is asked about in Qiyas first, and a drawing with an autosave to \
+             decide about is refused (the user opens it with Open). The answer summarises it.",
+            json!({ "path": { "type": "string", "description": "The drawing file's full path." } }),
+            &["path"],
+            false,
+        ),
+        tool(
+            "switch_drawing",
+            "Put another open drawing on screen, by its tab id from list_drawings. Every other \
+             tool works on the drawing on screen.",
+            json!({ "id": { "type": "integer", "description": "The tab id." } }),
+            &["id"],
+            false,
+        ),
+        tool(
+            "save_drawing",
+            "Save the drawing on screen over its own file (Qiyas keeps a .bak of the old one). An \
+             untitled drawing has no file yet: this opens the Save dialog for the user to choose \
+             where, and does not wait for it. Save only when the user asked.",
+            json!({}),
+            &[],
+            false,
+        ),
+        tool(
+            "close_drawing",
+            "Close a drawing's tab (the one on screen when id is left out). One with unsaved \
+             changes is not closed by you: Qiyas asks the user Save, Don't Save or Cancel. Close \
+             only when the user asked.",
+            json!({ "id": { "type": "integer", "description": "The tab id; the drawing on screen when left out." } }),
+            &[],
+            false,
+        ),
+        tool(
             "list_sheets",
             "List the drawing's sheets (model space and paper layouts), the sheet shown now and \
              the drawing units. Coordinates, lengths and areas read from the drawing are in \
@@ -766,6 +821,86 @@ pub fn catalogue() -> Vec<ToolSpec> {
                 "layer": { "type": "string", "description": "The layer; the current layer when left out." }
             }),
             &["blocks"],
+            true,
+        ),
+        tool(
+            "modify",
+            "Move, copy, rotate, scale, mirror or array drawn entities (handles from \
+             find_entities: the drawing's own entities on the sheet, not inside blocks or xrefs). \
+             One undo step; the take-off follows. move and copy: delta [dx, dy] (copy: count \
+             copies, each delta further). rotate: base and angle (degrees, counter-clockwise). \
+             scale: base and factor. mirror: the line p1-p2. copy true keeps the originals \
+             (rotate, scale, mirror). array: rows, cols, dx, dy. Drawing units.",
+            json!({
+                "kind": { "type": "string", "enum": ["move", "copy", "rotate", "scale", "mirror", "array"] },
+                "handles": { "type": "array", "items": { "type": "integer" }, "description": "The entities." },
+                "delta": point_described("[dx, dy] for move and copy."),
+                "count": { "type": "integer", "description": "Copies, 1 or more (copy)." },
+                "base": point_described("The base point (rotate, scale)."),
+                "angle": { "type": "number", "description": "Degrees, counter-clockwise (rotate)." },
+                "factor": { "type": "number", "description": "Above 0 (scale)." },
+                "copy": { "type": "boolean", "description": "Keep the originals (rotate, scale, mirror)." },
+                "p1": point_described("The mirror line's first point."),
+                "p2": point_described("The mirror line's second point."),
+                "rows": { "type": "integer", "description": "Array rows, 1 or more." },
+                "cols": { "type": "integer", "description": "Array columns, 1 or more." },
+                "dx": { "type": "number", "description": "Array column spacing." },
+                "dy": { "type": "number", "description": "Array row spacing." }
+            }),
+            &["kind", "handles"],
+            true,
+        ),
+        tool(
+            "edit",
+            "Offset, trim, extend, fillet or chamfer one drawn entity (its handle from \
+             find_entities). One undo step; the take-off follows. offset: distance and point on \
+             the side to offset to. trim: point on the piece to cut away (edges: the cutters; \
+             left out, everything drawn). extend: point near the end to extend (edges: the \
+             boundaries). fillet: other line, point and point2 on the kept sides, radius (0 \
+             meets them). chamfer: other line, point, point2, distance and distance2. Drawing units.",
+            json!({
+                "kind": { "type": "string", "enum": ["offset", "trim", "extend", "fillet", "chamfer"] },
+                "handle": handle("The entity."),
+                "other": handle("The second line (fillet, chamfer)."),
+                "distance": { "type": "number", "description": "Offset distance, or the chamfer back along the first line." },
+                "distance2": { "type": "number", "description": "The chamfer back along the second line." },
+                "radius": { "type": "number", "description": "The fillet's radius." },
+                "point": point_described("See the description, per kind."),
+                "point2": point_described("A point on the second line's kept side (fillet, chamfer)."),
+                "edges": { "type": "array", "items": { "type": "integer" }, "description": "Trim's cutters or extend's boundaries." }
+            }),
+            &["kind", "handle", "point"],
+            true,
+        ),
+        tool(
+            "erase",
+            "Erase drawn entities (handles from find_entities: the drawing's own, on the sheet). \
+             One undo step. Erase only what the user asked to erase.",
+            json!({ "handles": { "type": "array", "items": { "type": "integer" }, "description": "The entities." } }),
+            &["handles"],
+            true,
+        ),
+        tool(
+            "set_text",
+            "Change a text or MText you or the user wrote, in place: its words, height (metres), \
+             rotation (degrees) or layer. To move it, use modify move. Fix a label this way, \
+             never by writing another one over it.",
+            json!({
+                "handle": handle("The text (find_entities kind Text or MText)."),
+                "text": { "type": "string", "description": "The new words; \\n starts a new line in an MText." },
+                "height": { "type": "number", "description": "Text height in metres." },
+                "rotation": { "type": "number", "description": "Degrees, counter-clockwise." },
+                "layer": { "type": "string", "description": "A layer the drawing has." }
+            }),
+            &["handle"],
+            true,
+        ),
+        tool(
+            "undo_last",
+            "Undo your own newest step (a drawing, take-off or BOQ change you made). Refused when \
+             the newest step is the user's: never undo their work.",
+            json!({}),
+            &[],
             true,
         ),
         tool(

@@ -29,7 +29,7 @@ use opencadcodec::{
 use qiyas_geom::{flatten, object_to_world, Path, XrefDocs};
 
 use crate::drawing::short_layer_name;
-use crate::session::{effective_block_name, locate, MEASURE_TOL};
+use crate::session::{effective_block_name, locate, measure_tol_of};
 use crate::{Kind, Measurement, Units};
 
 const APP: &str = "QIYAS";
@@ -178,7 +178,7 @@ fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
     else {
         return Vec::new();
     };
-    flatten(doc, located.entity, &located.xf, MEASURE_TOL)
+    flatten(doc, located.entity, &located.xf, measure_tol_of(doc))
         .into_paths()
         .into_iter()
         .filter(|p| !closed(m.kind) || p.closed)

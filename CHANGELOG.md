@@ -7,6 +7,36 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
+### Added
+
+- New drawing (New on the quick-access bar, Ctrl+N or NEW): an empty drawing in metres,
+  centimetres or millimetres, saved with Save As the first time.
+- Mizan can list, make, open, switch, save and close drawings, in the same conversation. Opening a
+  file you have not opened or named before, Save As and closing unsaved work stay your choice in
+  Qiyas. The MCP server has the same tools.
+- New chat button at the top of Mizan's panel.
+- Mizan can move, copy, rotate, scale, mirror, array, offset, trim, extend, fillet, chamfer and
+  erase what is drawn, and undo its own last step.
+- The origin icon: X and Y arrows on 0,0 (or the UCS origin), parked in the corner when 0,0 is off
+  screen; UCSICON ON / OFF or View, Origin icon.
+
+### Fixed
+
+- Circles and arcs drew as polygons in metre and centimetre drawings: curves are now drawn within
+  0.05 mm in every unit, with 64 segments a circle at least, and again finer when zoomed in close.
+- New drawings get readable dimensions and text (a metric template at 1:100), a metre grid and
+  AutoCAD's multiline width, whatever their units.
+- A block inserted from a drawing in other units comes in at its real size.
+- AUTOCONSTRAIN no longer welds ends a few centimetres apart in metre drawings.
+- Mizan's hatches use the right pattern scale for the drawing's units.
+- A hatch made by clicking inside a square round a circle found slivers as islands.
+- Mizan no longer makes up explanations of how Qiyas works, and its formulas read as plain text.
+- Dimensions in metre drawings without a dimension style of their own were metres tall, with
+  extension lines running off the sheet; such drawings are sized when they open.
+- Mizan's picture of the drawing now shows its text and solid fills, so it no longer writes labels
+  over labels it could not see; it can change a text in place.
+- Table rows grow to hold text that wraps, instead of running over the next row.
+
 ## [0.0.1] - 2026-10-12
 
 First public release.

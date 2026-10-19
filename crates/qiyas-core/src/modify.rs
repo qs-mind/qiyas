@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::commands::insert_point;
-use crate::session::{locate, variant_name, BATCH_TOL};
+use crate::session::{locate, variant_name};
 use crate::takeoff::in_metres;
 use crate::{Command, CoreError, Kind, Measurement, Outcome, Session, Target};
 
@@ -792,7 +792,8 @@ impl Session {
 
     /// Every point of `e` as drawn lies in `window`.
     fn wholly_inside(&self, e: &EntityType, [lo, hi]: [[f64; 2]; 2]) -> bool {
-        let paths = flatten(&self.drawing.doc, e, &Xform::identity(), BATCH_TOL).into_paths();
+        let paths =
+            flatten(&self.drawing.doc, e, &Xform::identity(), self.batch_tol()).into_paths();
         !paths.is_empty()
             && paths
                 .iter()

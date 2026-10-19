@@ -16,7 +16,7 @@ use qiyas_render::{layer_on_in_file_with, layer_shown_with};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{effective_block_name, variant_name, Extent};
-use crate::{Session, BATCH_TOL};
+use crate::Session;
 
 /// Most rows one `find_entities` page returns.
 const MAX_LIMIT: usize = 500;
@@ -453,7 +453,7 @@ impl Session {
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
     pub(crate) fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
-        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, BATCH_TOL).into_paths();
+        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, self.batch_tol()).into_paths();
         let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
         if !points.is_empty() {
             return points;

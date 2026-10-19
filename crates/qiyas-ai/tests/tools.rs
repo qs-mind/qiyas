@@ -73,6 +73,12 @@ fn catalogue_schemas_are_strict_objects() {
     assert_eq!(
         names,
         [
+            "list_drawings",
+            "new_drawing",
+            "open_drawing",
+            "switch_drawing",
+            "save_drawing",
+            "close_drawing",
             "list_sheets",
             "set_sheet",
             "list_layers",
@@ -115,6 +121,11 @@ fn catalogue_schemas_are_strict_objects() {
             "edit_table_cell",
             "draw",
             "insert_block",
+            "modify",
+            "edit",
+            "erase",
+            "set_text",
+            "undo_last",
             "view_image",
         ]
     );
@@ -348,6 +359,57 @@ fn handles_at(session: &Session, offset: usize) -> Value {
     )
 }
 
+/// Dark pixels in a PNG (any channel under 128).
+fn dark_pixels(png: &[u8]) -> usize {
+    let pixmap = tiny_skia::Pixmap::decode_png(png).expect("a PNG");
+    pixmap
+        .pixels()
+        .iter()
+        .filter(|p| p.red() < 128 || p.green() < 128 || p.blue() < 128)
+        .count()
+}
+
+/// Mizan looks at what the engineer sees: a text is drawn as its letters (it once saw nothing
+/// of text, and drew labels again over labels it couldn't see), and a solid hatch as a fill.
+#[test]
+fn view_image_shows_text_and_solid_fills() {
+    let (_dir, mut session) = sample();
+    let picture = |session: &mut Session| {
+        let out = execute(
+            session,
+            "view_image",
+            &json!({ "width": 800, "bounds": [[100, 100], [110, 105]] }),
+            Source::Ai,
+        )
+        .unwrap();
+        let ToolOutput::Image { png, caption } = out else {
+            panic!("expected an image");
+        };
+        assert!(caption.contains("text"), "{caption}");
+        dark_pixels(&png)
+    };
+    assert_eq!(picture(&mut session), 0, "an empty corner of the sheet");
+    execute(
+        &mut session,
+        "add_text",
+        &json!({ "texts": [{ "text": "MAJLIS", "point": [101, 102], "height": 1.0 }] }),
+        Source::Ai,
+    )
+    .unwrap();
+    let text = picture(&mut session);
+    assert!(text > 500, "the letters: {text} dark pixels");
+    execute(
+        &mut session,
+        "draw",
+        &json!({ "shapes": [{ "kind": "hatch", "points": [[107, 101], [109, 101], [109, 104], [107, 104]] }] }),
+        Source::Ai,
+    )
+    .unwrap();
+    let filled = picture(&mut session) - text;
+    // A 2 x 3 unit square at 80 px a unit: about 38,400 pixels.
+    assert!(filled > 30_000, "the solid fill: {filled} dark pixels");
+}
+
 #[test]
 fn view_image_is_a_png_of_the_right_size() {
     let (_dir, mut session) = sample();
@@ -388,8 +450,12 @@ fn unknown_tool_is_an_error() {
     let (_dir, mut session) = sample();
     let err = execute(&mut session, "delete_everything", &json!({}), Source::Ai).unwrap_err();
     assert!(matches!(err, ToolError::UnknownTool(ref n) if n == "delete_everything"));
-    // Every tool in the catalogue is known to `execute`.
-    for tool in catalogue() {
+    // Every tool in the catalogue is known to `execute`, but the file tools: the app's host runs
+    // those, outside the session.
+    for tool in catalogue()
+        .into_iter()
+        .filter(|t| !qiyas_ai::is_host_tool(t.name))
+    {
         let result = execute(&mut session, tool.name, &json!({}), Source::Ai);
         assert!(
             !matches!(result, Err(ToolError::UnknownTool(_))),

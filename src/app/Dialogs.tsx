@@ -26,8 +26,9 @@ import { useT } from "../i18n";
 import { About } from "../shell/About";
 import { AliasEditor } from "../shell/AliasEditor";
 import { AuditDialog } from "../shell/AuditDialog";
+import { NewDrawingDialog } from "../shell/NewDrawingDialog";
 import { AttachImageDialog, defaultImageWidth } from "../shell/AttachImageDialog";
-import { AttachPdfDialog, CalibrateDialog } from "../shell/AttachPdfDialog";
+import { AttachPdfDialog, CalibrateDialog, metresPerUnit } from "../shell/AttachPdfDialog";
 import { AttDefDialog, AttributeManager, AttributesDialog, CreateBlockDialog } from "../shell/BlockDialogs";
 import { BlockPalette } from "../shell/BlockPalette";
 import { CustomizeUi } from "../shell/CustomizeUi";
@@ -223,7 +224,7 @@ export function Dialogs({
       {attachImageOpen && info && (
         <AttachImageDialog
           units={info.units}
-          defaultWidth={defaultImageWidth(batch?.bounds ?? null)}
+          defaultWidth={defaultImageWidth(batch?.bounds ?? null, metresPerUnit(info.units))}
           picked={pickedInsert}
           picking={pending?.kind === "insert" && pending.of === "image"}
           chooseFile={async () => {
@@ -681,10 +682,14 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
     setSheetSetShown,
     sheetSetApi,
     openAll,
+    newOpen,
+    setNewOpen,
+    newDrawing,
   } = drawings;
 
   return (
     <>
+      {newOpen && <NewDrawingDialog onCreate={newDrawing} onClose={() => setNewOpen(false)} />}
       {recovery && (
         <RecoveryDialog
           key={recovery.id}

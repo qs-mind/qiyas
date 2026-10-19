@@ -1456,7 +1456,7 @@ fn hatch_by_click_inside_a_block_follows_its_entities_and_an_array_cell_as_drawn
     };
     assert!(close(signed_area(&ring).abs(), 4.0), "{ring:?}");
     assert_eq!(holes.len(), 1, "{holes:?}");
-    // The island's ring is the circle flattened at `MEASURE_TOL`; its bulges make it exact.
+    // The island's ring is the circle flattened at the measuring tolerance; its bulges make it exact.
     let want = PI * 0.6 * 0.6;
     let hole = signed_area(&holes[0]).abs();
     assert!((hole - want).abs() / want < 5e-3, "{hole} vs {want}");

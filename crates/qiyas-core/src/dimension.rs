@@ -26,7 +26,6 @@ use qiyas_geom::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::session::MEASURE_TOL;
 use crate::text::{escape_mtext, mark_logical};
 use crate::{CoreError, Session, Target, Units};
 
@@ -521,6 +520,63 @@ impl Session {
         }
     }
 
+    /// A dimension style nobody sized: the codec's stock "Standard" (text and arrows 0.18, offset
+    /// 0.625, extension 1.25, gap 0.625, no unit at all), which a drawing gets when it was written
+    /// without a style of its own (by Qiyas before its metric template, or a DXF without one).
+    /// AutoCAD's own imperial Standard differs (offset 0.0625), so it is never taken for one.
+    fn is_stock_style(s: &DimStyle) -> bool {
+        s.dimtxt == 0.18
+            && s.dimasz == 0.18
+            && s.dimexo == 0.625
+            && s.dimexe == 1.25
+            && s.dimgap == 0.625
+    }
+
+    /// On open: in a drawing that is not in inches or feet, each stock style (`is_stock_style`)
+    /// takes the metric template's sizes in the drawing's units (text and arrows 2.5 mm,
+    /// offset 0.625, extension 1.25, gap 0.625, baseline 3.75, centre 2.5), and the dimensions
+    /// Qiyas made in it are drawn again. In a metre drawing at 1:100 the stock sizes gave text
+    /// 18 m tall and extension lines 125 m long. AutoCAD's dimensions keep their own blocks.
+    pub(crate) fn size_stock_dim_styles(&mut self) {
+        if matches!(self.drawing.units, Units::Inches | Units::Feet) {
+            return;
+        }
+        let mm = 0.001 / self.drawing.units.to_metres();
+        let doc = &mut self.drawing.doc;
+        let current = doc.header.current_dimstyle_name.clone();
+        let mut sized = Vec::new();
+        for style in doc
+            .dim_styles
+            .iter_mut()
+            .filter(|s| Self::is_stock_style(s))
+        {
+            style.dimtxt = 2.5 * mm;
+            style.dimasz = 2.5 * mm;
+            style.dimexo = 0.625 * mm;
+            style.dimexe = 1.25 * mm;
+            style.dimgap = 0.625 * mm;
+            style.dimdli = 3.75 * mm;
+            style.dimcen = 2.5 * mm;
+            sized.push(style.name.clone());
+        }
+        if sized.iter().any(|n| n.eq_ignore_ascii_case(&current)) {
+            let h = &mut doc.header;
+            h.dim_text_height = 2.5 * mm;
+            h.dim_arrow_size = 2.5 * mm;
+            h.dim_ext_line_offset = 0.625 * mm;
+            h.dim_ext_line_extension = 1.25 * mm;
+            h.dim_line_gap = 0.625 * mm;
+            h.dim_line_increment = 3.75 * mm;
+            h.dim_center_mark = 2.5 * mm;
+        }
+        for name in sized {
+            for h in self.generated_dimensions(&name) {
+                // A dimension Qiyas can't draw again keeps the block it has.
+                let _ = self.rebuild_dimension(h);
+            }
+        }
+    }
+
     /// The DIMSCALE a new annotation keeps as its own: the annotation scale's factor, which
     /// replaces its style's DIMSCALE; `None` at 1:1 (it then follows its style).
     fn annotation_dimscale(&self) -> Option<f64> {
@@ -536,7 +592,12 @@ impl Session {
         if !matches!(entity, EntityType::Circle(_) | EntityType::Arc(_)) {
             return Err(invalid("Pick a circle or an arc"));
         }
-        let shapes = snap_shapes(&self.drawing.doc, entity, &Xform::identity(), MEASURE_TOL);
+        let shapes = snap_shapes(
+            &self.drawing.doc,
+            entity,
+            &Xform::identity(),
+            self.measure_tol(),
+        );
         match shapes.first().and_then(|s| s.pieces.first()) {
             Some(Curve::Circle(c)) => Ok((c.centre, c.radius, None)),
             Some(Curve::Arc(a)) => Ok((a.centre, a.radius, Some((a.start_angle, a.end_angle)))),
@@ -975,7 +1036,7 @@ impl Session {
         };
         let cutting: Vec<([f64; 2], [f64; 2])> = {
             let doc = &self.drawing.doc;
-            flatten(doc, self.entity(c), &Xform::identity(), MEASURE_TOL)
+            flatten(doc, self.entity(c), &Xform::identity(), self.measure_tol())
                 .into_paths()
                 .iter()
                 .flat_map(|p| {

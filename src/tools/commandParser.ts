@@ -32,6 +32,7 @@ export type ParseState = {
 
 /** One of the app's own actions, run from the command line. */
 export type Run =
+  | "new"
   | "open"
   | "save"
   | "saveAs"
@@ -105,6 +106,8 @@ export type Action =
   | { type: "showAll" }
   | { type: "zoom"; how: "extents" | "in" | "out" }
   | { type: "toggle"; toggle: DraftingToggle }
+  /** UCSICON ON or OFF; null flips it. */
+  | { type: "ucsIcon"; on: boolean | null }
   | { type: "sheet"; name: string }
   | { type: "ai"; text: string }
   | { type: "run"; what: Run };
@@ -113,6 +116,7 @@ export type Action =
 export type ParseError = { type: "error"; key: string; args?: Record<string, string> };
 
 const RUNS: Partial<Record<CommandName, Run>> = {
+  NEW: "new",
   OPEN: "open",
   SAVE: "save",
   SAVEAS: "saveAs",
@@ -520,6 +524,12 @@ function command(
       if (how === "W" || how === "WORLD") return { type: "run", what: "ucsWorld" };
       if (how === "OB" || how === "OBJECT") return { type: "tool", tool: "ucsObject" };
       return { type: "error", key: "cmd.ucsOption" };
+    }
+    case "UCSICON": {
+      const how = rest.trim().toUpperCase();
+      if (how === "") return { type: "ucsIcon", on: null };
+      if (how === "ON" || how === "OFF") return { type: "ucsIcon", on: how === "ON" };
+      return { type: "error", key: "cmd.ucsIconOption" };
     }
     default:
       return { type: "error", key: "cmd.unknown", args: { name: cmd } };

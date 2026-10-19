@@ -81,7 +81,10 @@ pub use project::{project_path, Project};
 pub use props::{EntityProp, MatchProp};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};
 pub use script::Script;
-pub use session::{DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MODEL};
+pub use session::{
+    batch_tol_for, zoom_tol, DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MODEL,
+    UNTITLED, ZOOM_TOL_PX,
+};
 pub use sheetset::{sheet_set_entries, sheet_set_entry, SheetSet, SheetSetDrawing, SheetSetEntry};
 pub use snap::{Drafting, Snap, SnapKind, SnapModes};
 pub use table::TableInfo;

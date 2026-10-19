@@ -122,8 +122,17 @@ test("AI sends the rest of the line as typed", () => {
   expect(parse("AI", cmd)).toEqual({ type: "error", key: "cmd.needText", args: { name: "AI" } });
 });
 
+test("UCSICON turns the origin icon on or off, or flips it", () => {
+  expect(parse("UCSICON ON", cmd)).toEqual({ type: "ucsIcon", on: true });
+  expect(parse("ucsicon off", cmd)).toEqual({ type: "ucsIcon", on: false });
+  expect(parse("UCSICON", cmd)).toEqual({ type: "ucsIcon", on: null });
+  expect(parse("UCSICON OR", cmd)).toEqual({ type: "error", key: "cmd.ucsIconOption" });
+});
+
 test("file, view and drafting commands", () => {
   const runs = {
+    NEW: "new",
+    QNEW: "new",
     OPEN: "open",
     SAVE: "save",
     SAVEAS: "saveAs",

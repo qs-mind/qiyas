@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::host::{changes_drawing, is_host_tool, run_host, DrawingHost, NO_HOST};
 use crate::log::{clip, AgentLog};
 use crate::prompt::{state_block, system_prompt, DrawingFacts, Lang, LiveState};
 use crate::provider::{
@@ -101,6 +102,10 @@ pub enum AgentEvent {
 pub struct Agent {
     provider: Box<dyn Provider>,
     session: Arc<Mutex<Option<Session>>>,
+    /// The app's drawings (the file tools); without one they answer `NO_HOST`.
+    host: Option<Arc<dyn DrawingHost>>,
+    /// The user's message of the turn running: a path written in it counts as named by the user.
+    turn_text: String,
     settings: AgentSettings,
     /// Built at the first turn and kept, byte for byte, until `clear()`.
     system: Option<String>,
@@ -151,6 +156,8 @@ impl Agent {
         Agent {
             provider,
             session,
+            host: None,
+            turn_text: String::new(),
             settings,
             system: None,
             history: Vec::new(),
@@ -158,6 +165,12 @@ impl Agent {
             image_budget: IMAGE_BUDGET,
             log: None,
         }
+    }
+
+    /// The agent with the app's drawings behind its file tools (`crate::host`).
+    pub fn with_host(mut self, host: Arc<dyn DrawingHost>) -> Agent {
+        self.host = Some(host);
+        self
     }
 
     /// The agent writing every turn, request, answer, tool run and error to `log`.
@@ -216,7 +229,8 @@ impl Agent {
                 s
             }
         };
-        let (state, epoch) = self.state();
+        let (state, mut epoch) = self.state();
+        self.turn_text = user_text.clone();
         self.push_user(vec![
             ContentBlock::Text { text: state },
             ContentBlock::Text { text: user_text },
@@ -296,7 +310,14 @@ impl Agent {
                 StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
                     let results = self
-                        .run_tools(&assistant, &tools, &mut counts, &events, &cancel, epoch)
+                        .run_tools(
+                            &assistant,
+                            &tools,
+                            &mut counts,
+                            &events,
+                            &cancel,
+                            &mut epoch,
+                        )
                         .await;
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
@@ -375,7 +396,8 @@ impl Agent {
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
     /// for one user message. Once `cancel` fires, past `MAX_TOOL_CALLS`, and past
     /// `MAX_DESTRUCTIVE` removals or resolutions, the calls are answered but not run. `epoch` is
-    /// the session's at the start of the turn (see `run_tool`).
+    /// the session's at the start of the turn (see `run_tool`), moved on when a file tool of the
+    /// turn put another drawing on screen.
     async fn run_tools(
         &mut self,
         assistant: &Message,
@@ -383,7 +405,7 @@ impl Agent {
         counts: &mut TurnCounts,
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancellationToken,
-        epoch: Option<u64>,
+        epoch: &mut Option<u64>,
     ) -> Vec<ContentBlock> {
         let mut results = Vec::new();
         for (id, name, input) in assistant.tool_uses() {
@@ -411,9 +433,17 @@ impl Agent {
             } else if let Some(why) = counts.over_cap(name) {
                 counts.calls += 1;
                 (error_result(id, why), error_event(id, why))
+            } else if is_host_tool(name) {
+                counts.calls += 1;
+                let ran = self.run_host_tool(id, name, input).await;
+                // The calls after it work on the drawing on screen now.
+                if changes_drawing(name) && !is_error(&ran.0) {
+                    *epoch = self.epoch_now();
+                }
+                ran
             } else {
                 counts.calls += 1;
-                self.run_tool(id, name, input, cancel, epoch).await
+                self.run_tool(id, name, input, cancel, *epoch).await
             };
             self.log(
                 &format!("TOOL {name} ({} ms)", started.elapsed().as_millis()),
@@ -472,21 +502,7 @@ impl Agent {
                 let why = e.to_string();
                 (error_result(id, &why), error_event(id, &why))
             }
-            Ok(ToolOutput::Json(value)) => {
-                let event = AgentEvent::ToolResult {
-                    id: id.to_string(),
-                    summary: summary(&value),
-                    handles: handles(&value),
-                    ui: value.get("ui").cloned(),
-                    is_error: false,
-                };
-                let block = ContentBlock::ToolResult {
-                    tool_use_id: id.to_string(),
-                    content: vec![ResultPart::Text(value.to_string())],
-                    is_error: false,
-                };
-                (block, event)
-            }
+            Ok(ToolOutput::Json(value)) => json_result(id, &value),
             Ok(ToolOutput::Image { png, caption }) => {
                 let data = png_base64(&png);
                 if self.image_bytes + data.len() > self.image_budget {
@@ -511,6 +527,36 @@ impl Agent {
                 (block, event)
             }
         }
+    }
+
+    /// Runs a file tool through the host, off the async workers and outside the session's lock
+    /// (the host locks the app's tabs first).
+    async fn run_host_tool(
+        &self,
+        id: &str,
+        name: &str,
+        input: &Value,
+    ) -> (ContentBlock, AgentEvent) {
+        let Some(host) = self.host.clone() else {
+            return (error_result(id, NO_HOST), error_event(id, NO_HOST));
+        };
+        let (tool, args, text) = (name.to_string(), input.clone(), self.turn_text.clone());
+        let ran =
+            tokio::task::spawn_blocking(move || run_host(&*host, &tool, &args, Some(&text))).await;
+        match ran {
+            Ok(Ok(value)) => json_result(id, &value),
+            Ok(Err(why)) => (error_result(id, &why), error_event(id, &why)),
+            Err(e) => {
+                let why = format!("The tool {name} crashed: {e}");
+                (error_result(id, &why), error_event(id, &why))
+            }
+        }
+    }
+
+    /// The epoch of the drawing on screen now (none without one).
+    fn epoch_now(&self) -> Option<u64> {
+        let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.as_ref().map(Session::epoch)
     }
 
     /// The system prompt for a new conversation: the rules and the drawing as it is now.
@@ -544,6 +590,28 @@ impl Agent {
             _ => self.history.push(Message::user(content)),
         }
     }
+}
+
+/// A tool's JSON answer: the block for the model and the event for the window.
+fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
+    let event = AgentEvent::ToolResult {
+        id: id.to_string(),
+        summary: summary(value),
+        handles: handles(value),
+        ui: value.get("ui").cloned(),
+        is_error: false,
+    };
+    let block = ContentBlock::ToolResult {
+        tool_use_id: id.to_string(),
+        content: vec![ResultPart::Text(value.to_string())],
+        is_error: false,
+    };
+    (block, event)
+}
+
+/// Whether a result block is an error.
+fn is_error(block: &ContentBlock) -> bool {
+    matches!(block, ContentBlock::ToolResult { is_error: true, .. })
 }
 
 /// Whether `content` holds a tool call to answer.
@@ -649,6 +717,10 @@ fn summary(value: &Value) -> String {
     }
     if let Some(removed) = value.get("removed").and_then(Value::as_str) {
         return format!("Removed {removed}");
+    }
+    // The file tools say what they did in a line of their own.
+    if let Some(message) = value.get("message").and_then(Value::as_str) {
+        return message.to_string();
     }
     "Done".to_string()
 }

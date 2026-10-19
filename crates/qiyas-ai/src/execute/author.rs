@@ -760,7 +760,9 @@ fn need<T>(v: Option<T>, what: &str, kind: &str) -> Result<T, ToolError> {
     v.ok_or_else(|| bad(&format!("A {kind} needs {what}")))
 }
 
-fn spec_of(shape: &ShapeItem) -> Result<DrawSpec, ToolError> {
+/// The draw spec of one shape; patterns are scaled by `hatch_scale` (the Hatch tool's default,
+/// 25 in millimetres, 0.025 in metres).
+fn spec_of(shape: &ShapeItem, hatch_scale: f64) -> Result<DrawSpec, ToolError> {
     let point = |p: Option<[f64; 2]>, what: &str, kind: &str| -> Result<[f64; 2], ToolError> {
         finite_point(need(p, what, kind)?, what)
     };
@@ -814,8 +816,18 @@ fn spec_of(shape: &ShapeItem) -> Result<DrawSpec, ToolError> {
             bulges: Vec::new(),
             pattern: match shape.pattern.unwrap_or(PatternName::Solid) {
                 PatternName::Solid => HatchPattern::Solid,
-                PatternName::Ansi31 => HatchPattern::Ansi31,
-                PatternName::Ansi37 => HatchPattern::Ansi37,
+                // The pattern table is in millimetres: at scale 1 a metre plan would get lines
+                // 3 m apart, a millimetre one lines that plot as solid.
+                PatternName::Ansi31 => HatchPattern::Custom {
+                    name: "ANSI31".into(),
+                    angle: 0.0,
+                    scale: hatch_scale,
+                },
+                PatternName::Ansi37 => HatchPattern::Custom {
+                    name: "ANSI37".into(),
+                    angle: 0.0,
+                    scale: hatch_scale,
+                },
             },
         },
         ShapeKind::Revcloud => DrawSpec::RevCloud {
@@ -835,10 +847,11 @@ pub(super) fn draw(
     source: Source,
 ) -> Result<Value, ToolError> {
     at_most(input.shapes.len(), "shapes")?;
+    let hatch_scale = 0.025 / session.drawing.units.to_metres();
     let commands = input
         .shapes
         .iter()
-        .map(|s| spec_of(s).map(Command::Draw))
+        .map(|s| spec_of(s, hatch_scale).map(Command::Draw))
         .collect::<Result<Vec<_>, _>>()?;
     let (handles, created) = run_batch(
         session,

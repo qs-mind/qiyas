@@ -12,8 +12,9 @@ use opencadcodec::{BlockRecord, CadDocument, Color, Line, Vector3};
 use crate::flatten::{is_logical_text, LOGICAL_TEXT_APP};
 use crate::Xform;
 
-/// Text height when a cell gives none, in drawing units (AutoCAD's own default).
-const DEFAULT_TEXT_HEIGHT: f64 = 0.18;
+/// Text height when a cell gives none, as a share of its row's height (Qiyas's own tables put
+/// text at half the row): AutoCAD's fixed 0.18 is a hair in millimetres and a wall in metres.
+const DEFAULT_TEXT_SHARE: f64 = 0.5;
 
 /// The block record a table refers to: by its name when the drawing has a block of that name,
 /// else by its record handle (a DWG reader sets only the handle).
@@ -56,6 +57,57 @@ fn edges(t: &Table) -> (Vec<f64>, Vec<f64>) {
         ys.push(ys[ys.len() - 1] - r.height);
     }
     (xs, ys)
+}
+
+/// Grows each row to hold its cells' text once wrapped, as AutoCAD's tables do: `measure` gives
+/// the height an MText takes laid out (`None`: unknown, the row is left as it is). A cell merged
+/// over several rows is left to them. Rows never shrink. True when a row grew.
+pub fn fit_rows(t: &mut Table, measure: &mut dyn FnMut(&MText) -> Option<f64>) -> bool {
+    let (rows, cols) = (t.rows.len(), t.columns.len());
+    if rows == 0 || cols == 0 {
+        return false;
+    }
+    let (xs, ys) = edges(t);
+    let owner = merge_owners(t);
+    let logical = is_logical_text(&t.common);
+    let mut grown = Vec::new();
+    for r in 0..rows {
+        let mut need = t.rows[r].height;
+        for c in 0..cols {
+            if owner[r][c] != (r, c) || (r + 1 < rows && owner[r + 1][c] == (r, c)) {
+                continue;
+            }
+            let Some(cell) = t.cell(r, c) else {
+                continue;
+            };
+            let value = cell.text_value();
+            if value.trim().is_empty() {
+                continue;
+            }
+            let last_col = (c..cols)
+                .take_while(|&j| owner[r][j] == (r, c))
+                .last()
+                .unwrap_or(c);
+            let bounds = [xs[c], ys[r], xs[last_col + 1], ys[r + 1]];
+            let m = cell_text(t, cell, value, bounds, logical);
+            let style = cell.style.as_ref().or(t.base_style.as_ref());
+            let (top, bottom) = style.map_or((m.height / 3.0, m.height / 3.0), |s| {
+                (s.margin_top, s.margin_bottom)
+            });
+            if let Some(h) = measure(&m).filter(|h| h.is_finite() && *h > 0.0) {
+                need = need.max(h + top + bottom);
+            }
+        }
+        grown.push(need);
+    }
+    let mut changed = false;
+    for (row, need) in t.rows.iter_mut().zip(grown) {
+        if need > row.height + 1e-9 {
+            row.height = need;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// For every cell, the first cell (row, column) of the merged cell it is part of (itself when it
@@ -188,7 +240,7 @@ fn cell_text(t: &Table, cell: &TableCell, value: &str, bounds: [f64; 4], logical
         .map(|s| s.text_height)
         .filter(|h| *h > 0.0)
         .or(content.map(|c| c.text_height).filter(|h| *h > 0.0))
-        .unwrap_or(DEFAULT_TEXT_HEIGHT);
+        .unwrap_or((top - bottom).abs() * DEFAULT_TEXT_SHARE);
     let alignment = content
         .map(|c| c.alignment)
         .filter(|a| (1..=9).contains(a))

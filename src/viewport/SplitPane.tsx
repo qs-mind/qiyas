@@ -23,6 +23,8 @@ type Props = {
   /** The user's background and highlight colours (as the main view's). */
   colours?: CanvasColours | null;
   ucs?: Ucs | null;
+  /** The UCS icon shows (as in the main view). */
+  ucsIcon?: boolean;
   /** Fetches the glyph atlas pages `b` needs that the window doesn't hold yet. */
   syncAtlas(b: Batch): Promise<void>;
   onError(e: unknown): void;
@@ -41,6 +43,7 @@ export function SplitPane({
   theme,
   colours = null,
   ucs = null,
+  ucsIcon = true,
   syncAtlas,
   onError,
   onClose,
@@ -145,6 +148,7 @@ export function SplitPane({
           theme={theme}
           colours={colours}
           ucs={ucs}
+          ucsIcon={ucsIcon}
           inset={inset}
           onClick={() => {}}
           onMove={() => {}}

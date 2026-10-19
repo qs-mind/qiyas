@@ -40,6 +40,17 @@ type Deps = {
   measure: RefObject<{ cancel(): void } | null>;
 };
 
+const UCS_ICON_KEY = "qiyas.ucsIcon";
+
+/** Whether the UCS icon shows: on unless it was turned off on this computer. */
+function readUcsIcon(): boolean {
+  try {
+    return localStorage.getItem(UCS_ICON_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
 export function useSheets({ switchGen, viewport, run, autosave, setInfo, refreshTabs, items, measure }: Deps) {
   const [batch, setBatch] = useState<Batch | null>(null);
   /** The batch in hand and the core's version of it (`batchVersion`), so a redraw that changed
@@ -67,6 +78,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
   /** The drawing holds its Arabic text backwards (View tab). */
   const [arabicReversed, setArabicReversed] = useState(false);
+  /** The UCS icon on the canvas (UCSICON, View tab), kept on this computer. */
+  const [ucsIcon, setUcsIcon] = useState(readUcsIcon);
   const [sheet, setSheetBlock] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
@@ -219,6 +232,16 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     glyphsBusy.current = false;
   }
 
+  /** Shows or hides the UCS icon, and keeps the choice on this computer. */
+  function chooseUcsIcon(on: boolean) {
+    setUcsIcon(on);
+    try {
+      localStorage.setItem(UCS_ICON_KEY, on ? "on" : "off");
+    } catch {
+      // Kept for this run only.
+    }
+  }
+
   /** Says whether the drawing holds its Arabic text backwards, and redraws its text. */
   async function chooseArabicReversed(on: boolean) {
     let changed = false;
@@ -292,6 +315,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     setRenderProgress,
     arabicReversed,
     setArabicReversed,
+    ucsIcon,
+    chooseUcsIcon,
     sheet,
     setSheetBlock,
     hidden,

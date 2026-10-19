@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::{Arc, MutexGuard, PoisonError};
 
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent, AgentLog};
@@ -45,7 +45,7 @@ pub async fn open_drawing<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
     if let Some(id) = tabs::find_path(&state, Path::new(&path)) {
-        tabs::activate(&app, &state, id)?;
+        tabs::activate(&app, &state, id, false)?;
         remember_recent(&state, &path);
         return with_session(&state, |s| Ok(s.info()));
     }
@@ -56,6 +56,32 @@ pub async fn open_drawing<R: Runtime>(
     new_conversation(&app, &state);
     tabs::add(&state, session);
     remember_recent(&state, &path);
+    Ok(info)
+}
+
+/// The header's INSUNITS for a new drawing's units: "m", "cm" or "mm".
+pub(crate) fn insunits_of(units: &str) -> Result<i16, String> {
+    match units {
+        "m" => Ok(6),
+        "cm" => Ok(5),
+        "mm" => Ok(4),
+        other => Err(format!("Units must be m, cm or mm, not {other}")),
+    }
+}
+
+/// A new, empty drawing in `units` ("m", "cm" or "mm") in a new tab, untitled until its first
+/// Save As (`tabs::untitled_path`); the assistant starts a new conversation about it. Not a
+/// recent drawing until it is saved.
+#[tauri::command]
+pub async fn new_drawing<R: Runtime>(
+    units: String,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<DrawingInfo, String> {
+    let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(&units)?);
+    let info = session.info();
+    new_conversation(&app, &state);
+    tabs::add(&state, session);
     Ok(info)
 }
 
@@ -633,7 +659,10 @@ pub async fn ai_send<R: Runtime>(
         .clone();
     let mut agent = match kept {
         Some(agent) => agent,
-        None => new_agent(&state, &settings, language).await?,
+        // Its file tools run on the app's tabs.
+        None => new_agent(&state, &settings, language)
+            .await?
+            .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() })),
     };
     // Effort may have changed since the last message.
     agent.set_settings(ai::agent_settings(&settings, language));

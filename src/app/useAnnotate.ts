@@ -83,8 +83,12 @@ export function useAnnotate({
   >(null);
   const [fieldTarget, setFieldTarget] = useState<{ handle: number; kind: string } | null>(null);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
-   *  drawing units, and the drawing's current style). */
-  const [textHeight, setTextHeight] = useState<number | null>(null);
+   *  drawing units, and the drawing's current style). The height is a length in one drawing's
+   *  units, so it is kept for that drawing only: 250 in a millimetre plan is never 250 m in a
+   *  metre one opened beside it. */
+  const [keptHeight, setKeptHeight] = useState<{ path: string; height: number } | null>(null);
+  const textHeight = keptHeight && info && keptHeight.path === info.path ? keptHeight.height : null;
+  const setTextHeight = (height: number) => setKeptHeight(info ? { path: info.path, height } : null);
   const [textStyle, setTextStyle] = useState<string | null>(null);
   /** TEXT's in-place editor: where the text goes, and where that is on the canvas. */
   const [textEditor, setTextEditor] = useState<{

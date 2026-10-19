@@ -38,6 +38,8 @@ test("undo, redo and save with Ctrl", () => {
   expect(shortcutFor(keys("KeyZ", { ctrlKey: true, shiftKey: true }))).toBe("redo");
   expect(shortcutFor(keys("KeyY", { ctrlKey: true }))).toBe("redo");
   expect(shortcutFor(keys("KeyS", { ctrlKey: true }))).toBe("save");
+  expect(shortcutFor(keys("KeyN", { ctrlKey: true }))).toBe("new");
+  expect(shortcutFor(keys("KeyN", { ctrlKey: true, shiftKey: true }))).toBeNull();
   expect(shortcutFor(keys("Digit9", { ctrlKey: true }))).toBe("commandLine");
   expect(shortcutFor(keys("Digit9"))).toBeNull();
   expect(shortcutFor(keys("KeyS", { ctrlKey: true, shiftKey: true }))).toBeNull();

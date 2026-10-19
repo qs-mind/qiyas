@@ -13,6 +13,7 @@
 pub mod agent;
 pub mod anthropic;
 mod execute;
+pub mod host;
 mod image;
 pub mod log;
 pub mod mcp;
@@ -23,7 +24,8 @@ mod tools;
 
 pub use agent::{Agent, AgentEvent, AgentSettings};
 pub use execute::{execute, ToolError, ToolOutput};
-pub use image::render_png;
+pub use host::{is_host_tool, run_host, DrawingHost};
+pub use image::{render_png, render_png_with_text};
 pub use log::AgentLog;
 pub use provider::{
     AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason, StreamEvent,

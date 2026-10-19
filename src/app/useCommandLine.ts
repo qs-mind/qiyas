@@ -33,7 +33,10 @@ type Deps = {
   drafting: Pick<DraftingState, "toggleDrafting">;
   toolChoice: ToolChoice;
   commands: Commands;
-  sheets: Pick<Sheets, "batch" | "renderProgress" | "split" | "setSplit" | "hidden" | "chooseSheet">;
+  sheets: Pick<
+    Sheets,
+    "batch" | "renderProgress" | "split" | "setSplit" | "hidden" | "chooseSheet" | "ucsIcon" | "chooseUcsIcon"
+  >;
   layers: Pick<Layers, "applyHidden" | "isolateLayer" | "showAll" | "setLayerStatesOpen" | "setTranslatorOpen">;
   attach: Pick<
     Attach,
@@ -46,6 +49,7 @@ type Deps = {
     | "opening"
     | "switching"
     | "openFile"
+    | "setNewOpen"
     | "recoverFile"
     | "runScriptFile"
     | "scriptLine"
@@ -96,7 +100,7 @@ export function useCommandLine({
   const { toggleDrafting } = drafting;
   const { tool, setTool, lastPoint, preset, chooseTool } = toolChoice;
   const { apply, history } = commands;
-  const { batch, renderProgress, split, setSplit, hidden, chooseSheet } = sheets;
+  const { batch, renderProgress, split, setSplit, hidden, chooseSheet, ucsIcon, chooseUcsIcon } = sheets;
   const { applyHidden, isolateLayer, showAll, setLayerStatesOpen, setTranslatorOpen } = layers;
   const { attachOpen, setAttachOpen, setAttachImageOpen, pending, setPending, setPickedInsert, pendingPoint } = attach;
   const { setBlockPaletteOpen, closeBlockEdit, openAttributeManager } = blocks;
@@ -105,6 +109,7 @@ export function useCommandLine({
     opening,
     switching,
     openFile,
+    setNewOpen,
     recoverFile,
     runScriptFile,
     scriptLine,
@@ -268,6 +273,9 @@ export function useCommandLine({
       case "toggle":
         if (!needDrawing()) toggleDrafting(a.toggle);
         return;
+      case "ucsIcon":
+        chooseUcsIcon(a.on ?? !ucsIcon);
+        return;
       case "sheet": {
         if (needDrawing()) return;
         const want = a.name.toUpperCase();
@@ -292,6 +300,10 @@ export function useCommandLine({
   function runCommandLine(what: Extract<Action, { type: "run" }>["what"]) {
     if (what === "open") {
       openFile();
+      return;
+    }
+    if (what === "new") {
+      setNewOpen(true);
       return;
     }
     // A plot style file needs no drawing.
@@ -416,6 +428,12 @@ export function useCommandLine({
         if (e.repeat) return;
         focusCommandLine.current = !commandLineOn;
         setCommandLineOn(!commandLineOn);
+        return;
+      }
+      // A new drawing, from anywhere: Ctrl+N types nothing (nor opens a browser window).
+      if (action === "new") {
+        e.preventDefault();
+        if (!e.repeat) setNewOpen(true);
         return;
       }
       // The file tabs, from anywhere: Ctrl+Tab and Ctrl+W type nothing.

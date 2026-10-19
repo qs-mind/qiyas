@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::insert_point;
 use crate::drawing::short_layer_name;
 use crate::query::{bounds, plain_text, texts_of, Candidate};
-use crate::session::{effective_block_name, locate, variant_name, Located, MEASURE_TOL};
+use crate::session::{effective_block_name, locate, variant_name, Located};
 use crate::{CoreError, EntityFilter, Kind, Measurement, Session, SnapKind};
 
 /// The layer divided and measured points go on, and its colour index (yellow).
@@ -190,7 +190,7 @@ impl Session {
     fn curve_rows(&self, located: &Located, s: &Shown, at: Option<[f64; 2]>, rows: &mut Rows) {
         let e = located.entity;
         let extent = self.extent(located.doc, e, &located.xf);
-        let shapes = snap_shapes(located.doc, e, &located.xf, MEASURE_TOL);
+        let shapes = snap_shapes(located.doc, e, &located.xf, self.measure_tol());
         let polyline = matches!(
             e,
             EntityType::LwPolyline(_)
@@ -267,7 +267,7 @@ impl Session {
         let (positions, layer, description) = {
             let xrefs: XrefDocs = self.xref_docs();
             let located = locate(&self.drawing.doc, &xrefs, handle, &chain)?;
-            let path = oriented_path(&located);
+            let path = oriented_path(&located, self.measure_tol());
             let total: f64 = path.iter().map(|(c, _)| c.length()).sum();
             if path.is_empty() || !(total > 0.0 && total.is_finite()) {
                 return Err(invalid("This entity has no path to place points along"));
@@ -487,8 +487,8 @@ fn nearest_piece(pieces: &[Curve], p: [f64; 2]) -> usize {
 
 /// The entity's pieces in the order a walk from its start meets them, each with whether it runs
 /// backwards (a clockwise bulge is stored counter-clockwise, so from its far end).
-fn oriented_path(located: &Located) -> Vec<(Curve, bool)> {
-    let shapes = snap_shapes(located.doc, located.entity, &located.xf, MEASURE_TOL);
+fn oriented_path(located: &Located, tol: f64) -> Vec<(Curve, bool)> {
+    let shapes = snap_shapes(located.doc, located.entity, &located.xf, tol);
     let mut out = Vec::new();
     for shape in shapes {
         let mut cursor = shape.vertices.first().copied();

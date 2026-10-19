@@ -11,7 +11,7 @@ import { useStickToBottom } from "./useStickToBottom";
 type Props = {
   assistant: Pick<
     Assistant,
-    "transcript" | "busy" | "error" | "status" | "send" | "cancel" | "clear"
+    "transcript" | "busy" | "error" | "send" | "cancel" | "clear"
   >;
   onShow(card: ToolCardItem): void;
   onUndo(card: ToolCardItem): void;
@@ -24,7 +24,7 @@ const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
  *  Memoised: the app re-renders on every pointer move. */
 export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, onUndo, onSettings }: Props) {
   const t = useT();
-  const { transcript, busy, error, status } = assistant;
+  const { transcript, busy, error } = assistant;
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
 
@@ -141,11 +141,18 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
   return (
     <section className="assistant-panel" aria-label={t("assistant")}>
       <div className="assistant-head">
-        {status && (
-          <span className="model-badge" dir="ltr" title={t("settings.model")}>
-            {status.model}
-          </span>
-        )}
+        <button
+          type="button"
+          className="new-chat"
+          onClick={assistant.clear}
+          disabled={busy || empty}
+          title={t("ai.newChatTip")}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 3.5v9M3.5 8h9" />
+          </svg>
+          {t("ai.newChat")}
+        </button>
         <button type="button" aria-pressed={showLog} onClick={() => setShowLog((on) => !on)}>
           {t("ai.log")}
         </button>
@@ -262,9 +269,6 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           }}
         />
         <div className="composer-buttons">
-          <button type="button" onClick={assistant.clear} disabled={busy || empty}>
-            {t("ai.clear")}
-          </button>
           {busy ? (
             <button type="button" className="primary" onClick={assistant.cancel}>
               {t("ai.stop")}

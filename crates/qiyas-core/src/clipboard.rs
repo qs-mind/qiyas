@@ -16,7 +16,6 @@ use qiyas_geom::{flatten_with, is_xref_block, Xform};
 
 use crate::blocks::Importer;
 use crate::modify::{place, place_keeping_blocks, Placing, MAX_NEW};
-use crate::session::BATCH_TOL;
 use crate::{CoreError, Session, Target, Units};
 
 /// The first line of every clipboard text Qiyas writes (a DXF comment), so paste knows it.
@@ -67,7 +66,7 @@ fn lower_left(session: &Session, handles: &[Handle]) -> Option<[f64; 2]> {
         let Some(e) = doc.get_entity(h) else {
             continue;
         };
-        let outcome = flatten_with(doc, &xrefs, e, &Xform::identity(), BATCH_TOL);
+        let outcome = flatten_with(doc, &xrefs, e, &Xform::identity(), session.batch_tol());
         for p in outcome.paths.iter().flat_map(|f| &f.path.points) {
             let l = low.get_or_insert(*p);
             l[0] = l[0].min(p[0]);

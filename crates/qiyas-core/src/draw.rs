@@ -19,7 +19,7 @@ use qiyas_geom::{flatten, flatten_within, snap_shapes, Paint, Xform};
 use qiyas_render::layer_shown_with;
 use serde::{Deserialize, Serialize};
 
-use crate::session::{locate, Near, MEASURE_TOL};
+use crate::session::{locate, Near};
 use crate::{CoreError, Session};
 
 /// The drawing state new entities take: their layer, colour, linetype and lineweight. Saved in
@@ -744,7 +744,9 @@ impl Session {
                 if points.len() < 2 {
                     return Err(invalid("A multiline needs 2 points or more"));
                 }
-                let scale = positive(scale.unwrap_or(1.0), "scale")?;
+                // AutoCAD's CMLSCALE 20 in a millimetre drawing: 20 mm whatever the units.
+                let scale = scale.unwrap_or(0.02 / self.drawing.units.to_metres());
+                let scale = positive(scale, "scale")?;
                 one(EntityType::MLine(self.mline(
                     &points,
                     style.as_deref().unwrap_or("Standard"),
@@ -862,8 +864,13 @@ impl Session {
                 Some(path)
             }
             _ => {
-                let paths = flatten(&self.drawing.doc, entity, &Xform::identity(), MEASURE_TOL)
-                    .into_paths();
+                let paths = flatten(
+                    &self.drawing.doc,
+                    entity,
+                    &Xform::identity(),
+                    self.measure_tol(),
+                )
+                .into_paths();
                 let ring = paths
                     .into_iter()
                     .find(|p| p.closed && p.points.len() >= 3)?;
@@ -939,7 +946,7 @@ impl Session {
                 return Boundary::TooDense;
             }
             if let Some(found) = region_around(&segments, p, radius, lo, hi) {
-                return with_bulges(found, &rounds);
+                return with_bulges(found, &rounds, self.measure_tol());
             }
             // The box held every segment there is: nothing further can close a region.
             if near.whole_sheet {
@@ -951,7 +958,7 @@ impl Session {
 }
 
 impl Session {
-    /// The line work of `near`'s entities flattened again at `MEASURE_TOL` in drawing
+    /// The line work of `near`'s entities flattened again at the measuring tolerance (`measure_tol`) in drawing
     /// coordinates, as the sheet draws them (multiline elements, rays across the box, no texts,
     /// pattern lines or hidden layers): the segments reaching into the box `lo hi`, and the
     /// circles and arcs among the entities' true shapes. An entity inside an arrayed block
@@ -984,7 +991,7 @@ impl Session {
                 &xrefs,
                 located.entity,
                 &located.xf,
-                MEASURE_TOL,
+                self.measure_tol(),
                 &mut budget,
             );
             for f in flat.paths {
@@ -1041,7 +1048,7 @@ impl Session {
                     _ => {}
                 }
             }
-            let shapes = snap_shapes(located.doc, located.entity, &located.xf, MEASURE_TOL);
+            let shapes = snap_shapes(located.doc, located.entity, &located.xf, self.measure_tol());
             for piece in shapes.iter().filter(|s| s.exact).flat_map(|s| &s.pieces) {
                 match piece {
                     Curve::Circle(c) => rounds.push(Round {
@@ -1074,13 +1081,13 @@ struct Round {
 
 /// `found` with each edge that is a chord of a drawn circle or arc turned back into that arc:
 /// its bulge (zero for a straight edge), per ring, the ring first.
-fn with_bulges(found: Boundary, rounds: &[Round]) -> Boundary {
+fn with_bulges(found: Boundary, rounds: &[Round], tol: f64) -> Boundary {
     let Boundary::Ring { ring, holes, .. } = found else {
         return found;
     };
-    // Chords are within `MEASURE_TOL` of their arc; points where a line crosses one sit on the
-    // chord, as far off the circle at most.
-    let near = 1.5 * MEASURE_TOL;
+    // Chords are within `tol` (the measuring tolerance) of their arc; points where a line crosses
+    // one sit on the chord, as far off the circle at most.
+    let near = 1.5 * tol;
     let bulge = |a: [f64; 2], b: [f64; 2]| -> f64 {
         for r in rounds {
             let on =

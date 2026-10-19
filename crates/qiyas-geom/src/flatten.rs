@@ -20,6 +20,10 @@ use crate::{Path, Xform};
 const MAX_DEPTH: usize = 32;
 /// Upper bound on segments per curve, so a zero or tiny `tol` cannot exhaust memory.
 const MAX_SEGMENTS: usize = 1 << 16;
+/// Largest angle one segment of an arc, circle or ellipse spans: a full circle gets at least 64,
+/// so a small circle (a 12 mm bar, a pipe) stays round when zoomed in close, whatever `tol`
+/// allows (a chord then strays 0.12% of the radius).
+const MAX_STEP: f64 = TAU / 64.0;
 /// Most block instances plus paths one `flatten` call produces; past it, output stops.
 /// Keeps a block that inserts itself, or a huge nested array, from hanging the app. A caller
 /// flattening many entities shares one budget through `flatten_within`.
@@ -1078,10 +1082,14 @@ pub(crate) fn sweep(a0: f64, a1: f64) -> f64 {
     }
 }
 
-/// Segments needed so a chord of an arc of radius `r` stays within `tol` of it.
+/// Segments needed so a chord of an arc of radius `r` stays within `tol` of it, and spans at
+/// most `MAX_STEP`.
 fn segment_count(r: f64, sweep: f64, tol: f64) -> usize {
-    let step = 2.0 * (1.0 - tol / r).clamp(-1.0, 1.0).acos();
-    ((sweep / step).ceil() as usize).clamp(1, MAX_SEGMENTS)
+    let step = (2.0 * (1.0 - tol / r).clamp(-1.0, 1.0).acos()).min(MAX_STEP);
+    // An arc spanning exactly whole steps (one piece of a circle flattened before, as a hatch
+    // traced round a circle keeps it) must not gain a piece from rounding: its points would then
+    // miss the circle's own and leave slivers between the two.
+    ((sweep / step - 1e-9).ceil() as usize).clamp(1, MAX_SEGMENTS)
 }
 
 /// Points on an ellipse from parameter `t0` to `t1`, counter-clockwise, ends included.
@@ -1328,4 +1336,27 @@ fn max_stretch(xf: &Xform) -> f64 {
 
 fn xy(v: &Vector3) -> [f64; 2] {
     [v.x, v.y]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_small_circle_still_gets_64_segments() {
+        // A 12 mm bar at 0.05 mm: the tolerance alone would give 22.
+        assert_eq!(segment_count(6.0, TAU, 0.05), 64);
+        // A big one keeps what its tolerance needs.
+        assert!(segment_count(1000.0, TAU, 0.05) > 300);
+    }
+
+    #[test]
+    fn an_arc_of_exactly_whole_steps_gains_no_piece_from_rounding() {
+        let step = TAU / 64.0;
+        for k in 1..=64 {
+            // Swept angles worked out from points, a hair over the exact multiple.
+            let sweep = k as f64 * step * (1.0 + 1e-15);
+            assert_eq!(segment_count(6.0, sweep, 0.05), k);
+        }
+    }
 }

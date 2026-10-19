@@ -33,8 +33,32 @@ use crate::{
     Outcome, Schedule, Sheet, Source, TableInfo, Takeoff, Ucs, Units,
 };
 
-/// Flatten tolerance for drawing on screen, in drawing units.
+/// Flatten tolerance for drawing on screen in a millimetre drawing: 0.05 mm. Other units use the
+/// same real size (`Session::batch_tol`), so a circle is as round in metres as in millimetres.
 pub const BATCH_TOL: f64 = 0.05;
+
+/// `BATCH_TOL`'s real size in drawing units of `units`: 0.05 mm whatever the drawing's units.
+pub fn batch_tol_for(units: Units) -> f64 {
+    BATCH_TOL * 0.001 / units.to_metres()
+}
+
+/// Zoomed in past `batch_tol`, curves on screen are flattened within this many screen pixels
+/// (AutoCAD's automatic regen): never a visible corner on a circle, however close.
+pub const ZOOM_TOL_PX: f64 = 0.25;
+
+/// The tolerance the sheet on screen should draw curves within at `px_per_unit` screen pixels per
+/// drawing unit, and whether `current` is far enough from it to draw them again: more than twice
+/// as coarse (a corner could show), or eight times finer than needed (memory) while finer than
+/// the drawing's own `base`. The window's `curvesNeedRedraw` asks the same.
+pub fn zoom_tol(base: f64, current: f64, px_per_unit: f64) -> Option<f64> {
+    if !(px_per_unit > 0.0 && px_per_unit.is_finite()) {
+        return None;
+    }
+    let want = (ZOOM_TOL_PX / px_per_unit).min(base);
+    let coarse = current > 2.0 * want;
+    let fine = current < want / 8.0 && current < base;
+    (coarse || fine).then_some(want)
+}
 /// What `Session::segments_near` finds.
 pub(crate) struct Near {
     /// The entities the drawn segments there draw (handle and block chain, as `locate` takes them), once
@@ -52,9 +76,20 @@ const OTHER_SHEETS: usize = 2;
 /// Segments looked at past locked ones for a pick while a block is edited in place.
 const PICK_PAST_LOCKED: usize = 4096;
 
-/// Flatten tolerance for measured lengths and areas, in drawing units. Finer than `BATCH_TOL`
-/// so arcs measure close to their true length.
-pub(crate) const MEASURE_TOL: f64 = 1e-3;
+/// Flatten tolerance for measured lengths and areas: 1 µm (0.001 in a millimetre drawing), the
+/// same real size in every unit (`measure_tol_for`). Finer than `BATCH_TOL` so arcs measure close
+/// to their true length.
+pub(crate) const MEASURE_TOL_M: f64 = 1e-6;
+
+/// `MEASURE_TOL_M` in drawing units of `units`.
+pub(crate) fn measure_tol_for(units: Units) -> f64 {
+    MEASURE_TOL_M / units.to_metres()
+}
+
+/// `MEASURE_TOL_M` in the drawing units of `doc` (its header's INSUNITS).
+pub(crate) fn measure_tol_of(doc: &CadDocument) -> f64 {
+    measure_tol_for(Units::from_header(doc.header.insertion_units))
+}
 
 /// Gives every opened session its own number, so the batch version of one drawing never equals
 /// that of another opened later in the same window.
@@ -99,6 +134,12 @@ pub struct Session {
     pub(crate) recovered_from: Option<PathBuf>,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
+    /// A new drawing never saved yet (`Session::new_blank`): its path is a placeholder, Save goes
+    /// through Save As and no project file is written beside it.
+    untitled: bool,
+    /// The curve tolerance of the sheet on screen when zoomed in past `batch_tol` (`zoom_tol`);
+    /// `None` draws at `batch_tol`.
+    zoom_tol: std::cell::Cell<Option<f64>>,
     /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
     pub(crate) document_revision: u64,
     /// `document_revision` at the last save (or the open): the drawing has unsaved changes
@@ -117,7 +158,7 @@ pub struct Session {
     others: RefCell<Vec<(String, u64, Batch)>>,
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
     /// holds stay valid.
-    text: RefCell<TextEngine>,
+    pub(crate) text: RefCell<TextEngine>,
     /// The pictures' (PDF underlays and raster images) image ids, PDF page sizes and problems.
     pub(crate) underlays: RefCell<Underlays>,
 }
@@ -126,6 +167,8 @@ struct Cached {
     sheet: String,
     hidden_layers: HashSet<String>,
     arabic_reversed: bool,
+    /// The curve tolerance it was flattened within (`screen_tol`).
+    tol: f64,
     batch: Batch,
     index: PickIndex,
     /// The point entities on the sheet (top level, on shown layers), for node snaps: where, and
@@ -179,6 +222,8 @@ pub struct DrawingInfo {
     /// The drawing has (or had) parametric constraints: its `QIYAS-PARAM` application is
     /// registered, so the window keeps the constraint bar's list read.
     pub has_constraints: bool,
+    /// A new drawing never saved yet (`Session::is_untitled`): Save goes through Save As.
+    pub untitled: bool,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -188,6 +233,8 @@ pub(crate) type PointAt = ([f64; 2], u64);
 
 /// In the problems of a drawing that opens with nothing in model space.
 pub const EMPTY_MODEL: &str = "This drawing has no geometry in Model";
+/// `Session::save` on a new drawing that has no file yet.
+pub const UNTITLED: &str = "This drawing has not been saved yet: use Save As";
 
 /// Shown when some block content was too deep or too large to draw.
 const TRUNCATED: &str = "Drawing too complex, some block content not drawn";
@@ -465,19 +512,89 @@ impl Session {
         project_file: &Path,
         name: &str,
     ) -> Result<Session, CoreError> {
-        let mut drawing = Drawing::open(path)?;
+        let mut session = Session::from_drawing(Drawing::open(path)?, Some((project_file, name)));
+        session.size_stock_dim_styles();
+        Ok(session)
+    }
+
+    /// A new, empty drawing (`Drawing::blank`) on its model sheet, with an empty take-off and the
+    /// header's INSUNITS `insunits`. It has no file yet (Save goes through Save As,
+    /// `is_untitled`) and stands at `placeholder` until then: the app's own folder, so its
+    /// autosave has a home. Nothing to save until it changes, so closing it untouched asks nothing.
+    pub fn new_blank(placeholder: &Path, insunits: i16) -> Session {
+        let mut session = Session::from_drawing(Drawing::blank(placeholder, insunits), None);
+        session.untitled = true;
+        session.metric_template();
+        session
+    }
+
+    /// A new drawing's annotation defaults, as AutoCAD's metric templates have them in paper
+    /// millimetres, in this drawing's units, at an annotation scale of 1:100 (a building plan's):
+    /// dimension text and arrows 2.5 mm on paper, extension offset 0.625, extension 1.25, gap
+    /// 0.625, baseline spacing 3.75, text 2.5 mm x 100, linetype scale 100. So a dimension or text
+    /// drawn at once is readable, whatever the units: 0.25 m in metres, 250 in millimetres.
+    fn metric_template(&mut self) {
+        const SCALE: f64 = 100.0;
+        let mm = 0.001 / self.drawing.units.to_metres();
+        let decimals = match self.drawing.units {
+            Units::Metres => 2,
+            Units::Centimetres => 1,
+            _ => 0,
+        };
+        let doc = &mut self.drawing.doc;
+        let current = doc.header.current_dimstyle_name.clone();
+        let name = if doc.dim_styles.get(&current).is_some() {
+            current
+        } else {
+            "Standard".to_string()
+        };
+        if let Some(style) = doc.dim_styles.get_mut(&name) {
+            style.dimtxt = 2.5 * mm;
+            style.dimasz = 2.5 * mm;
+            style.dimexo = 0.625 * mm;
+            style.dimexe = 1.25 * mm;
+            style.dimgap = 0.625 * mm;
+            style.dimdli = 3.75 * mm;
+            style.dimcen = 2.5 * mm;
+            style.dimscale = 1.0;
+            style.dimdec = decimals;
+        }
+        let h = &mut doc.header;
+        h.dim_text_height = 2.5 * mm;
+        h.dim_arrow_size = 2.5 * mm;
+        h.dim_ext_line_offset = 0.625 * mm;
+        h.dim_ext_line_extension = 1.25 * mm;
+        h.dim_line_gap = 0.625 * mm;
+        h.dim_line_increment = 3.75 * mm;
+        h.dim_center_mark = 2.5 * mm;
+        h.dim_scale = 1.0;
+        h.dim_decimal_places = decimals;
+        h.text_height = 2.5 * mm * SCALE;
+        h.linetype_scale = mm * SCALE;
+        // A fresh drawing's variable dictionary always takes it.
+        let _ = self.set_annotation_scale("1:100");
+    }
+
+    /// The session over a drawing just read (or made), with the project file `project` (its path
+    /// and the drawing's name it should be saved for) when there is one to read.
+    fn from_drawing(mut drawing: Drawing, project: Option<(&Path, &str)>) -> Session {
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
         let mut boq = None;
         let mut conflicts = Vec::new();
         let mut schedules = Vec::new();
         let mut arabic_reversed = false;
-        let mut drafting = Drafting::default();
+        // The grid's dots a metre apart until the drawing's project file says otherwise (1 drawing
+        // unit would be a millimetre grid, never shown, in a millimetre drawing).
+        let mut drafting = Drafting {
+            grid_spacing: 1.0 / drawing.units.to_metres(),
+            ..Drafting::default()
+        };
         let mut xref_overrides = HashMap::new();
         let mut current = Current::default();
         let mut state_hidden = BTreeMap::new();
         let mut ucs = None;
-        if project_file.exists() {
+        if let Some((project_file, name)) = project.filter(|(file, _)| file.exists()) {
             match project::load(project_file) {
                 Ok(project) => {
                     if !project.drawing.eq_ignore_ascii_case(name) {
@@ -512,7 +629,7 @@ impl Session {
                     Err(_) => format!("Project file could not be read: {e}"),
                 }),
             }
-        } else {
+        } else if project.is_some() {
             takeoff.items = read_embedded(&drawing.doc);
         }
         let xrefs = XrefSet::load(&drawing, &xref_overrides, MAX_XREF_DEPTH);
@@ -520,7 +637,7 @@ impl Session {
         let ucs = ucs
             .or_else(|| Ucs::from_header(&drawing.doc))
             .unwrap_or_default();
-        Ok(Session {
+        Session {
             drawing,
             sheet,
             visibility: Visibility::default(),
@@ -539,6 +656,8 @@ impl Session {
             block_edit: None,
             recovered_from: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            untitled: false,
+            zoom_tol: std::cell::Cell::new(None),
             document_revision: 0,
             saved_revision: 0,
             autosave_revision: std::cell::Cell::new(0),
@@ -547,15 +666,39 @@ impl Session {
             others: RefCell::new(Vec::new()),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
-        })
+        }
     }
 
     /// Saves the take-off, the BOQ, the conflicts and the schedules to the drawing's project file
-    /// and returns its path.
+    /// and returns its path. An untitled drawing has none until its first Save As: nothing is
+    /// written.
     pub fn save_project(&self) -> Result<PathBuf, CoreError> {
         let path = project_path(&self.drawing.path);
-        project::save(&path, &self.project())?;
+        if !self.untitled {
+            project::save(&path, &self.project())?;
+        }
         Ok(path)
+    }
+
+    /// The screen's flatten tolerance in this drawing's units: 0.05 mm (`batch_tol_for`).
+    pub fn batch_tol(&self) -> f64 {
+        batch_tol_for(self.drawing.units)
+    }
+
+    /// The measuring flatten tolerance in this drawing's units: 1 µm (`measure_tol_for`).
+    pub(crate) fn measure_tol(&self) -> f64 {
+        measure_tol_for(self.drawing.units)
+    }
+
+    /// What the sheet on screen flattens curves within now: `batch_tol`, or finer while zoomed
+    /// in close (`zoom_tol`).
+    pub fn screen_tol(&self) -> f64 {
+        self.zoom_tol.get().unwrap_or_else(|| self.batch_tol())
+    }
+
+    /// A new drawing never saved yet (see `new_blank`).
+    pub fn is_untitled(&self) -> bool {
+        self.untitled
     }
 
     /// The project file's contents for the session as it is.
@@ -576,8 +719,12 @@ impl Session {
         }
     }
 
-    /// Saves the drawing over its own file; see `save_as`.
+    /// Saves the drawing over its own file; see `save_as`. Refused for an untitled drawing
+    /// (`UNTITLED`): it has no file of its own yet.
     pub fn save(&mut self) -> Result<(), CoreError> {
+        if self.untitled {
+            return Err(CoreError::InvalidCommand(UNTITLED.to_string()));
+        }
         let path = self.drawing.path.clone();
         self.save_as(&path)
     }
@@ -650,6 +797,7 @@ impl Session {
             }
         }
         self.drawing.path = path.to_path_buf();
+        self.untitled = false;
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
                 "Drawing saved, but the project file could not be written: {e}"
@@ -662,7 +810,7 @@ impl Session {
     /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
         let mut problems = self.drawing.problems.clone();
-        if self.empty_model {
+        if self.empty_model && !self.untitled {
             problems.push(EMPTY_MODEL.to_string());
         }
         problems.extend(self.xrefs.problems().cloned());
@@ -695,6 +843,7 @@ impl Session {
             viewports: self.viewports(),
             ucs: self.ucs,
             has_constraints: !self.needs_param_app(),
+            untitled: self.untitled,
         }
     }
 
@@ -790,6 +939,34 @@ impl Session {
         self.text.borrow().font_bytes(id)
     }
 
+    /// The sheet on screen drawn afresh for a picture at `px_per_unit` pixels per drawing unit
+    /// (Mizan's view_image): its glyphs placed for that zoom, curves within half a pixel (never
+    /// coarser than `batch_tol`), and a copy of the glyph atlas pages its quads draw from. Nothing
+    /// is kept, so the window's batch, its glyphs and its curves are left as they are.
+    pub fn picture_batch(&self, px_per_unit: f64) -> (Batch, Vec<Vec<u8>>) {
+        let px = if px_per_unit > 0.0 && px_per_unit.is_finite() {
+            px_per_unit
+        } else {
+            1.0
+        };
+        let options = TextOptions {
+            arabic_reversed: self.arabic_reversed,
+            px_per_unit: Some(px),
+        };
+        let mut text = self.text.borrow_mut();
+        let batch = build_batch_with_xrefs(
+            &self.drawing.doc,
+            &self.xref_docs(),
+            &self.sheet,
+            &self.visibility,
+            (0.5 / px).min(self.batch_tol()),
+            &mut text,
+            options,
+        );
+        let pages = text.atlas_pages(None).map(|p| p.data.to_vec()).collect();
+        (batch, pages)
+    }
+
     /// The sheet `sheet` (block name) drawn afresh with curves flattened within `tol` drawing
     /// units, for the PDF plot (no pictures, nothing kept).
     pub fn sheet_batch_with_tol(&self, sheet: &str, tol: f64) -> Batch {
@@ -815,7 +992,17 @@ impl Session {
     /// Arabic setting, document revision and xrefs (name, file found, when it was last changed
     /// and its size, each), cut to 53 bits so it survives a trip through a JavaScript number.
     pub fn batch_version(&self) -> u64 {
-        self.version_of(&self.sheet)
+        let version = self.version_of(&self.sheet);
+        // Finer curves for a close zoom are another batch.
+        match self.zoom_tol.get() {
+            None => version,
+            Some(tol) => {
+                let mut hash = Fnv::new();
+                hash.write(&version.to_le_bytes());
+                hash.write(&tol.to_bits().to_le_bytes());
+                hash.0 & ((1 << 53) - 1)
+            }
+        }
     }
 
     /// `batch_version` for the sheet `sheet`.
@@ -1125,10 +1312,12 @@ impl Session {
             EntityType::Line(_)
             | EntityType::Circle(_)
             | EntityType::Arc(_)
-            | EntityType::Ellipse(_) => snap_shapes(located.doc, entity, &located.xf, MEASURE_TOL)
-                .into_iter()
-                .next()
-                .and_then(|shape| shape.pieces.into_iter().next()),
+            | EntityType::Ellipse(_) => {
+                snap_shapes(located.doc, entity, &located.xf, self.measure_tol())
+                    .into_iter()
+                    .next()
+                    .and_then(|shape| shape.pieces.into_iter().next())
+            }
             _ => None,
         };
         let radius = match &piece {
@@ -1515,7 +1704,7 @@ impl Session {
             };
         }
         let xrefs = self.xref_docs();
-        let paths = flatten_with(doc, &xrefs, entity, xf, MEASURE_TOL).into_paths();
+        let paths = flatten_with(doc, &xrefs, entity, xf, self.measure_tol()).into_paths();
         let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
         let crossing: Vec<bool> = closed.iter().map(|p| p.self_intersects()).collect();
         let self_intersecting = crossing.contains(&true);
@@ -1599,15 +1788,17 @@ impl Session {
                     arabic_reversed: self.arabic_reversed,
                     px_per_unit,
                 };
-                let batch = build_batch_with_xrefs(
+                let mut batch = build_batch_with_xrefs(
                     &self.drawing.doc,
                     &self.xref_docs(),
                     sheet,
                     &self.visibility,
-                    BATCH_TOL,
+                    self.batch_tol(),
                     &mut text,
                     options,
                 );
+                batch.curve_tol = self.batch_tol();
+                batch.base_tol = batch.curve_tol;
                 others.retain(|(name, _, _)| !name.eq_ignore_ascii_case(sheet));
                 (sheet.to_string(), version, batch)
             }
@@ -1634,10 +1825,18 @@ impl Session {
     fn with_cache<R>(&self, px_per_unit: Option<f64>, f: impl FnOnce(&Cached) -> R) -> R {
         let mut cache = self.cache.borrow_mut();
         let mut text = self.text.borrow_mut();
+        // The zoom the window asks for may need the curves drawn again, finer or coarser.
+        if let Some(px) = px_per_unit {
+            let base = self.batch_tol();
+            if let Some(want) = zoom_tol(base, self.screen_tol(), px) {
+                self.zoom_tol.set((want < base).then_some(want));
+            }
+        }
         let stale = cache.as_ref().is_none_or(|c| {
             c.sheet != self.sheet
                 || c.hidden_layers != self.visibility.hidden_layers
                 || c.arabic_reversed != self.arabic_reversed
+                || c.tol != self.screen_tol()
         });
         if stale {
             // Drawn here now: no copy kept beside it.
@@ -1653,10 +1852,12 @@ impl Session {
                 &self.xref_docs(),
                 &self.sheet,
                 &self.visibility,
-                BATCH_TOL,
+                self.screen_tol(),
                 &mut text,
                 options,
             );
+            batch.curve_tol = self.screen_tol();
+            batch.base_tol = self.batch_tol();
             let (pictures, outlines) = self.underlay_placements();
             add_images(&mut batch, &pictures);
             add_pick_outlines(&mut batch, &outlines);
@@ -1680,6 +1881,7 @@ impl Session {
                 sheet: self.sheet.clone(),
                 hidden_layers: self.visibility.hidden_layers.clone(),
                 arabic_reversed: self.arabic_reversed,
+                tol: self.screen_tol(),
                 index: PickIndex::new(&batch),
                 batch,
                 points,

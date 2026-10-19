@@ -62,6 +62,7 @@ async fn start(with_drawing: bool) -> Server {
     let on_ui: OnUi = Arc::new(move |v| seen.lock().unwrap().push(v));
     let addr = serve(
         session.clone(),
+        None,
         0,
         TOKEN.into(),
         shutdown.clone(),
@@ -125,7 +126,7 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     let client = connect(server.addr, TOKEN).await.unwrap();
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 43);
+    assert_eq!(tools.len(), 54);
     let measure = tools.iter().find(|t| t.name == "measure_area").unwrap();
     assert!(measure.description.as_deref().unwrap().contains("area"));
     assert_eq!(measure.input_schema["type"], "object");
@@ -252,6 +253,10 @@ async fn tool_errors_are_error_results() {
     let result = call(&client, "list_sheets", json!({})).await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(text(&result, 0), "No drawing is open");
+    // The file tools need the app behind them; without it they say what to do instead.
+    let result = call(&client, "new_drawing", json!({ "units": "m" })).await;
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(text(&result, 0), qiyas_ai::host::NO_HOST);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -262,6 +267,7 @@ async fn a_restart_on_the_same_port_binds_again() {
     let shutdown = CancellationToken::new();
     let addr = serve(
         server.session.clone(),
+        None,
         port,
         TOKEN.into(),
         shutdown.clone(),
@@ -272,7 +278,7 @@ async fn a_restart_on_the_same_port_binds_again() {
     .unwrap();
     assert_eq!(addr.port(), port);
     let client = connect(addr, TOKEN).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 43);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 54);
     shutdown.cancel();
 }
 
@@ -315,6 +321,6 @@ async fn other_origins_are_refused_even_with_the_token() {
 
     // Clients that send no Origin (the bridge, Claude Code) still work.
     let client = connect(server.addr, TOKEN).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 43);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 54);
     assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
 }

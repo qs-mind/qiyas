@@ -24,6 +24,7 @@ use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::host::{run_host, DrawingHost, NO_HOST};
 use crate::provider::png_base64;
 use crate::{catalogue, execute, AiError, ToolError, ToolOutput};
 
@@ -42,9 +43,11 @@ const BIND_WAIT: Duration = Duration::from_millis(50);
 
 /// Serves the tools at `http://127.0.0.1:<port>/mcp` until `shutdown` is cancelled. Every request
 /// must carry `Authorization: Bearer <token>`; others get 401. Port 0 picks a free port. Gives
-/// the address bound; fails when the port can't be bound.
+/// the address bound; fails when the port can't be bound. `host` runs the file tools (none:
+/// they answer `NO_HOST`); a path the client gives is never counted as one the user wrote.
 pub async fn serve(
     session: Arc<Mutex<Option<Session>>>,
+    host: Option<Arc<dyn DrawingHost>>,
     port: u16,
     token: String,
     shutdown: CancellationToken,
@@ -56,7 +59,7 @@ pub async fn serve(
         .local_addr()
         .map_err(|e| AiError::Server(format!("127.0.0.1:{port}: {e}")))?;
 
-    let handler = Qiyas::new(session, on_mutated, on_ui);
+    let handler = Qiyas::new(session, host, on_mutated, on_ui);
     // Browsers send `Origin`; only the server's own origin may call it, so a web page can't drive
     // Qiyas even with the token. MCP apps and the bridge send no `Origin` and pass.
     let port = addr.port();
@@ -137,6 +140,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 #[derive(Clone)]
 struct Qiyas {
     session: Arc<Mutex<Option<Session>>>,
+    host: Option<Arc<dyn DrawingHost>>,
     on_mutated: OnMutated,
     on_ui: OnUi,
     tools: Arc<Vec<Tool>>,
@@ -145,7 +149,12 @@ struct Qiyas {
 }
 
 impl Qiyas {
-    fn new(session: Arc<Mutex<Option<Session>>>, on_mutated: OnMutated, on_ui: OnUi) -> Qiyas {
+    fn new(
+        session: Arc<Mutex<Option<Session>>>,
+        host: Option<Arc<dyn DrawingHost>>,
+        on_mutated: OnMutated,
+        on_ui: OnUi,
+    ) -> Qiyas {
         let specs = catalogue();
         let mutating = specs
             .iter()
@@ -164,6 +173,7 @@ impl Qiyas {
             .collect();
         Qiyas {
             session,
+            host,
             on_mutated,
             on_ui,
             tools: Arc::new(tools),
@@ -171,8 +181,18 @@ impl Qiyas {
         }
     }
 
-    /// Runs one tool on the session, holding the lock only while it runs.
+    /// Runs one tool on the session, holding the lock only while it runs; a file tool through the
+    /// host, without the session's lock (the host locks the app's tabs first).
     fn run(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
+        if crate::is_host_tool(name) {
+            let host = self
+                .host
+                .as_deref()
+                .ok_or(ToolError::Failed(NO_HOST.into()))?;
+            return run_host(host, name, input, None)
+                .map(ToolOutput::Json)
+                .map_err(ToolError::Failed);
+        }
         let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
         let session = guard
             .as_mut()
@@ -188,7 +208,9 @@ impl ServerHandler for Qiyas {
             .with_instructions(
                 "Qiyas is a measurement CAD for quantity surveyors. These tools read the drawing \
                  open in Qiyas and add measurements to its take-off; the user sees each change \
-                 in the app and can undo it.",
+                 in the app and can undo it. list_drawings, new_drawing, open_drawing and \
+                 switch_drawing choose the drawing the others work on; opening a file the user \
+                 has not opened before, Save As and closing unsaved work are asked in the app.",
             )
     }
 

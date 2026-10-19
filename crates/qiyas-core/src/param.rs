@@ -139,9 +139,10 @@ pub struct AutoSettings {
     /// are not meant to stay equal).
     #[serde(default = "AutoSettings::default_kinds")]
     pub kinds: Vec<ConstraintKind>,
-    /// Drawing units.
-    #[serde(default = "AutoSettings::default_distance")]
-    pub distance_tolerance: f64,
+    /// Drawing units; left out, 0.05 mm in the drawing's units (as AutoCAD's 0.05 in a millimetre
+    /// drawing), so ends 5 cm apart in a metre plan are never welded.
+    #[serde(default)]
+    pub distance_tolerance: Option<f64>,
     /// Degrees.
     #[serde(default = "AutoSettings::default_angle")]
     pub angle_tolerance: f64,
@@ -161,9 +162,6 @@ impl AutoSettings {
             Vertical,
         ]
     }
-    fn default_distance() -> f64 {
-        0.05
-    }
     fn default_angle() -> f64 {
         1.0
     }
@@ -173,7 +171,7 @@ impl Default for AutoSettings {
     fn default() -> Self {
         AutoSettings {
             kinds: AutoSettings::default_kinds(),
-            distance_tolerance: AutoSettings::default_distance(),
+            distance_tolerance: None,
             angle_tolerance: AutoSettings::default_angle(),
         }
     }
@@ -1835,7 +1833,10 @@ impl Session {
         targets: &[Target],
         settings: &AutoSettings,
     ) -> Result<Vec<u32>, CoreError> {
-        if !(settings.distance_tolerance >= 0.0 && settings.distance_tolerance.is_finite())
+        let distance = settings
+            .distance_tolerance
+            .unwrap_or_else(|| self.batch_tol());
+        if !(distance >= 0.0 && distance.is_finite())
             || !(settings.angle_tolerance >= 0.0 && settings.angle_tolerance.is_finite())
         {
             return Err(invalid("The tolerances must be 0 or more"));
@@ -1884,7 +1885,7 @@ impl Session {
             &prims,
             &InferenceSettings {
                 priority,
-                distance_tolerance: settings.distance_tolerance,
+                distance_tolerance: distance,
                 angle_tolerance_radians: settings.angle_tolerance.to_radians(),
                 ..InferenceSettings::default()
             },

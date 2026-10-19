@@ -672,6 +672,8 @@ fn an_overlay_inside_an_xref_is_not_drawn_again() {
         .is_xref_overlay = true;
     write_drawing(&arch, &dir.path().join("plan-arch.dxf"));
     let mut host = CadDocument::new();
+    // In the sample's units (metres), so its arcs are drawn as finely as on their own.
+    host.header.insertion_units = 6;
     host.add_entity(line_on("A-WALL", [0.0, -10.0], [5.0, -10.0]))
         .unwrap();
     add_xref(
@@ -710,6 +712,8 @@ fn a_nested_xref_missing_beside_the_host_loads_from_its_own_drawings_folder() {
     write_drawing(&arch, &arch_dir.join("plan-arch.dxf"));
 
     let mut host = CadDocument::new();
+    // In the sample's units (metres), so its arcs are drawn as finely as on their own.
+    host.header.insertion_units = 6;
     host.add_entity(line_on("A-WALL", [0.0, -10.0], [5.0, -10.0]))
         .unwrap();
     // The host's block table also carries the nested xref, as saved drawings do.

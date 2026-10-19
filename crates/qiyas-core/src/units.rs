@@ -32,3 +32,16 @@ impl Units {
         }
     }
 }
+
+/// The factor AutoCAD's INSERT scales a block by: its block units (INSUNITS code) to the drawing's.
+/// 1 when either is unitless or a unit Qiyas does not know, as AutoCAD then inserts at scale 1.
+pub fn insert_unit_factor(block_units: i16, drawing_units: i16) -> f64 {
+    let known = |code: i16| match Units::from_header(code) {
+        Units::Unknown => None,
+        units => Some(units.to_metres()),
+    };
+    match (known(block_units), known(drawing_units)) {
+        (Some(from), Some(to)) => from / to,
+        _ => 1.0,
+    }
+}

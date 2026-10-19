@@ -240,8 +240,8 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
         .map(|g| g.id.as_str())
         .collect();
     assert_eq!(annotate, ["dims", "notes", "markup", "tables"]);
-    // Open, Save, Save as, Undo and Redo are the window's quick-access bar, in no layout.
-    for command in ["open", "save", "saveAs", "undo", "redo"] {
+    // New, Open, Save, Save as, Undo and Redo are the window's quick-access bar, in no layout.
+    for command in ["new", "open", "save", "saveAs", "undo", "redo"] {
         assert!(buttons.iter().all(|b| b.command != command), "{command}");
     }
 }

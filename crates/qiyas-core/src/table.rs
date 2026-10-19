@@ -8,7 +8,7 @@
 
 use opencadcodec::entities::{CellRange, CellStyle, CellValue, CellValueType, Table, TableCell};
 use opencadcodec::objects::ObjectType;
-use opencadcodec::{BlockRecord, EntityType, Handle, Vector3};
+use opencadcodec::{BlockRecord, EntityType, Handle, MText, Vector3};
 use qiyas_geom::{merge_owners, table_entities};
 use serde::Serialize;
 
@@ -222,6 +222,8 @@ impl Session {
             return Err(invalid("This is no table"));
         };
         let mut t = t.clone();
+        // Rows grow to hold their wrapped text (AutoCAD's tables do).
+        qiyas_geom::fit_rows(&mut t, &mut |m| self.mtext_height(m));
         let parts = table_entities(&t);
         let owner = self.table_block(&mut t)?;
         for mut e in parts {
@@ -234,6 +236,27 @@ impl Session {
         t.common.graphic_data = None;
         *self.drawing.doc.get_entity_mut(h).expect("found above") = EntityType::Table(t);
         Ok(())
+    }
+
+    /// The height an MText takes laid out (wrapped at its width) by the screen's text engine.
+    fn mtext_height(&self, m: &MText) -> Option<f64> {
+        let entity = EntityType::MText(m.clone());
+        let flat = qiyas_geom::flatten(
+            &self.drawing.doc,
+            &entity,
+            &qiyas_geom::Xform::identity(),
+            self.batch_tol(),
+        );
+        let text = flat.paths.into_iter().find_map(|p| p.text)?;
+        let (_, _, corners) =
+            self.text
+                .borrow_mut()
+                .lay_out(&self.drawing.doc, &text, self.arabic_reversed)?;
+        let ys = corners.map(|c| c[1]);
+        let (lo, hi) = ys
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
+        Some(hi - lo)
     }
 
     /// The block record `t`'s picture goes in, emptied: its own `*T` block, or a new one under
