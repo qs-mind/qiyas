@@ -113,6 +113,12 @@ pub enum ContentBlock {
         content: Vec<ResultPart>,
         is_error: bool,
     },
+    /// A picture in a user message (one the user attached, or of what they selected): its
+    /// media type ("image/png", ...) and base64 data.
+    Image {
+        media_type: String,
+        data: String,
+    },
     /// Kept with its signature exactly as streamed; the API checks it when it is sent back.
     Thinking {
         thinking: String,
@@ -245,6 +251,13 @@ pub const INVALID_JSON: &str = "invalid JSON input";
 /// A PNG as the base64 text a `ResultPart::Png` holds.
 pub fn png_base64(png: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(png)
+}
+
+/// The bytes of base64 `text` (a picture the window sent).
+pub fn from_base64(text: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .map_err(|e| format!("Not base64: {e}"))
 }
 
 /// Longest wait before the one retry after a 429 or 529.

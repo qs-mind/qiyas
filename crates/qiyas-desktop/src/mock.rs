@@ -1,13 +1,15 @@
 //! A canned AI provider for trying the assistant panel without a key or the network:
 //! `QIYAS_AI_MOCK=1` in a debug build. It says a sentence, measures the area of the first polyline
-//! on layer A-WALL, and closes with another sentence. Not compiled into release builds.
+//! on layer A-WALL, and closes with another sentence. With a selection in the message's `[state]`
+//! block it looks at the screen (`view_screen`) and selects what was selected
+//! (`select_entities`) instead. Not compiled into release builds.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use qiyas_ai::provider::{BoxFuture, Sink};
 use qiyas_ai::{
-    AiError, ContentBlock, Provider, StopReason, StreamEvent, TurnRequest, TurnResult, Usage,
+    AiError, ContentBlock, Provider, Role, StopReason, StreamEvent, TurnRequest, TurnResult, Usage,
 };
 use qiyas_core::{EntityFilter, Session};
 use serde_json::json;
@@ -55,6 +57,33 @@ async fn stream(text: &str, sink: Sink<'_>) {
     }
 }
 
+/// The handles the `[state]` block of the user's last message lists as selected or marked.
+fn pointed_at(req: &TurnRequest) -> Vec<u64> {
+    let Some(last) = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User && !m.has_tool_results())
+    else {
+        return Vec::new();
+    };
+    last.content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } if text.starts_with("[state]") => Some(text),
+            _ => None,
+        })
+        .flat_map(|text| text.lines())
+        .filter_map(|line| {
+            line.strip_prefix("- handle ")?
+                .split(' ')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
 impl Provider for Mock {
     fn stream_turn<'a>(
         &'a self,
@@ -63,6 +92,40 @@ impl Provider for Mock {
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
             let answered = req.messages.last().is_some_and(|m| m.has_tool_results());
+            let pointed = pointed_at(&req);
+            if answered && !pointed.is_empty() {
+                let text = format!(
+                    "I looked at your screen and selected the {} entities you pointed at.",
+                    pointed.len()
+                );
+                stream(&text, sink).await;
+                return Ok(TurnResult {
+                    content: vec![ContentBlock::Text { text }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage::default(),
+                });
+            }
+            if !pointed.is_empty() {
+                let text = "Let me look at what you see.";
+                stream(text, sink).await;
+                return Ok(TurnResult {
+                    content: vec![
+                        ContentBlock::Text { text: text.into() },
+                        ContentBlock::ToolUse {
+                            id: "mock_screen".into(),
+                            name: "view_screen".into(),
+                            input: json!({}),
+                        },
+                        ContentBlock::ToolUse {
+                            id: "mock_select".into(),
+                            name: "select_entities".into(),
+                            input: json!({ "handles": pointed, "zoom": true }),
+                        },
+                    ],
+                    stop_reason: StopReason::ToolUse,
+                    usage: Usage::default(),
+                });
+            }
             if answered {
                 let text = "Done. The **wall area** is in the take-off:\n\n- source: `ai`\n- \
                             press Undo on the card to take it out";

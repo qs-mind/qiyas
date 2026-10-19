@@ -558,6 +558,12 @@ export const pickWindow = (bounds: [P, P], crossing: boolean) =>
     crossing,
   });
 
+/** What a selection polygon `points` (drawing coordinates, three corners or more) picks: the
+ *  entities wholly inside it, or with `crossing` those touching it. Whole entities at the top of
+ *  the sheet, sorted by handle, as `pickWindow`. */
+export const pickPolygon = (points: P[], crossing: boolean) =>
+  invoke<Picked[]>("pick_polygon", { points, crossing });
+
 /** What kind of point an object snap found (`qiyas_core::SnapKind`), best first. */
 export type SnapKind =
   | "end"
@@ -1698,9 +1704,45 @@ export type AiStatus = {
   message_count: number;
 };
 
+/** A region the user marked for Mizan: a box (two opposite corners) or a polygon, drawing
+ *  coordinates (`qiyas_ai::Region`). */
+export type AiRegion = { kind: "box" | "polygon"; points: P[] };
+
+/** What the user points Mizan at with a message (`qiyas_ai::TurnContext`): the entities selected,
+ *  a marked region, the view on screen; `picture` when the selection or region is new since the
+ *  last message, so a picture of it goes too. */
+export type AiContext = {
+  selection: EntityTarget[];
+  region: AiRegion | null;
+  view: [P, P] | null;
+  picture: boolean;
+};
+
+/** A picture the user attached to a message: its type and base64 data (`qiyas_ai::UserImage`). */
+export type AiImage = { media_type: string; data: string };
+
 /** Starts a turn and returns at once; events follow as `ai:event`, then `ai:done`. Rejects with
  *  "busy", "no_api_key" or "no_base_url". */
-export const aiSend = (text: string) => invoke<void>("ai_send", { text });
+export const aiSend = (text: string, context?: AiContext, images?: AiImage[]) =>
+  invoke<void>("ai_send", { text, context: context ?? null, images: images ?? null });
+
+/** Mizan's `view_screen` asks for a picture of the main view: `{ id, maxSide }`, answered with
+ *  `{ png, bounds }` (a base64 PNG and the drawing area it shows). */
+export const AI_CAPTURE = "ai:capture";
+/** Mizan's `get_selection` (and `view_screen`) ask what the user points at: `{ id }`, answered
+ *  with an `AiContext`. */
+export const AI_POINTED = "ai:pointed";
+/** Mizan's `select_entities` asks the window to select: `{ handles, zoom }`. */
+export const AI_SELECT = "ai:select";
+
+/** The window's answer to the core's question `id` (`ai:capture`, `ai:pointed`), or why it has
+ *  none. */
+export const aiWindowReply = (id: number, answer: { value: unknown } | { error: string }) =>
+  invoke<void>("ai_window_reply", {
+    id,
+    value: "value" in answer ? answer.value : null,
+    error: "error" in answer ? answer.error : null,
+  });
 
 export const aiCancel = () => invoke<void>("ai_cancel");
 

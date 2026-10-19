@@ -7,6 +7,8 @@
 
 use serde_json::{json, Value};
 
+use crate::context::TurnContext;
+
 /// The tools run by the host, not on the session.
 pub const HOST_TOOLS: [&str; 6] = [
     "list_drawings",
@@ -51,7 +53,35 @@ pub trait DrawingHost: Send + Sync {
     /// Closes tab `id` (the one on screen when `None`); one with unsaved changes is asked about
     /// in the window (Save, Don't Save, Cancel) instead.
     fn close(&self, id: Option<u32>) -> Result<Value, String>;
+    /// What the main view shows now, as the window draws it: a PNG at most `max_side` pixels a
+    /// side, and the drawing bounds it shows (see `crate::window`).
+    fn capture_screen(&self, max_side: u32) -> Result<Screen, String> {
+        let _ = max_side;
+        Err(NO_WINDOW.into())
+    }
+    /// Makes `handles` (entities at the top of the sheet on screen) the Select tool's selection
+    /// in the window, zooming to them with `zoom`.
+    fn select(&self, handles: &[u64], zoom: bool) -> Result<(), String> {
+        let _ = (handles, zoom);
+        Err(NO_WINDOW.into())
+    }
+    /// What the user points at in the window now: the selection, a marked region, the view.
+    fn pointed(&self) -> Result<TurnContext, String> {
+        Err(NO_WINDOW.into())
+    }
 }
+
+/// A picture of the main view: a PNG, and `[[min_x, min_y], [max_x, max_y]]` of the drawing it
+/// shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screen {
+    pub png: Vec<u8>,
+    pub bounds: [[f64; 2]; 2],
+}
+
+/// What a window tool answers when there is no window to ask.
+pub const NO_WINDOW: &str = "The Qiyas window can't be asked from here; use view_image to look \
+                             at the drawing";
 
 /// Runs the host tool `name` with `input`. `user_text` is the user's message of this turn (the
 /// agent's; `None` for MCP, which has none): a path in it counts as named by the user.

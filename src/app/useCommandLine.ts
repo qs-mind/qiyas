@@ -522,7 +522,7 @@ export function useCommandLine({
   } else if (measure.draw || measure.modify || measure.edit || measure.text || measure.dim) {
     expect = "point";
     promptKey = measure.hint;
-  } else if (tool === "distance" || tool === "area") {
+  } else if (tool === "distance" || tool === "area" || tool === "mizanArea") {
     expect = "point";
     promptKey = measure.points.length > 0 ? "cmd.prompt.nextPoint" : "cmd.prompt.firstPoint";
   } else if (tool === "idPoint") {

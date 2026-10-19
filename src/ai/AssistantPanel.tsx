@@ -1,9 +1,11 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { aiLog, type AiLog } from "../api";
+import type { Pointing } from "../app/useAssistantWiring";
 import { useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
+import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
 import { ToolCard } from "./ToolCard";
 import type { Assistant } from "./useAssistant";
 import { useStickToBottom } from "./useStickToBottom";
@@ -16,17 +18,52 @@ type Props = {
   onShow(card: ToolCardItem): void;
   onUndo(card: ToolCardItem): void;
   onSettings(): void;
+  /** What the user points at (the selection, a marked area) as chips above the box, and the send
+   *  that takes them along. Without it the message goes alone. */
+  pointing?: Pointing;
+  /** Reads a picture pasted, dropped or picked (tests give their own). */
+  read?(file: File): Promise<Picture>;
 };
 
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
 
 /** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
  *  Memoised: the app re-renders on every pointer move. */
-export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, onUndo, onSettings }: Props) {
+export const AssistantPanel = memo(function AssistantPanel({
+  assistant,
+  onShow,
+  onUndo,
+  onSettings,
+  pointing,
+  read = readPicture,
+}: Props) {
   const t = useT();
   const { transcript, busy, error } = assistant;
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
+  /** The pictures to send with the next message. */
+  const [pictures, setPictures] = useState<Picture[]>([]);
+  const [pictureError, setPictureError] = useState<string | null>(null);
+
+  // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
+  const focusKey = pointing?.focusKey ?? 0;
+  useEffect(() => {
+    if (focusKey > 0) box.current?.focus();
+  }, [focusKey]);
+
+  /** Adds the pictures among `files`, up to `MAX_PICTURES` in all. */
+  async function addPictures(files: File[]) {
+    const wanted = files.filter(isPicture);
+    if (wanted.length === 0) return;
+    setPictureError(null);
+    const room = MAX_PICTURES - pictures.length;
+    if (wanted.length > room) setPictureError(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
+    const results = await Promise.allSettled(wanted.slice(0, Math.max(0, room)).map((file) => read(file)));
+    const ok = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    if (ok.length < results.length) setPictureError(t("ai.pictureFailed"));
+    setPictures((now) => [...now, ...ok].slice(0, MAX_PICTURES));
+  }
 
   // The agent log, in place of the conversation while it is shown.
   const [showLog, setShowLog] = useState(false);
@@ -51,10 +88,22 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
 
   async function submit() {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && pictures.length === 0) || busy) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
-    if (await assistant.send(text)) setDraft("");
+    const sent = pointing
+      ? await pointing.send(text, pictures)
+      : pictures.length > 0
+        ? await assistant.send(text, {
+            images: pictures.map(({ media_type, data }) => ({ media_type, data })),
+            shown: { images: pictures.map((p) => p.url) },
+          })
+        : await assistant.send(text);
+    if (sent) {
+      setDraft("");
+      setPictures([]);
+      setPictureError(null);
+    }
   }
 
   // Undo is offered on the card whose change is the assistant's newest still in the take-off.
@@ -92,6 +141,18 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
       case "user":
         return (
           <div key={i} className="msg user" dir="auto">
+            {((item.pointed?.length ?? 0) > 0 || (item.images?.length ?? 0) > 0) && (
+              <div className="msg-attached">
+                {item.pointed?.map((label) => (
+                  <span key={label} className="chip">
+                    {label}
+                  </span>
+                ))}
+                {item.images?.map((url, k) => (
+                  <img key={k} src={url} alt={t("ai.picture")} className="thumb" />
+                ))}
+              </div>
+            )}
             {item.text}
           </div>
         );
@@ -251,7 +312,76 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           e.preventDefault();
           submit();
         }}
+        onDragOver={(e) => {
+          if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = [...e.dataTransfer.files];
+          if (files.length === 0) return;
+          e.preventDefault();
+          addPictures(files);
+        }}
       >
+        {(pointing?.selection || pointing?.region || pictures.length > 0) && (
+          <div className="composer-chips">
+            {pointing?.selection && (
+              <span className="chip" title={pointing.selection.kinds}>
+                {t("ai.chip.selection", { n: String(pointing.selection.count) })}
+                {pointing.selection.kinds && <span className="chip-detail">{pointing.selection.kinds}</span>}
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={t("ai.chip.remove")}
+                  title={t("ai.chip.remove")}
+                  onClick={pointing.detachSelection}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {pointing?.region && (
+              <span className="chip">
+                {t("ai.chip.area", {
+                  w: pointing.region.width.toFixed(2),
+                  h: pointing.region.height.toFixed(2),
+                })}
+                {pointing.region.count !== null && (
+                  <span className="chip-detail">
+                    {t("ai.chip.entities", { n: String(pointing.region.count) })}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={t("ai.chip.remove")}
+                  title={t("ai.chip.remove")}
+                  onClick={pointing.clearRegion}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {pictures.map((p, k) => (
+              <span key={k} className="chip picture">
+                <img src={p.url} alt={t("ai.picture")} className="thumb" />
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={t("ai.removePicture")}
+                  title={t("ai.removePicture")}
+                  onClick={() => setPictures((now) => now.filter((_, j) => j !== k))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {pictureError && (
+          <p className="composer-note" role="alert">
+            {pictureError}
+          </p>
+        )}
         <textarea
           ref={box}
           dir="auto"
@@ -260,6 +390,12 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           placeholder={t("ai.placeholder")}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files].filter(isPicture);
+            if (files.length === 0) return;
+            e.preventDefault();
+            addPictures(files);
+          }}
           onKeyDown={(e) => {
             // Enter sends, Shift+Enter is a new line; not while an input method is composing.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -268,13 +404,52 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
             }
           }}
         />
+        <input
+          ref={filePicker}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          hidden
+          onChange={(e) => {
+            addPictures([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
         <div className="composer-buttons">
+          {pointing && (
+            <button
+              type="button"
+              className="icon"
+              aria-label={t("ai.markArea")}
+              title={t("ai.markArea")}
+              onClick={pointing.markArea}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
+                <path d="M8 6v4M6 8h4" />
+              </svg>
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon"
+            aria-label={t("ai.attach")}
+            title={t("ai.attach")}
+            disabled={pictures.length >= MAX_PICTURES}
+            onClick={() => filePicker.current?.click()}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="10" rx="1.5" />
+              <circle cx="6" cy="6.5" r="1.2" />
+              <path d="M2.5 11.5l3.5-3 2.5 2 2-1.5 3 2.5" />
+            </svg>
+          </button>
           {busy ? (
             <button type="button" className="primary" onClick={assistant.cancel}>
               {t("ai.stop")}
             </button>
           ) : (
-            <button type="submit" className="primary" disabled={!draft.trim()}>
+            <button type="submit" className="primary" disabled={!draft.trim() && pictures.length === 0}>
               {t("ai.send")}
             </button>
           )}

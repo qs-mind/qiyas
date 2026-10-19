@@ -950,6 +950,13 @@ impl Session {
     /// coarser than `batch_tol`), and a copy of the glyph atlas pages its quads draw from. Nothing
     /// is kept, so the window's batch, its glyphs and its curves are left as they are.
     pub fn picture_batch(&self, px_per_unit: f64) -> (Batch, Vec<Vec<u8>>) {
+        self.picture_batch_of(&self.sheet, px_per_unit)
+    }
+
+    /// `picture_batch` for the sheet `sheet` (block name), on screen or not: a layout's own
+    /// drawing, or model space for the viewports of one. Lines, fills and text only; the
+    /// pictures are `plot_pictures`'.
+    pub fn picture_batch_of(&self, sheet: &str, px_per_unit: f64) -> (Batch, Vec<Vec<u8>>) {
         let px = if px_per_unit > 0.0 && px_per_unit.is_finite() {
             px_per_unit
         } else {
@@ -963,7 +970,7 @@ impl Session {
         let batch = build_batch_with_xrefs(
             &self.drawing.doc,
             &self.xref_docs(),
-            &self.sheet,
+            sheet,
             &self.visibility,
             (0.5 / px).min(self.batch_tol()),
             &mut text,
@@ -1158,19 +1165,76 @@ impl Session {
                 }
                 tops.extend(reached.difference(&outside));
             }
-            if let Some(locked) = self.locked() {
-                tops.retain(|top| !locked.contains(top));
-            }
-            tops.into_iter()
-                .map(|top| Picked {
-                    top,
-                    entity: top,
-                    chain: Vec::new(),
-                    xref: None,
-                    kind: self.kind_of(top),
-                })
-                .collect()
+            self.picked_tops(tops)
         })
+    }
+
+    /// The entities a selection polygon picks on the sheet on screen, as `pick_window` does for
+    /// a box: `points` (drawing coordinates, three corners or more, either way round, concave
+    /// too) with `crossing` takes each entity with a drawn segment inside or crossing it, else
+    /// each drawn wholly inside it. Whole entities at the top of the sheet, sorted by handle.
+    pub fn pick_polygon(&self, points: &[[f64; 2]], crossing: bool) -> Vec<Picked> {
+        if points.len() < 3 || points.iter().flatten().any(|v| !v.is_finite()) {
+            return Vec::new();
+        }
+        let lo = points
+            .iter()
+            .fold([f64::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
+        let hi = points
+            .iter()
+            .fold([f64::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
+        self.with_cache(None, |cached| {
+            let batch = &cached.batch;
+            let [ox, oy] = batch.origin;
+            // In the batch's own coordinates, as its segments are.
+            let ring: Vec<[f64; 2]> = points.iter().map(|p| [p[0] - ox, p[1] - oy]).collect();
+            let segment = |i: usize| -> [f64; 4] {
+                let s = &batch.segments[4 * i..4 * i + 4];
+                [s[0], s[1], s[2], s[3]].map(f64::from)
+            };
+            let near = cached.index.within(lo, hi, usize::MAX, |_| true);
+            let mut tops = std::collections::BTreeSet::new();
+            if crossing {
+                for i in near {
+                    if touches_ring(segment(i), &ring) {
+                        tops.extend(batch.range_of(i).map(|r| r.top));
+                    }
+                }
+            } else {
+                let reached: HashSet<u64> = near
+                    .into_iter()
+                    .filter_map(|i| batch.range_of(i))
+                    .map(|r| r.top)
+                    .collect();
+                let mut outside = HashSet::new();
+                for r in batch.ranges.iter().filter(|r| reached.contains(&r.top)) {
+                    let out = (r.first..r.first + r.count)
+                        .any(|i| !inside_ring(segment(i as usize), &ring));
+                    if out {
+                        outside.insert(r.top);
+                    }
+                }
+                tops.extend(reached.difference(&outside));
+            }
+            self.picked_tops(tops)
+        })
+    }
+
+    /// `tops` as picks of whole entities at the top of the sheet, without those a block edit in
+    /// place has locked.
+    fn picked_tops(&self, mut tops: std::collections::BTreeSet<u64>) -> Vec<Picked> {
+        if let Some(locked) = self.locked() {
+            tops.retain(|top| !locked.contains(top));
+        }
+        tops.into_iter()
+            .map(|top| Picked {
+                top,
+                entity: top,
+                chain: Vec::new(),
+                xref: None,
+                kind: self.kind_of(top),
+            })
+            .collect()
     }
 
     /// The kind of the drawing's entity `handle` ("Line", "Insert"…).
@@ -1931,6 +1995,72 @@ fn crosses_box([x0, y0, x1, y1]: [f64; 4], lo: [f64; 2], hi: [f64; 2]) -> bool {
         }
     }
     true
+}
+
+/// Whether `p` lies inside the polygon `ring` or on its edge (even-odd).
+fn in_ring(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
+    let mut inside = false;
+    for (k, a) in ring.iter().enumerate() {
+        let b = ring[(k + 1) % ring.len()];
+        if on_edge(p, *a, b) {
+            return true;
+        }
+        if (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Whether `p` lies on the segment from `a` to `b`, within a billionth of its length.
+fn on_edge(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = dx.hypot(dy);
+    let tol = len.max(f64::MIN_POSITIVE) * 1e-9;
+    let cross = (p[0] - a[0]) * dy - (p[1] - a[1]) * dx;
+    cross.abs() <= tol * len
+        && p[0] >= a[0].min(b[0]) - tol
+        && p[0] <= a[0].max(b[0]) + tol
+        && p[1] >= a[1].min(b[1]) - tol
+        && p[1] <= a[1].max(b[1]) + tol
+}
+
+/// The sign of the turn from `a` to `b` to `c`.
+fn turn(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Whether the segments `p`–`q` and `a`–`b` cross each other, touching ends excluded.
+fn cross_properly(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+    let (d1, d2) = (turn(a, b, p), turn(a, b, q));
+    let (d3, d4) = (turn(p, q, a), turn(p, q, b));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// Whether the segment `s` (`x0 y0 x1 y1`) lies wholly inside the polygon `ring`: both ends and
+/// its middle inside, never crossing an edge.
+fn inside_ring([x0, y0, x1, y1]: [f64; 4], ring: &[[f64; 2]]) -> bool {
+    let (p, q) = ([x0, y0], [x1, y1]);
+    in_ring(p, ring)
+        && in_ring(q, ring)
+        && in_ring([(x0 + x1) / 2.0, (y0 + y1) / 2.0], ring)
+        && !ring
+            .iter()
+            .enumerate()
+            .any(|(k, a)| cross_properly(p, q, *a, ring[(k + 1) % ring.len()]))
+}
+
+/// Whether the segment `s` touches the polygon `ring`: an end inside it, or meeting an edge.
+fn touches_ring([x0, y0, x1, y1]: [f64; 4], ring: &[[f64; 2]]) -> bool {
+    let (p, q) = ([x0, y0], [x1, y1]);
+    in_ring(p, ring)
+        || in_ring(q, ring)
+        || ring.iter().enumerate().any(|(k, a)| {
+            let b = ring[(k + 1) % ring.len()];
+            cross_properly(p, q, *a, b) || on_edge(*a, p, q) || on_edge(b, p, q)
+        })
 }
 
 /// Model space holds no entity.

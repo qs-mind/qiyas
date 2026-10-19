@@ -4,7 +4,7 @@
  *  that call back into one made later (`apply`, `onCommand`, the tool's `cancel`) reach it
  *  through a ref filled right after it exists. */
 import { useRef, useState, type CSSProperties } from "react";
-import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type DrawingInfo } from "../api";
+import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type AiRegion, type DrawingInfo } from "../api";
 import { useLanguage, useT } from "../i18n";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import { CommandLine } from "../shell/CommandLine";
@@ -95,6 +95,8 @@ export default function App() {
    *  palette's command line); those reach them through these, filled once they exist. */
   const applyRef = useRef<Commands["apply"] | null>(null);
   const onCommandRef = useRef<((a: Action) => void) | null>(null);
+  /** The area tool hands the area it marked to Mizan's wiring, made after the tool. */
+  const markRegionRef = useRef<((region: AiRegion) => void) | null>(null);
   const blocks = useBlocks({
     t,
     switchGen,
@@ -187,6 +189,7 @@ export default function App() {
       editText: (handle, at) => run(() => openTextEdit(handle, at)),
       dimText: setDimText,
       groupOf,
+      markRegion: (region) => markRegionRef.current?.(region),
     },
     drafting,
     info?.ucs,
@@ -194,6 +197,7 @@ export default function App() {
   );
   measureRef.current = measure;
   const ai = useAssistantWiring({
+    t,
     lang,
     switchGen,
     info,
@@ -212,7 +216,11 @@ export default function App() {
     setAiHighlight,
     syncInfo,
     measure,
+    tool,
+    chooseTool,
+    setSideTab,
   });
+  markRegionRef.current = ai.markRegion;
   const { assistant } = ai;
   const drawings = useDrawings({
     t,
@@ -370,6 +378,7 @@ export default function App() {
           colours={options.colours}
           parametric={parametric}
           chooseTool={chooseTool}
+          askMizan={ai.pointing}
           onProperties={() => {
             panels.setFolded("left", false);
             setRevealProperties((n) => n + 1);

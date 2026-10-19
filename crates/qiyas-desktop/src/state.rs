@@ -46,6 +46,8 @@ pub struct AppState {
     /// The system clipboard, opened on first use and kept: on X11 a dropped one takes what it
     /// copied with it.
     pub clipboard: Mutex<Option<arboard::Clipboard>>,
+    /// The questions Mizan's window tools put to the window, waiting for its reply.
+    pub ai_window: crate::ai_window::AiWindow,
 }
 
 impl AppState {
@@ -60,6 +62,7 @@ impl AppState {
             mcp: Mutex::new(McpRun::default()),
             pictures: Mutex::new(PictureCache::default()),
             clipboard: Mutex::new(None),
+            ai_window: crate::ai_window::AiWindow::default(),
         }
     }
 }

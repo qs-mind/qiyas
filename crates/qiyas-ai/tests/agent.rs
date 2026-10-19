@@ -1481,3 +1481,222 @@ async fn file_tools_without_a_host_say_to_use_the_app() {
         AgentEvent::ToolResult { is_error: true, summary, .. } if summary == qiyas_ai::host::NO_HOST
     )));
 }
+
+// ---------------------------------------------------------------------------------------------
+// What the user points at
+
+/// Runs one user turn with what the user points at and the pictures they attached.
+async fn turn_with(agent: &mut Agent, message: qiyas_ai::UserMessage) -> Result<(), AiError> {
+    let (tx, _rx) = mpsc::channel(10_000);
+    agent
+        .run_turn_with(message, tx, CancellationToken::new())
+        .await
+}
+
+fn rectangle_of(session: &Arc<Mutex<Option<Session>>>) -> u64 {
+    let guard = session.lock().unwrap();
+    guard
+        .as_ref()
+        .unwrap()
+        .find_entities(&qiyas_core::EntityFilter {
+            kind: Some("LwPolyline".into()),
+            ..Default::default()
+        })
+        .rows[0]
+        .handle
+}
+
+/// The selection reaches the `[state]` block as rows Mizan can act on, with a picture of it
+/// marked first; the view on screen is there too.
+#[tokio::test]
+async fn a_selection_is_listed_and_shown() {
+    let mock = serve(|_| text_turn(&["Seen."])).await;
+    let (_dir, session) = sample();
+    let rect = rectangle_of(&session);
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let message = qiyas_ai::UserMessage {
+        text: "What is this?".into(),
+        context: qiyas_ai::TurnContext {
+            selection: vec![qiyas_core::Target {
+                handle: rect,
+                chain: vec![],
+            }],
+            view: Some([[0.0, 0.0], [20.0, 10.0]]),
+            picture: true,
+            ..Default::default()
+        },
+        images: vec![],
+    };
+    turn_with(&mut agent, message).await.unwrap();
+    let body = &mock.requests()[0].body;
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    let state = content[0]["text"].as_str().unwrap();
+    assert!(
+        state.contains("View on screen: [[0.000, 0.000], [20.000, 10.000]]"),
+        "{state}"
+    );
+    assert!(state.contains("Selected by the user (1;"), "{state}");
+    assert!(
+        state.contains(&format!("- handle {rect} LwPolyline on A-WALL")),
+        "{state}"
+    );
+    assert!(state.contains("area 12.000 m²"), "{state}");
+    let caption = content[1]["text"].as_str().unwrap();
+    assert!(
+        caption.starts_with("[picture of what the user points at]"),
+        "{caption}"
+    );
+    assert!(
+        caption.contains(&format!("#1 handle {rect} LwPolyline")),
+        "{caption}"
+    );
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[3]["text"], "What is this?");
+
+    // The same selection again, unchanged: listed, but no second picture.
+    let again = qiyas_ai::UserMessage {
+        text: "And its perimeter?".into(),
+        context: qiyas_ai::TurnContext {
+            selection: vec![qiyas_core::Target {
+                handle: rect,
+                chain: vec![],
+            }],
+            ..Default::default()
+        },
+        images: vec![],
+    };
+    turn_with(&mut agent, again).await.unwrap();
+    let body = &mock.requests()[1].body;
+    let last = body["messages"].as_array().unwrap().last().unwrap()["content"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(last[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Selected by the user"));
+    assert!(!last.iter().any(|b| b["type"] == "image"));
+}
+
+/// A region the user marked lists what is in it or crosses it, with its area.
+#[tokio::test]
+async fn a_marked_region_lists_what_is_in_it() {
+    let mock = serve(|_| text_turn(&["Seen."])).await;
+    let (_dir, session) = sample();
+    let rect = rectangle_of(&session);
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let message = qiyas_ai::UserMessage {
+        text: "Count what is here".into(),
+        context: qiyas_ai::TurnContext {
+            region: Some(qiyas_ai::Region {
+                kind: qiyas_ai::RegionKind::Box,
+                points: vec![[-1.0, -1.0], [4.5, 3.5]],
+            }),
+            picture: true,
+            ..Default::default()
+        },
+        images: vec![],
+    };
+    turn_with(&mut agent, message).await.unwrap();
+    let body = &mock.requests()[0].body;
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    let state = content[0]["text"].as_str().unwrap();
+    assert!(state.contains("Region marked by the user (box;"), "{state}");
+    assert!(state.contains("24.750 m²"), "{state}");
+    assert!(
+        state.contains(&format!("- handle {rect} LwPolyline")),
+        "{state}"
+    );
+    assert!(content[1]["text"].as_str().unwrap().contains("dashed blue"));
+    assert_eq!(content[2]["type"], "image");
+}
+
+/// Pictures the user attaches go before their words; a kind the model can't read is refused.
+#[tokio::test]
+async fn attached_pictures_go_before_the_words() {
+    let mock = serve(|_| text_turn(&["A site photo."])).await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let photo = qiyas_ai::UserImage {
+        media_type: "image/jpeg".into(),
+        data: "QUJD".into(),
+    };
+    let message = qiyas_ai::UserMessage {
+        text: "What is in this photo?".into(),
+        images: vec![photo.clone()],
+        ..Default::default()
+    };
+    turn_with(&mut agent, message).await.unwrap();
+    let body = &mock.requests()[0].body;
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 3, "{content:?}");
+    assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+    assert_eq!(content[1]["source"]["data"], "QUJD");
+    assert_eq!(content[2]["text"], "What is in this photo?");
+
+    let (tx, mut rx) = mpsc::channel(100);
+    let pdf = qiyas_ai::UserMessage {
+        text: "And this?".into(),
+        images: vec![qiyas_ai::UserImage {
+            media_type: "application/pdf".into(),
+            ..photo
+        }],
+        ..Default::default()
+    };
+    agent
+        .run_turn_with(pdf, tx, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(mock.requests().len(), 1, "nothing sent");
+    let stopped = std::iter::from_fn(|| rx.try_recv().ok())
+        .any(|e| matches!(e, AgentEvent::Stopped { reason } if reason.contains("can't be sent")));
+    assert!(stopped);
+}
+
+/// Old pictures give way to a line of text, so a long look round the drawing keeps working; the
+/// newest stay.
+#[tokio::test]
+async fn old_pictures_give_way_to_a_line() {
+    let calls: Vec<String> = (0..15).map(|k| format!("toolu_{k}")).collect();
+    let mock = serve(move |n| {
+        if n < 15 {
+            let id: &'static str = Box::leak(calls[n].clone().into_boxed_str());
+            tool_turn(&[(id, "view_image", &[r#"{"width": 64}"#])])
+        } else {
+            text_turn(&["Looked."])
+        }
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    turn(&mut agent, "Look round").await.0.unwrap();
+    let requests = mock.requests();
+    let body = &requests.last().unwrap().body;
+    let text = body.to_string();
+    let images = text.matches("\"type\":\"image\"").count();
+    assert!(
+        (qiyas_ai::agent::KEEP_PICTURES..=qiyas_ai::agent::MAX_PICTURES).contains(&images),
+        "{images} pictures sent"
+    );
+    assert!(text.contains(qiyas_ai::agent::PICTURE_REMOVED));
+    // The newest picture is still there.
+    let messages = body["messages"].as_array().unwrap();
+    let newest = &messages[messages.len() - 1]["content"][0]["content"];
+    assert_eq!(newest[1]["type"], "image");
+}

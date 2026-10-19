@@ -10,25 +10,36 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::host::{changes_drawing, is_host_tool, run_host, DrawingHost, NO_HOST};
+use crate::context::{self, TurnContext, UserMessage};
+use crate::host::{changes_drawing, is_host_tool, run_host, DrawingHost, NO_HOST, NO_WINDOW};
 use crate::log::{clip, AgentLog};
 use crate::prompt::{state_block, system_prompt, DrawingFacts, Lang, LiveState};
 use crate::provider::{
     png_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
     StreamEvent, TurnRequest, Usage, INVALID_JSON,
 };
+use crate::window::{is_window_tool, run_window};
 use crate::{catalogue, execute, ToolOutput, ToolSpec};
 
 /// Most tool calls in one user turn.
 pub const MAX_TOOL_CALLS: usize = 40;
 /// Longest conversation sent. The history is append-only (the API ties the model's thinking to
-/// everything before it), so instead of trimming, a longer one asks for a new conversation.
+/// everything before it; only old pictures give way, see `trim_pictures`), so instead of
+/// trimming, a longer one asks for a new conversation.
 pub const MAX_MESSAGES: usize = 400;
 /// Why the agent stops at `MAX_MESSAGES`.
 pub const TOO_LONG: &str = "conversation is long, start a new one";
-/// Most base64 bytes of pictures in one conversation; every picture stays in the history and is
-/// sent again with each request.
-pub const IMAGE_BUDGET: usize = 15 * 1024 * 1024;
+/// Most base64 bytes of pictures Mizan draws in one conversation (the user's own count too).
+pub const IMAGE_BUDGET: usize = 40 * 1024 * 1024;
+/// The history keeps at most this many pictures, or this many base64 bytes of them; past
+/// either, the oldest give way to a line of text until `KEEP_PICTURES` and `KEEP_PICTURE_BYTES`
+/// are left. Cut seldom and in one go, so the requests between cuts share their cached start.
+pub const MAX_PICTURES: usize = 12;
+pub const MAX_PICTURE_BYTES: usize = 16 * 1024 * 1024;
+pub const KEEP_PICTURES: usize = 8;
+pub const KEEP_PICTURE_BYTES: usize = 10 * 1024 * 1024;
+/// What an old picture becomes.
+pub const PICTURE_REMOVED: &str = "[earlier picture removed; look again if you need it]";
 /// Most `remove_measurement` (and, apart, `resolve_conflict`) calls in one user turn.
 pub const MAX_DESTRUCTIVE: usize = 10;
 const NO_IMAGE_BUDGET: &str =
@@ -109,12 +120,21 @@ pub struct Agent {
     settings: AgentSettings,
     /// Built at the first turn and kept, byte for byte, until `clear()`.
     system: Option<String>,
-    /// Append-only: earlier messages are never changed or dropped.
+    /// Append-only: earlier messages are never dropped; only their old pictures give way to a
+    /// line of text (`trim_pictures`).
     history: Vec<Message>,
     /// Base64 bytes of the pictures in `history`, and the most it may hold.
     image_bytes: usize,
     image_budget: usize,
     log: Option<AgentLog>,
+}
+
+/// What a user turn starts from: the `[state]` block, the session's epoch (none without a
+/// drawing), and a picture of a new selection or region with its caption.
+struct Opening {
+    state: String,
+    epoch: Option<u64>,
+    picture: Option<(Vec<u8>, String)>,
 }
 
 /// What the tool calls of one user turn have used so far.
@@ -217,9 +237,45 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
         cancel: CancellationToken,
     ) -> Result<(), AiError> {
-        self.log("USER", || user_text.clone());
+        self.run_turn_with(UserMessage::text(user_text), events, cancel)
+            .await
+    }
+
+    /// `run_turn` for a message with what the user points at (the selection, a marked region,
+    /// the view: written into the `[state]` block, with a picture of a new selection or region)
+    /// and the pictures they attached (sent before their words).
+    pub async fn run_turn_with(
+        &mut self,
+        message: UserMessage,
+        events: mpsc::Sender<AgentEvent>,
+        cancel: CancellationToken,
+    ) -> Result<(), AiError> {
+        let UserMessage {
+            text: user_text,
+            context: pointed,
+            images,
+        } = message;
+        self.log("USER", || {
+            let mut entry = user_text.clone();
+            if !pointed.selection.is_empty() {
+                entry.push_str(&format!(
+                    "\n(selection: {} entities)",
+                    pointed.selection.len()
+                ));
+            }
+            if pointed.region.is_some() {
+                entry.push_str("\n(a marked region)");
+            }
+            if !images.is_empty() {
+                entry.push_str(&format!("\n({} pictures attached)", images.len()));
+            }
+            entry
+        });
         if self.history.len() >= MAX_MESSAGES {
             return self.stop(&events, TOO_LONG).await;
+        }
+        if let Some(why) = images.iter().find_map(context::UserImage::refused) {
+            return self.stop(&events, &why).await;
         }
         let system = match &self.system {
             Some(s) => s.clone(),
@@ -229,12 +285,43 @@ impl Agent {
                 s
             }
         };
-        let (state, mut epoch) = self.state();
+        let Opening {
+            state,
+            mut epoch,
+            picture,
+        } = self.state(&pointed);
         self.turn_text = user_text.clone();
-        self.push_user(vec![
-            ContentBlock::Text { text: state },
-            ContentBlock::Text { text: user_text },
-        ]);
+        let mut content = vec![ContentBlock::Text { text: state }];
+        if let Some((png, caption)) = picture {
+            let data = png_base64(&png);
+            if self.image_bytes + data.len() <= self.image_budget {
+                self.image_bytes += data.len();
+                content.push(ContentBlock::Text {
+                    text: format!("[picture of what the user points at] {caption}"),
+                });
+                content.push(ContentBlock::Image {
+                    media_type: "image/png".into(),
+                    data,
+                });
+            }
+        }
+        for image in images.into_iter().take(context::MAX_USER_IMAGES) {
+            self.image_bytes += image.data.len();
+            content.push(ContentBlock::Image {
+                media_type: image.media_type,
+                data: image.data,
+            });
+        }
+        // A picture alone needs no words; an empty text block would be refused.
+        let pictures_only = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { .. }))
+            && user_text.trim().is_empty();
+        if !pictures_only {
+            content.push(ContentBlock::Text { text: user_text });
+        }
+        self.push_user(content);
+        self.trim_pictures();
         let tools = catalogue();
         let mut counts = TurnCounts::default();
         let mut usage = Usage::default();
@@ -321,6 +408,7 @@ impl Agent {
                         .await;
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
+                    self.trim_pictures();
                     if counts.calls >= MAX_TOOL_CALLS {
                         let why = format!("stopped after {MAX_TOOL_CALLS} steps");
                         return self.stop(&events, &why).await;
@@ -433,6 +521,9 @@ impl Agent {
             } else if let Some(why) = counts.over_cap(name) {
                 counts.calls += 1;
                 (error_result(id, why), error_event(id, why))
+            } else if is_window_tool(name) {
+                counts.calls += 1;
+                self.run_window_tool(id, name, input).await
             } else if is_host_tool(name) {
                 counts.calls += 1;
                 let ran = self.run_host_tool(id, name, input).await;
@@ -489,19 +580,56 @@ impl Agent {
             }
         })
         .await;
-        let output = match ran {
-            Ok(Ok(output)) => output,
-            Ok(Err(why)) => return (error_result(id, why), error_event(id, why)),
+        match ran {
+            Ok(Ok(output)) => self.output_result(id, output.map_err(|e| e.to_string())),
+            Ok(Err(why)) => (error_result(id, why), error_event(id, why)),
             Err(e) => {
                 let why = format!("The tool {name} crashed: {e}");
-                return (error_result(id, &why), error_event(id, &why));
-            }
-        };
-        match output {
-            Err(e) => {
-                let why = e.to_string();
                 (error_result(id, &why), error_event(id, &why))
             }
+        }
+    }
+
+    /// Runs a window tool (see `crate::window`) off the async workers: the window first, then
+    /// the session.
+    async fn run_window_tool(
+        &mut self,
+        id: &str,
+        name: &str,
+        input: &Value,
+    ) -> (ContentBlock, AgentEvent) {
+        if name == "view_screen" && self.image_bytes >= self.image_budget {
+            return (
+                error_result(id, NO_IMAGE_BUDGET),
+                error_event(id, NO_IMAGE_BUDGET),
+            );
+        }
+        let Some(host) = self.host.clone() else {
+            return (error_result(id, NO_WINDOW), error_event(id, NO_WINDOW));
+        };
+        let session = self.session.clone();
+        let (tool, args, lang) = (name.to_string(), input.clone(), self.settings.language);
+        let ran =
+            tokio::task::spawn_blocking(move || run_window(&*host, &session, &tool, &args, lang))
+                .await;
+        match ran {
+            Ok(output) => self.output_result(id, output),
+            Err(e) => {
+                let why = format!("The tool {name} crashed: {e}");
+                (error_result(id, &why), error_event(id, &why))
+            }
+        }
+    }
+
+    /// A tool's output as the block for the model and the event for the window; a picture past
+    /// the conversation's budget is refused.
+    fn output_result(
+        &mut self,
+        id: &str,
+        output: Result<ToolOutput, String>,
+    ) -> (ContentBlock, AgentEvent) {
+        match output {
+            Err(why) => (error_result(id, &why), error_event(id, &why)),
             Ok(ToolOutput::Json(value)) => json_result(id, &value),
             Ok(ToolOutput::Image { png, caption }) => {
                 let data = png_base64(&png);
@@ -570,15 +698,77 @@ impl Agent {
         system_prompt(self.settings.language, &facts)
     }
 
-    /// The `[state]` block for the next user message, and the session's epoch (none without a
-    /// drawing).
-    fn state(&self) -> (String, Option<u64>) {
-        let (state, epoch) = {
-            let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-            let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
-            (state, guard.as_ref().map(Session::epoch))
-        };
-        (state_block(self.settings.language, &state), epoch)
+    /// The `[state]` block for the next user message with what the user points at, the
+    /// session's epoch, and a picture of a new selection or region.
+    fn state(&self, pointed: &TurnContext) -> Opening {
+        let lang = self.settings.language;
+        let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
+        let mut text = state_block(lang, &state);
+        let mut picture = None;
+        if let Some(session) = guard.as_ref() {
+            text.push_str(&context::describe(session, pointed, lang));
+            picture = context::picture(session, pointed);
+        }
+        Opening {
+            state: text,
+            epoch: guard.as_ref().map(Session::epoch),
+            picture,
+        }
+    }
+
+    /// Replaces the oldest pictures in the history with `PICTURE_REMOVED` once it holds more
+    /// than `MAX_PICTURES` of them or `MAX_PICTURE_BYTES`, keeping the newest `KEEP_PICTURES`
+    /// within `KEEP_PICTURE_BYTES` (the newest always).
+    fn trim_pictures(&mut self) {
+        // Where each picture is, oldest first: message, block, part of a tool result, bytes.
+        let mut found: Vec<(usize, usize, Option<usize>, usize)> = Vec::new();
+        for (m, message) in self.history.iter().enumerate() {
+            for (b, block) in message.content.iter().enumerate() {
+                match block {
+                    ContentBlock::Image { data, .. } => found.push((m, b, None, data.len())),
+                    ContentBlock::ToolResult { content, .. } => {
+                        for (p, part) in content.iter().enumerate() {
+                            if let ResultPart::Png(data) = part {
+                                found.push((m, b, Some(p), data.len()));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let bytes: usize = found.iter().map(|f| f.3).sum();
+        if found.len() <= MAX_PICTURES && bytes <= MAX_PICTURE_BYTES {
+            return;
+        }
+        let (mut kept, mut kept_bytes, mut cut) = (0, 0, found.len());
+        for (k, f) in found.iter().enumerate().rev() {
+            let first = kept == 0;
+            if !first && (kept + 1 > KEEP_PICTURES || kept_bytes + f.3 > KEEP_PICTURE_BYTES) {
+                break;
+            }
+            kept += 1;
+            kept_bytes += f.3;
+            cut = k;
+        }
+        for &(m, b, part, _) in &found[..cut] {
+            let block = &mut self.history[m].content[b];
+            match (block, part) {
+                (ContentBlock::ToolResult { content, .. }, Some(p)) => {
+                    content[p] = ResultPart::Text(PICTURE_REMOVED.to_string());
+                }
+                (block, None) => {
+                    *block = ContentBlock::Text {
+                        text: PICTURE_REMOVED.to_string(),
+                    };
+                }
+                _ => {}
+            }
+        }
+        self.log("PICTURES", || {
+            format!("{cut} older pictures removed from the conversation, {kept} kept")
+        });
     }
 
     /// Adds user content. A user message already last (after a cancel, an error or a refusal,

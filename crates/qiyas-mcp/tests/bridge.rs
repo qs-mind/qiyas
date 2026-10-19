@@ -56,7 +56,7 @@ async fn lists_and_calls_through_the_bridge() {
     let client = bridge(&url, TOKEN).await;
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 54);
+    assert_eq!(tools.len(), 57);
 
     let result = client
         .call_tool(CallToolRequestParams::new("list_sheets"))

@@ -22,8 +22,12 @@ export type ToolCardItem = {
   stale: boolean;
 };
 
+/** What went with a user's message besides their words: the selection or area they pointed at
+ *  (a short label), and the pictures they attached (data URLs, for thumbnails). */
+export type Attached = { pointed?: string[]; images?: string[] };
+
 export type Item =
-  | { kind: "user"; text: string }
+  | ({ kind: "user"; text: string } & Attached)
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
@@ -36,7 +40,7 @@ export type Transcript = { items: Item[] };
 /** The agent's events, plus what the window does itself. */
 export type Action =
   | AgentEvent
-  | { type: "user"; text: string }
+  | ({ type: "user"; text: string } & Attached)
   /** The message could not be sent: take it back. */
   | { type: "unsend" }
   /** The turn has ended (`ai:done`). */
@@ -65,8 +69,10 @@ export function reduce(state: Transcript, action: Action): Transcript {
   const items = state.items;
   const last = items.at(-1);
   switch (action.type) {
-    case "user":
-      return { items: [...finishText(items), { kind: "user", text: action.text }] };
+    case "user": {
+      const { type: _, ...item } = action;
+      return { items: [...finishText(items), { ...item, kind: "user" }] };
+    }
     case "unsend":
       return last?.kind === "user" ? { items: items.slice(0, -1) } : state;
     case "text":

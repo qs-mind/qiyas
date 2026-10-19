@@ -19,6 +19,13 @@ section below, so add the section before pushing the tag.
   erase what is drawn, and undo its own last step.
 - The origin icon: X and Y arrows on 0,0 (or the UCS origin), parked in the corner when 0,0 is off
   screen; UCSICON ON / OFF or View, Origin icon.
+- Point Mizan at something: what you select shows as a chip above Mizan's box and goes with your
+  message, with a picture of it; the box's area button marks an area (drag a box, or click its
+  corners); right-click, Ask Mizan about this.
+- Paste, drop or attach pictures (a screenshot, a site photo, a scanned schedule) in Mizan's box.
+- Mizan sees the drawing as you do: its pictures show images and PDF underlays, model space in a
+  layout's viewports and any sheet, with numbered marks it can act on; it can look at your screen
+  as it is and select entities for you.
 
 ### Fixed
 

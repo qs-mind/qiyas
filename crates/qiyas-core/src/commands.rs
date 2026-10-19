@@ -715,7 +715,7 @@ fn one() -> f64 {
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
 /// outermost first (empty, the default, for an entity on the sheet). A chain ending in an xref
 /// reference names an entity of that xref.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Target {
     pub handle: u64,
     #[serde(default)]

@@ -170,6 +170,10 @@ fn block_json(b: &ContentBlock) -> Value {
             }
             v
         }
+        ContentBlock::Image { media_type, data } => json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": media_type, "data": data }
+        }),
         ContentBlock::Thinking {
             thinking,
             signature,
@@ -436,6 +440,18 @@ mod tests {
             .any(|e| matches!(e, StreamEvent::ToolUse { .. })));
         // Sent back as an empty object.
         assert_eq!(block_json(&result.content[0])["input"], json!({}));
+    }
+
+    #[test]
+    fn a_users_picture_is_an_image_block() {
+        let block = ContentBlock::Image {
+            media_type: "image/jpeg".into(),
+            data: "QUJD".into(),
+        };
+        assert_eq!(
+            block_json(&block),
+            json!({"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"QUJD"}})
+        );
     }
 
     #[test]

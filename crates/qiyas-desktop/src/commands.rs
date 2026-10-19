@@ -304,6 +304,17 @@ pub async fn pick_window(
     })
 }
 
+/// The entities a selection polygon `points` (drawing coordinates) picks: wholly inside it, or
+/// with `crossing` touching it (see `Session::pick_polygon`).
+#[tauri::command]
+pub async fn pick_polygon(
+    points: Vec<[f64; 2]>,
+    crossing: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<Picked>, String> {
+    with_session(&state, |s| Ok(s.pick_polygon(&points, crossing)))
+}
+
 /// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;
 /// `from_x`, `from_y` is the previous point, for perpendicular snaps. None while snaps are off.
 #[tauri::command]
@@ -632,18 +643,37 @@ struct AiDone {
     error: Option<String>,
 }
 
-/// Sends `text` to the assistant and returns at once; the turn runs in the background and sends
-/// each `AgentEvent` as `ai:event`, then `ai:done`. Fails with "busy" while a turn runs, and with
-/// "no_api_key" or "no_base_url" when the settings can't reach a provider.
+/// Sends `text` to the assistant, with what the user points at (`context`: the selection, a
+/// marked region, the view) and the pictures they attached (`images`), and returns at once; the
+/// turn runs in the background and sends each `AgentEvent` as `ai:event`, then `ai:done`. Fails
+/// with "busy" while a turn runs, and with "no_api_key" or "no_base_url" when the settings can't
+/// reach a provider.
 #[tauri::command]
 pub async fn ai_send<R: Runtime>(
     text: String,
+    context: Option<qiyas_ai::TurnContext>,
+    images: Option<Vec<qiyas_ai::UserImage>>,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if text.trim().is_empty() {
+    let images = images.unwrap_or_default();
+    if text.trim().is_empty() && images.is_empty() {
         return Err("The message is empty".into());
     }
+    if images.len() > qiyas_ai::context::MAX_USER_IMAGES {
+        return Err(format!(
+            "At most {} pictures in one message",
+            qiyas_ai::context::MAX_USER_IMAGES
+        ));
+    }
+    if let Some(why) = images.iter().find_map(qiyas_ai::UserImage::refused) {
+        return Err(why);
+    }
+    let message = qiyas_ai::UserMessage {
+        text,
+        context: context.unwrap_or_default(),
+        images,
+    };
     let (kept, generation) = ai_run(&state).reserve()?;
     // Gives the claim back on every way out before the turn starts, a panic included.
     let mut claim = Claim {
@@ -669,7 +699,7 @@ pub async fn ai_send<R: Runtime>(
     let turn = ai_run(&state).start(agent, generation);
     // `start` settles the claim either way.
     claim.armed = false;
-    tauri::async_runtime::spawn(supervise(app, turn?, text));
+    tauri::async_runtime::spawn(supervise(app, turn?, message));
     Ok(())
 }
 
@@ -729,9 +759,9 @@ async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Res
 /// Runs one turn, forwarding its events to the window while its conversation is current.
 /// Runs the turn on its own task and always ends it with `ai:done`: if the task panics, the
 /// conversation is dropped and the error is `CRASHED`.
-async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
+async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, message: qiyas_ai::UserMessage) {
     let generation = turn.generation;
-    let task = tauri::async_runtime::spawn(run_turn(app.clone(), turn, text));
+    let task = tauri::async_runtime::spawn(run_turn(app.clone(), turn, message));
     let error = match task.await {
         Ok((agent, result)) => {
             ai_run(&app.state::<AppState>()).finish(agent, generation);
@@ -750,7 +780,7 @@ async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
 async fn run_turn<R: Runtime>(
     app: AppHandle<R>,
     turn: Turn,
-    text: String,
+    message: qiyas_ai::UserMessage,
 ) -> (Agent, Result<(), qiyas_ai::AiError>) {
     let Turn {
         mut agent,
@@ -767,7 +797,7 @@ async fn run_turn<R: Runtime>(
         }
     };
     // The agent drops the sender when the turn ends, which ends `forward`.
-    let (result, ()) = tokio::join!(agent.run_turn(text, tx, cancel), forward);
+    let (result, ()) = tokio::join!(agent.run_turn_with(message, tx, cancel), forward);
     (agent, result)
 }
 

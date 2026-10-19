@@ -905,13 +905,70 @@ pub fn catalogue() -> Vec<ToolSpec> {
         ),
         tool(
             "view_image",
-            "A PNG picture of the sheet shown, so you can look at the drawing: lines in their \
-             colours on white, the take-off in violet. The caption gives the bounds used.",
+            "A PNG picture of a sheet, drawn as the engineer sees it, so you can look at the \
+             drawing: images and PDF underlays under the lines, model space in a layout's \
+             viewports, lines, fills and text in their colours on white, the take-off in violet. \
+             Look at the whole sheet first, then zoom in with bounds where you need detail: the \
+             caption says how tall the text is in pixels (letters read from about 8 px) and how \
+             big a pixel is. It never moves the user's view.",
             json!({
                 "bounds": bbox("The part to show; the whole sheet when left out."),
-                "width": { "type": "integer", "description": "Width in pixels, at most 1600. Default 800." }
+                "width": { "type": "integer", "description": "Width in pixels, at most 1600. Default 800." },
+                "sheet": sheet("A layout or sheet name; the one shown when left out."),
+                "highlight": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "description": "Handles of entities on the sheet to draw thick violet (and mark first)."
+                },
+                "marks": {
+                    "type": "boolean",
+                    "description": "Put numbered badges on up to 40 entities in view; the caption \
+                                    gives each number's handle, kind and layer. Use them to name \
+                                    what you see and to act on it by handle."
+                }
             }),
             &[],
+            false,
+        ),
+        tool(
+            "view_screen",
+            "A picture of exactly what the user sees now in Qiyas's main view, as the window \
+             draws it (their colours and background, images and PDF underlays, layout \
+             viewports, the selection highlighted), with numbered marks on the entities: the \
+             caption gives each mark's handle, and what the user selected is marked first. Use \
+             it when the user refers to what they are looking at. It shows only the view on \
+             screen: use view_image to look elsewhere or closer.",
+            json!({
+                "marks": { "type": "boolean", "description": "Numbered marks on the entities in view. Default true." }
+            }),
+            &[],
+            false,
+        ),
+        tool(
+            "get_selection",
+            "What the user points at in the window now: the entities they selected (handle, \
+             kind, layer, length and area each), a region they marked, and the view on screen. \
+             Each message's [state] block gives it; call this when they may have changed it \
+             since.",
+            json!({}),
+            &[],
+            false,
+        ),
+        tool(
+            "select_entities",
+            "Selects entities in the window for the user, as if they had picked them with the \
+             Select tool, so they can check them or run Move, Erase or Properties on them. \
+             Entities at the top of the sheet on screen only. Changes nothing in the drawing and \
+             is no undo step.",
+            json!({
+                "handles": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "description": "The entities to select; the selection is replaced."
+                },
+                "zoom": { "type": "boolean", "description": "Zoom the view to them. Default false." }
+            }),
+            &["handles"],
             false,
         ),
     ]

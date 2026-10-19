@@ -127,6 +127,9 @@ fn catalogue_schemas_are_strict_objects() {
             "set_text",
             "undo_last",
             "view_image",
+            "view_screen",
+            "get_selection",
+            "select_entities",
         ]
     );
     for tool in &tools {
@@ -450,11 +453,11 @@ fn unknown_tool_is_an_error() {
     let (_dir, mut session) = sample();
     let err = execute(&mut session, "delete_everything", &json!({}), Source::Ai).unwrap_err();
     assert!(matches!(err, ToolError::UnknownTool(ref n) if n == "delete_everything"));
-    // Every tool in the catalogue is known to `execute`, but the file tools: the app's host runs
-    // those, outside the session.
+    // Every tool in the catalogue is known to `execute`, but the file and window tools: the
+    // app's host runs those, outside the session.
     for tool in catalogue()
         .into_iter()
-        .filter(|t| !qiyas_ai::is_host_tool(t.name))
+        .filter(|t| !qiyas_ai::is_host_tool(t.name) && !qiyas_ai::is_window_tool(t.name))
     {
         let result = execute(&mut session, tool.name, &json!({}), Source::Ai);
         assert!(

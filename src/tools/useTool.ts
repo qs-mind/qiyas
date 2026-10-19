@@ -4,7 +4,7 @@
  *  set: the entities a Shift click or a selection box picked with the select tool, which a modify
  *  tool then works on. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { Boundary, Command, Drafting, EntityInfo, Picked, Snap, SnapKind, Ucs } from "../api";
+import type { AiRegion, Boundary, Command, Drafting, EntityInfo, Picked, Snap, SnapKind, Ucs } from "../api";
 import type { Target } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
@@ -110,6 +110,8 @@ export type ToolState = {
   corner: Point | null;
   /** Set by the event that gave `zoomWindow` its second corner; the hook zooms to it. */
   pendingZoom: Bounds | null;
+  /** Set by the box or the closed polygon that marked an area for Mizan; the hook hands it on. */
+  pendingRegion: AiRegion | null;
   /** A draw tool's own state; null for the other tools. */
   draw: DrawState | null;
   /** A modify tool's own state, with the entities it works on; null for the other tools. */
@@ -161,6 +163,11 @@ export type ToolEvent =
   | { type: "selected"; handles: number[]; add: boolean; kinds?: (string | null | undefined)[] }
   /** The drawing changed under the selection (an undo, a redo): keep the handles `present`. */
   | { type: "prune"; present: (handle: number) => boolean }
+  /** `mizanArea`: a box dragged marks the area. */
+  | { type: "region"; region: AiRegion }
+  /** Mizan selected these entities (top-level handles): the select tool with them as its
+   *  selection set. */
+  | { type: "aiSelect"; handles: number[] }
   /** For a modify tool: what its stretch window touches, or a box as that window. */
   | { type: "modify"; input: ModifyInput }
   | { type: "finish" }
@@ -192,6 +199,7 @@ const PROMPT: Partial<Record<Tool, string>> = {
   mview: "vport.prompt.first",
   ucs: "ucs.prompt.origin",
   ucsObject: "ucs.prompt.object",
+  mizanArea: "ai.area.prompt",
 };
 
 /** The tools that act on the entity clicked. */
@@ -249,6 +257,7 @@ export const initialToolState = (
     asking: null,
     corner: null,
     pendingZoom: null,
+    pendingRegion: null,
     draw: isDrawTool(tool) ? initialDrawState(tool) : null,
     modify,
     edit,
@@ -369,6 +378,10 @@ function finish(s: ToolState): ToolState {
   if (s.text) return textStep(s, { type: "finish" });
   if (s.tool === "select") return measureSelected(s);
   if (s.draw) return { ...drawStep(s, { type: "finish" }), lastClick: null };
+  if (s.tool === "mizanArea") {
+    if (s.points.length < 3) return { ...s, hint: promptOf(s.tool) };
+    return { ...s, points: [], lastClick: null, pendingRegion: { kind: "polygon", points: s.points } };
+  }
   const need = s.tool === "area" ? 3 : 2;
   if (s.tool !== "distance" && s.tool !== "area") return s;
   if (s.points.length < need) return { ...s, hint: promptOf(s.tool) };
@@ -378,7 +391,7 @@ function finish(s: ToolState): ToolState {
 
 export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
   // A command or a zoom is pending for one state only: the hook sees it once.
-  const s = { ...state, pendingCommand: null, pendingZoom: null, pendingEdit: null, editAt: null };
+  const s = { ...state, pendingCommand: null, pendingZoom: null, pendingRegion: null, pendingEdit: null, editAt: null };
   switch (event.type) {
     case "tool": {
       // The selection set goes along; with none, the entity the select tool picked (whole).
@@ -403,6 +416,10 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       const kinds = withKinds(event.add ? s.kinds : {}, event.handles, event.kinds);
       return { ...s, selection: event.add ? union(s.selection, event.handles) : event.handles, kinds };
     }
+    case "region":
+      return s.tool === "mizanArea" ? { ...s, points: [], pendingRegion: event.region } : s;
+    case "aiSelect":
+      return { ...initialToolState("select", event.handles), hint: "" };
     case "prune": {
       const selection = s.selection.filter(event.present);
       const modify = s.modify && { ...s.modify, handles: s.modify.handles.filter(event.present) };
@@ -507,7 +524,8 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
       }
       switch (s.tool) {
         case "distance":
-        case "area": {
+        case "area":
+        case "mizanArea": {
           if (double) return { ...finish(s), lastClick: null };
           const prev = s.points.length > 0 ? s.points[s.points.length - 1] : null;
           const point = event.snapped ? event.world : constrain(prev, event.world, event.track ?? NO_TRACK);
@@ -652,6 +670,8 @@ export function toolReducer(state: ToolState, event: ToolEvent): ToolState {
 }
 
 export type ToolApi = {
+  /** `mizanArea` marked an area: hand it to Mizan. */
+  markRegion?(region: AiRegion): void;
   pick(x: number, y: number, tol: number): Promise<Picked | null>;
   /** What a selection box picks: wholly inside, or with `crossing` touching it. */
   pickWindow(bounds: Bounds, crossing: boolean): Promise<Picked[]>;
@@ -686,6 +706,7 @@ export type ToolApi = {
 const placesPoints = (tool: Tool) =>
   tool === "distance" ||
   tool === "area" ||
+  tool === "mizanArea" ||
   (isDrawTool(tool) && tool !== "hatch") ||
   isTextTool(tool) ||
   tool === "pasteclip" ||
@@ -773,6 +794,10 @@ export function useTool(
   useEffect(() => {
     if (state.pendingZoom) api.zoomTo(state.pendingZoom);
   }, [state.pendingZoom]);
+
+  useEffect(() => {
+    if (state.pendingRegion) api.markRegion?.(state.pendingRegion);
+  }, [state.pendingRegion]);
 
   useEffect(() => {
     if (state.draw?.undo) api.undo();
@@ -894,6 +919,10 @@ export function useTool(
   /** A selection box dragged in the viewport: picks for the select tool or a modify tool, or is
    *  stretch's window. */
   async function onBox(bounds: Bounds, crossing: boolean, shift: boolean) {
+    if (tool === "mizanArea") {
+      dispatch({ type: "region", region: { kind: "box", points: [bounds[0], bounds[1]] } });
+      return;
+    }
     if (modifyPhase === "window") {
       dispatch({ type: "modify", input: { type: "box", bounds } });
       return;
@@ -1001,6 +1030,11 @@ export function useTool(
     /** The select tool's whole selection set (top-level handles): the properties palette sums
      *  it when two or more are picked. */
     picks: tool === "select" ? state.selection : NO_PICKS,
+    /** The kind of each handle in the selection set, when known ("Line", "Insert"…). */
+    kinds: state.kinds,
+    /** Mizan selected `handles` (top-level): the select tool takes them as its selection set. The
+     *  app chooses the select tool too. */
+    select: (handles: number[]) => dispatch({ type: "aiSelect", handles }),
     /** Dimensions and tables the modify tool just left out: say how many. */
     skipped,
     /** The drawing changed: keep only the selected handles `present`. */
@@ -1008,6 +1042,7 @@ export function useTool(
     /** A left drag in the viewport draws a selection box now. */
     boxes:
       tool === "select" ||
+      tool === "mizanArea" ||
       modifyPhase === "select" ||
       modifyPhase === "window" ||
       (edit !== null && editBoxes(edit)) ||

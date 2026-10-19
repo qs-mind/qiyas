@@ -1,4 +1,5 @@
 mod ai;
+mod ai_window;
 mod blocks;
 mod commands;
 mod drawing_host;
@@ -78,6 +79,7 @@ pub fn run() {
             commands::pick,
             commands::boundary_at,
             commands::pick_window,
+            commands::pick_polygon,
             commands::snap,
             commands::get_drafting,
             commands::set_drafting,
@@ -114,6 +116,7 @@ pub fn run() {
             updater::cancel_update,
             launch::take_open_requests,
             commands::ai_send,
+            ai_window::ai_window_reply,
             commands::ai_cancel,
             commands::ai_clear,
             commands::ai_status,

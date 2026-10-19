@@ -267,3 +267,96 @@ test("Mizan's answers render headings, rules, nested lists and tables, and links
   expect(md.querySelector("a")).toBeNull();
   expect(md.querySelector(".md-link")?.getAttribute("title")).toBe("https://example.com");
 });
+
+function pointingSetup(more: Partial<import("../app/useAssistantWiring").Pointing> = {}) {
+  const send = vi.fn<import("../app/useAssistantWiring").Pointing["send"]>().mockResolvedValue(true);
+  const pointing = {
+    selection: { count: 3, kinds: "2 LwPolyline, 1 Insert" },
+    region: { width: 12.3456, height: 8.1, count: 47 },
+    detachSelection: vi.fn(),
+    clearRegion: vi.fn(),
+    markArea: vi.fn(),
+    send,
+    focusKey: 0,
+    ask: vi.fn(),
+    ...more,
+  };
+  const read = vi.fn(async (file: File) => ({
+    media_type: file.type,
+    data: "QUJD",
+    url: `data:${file.type};base64,QUJD`,
+  }));
+  const assistant = {
+    transcript: EMPTY,
+    busy: false,
+    error: null,
+    status: null,
+    send: vi.fn().mockResolvedValue(true),
+    cancel: vi.fn(),
+    clear: vi.fn(),
+  };
+  render(
+    <AssistantPanel
+      assistant={assistant}
+      onShow={() => {}}
+      onUndo={() => {}}
+      onSettings={() => {}}
+      pointing={pointing}
+      read={read}
+    />,
+  );
+  return { pointing, read, assistant, send };
+}
+
+test("what the user points at shows as chips above the box; × leaves it out", () => {
+  const { pointing } = pointingSetup();
+  expect(screen.getByText("Selection · 3")).toBeTruthy();
+  expect(screen.getByText("2 LwPolyline, 1 Insert")).toBeTruthy();
+  expect(screen.getByText("Area · 12.35 × 8.10 m")).toBeTruthy();
+  expect(screen.getByText("47 entities")).toBeTruthy();
+  const [selectionX, areaX] = screen.getAllByRole("button", { name: "Remove" });
+  fireEvent.click(selectionX);
+  expect(pointing.detachSelection).toHaveBeenCalledTimes(1);
+  fireEvent.click(areaX);
+  expect(pointing.clearRegion).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Mark an area for Mizan" }));
+  expect(pointing.markArea).toHaveBeenCalledTimes(1);
+});
+
+test("a pasted picture shows as a thumbnail and goes with the message", async () => {
+  const { send: sendPointed, read } = pointingSetup({ selection: null, region: null });
+  const box = screen.getByLabelText("Type your request…");
+  const photo = new File(["x"], "site.jpg", { type: "image/jpeg" });
+  fireEvent.paste(box, { clipboardData: { files: [photo] } });
+  await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(1));
+  expect(read).toHaveBeenCalledWith(photo);
+  // A picture alone can be sent.
+  const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+  expect(send.disabled).toBe(false);
+  fireEvent.change(box, { target: { value: "What is this?" } });
+  fireEvent.click(send);
+  await waitFor(() => expect(sendPointed).toHaveBeenCalledTimes(1));
+  expect(sendPointed.mock.calls[0][0]).toBe("What is this?");
+  expect(sendPointed.mock.calls[0][1]).toEqual([
+    { media_type: "image/jpeg", data: "QUJD", url: "data:image/jpeg;base64,QUJD" },
+  ]);
+  await waitFor(() => expect(screen.queryAllByAltText("Picture")).toHaveLength(0));
+});
+
+test("at most four pictures go with one message", async () => {
+  pointingSetup({ selection: null, region: null });
+  const box = screen.getByLabelText("Type your request…");
+  const files = [1, 2, 3, 4, 5].map((n) => new File(["x"], `p${n}.png`, { type: "image/png" }));
+  fireEvent.paste(box, { clipboardData: { files } });
+  await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(4));
+  expect(screen.getByRole("alert").textContent).toBe("At most 4 pictures in one message");
+  expect((screen.getByRole("button", { name: "Attach pictures" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("a user's message shows what went with it", () => {
+  setup({
+    items: [{ kind: "user", text: "And this?", pointed: ["Selection · 2"], images: ["data:image/png;base64,QUJD"] }],
+  });
+  expect(screen.getByText("Selection · 2")).toBeTruthy();
+  expect(screen.getByAltText("Picture").getAttribute("src")).toBe("data:image/png;base64,QUJD");
+});

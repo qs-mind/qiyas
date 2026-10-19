@@ -173,50 +173,61 @@ impl Session {
         if viewports.is_empty() {
             return Vec::new();
         }
+        self.with_model(None, |batch| self.views_against(viewports, batch))
+    }
+
+    /// `paper_views_of` with its spans counted in `batch`, a model space batch drawn for another
+    /// zoom (Mizan's picture of a layout).
+    pub fn paper_views_against(&self, sheet: &str, batch: &Batch) -> Vec<PaperView> {
+        if sheet.eq_ignore_ascii_case(MODEL) {
+            return Vec::new();
+        }
+        self.views_against(viewports_on(self, sheet), batch)
+    }
+
+    fn views_against(&self, viewports: Vec<&Viewport>, batch: &Batch) -> Vec<PaperView> {
         let doc = &self.drawing.doc;
         let xrefs = self.xref_docs();
-        self.with_model(None, |batch| {
-            viewports
-                .into_iter()
-                .filter_map(|v| {
-                    let (centre, scale) = view_of(v)?;
-                    let (cx, cy, w, h) = (v.center.x, v.center.y, v.width / 2.0, v.height / 2.0);
-                    let frozen = frozen_names(doc, v);
-                    let (lines, fills, texts) = if frozen.is_empty() {
-                        (None, None, None)
-                    } else {
-                        let mut memo: HashMap<(u64, u32), bool> = HashMap::new();
-                        let mut hidden = |r: &Range| {
-                            *memo.entry((r.entity, r.chain)).or_insert_with(|| {
-                                let chain = batch.chain_of(r);
-                                let outer = chain.iter().any(|&h| {
-                                    doc.get_entity(Handle::new(h)).is_some_and(|e| {
-                                        frozen.contains(&normalize_name(&e.common().layer))
-                                    })
-                                });
-                                outer
-                                    || locate(doc, &xrefs, r.entity, chain)
-                                        .is_ok_and(|l| frozen.contains(&normalize_name(&l.layer)))
-                            })
-                        };
-                        (
-                            Some(spans(&batch.ranges, &mut hidden)),
-                            Some(spans(&batch.fill_ranges, &mut hidden)),
-                            Some(spans(&batch.text_ranges, &mut hidden)),
-                        )
+        viewports
+            .into_iter()
+            .filter_map(|v| {
+                let (centre, scale) = view_of(v)?;
+                let (cx, cy, w, h) = (v.center.x, v.center.y, v.width / 2.0, v.height / 2.0);
+                let frozen = frozen_names(doc, v);
+                let (lines, fills, texts) = if frozen.is_empty() {
+                    (None, None, None)
+                } else {
+                    let mut memo: HashMap<(u64, u32), bool> = HashMap::new();
+                    let mut hidden = |r: &Range| {
+                        *memo.entry((r.entity, r.chain)).or_insert_with(|| {
+                            let chain = batch.chain_of(r);
+                            let outer = chain.iter().any(|&h| {
+                                doc.get_entity(Handle::new(h)).is_some_and(|e| {
+                                    frozen.contains(&normalize_name(&e.common().layer))
+                                })
+                            });
+                            outer
+                                || locate(doc, &xrefs, r.entity, chain)
+                                    .is_ok_and(|l| frozen.contains(&normalize_name(&l.layer)))
+                        })
                     };
-                    Some(PaperView {
-                        handle: v.common.handle.value(),
-                        rect: [[cx - w, cy - h], [cx + w, cy + h]],
-                        centre,
-                        scale,
-                        lines,
-                        fills,
-                        texts,
-                    })
+                    (
+                        Some(spans(&batch.ranges, &mut hidden)),
+                        Some(spans(&batch.fill_ranges, &mut hidden)),
+                        Some(spans(&batch.text_ranges, &mut hidden)),
+                    )
+                };
+                Some(PaperView {
+                    handle: v.common.handle.value(),
+                    rect: [[cx - w, cy - h], [cx + w, cy + h]],
+                    centre,
+                    scale,
+                    lines,
+                    fills,
+                    texts,
                 })
-                .collect()
-        })
+            })
+            .collect()
     }
 
     /// Model space as drawn inside the layout's viewports (`with_model`).

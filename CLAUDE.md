@@ -20,7 +20,7 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
-    qiyas-ai        the 54 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        the 57 AI tools over the command bus, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
@@ -343,7 +343,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   after an undo or redo it keeps only what is still drawn. A modify tool starts on it (or on the select
   tool's pick, whole), else asks for one (clicks or a box, then Enter); stretch always asks for
   its crossing window. Home tab, Modify group; command line M, CO/CP, RO, SC, MI, S, AL, AR (R or
-  P), X, E. Grips come later.
+  P), X, E. Grips come later. `Session::pick_polygon(points, crossing)` (IPC `pick_polygon`) does
+  the same for a polygon (concave too, either way round; an entity wholly inside has both ends and
+  the middle of every segment inside and crosses no edge); Mizan's area tool uses it.
 - `Command::Edit(EditSpec)` (`qiyas-core/src/modify2.rs`, wire `{"type":"edit","kind":"trim",...}`):
   trim, extend, break, join, lengthen, reverse, offset, fillet, chamfer, blend, pedit, overkill,
   flatten; same targets, one undo step. The take-off follows (`follow_edit`): rows on a cut
@@ -1021,8 +1023,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   provider name), is set only in the Settings dialog, and is never sent back to the window.
   Agents never read or type a real key; the founder pastes it himself.
 - `QIYAS_AI_MOCK=1` with a debug build (`pnpm tauri dev`) uses a canned provider: it says a
-  sentence, measures the first polyline on layer A-WALL and answers. No key, no network. Release
-  builds leave it out.
+  sentence, measures the first polyline on layer A-WALL and answers; with a selection in the
+  message's `[state]` it calls `view_screen` and `select_entities` on it instead. No key, no
+  network. Release builds leave it out.
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.
@@ -1032,7 +1035,44 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   when the request is clear it acts. The question is a plain text answer: the turn ends
   (`StopReason::EndTurn`, `AgentEvent::Done`), the question stays in the history and the next
   message is the answer (`agent.rs` test `a_question_ends_the_turn_cleanly...`). The fixed prompt
-  stays under 800 words (a test).
+  stays under 900 words (a test), English and Arabic saying the same rules.
+- Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `execute.rs` `picture`): `view_image` draws a
+  sheet (`sheet`, by layout or block name; the one on screen by default; it never moves the
+  user's view) as the engineer sees it on white: model space inside a layout's viewports
+  (`Session::picture_batch_of`, `paper_views_against`, clipped to each frame), pictures and PDF
+  underlays under the lines (`plot_pictures` + `draw_picture`, at most 4096 px; one that can't
+  be drawn is named in the caption), fills, lines, text as glyphs, the take-off in violet,
+  `highlight` handles thick violet. `marks: true` puts orange numbered badges on up to 40
+  entities in view (highlighted ones first, then the largest; a block reference whole) and the
+  caption lists `#n handle kind layer "text"`. The caption also says how big a pixel is (drawing
+  units and mm) and how tall the text is (the smallest tenth and the median of each text's
+  tallest glyph, in px; letters read from about 8 px), so Mizan zooms in with `bounds` to read.
+- Window tools (`qiyas-ai/src/window.rs`, `DrawingHost::capture_screen`, `select`, `pointed`;
+  `qiyas-desktop/src/ai_window.rs`): the core asks the window and waits at most 5 s for
+  `ai_window_reply { id, value, error }`, without the session's lock. `view_screen` (`ai:capture
+  { id, maxSide }`: the window draws its main view and reads it back in the same task,
+  `Renderer.read`, `Viewport.capture`, `viewport/capture.ts`; the core then marks it, what the user
+  selected first), `get_selection` (`ai:pointed { id }`: the selection, the marked area, the
+  view), `select_entities` (`ai:select { handles, zoom }`: the Select tool's selection set,
+  entities drawn at the top of the sheet only; no undo step). Without a window they say so.
+  MCP clients reach them too.
+- What the user points at (`qiyas-ai/src/context.rs`, `src/ai/pointing.ts`,
+  `useAssistantWiring`): the Select tool's selection (or its one pick inside a block, with its
+  chain) shows as a chip above the composer ("Selection · 3", its kinds), × leaves it out until
+  it changes; the composer's area button starts the `mizanArea` tool (drag a box, or click
+  corners and Enter or double click; it then goes back to the tool before and opens Mizan's tab)
+  and an "Area · w × h m · n entities" chip; the canvas menu's "Ask Mizan about this" opens the
+  tab with the selection. `ai_send { text, context: { selection, region, view, picture }, images }`:
+  `Agent::run_turn_with(UserMessage)` adds to `[state]` the view on screen, the selection and the
+  region's entities (handle, kind, layer, length and area in metres, a text's words; 50 listed,
+  the rest counted by kind; totals without dimensions and block references), and when the
+  selection or region changed since the last message (`picture`) a 1000 px picture of it, marked.
+  Pictures pasted, dropped or attached (`src/ai/pictures.ts`: png, jpeg, webp, gif, at most 4, at
+  most 1600 px a side, 6 MB of base64 each) go before the words as `ContentBlock::Image`
+  (Claude: an image block; OpenAI-compatible: an `image_url` data URL) and show as thumbnails
+  in the bubble. The history keeps at most 12 pictures or 16 MB of them: past either, the
+  oldest give way to a line of text until 8 within 10 MB are left (`trim_pictures`); a
+  conversation may make 40 MB of pictures (`IMAGE_BUDGET`).
 - The panel's header has New chat (`ai.newChat`, `assistant.clear`): a new conversation, disabled
   while Mizan works or the thread is empty.
 - Mizan never explains how Qiyas draws or fails unless a tool result shows it, and writes formulas
@@ -1068,7 +1108,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   and `candidates` (handle, kind, layer, length, area) so Mizan removes it and measures the
   handle. `add_measurement` refuses a no-geometry item of quantity 0 (notes, analysis) unless
   `empty_item` is true; `add_markup` is unaffected.
-- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 54 tools in all): `add_text`
+- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 57 tools in all): `add_text`
   (TEXT, or MTEXT for several lines or a width; height in metres, default 2.5 mm x annotation
   scale), `room_areas` and `label_spaces` (the smallest closed region round each room-name text
   or seed via `Session::boundary_at`, like Hatch: `enclosed_area_m2` is what the line work
@@ -1100,8 +1140,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## MCP
 
-Outside AI apps can drive Qiyas through its MCP server (the same tools as the in-app assistant;
-their measurements are marked `mcp`).
+Outside AI apps can drive Qiyas through its MCP server (the same tools as the in-app assistant,
+the window tools included: `view_screen`, `get_selection`, `select_entities`; their measurements
+are marked `mcp`).
 
 - Turn it on in Settings, MCP server. It listens on `127.0.0.1:48123/mcp` (port in Settings) and
   needs `Authorization: Bearer <token>`; a request with an `Origin` other than the server's own

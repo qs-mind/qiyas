@@ -10,7 +10,7 @@ use std::sync::PoisonError;
 
 use qiyas_ai::host::asked;
 use qiyas_ai::prompt::DrawingFacts;
-use qiyas_ai::DrawingHost;
+use qiyas_ai::{DrawingHost, Screen, TurnContext};
 use qiyas_core::Session;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -229,6 +229,18 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         let title = tab.title.clone();
         tabs::close(&self.app, &state, id, false, true)?;
         self.shown(format!("Closed {title}"))
+    }
+
+    fn capture_screen(&self, max_side: u32) -> Result<Screen, String> {
+        self.state().ai_window.capture(&self.app, max_side)
+    }
+
+    fn select(&self, handles: &[u64], zoom: bool) -> Result<(), String> {
+        self.state().ai_window.select(&self.app, handles, zoom)
+    }
+
+    fn pointed(&self) -> Result<TurnContext, String> {
+        self.state().ai_window.pointed(&self.app)
     }
 }
 

@@ -61,6 +61,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "conflicts":
       case "paper_views":
         return [];
+      case "pick_polygon":
+        return [{ top: 42, entity: 42, chain: [], xref: null, kind: "Line" }];
       case "get_settings":
         return {
           autosave_minutes: 5,
@@ -168,7 +170,15 @@ vi.mock("@tauri-apps/api/core", () => ({
     }
   }),
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+/** The core's events, by name: a test sends one with `emit`. */
+const events = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
+const emit = (name: string, payload: unknown) => act(async () => events.get(name)?.({ payload }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
+    events.set(name, handler);
+    return () => {};
+  }),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
@@ -845,4 +855,46 @@ test("opening a drawing and comparing show dots beside the status bar's text, an
   await expectToasts([en["conflicts.none"]]);
   expect(bar().textContent).toBe("plan.dwg");
   expect(bar().querySelector(".dot-loader")).toBeNull();
+});
+
+test("an area marked with the area tool reaches Mizan's composer, made after the tool", async () => {
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: en["ai.markArea"] }));
+  await settle();
+  // The tool hands the box to the wiring through the root's markRegionRef.
+  (canvas.props as unknown as { onBox(b: number[][], crossing: boolean, shift: boolean): void }).onBox(
+    [
+      [0, 0],
+      [5000, 2000],
+    ],
+    false,
+    false,
+  );
+  await settle();
+  expect(core.calls).toContain(`pick_polygon {"points":[[0,0],[5000,0],[5000,2000],[0,2000]],"crossing":true}`);
+  expect(screen.getByText("Area · 5.00 × 2.00 m")).toBeTruthy();
+  expect(screen.getByText("1 entities")).toBeTruthy();
+});
+
+test("Mizan selects for the user, and the window says what the user points at", async () => {
+  await mount();
+  await clickOpen();
+  await emit("ai:select", { handles: [42], zoom: false });
+  await settle();
+  expect(screen.getByText("Selection · 1")).toBeTruthy();
+  core.calls.length = 0;
+  await emit("ai:pointed", { id: 7 });
+  await settle();
+  expect(core.calls).toEqual([
+    `ai_window_reply {"id":7,"value":{"selection":[{"handle":42,"chain":[]}],"region":null,"view":null},"error":null}`,
+  ]);
+  // The canvas is faked: no picture, said as an error.
+  core.calls.length = 0;
+  await emit("ai:capture", { id: 8, maxSide: 1600 });
+  await settle();
+  expect(core.calls).toEqual([`ai_window_reply {"id":8,"value":null,"error":"No drawing is on screen"}`]);
 });

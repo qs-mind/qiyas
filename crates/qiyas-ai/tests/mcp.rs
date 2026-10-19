@@ -126,7 +126,7 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     let client = connect(server.addr, TOKEN).await.unwrap();
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 54);
+    assert_eq!(tools.len(), 57);
     let measure = tools.iter().find(|t| t.name == "measure_area").unwrap();
     assert!(measure.description.as_deref().unwrap().contains("area"));
     assert_eq!(measure.input_schema["type"], "object");
@@ -278,7 +278,7 @@ async fn a_restart_on_the_same_port_binds_again() {
     .unwrap();
     assert_eq!(addr.port(), port);
     let client = connect(addr, TOKEN).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 54);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 57);
     shutdown.cancel();
 }
 
@@ -321,6 +321,6 @@ async fn other_origins_are_refused_even_with_the_token() {
 
     // Clients that send no Origin (the bridge, Claude Code) still work.
     let client = connect(server.addr, TOKEN).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 54);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 57);
     assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
 }

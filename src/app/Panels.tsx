@@ -30,7 +30,7 @@ import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
 import { type Measure, NO_VIEWPORTS } from "./shared";
 import type { Annotate } from "./useAnnotate";
-import type { AssistantWiring } from "./useAssistantWiring";
+import type { AssistantWiring, Pointing } from "./useAssistantWiring";
 import type { Attach } from "./useAttach";
 import type { Blocks } from "./useBlocks";
 import type { Comments } from "./useComments";
@@ -138,9 +138,11 @@ type WorkProps = {
   /** The Options dialog's background and highlight colours (null: the theme's). */
   colours: CanvasColours;
   parametric: Pick<Parametric, "constraints" | "deleteConstraint" | "hoverConstraint" | "barHidden" | "setBarHidden">;
-  /** The right-click menu: a tool chosen, the properties palette shown. */
+  /** The right-click menu: a tool chosen, the properties palette shown, Mizan asked about the
+   *  selection. */
   chooseTool(tool: Tool): void;
   onProperties(): void;
+  askMizan?: Pick<Pointing, "selection" | "ask">;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -166,6 +168,7 @@ export function WorkArea({
   parametric,
   chooseTool,
   onProperties,
+  askMizan,
 }: WorkProps) {
   const { theme, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -210,6 +213,7 @@ export function WorkArea({
           hasDrawing={info !== null}
           onTool={chooseTool}
           onProperties={onProperties}
+          onAskMizan={askMizan?.selection ? askMizan.ask : undefined}
           onZoomExtents={() => {
             viewport.current?.fitExtents();
             focusDrawing();
@@ -340,7 +344,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
     resolveConflict,
     openBoqTab,
   } = takeoff;
-  const { assistant, showCard, undoCard, openSettings } = ai;
+  const { assistant, showCard, undoCard, openSettings, pointing } = ai;
   const openConflicts = openCount(conflicts);
 
   const tabs: SideTabItem<SideTab>[] = [
@@ -419,6 +423,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onShow={showCard}
           onUndo={undoCard}
           onSettings={openSettings}
+          pointing={pointing}
         />
       </Tabs.Panel>
     </SideTabs>

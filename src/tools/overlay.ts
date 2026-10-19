@@ -7,12 +7,12 @@ import type { Tool } from "../viewport/Viewport";
 
 /**
  * Segments `x0 y0 x1 y1` in absolute drawing coordinates: the polyline through `points`, on to the
- * cursor, and for `area` back to the first point once there are two points or more. Float64, so far
+ * cursor, and for `area` and `mizanArea` back to the first point once there are two points or more. Float64, so far
  * coordinates stay exact until the renderer makes them relative to the batch origin.
  */
 export function overlaySegments(points: Point[], cursor: Point | null, tool: Tool): Float64Array {
   const path = cursor && points.length > 0 ? [...points, cursor] : [...points];
-  if (tool === "area" && points.length >= 2) path.push(points[0]);
+  if ((tool === "area" || tool === "mizanArea") && points.length >= 2) path.push(points[0]);
   const out = new Float64Array(4 * Math.max(0, path.length - 1));
   for (let i = 1; i < path.length; i++) out.set([...path[i - 1], ...path[i]], 4 * (i - 1));
   return out;

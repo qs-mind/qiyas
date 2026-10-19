@@ -184,6 +184,14 @@ impl Qiyas {
     /// Runs one tool on the session, holding the lock only while it runs; a file tool through the
     /// host, without the session's lock (the host locks the app's tabs first).
     fn run(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
+        if crate::is_window_tool(name) {
+            let host = self
+                .host
+                .as_deref()
+                .ok_or(ToolError::Failed(crate::host::NO_WINDOW.into()))?;
+            return crate::run_window(host, &self.session, name, input, crate::prompt::Lang::En)
+                .map_err(ToolError::Failed);
+        }
         if crate::is_host_tool(name) {
             let host = self
                 .host

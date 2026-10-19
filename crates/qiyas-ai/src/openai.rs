@@ -180,6 +180,12 @@ fn push_messages(out: &mut Vec<Value>, m: &Message, extras: &HashMap<String, Val
                     ContentBlock::Text { text } => {
                         parts.push(json!({ "type": "text", "text": text }));
                     }
+                    ContentBlock::Image { media_type, data } => {
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{media_type};base64,{data}") }
+                        }));
+                    }
                     _ => {}
                 }
             }
@@ -487,6 +493,31 @@ mod tests {
             out[2]["content"][0]["image_url"]["url"],
             "data:image/png;base64,QUJD"
         );
+    }
+
+    #[test]
+    fn a_users_picture_goes_in_their_message_as_a_data_url() {
+        let mut out = Vec::new();
+        push_messages(
+            &mut out,
+            &Message::user(vec![
+                ContentBlock::Image {
+                    media_type: "image/webp".into(),
+                    data: "QUJD".into(),
+                },
+                ContentBlock::Text {
+                    text: "what is this?".into(),
+                },
+            ]),
+            &HashMap::new(),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(
+            out[0]["content"][0]["image_url"]["url"],
+            "data:image/webp;base64,QUJD"
+        );
+        assert_eq!(out[0]["content"][1]["text"], "what is this?");
     }
 
     #[test]

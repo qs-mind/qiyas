@@ -30,6 +30,7 @@ import type { ModifyKind } from "../tools/modifyTools";
 import type { TextKind } from "../tools/textTools";
 import type { PaperView, Ucs } from "../api";
 import { palette, type CanvasColours } from "./colours";
+import { toPngBase64 } from "./capture";
 import { createRenderer, type Renderer, type Theme } from "./gl";
 import { UCS_ICON_PX, ucsIconPlace } from "./ucsIcon";
 import { wheelFactor } from "./wheel";
@@ -69,7 +70,9 @@ export type Tool =
   | "mview"
   /** UCS: an origin, then a point on its x axis; UCS OB: an entity's. */
   | "ucs"
-  | "ucsObject";
+  | "ucsObject"
+  /** Marks an area for Mizan: a box dragged, or a polygon clicked and closed with Enter. */
+  | "mizanArea";
 
 export type ViewportHandle = {
   fitExtents(): void;
@@ -82,6 +85,9 @@ export type ViewportHandle = {
   visible(): Bounds;
   /** Where the drawing point `p` is on the canvas, in CSS pixels from its top left corner. */
   toScreen(p: Point): Point;
+  /** A picture of the view as drawn now (Mizan's `view_screen`): a PNG, base64, its longer side
+   *  at most `maxSide` pixels, and the drawing area it shows. */
+  capture(maxSide: number): Promise<{ png: string; bounds: Bounds }>;
 };
 
 type Props = {
@@ -276,6 +282,15 @@ export function Viewport({
       pxPerUnit,
       visible: () => visibleBounds(camera.current),
       toScreen: (p) => worldToScreen(camera.current, p),
+      capture: async (maxSide) => {
+        const r = renderer.current;
+        if (!r) throw new Error("The drawing is not on screen");
+        // Drawn and read in one go: the browser clears the canvas once it has shown it.
+        r.draw(camera.current, lookRef.current);
+        const shot = r.read();
+        const bounds = visibleBounds(camera.current);
+        return { png: await toPngBase64(shot, maxSide), bounds };
+      },
     }),
     [],
   );

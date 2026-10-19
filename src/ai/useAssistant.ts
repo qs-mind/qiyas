@@ -9,12 +9,18 @@ import {
   aiSetLanguage,
   aiStatus,
   type AgentEvent,
+  type AiContext,
   type AiDone,
+  type AiImage,
   type AiStatus,
   type AiUi,
 } from "../api";
 import type { Lang } from "../i18n";
-import { EMPTY, reduce, type Transcript } from "./messages";
+import { EMPTY, reduce, type Attached, type Transcript } from "./messages";
+
+/** What goes with a message besides its words: what the user points at, the pictures they
+ *  attached, and how the transcript shows them. */
+export type SendExtras = { context?: AiContext; images?: AiImage[]; shown?: Attached };
 
 type Options = {
   lang: Lang;
@@ -33,7 +39,7 @@ export type Assistant = {
   error: string | null;
   status: AiStatus | null;
   /** Resolves false when the message was not sent (the composer keeps it). */
-  send(text: string): Promise<boolean>;
+  send(text: string, extras?: SendExtras): Promise<boolean>;
   cancel(): void;
   clear(): void;
   markUndone(id: string): void;
@@ -98,13 +104,13 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
     aiSetLanguage(lang).catch((e) => setError(String(e)));
   }, [lang]);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, extras: SendExtras = {}) => {
     setError(null);
     // Before the call: the turn's first events may arrive before it returns.
-    dispatch({ type: "user", text });
+    dispatch({ type: "user", text, ...extras.shown });
     setBusy(true);
     try {
-      await aiSend(text);
+      await aiSend(text, extras.context, extras.images);
       return true;
     } catch (e) {
       const why = String(e);
