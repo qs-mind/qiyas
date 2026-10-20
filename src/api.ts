@@ -109,6 +109,8 @@ export type DrawingInfo = {
   xrefs: XrefInfo[];
   /** Block name of the sheet on screen. */
   sheet: string;
+  /** Physical layout paper size in millimetres, after rotation; null on Model. */
+  paper?: Paper | null;
   /** The layers the user has hidden, sorted. */
   hidden_layers: string[];
   /** The layer isolated on screen (LAYISO), if one is. */
@@ -1067,8 +1069,12 @@ export type Command =
    *  a paste of the system clipboard at `at` (as one block reference with `as_block`). */
   | { type: "copy_to_clipboard"; targets: EntityTarget[]; base: P | null }
   | { type: "paste_from_clipboard"; at: P; as_block: boolean; height?: number | null }
-  /** A paper-space viewport on the layout on screen. */
-  | { type: "mview"; corner1: P; corner2: P }
+  /** Paper layouts and a title block containing only supplied values. */
+  | { type: "new_layout"; name: string; paper: string; orientation?: "portrait" | "landscape" }
+  | { type: "rename_layout"; from: string; to: string }
+  | { type: "title_block"; fields: Record<string, string>; margin_mm?: number; binding_mm?: number }
+  /** A viewport: ratio string or paper millimetres per model unit, centred at a model point. */
+  | { type: "mview"; corner1: P; corner2: P; scale?: string | number | null; centre?: P | null }
   /** The user coordinate system (not an undo step): an origin and an x axis, or an entity's. */
   | { type: "ucs"; origin: P; x_axis: P }
   | { type: "ucs_object"; target: EntityTarget }

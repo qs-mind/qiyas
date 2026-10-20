@@ -4019,6 +4019,7 @@ dependencies = [
 name = "qiyas-geom"
 version = "0.0.1"
 dependencies = [
+ "cavalier_contours",
  "opencadcodec",
  "opencadkernel",
 ]

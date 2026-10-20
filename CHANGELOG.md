@@ -9,6 +9,13 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Draw joined walls with clean corners and junctions, measurable wall hatches, room holes,
+  and reusable door and window symbols. Wall quantities report length, gross and net plan
+  area, and volume with opening heights, in metres across drawing units.
+- Create and rename paper layouts, set a viewport's scale and model centre, and add a sheet
+  frame and title block containing only the information supplied. Text and dimensions on
+  layouts use paper millimetres.
+- Define reusable blocks directly from drawing objects through the command registry.
 - Mizan's drawing changes appear live, entity by entity, with consecutive steps queued.
   Reduced motion shows them at once; a command, undo or drawing switch ends the animation.
 - Mizan can now use every command in Qiyas, discover the properties of drawing objects, and

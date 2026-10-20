@@ -34,6 +34,8 @@ fn on_layout() -> (tempfile::TempDir, Session) {
 fn mview(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> u64 {
     match s
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: a,
             corner2: b,
         })
@@ -115,6 +117,8 @@ fn mview_creates_a_viewport_on_the_layout_that_saves() {
     s.set_sheet(MODEL).unwrap();
     assert!(s
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: [0.0, 0.0],
             corner2: [1.0, 1.0],
         })

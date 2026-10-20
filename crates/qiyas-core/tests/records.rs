@@ -383,6 +383,8 @@ fn a_viewport_scale_is_set_through_its_record() {
     .unwrap();
     let added = s
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: [10.0, 10.0],
             corner2: [110.0, 80.0],
         })

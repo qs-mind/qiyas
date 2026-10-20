@@ -197,6 +197,8 @@ pub struct DrawingInfo {
     pub xrefs: Vec<XrefInfo>,
     /// Block name of the sheet on screen.
     pub sheet: String,
+    /// The layout's physical paper size in millimetres, including its rotation; none on Model.
+    pub paper: Option<crate::Paper>,
     /// The layers the user has hidden, sorted.
     pub hidden_layers: Vec<String>,
     /// The layer isolated on screen (LAYISO), if one is.
@@ -846,6 +848,7 @@ impl Session {
             arabic_reversed: self.arabic_reversed,
             xrefs: self.xrefs.info(&self.xref_overrides),
             sheet: self.sheet.clone(),
+            paper: self.paper(),
             hidden_layers: self.hidden_layers(),
             isolated_layer: self.isolated.as_ref().map(|i| i.layer.clone()),
             current: self.current.clone(),
@@ -1790,6 +1793,10 @@ impl Session {
 
     /// The drawing itself changed: the batch is drawn again and its version moves on.
     pub(crate) fn drawing_changed(&mut self) {
+        if !self.drawing.doc.block_records.contains(&self.sheet) {
+            // Undoing a newly created layout can remove the sheet currently on screen.
+            self.sheet = "*Model_Space".to_string();
+        }
         self.document_revision += 1;
         self.empty_model = model_is_empty(&self.drawing);
         *self.cache.get_mut() = None;

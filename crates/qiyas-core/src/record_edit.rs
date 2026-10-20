@@ -495,17 +495,27 @@ impl Session {
         entities: Vec<NewEntity>,
         sheet: Option<String>,
     ) -> Result<Vec<u64>, CoreError> {
+        let block = self.sheet_block(sheet.as_deref());
+        self.create_entities_in_block(entities, &block)
+    }
+
+    /// Creates the supplied record entities directly in `block`, preserving the same defaults
+    /// and validation whether the owner is a sheet or a named block definition.
+    pub(crate) fn create_entities_in_block(
+        &mut self,
+        entities: Vec<NewEntity>,
+        block: &str,
+    ) -> Result<Vec<u64>, CoreError> {
         if entities.is_empty() {
             return Err(invalid("Give at least one entity"));
         }
-        let block = self.sheet_block(sheet.as_deref());
         let owner = self
             .drawing
             .doc
             .block_records
-            .get(&block)
+            .get(block)
             .map(|b| b.handle)
-            .ok_or_else(|| CoreError::NoSuchSheet(block.clone()))?;
+            .ok_or_else(|| CoreError::NoSuchSheet(block.to_string()))?;
         let mut handles = Vec::with_capacity(entities.len());
         for (index, wanted) in entities.into_iter().enumerate() {
             let what = format!("Entity {index} ({})", wanted.kind);

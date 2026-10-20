@@ -12,7 +12,8 @@ use opencadcodec::entities::Viewport;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, EntityType, Handle, Vector3};
 use qiyas_render::{layer_shown, Batch, Range};
-use serde::Serialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::session::{locate, Picked};
 use crate::{CoreError, Session};
@@ -21,6 +22,46 @@ const MODEL: &str = "*Model_Space";
 
 fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
+}
+
+/// A physical paper:model ratio, or a custom scale in paper millimetres per model unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ViewportScale {
+    /// A paper:model ratio such as "1:100", accounting for the drawing's model units.
+    Ratio(String),
+    /// Paper millimetres per model drawing unit, as the viewport's custom scale stores it.
+    Number(f64),
+}
+
+impl ViewportScale {
+    fn custom_scale(&self, metres_per_unit: f64) -> Result<f64, CoreError> {
+        let value = match self {
+            Self::Number(value) => *value,
+            Self::Ratio(ratio) => {
+                let (paper, model) = ratio
+                    .split_once(':')
+                    .ok_or_else(|| invalid("Write a viewport scale as 1:100 or a number"))?;
+                let parse = |value: &str| {
+                    value
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v| v.is_finite() && *v > 0.0)
+                };
+                let (Some(paper), Some(model)) = (parse(paper), parse(model)) else {
+                    return Err(invalid(
+                        "A viewport ratio needs two finite positive numbers",
+                    ));
+                };
+                paper / model * metres_per_unit / 0.001
+            }
+        };
+        if !value.is_finite() || value <= 0.0 {
+            return Err(invalid("A viewport scale must be finite and positive"));
+        }
+        Ok(value)
+    }
 }
 
 /// One viewport of the layout on screen, as the window draws model space inside it.
@@ -99,11 +140,23 @@ fn frozen_names(doc: &CadDocument, v: &Viewport) -> HashSet<String> {
 
 impl Session {
     /// `Command::MView`: a viewport on the layout on screen with the corners `a` and `b`,
-    /// showing all of model space; on the current layer and state. Its handle.
-    pub(crate) fn mview(&mut self, a: [f64; 2], b: [f64; 2]) -> Result<u64, CoreError> {
+    /// showing model extents unless a scale or model centre is supplied; its handle.
+    pub(crate) fn mview(
+        &mut self,
+        a: [f64; 2],
+        b: [f64; 2],
+        scale: Option<&ViewportScale>,
+        centre: Option<[f64; 2]>,
+    ) -> Result<u64, CoreError> {
         if ![a, b].iter().flatten().all(|v| v.is_finite()) {
             return Err(invalid("Points must have finite coordinates"));
         }
+        if centre.is_some_and(|p| !p.into_iter().all(f64::is_finite)) {
+            return Err(invalid("The model centre must have finite coordinates"));
+        }
+        let given_scale = scale
+            .map(|s| s.custom_scale(self.drawing.units.to_metres()))
+            .transpose()?;
         if self.sheet.eq_ignore_ascii_case(MODEL) {
             return Err(invalid(
                 "Viewports go on a layout: choose a layout tab first",
@@ -121,7 +174,7 @@ impl Session {
         });
         let [[x0, y0], [x1, y1]] = bounds;
         let (ew, eh) = (x1 - x0, y1 - y0);
-        let (centre, scale) = if empty || !(ew > 0.0 || eh > 0.0) {
+        let (fit_centre, fit_scale) = if empty || !(ew > 0.0 || eh > 0.0) {
             ([x0, y0], 1.0)
         } else {
             let fit = |paper: f64, model: f64| {
@@ -136,6 +189,8 @@ impl Session {
                 fit(w, ew).min(fit(h, eh)),
             )
         };
+        let centre = centre.unwrap_or(fit_centre);
+        let scale = given_scale.unwrap_or(fit_scale);
         let id = self
             .drawing
             .doc

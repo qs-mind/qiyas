@@ -30,7 +30,7 @@ use crate::modify::{add_fresh_to, place, Placing};
 use crate::text::mark_logical;
 use crate::undo::{DocChange, TablesSnapshot};
 use crate::units::insert_unit_factor;
-use crate::{Command, CoreError, Outcome, Session, Target};
+use crate::{Command, CoreError, NewEntity, Outcome, Session, Target};
 
 /// Characters AutoCAD refuses in a block name.
 pub(crate) const BAD_NAME_CHARS: &[char] = &[
@@ -592,6 +592,7 @@ impl Session {
             }
             Command::EditBlockInPlace { .. }
             | Command::CreateBlock { .. }
+            | Command::DefineBlock { .. }
             | Command::WriteBlock { .. }
             | Command::RedefineBlock { .. } => Err(invalid(format!(
                 "Block {} is being edited in place: save or discard the edit first (REFCLOSE)",
@@ -608,6 +609,50 @@ impl Session {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Makes a named block from record entities as one undo step, including its new layers.
+    /// Coordinates and the insertion base point are in drawing units. Returns the handles of
+    /// the definition's entities; the block is placed separately with `Command::InsertBlock`.
+    pub fn define_block(
+        &mut self,
+        name: &str,
+        base: [f64; 2],
+        entities: Vec<NewEntity>,
+    ) -> Result<Vec<u64>, CoreError> {
+        match self.run(Command::DefineBlock {
+            name: name.to_string(),
+            base,
+            entities,
+        })? {
+            Outcome::Added { handles } => Ok(handles),
+            _ => unreachable!("define_block returns its entities' handles"),
+        }
+    }
+
+    /// `Command::DefineBlock`: makes the record and its entities inside the command's existing
+    /// undo recording. Coordinates are local to the block, with `base` as its insertion base
+    /// point; the same defaults and checks apply as for `CreateEntities`.
+    pub(crate) fn define_block_entities(
+        &mut self,
+        name: &str,
+        base: [f64; 2],
+        entities: Vec<NewEntity>,
+    ) -> Result<Vec<u64>, CoreError> {
+        finite(&base)?;
+        let name = check_new_name(&self.drawing.doc, name)?;
+        if entities.is_empty() {
+            return Err(invalid("Give at least one entity"));
+        }
+        let doc = &mut self.drawing.doc;
+        let mut record = BlockRecord::new(&name);
+        record.handle = doc.allocate_handle();
+        record.block_entity_handle = doc.allocate_handle();
+        record.block_end_handle = doc.allocate_handle();
+        record.base_point = v3(base);
+        record.units = doc.header.insertion_units;
+        doc.block_records.add(record).map_err(invalid)?;
+        self.create_entities_in_block(entities, &name)
     }
 
     /// `Command::CreateBlock`: the entities `targets` leave the sheet for a new block `name`,

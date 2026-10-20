@@ -85,10 +85,15 @@ export function useAnnotate({
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
    *  drawing units, and the drawing's current style). The height is a length in one drawing's
    *  units, so it is kept for that drawing only: 250 in a millimetre plan is never 250 m in a
-   *  metre one opened beside it. */
-  const [keptHeight, setKeptHeight] = useState<{ path: string; height: number } | null>(null);
-  const textHeight = keptHeight && info && keptHeight.path === info.path ? keptHeight.height : null;
-  const setTextHeight = (height: number) => setKeptHeight(info ? { path: info.path, height } : null);
+   *  metre one opened beside it. Paper space keeps a separate height in millimetres. */
+  const paperSpace = sheet.toLowerCase() !== "*model_space";
+  const [keptHeight, setKeptHeight] = useState<{ path: string; paper: boolean; height: number } | null>(null);
+  const textHeight =
+    keptHeight && info && keptHeight.path === info.path && keptHeight.paper === paperSpace
+      ? keptHeight.height
+      : null;
+  const setTextHeight = (height: number) =>
+    setKeptHeight(info ? { path: info.path, paper: paperSpace, height } : null);
   const [textStyle, setTextStyle] = useState<string | null>(null);
   /** TEXT's in-place editor: where the text goes, and where that is on the canvas. */
   const [textEditor, setTextEditor] = useState<{
@@ -106,7 +111,8 @@ export function useAnnotate({
   /** The height new text takes: the last one used, else 2.5 mm on paper in drawing units at the
    *  annotation scale. */
   const currentTextHeight =
-    textHeight ?? (0.0025 / metresPerUnit(info?.units ?? "unknown")) * (info?.annotation_factor ?? 1);
+    textHeight ??
+    (paperSpace ? 2.5 : (0.0025 / metresPerUnit(info?.units ?? "unknown")) * (info?.annotation_factor ?? 1));
   /** The style new text takes: the last one used when the drawing has it, else its current one. */
   const currentTextStyle =
     textStyle !== null && info?.text_styles.includes(textStyle) ? textStyle : (info?.text_style ?? "Standard");

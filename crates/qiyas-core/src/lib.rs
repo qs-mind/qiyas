@@ -27,6 +27,7 @@ mod groups;
 mod image;
 mod inquiry;
 mod layers;
+pub mod layouts;
 mod modify;
 mod modify2;
 mod param;
@@ -53,6 +54,7 @@ mod undo;
 mod units;
 mod viewports;
 mod views;
+pub mod walls;
 mod xref;
 
 pub use self::image::{draw_picture, image_size, ImageDisplay, IMAGE_EXTENSIONS, IMAGE_LAYER};
@@ -77,6 +79,7 @@ pub use field::{field_code, FieldKind, FIELD_APP};
 pub use groups::GroupInfo;
 pub use inquiry::{Field, POINT_LAYER};
 pub use layers::{drawing_layers, LayerMapping, LayerProp, ViewportInfo};
+pub use layouts::{paper_catalog, LayoutOrientation, Paper, ViewportScale};
 pub use modify::ModifySpec;
 pub use modify2::{EditSpec, LengthenBy, PEditOp};
 pub use param::{
@@ -107,4 +110,8 @@ pub use underlay::{AttachMode, PictureSource, PreparedPdf, UnderlayImage, UNDERL
 pub use units::Units;
 pub use viewports::PaperView;
 pub use views::NamedView;
+pub use walls::{
+    DoorSwing, OpeningKind, WallJustification, WallLayers, WallOpening, WallResult, WallRun,
+    WallSpec, WALL_APP,
+};
 pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};

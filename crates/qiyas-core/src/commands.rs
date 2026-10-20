@@ -26,6 +26,12 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Draws joined walls, measurable hatches, centrelines and reusable door/window blocks.
+    /// Plan sizes use drawing units; height, sill and head use metres. Returns metre quantities.
+    /// One undo step includes every new layer and block. Curves use polyline approximations.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "walls", "runs": [{"points": [[0, 0], [5000, 0]]}], "thickness": 200, "height": 3, "openings": [{"run": 0, "at": 2000, "width": 900, "kind": "door"}]}))]
+    Walls(crate::WallSpec),
     /// Length along `points`, in drawing coordinates. Needs 2 points or more.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "measure_distance", "points": [[0, 0], [5, 0], [5, 3]]}))]
@@ -540,6 +546,16 @@ pub enum Command {
         #[serde(default)]
         convert_to_insert: bool,
     },
+    /// Defines a named block from entities shaped exactly as CreateEntities takes them.
+    /// Coordinates are relative to the block's own system; `base` is its insertion base.
+    /// A taken name is refused. One undo step includes the definition and any new layers.
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "define_block", "name": "MARK", "base": [0, 0], "entities": [{"type": "Line", "data": {"start": {"x": 0, "y": 0, "z": 0}, "end": {"x": 100, "y": 0, "z": 0}}}]}))]
+    DefineBlock {
+        name: String,
+        base: [f64; 2],
+        entities: Vec<crate::NewEntity>,
+    },
     /// A reference to the block `name` at `at`, `scale` times its size (above 0), turned
     /// `rotation` degrees, on the current layer and state; its attributes take
     /// `attribute_values` by tag, else their defaults. With `from_path`, a block the drawing
@@ -747,15 +763,46 @@ pub enum Command {
         #[serde(default)]
         height: Option<f64>,
     },
-    /// A paper-space viewport on the layout on screen with the corners `corner1` and
-    /// `corner2`, showing all of model space (see `crate::viewports`); on the current layer.
+    /// Adds a layout using a paper_catalog name (for example ISO A1), in paper millimetres.
+    /// Refuses an existing name. Use SetSheet to display the new layout. One undo step.
+    #[schemars(extend("x-category" = "layouts"))]
+    #[schemars(example = json!({"type": "new_layout", "name": "Ground floor", "paper": "ISO A1", "orientation": "landscape"}))]
+    NewLayout {
+        name: String,
+        paper: String,
+        #[serde(default)]
+        orientation: crate::LayoutOrientation,
+    },
+    /// Renames a paper layout, refusing a name already taken. One undo step.
+    #[schemars(extend("x-category" = "layouts"))]
+    #[schemars(example = json!({"type": "rename_layout", "from": "Layout1", "to": "Ground floor"}))]
+    RenameLayout { from: String, to: String },
+    /// Draws Qiyas's frame and title block on the layout on screen, in paper millimetres.
+    /// Writes only supplied field values; all other cells remain empty. One undo step.
+    #[schemars(extend("x-category" = "layouts"))]
+    #[schemars(example = json!({"type": "title_block", "fields": {"title": "Ground floor", "drawing_no": "A-101"}, "margin_mm": 10, "binding_mm": 20}))]
+    TitleBlock {
+        fields: BTreeMap<String, String>,
+        #[serde(default = "crate::layouts::default_margin")]
+        margin_mm: f64,
+        #[serde(default = "crate::layouts::default_binding")]
+        binding_mm: f64,
+    },
+    /// A paper-space viewport on the layout on screen with corners in paper millimetres.
+    /// Without scale it fits model extents. A ratio such as "1:100" is a physical paper scale;
+    /// a number is paper millimetres per model unit. `centre` is a model point.
     /// `Outcome::Added`.
     #[serde(rename = "mview")]
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "mview", "corner1": [10, 10], "corner2": [400, 280]}))]
+    #[schemars(example = json!({"type": "mview", "corner1": [10, 10], "corner2": [400, 280], "scale": "1:100", "centre": [5000, 4000]}))]
     MView {
         corner1: [f64; 2],
         corner2: [f64; 2],
+        #[serde(default)]
+        scale: Option<crate::ViewportScale>,
+        #[serde(default)]
+        centre: Option<[f64; 2]>,
     },
     /// The user coordinate system becomes the one at `origin` with its x axis along `x_axis`
     /// (`[1, 0]` from `[0, 0]` is the world's). View state: not an undo step (see `crate::ucs`).
@@ -1067,6 +1114,11 @@ impl Command {
             | Command::UpdateFields
             // A new or changed block record (and what a copied one uses).
             | Command::CreateBlock { .. }
+            | Command::DefineBlock { .. }
+            | Command::Walls(_)
+            | Command::NewLayout { .. }
+            | Command::RenameLayout { .. }
+            | Command::TitleBlock { .. }
             | Command::RedefineBlock { .. }
             // The layers, linetypes, styles and blocks the pasted entities bring.
             | Command::PasteFromClipboard { .. } => Some(Part::Document {
@@ -1183,6 +1235,11 @@ impl Command {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    /// Wall entities and lengths, areas and volume in metre units.
+    Walls {
+        #[serde(flatten)]
+        result: crate::WallResult,
+    },
     Measured {
         measurement: Box<Measurement>,
     },
@@ -1324,6 +1381,41 @@ impl Session {
     /// is marked as made by `source`.
     pub(crate) fn execute(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         let mut measurement = match cmd {
+            Command::Walls(spec) => {
+                return Ok(Outcome::Walls {
+                    result: self.walls(spec)?,
+                })
+            }
+            Command::DefineBlock {
+                name,
+                base,
+                entities,
+            } => {
+                return Ok(Outcome::Added {
+                    handles: self.define_block_entities(&name, base, entities)?,
+                });
+            }
+            Command::NewLayout {
+                name,
+                paper,
+                orientation,
+            } => {
+                self.new_layout(&name, &paper, orientation)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::RenameLayout { from, to } => {
+                self.rename_layout(&from, &to)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::TitleBlock {
+                fields,
+                margin_mm,
+                binding_mm,
+            } => {
+                return Ok(Outcome::Added {
+                    handles: self.title_block(&fields, margin_mm, binding_mm)?,
+                });
+            }
             Command::MeasureDistance { points } => {
                 if points.len() < 2 {
                     return Err(invalid("A distance needs at least 2 points"));
@@ -1939,8 +2031,13 @@ impl Session {
                 let report = self.audit(fix)?;
                 return Ok(Outcome::Audited { report });
             }
-            Command::MView { corner1, corner2 } => {
-                let h = self.mview(corner1, corner2)?;
+            Command::MView {
+                corner1,
+                corner2,
+                scale,
+                centre,
+            } => {
+                let h = self.mview(corner1, corner2, scale.as_ref(), centre)?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::CopyToClipboard { targets, base } => {

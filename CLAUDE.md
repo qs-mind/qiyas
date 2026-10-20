@@ -380,6 +380,36 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y, SOLID (SO) 3 or
   4 points, TRACE width points, MLINE (ML) points, SKETCH points.
 
+## Walls
+
+- `qiyas-core/src/walls.rs`: `Command::Walls(WallSpec)` creates joined wall outlines,
+  one solid hatch per wall region, centrelines and reusable door/window references in one undo
+  step, including layers, block definitions and the xdata application. The registry exposes it
+  to Mizan and the generic tools without a separate AI tool.
+- `WallSpec { runs: [{points, closed}], thickness, justification, openings, height, layers }`:
+  plan points, thickness, opening `at` (distance to its centre along the run) and `width` use
+  drawing units; `height`, `sill` and `head` use metres above floor. Justification is `centre`
+  by default, or `left` / `right` of the directed run. Curves are supplied as polylines
+  approximating arcs, not bulges. Openings must fit a straight segment clear of corners and
+  junctions; overlapping openings and parallel overlapping walls are refused. An opening
+  cannot wrap across a closed run's start. A door defaults to a left swing, sill 0 and head
+  `min(2.1, height)`; a window requires its sill and head.
+- Optional `layers` names are `outline`, `hatch`, `centreline`, `doors`, `windows`: defaults
+  `A-WALL`, `A-WALL-PATT`, `A-WALL-CNTR`, `A-DOOR`, `A-GLAZ`. Measure the hatches for wall
+  plan area. Centrelines carry `QIYAS_WALL` xdata containing thickness in drawing units and
+  height in metres. Blocks use millimetre sizes in their names (`QIYAS_DOOR_0900`,
+  `QIYAS_WIN_1200_200`), with their geometry converted to the drawing's units; equal sizes
+  reuse a definition across calls, placed along the wall and mirrored for a right swing.
+- `qiyas-geom/src/walls.rs` uses `cavalier_contours` 0.7.0 booleans: runs join at their ends
+  with mitres (limited to four offset widths), T and X junctions unite, closed rooms remain
+  holes, and opening rectangles cut through both faces. Computation uses a local origin and
+  thickness as its unit to keep survey coordinates and small drawing units stable.
+  The outcome is `{type: "walls", handles, outlines, hatches, centrelines, inserts,
+  centreline_length, gross_area, net_area, volume}`: length in metres, areas in square metres,
+  volume in cubic metres; `handles` lists the sheet entities. Volume is gross plan
+  area times height less each opening's width × thickness × (head − sill), so lintels and
+  walls below windows remain. The release `walls_speed` test guards 500 walls under two seconds.
+
 ## Modify
 
 - `Command::Modify(ModifySpec)` (`qiyas-core/src/modify.rs`): move, copy (A: several in a row),
@@ -623,6 +653,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Blocks
 
+- `DefineBlock { name, base, entities: [{type, data}] }` creates a named definition directly
+  from the same record shapes and validation as `CreateEntities`. Coordinates and `base` are
+  drawing units; the block keeps the drawing's units. `Session::define_block` runs the command
+  and returns its entity handles (`Outcome::Added`); the internal `define_block_entities`
+  helper joins a command already being recorded, such as Walls. Names already taken (any case),
+  invalid names, empty definitions and supplied ownership are refused. Its entities and new
+  layers are one undo step. Place it with `InsertBlock`.
 - `qiyas-core/src/blocks.rs`: `CreateBlock { name, base, targets, convert_to_insert }` (sheet
   entities leave for a new block, relative to `base`; names AutoCAD refuses, or the drawing's own,
   are refused; with convert a reference takes their place; rows on them are unlinked and counted,
@@ -726,6 +763,31 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   LAYSTATE (LAS), LAYTRANS, VPLAYER (the VP freeze column), GROUP (G: pick, Enter, name),
   UNGROUP, MATCHPROP (MA: source, then targets, Enter), PROPERTIES (PR, CH: the palette).
 
+## Layouts
+
+- `qiyas-core/src/layouts.rs` owns `Paper { name, w_mm, h_mm }` and `paper_catalog()` (ISO A0
+  to A4, ANSI A to E, ARCH A to E1, portrait), re-exported by `qiyas-plot` to avoid a dependency
+  cycle. `NewLayout { name, paper, orientation }` creates a sized paper layout through the
+  codec's `add_layout`; `paper` is a catalog name such as `"ISO A1"`, and orientation is
+  `portrait` (default) or `landscape`. It leaves the sheet on screen selected. A taken name
+  (any case), invalid name or collision with the backing paper-space block is refused.
+  `RenameLayout { from, to }` changes the layout and dictionary entry while keeping its block.
+- `DrawingInfo.paper` is the current layout's `{name, w_mm, h_mm}` after rotation, or null on
+  Model or an unsized layout. `Session::paper_unit()` gives one paper millimetre in sheet
+  coordinates. Layout text defaults to 2.5 paper millimetres; dimensions convert the drawing's
+  style sizes to paper millimetres with no model annotation scale.
+- `MView { corner1, corner2, scale?, centre? }` can set its physical paper:model ratio with a
+  string such as `"1:100"` (model units are accounted for), or a numeric custom scale in
+  paper millimetres per model unit. `centre` is the model point shown at the viewport's middle.
+  Without them it fits and centres the model extents.
+- `TitleBlock { fields, margin_mm?, binding_mm? }` draws Qiyas's frame and title grid at the
+  bottom right of the layout on screen, in paper millimetres. Defaults: margin 10 mm, binding
+  20 mm; the left margin is the larger of those. `fields` maps names to values, including
+  `title`, `project`, `drawing_no`, `scale`, `date`, `drawn_by`, `sheet` and extra names. Only
+  supplied values become text, with literal escaping; missing values stay empty, including the
+  date and scale. It requires a sized layout. NewLayout, RenameLayout, MView and TitleBlock
+  each make one undo step, keeping their table changes too.
+
 ## Clipboard, viewports, UCS, sheet sets and recovery
 
 - Clipboard (`qiyas-core/src/clipboard.rs`): `CopyToClipboard { targets, base }` (base null: the
@@ -746,9 +808,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   takes its copy with it) and puts a copy's text on it. Home tab, Clipboard group;
   Ctrl+C (COPYCLIP), Ctrl+Shift+C (COPYBASE), Ctrl+V (PASTECLIP), Ctrl+Shift+V (PASTEBLOCK); Ctrl+C
   with text selected in a panel copies the text.
-- Paper-space viewports (`qiyas-core/src/viewports.rs`): `MView { corner1, corner2 }` (wire
-  `mview`; layouts only) adds a `Viewport` on the current layer showing model extents
-  (`set_scale`). Its frame draws (flatten's Viewport arm, never number 1); a click inside one with
+- Paper-space viewports (`qiyas-core/src/viewports.rs`): `MView { corner1, corner2, scale?,
+  centre? }` (wire `mview`; layouts only; see Layouts) adds a `Viewport` on the current layer,
+  fitting model extents when no scale is given. Its frame draws (flatten's Viewport arm, never
+  number 1); a click inside one with
   nothing of the layout near picks it. `paper_views()` gives each viewport's frame, model centre,
   scale and, when it freezes layers, the spans of the model batch it draws; the window fetches
   model space once (`sheet_batch("*Model_Space")`, `Session::with_sheet` keeps two sheets beside

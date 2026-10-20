@@ -190,7 +190,12 @@ fn rounded(x: f64) -> f64 {
 impl Session {
     /// 2.5 mm on paper at the annotation scale, in drawing units.
     pub fn default_text_height(&self) -> f64 {
-        0.0025 / self.drawing.units.to_metres() * self.annotation_scale().1
+        let scale = if self.sheet.eq_ignore_ascii_case("*Model_Space") {
+            self.annotation_scale().1
+        } else {
+            1.0
+        };
+        2.5 * self.paper_unit() * scale
     }
 
     /// `Command::Rooms`: the rooms round the seeds or room names `q` gives.

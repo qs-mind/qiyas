@@ -592,6 +592,10 @@ impl Session {
     /// The DIMSCALE a new annotation keeps as its own: the annotation scale's factor, which
     /// replaces its style's DIMSCALE; `None` at 1:1 (it then follows its style).
     fn annotation_dimscale(&self) -> Option<f64> {
+        if !self.sheet.eq_ignore_ascii_case("*Model_Space") {
+            // Style lengths are in model drawing units; layout annotations use paper mm.
+            return Some(self.drawing.units.to_metres() / 0.001);
+        }
         let (_, factor) = self.annotation_scale();
         ((factor - 1.0).abs() >= 1e-12).then_some(factor)
     }

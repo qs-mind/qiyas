@@ -72,6 +72,8 @@ fn a_10_m_line_in_a_1_to_100_viewport_measures_100_mm_on_a1() {
     s.set_sheet(&layout.block).unwrap();
     let Outcome::Added { handles } = s
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: [20.0, 20.0],
             corner2: [820.0, 570.0],
         })
@@ -756,6 +758,8 @@ fn defpoints_never_plots() {
     s.set_sheet(&layout.block).unwrap();
     s.current.layer = "Defpoints".to_string();
     s.run(Command::MView {
+        scale: None,
+        centre: None,
         corner1: [20.0, 20.0],
         corner2: [820.0, 570.0],
     })
@@ -806,6 +810,8 @@ fn a_viewport_plots_the_picture_under_it_and_a_missing_one_is_reported() {
     s.set_sheet(&layout.block).unwrap();
     let Outcome::Added { handles } = s
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: [20.0, 20.0],
             corner2: [820.0, 570.0],
         })

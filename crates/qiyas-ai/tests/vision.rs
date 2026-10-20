@@ -101,6 +101,8 @@ fn a_layout_shows_model_space_inside_its_viewports() {
     session.set_sheet(&paper.block).unwrap();
     let Outcome::Added { .. } = session
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: [10.0, 10.0],
             corner2: [200.0, 150.0],
         })
@@ -133,6 +135,8 @@ fn a_picture_of_another_sheet_leaves_the_screen_alone() {
     session.set_sheet(&paper.block).unwrap();
     session
         .run(Command::MView {
+            scale: None,
+            centre: None,
             corner1: [10.0, 10.0],
             corner2: [200.0, 150.0],
         })

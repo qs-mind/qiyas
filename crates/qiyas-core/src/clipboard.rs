@@ -231,8 +231,7 @@ impl Session {
         if value.trim().is_empty() {
             return Err(invalid("The clipboard is empty"));
         }
-        let height = height
-            .unwrap_or_else(|| 0.0025 / self.drawing.units.to_metres() * self.annotation_scale().1);
+        let height = height.unwrap_or_else(|| self.default_text_height());
         let h = if value.contains('\n') {
             self.add_mtext(at, 0.0, height, value, None)?
         } else {

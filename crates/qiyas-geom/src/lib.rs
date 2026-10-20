@@ -8,6 +8,7 @@ mod path;
 mod shapes;
 mod table;
 mod transform;
+pub mod walls;
 
 pub use dimension::{
     clear_dimpost, dimension_entities, dimension_text, dimpost, dimscale, dimtxt, format_measure,
