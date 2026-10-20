@@ -19,6 +19,8 @@ export type { Tool };
 type Props = {
   active: Tool;
   onTool(t: Tool): void;
+  /** A registry command added through Customize, read by the core's typed prompt machine. */
+  onCommandLine?(line: string): void;
   /** New drawing (asks its units); disabled when left out. */
   onNew?(): void;
   onOpen(): void;
@@ -201,6 +203,9 @@ function RibbonBody(props: Props) {
 
   /** What a button is and does now; no `run` is a disabled button ("coming soon"). */
   function resolve(b: RibbonButton): { label: string; run?: () => void; pressed?: boolean } {
+    if (b.kind === "command") {
+      return { label: b.label, run: props.onCommandLine && (() => props.onCommandLine!(b.command)) };
+    }
     if (b.kind === "tool") {
       const name = b.command as Tool;
       return {
@@ -253,7 +258,7 @@ function RibbonBody(props: Props) {
             onKeyDown={ignoreSpace}
             onKeyUp={ignoreSpace}
           >
-            <RibbonIcon name={b.command} />
+            <RibbonIcon name={b.kind === "command" ? "aliases" : b.command} />
             {primary && <span className="rb-label">{name}</span>}
           </button>
         )}
@@ -351,7 +356,7 @@ function RibbonBody(props: Props) {
     const checkable = b.kind !== "action";
     const content = (
       <>
-        <RibbonIcon name={b.command} />
+        <RibbonIcon name={b.kind === "command" ? "aliases" : b.command} />
         <span>{t(r.label)}</span>
       </>
     );

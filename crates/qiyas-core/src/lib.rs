@@ -12,6 +12,7 @@ mod blocks;
 mod boq;
 pub mod check;
 mod clipboard;
+pub mod cmdline;
 mod commands;
 mod comment;
 mod conflict;

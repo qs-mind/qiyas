@@ -5,8 +5,8 @@
 //! `@dx,dy`, `@d<angle` in degrees, drawing units, world coordinates, Arabic digits accepted),
 //! and a line starting with `{` is a command in its wire form (`{"type":"draw","kind":"line",
 //! ...}`, exactly what `Command` reads), so every command of the bus can be scripted without a
-//! second parser. The window's command line keeps its own grammar (`src/tools/commandParser.ts`);
-//! this file is the headless one.
+//! second parser. Words outside this file's legacy grammar use `cmdline::Machine`, the same
+//! schema-driven prompts as the window and AI.
 //!
 //! The whole script is read and checked before anything runs: words, points, handles and paths.
 //! A relative path is taken from the script's folder (a written one from `Context::out_dir` when
@@ -585,9 +585,63 @@ impl Parser {
                 }
             }
             "ECHO" => self.push(line, Action::Echo(rest.to_string())),
-            _ => return Err(at(line, format!("unknown command {first}"))),
+            _ => {
+                if crate::registry::registry().by_word(first).is_none() {
+                    return Err(at(line, format!("unknown command {first}")));
+                }
+                self.typed(text, line, lines, i)?;
+            }
         }
         Ok(())
+    }
+
+    /// Registry words keep the legacy script's whole-file validation and continuation lines.
+    fn typed(
+        &mut self,
+        text: &str,
+        line: usize,
+        lines: &[&str],
+        i: &mut usize,
+    ) -> Result<(), ScriptError> {
+        use crate::cmdline::{Machine, Step as TypedStep};
+
+        let mut machine = Machine::default();
+        machine.set_last(self.last);
+        let mut on = line;
+        let mut answer = machine.step(text).map_err(|e| at(on, e))?;
+        loop {
+            match answer {
+                TypedStep::Command(command) => {
+                    let mut value =
+                        serde_json::to_value(command).map_err(|e| at(line, e.to_string()))?;
+                    self.json_paths(line, &mut value)?;
+                    let command =
+                        serde_json::from_value(value).map_err(|e| at(line, e.to_string()))?;
+                    self.last = machine.last();
+                    self.push(line, Action::Command(command));
+                    return Ok(());
+                }
+                TypedStep::Cancelled => {
+                    self.last = machine.last();
+                    return Ok(());
+                }
+                TypedStep::Prompt(prompt) => {
+                    while *i < lines.len() && lines[*i].trim().starts_with(';') {
+                        *i += 1;
+                    }
+                    let eof = *i == lines.len();
+                    let next = if eof { "" } else { lines[*i].trim() };
+                    if !eof {
+                        *i += 1;
+                        on = *i;
+                    }
+                    answer = machine.step(next).map_err(|e| at(on, e))?;
+                    if next.is_empty() && matches!(answer, TypedStep::Prompt(_)) {
+                        return Err(at(line, format!("incomplete command: {prompt}")));
+                    }
+                }
+            }
+        }
     }
 
     /// A JSON line's paths (`path`, `from_path`, any `..._path`) through the folder rule, made

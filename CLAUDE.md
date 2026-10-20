@@ -181,7 +181,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   self-contained and names its type, and that a command that reads leaves the session as it was.
   Other extensions: `x-effect` ("view", "file", "session" for one that is not an undo step),
   `x-destructive`, `x-batch` false, `x-internal` (hosts only: `set_boq`, `set_conflicts`),
-  `x-needs`.
+  `x-needs`. Command-line words live on the command or kind variant too:
+  `#[schemars(extend("x-words" = ["LINE", "L"]))]`, upper case, the full word first.
+  `CommandInfo::words`, `Registry::by_word` and `Registry::words` expose them; the guard
+  refuses a word owned by two commands. `x-prompts` overrides argument order or prompt text.
 
 ## Records
 
@@ -271,7 +274,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Command line (Ctrl+9 shows or hides it): AutoCAD-style words and aliases (DI, AA, COUNT, DIV,
   ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
   Arabic digits accepted. Extra aliases: `aliases` in `settings.json`, edited in ALIASEDIT. Typing
-  a command lists the matches in a cmdk list above the line (see the UI kit).
+  a command lists the matches in a cmdk list above the line (see the UI kit). IPC `command_words`
+  supplies the core's words, aliases and summaries; the window adds its own tools and actions.
+  Its existing parser keeps click-driven tools and their options. Unknown words go through
+  `cmdline_step { line }` to `qiyas-core/src/cmdline::Machine`, with the current UCS and last
+  point. A completed command uses the window's usual apply path; an incomplete one shows its
+  next prompt. The pure machine reads points, numbers, names and options from the registry
+  schema, with `x-prompts` when a command needs a different order or prompt. A new core word
+  requires no window parser change.
 - Properties palette under Layers: what the Select tool picked, in AutoCAD's folding sections
   (`PropertiesPanel.tsx`, `propertiesGeometry.ts`; folded ones kept in `qiyas.properties.folded`):
   General (handle, type, layer, colour as drawn, linetype, weight, sheet, block path, xref),
@@ -944,15 +954,15 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   two commands on one key refused, `settings::shortcut_key` spells a key one way), `ribbon`
   (null = `ribbon::default_ribbon`), `aliases` (no two that differ only in case). The ribbon
   (`qiyas-desktop/src/ribbon.rs`, IPC `get_default_ribbon`) is data: tabs, groups, buttons
-  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them, in groups that may
+  `{ kind: tool | action | toggle | command, command, label }` as `Ribbon.tsx` draws them, in groups that may
   carry `main` (how many buttons show; the rest wait behind the group's "⋯" flyout). Tabs: Measure
   (Measure, Inquiry, Take-off, Dimensions with `main` 5, Markup), Draw (id `home`: Draw, Modify,
   Edit, Annotation, Clipboard, Layers), Annotate (Dimensions with all kinds and the style,
   Leaders, Markup, Tables); those three show on the tab row and the rest (Parametric, Insert, View,
   Manage (Drawing: Audit, Purge, Recover), Output) are under "More" (`SHOWN_TABS`). Group id
   `markup` holds the revision cloud and the comment cloud (COMMENT). `src/shell/ribbon.default.json` is that default, and both
-  `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may only
-  use the default's buttons (moved between groups and tabs as it likes), and one that no longer
+  `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may use
+  the default's buttons and the registry's command words (moved between groups and tabs as it likes), and one that no longer
   checks out falls back to the default on load. An icon ribbon (`ribbonIcons.tsx`: one family, 24
   grid, 1.5 stroke, `currentColor`, keyed by command, a test fails when a button has none; icons
   that point along the text mirror in Arabic): every button is an icon with its name as
@@ -1002,9 +1012,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   bound (`SHORTCUT_COMMANDS`), not ribbon actions. CUI (`CustomizeUi`): the ribbon as a tree
   (`ribbonLayout.ts` `editTree`: the saved layout, or the window's default, then what the core's
   `get_default_ribbon` has that it leaves out, hidden); show/hide and up/down; Reset saves null.
+  That IPC catalog includes a Command line tab grouped by registry category, initially hidden.
+  Its `kind: "command"` buttons start the core machine's prompts on the command line. Adding
+  words to a core variant makes it available here without editing window code. The registry's
+  ribbon guard checks every shipped button against core names, words or actual window handlers.
   `Ribbon.tsx` draws `layout ?? DEFAULT_RIBBON` (the same default as the core's). ALIASEDIT (`AliasEditor`): alias
   to command, upper-cased; refused: two that differ only in case, a command's own name
-  (`COMMANDS`), a command that is not one; saved aliases reach the command line (`loadAliases`).
+  (the window and registry catalog), a command that is not one; saved aliases reach the command line (`loadAliases`).
 
 ## PDF
 
@@ -1204,9 +1218,15 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
   and examples; `search`: matching commands), records, record_schema, query, measure (numbers
   only), run (read-only commands), check, history, drawings, selection and rooms. Execute
-  operations: run (any core command), batch, set_records, create_entities, undo_own, select,
+  operations: run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
   view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
   compare, export_takeoff and export_conflicts. Capture's source is screen or picture.
+- `qiyas_execute {op: "type", args: {"line": "PLINE 0,0 10,0 C"}}` uses the same registry
+  machine as scripts and the command line, then the same folder rules, undo attribution,
+  drawing check and reveal as `run`. Coordinates use the session's UCS, with relative points
+  following earlier points in that line. Each call supplies a whole command: incomplete
+  input returns the next prompt without running anything; resend the complete line with its
+  answers. `commands` includes words and aliases, and capabilities describe this operation.
 - A batch is one undo step, all or nothing, and can read earlier results through
   `{"$step": 0, "pointer": "/added/0"}`. `Session::batch_with` sets the batch's layer and colour,
   making a missing layer, then puts the previous current state back. Errors name the field,
@@ -1392,6 +1412,12 @@ and Mizan's turn epoch together.
   point carries across commands for `@`. Double quotes keep a name with spaces together. The
   whole file is checked before anything runs; an error is `line N: …`, and a run stops at the
   first failing step with its line.
+  Words outside the legacy script grammar fall back to `cmdline::Machine`, including
+  `LINE` / `L`, `PLINE` / `PL`, `CIRCLE` / `C`, `NEWLAYER`, `NEWLAYOUT` and `RENAMELAYOUT`.
+  Answers may follow on later lines, and the last point carries between the legacy grammar
+  and the machine. A blank line or end of file finishes a variable point sequence; `C`
+  closes a polyline. Quoted names, Arabic digits and separators work in both paths.
+  The legacy grammar has priority (`MEASURE` still takes an entity handle in scripts).
 
   | Line | Does |
   |---|---|
@@ -1414,7 +1440,9 @@ and Mizan's turn epoch together.
   | `ECHO <text>` | Prints the text in the report. |
   | `{"type":…}` | Any `Command` in its wire form, e.g. `{"type":"draw","kind":"line","a":[0,0],"b":[0,5]}`; its `path` and `…_path` fields go through the folder rule below and become absolute. |
 
-  Not in the grammar on purpose: `ME` (measure along) and UCS (points are world). Paths are
+  Script coordinates remain world coordinates: the whole file is parsed before its commands
+  run, so a UCS command does not change how later script points are read. `ME` (measure along)
+  now reaches the registry fallback; `MEASURE` retains the legacy handle-only grammar. Paths are
   relative to the script's folder (written ones, SAVEAS and EXPORT, to the batch's `--out`
   folder when given) and must stay inside the script's folder, the drawing's folder or the out
   folder. `{name}` in a path is the drawing's file name without extension and `{ext}` its

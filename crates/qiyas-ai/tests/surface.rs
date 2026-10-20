@@ -94,6 +94,99 @@ fn commands_without_arguments_return_the_registry_index() {
 }
 
 #[test]
+fn typed_commands_are_discoverable_and_run_with_the_same_undo_and_reveal() {
+    let (_dir, mut s) = sample();
+    let capabilities = call(&mut s, READ, json!({"op": "capabilities"})).unwrap();
+    assert!(capabilities["execute_ops"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("type")));
+    let info = call(
+        &mut s,
+        READ,
+        json!({"op": "commands", "args": {"name": "draw.polyline"}}),
+    )
+    .unwrap();
+    assert!(info["words"].as_array().unwrap().contains(&json!("PLINE")));
+    let before = count(&s);
+    let input = json!({"op": "type", "args": {"line": "PLINE 0,0 10,0 C"}});
+    assert_eq!(
+        surface::label(EXECUTE, &input).as_deref(),
+        Some("draw.polyline")
+    );
+    let out = call(&mut s, EXECUTE, input).unwrap();
+    assert_eq!(out["command"], "draw.polyline");
+    assert_eq!(out["added"].as_array().unwrap().len(), 1);
+    assert_eq!(out["step"]["source"], "ai");
+    assert_eq!(out["ui"]["action"], "reveal");
+    assert_eq!(count(&s), before + 1);
+    assert!(s.undo_if(Source::Ai));
+    assert_eq!(count(&s), before);
+}
+
+#[test]
+fn typed_commands_use_the_ucs_and_do_not_run_incomplete_input() {
+    let (_dir, mut s) = sample();
+    s.ucs = qiyas_core::Ucs::new([10.0, 20.0], [0.0, 1.0]).unwrap();
+    let before = count(&s);
+    let pending = call(
+        &mut s,
+        EXECUTE,
+        json!({"op": "type", "args": {"line": "LINE 0,0"}}),
+    )
+    .unwrap();
+    assert_eq!(pending["complete"], false);
+    assert!(pending["prompt"].is_string());
+    assert_eq!(count(&s), before);
+    assert!(!s.can_undo());
+    let out = call(
+        &mut s,
+        EXECUTE,
+        json!({"op": "type", "args": "{\"line\":\"L ١،٢ @٣،٠\"}"}),
+    )
+    .unwrap();
+    let handle = out["added"][0].as_u64().unwrap();
+    let entity = s
+        .find_entities(&EntityFilter {
+            limit: 500,
+            ..Default::default()
+        })
+        .rows
+        .into_iter()
+        .find(|row| row.handle == handle)
+        .unwrap();
+    assert_eq!(entity.bounds, [[8.0, 21.0], [8.0, 24.0]]);
+}
+
+#[test]
+fn new_registry_words_need_no_ai_dispatch_and_keep_destructive_metadata() {
+    let (_dir, mut s) = sample();
+    let out = call(
+        &mut s,
+        EXECUTE,
+        json!({"op": "type", "args": {"line": "NEWLAYER \"Typed layer\""}}),
+    )
+    .unwrap();
+    assert_eq!(out["command"], "new_layer");
+    assert!(s.drawing.doc.layers.get("Typed layer").is_some());
+    assert_eq!(
+        surface::destructive_count(EXECUTE, &json!({"op": "type", "args": {"line": "ERASE"}})),
+        1
+    );
+    let error = call(
+        &mut s,
+        EXECUTE,
+        json!({"op": "type", "args": {"line": "WBLOCK DOOR ../outside.dwg"}}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Only files beside the open drawing"),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_wrong_command_names_the_field_and_gives_its_schema_and_example() {
     let (_dir, mut s) = sample();
     let error = call(

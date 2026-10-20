@@ -3,8 +3,9 @@
 //! (`src/shell/ribbon.default.json` pins the two to one JSON); the user's own layout lives in `settings.json` (`Settings::ribbon`, null for the
 //! default), so the Customize dialog can change it and reset it. Data only: the window draws it.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use qiyas_core::registry::registry;
 use serde::{Deserialize, Serialize};
 
 /// Tabs a layout holds at most.
@@ -26,6 +27,8 @@ pub enum ButtonKind {
     Action,
     /// A checkbox: group selection, Arabic text reversed.
     Toggle,
+    /// A registry command word, with any required arguments asked on the command line.
+    Command,
 }
 
 /// One button: what it runs and its label (an i18n key, or the user's own text).
@@ -448,10 +451,43 @@ pub fn default_ribbon() -> RibbonLayout {
     }
 }
 
-/// The default ribbon, for the Customize dialog's "Reset to default".
+/// Buttons available to Customize: the shipped ribbon and the registry's typed commands.
+pub fn command_ribbon() -> RibbonLayout {
+    let mut layout = default_ribbon();
+    let mut categories: BTreeMap<&str, Vec<RibbonButton>> = BTreeMap::new();
+    for command in registry().commands().iter().filter(|c| !c.internal) {
+        if let Some(word) = command.words.first() {
+            categories
+                .entry(&command.category)
+                .or_default()
+                .push(button(ButtonKind::Command, word, word));
+        }
+    }
+    let groups = categories
+        .into_iter()
+        .flat_map(|(category, buttons)| {
+            buttons
+                .chunks(MAX_BUTTONS)
+                .enumerate()
+                .map(|(i, chunk)| group(&format!("{category}-{i}"), category, chunk.to_vec()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    // The catalog can grow beyond one tab without exceeding the saved layout's group limit.
+    for (i, groups) in groups.chunks(MAX_GROUPS).enumerate() {
+        layout.tabs.push(tab_labelled(
+            &format!("commands-{i}"),
+            "cmd.label",
+            groups.to_vec(),
+        ));
+    }
+    layout
+}
+
+/// The customization catalog. Reset still saves no custom layout, retaining the shipped ribbon.
 #[tauri::command]
 pub async fn get_default_ribbon() -> RibbonLayout {
-    default_ribbon()
+    command_ribbon()
 }
 
 fn check_name(what: &str, text: &str) -> Result<(), String> {
@@ -465,10 +501,10 @@ fn check_name(what: &str, text: &str) -> Result<(), String> {
 
 /// Checks a user's ribbon before it is kept: at most `MAX_TABS` tabs of `MAX_GROUPS` groups of
 /// `MAX_BUTTONS` buttons, ids unique (tabs, and groups within a tab), every id and label 1 to
-/// `MAX_LABEL` characters, and every button one the default ribbon has (its kind and command),
-/// so the window always knows how to run it. A button may appear more than once.
+/// `MAX_LABEL` characters, and every button one the shipped ribbon or registry catalog has.
+/// A button may appear more than once.
 pub fn validate(layout: &RibbonLayout) -> Result<(), String> {
-    let known: HashSet<(ButtonKind, String)> = default_ribbon()
+    let known: HashSet<(ButtonKind, String)> = command_ribbon()
         .tabs
         .into_iter()
         .flat_map(|t| t.groups)

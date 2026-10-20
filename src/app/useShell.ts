@@ -1,7 +1,7 @@
 /** The window's own chrome: theme, the notices and errors (toasts), the settings and About
  *  dialogs' switches, the side panel's tab, the command line aliases, and the viewport refs. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { aliases as readAliases } from "../api";
+import { aliases as readAliases, commandWords, type CommandWord } from "../api";
 import { blurAfterClick } from "../shell/blurAfterClick";
 import { mergeAliases } from "../tools/aliases";
 import { dismissNotice, notify, notifyError, notifyUndoGone } from "../ui/notices";
@@ -17,6 +17,7 @@ export function useShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The user's command line aliases from the settings. */
   const [userAliases, setUserAliases] = useState<Record<string, string>>({});
+  const [words, setWords] = useState<CommandWord[]>([]);
   const commandAliases = useMemo(() => mergeAliases(userAliases), [userAliases]);
   /** The toast of the notice and of the error on screen, so the next one takes its place. */
   const noticeToast = useRef<string | number | null>(null);
@@ -52,6 +53,7 @@ export function useShell() {
       .catch(() => {});
   useEffect(() => {
     loadAliases();
+    commandWords().then((value) => setWords(value ?? [])).catch(() => {});
   }, []);
 
   function chooseTheme(next: Theme) {
@@ -87,6 +89,7 @@ export function useShell() {
     settingsOpen,
     setSettingsOpen,
     commandAliases,
+    words,
     loadAliases,
     setError,
     setNotice,

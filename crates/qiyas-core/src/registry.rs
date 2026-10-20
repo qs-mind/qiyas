@@ -12,6 +12,9 @@
 //! - `x-batch: false`: `Command::Batch` refuses it.
 //! - `x-internal`: hosts run it (the BOQ import, the comparison); never offered to the AI.
 //! - `x-needs`: what it needs besides the drawing ("pdf": PDF support, "clipboard").
+//! - `x-words`: command-line words and aliases, upper case, the full word first.
+//! - `x-prompts`: ordered field names or objects with `field` and `prompt`, overriding the
+//!   schema's argument order and prompt text for the typed command line.
 //!
 //! A command whose payload is another tagged enum (`Draw(DrawSpec)`) has kinds: `draw.line`,
 //! `draw.circle`, each described and exampled on its own.
@@ -53,6 +56,10 @@ pub struct CommandInfo {
     pub summary: String,
     /// The whole doc comment.
     pub doc: String,
+    /// Command-line words and aliases, the full word first.
+    pub words: Vec<String>,
+    /// Ordered prompt overrides from `x-prompts`; the schema supplies omitted field details.
+    pub prompts: Vec<Value>,
     pub effect: Effect,
     /// The part of the session its undo step keeps ("takeoff", "boq", "conflicts", "drawing",
     /// "drawing+tables", "drawing+tables+takeoff"), worked out from its first example; none when
@@ -79,6 +86,15 @@ pub struct CommandInfo {
 pub struct Registry {
     commands: Vec<CommandInfo>,
     by_name: BTreeMap<String, usize>,
+    by_word: BTreeMap<String, usize>,
+}
+
+/// A command-line word, its registry command and the text shown beside a suggestion.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandWord {
+    pub word: String,
+    pub command: String,
+    pub summary: String,
 }
 
 /// The registry, built once from `Command`'s schema.
@@ -120,6 +136,8 @@ impl Registry {
             commands.push(CommandInfo {
                 summary: summary(&doc),
                 doc,
+                words: words_of(&variant),
+                prompts: prompts_of(&variant),
                 effect: effect(&meta, &examples),
                 undo: undo_of(&examples),
                 category: meta.category.clone(),
@@ -166,6 +184,8 @@ impl Registry {
                     name: format!("{name}.{kind_name}"),
                     summary: summary(&doc),
                     doc,
+                    words: words_of(&kind),
+                    prompts: prompts_of(&kind),
                     effect: effect(&meta, &examples),
                     undo: undo_of(&examples),
                     category: meta.category.clone(),
@@ -183,14 +203,30 @@ impl Registry {
         for c in &mut commands {
             let mut words = String::new();
             schema_words(&c.schema, &mut words);
-            c.search_text = format!("{} {} {} {words}", c.name, c.category, c.doc).to_lowercase();
+            c.search_text = format!(
+                "{} {} {} {} {words}",
+                c.name,
+                c.category,
+                c.doc,
+                c.words.join(" ")
+            )
+            .to_lowercase();
         }
         let by_name = commands
             .iter()
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
             .collect();
-        Registry { commands, by_name }
+        let by_word = commands
+            .iter()
+            .enumerate()
+            .flat_map(|(i, c)| c.words.iter().map(move |word| (word.clone(), i)))
+            .collect();
+        Registry {
+            commands,
+            by_name,
+            by_word,
+        }
     }
 
     /// Every command, each followed by its kinds.
@@ -202,6 +238,28 @@ impl Registry {
     pub fn get(&self, name: &str) -> Option<&CommandInfo> {
         let key = name.trim().to_ascii_lowercase().replace('-', "_");
         self.by_name.get(&key).map(|&i| &self.commands[i])
+    }
+
+    /// A command by one of its command-line words or aliases, in any case.
+    pub fn by_word(&self, word: &str) -> Option<&CommandInfo> {
+        self.by_word
+            .get(&word.trim().to_ascii_uppercase())
+            .map(|&i| &self.commands[i])
+    }
+
+    /// Every command-line word and alias, in registry order, for suggestions and customisation.
+    pub fn words(&self) -> Vec<CommandWord> {
+        self.commands
+            .iter()
+            .filter(|command| !command.internal)
+            .flat_map(|command| {
+                command.words.iter().map(move |word| CommandWord {
+                    word: word.clone(),
+                    command: command.name.clone(),
+                    summary: command.summary.clone(),
+                })
+            })
+            .collect()
     }
 
     /// The commands whose name, category or doc holds every word of `query` (any case), names
@@ -459,6 +517,25 @@ fn schema_words(schema: &Value, out: &mut String) {
 fn examples_of(variant: &Value) -> Vec<Value> {
     variant
         .get("examples")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn words_of(variant: &Value) -> Vec<String> {
+    variant
+        .get("x-words")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn prompts_of(variant: &Value) -> Vec<Value> {
+    variant
+        .get("x-prompts")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()

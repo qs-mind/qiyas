@@ -2,16 +2,17 @@
  *  `aliases`, over the built-in ones). An alias is one word; a command is a command's name with
  *  words after it if wanted (`LAYOFF A-WALL`). */
 import { useEffect, useRef, useState } from "react";
-import { getSettings, setSettings, type Settings } from "../api";
+import { commandWords, getSettings, setSettings, type Settings } from "../api";
 import { useT } from "../i18n";
 import { COMMANDS } from "../tools/aliases";
+import { registryNames } from "../tools/commandWords";
 
 type Row = { alias: string; command: string };
 
-const isCommand = (word: string) => (COMMANDS as readonly string[]).includes(word.toUpperCase());
-
 /** What is wrong with the rows, as an i18n key and its values; null when nothing is. */
-export function aliasProblem(rows: Row[]): { key: string; args?: Record<string, string> } | null {
+export function aliasProblem(rows: Row[], words: string[] = []): { key: string; args?: Record<string, string> } | null {
+  const known = new Set<string>([...COMMANDS, ...words]);
+  const isCommand = (word: string) => known.has(word.toUpperCase());
   const seen = new Set<string>();
   for (const { alias, command } of rows) {
     const a = alias.trim().toUpperCase();
@@ -30,6 +31,7 @@ export function AliasEditor({ onSaved, onClose }: { onSaved(aliases: Record<stri
   const dialog = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
+  const [words, setWords] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,6 +43,7 @@ export function AliasEditor({ onSaved, onClose }: { onSaved(aliases: Record<stri
         setRows(Object.entries(s.aliases ?? {}).map(([alias, command]) => ({ alias, command })));
       })
       .catch((e) => setError(String(e)));
+    commandWords().then((items) => setWords(registryNames(items ?? []))).catch(() => {});
     return () => opener?.focus();
   }, []);
 
@@ -48,7 +51,7 @@ export function AliasEditor({ onSaved, onClose }: { onSaved(aliases: Record<stri
 
   async function save() {
     if (!draft) return;
-    const problem = aliasProblem(rows);
+    const problem = aliasProblem(rows, words);
     if (problem) {
       setError(t(problem.key, problem.args));
       return;

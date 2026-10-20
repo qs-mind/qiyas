@@ -284,8 +284,9 @@ export default function App() {
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
   const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
-  const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
+  const { commandLineOn, commandInput, onCommand, typeCommand, startCommand, coreActive, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
     t,
+    switchGen,
     info,
     measure,
     assistant,
@@ -339,6 +340,9 @@ export default function App() {
         plot={plot}
         options={options}
         parametric={parametric}
+        onCommandLine={(line) => {
+          void startCommand(line).catch((error) => shell.setError(String(error)));
+        }}
       />
       <Dialogs
         info={info}
@@ -424,7 +428,8 @@ export default function App() {
         />
       </div>
       {commandLineOn && (
-        <CommandLine state={commandState} prompt={prompt} onAction={onCommand} inputRef={commandInput} />
+        <CommandLine state={commandState} prompt={prompt} onAction={onCommand} inputRef={commandInput}
+          words={shell.words} onTyped={typeCommand} coreActive={coreActive} />
       )}
       <StatusBar
         cursor={measure.cursor}

@@ -36,12 +36,14 @@ pub(crate) const MAX_NEW: usize = 100_000;
 pub enum ModifySpec {
     /// Moves them by `delta`.
     #[schemars(example = json!({"kind": "move", "targets": [{"handle": 1234}], "delta": [2, 0]}))]
+    #[schemars(extend("x-words" = ["MOVE", "M"]))]
     Move {
         targets: Vec<Target>,
         delta: [f64; 2],
     },
     /// Adds `count` copies (1 or more), the first `delta` away, each next one `delta` further.
     #[schemars(example = json!({"kind": "copy", "targets": [{"handle": 1234}], "delta": [0, 3], "count": 4}))]
+    #[schemars(extend("x-words" = ["COPY", "CO", "CP"]))]
     Copy {
         targets: Vec<Target>,
         delta: [f64; 2],
@@ -49,6 +51,7 @@ pub enum ModifySpec {
     },
     /// Turns them `angle` about `base`; with `copy`, turns a copy and keeps them.
     #[schemars(example = json!({"kind": "rotate", "targets": [{"handle": 1234}], "base": [0, 0], "angle": 90}))]
+    #[schemars(extend("x-words" = ["ROTATE", "RO"]))]
     Rotate {
         targets: Vec<Target>,
         base: [f64; 2],
@@ -58,6 +61,7 @@ pub enum ModifySpec {
     },
     /// Scales them by `factor` (above 0) about `base`; with `copy`, scales a copy.
     #[schemars(example = json!({"kind": "scale", "targets": [{"handle": 1234}], "base": [0, 0], "factor": 2}))]
+    #[schemars(extend("x-words" = ["SCALE", "SC"]))]
     Scale {
         targets: Vec<Target>,
         base: [f64; 2],
@@ -68,6 +72,7 @@ pub enum ModifySpec {
     /// Mirrors them across the line through `p1` and `p2`; with `keep`, mirrors a copy and keeps
     /// them. Texts still read forwards (AutoCAD's MIRRTEXT 0).
     #[schemars(example = json!({"kind": "mirror", "targets": [{"handle": 1234}], "p1": [5, 0], "p2": [5, 1], "keep": true}))]
+    #[schemars(extend("x-words" = ["MIRROR", "MI"]))]
     Mirror {
         targets: Vec<Target>,
         p1: [f64; 2],
@@ -79,6 +84,7 @@ pub enum ModifySpec {
     /// or when its centre or insertion point does (circles, arcs, ellipses, texts, block
     /// references, points).
     #[schemars(example = json!({"kind": "stretch", "targets": [{"handle": 1234}], "window": [[4, -1], [6, 5]], "delta": [1, 0]}))]
+    #[schemars(extend("x-words" = ["STRETCH", "S"]))]
     Stretch {
         targets: Vec<Target>,
         window: [[f64; 2]; 2],
@@ -88,6 +94,7 @@ pub enum ModifySpec {
     /// one pair moves; two pairs also turn them so the line between the sources lies along the
     /// line between the destinations (no scaling).
     #[schemars(example = json!({"kind": "align", "targets": [{"handle": 1234}], "pairs": [[[0, 0], [10, 10]], [[1, 0], [10, 11]]]}))]
+    #[schemars(extend("x-words" = ["ALIGN", "AL"]))]
     Align {
         targets: Vec<Target>,
         pairs: Vec<[[f64; 2]; 2]>,
@@ -95,6 +102,7 @@ pub enum ModifySpec {
     /// Copies them into `rows` x `cols` (1 or more each, 2 cells at least), `dy` apart up and `dx`
     /// across; they are the first cell.
     #[schemars(example = json!({"kind": "array_rect", "targets": [{"handle": 1234}], "rows": 3, "cols": 4, "dy": 6, "dx": 6}))]
+    #[schemars(extend("x-words" = ["ARRAY", "AR"]))]
     ArrayRect {
         targets: Vec<Target>,
         rows: u32,
@@ -116,6 +124,7 @@ pub enum ModifySpec {
     /// multilines into their parts. Entities that have no parts are left as they are; nothing to
     /// explode at all is refused.
     #[schemars(example = json!({"kind": "explode", "targets": [{"handle": 1234}]}))]
+    #[schemars(extend("x-words" = ["EXPLODE", "X"]))]
     Explode { targets: Vec<Target> },
 }
 

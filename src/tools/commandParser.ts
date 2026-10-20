@@ -360,7 +360,7 @@ function oneName(rest: string): string {
 }
 
 /** A command line, with its first word's alias expanded. */
-function expand(line: string, aliases: Record<string, string>): { name: string; rest: string } {
+export function expand(line: string, aliases: Record<string, string>): { name: string; rest: string } {
   const t = line.trim();
   const first = t.split(/\s/, 1)[0];
   let rest = t.slice(first.length).trim();

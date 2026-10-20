@@ -156,6 +156,79 @@ fn a_relative_point_needs_a_point_before_it() {
 }
 
 #[test]
+fn registry_words_share_points_with_the_legacy_grammar() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "DI 0,0 2,3\nL @١،٠ @٢<٩٠\nDI @1,0 @0,1\nPLINE 0,0 10,0 C",
+        dir.path(),
+        None,
+    );
+    let Action::Command(command) = &script.steps[1].action else {
+        panic!("a registry command");
+    };
+    let command = serde_json::to_value(command).unwrap();
+    assert_eq!(command["type"], "draw");
+    assert_eq!(command["kind"], "line");
+    assert_eq!(command["a"], serde_json::json!([3.0, 3.0]));
+    assert_eq!(command["b"], serde_json::json!([3.0, 5.0]));
+    assert_eq!(points(&script.steps[2].action), [[4.0, 5.0], [4.0, 6.0]]);
+    let Action::Command(command) = &script.steps[3].action else {
+        panic!("a polyline");
+    };
+    let command = serde_json::to_value(command).unwrap();
+    assert_eq!(command["kind"], "polyline");
+    assert_eq!(command["closed"], true);
+}
+
+#[test]
+fn registry_prompts_consume_following_lines_and_report_bad_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "LINE\n; first point\n١٫٥،٢\n@٣،٤\nCIRCLE\n0,0\n٢",
+        dir.path(),
+        None,
+    );
+    assert_eq!(
+        script.steps.iter().map(|s| s.line).collect::<Vec<_>>(),
+        [1, 5]
+    );
+    let Action::Command(command) = &script.steps[0].action else {
+        panic!("a line");
+    };
+    let command = serde_json::to_value(command).unwrap();
+    assert_eq!(command["a"], serde_json::json!([1.5, 2.0]));
+    assert_eq!(command["b"], serde_json::json!([4.5, 6.0]));
+    assert_eq!(error("LINE\n0,0\nbad", dir.path(), None).0, 3);
+    assert!(parse("COUNT DOOR\nLINE 0,0", dir.path(), None).is_err());
+}
+
+#[test]
+fn new_registry_words_work_without_script_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "NEWLAYER \"Typed layer\"\nRENAMELAYOUT \"Old sheet\" \"New sheet\"",
+        dir.path(),
+        None,
+    );
+    assert!(matches!(
+        &script.steps[0].action,
+        Action::Command(Command::NewLayer { name }) if name == "Typed layer"
+    ));
+    assert!(matches!(
+        &script.steps[1].action,
+        Action::Command(Command::RenameLayout { from, to })
+            if from == "Old sheet" && to == "New sheet"
+    ));
+    let script = parsed("WBLOCK DOOR blocks/door.dwg", dir.path(), None);
+    assert!(matches!(
+        &script.steps[0].action,
+        Action::Command(Command::WriteBlock { path, .. })
+            if Path::new(path) == dir.path().join("blocks/door.dwg")
+    ));
+    assert!(parse("WBLOCK DOOR ../outside.dwg", dir.path(), None).is_err());
+}
+
+#[test]
 fn errors_name_their_line() {
     let dir = tempfile::tempdir().unwrap();
     let (line, message) = error("COUNT DOOR\n\nFOO bar", dir.path(), None);

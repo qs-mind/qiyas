@@ -1,7 +1,9 @@
 import { Command } from "cmdk";
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { useT } from "../i18n";
-import { parse, suggest, type Action, type ParseState, type Suggestion } from "../tools/commandParser";
+import type { CmdlineStep, CommandWord } from "../api";
+import { expand, parse, type Action, type ParseState, type Suggestion } from "../tools/commandParser";
+import { registryAliases, suggestWords } from "../tools/commandWords";
 
 /** Lines of history kept for ↑ and ↓. */
 const HISTORY = 50;
@@ -14,6 +16,10 @@ type Props = {
   /** The prompt before the input, translated, e.g. "Specify first point:". */
   prompt: string;
   onAction(action: Action): void;
+  /** Registry additions are typed in the core; existing click-driven tools still use `parse`. */
+  words?: CommandWord[];
+  onTyped?(line: string): Promise<CmdlineStep>;
+  coreActive?: boolean;
   /** The input, so the app can focus it (Ctrl+9). */
   inputRef?: Ref<HTMLInputElement>;
 };
@@ -58,7 +64,7 @@ const NONE = "\u0000none";
  *  line (cmdk: ↑, ↓, Tab, Enter or a click choose one, each with its shortcut as a small key, in
  *  sections when there are both commands and shortcuts to show); Escape cancels. The two lines
  *  above show what was typed and any error. */
-export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
+export function CommandLine({ state, prompt, onAction, inputRef, words = [], onTyped, coreActive = false }: Props) {
   const t = useT();
   const id = useId();
   const [text, setText] = useState("");
@@ -70,10 +76,15 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
   /** The suggestions show while typing a command name; Escape, a pick or a recall hides them. */
   const [suggesting, setSuggesting] = useState(false);
   const [active, setActive] = useState(-1);
+  const pending = useRef(false);
+  /** A prompted command repeats its entire completed input, never its last answer alone. */
+  const coreLines = useRef<string[]>([]);
+  const coreStartedHere = useRef(false);
+  const suggestionAliases = useMemo(() => ({ ...registryAliases(words), ...state.aliases }), [words, state.aliases]);
 
   const suggestions = useMemo(
-    () => (suggesting && state.expect === "command" ? rowsOf(suggest(text, state.aliases), state.aliases) : []),
-    [suggesting, text, state.expect, state.aliases],
+    () => (suggesting && !coreActive && state.expect === "command" ? rowsOf(suggestWords(text, suggestionAliases, words), suggestionAliases) : []),
+    [suggesting, text, state.expect, suggestionAliases, words, coreActive],
   );
   const open = suggestions.length > 0;
   const list = useRef<HTMLDivElement>(null);
@@ -97,19 +108,53 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
   const write = (...lines: string[]) => setLog((l) => [...l, ...lines].slice(-LOG_LINES));
 
   function submit(line: string) {
+    if (pending.current) return;
     setText("");
     setRecalled(null);
     setSuggesting(false);
     setActive(-1);
     let action = parse(line, state);
     let typed = line.trim();
-    if (action.type === "repeat") {
+    if (!coreActive && action.type === "repeat") {
       if (!lastCommand) return;
       typed = lastCommand;
       action = parse(lastCommand, state);
     }
     if (typed) setHistory((h) => (h[h.length - 1] === typed ? h : [...h, typed].slice(-HISTORY)));
     const echo = typed ? `${prompt} ${typed}` : prompt;
+    if (onTyped && (coreActive || (action.type === "error" && action.key === "cmd.unknown"))) {
+      write(echo);
+      const expanded = expand(typed, state.aliases);
+      const input = coreActive ? typed : [expanded.name, expanded.rest].filter(Boolean).join(" ");
+      if (!coreActive) {
+        coreLines.current = [];
+        coreStartedHere.current = true;
+      }
+      pending.current = true;
+      onTyped(input)
+        .then((result) => {
+          if (result.type === "cancelled") {
+            coreLines.current = [];
+            coreStartedHere.current = false;
+            return;
+          }
+          coreLines.current.push(input);
+          if (result.type === "command") {
+            setLastCommand(coreStartedHere.current ? coreLines.current.join(" ") : null);
+            coreLines.current = [];
+            coreStartedHere.current = false;
+          }
+        })
+        .catch((error) => {
+          const message = String(error);
+          write(!coreActive && action.type === "error" && action.key === "cmd.unknown" &&
+            /^(?:Error:\s*)?unknown command\b/i.test(message)
+            ? t(action.key, action.args)
+            : message);
+        })
+        .finally(() => { pending.current = false; });
+      return;
+    }
     if (action.type === "error") {
       write(echo, t(action.key, action.args));
       return;
@@ -164,6 +209,8 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
       }
       setText("");
       setRecalled(null);
+      coreLines.current = [];
+      coreStartedHere.current = false;
       onAction({ type: "cancel" });
     }
   }
@@ -226,7 +273,8 @@ export function CommandLine({ state, prompt, onAction, inputRef }: Props) {
               return (
                 <Command.Group key={group} heading={both ? t(`cmd.group.${group}`) : undefined}>
                   {rows.map((r) => (
-                    <Command.Item key={r.name} value={r.name} className="cmd-item" onSelect={() => submit(r.name)}>
+                    <Command.Item key={r.name} value={r.name} className="cmd-item" onSelect={() => submit(r.name)}
+                      title={words.find((word) => word.word === r.name || word.word === r.label)?.summary}>
                       <span>{r.label}</span>
                       {r.chip && <kbd>{r.chip}</kbd>}
                     </Command.Item>

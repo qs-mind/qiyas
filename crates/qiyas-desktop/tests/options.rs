@@ -312,6 +312,35 @@ fn the_default_ribbon_is_the_one_the_window_draws() {
 }
 
 #[test]
+fn registry_words_are_available_to_customize_and_valid_saved_buttons() {
+    let catalog = ribbon::command_ribbon();
+    let buttons: Vec<_> = catalog
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.groups)
+        .flat_map(|group| &group.buttons)
+        .filter(|button| button.kind == ButtonKind::Command)
+        .collect();
+    for command in qiyas_core::registry::registry()
+        .commands()
+        .iter()
+        .filter(|command| !command.internal)
+    {
+        if let Some(word) = command.words.first() {
+            assert!(
+                buttons.iter().any(|button| &button.command == word),
+                "{word}"
+            );
+        }
+    }
+    assert!(!buttons.is_empty());
+    assert_eq!(ribbon::validate(&catalog), Ok(()));
+    let mut custom = ribbon::default_ribbon();
+    custom.tabs[0].groups[0].buttons.push((*buttons[0]).clone());
+    assert_eq!(ribbon::validate(&custom), Ok(()));
+}
+
+#[test]
 fn a_ribbon_with_an_unknown_button_or_twin_ids_is_refused() {
     let mut unknown = ribbon::default_ribbon();
     unknown.tabs[0].groups[0].buttons[0].command = "format_disk".into();

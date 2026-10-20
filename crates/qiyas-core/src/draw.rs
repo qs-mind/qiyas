@@ -99,12 +99,16 @@ pub enum HatchPattern {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawSpec {
     #[schemars(example = json!({"kind": "line", "a": [0, 0], "b": [5, 0]}))]
+    #[schemars(extend("x-words" = ["LINE", "L"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "a", "prompt": "First point"}, {"field": "b", "prompt": "Next point"}])))]
     Line { a: [f64; 2], b: [f64; 2] },
     /// A lightweight polyline; `bulges` (one per point, or none for straight segments) bends the
     /// segment starting at each point (tan of a quarter of its included angle, positive
     /// counter-clockwise).
     #[schemars(example = json!({"kind": "polyline", "points": [[0, 0], [6, 0], [6, 4], [0, 4]], "closed": true}))]
     #[schemars(example = json!({"kind": "polyline", "points": [[0, 0], [4, 0], [4, 2]], "bulges": [0, 1, 0]}))]
+    #[schemars(extend("x-words" = ["PLINE", "PL"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point or [Close]", "close": "closed"}])))]
     Polyline {
         points: Vec<[f64; 2]>,
         #[serde(default)]
@@ -114,10 +118,14 @@ pub enum DrawSpec {
     },
     /// A closed polyline with corners `a` and `b`.
     #[schemars(example = json!({"kind": "rectangle", "a": [0, 0], "b": [5, 4]}))]
+    #[schemars(extend("x-words" = ["RECTANG", "REC"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "a", "prompt": "First corner"}, {"field": "b", "prompt": "Other corner"}])))]
     Rectangle { a: [f64; 2], b: [f64; 2] },
     /// A regular polygon (3 to 1024 sides) with a flat bottom edge: its corners on the circle of
     /// `radius` when `inscribed`, its sides touching it otherwise.
     #[schemars(example = json!({"kind": "polygon", "centre": [0, 0], "sides": 6, "radius": 2, "inscribed": true}))]
+    #[schemars(extend("x-words" = ["POLYGON", "POL"]))]
+    #[schemars(extend("x-prompts" = json!(["sides", "centre", "radius", {"field": "inscribed", "default": true, "options": {"I": true, "C": false}, "prompt": "Inscribed or Circumscribed [I/C]"}])))]
     Polygon {
         centre: [f64; 2],
         sides: u32,
@@ -125,6 +133,8 @@ pub enum DrawSpec {
         inscribed: bool,
     },
     #[schemars(example = json!({"kind": "circle", "centre": [2, 2], "radius": 0.5}))]
+    #[schemars(extend("x-words" = ["CIRCLE", "C"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "centre", "prompt": "Centre point"}, {"field": "radius", "prompt": "Radius"}])))]
     Circle { centre: [f64; 2], radius: f64 },
     /// Counter-clockwise from `start` to `end` (degrees).
     #[schemars(example = json!({"kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}))]
@@ -136,6 +146,8 @@ pub enum DrawSpec {
     },
     /// The arc from `a` through `b` to `c`.
     #[schemars(example = json!({"kind": "three_point_arc", "a": [0, 0], "b": [1, 1], "c": [2, 0]}))]
+    #[schemars(extend("x-words" = ["ARC", "A"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "a", "prompt": "Start point"}, {"field": "b", "prompt": "Second point"}, {"field": "c", "prompt": "End point"}])))]
     ThreePointArc {
         a: [f64; 2],
         b: [f64; 2],
@@ -144,6 +156,8 @@ pub enum DrawSpec {
     /// A full ellipse: `major` is the major semi-axis (from the centre to its end), `ratio` the
     /// minor axis over the major (above 0, at most 1).
     #[schemars(example = json!({"kind": "ellipse", "centre": [0, 0], "major": [3, 0], "ratio": 0.5}))]
+    #[schemars(extend("x-words" = ["ELLIPSE", "EL"]))]
+    #[schemars(extend("x-prompts" = json!(["centre", {"field": "major", "direction": true}, "ratio"])))]
     Ellipse {
         centre: [f64; 2],
         major: [f64; 2],
@@ -151,11 +165,16 @@ pub enum DrawSpec {
     },
     /// The cubic through `fit_points` (2 or more).
     #[schemars(example = json!({"kind": "spline", "fit_points": [[0, 0], [2, 1], [4, 0], [6, 1]]}))]
+    #[schemars(extend("x-words" = ["SPLINE", "SPL"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "fit_points", "min": 2, "prompt": "Next fit point"}])))]
     Spline { fit_points: Vec<[f64; 2]> },
     #[schemars(example = json!({"kind": "point", "p": [3, 4]}))]
+    #[schemars(extend("x-words" = ["POINT", "PO"]))]
     Point { p: [f64; 2] },
     /// A filled ring: `inner` and `outer` are diameters (`inner` 0 for a dot), as AutoCAD asks.
     #[schemars(example = json!({"kind": "donut", "centre": [0, 0], "inner": 0.1, "outer": 0.2}))]
+    #[schemars(extend("x-words" = ["DONUT", "DO"]))]
+    #[schemars(extend("x-prompts" = json!(["inner", "outer", "centre"])))]
     Donut {
         centre: [f64; 2],
         inner: f64,
@@ -163,22 +182,30 @@ pub enum DrawSpec {
     },
     /// A half-infinite line from `origin` along `dir`.
     #[schemars(example = json!({"kind": "ray", "origin": [0, 0], "dir": [1, 1]}))]
+    #[schemars(extend("x-words" = ["RAY"]))]
+    #[schemars(extend("x-prompts" = json!(["origin", {"field": "dir", "relative_to": "origin", "prompt": "Through point"}])))]
     Ray { origin: [f64; 2], dir: [f64; 2] },
     /// An infinite construction line through `origin` along `dir`.
     #[serde(rename = "xline")]
     #[schemars(example = json!({"kind": "xline", "origin": [0, 0], "dir": [0, 1]}))]
+    #[schemars(extend("x-words" = ["XLINE", "XL"]))]
+    #[schemars(extend("x-prompts" = json!(["origin", {"field": "dir", "relative_to": "origin", "prompt": "Through point"}])))]
     XLine { origin: [f64; 2], dir: [f64; 2] },
     /// A revision cloud around the polygon `points`: arcs about `arc_len` long bulging outward.
     #[serde(rename = "revcloud")]
     #[schemars(example = json!({"kind": "revcloud", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "arc_len": 0.5}))]
+    #[schemars(extend("x-words" = ["REVCLOUD"]))]
     RevCloud { points: Vec<[f64; 2]>, arc_len: f64 },
     /// Covers the polygon `points` with the background colour.
     #[schemars(example = json!({"kind": "wipeout", "points": [[0, 0], [2, 0], [2, 1], [0, 1]]}))]
+    #[schemars(extend("x-words" = ["WIPEOUT"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "prompt": "Next corner"}])))]
     Wipeout { points: Vec<[f64; 2]> },
     /// A hatch inside the closed entities `boundary_handles` (on the sheet; islands inside the
     /// outer one stay empty) or inside the ring `points`: one of the two.
     #[schemars(example = json!({"kind": "hatch", "boundary_handles": [1234], "pattern": "solid"}))]
     #[schemars(example = json!({"kind": "hatch", "points": [[0, 0], [5, 0], [5, 4], [0, 4]], "pattern": {"custom": {"name": "ANSI31", "angle": 0, "scale": 25}}}))]
+    #[schemars(extend("x-words" = ["HATCH", "H"]))]
     Hatch {
         #[serde(default)]
         boundary_handles: Vec<u64>,
@@ -197,14 +224,20 @@ pub enum DrawSpec {
     /// outline runs first, second, fourth, third.
     #[serde(rename = "solid2d")]
     #[schemars(example = json!({"kind": "solid2d", "points": [[0, 0], [1, 0], [0, 1], [1, 1]]}))]
+    #[schemars(extend("x-words" = ["SOLID", "SO"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "max": 4, "prompt": "Next corner"}])))]
     Solid2D { points: Vec<[f64; 2]> },
     /// A wide line: one TRACE quad `width` wide per segment.
     #[schemars(example = json!({"kind": "trace", "points": [[0, 0], [5, 0]], "width": 0.2}))]
+    #[schemars(extend("x-words" = ["TRACE"]))]
+    #[schemars(extend("x-prompts" = json!(["width", {"field": "points", "min": 2, "prompt": "Next point"}])))]
     Trace { points: Vec<[f64; 2]>, width: f64 },
     /// A multiline in the drawing's multiline style `style` ("Standard" when left out), its
     /// offsets times `scale` (1 when left out).
     #[serde(rename = "mline")]
     #[schemars(example = json!({"kind": "mline", "points": [[0, 0], [5, 0], [5, 4]]}))]
+    #[schemars(extend("x-words" = ["MLINE", "ML"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
     MLine {
         points: Vec<[f64; 2]>,
         #[serde(default)]
@@ -214,6 +247,8 @@ pub enum DrawSpec {
     },
     /// Freehand: an open polyline through `points`.
     #[schemars(example = json!({"kind": "sketch", "points": [[0, 0], [0.2, 0.1], [0.4, 0.05]]}))]
+    #[schemars(extend("x-words" = ["SKETCH"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
     Sketch { points: Vec<[f64; 2]> },
 }
 

@@ -35,6 +35,7 @@ type Props = {
   plot: Plot;
   options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit">;
   parametric: Pick<Parametric, "openParameters" | "setBarHidden">;
+  onCommandLine?(line: string): void;
 };
 
 export function Header({
@@ -54,6 +55,7 @@ export function Header({
   plot,
   options,
   parametric,
+  onCommandLine,
 }: Props) {
   const t = useT();
   const { lang, setLang } = useLanguage();
@@ -88,6 +90,7 @@ export function Header({
       <Ribbon
         active={tool}
         onTool={chooseTool}
+        onCommandLine={onCommandLine}
         onNew={() => setNewOpen(true)}
         onOpen={openFile}
         loadRecents={readRecents}

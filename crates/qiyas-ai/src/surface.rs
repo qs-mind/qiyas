@@ -10,7 +10,7 @@
 //!   history, the drawings and what the user selected.
 //! - `qiyas_execute {op, args}`: any command (`run`), several as one undo step with each able to
 //!   use what an earlier one made (`batch`), records set and entities made, undoing its own step,
-//!   selecting and viewing, the drawing files and the BOQ files.
+//!   typed command lines (`type`), selecting and viewing, the drawing files and the BOQ files.
 //! - `qiyas_capture {source, args}`: a picture of the screen or of any part of a sheet.
 //!
 //! `args` is a JSON object written as a string, so each tool's schema stays strict and closed for
@@ -47,8 +47,9 @@ pub const READ_OPS: [&str; 13] = [
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 16] = [
+pub const EXECUTE_OPS: [&str; 17] = [
     "run",
+    "type",
     "batch",
     "set_records",
     "create_entities",
@@ -101,7 +102,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Change the drawing, take-off or view. ops: run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [...], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Change the drawing, take-off or view. ops: type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [...], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -144,6 +145,11 @@ pub fn label(name: &str, input: &Value) -> Option<String> {
         return None;
     }
     let op = input.get("op")?.as_str()?;
+    if name == EXECUTE && op == "type" {
+        let args = args_of(input).ok()?;
+        let word = args["line"].as_str()?.split_whitespace().next()?;
+        return registry().by_word(word).map(|info| info.name.clone());
+    }
     if name == EXECUTE && op == "run" {
         let args = args_of(input).ok()?;
         let command = command_value(&args["command"]).ok()?;
@@ -184,6 +190,11 @@ pub fn destructive_count(name: &str, input: &Value) -> usize {
     }
     match input["op"].as_str() {
         Some("run") => count(&args["command"]),
+        Some("type") => args["line"]
+            .as_str()
+            .and_then(|line| line.split_whitespace().next())
+            .and_then(|word| registry().by_word(word))
+            .map_or(0, |info| usize::from(info.destructive)),
         Some("batch") => args["commands"]
             .as_array()
             .map_or(0, |commands| commands.iter().map(count).sum()),
@@ -370,6 +381,29 @@ pub fn run_session(
             let command = parse_command(session, &args["command"])?;
             json(run_one(session, command, source)?)
         }
+        (EXECUTE, "type") => {
+            let line = args["line"]
+                .as_str()
+                .ok_or_else(|| bad("type needs {line}: a complete typed command line"))?;
+            let mut machine = qiyas_core::cmdline::Machine::default();
+            machine.set_ucs(session.ucs);
+            match machine.step(line).map_err(bad)? {
+                qiyas_core::cmdline::Step::Command(command) => {
+                    // Apply the same internal-command and folder rules as `run`.
+                    let command = parse_command(session, &json!(command))?;
+                    json(run_one(session, command, source)?)
+                }
+                qiyas_core::cmdline::Step::Prompt(prompt) => json(json!({
+                    "ok": true,
+                    "complete": false,
+                    "prompt": prompt,
+                    "next": "Send type again with the complete command line, including its word and answers; nothing ran.",
+                })),
+                qiyas_core::cmdline::Step::Cancelled => {
+                    json(json!({ "ok": true, "cancelled": true }))
+                }
+            }
+        }
         (EXECUTE, "set_records") => {
             let mut body = args.clone();
             body["type"] = json!("set_records");
@@ -471,6 +505,12 @@ fn capabilities() -> Value {
     json!({
         "read_ops": READ_OPS,
         "execute_ops": EXECUTE_OPS,
+        "typed_commands": {
+            "args": { "line": "PLINE 0,0 10,0 C" },
+            "words": "qiyas_read commands returns each command's words and aliases",
+            "coordinates": "Drawing units in the current UCS; @ uses the preceding point in this line",
+            "continuation": "An incomplete line returns a prompt; resend the complete line",
+        },
         "capture": ["screen", "picture"],
         "query_kinds": QUERY_KINDS,
         "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters"],
@@ -485,14 +525,20 @@ fn capabilities() -> Value {
 fn commands(args: &Value) -> Result<Value, ToolError> {
     let reg = registry();
     if let Some(name) = args.get("name").and_then(Value::as_str) {
-        let info = reg.get(name).filter(|c| !c.internal).ok_or_else(|| {
-            bad(format!(
-                "No command {name}; close ones: {}",
-                close_commands(name).join(", ")
-            ))
-        })?;
+        let info = reg
+            .get(name)
+            .or_else(|| reg.by_word(name))
+            .filter(|c| !c.internal)
+            .ok_or_else(|| {
+                bad(format!(
+                    "No command {name}; close ones: {}",
+                    close_commands(name).join(", ")
+                ))
+            })?;
         return Ok(json!({
             "name": info.name,
+            "words": info.words,
+            "prompts": info.prompts,
             "category": info.category,
             "doc": info.doc,
             "effect": info.effect,
@@ -507,7 +553,7 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     }
     let list = |cs: Vec<&qiyas_core::registry::CommandInfo>| -> Vec<Value> {
         cs.into_iter()
-            .map(|c| json!({ "name": c.name, "summary": c.summary, "effect": c.effect }))
+            .map(|c| json!({ "name": c.name, "words": c.words, "summary": c.summary, "effect": c.effect }))
             .collect()
     };
     if let Some(query) = args.get("search").and_then(Value::as_str) {

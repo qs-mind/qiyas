@@ -1,6 +1,7 @@
 mod ai;
 mod ai_window;
 mod blocks;
+mod cmdline;
 mod commands;
 mod drawing_host;
 mod files;
@@ -25,6 +26,7 @@ pub fn run() {
         .manage(launch::OpenRequests::default())
         .manage(updater::Pending::default())
         .manage(script::ScriptControl::default())
+        .manage(cmdline::CommandLineState::default())
         // First of the plugins: a second Qiyas hands its files to this one and quits.
         .plugin(launch::single_instance())
         .plugin(tauri_plugin_dialog::init())
@@ -86,6 +88,8 @@ pub fn run() {
             commands::entity_info,
             commands::table_cell_at,
             commands::run_command,
+            cmdline::command_words,
+            cmdline::cmdline_step,
             commands::undo,
             commands::redo,
             commands::takeoff,

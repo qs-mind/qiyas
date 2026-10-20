@@ -1,8 +1,8 @@
 /** The command line and the keyboard: what a typed command or a key does (through the same
  *  handlers as the ribbon), a click in the drawing, Escape, the DIVIDE and MEASURE presets, and
  *  what the command line and the status bar say. */
-import { useEffect, useRef, useState } from "react";
-import { EMPTY_MODEL, pick, redo, undo, type DrawingInfo } from "../api";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { cmdlineStep, EMPTY_MODEL, pick, redo, undo, type CmdlineStep, type DrawingInfo } from "../api";
 import type { Assistant } from "../ai/useAssistant";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import type { DotPattern } from "../shell/DotLoader";
@@ -26,6 +26,7 @@ import type { Takeoff, TakeoffState } from "./useTakeoff";
 
 type Deps = {
   t: T;
+  switchGen: RefObject<number>;
   info: DrawingInfo | null;
   measure: Measure;
   assistant: Pick<Assistant, "send">;
@@ -80,6 +81,7 @@ type Deps = {
 
 export function useCommandLine({
   t,
+  switchGen,
   info,
   measure,
   assistant,
@@ -132,12 +134,76 @@ export function useCommandLine({
   const [commandLineOn, setCommandLineOn] = useState(true);
   const commandInput = useRef<HTMLInputElement>(null);
   const focusCommandLine = useRef(false);
+  const [typedPrompt, setTypedPrompt] = useState<string | null>(null);
+  const typedActive = useRef(false);
+  const typedGeneration = useRef(0);
+  const typedCalls = useRef<Promise<unknown>>(Promise.resolve());
+
+  /** A cancellation must finish before the next line starts its machine. */
+  function readTyped(line: string, last?: Point | null): Promise<CmdlineStep> {
+    const next = typedCalls.current.then(() => cmdlineStep(line, last));
+    typedCalls.current = next.catch(() => {});
+    return next;
+  }
+
+  function cancelTyped() {
+    typedGeneration.current++;
+    if (typedActive.current) void readTyped("ESC").catch(() => {});
+    typedActive.current = false;
+    setTypedPrompt(null);
+  }
+
+  useEffect(() => {
+    cancelTyped();
+  }, [info?.path, info?.sheet, tool]);
+
+  /** Registry commands use the same refresh and save path as drawing tools. */
+  async function typeCommand(line: string): Promise<CmdlineStep> {
+    if (scriptLine !== null) throw new Error(t("script.busy"));
+    if (switching.current > 0) return { type: "cancelled" };
+    const last = measure.lastDrawPoint ?? measure.points[measure.points.length - 1] ?? lastPoint.current;
+    if (!typedActive.current) {
+      measure.cancel();
+      setPending(null);
+      cancelPick();
+    }
+    const generation = typedGeneration.current;
+    const drawingGeneration = switchGen.current;
+    const wasActive = typedActive.current;
+    typedActive.current = true;
+    let result: CmdlineStep;
+    try {
+      result = await readTyped(line, last);
+    } catch (error) {
+      if (generation === typedGeneration.current) typedActive.current = wasActive;
+      throw error;
+    }
+    if (generation !== typedGeneration.current || drawingGeneration !== switchGen.current || switching.current > 0) {
+      return { type: "cancelled" };
+    }
+    if (result.type !== "cancelled") lastPoint.current = result.last;
+    typedActive.current = result.type === "prompt";
+    setTypedPrompt(result.type === "prompt" ? result.prompt : null);
+    if (result.type === "command") {
+      sheets.cancelReveal();
+      await apply(result.command, true);
+    }
+    return result;
+  }
+
+  async function startCommand(line: string): Promise<void> {
+    cancelTyped();
+    setCommandLineOn(true);
+    await typeCommand(line);
+    commandInput.current?.focus();
+  }
 
   /** A click in the drawing: the one a plot window, a PDF or image insert point or a calibration
    *  waits for, else the tool's. */
   function clickDrawing(world: Point, screen: Point, worldPerPixel: number, shift: boolean) {
     // The drawing under the click may be about to go.
     if (switching.current > 0) return;
+    if (typedActive.current) cancelTyped();
     lastPoint.current = world;
     if (pickPoint(world)) return;
     if (pending?.kind === "fieldTarget") {
@@ -156,6 +222,7 @@ export function useCommandLine({
   /** Escape: drops what is waiting (an insert point, a measure, a prompt) and every highlight.
    *  `escKey` for the Esc key itself (or ESC typed), which keeps a polyline drawn so far. */
   function cancelAll(escKey = false) {
+    cancelTyped();
     preset.current = null;
     setPending(null);
     cancelPick();
@@ -200,6 +267,7 @@ export function useCommandLine({
 
   /** Runs what the command line asks for, through the same handlers as the ribbon and keys. */
   function onCommand(a: Action) {
+    if (a.type !== "repeat") cancelTyped();
     sheets.cancelReveal();
     setNotice(null);
     // A running script: nothing else runs until it ends or is stopped.
@@ -560,7 +628,7 @@ export function useCommandLine({
     numberToo: measure.takesNumber,
     ucs: info?.ucs,
   };
-  const prompt = t(promptKey, promptKey === measure.hint ? (measure.hintArgs ?? undefined) : undefined);
+  const prompt = typedPrompt ?? t(promptKey, promptKey === measure.hint ? (measure.hintArgs ?? undefined) : undefined);
 
   // The command line already asks the tool's own prompt: the status bar does not say it again (it
   // keeps the file name; what was done is a toast). A hint the command line does not show (COUNT's "not a
@@ -601,5 +669,5 @@ export function useCommandLine({
   const progress =
     !opening && !comparing && !windowPick && !pending && renderProgress !== null && !attachOpen ? renderProgress : null;
 
-  return { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting, progress };
+  return { commandLineOn, commandInput, onCommand, typeCommand, startCommand, coreActive: typedPrompt !== null, clickDrawing, commandState, prompt, message, waiting, progress };
 }

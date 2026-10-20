@@ -1252,6 +1252,17 @@ export type Outcome =
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
+/** Registry words and aliases, in command order; each command's first word is its full name. */
+export type CommandWord = { word: string; command: string; summary: string };
+export const commandWords = () => invoke<CommandWord[]>("command_words");
+export type CmdlineStep =
+  | { type: "command"; command: Command; last: P | null }
+  | { type: "prompt"; prompt: string; last: P | null }
+  | { type: "cancelled" };
+/** The core reads a line; the caller applies a completed command through the usual window path. */
+export const cmdlineStep = (line: string, last?: P | null) =>
+  invoke<CmdlineStep>("cmdline_step", { line, ...(last === undefined ? {} : { last }) });
+
 /** The constraints of the sheet on screen. */
 export async function listConstraints(): Promise<ConstraintInfo[]> {
   const o = await runCommand({ type: "list_constraints" });
@@ -1365,7 +1376,7 @@ export type Settings = {
 };
 
 /** How the window runs a ribbon button: picks a tool, runs an action, or a checkbox. */
-export type RibbonButtonKind = "tool" | "action" | "toggle";
+export type RibbonButtonKind = "tool" | "action" | "toggle" | "command";
 /** One ribbon button; `label` is an i18n key (or the user's own text). */
 export type RibbonButton = { kind: RibbonButtonKind; command: string; label: string };
 /** `main`: how many of the buttons the group shows; the rest wait behind its "⋯" button (all when left out). */

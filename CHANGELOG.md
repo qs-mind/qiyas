@@ -9,6 +9,10 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Core commands now supply their command-line words and aliases to suggestions, ribbon
+  customisation, scripts and Mizan. Typed commands share schema-driven prompts, relative
+  points, UCS coordinates and Arabic number input while existing window tools keep their
+  command-line behaviour.
 - Draw joined walls with clean corners and junctions, measurable wall hatches, room holes,
   and reusable door and window symbols. Wall quantities report length, gross and net plan
   area, and volume with opening heights, in metres across drawing units.

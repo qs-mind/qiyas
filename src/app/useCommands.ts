@@ -65,7 +65,7 @@ export function useCommands({
 }: Deps) {
   /** Runs a take-off command; a new measurement becomes the selected row. An inquiry's answer
    *  shows in the info card. */
-  async function apply(given: Command) {
+  async function apply(given: Command, refreshAll = false) {
     // Plain text pastes as a text as tall as new text is.
     const cmd: Command =
       given.type === "paste_from_clipboard" ? { ...given, height: currentTextHeight } : given;
@@ -112,6 +112,12 @@ export function useCommands({
     let changed = false;
     await run(async () => {
       const outcome = await runCommand(cmd);
+      // A registry addition may change any drawing part without a window-side command list.
+      if (refreshAll) {
+        await redraw();
+        await syncInfo();
+        changed = true;
+      }
       if (outcome.type === "nothing") return;
       if (outcome.type === "info") {
         setInfoCard({ title: outcome.title, rows: outcome.rows });
@@ -150,7 +156,7 @@ export function useCommands({
         "add_dim_constraint",
         "set_parameter",
       ];
-      if (drawingChanged.includes(cmd.type)) {
+      if (!refreshAll && drawingChanged.includes(cmd.type)) {
         await redraw();
       }
       // A new viewport shows in the layers panel's VP freeze column.
