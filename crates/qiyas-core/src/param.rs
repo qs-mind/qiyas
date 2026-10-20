@@ -17,6 +17,7 @@
 //! constraints it is part of are solved again in the same undo step, and a conflict (a fixed point
 //! moved, a dimension scaled) refuses the whole command.
 
+use schemars::JsonSchema;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use opencadcodec::entities::{Dimension, EntityCommon};
@@ -54,7 +55,7 @@ fn invalid(why: impl Into<String>) -> CoreError {
 }
 
 /// What a constraint keeps: the geometric kinds, then the dimensional ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
     Coincident,
@@ -133,7 +134,7 @@ pub struct Ref {
 }
 
 /// What `Command::AutoConstrain` looks for, and how close the drawing must be already.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AutoSettings {
     /// The kinds to apply, first first. Without Equal by default (opposite sides of a rectangle
     /// are not meant to stay equal).

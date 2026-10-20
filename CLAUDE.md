@@ -162,6 +162,27 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   unsaved changes (see Clipboard, viewports, UCS, sheet sets and recovery); a save, or closing it
   with Don't Save, deletes them.
 
+## Command registry
+
+- `qiyas-core/src/registry.rs`: every `Command` describes itself from its JSON schema (schemars
+  1.2, MIT: `JsonSchema` on `Command` and every type it holds). Each entry: the wire name, category,
+  summary and doc (the doc comment), effect (read, view, edit, file, session), the undo part
+  (`changes()` on its examples: takeoff, boq, conflicts, drawing, drawing+tables…), destructive,
+  batchable, internal, needs (pdf, clipboard), a self-contained schema (definitions inlined,
+  number formats left out; `batch`'s commands left open) and examples. A command whose payload is
+  a tagged enum lists its kinds, each an entry of its own: `draw.line`, `modify.move`,
+  `edit.offset`, `dimension.linear`. `registry()`, `get` (any case, `-` as `_`), `search` (the
+  name, doc and the schema's property names, values and descriptions; internal ones left out),
+  `index_text` (one line per category, about 2,000 characters, deterministic: the AI's index) and
+  `effect_of(&Command)` (a dry-run purge reads, a real one edits).
+- A new command needs a doc comment, `#[schemars(extend("x-category" = "…"))]` and an example
+  (`#[schemars(example = json!({…}))]`), and each kind an example; `tests/registry.rs` fails
+  without them, and checks that every example reads back as its command, every schema is
+  self-contained and names its type, and that a command that reads leaves the session as it was.
+  Other extensions: `x-effect` ("view", "file", "session" for one that is not an undo step),
+  `x-destructive`, `x-batch` false, `x-internal` (hosts only: `set_boq`, `set_conflicts`),
+  `x-needs`.
+
 ## Undo
 
 - `qiyas-core/src/undo.rs`: one step per command, at most 200, each with its `Source`

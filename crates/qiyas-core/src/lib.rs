@@ -33,6 +33,7 @@ mod project;
 mod props;
 pub mod purge;
 mod query;
+pub mod registry;
 pub mod script;
 mod session;
 mod sheetset;

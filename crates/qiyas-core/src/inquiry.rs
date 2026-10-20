@@ -4,6 +4,7 @@
 //! Values are shown in metres, square metres and degrees, with the drafting precision. Row labels
 //! are short keys ("radius", "centre") the window translates.
 
+use schemars::JsonSchema;
 use std::f64::consts::TAU;
 
 use opencadcodec::{Color, EntityType, Point, Vector3};
@@ -26,7 +27,7 @@ const MAX_POINTS: usize = 1000;
 const MAX_EXTRACT: usize = 5000;
 
 /// One column of an extraction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Field {
     Handle,

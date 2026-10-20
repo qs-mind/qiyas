@@ -1,12 +1,13 @@
 //! The take-off: every measurement the user (or the AI) has made in this session.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::Units;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Length,

@@ -15,7 +15,9 @@ use opencadcodec::entities::{
 use opencadcodec::types::{Matrix3, Transform};
 use opencadcodec::{Circle, EntityType, Handle, Vector3};
 use qiyas_geom::{flatten, is_xref_block, Xform};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use std::collections::HashSet;
 
@@ -29,21 +31,24 @@ pub(crate) const MAX_NEW: usize = 100_000;
 
 /// What `Command::Modify` does, to the entities `targets` (as picked, see `Target`). Points are
 /// in drawing coordinates, angles in degrees counter-clockwise.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModifySpec {
     /// Moves them by `delta`.
+    #[schemars(example = json!({"kind": "move", "targets": [{"handle": 1234}], "delta": [2, 0]}))]
     Move {
         targets: Vec<Target>,
         delta: [f64; 2],
     },
     /// Adds `count` copies (1 or more), the first `delta` away, each next one `delta` further.
+    #[schemars(example = json!({"kind": "copy", "targets": [{"handle": 1234}], "delta": [0, 3], "count": 4}))]
     Copy {
         targets: Vec<Target>,
         delta: [f64; 2],
         count: u32,
     },
     /// Turns them `angle` about `base`; with `copy`, turns a copy and keeps them.
+    #[schemars(example = json!({"kind": "rotate", "targets": [{"handle": 1234}], "base": [0, 0], "angle": 90}))]
     Rotate {
         targets: Vec<Target>,
         base: [f64; 2],
@@ -52,6 +57,7 @@ pub enum ModifySpec {
         copy: bool,
     },
     /// Scales them by `factor` (above 0) about `base`; with `copy`, scales a copy.
+    #[schemars(example = json!({"kind": "scale", "targets": [{"handle": 1234}], "base": [0, 0], "factor": 2}))]
     Scale {
         targets: Vec<Target>,
         base: [f64; 2],
@@ -61,6 +67,7 @@ pub enum ModifySpec {
     },
     /// Mirrors them across the line through `p1` and `p2`; with `keep`, mirrors a copy and keeps
     /// them. Texts still read forwards (AutoCAD's MIRRTEXT 0).
+    #[schemars(example = json!({"kind": "mirror", "targets": [{"handle": 1234}], "p1": [5, 0], "p2": [5, 1], "keep": true}))]
     Mirror {
         targets: Vec<Target>,
         p1: [f64; 2],
@@ -71,6 +78,7 @@ pub enum ModifySpec {
     /// lines and polylines; any other entity moves whole when it lies wholly inside the window,
     /// or when its centre or insertion point does (circles, arcs, ellipses, texts, block
     /// references, points).
+    #[schemars(example = json!({"kind": "stretch", "targets": [{"handle": 1234}], "window": [[4, -1], [6, 5]], "delta": [1, 0]}))]
     Stretch {
         targets: Vec<Target>,
         window: [[f64; 2]; 2],
@@ -79,12 +87,14 @@ pub enum ModifySpec {
     /// Moves them so each pair's source point (the first) lands on its destination (the second):
     /// one pair moves; two pairs also turn them so the line between the sources lies along the
     /// line between the destinations (no scaling).
+    #[schemars(example = json!({"kind": "align", "targets": [{"handle": 1234}], "pairs": [[[0, 0], [10, 10]], [[1, 0], [10, 11]]]}))]
     Align {
         targets: Vec<Target>,
         pairs: Vec<[[f64; 2]; 2]>,
     },
     /// Copies them into `rows` x `cols` (1 or more each, 2 cells at least), `dy` apart up and `dx`
     /// across; they are the first cell.
+    #[schemars(example = json!({"kind": "array_rect", "targets": [{"handle": 1234}], "rows": 3, "cols": 4, "dy": 6, "dx": 6}))]
     ArrayRect {
         targets: Vec<Target>,
         rows: u32,
@@ -94,6 +104,7 @@ pub enum ModifySpec {
     },
     /// Copies them round `centre` into `count` items (2 or more, they are the first), each turned
     /// `angle` from the one before (90 with 4 items fills the circle).
+    #[schemars(example = json!({"kind": "array_polar", "targets": [{"handle": 1234}], "centre": [0, 0], "count": 8, "angle": 45}))]
     ArrayPolar {
         targets: Vec<Target>,
         centre: [f64; 2],
@@ -104,6 +115,7 @@ pub enum ModifySpec {
     /// ByBlock take the reference's layer, colour, linetype and lineweight), polylines and
     /// multilines into their parts. Entities that have no parts are left as they are; nothing to
     /// explode at all is refused.
+    #[schemars(example = json!({"kind": "explode", "targets": [{"handle": 1234}]}))]
     Explode { targets: Vec<Target> },
 }
 

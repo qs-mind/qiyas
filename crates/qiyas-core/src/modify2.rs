@@ -26,7 +26,9 @@ use opencadkernel::geom2d::{
 };
 use qiyas_geom::{flatten_with, snap_shapes, Xform};
 use qiyas_render::layer_shown;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::session::variant_name;
 use crate::{CoreError, Outcome, Session, Target};
@@ -48,11 +50,12 @@ fn tol_near(p: [f64; 2]) -> f64 {
 /// What `Command::Edit` does. Points are in drawing coordinates; a pick point (`at_point`,
 /// `at_end`, `at_a`...) is where the entity was clicked, which says which piece, end or side is
 /// meant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EditSpec {
     /// Cuts away the piece of `target` around `at_point` between the crossings of the `cutters`
     /// (none: everything drawn on the sheet cuts).
+    #[schemars(example = json!({"kind": "trim", "cutters": [{"handle": 1235}], "target": {"handle": 1234}, "at_point": [6, 0]}))]
     Trim {
         #[serde(default)]
         cutters: Vec<Target>,
@@ -61,6 +64,7 @@ pub enum EditSpec {
     },
     /// Runs the end of `target` nearest `at_end` on to the first of the `boundaries` it meets
     /// (none: everything drawn on the sheet). Lines, arcs and open polylines.
+    #[schemars(example = json!({"kind": "extend", "boundaries": [{"handle": 1235}], "target": {"handle": 1234}, "at_end": [4.9, 0]}))]
     Extend {
         #[serde(default)]
         boundaries: Vec<Target>,
@@ -69,6 +73,7 @@ pub enum EditSpec {
     },
     /// Removes the part of `target` between `p1` and `p2` (the same point splits it there). A
     /// circle keeps the part counter-clockwise from `p2` round to `p1`.
+    #[schemars(example = json!({"kind": "break", "target": {"handle": 1234}, "p1": [2, 0], "p2": [3, 0]}))]
     Break {
         target: Target,
         p1: [f64; 2],
@@ -77,18 +82,22 @@ pub enum EditSpec {
     /// Joins lines, arcs and open polylines whose ends meet, starting from the first, into one
     /// polyline under the first's handle (closed when the chain closes). The others that don't
     /// meet the chain are left as they are.
+    #[schemars(example = json!({"kind": "join", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
     Join { targets: Vec<Target> },
     /// Lengthens (or with a negative change, shortens) the end of `target` nearest `at_end`.
     /// Lines, arcs and open polylines (their end side).
+    #[schemars(example = json!({"kind": "lengthen", "target": {"handle": 1234}, "at_end": [5, 0], "by": {"delta": 0.5}}))]
     Lengthen {
         target: Target,
         at_end: [f64; 2],
         by: LengthenBy,
     },
     /// Turns lines and polylines to run the other way; anything else is left as it is.
+    #[schemars(example = json!({"kind": "reverse", "targets": [{"handle": 1234}]}))]
     Reverse { targets: Vec<Target> },
     /// A copy of `target` `distance` away (above 0) on the side of `side_point`: lines, arcs,
     /// circles and polylines (arcs stay arcs; straight corners stay sharp).
+    #[schemars(example = json!({"kind": "offset", "target": {"handle": 1234}, "distance": 0.2, "side_point": [1, 1]}))]
     Offset {
         target: Target,
         distance: f64,
@@ -97,6 +106,7 @@ pub enum EditSpec {
     /// Rounds the corner where two lines meet (each kept on its picked side) with an arc of
     /// `radius`; 0 meets them at the corner. `a` and `b` may be one polyline: then its two
     /// straight sides picked, which must meet at a vertex.
+    #[schemars(example = json!({"kind": "fillet", "a": {"handle": 1234}, "b": {"handle": 1235}, "at_a": [4, 0], "at_b": [5, 1], "radius": 0.5}))]
     Fillet {
         a: Target,
         b: Target,
@@ -106,6 +116,7 @@ pub enum EditSpec {
     },
     /// Cuts the corner as `Fillet` rounds it: `d1` back along `a`, `d2` back along `b`, and a
     /// line between.
+    #[schemars(example = json!({"kind": "chamfer", "a": {"handle": 1234}, "b": {"handle": 1235}, "at_a": [4, 0], "at_b": [5, 1], "d1": 0.3, "d2": 0.3}))]
     Chamfer {
         a: Target,
         b: Target,
@@ -116,6 +127,7 @@ pub enum EditSpec {
     },
     /// A spline from the end of `a` nearest `at_a` to the end of `b` nearest `at_b`, tangent to
     /// both. Lines, arcs and open polylines.
+    #[schemars(example = json!({"kind": "blend", "a": {"handle": 1234}, "b": {"handle": 1235}, "at_a": [4, 0], "at_b": [6, 1]}))]
     Blend {
         a: Target,
         b: Target,
@@ -124,10 +136,13 @@ pub enum EditSpec {
     },
     /// Edits a polyline (or turns a line or an arc into one).
     #[serde(rename = "pedit")]
+    #[schemars(example = json!({"kind": "pedit", "target": {"handle": 1234}, "op": "close"}))]
+    #[schemars(example = json!({"kind": "pedit", "target": {"handle": 1234}, "op": {"width": 0.05}}))]
     PEdit { target: Target, op: PEditOp },
     /// Removes duplicates among `targets`: lines lying on one another within `tol` (drawing
     /// units) become one line covering them all; circles, arcs, points and polylines drawn twice
     /// go. Only entities with the same layer, colour, linetype and lineweight count as the same.
+    #[schemars(example = json!({"kind": "overkill", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
     Overkill {
         targets: Vec<Target>,
         #[serde(default = "default_overkill_tol")]
@@ -135,6 +150,7 @@ pub enum EditSpec {
     },
     /// Puts `targets` on the plan: every height to 0 and normals up, looking the same from above.
     /// What lies tilted (or faces down, for texts and block references) is left as it is.
+    #[schemars(example = json!({"kind": "flatten", "targets": [{"handle": 1234}]}))]
     Flatten { targets: Vec<Target> },
 }
 
@@ -144,7 +160,7 @@ fn default_overkill_tol() -> f64 {
 
 /// How `Lengthen` changes the length: by `Delta` drawing units, to a `Total`, or to a `Percent`
 /// of what it is.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LengthenBy {
     Delta(f64),
@@ -156,7 +172,7 @@ pub enum LengthenBy {
 /// given; `DeleteVertex` removes the vertex nearest it (the side across is straight);
 /// `FitCurve` runs tangent arcs through the vertices; `Decurve` straightens every side;
 /// `ConvertToPolyline` turns a line or an arc into a polyline under its own handle.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PEditOp {
     Close,

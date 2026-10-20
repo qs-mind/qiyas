@@ -21,6 +21,7 @@
 //! references are less plain (multileaders, tables, dimension overrides, proxies), keeps an entry.
 //! A name that might be a use keeps the entry; a purge never leaves a dangling reference.
 
+use schemars::JsonSchema;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 
@@ -32,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CoreError, Session};
 
 /// What a purge looks at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PurgeKind {
     Layers,

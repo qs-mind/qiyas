@@ -19,6 +19,7 @@ use opencadcodec::tables::normalize_name;
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{AppId, EntityType, Handle};
 use qiyas_geom::Xform;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::session::effective_block_name;
@@ -35,7 +36,7 @@ const UNKNOWN: &str = "####";
 const CHUNK: usize = 250;
 
 /// A field to insert (`Command::Field`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FieldKind {
     /// Today's date, `yyyy-MM-dd` (UTC).

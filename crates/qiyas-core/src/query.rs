@@ -1,6 +1,7 @@
 //! Read-only questions about the open drawing: what is there, what it says, what it measures.
 //! These are the AI's eyes; nothing here changes the session.
 
+use schemars::JsonSchema;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
@@ -27,7 +28,7 @@ const MAX_INSTANCES: usize = 100_000;
 
 /// Which entities `find_entities` returns. Every filter that is set must match; names match
 /// case-insensitively. Missing fields take their defaults when read from JSON.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct EntityFilter {
     /// Sheet block or layout name; the current sheet when `None`.

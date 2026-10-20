@@ -24,19 +24,22 @@ use qiyas_geom::{
     clear_dimpost, dimension_entities, dimpost, flatten, is_logical_text, set_dimpost,
     set_dimscale, snap_shapes, style_named, DimLook, Xform,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::text::{escape_mtext, mark_logical};
 use crate::{CoreError, Session, Target, Units};
 
 /// A dimension to add (`Command::Dimension`). Points are in drawing coordinates, angles in
 /// degrees. Circles and arcs are picked as `Target`s at the top of the sheet.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DimSpec {
     /// The distance from `p1` to `p2` along `rotation` (degrees), its line through `line_point`.
     /// No rotation: horizontal, or vertical when `line_point` lies beside the points rather than
     /// above or below them (AutoCAD's DIMLINEAR).
+    #[schemars(example = json!({"kind": "linear", "p1": [0, 0], "p2": [5, 0], "line_point": [2.5, -1]}))]
     Linear {
         p1: [f64; 2],
         p2: [f64; 2],
@@ -45,12 +48,14 @@ pub enum DimSpec {
         rotation: Option<f64>,
     },
     /// The true distance from `p1` to `p2`, its line `offset` to their left (negative: right).
+    #[schemars(example = json!({"kind": "aligned", "p1": [0, 0], "p2": [3, 4], "offset": 0.8}))]
     Aligned {
         p1: [f64; 2],
         p2: [f64; 2],
         offset: f64,
     },
     /// The angle at `vertex` from `p1` to `p2`, its arc through `arc_point`.
+    #[schemars(example = json!({"kind": "angular", "vertex": [0, 0], "p1": [5, 0], "p2": [0, 5], "arc_point": [2, 2]}))]
     Angular {
         vertex: [f64; 2],
         p1: [f64; 2],
@@ -58,24 +63,31 @@ pub enum DimSpec {
         arc_point: [f64; 2],
     },
     /// The radius of a circle or arc, toward `point`.
+    #[schemars(example = json!({"kind": "radius", "target": {"handle": 1234}, "point": [1, 1]}))]
     Radius { target: Target, point: [f64; 2] },
     /// The diameter of a circle or arc, through `point`'s direction.
+    #[schemars(example = json!({"kind": "diameter", "target": {"handle": 1234}, "point": [1, 1]}))]
     Diameter { target: Target, point: [f64; 2] },
     /// The length of an arc, its dimension arc through `point`.
+    #[schemars(example = json!({"kind": "arc_length", "target": {"handle": 1234}, "point": [1, 1.5]}))]
     ArcLength { target: Target, point: [f64; 2] },
     /// The X (leader mostly up or down) or Y ordinate of `feature` from the drawing's origin.
+    #[schemars(example = json!({"kind": "ordinate", "feature": [5, 3], "leader_end": [5, 6]}))]
     Ordinate {
         feature: [f64; 2],
         leader_end: [f64; 2],
     },
     /// Dimensions from the first point of the linear or aligned dimension `from` to each of
     /// `points`, each line a baseline spacing (DIMDLI) further out.
+    #[schemars(example = json!({"kind": "baseline", "from": {"handle": 1234}, "points": [[8, 0], [12, 0]]}))]
     Baseline { from: Target, points: Vec<[f64; 2]> },
     /// Dimensions on the line of `from`, from its second point to the first of `points`, then
     /// from each point to the next.
+    #[schemars(example = json!({"kind": "continue", "from": {"handle": 1234}, "points": [[8, 0], [12, 0]]}))]
     Continue { from: Target, points: Vec<[f64; 2]> },
     /// One dimension per entity: a line its horizontal or vertical length (its line through
     /// `line_point`), an arc its radius, a circle its diameter.
+    #[schemars(example = json!({"kind": "quick", "targets": [{"handle": 1234}, {"handle": 1235}], "line_point": [0, -1.5]}))]
     Quick {
         targets: Vec<Target>,
         line_point: [f64; 2],
@@ -83,7 +95,7 @@ pub enum DimSpec {
 }
 
 /// What `Command::DimEdit` changes on a dimension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DimEditOp {
     /// The text shown instead of the measurement; `<>` stands for it, empty clears the override.
@@ -95,7 +107,7 @@ pub enum DimEditOp {
 }
 
 /// The common fields of a dimension style, in drawing units (before its scale).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DimStyleFields {
     /// DIMASZ.
     pub arrow_size: f64,

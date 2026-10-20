@@ -17,7 +17,9 @@ use opencadcodec::{
 use opencadkernel::geom2d::{bounded_faces, Curve, Line as KernelLine, NurbsCurve, Tolerance};
 use qiyas_geom::{flatten, flatten_within, snap_shapes, Paint, Xform};
 use qiyas_render::layer_shown_with;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::session::{locate, Near};
 use crate::{CoreError, Session};
@@ -25,7 +27,7 @@ use crate::{CoreError, Session};
 /// The drawing state new entities take: their layer, colour, linetype and lineweight. Saved in
 /// the project file; changing it is not an undo step (it is how the window draws, not the
 /// drawing).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct Current {
     /// A layer of the drawing itself (not an xref's), as the drawing spells it.
@@ -74,7 +76,7 @@ pub(crate) fn parse_color(text: &str) -> Option<Color> {
 
 /// A hatch's fill. Angles are degrees, counter-clockwise; scale multiplies the pattern's own
 /// sizes (millimetres, as in `acadiso.pat`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HatchPattern {
     Solid,
@@ -93,16 +95,16 @@ pub enum HatchPattern {
 
 /// What `Command::Draw` adds, in drawing coordinates. Angles are degrees, counter-clockwise from
 /// +X. Each adds one entity (a trace one per segment); `Outcome::Added` lists their handles.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawSpec {
-    Line {
-        a: [f64; 2],
-        b: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "line", "a": [0, 0], "b": [5, 0]}))]
+    Line { a: [f64; 2], b: [f64; 2] },
     /// A lightweight polyline; `bulges` (one per point, or none for straight segments) bends the
     /// segment starting at each point (tan of a quarter of its included angle, positive
     /// counter-clockwise).
+    #[schemars(example = json!({"kind": "polyline", "points": [[0, 0], [6, 0], [6, 4], [0, 4]], "closed": true}))]
+    #[schemars(example = json!({"kind": "polyline", "points": [[0, 0], [4, 0], [4, 2]], "bulges": [0, 1, 0]}))]
     Polyline {
         points: Vec<[f64; 2]>,
         #[serde(default)]
@@ -111,23 +113,21 @@ pub enum DrawSpec {
         closed: bool,
     },
     /// A closed polyline with corners `a` and `b`.
-    Rectangle {
-        a: [f64; 2],
-        b: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "rectangle", "a": [0, 0], "b": [5, 4]}))]
+    Rectangle { a: [f64; 2], b: [f64; 2] },
     /// A regular polygon (3 to 1024 sides) with a flat bottom edge: its corners on the circle of
     /// `radius` when `inscribed`, its sides touching it otherwise.
+    #[schemars(example = json!({"kind": "polygon", "centre": [0, 0], "sides": 6, "radius": 2, "inscribed": true}))]
     Polygon {
         centre: [f64; 2],
         sides: u32,
         radius: f64,
         inscribed: bool,
     },
-    Circle {
-        centre: [f64; 2],
-        radius: f64,
-    },
+    #[schemars(example = json!({"kind": "circle", "centre": [2, 2], "radius": 0.5}))]
+    Circle { centre: [f64; 2], radius: f64 },
     /// Counter-clockwise from `start` to `end` (degrees).
+    #[schemars(example = json!({"kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}))]
     Arc {
         centre: [f64; 2],
         radius: f64,
@@ -135,6 +135,7 @@ pub enum DrawSpec {
         end: f64,
     },
     /// The arc from `a` through `b` to `c`.
+    #[schemars(example = json!({"kind": "three_point_arc", "a": [0, 0], "b": [1, 1], "c": [2, 0]}))]
     ThreePointArc {
         a: [f64; 2],
         b: [f64; 2],
@@ -142,47 +143,42 @@ pub enum DrawSpec {
     },
     /// A full ellipse: `major` is the major semi-axis (from the centre to its end), `ratio` the
     /// minor axis over the major (above 0, at most 1).
+    #[schemars(example = json!({"kind": "ellipse", "centre": [0, 0], "major": [3, 0], "ratio": 0.5}))]
     Ellipse {
         centre: [f64; 2],
         major: [f64; 2],
         ratio: f64,
     },
     /// The cubic through `fit_points` (2 or more).
-    Spline {
-        fit_points: Vec<[f64; 2]>,
-    },
-    Point {
-        p: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "spline", "fit_points": [[0, 0], [2, 1], [4, 0], [6, 1]]}))]
+    Spline { fit_points: Vec<[f64; 2]> },
+    #[schemars(example = json!({"kind": "point", "p": [3, 4]}))]
+    Point { p: [f64; 2] },
     /// A filled ring: `inner` and `outer` are diameters (`inner` 0 for a dot), as AutoCAD asks.
+    #[schemars(example = json!({"kind": "donut", "centre": [0, 0], "inner": 0.1, "outer": 0.2}))]
     Donut {
         centre: [f64; 2],
         inner: f64,
         outer: f64,
     },
     /// A half-infinite line from `origin` along `dir`.
-    Ray {
-        origin: [f64; 2],
-        dir: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "ray", "origin": [0, 0], "dir": [1, 1]}))]
+    Ray { origin: [f64; 2], dir: [f64; 2] },
     /// An infinite construction line through `origin` along `dir`.
     #[serde(rename = "xline")]
-    XLine {
-        origin: [f64; 2],
-        dir: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "xline", "origin": [0, 0], "dir": [0, 1]}))]
+    XLine { origin: [f64; 2], dir: [f64; 2] },
     /// A revision cloud around the polygon `points`: arcs about `arc_len` long bulging outward.
     #[serde(rename = "revcloud")]
-    RevCloud {
-        points: Vec<[f64; 2]>,
-        arc_len: f64,
-    },
+    #[schemars(example = json!({"kind": "revcloud", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "arc_len": 0.5}))]
+    RevCloud { points: Vec<[f64; 2]>, arc_len: f64 },
     /// Covers the polygon `points` with the background colour.
-    Wipeout {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(example = json!({"kind": "wipeout", "points": [[0, 0], [2, 0], [2, 1], [0, 1]]}))]
+    Wipeout { points: Vec<[f64; 2]> },
     /// A hatch inside the closed entities `boundary_handles` (on the sheet; islands inside the
     /// outer one stay empty) or inside the ring `points`: one of the two.
+    #[schemars(example = json!({"kind": "hatch", "boundary_handles": [1234], "pattern": "solid"}))]
+    #[schemars(example = json!({"kind": "hatch", "points": [[0, 0], [5, 0], [5, 4], [0, 4]], "pattern": {"custom": {"name": "ANSI31", "angle": 0, "scale": 25}}}))]
     Hatch {
         #[serde(default)]
         boundary_handles: Vec<u64>,
@@ -200,17 +196,15 @@ pub enum DrawSpec {
     /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order: the
     /// outline runs first, second, fourth, third.
     #[serde(rename = "solid2d")]
-    Solid2D {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(example = json!({"kind": "solid2d", "points": [[0, 0], [1, 0], [0, 1], [1, 1]]}))]
+    Solid2D { points: Vec<[f64; 2]> },
     /// A wide line: one TRACE quad `width` wide per segment.
-    Trace {
-        points: Vec<[f64; 2]>,
-        width: f64,
-    },
+    #[schemars(example = json!({"kind": "trace", "points": [[0, 0], [5, 0]], "width": 0.2}))]
+    Trace { points: Vec<[f64; 2]>, width: f64 },
     /// A multiline in the drawing's multiline style `style` ("Standard" when left out), its
     /// offsets times `scale` (1 when left out).
     #[serde(rename = "mline")]
+    #[schemars(example = json!({"kind": "mline", "points": [[0, 0], [5, 0], [5, 4]]}))]
     MLine {
         points: Vec<[f64; 2]>,
         #[serde(default)]
@@ -219,9 +213,8 @@ pub enum DrawSpec {
         scale: Option<f64>,
     },
     /// Freehand: an open polyline through `points`.
-    Sketch {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(example = json!({"kind": "sketch", "points": [[0, 0], [0.2, 0.1], [0.4, 0.05]]}))]
+    Sketch { points: Vec<[f64; 2]> },
 }
 
 /// One line family of a hatch pattern as `acadiso.pat` writes it: angle (degrees), origin, the

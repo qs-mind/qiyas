@@ -7,7 +7,9 @@ use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{object_to_world, Path};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::drawing::short_layer_name;
 use crate::inquiry::{Field, Spacing};
@@ -21,21 +23,23 @@ use crate::{
     SnapKind, Source, TextMatch, TextScope,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     /// Length along `points`, in drawing coordinates. Needs 2 points or more.
-    MeasureDistance {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "measure_distance", "points": [[0, 0], [5, 0], [5, 3]]}))]
+    MeasureDistance { points: Vec<[f64; 2]> },
     /// Area inside the ring `points` (closed for you). Needs 3 points or more.
-    MeasureArea {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "measure_area", "points": [[0, 0], [5, 0], [5, 4], [0, 4]]}))]
+    MeasureArea { points: Vec<[f64; 2]> },
     /// Area of a closed entity, length of an open one, or 1 piece for a block reference.
     /// `chain` lists the block references the entity sits inside, outermost first (empty, the
     /// default, for an entity on the sheet); it is measured where they place it. A chain ending in
     /// an xref reference names an entity at the top of that xref (see `Picked`).
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "measure_entity", "handle": 1234}))]
     MeasureEntity {
         handle: u64,
         #[serde(default)]
@@ -43,45 +47,56 @@ pub enum Command {
     },
     /// Block references of `block_name` on the current sheet, on visible layers only
     /// (and only on `layer` when given), and those at the top of the sheet's xrefs.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "count_block", "block_name": "DOOR-900", "layer": null}))]
     CountBlock {
         block_name: String,
         layer: Option<String>,
     },
-    RemoveMeasurement {
-        id: String,
-    },
-    SetDescription {
-        id: String,
-        text: String,
-    },
-    SetLayerHidden {
-        name: String,
-        hidden: bool,
-    },
+    /// Removes the take-off row `id` (its link to the BOQ goes with it).
+    #[schemars(extend("x-category" = "takeoff", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "remove_measurement", "id": "m1"}))]
+    RemoveMeasurement { id: String },
+    /// Sets the take-off row `id`'s description, as the BOQ export shows it.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "set_description", "id": "m1", "text": "Ground floor walls"}))]
+    SetDescription { id: String, text: String },
+    /// Hides or shows the layer `name` on screen only (the drawing's own on, off and freeze stay as
+    /// they are; `SetLayer` changes those). View state: not an undo step.
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "set_layer_hidden", "name": "A-FURN", "hidden": true}))]
+    SetLayerHidden { name: String, hidden: bool },
     /// Shows only the layer `name`, hiding every other (LAYISO); the layer isolated already
     /// un-isolates. Not an undo step.
-    IsolateLayer {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "isolate_layer", "name": "A-WALL"}))]
+    IsolateLayer { name: String },
     /// Puts back what isolating a layer hid (LAYUNISO). Not an undo step.
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "unisolate_layers"}))]
     UnisolateLayers,
-    SetSheet {
-        block: String,
-    },
+    /// Shows the sheet whose block is `block`: `*Model_Space`, or a layout's `*Paper_Space…` block
+    /// (`DrawingInfo::sheets`). View state: not an undo step.
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "set_sheet", "block": "*Model_Space"}))]
+    SetSheet { block: String },
     /// Says whether the drawing holds its Arabic text backwards (`Session::arabic_reversed`).
     /// Not an undo step.
-    SetArabicReversed {
-        on: bool,
-    },
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "set_arabic_reversed", "on": true}))]
+    SetArabicReversed { on: bool },
     /// Replaces the drafting settings (`Session::drafting`). Not an undo step.
-    SetDrafting {
-        drafting: Drafting,
-    },
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "set_drafting", "drafting": {"osnap": true, "ortho": true}}))]
+    SetDrafting { drafting: Drafting },
     /// A measurement of any kind, described by the caller (usually the AI). Geometry is `points`
     /// (drawing coordinates) or `handles` (measured from the entities' flattened paths, summed),
     /// not both. A length, area or count is worked out from the geometry, so `value` must be
     /// `None`; a volume is an area from the geometry times `height` (drawing units, above 0); an
     /// item needs `value` and `unit` and may have no geometry.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "add_measurement", "kind": "area", "points": [], "handles": [1234], "description": "Living room floor", "note": ""}))]
+    #[schemars(example = json!({"type": "add_measurement", "kind": "item", "value": 1, "unit": "lump sum", "points": [], "handles": [], "description": "Site mobilisation", "note": ""}))]
     AddMeasurement {
         kind: Kind,
         value: Option<f64>,
@@ -98,36 +113,37 @@ pub enum Command {
     },
     /// Turns an area into a volume of that area times `height` (drawing units, above 0), keeping
     /// its geometry; on a volume, changes its height.
-    SetHeight {
-        id: String,
-        height: f64,
-    },
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "set_height", "id": "m1", "height": 3.0}))]
+    SetHeight { id: String, height: f64 },
     /// Links the measurement to the BOQ item `code`; `None` unlinks it.
-    LinkBoq {
-        id: String,
-        code: Option<String>,
-    },
-    SetNote {
-        id: String,
-        text: String,
-    },
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "link_boq", "id": "m1", "code": "03.01"}))]
+    LinkBoq { id: String, code: Option<String> },
+    /// Sets the take-off row `id`'s note (the engineer's remark beside the quantity).
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "set_note", "id": "m1", "text": "Checked against section A-A"}))]
+    SetNote { id: String, text: String },
     /// Replaces the BOQ with `boq`, usually one just read by `qiyas_boq::import_boq`.
-    SetBoq {
-        boq: Boq,
-    },
+    #[schemars(extend("x-category" = "boq", "x-internal" = true, "x-destructive" = true))]
+    #[schemars(example = json!({"type": "set_boq", "boq": {"source": "boq.xlsx", "imported": "2026-10-20", "items": [{"code": "03.01", "description": "Blockwork 200 mm", "unit": "m2", "quantity": 120.5, "row": 5}]}}))]
+    SetBoq { boq: Boq },
     /// Sets the allowed difference, in percent (0 or more), of every BOQ item with `code`;
     /// `None` goes back to the user's setting.
-    SetBoqTolerance {
-        code: String,
-        percent: Option<f64>,
-    },
+    #[schemars(extend("x-category" = "boq"))]
+    #[schemars(example = json!({"type": "set_boq_tolerance", "code": "03.01", "percent": 5.0}))]
+    SetBoqTolerance { code: String, percent: Option<f64> },
     /// Replaces the conflicts with those of a new comparison (`qiyas_takeoff::compare`), and the
     /// schedules with the ones it read off the sheets.
+    #[schemars(extend("x-category" = "boq", "x-internal" = true, "x-destructive" = true))]
+    #[schemars(example = json!({"type": "set_conflicts", "conflicts": [], "schedules": []}))]
     SetConflicts {
         conflicts: Vec<Conflict>,
         schedules: Vec<Schedule>,
     },
     /// Sets the status and note of the conflict `id`.
+    #[schemars(extend("x-category" = "boq", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "resolve_conflict", "id": "c1", "status": "resolved", "note": "The BOQ includes 5% waste"}))]
     ResolveConflict {
         id: String,
         status: ConflictStatus,
@@ -136,6 +152,8 @@ pub enum Command {
     /// Adds page `page` (from 1) of the PDF at `path` to the sheet on screen as lines, polylines
     /// and texts (`qiyas_pdf::extract_vectors`), `scale` drawing units per PDF point, the page's
     /// bottom-left corner at `insert_at`. One undo step; `Outcome::Added` lists the new entities.
+    #[schemars(extend("x-category" = "attach", "x-needs" = "pdf"))]
+    #[schemars(example = json!({"type": "import_pdf", "path": "plan.pdf", "page": 1, "insert_at": [0, 0], "scale": 0.3528}))]
     ImportPdf {
         path: String,
         page: u32,
@@ -146,6 +164,8 @@ pub enum Command {
     /// (an `Underlay` entity and its `UnderlayDefinition`, as AutoCAD stores them), `scale`
     /// drawing units per PDF point, bottom-left corner at `insert_at`. `Outcome::Added` holds the
     /// underlay's handle.
+    #[schemars(extend("x-category" = "attach", "x-needs" = "pdf"))]
+    #[schemars(example = json!({"type": "attach_pdf_underlay", "path": "plan.pdf", "page": 1, "insert_at": [0, 0], "scale": 0.3528}))]
     AttachPdfUnderlay {
         path: String,
         page: u32,
@@ -154,6 +174,8 @@ pub enum Command {
     },
     /// Rescales the underlay or image `handle` about `p1` so that `p1` to `p2` (drawing
     /// coordinates) becomes `real_distance` drawing units long.
+    #[schemars(extend("x-category" = "attach"))]
+    #[schemars(example = json!({"type": "calibrate", "handle": 1234, "p1": [0, 0], "p2": [10, 0], "real_distance": 5000}))]
     Calibrate {
         handle: u64,
         p1: [f64; 2],
@@ -164,6 +186,8 @@ pub enum Command {
     /// an AutoCAD image (a `RasterImage` and its `ImageDefinition`) on layer `IMAGE-UNDERLAY`,
     /// bottom-left corner at `insert_at`, `width_units` drawing units wide. `Outcome::Added` holds
     /// the image's handle.
+    #[schemars(extend("x-category" = "attach"))]
+    #[schemars(example = json!({"type": "attach_image", "path": "site.jpg", "insert_at": [0, 0], "width_units": 20}))]
     AttachImage {
         path: String,
         insert_at: [f64; 2],
@@ -171,6 +195,8 @@ pub enum Command {
     },
     /// Sets the brightness, contrast and fade (0 to 100 each; 50, 50 and 0 show the image as it
     /// is) of the image `handle`.
+    #[schemars(extend("x-category" = "attach"))]
+    #[schemars(example = json!({"type": "set_image_display", "handle": 1234, "brightness": 50, "contrast": 50, "fade": 30}))]
     SetImageDisplay {
         handle: u64,
         brightness: u8,
@@ -181,6 +207,8 @@ pub enum Command {
     /// an arc, circle or ellipse; length, angle and deltas of a line; a polyline's segment nearest
     /// `at`; a block reference's insertion, scale and rotation; a text's content, height and
     /// style), in metres and degrees. `Outcome::Info`; not an undo step.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type": "measure_geometry", "handle": 1234}))]
     MeasureGeometry {
         handle: u64,
         #[serde(default)]
@@ -190,6 +218,8 @@ pub enum Command {
     },
     /// Divides the entity's path into `count` equal parts (2 to 1000) with point entities on
     /// layer `QIYAS-POINT`, and counts them in the take-off: one undo step.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "divide_along", "handle": 1234, "count": 5}))]
     DivideAlong {
         handle: u64,
         #[serde(default)]
@@ -198,6 +228,8 @@ pub enum Command {
     },
     /// Places a point entity every `step` drawing units along the entity's path from its start,
     /// on layer `QIYAS-POINT`, and counts them in the take-off: one undo step.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "measure_along", "handle": 1234, "step": 0.6}))]
     MeasureAlong {
         handle: u64,
         #[serde(default)]
@@ -206,6 +238,8 @@ pub enum Command {
     },
     /// Where the point `p` (drawing coordinates) is, in metres, and the snap `kind` that found it.
     /// `Outcome::Info`; not an undo step.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type": "id_point", "p": [12.5, 3.0]}))]
     IdPoint {
         p: [f64; 2],
         #[serde(default)]
@@ -213,6 +247,8 @@ pub enum Command {
     },
     /// One row of `fields` per entity `filter` finds (up to 5,000; `limit` says how many).
     /// `Outcome::Table`; not an undo step.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type": "extract_data", "filter": {"block_name": "DOOR-900"}, "fields": ["handle", "layer", "x", "y", {"attribute": "MARK"}]}))]
     ExtractData {
         filter: EntityFilter,
         fields: Vec<Field>,
@@ -220,46 +256,53 @@ pub enum Command {
     /// Writes the named view `name` (replacing one of that name) showing `bounds`,
     /// `[[min_x, min_y], [max_x, max_y]]` in drawing coordinates, to the drawing's view table.
     /// Model sheet only.
-    SaveView {
-        name: String,
-        bounds: [[f64; 2]; 2],
-    },
+    #[schemars(extend("x-category" = "view"))]
+    #[schemars(example = json!({"type": "save_view", "name": "Kitchen", "bounds": [[0, 0], [10, 8]]}))]
+    SaveView { name: String, bounds: [[f64; 2]; 2] },
     /// Removes the named view `name`; `Outcome::Nothing` when there is none.
-    DeleteView {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "view", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_view", "name": "Kitchen"}))]
+    DeleteView { name: String },
     /// Deletes the entities `targets` from the sheet on screen: one undo step. Each must be an
     /// entity of the drawing itself at the top of that sheet (an empty chain: not inside a block,
     /// not an xref's); otherwise nothing is deleted.
-    DeleteEntities {
-        targets: Vec<Target>,
-    },
+    #[schemars(extend("x-category" = "modify", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_entities", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
+    DeleteEntities { targets: Vec<Target> },
     /// Adds what the spec describes to the sheet on screen, on the current layer with the current
     /// colour, linetype and lineweight (`Session::current`): one undo step. `Outcome::Added` lists
     /// the new entities.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "draw", "kind": "line", "a": [0, 0], "b": [5, 0]}))]
     Draw(DrawSpec),
     /// Drawing commands run in order as ONE undo step (and undone together if one fails):
     /// `Draw`, `Text`, `MText`, `InsertBlock`, `Table`, `EditCell`, `NewLayer` and `SetCurrent`
     /// (a legend, or a text on every room). The current layer, colour and linetype are put
     /// back by undo too. `Outcome::Added` lists every entity the commands added, in order.
-    Batch {
-        commands: Vec<Command>,
-    },
+    #[schemars(extend("x-category" = "draw", "x-batch" = false))]
+    #[schemars(example = json!({"type": "batch", "commands": [{"type": "new_layer", "name": "A-WALL"}, {"type": "set_current", "current": {"layer": "A-WALL"}}, {"type": "draw", "kind": "rectangle", "a": [0, 0], "b": [5, 4]}]}))]
+    Batch { commands: Vec<Command> },
     /// Sets the drawing state new entities take (`Session::current`). Not an undo step.
-    SetCurrent {
-        current: Current,
-    },
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "set_current", "current": {"layer": "A-WALL", "color": "ByLayer", "linetype": "ByLayer", "lineweight": -1}}))]
+    SetCurrent { current: Current },
     /// Moves, copies, turns, scales, mirrors, stretches, aligns, arrays or explodes entities at
     /// the top of the sheet on screen (see `ModifySpec`): one undo step.
+    #[schemars(extend("x-category" = "modify"))]
+    #[schemars(example = json!({"type": "modify", "kind": "move", "targets": [{"handle": 1234}], "delta": [2, 0]}))]
     Modify(ModifySpec),
     /// Trims, extends, breaks, joins, lengthens, reverses, offsets, fillets, chamfers, blends,
     /// edits polylines, removes duplicates or flattens entities at the top of the sheet on screen
     /// (see `EditSpec`): one undo step.
+    #[schemars(extend("x-category" = "modify"))]
+    #[schemars(example = json!({"type": "edit", "kind": "offset", "target": {"handle": 1234}, "distance": 0.2, "side_point": [1, 1]}))]
     Edit(EditSpec),
     /// One line of text at `at` on the sheet on screen, `height` drawing units tall, turned
     /// `rotation` degrees, in the text style `style` (the drawing's current one when `None`),
     /// with the current layer, colour and linetype: one undo step, `Outcome::Added`. Stored in
     /// reading order (see `crate::text`).
+    #[schemars(extend("x-category" = "text"))]
+    #[schemars(example = json!({"type": "text", "at": [2, 3], "height": 0.25, "rotation": 0, "value": "LIVING ROOM"}))]
     Text {
         at: [f64; 2],
         height: f64,
@@ -271,6 +314,8 @@ pub enum Command {
     /// Multiline text: `value` is plain text, lines split by `\n`, in a box `width` drawing units
     /// wide (0: no wrapping) whose top left corner is `at`. As `Text` otherwise.
     #[serde(rename = "mtext")]
+    #[schemars(extend("x-category" = "text"))]
+    #[schemars(example = json!({"type": "mtext", "at": [2, 6], "width": 4, "height": 0.2, "value": "Floor: porcelain tiles\nSkirting: 100 mm"}))]
     MText {
         at: [f64; 2],
         width: f64,
@@ -282,6 +327,8 @@ pub enum Command {
     /// Changes the text of `target` (a text or an MText at the top of the sheet on screen) to
     /// `value`, plain text (an MText's formatting goes); for a block reference the value of its
     /// attribute `tag` (which may be cleared). One undo step.
+    #[schemars(extend("x-category" = "text"))]
+    #[schemars(example = json!({"type": "edit_text", "target": {"handle": 1234}, "value": "KITCHEN"}))]
     EditText {
         target: Target,
         value: String,
@@ -294,6 +341,8 @@ pub enum Command {
     /// changes). A TEXT the replacement would leave blank or break into two lines, or a
     /// single-line attribute it would break, is left as it is and counted as skipped.
     /// `Outcome::Replaced`.
+    #[schemars(extend("x-category" = "text"))]
+    #[schemars(example = json!({"type": "find_replace", "find": "BED ROOM", "replace": "BEDROOM", "scope": "drawing"}))]
     FindReplace {
         find: String,
         replace: String,
@@ -304,6 +353,8 @@ pub enum Command {
         whole_word: bool,
     },
     /// What `FindReplace` would replace: `Outcome::Found`. Not an undo step.
+    #[schemars(extend("x-category" = "text"))]
+    #[schemars(example = json!({"type": "find_text", "find": "KITCHEN", "scope": "sheet"}))]
     FindText {
         find: String,
         scope: TextScope,
@@ -315,6 +366,8 @@ pub enum Command {
     /// A revision cloud around the polygon `points` with the comment `text` beside it, both on
     /// the layer COMMENTS (see `crate::comment`); `arc_len` None works the arcs out from the
     /// outline. One undo step, `Outcome::Added` (the cloud, then its label).
+    #[schemars(extend("x-category" = "markup"))]
+    #[schemars(example = json!({"type": "comment", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "text": "Check this wall thickness"}))]
     Comment {
         points: Vec<[f64; 2]>,
         text: String,
@@ -322,23 +375,28 @@ pub enum Command {
         arc_len: Option<f64>,
     },
     /// The comment clouds of every sheet: `Outcome::Comments`. Not an undo step.
+    #[schemars(extend("x-category" = "markup"))]
+    #[schemars(example = json!({"type": "list_comments"}))]
     ListComments,
     /// Adds the dimensions `DimSpec` describes on the current layer in the current dimension
     /// style, each with its `*D` block: one undo step, `Outcome::Added` (see `crate::dimension`).
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "dimension", "kind": "linear", "p1": [0, 0], "p2": [5, 0], "line_point": [2.5, -1]}))]
     Dimension(DimSpec),
     /// Changes the dimension `target` (its text, its arrows, where its text sits) and rebuilds
     /// its block: one undo step.
-    DimEdit {
-        target: Target,
-        op: DimEditOp,
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "dim_edit", "target": {"handle": 1234}, "op": {"text_override": "<> TYP."}}))]
+    #[schemars(example = json!({"type": "dim_edit", "target": {"handle": 1234}, "op": "flip"}))]
+    DimEdit { target: Target, op: DimEditOp },
     /// Breaks the dimension `target`'s lines where the entity `cutter` crosses them.
-    DimBreak {
-        target: Target,
-        cutter: Target,
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "dim_break", "target": {"handle": 1234}, "cutter": {"handle": 1235}}))]
+    DimBreak { target: Target, cutter: Target },
     /// Spaces the linear dimensions `targets`, parallel to `base`, `spacing` drawing units apart
     /// going out from it (none: twice the text height).
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "dim_space", "base": {"handle": 1234}, "targets": [{"handle": 1235}, {"handle": 1236}]}))]
     DimSpace {
         base: Target,
         targets: Vec<Target>,
@@ -346,35 +404,33 @@ pub enum Command {
         spacing: Option<f64>,
     },
     /// A jog in the linear dimension `target`'s line, nearest `at`.
-    DimJogLine {
-        target: Target,
-        at: [f64; 2],
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "dim_jog_line", "target": {"handle": 1234}, "at": [2, -1]}))]
+    DimJogLine { target: Target, at: [f64; 2] },
     /// A leader through `points` (arrowhead at the first) with `text` beside the last as an
     /// MText: `Outcome::Added` with the leader, then the text.
-    Leader {
-        points: Vec<[f64; 2]>,
-        text: String,
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "leader", "points": [[3, 3], [5, 5], [6, 5]], "text": "RC column 400x400"}))]
+    Leader { points: Vec<[f64; 2]>, text: String },
     /// A leader with a short landing before its text (Qiyas writes a multileader as a leader and
     /// an MText).
     #[serde(rename = "mleader")]
-    MLeader {
-        points: Vec<[f64; 2]>,
-        text: String,
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "mleader", "points": [[3, 3], [5, 5]], "text": "See detail 3"}))]
+    MLeader { points: Vec<[f64; 2]>, text: String },
     /// A feature control frame: `frame` in AutoCAD's codes, its left middle at `at`.
-    Tolerance {
-        at: [f64; 2],
-        frame: String,
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "tolerance", "at": [0, 0], "frame": "{\\Fgdt;p}%%v0.5%%vA"}))]
+    Tolerance { at: [f64; 2], frame: String },
     /// The annotation scale (CANNOSCALE), "paper:drawing" such as "1:50": new dimensions,
     /// leaders and tolerances are drawn that many times their style's size.
-    AnnotationScale {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "annotation_scale", "name": "1:100"}))]
+    AnnotationScale { name: String },
     /// The dimension style `name` (made from the current one when new) takes `fields`; with
     /// `current`, new dimensions take it.
+    #[schemars(extend("x-category" = "dimensions"))]
+    #[schemars(example = json!({"type": "set_dim_style", "name": "QIYAS-100", "fields": {"arrow_size": 2.5, "text_height": 2.5, "precision": 2, "ext_offset": 0.625, "ext_extension": 1.25, "gap": 0.625, "scale": 100}, "current": true}))]
     SetDimStyle {
         name: String,
         fields: DimStyleFields,
@@ -385,6 +441,8 @@ pub enum Command {
     /// `row_height` drawing units, cells filled row by row from `data` (plain text; field codes
     /// make a cell a field), on the current layer in the current text style (its text half the
     /// row height), with its `*T` block: one undo step, `Outcome::Added` (see `crate::table`).
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "table", "at": [0, 10], "rows": 3, "cols": 2, "col_width": 4, "row_height": 0.8, "data": [["Room", "Area (m²)"], ["Living", "58.28"], ["Kitchen", "17.39"]]}))]
     Table {
         at: [f64; 2],
         rows: usize,
@@ -396,6 +454,8 @@ pub enum Command {
     },
     /// Cell `row`, `col` (from 0) of the table `target` holds `text` (plain text; a cell inside a
     /// merged cell edits the merged cell).
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "edit_cell", "target": {"handle": 1234}, "row": 1, "col": 1, "text": "58.30"}))]
     EditCell {
         target: Target,
         row: usize,
@@ -403,45 +463,49 @@ pub enum Command {
         text: String,
     },
     /// A new row before row `at` of the table `target` (`at` = its row count: after the last).
-    InsertRow {
-        target: Target,
-        at: usize,
-    },
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "insert_row", "target": {"handle": 1234}, "at": 3}))]
+    InsertRow { target: Target, at: usize },
     /// A new column before column `at`.
-    InsertCol {
-        target: Target,
-        at: usize,
-    },
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "insert_col", "target": {"handle": 1234}, "at": 2}))]
+    InsertCol { target: Target, at: usize },
     /// Removes row `row` (a table keeps one).
-    DeleteRow {
-        target: Target,
-        row: usize,
-    },
+    #[schemars(extend("x-category" = "tables", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_row", "target": {"handle": 1234}, "row": 2}))]
+    DeleteRow { target: Target, row: usize },
     /// Removes column `col` (a table keeps one).
-    DeleteCol {
-        target: Target,
-        col: usize,
-    },
+    #[schemars(extend("x-category" = "tables", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_col", "target": {"handle": 1234}, "col": 1}))]
+    DeleteCol { target: Target, col: usize },
     /// Merges the cells from `first` to `last` (`[row, column]`); one cell given unmerges the
     /// merged cell it is in.
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "merge_cells", "target": {"handle": 1234}, "first": [0, 0], "last": [0, 1]}))]
     MergeCells {
         target: Target,
         first: [usize; 2],
         last: [usize; 2],
     },
     /// A one-line text at `at`, `height` tall, holding the field `field` (see `crate::field`).
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "field", "at": [2, 2], "height": 0.25, "field": {"kind": "area", "target": {"handle": 1234}}}))]
     Field {
         at: [f64; 2],
         height: f64,
         field: FieldKind,
     },
     /// Works every field of the drawing out again: one undo step when one changes.
+    #[schemars(extend("x-category" = "tables"))]
+    #[schemars(example = json!({"type": "update_fields"}))]
     UpdateFields,
     /// A new block `name` (not one the drawing has; none of `<>/\":;?*|,=` and the backquote)
     /// from the entities `targets` at the top of the sheet: they leave the sheet, their
     /// coordinates taken relative to `base`. With `convert_to_insert` a reference to the block
     /// takes their place at `base`. Rows measuring them keep their values without the link.
     /// `Outcome::Edited` (see `crate::blocks`).
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "create_block", "name": "WC-UNIT", "base": [0, 0], "targets": [{"handle": 1234}, {"handle": 1235}], "convert_to_insert": true}))]
     CreateBlock {
         name: String,
         base: [f64; 2],
@@ -454,6 +518,8 @@ pub enum Command {
     /// `attribute_values` by tag, else their defaults. With `from_path`, a block the drawing
     /// lacks is first copied, with what it uses, from the drawing there (read-only).
     /// `Outcome::Added`.
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "insert_block", "name": "DOOR-900", "at": [3, 0], "rotation": 90}))]
     InsertBlock {
         name: String,
         at: [f64; 2],
@@ -469,24 +535,29 @@ pub enum Command {
     /// Writes the block `name` as a DWG of its own at `path`, a file in the drawing's folder or
     /// below it (relative paths start there): its entities in model space, its base point at
     /// the origin. Not an undo step.
-    WriteBlock {
-        name: String,
-        path: String,
-    },
+    #[schemars(extend("x-category" = "blocks", "x-effect" = "file", "x-batch" = false))]
+    #[schemars(example = json!({"type": "write_block", "name": "DOOR-900", "path": "blocks/door-900.dwg"}))]
+    WriteBlock { name: String, path: String },
     /// Edits the block of the reference `target` in place, until `SaveBlockEdits` or
     /// `DiscardBlockEdits` (see `crate::blocks`). `Outcome::Added` lists the block's entities as
     /// copied onto the sheet. Not an undo step.
-    EditBlockInPlace {
-        target: Target,
-    },
+    #[schemars(extend("x-category" = "blocks", "x-effect" = "session", "x-batch" = false))]
+    #[schemars(example = json!({"type": "edit_block_in_place", "target": {"handle": 1234}}))]
+    EditBlockInPlace { target: Target },
     /// Ends the edit in place, the block taking what was edited (every reference changes).
     /// Not an undo step: the edit's steps leave the history. `Outcome::BlockEditClosed`.
+    #[schemars(extend("x-category" = "blocks", "x-effect" = "session", "x-batch" = false))]
+    #[schemars(example = json!({"type": "save_block_edits"}))]
     SaveBlockEdits,
     /// Ends the edit in place, the block as it was; everything else done meanwhile stays.
     /// `Outcome::BlockEditClosed`.
+    #[schemars(extend("x-category" = "blocks", "x-effect" = "session", "x-batch" = false, "x-destructive" = true))]
+    #[schemars(example = json!({"type": "discard_block_edits"}))]
     DiscardBlockEdits,
     /// An attribute definition `tag` (one word, upper-cased) on the current layer at `at`,
     /// `height` tall: it asks `prompt` on insert and takes `default` when nothing is given.
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "att_def", "tag": "ROOM_NO", "prompt": "Room number", "default": "G01", "at": [0, 0], "height": 0.25}))]
     AttDef {
         tag: String,
         prompt: String,
@@ -495,12 +566,16 @@ pub enum Command {
         height: f64,
     },
     /// The block reference `target`'s attributes take `values` by tag.
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "edit_attributes", "target": {"handle": 1234}, "values": {"ROOM_NO": "G02"}}))]
     EditAttributes {
         target: Target,
         values: BTreeMap<String, String>,
     },
     /// The attribute definition `tag` of the block `block` asks `prompt` and defaults to
     /// `default`.
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "edit_att_def", "block": "ROOM-TAG", "tag": "ROOM_NO", "prompt": "Room number", "default": "G01"}))]
     EditAttDef {
         block: String,
         tag: String,
@@ -509,55 +584,60 @@ pub enum Command {
     },
     /// Every reference to `block` gets its attributes as the block defines them now, keeping
     /// each tag's value (AutoCAD's ATTSYNC).
-    SyncAttributes {
-        block: String,
-    },
+    #[schemars(extend("x-category" = "blocks"))]
+    #[schemars(example = json!({"type": "sync_attributes", "block": "ROOM-TAG"}))]
+    SyncAttributes { block: String },
     /// The block `name` takes the contents of the block of that name in the drawing at
     /// `from_path` (read-only); every reference changes.
-    RedefineBlock {
-        name: String,
-        from_path: String,
-    },
+    #[schemars(extend("x-category" = "blocks", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "redefine_block", "name": "DOOR-900", "from_path": "library/doors.dwg"}))]
+    RedefineBlock { name: String, from_path: String },
     /// Every layer's on, frozen, locked, plot, colour, linetype and lineweight, kept in the
     /// drawing as the layer state `name` (AutoCAD's Layer States Manager sees it; one of that
     /// name is replaced), with the hidden layers kept beside it in the project file.
-    SaveLayerState {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "layers"))]
+    #[schemars(example = json!({"type": "save_layer_state", "name": "Walls only"}))]
+    SaveLayerState { name: String },
     /// The layers take what the state `name` kept; the hidden layers come back too.
-    RestoreLayerState {
-        name: String,
-    },
-    DeleteLayerState {
-        name: String,
-    },
-    RenameLayerState {
-        from: String,
-        to: String,
-    },
+    #[schemars(extend("x-category" = "layers"))]
+    #[schemars(example = json!({"type": "restore_layer_state", "name": "Walls only"}))]
+    RestoreLayerState { name: String },
+    /// Deletes the layer state `name`; the layers stay as they are.
+    #[schemars(extend("x-category" = "layers", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_layer_state", "name": "Walls only"}))]
+    DeleteLayerState { name: String },
+    /// Renames the layer state `from` to `to`.
+    #[schemars(extend("x-category" = "layers"))]
+    #[schemars(example = json!({"type": "rename_layer_state", "from": "Walls only", "to": "Structure"}))]
+    RenameLayerState { from: String, to: String },
     /// One property of the drawing's layer `name` (see `LayerProp` for the values).
+    #[schemars(extend("x-category" = "layers"))]
+    #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "color", "value": "ACI 1"}))]
+    #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "lineweight", "value": 50}))]
+    #[schemars(example = json!({"type": "set_layer", "name": "A-FURN", "prop": "locked", "value": true}))]
     SetLayer {
         name: String,
         prop: LayerProp,
         value: serde_json::Value,
     },
     /// A new layer, white and Continuous.
-    NewLayer {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "layers"))]
+    #[schemars(example = json!({"type": "new_layer", "name": "A-DOOR"}))]
+    NewLayer { name: String },
     /// Deletes an empty layer: never 0, Defpoints or the current layer.
-    DeleteLayer {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "layers", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_layer", "name": "TEMP"}))]
+    DeleteLayer { name: String },
     /// Renames a layer; its entities, the take-off rows on it, the current and hidden layers
     /// follow. A name another layer has is refused (`TranslateLayers` merges).
-    RenameLayer {
-        from: String,
-        to: String,
-    },
+    #[schemars(extend("x-category" = "layers"))]
+    #[schemars(example = json!({"type": "rename_layer", "from": "WALLS", "to": "A-WALL"}))]
+    RenameLayer { from: String, to: String },
     /// Renames, merges (when `to` exists) and recolours layers in one step; with `from_path`
     /// each layer then takes the colour, linetype, lineweight and plot setting of that drawing's
     /// layer of its new name (opened read-only).
+    #[schemars(extend("x-category" = "layers", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "translate_layers", "mappings": [{"from": "WALLS", "to": "A-WALL", "color": "ACI 7"}]}))]
     TranslateLayers {
         #[serde(default)]
         from_path: Option<String>,
@@ -565,34 +645,37 @@ pub enum Command {
     },
     /// The paper-space viewport `viewport` (on the sheet on screen) freezes `layer` inside it,
     /// or thaws it.
+    #[schemars(extend("x-category" = "layouts"))]
+    #[schemars(example = json!({"type": "set_viewport_frozen", "viewport": {"handle": 1234}, "layer": "A-FURN", "frozen": true}))]
     SetViewportFrozen {
         viewport: Target,
         layer: String,
         frozen: bool,
     },
     /// A new group `name` of the entities `targets` at the top of the sheet.
-    CreateGroup {
-        name: String,
-        targets: Vec<Target>,
-    },
-    AddToGroup {
-        name: String,
-        targets: Vec<Target>,
-    },
-    RemoveFromGroup {
-        name: String,
-        targets: Vec<Target>,
-    },
+    #[schemars(extend("x-category" = "groups"))]
+    #[schemars(example = json!({"type": "create_group", "name": "KITCHEN-UNITS", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
+    CreateGroup { name: String, targets: Vec<Target> },
+    /// Adds the entities `targets` at the top of the sheet to the group `name`.
+    #[schemars(extend("x-category" = "groups"))]
+    #[schemars(example = json!({"type": "add_to_group", "name": "KITCHEN-UNITS", "targets": [{"handle": 1236}]}))]
+    AddToGroup { name: String, targets: Vec<Target> },
+    /// Takes the entities `targets` out of the group `name`; they stay in the drawing.
+    #[schemars(extend("x-category" = "groups"))]
+    #[schemars(example = json!({"type": "remove_from_group", "name": "KITCHEN-UNITS", "targets": [{"handle": 1236}]}))]
+    RemoveFromGroup { name: String, targets: Vec<Target> },
     /// The group goes; its entities stay (AutoCAD's explode of a group).
-    DeleteGroup {
-        name: String,
-    },
+    #[schemars(extend("x-category" = "groups", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_group", "name": "KITCHEN-UNITS"}))]
+    DeleteGroup { name: String },
     /// Every group holding one of `targets` goes; the entities stay.
-    Ungroup {
-        targets: Vec<Target>,
-    },
+    #[schemars(extend("x-category" = "groups", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "ungroup", "targets": [{"handle": 1234}]}))]
+    Ungroup { targets: Vec<Target> },
     /// Each of `targets` takes the `props` of `source` (which may be inside a block or an
     /// xref) where it has them.
+    #[schemars(extend("x-category" = "modify"))]
+    #[schemars(example = json!({"type": "match_properties", "source": {"handle": 1234}, "targets": [{"handle": 1235}], "props": ["layer", "color"]}))]
     MatchProperties {
         source: Target,
         targets: Vec<Target>,
@@ -600,6 +683,9 @@ pub enum Command {
     },
     /// The palette's edit: one property of the entity `target` at the top of the sheet (see
     /// `EntityProp` for the values).
+    #[schemars(extend("x-category" = "modify"))]
+    #[schemars(example = json!({"type": "set_property", "target": {"handle": 1234}, "prop": "layer", "value": "A-WALL"}))]
+    #[schemars(example = json!({"type": "set_property", "target": {"handle": 1234}, "prop": "viewport_scale", "value": 0.01}))]
     SetProperty {
         target: Target,
         prop: EntityProp,
@@ -609,6 +695,8 @@ pub enum Command {
     /// taken from `base` (by default the lower left corner of what they draw): a small DXF
     /// drawing with the layers, blocks and styles they use (see `crate::clipboard`). Not an undo
     /// step; `Outcome::Clipboard`.
+    #[schemars(extend("x-category" = "clipboard", "x-needs" = "clipboard", "x-batch" = false))]
+    #[schemars(example = json!({"type": "copy_to_clipboard", "targets": [{"handle": 1234}]}))]
     CopyToClipboard {
         targets: Vec<Target>,
         #[serde(default)]
@@ -619,6 +707,8 @@ pub enum Command {
     /// blocks and styles the drawing lacks come along), as one block reference with `as_block`;
     /// plain text as a text `height` tall (2.5 mm at the annotation scale by default).
     /// `Outcome::Added`.
+    #[schemars(extend("x-category" = "clipboard", "x-needs" = "clipboard"))]
+    #[schemars(example = json!({"type": "paste_from_clipboard", "at": [10, 0]}))]
     PasteFromClipboard {
         at: [f64; 2],
         #[serde(default)]
@@ -632,24 +722,28 @@ pub enum Command {
     /// `corner2`, showing all of model space (see `crate::viewports`); on the current layer.
     /// `Outcome::Added`.
     #[serde(rename = "mview")]
+    #[schemars(extend("x-category" = "layouts"))]
+    #[schemars(example = json!({"type": "mview", "corner1": [10, 10], "corner2": [400, 280]}))]
     MView {
         corner1: [f64; 2],
         corner2: [f64; 2],
     },
     /// The user coordinate system becomes the one at `origin` with its x axis along `x_axis`
     /// (`[1, 0]` from `[0, 0]` is the world's). View state: not an undo step (see `crate::ucs`).
-    Ucs {
-        origin: [f64; 2],
-        x_axis: [f64; 2],
-    },
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "ucs", "origin": [100, 50], "x_axis": [1, 1]}))]
+    Ucs { origin: [f64; 2], x_axis: [f64; 2] },
     /// The user coordinate system becomes the entity `target`'s (AutoCAD's UCS OB; see
     /// `Session::ucs_of_entity`). Not an undo step.
-    UcsObject {
-        target: Target,
-    },
+    #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
+    #[schemars(example = json!({"type": "ucs_object", "target": {"handle": 1234}}))]
+    UcsObject { target: Target },
     /// AutoCAD's PURGE: what nothing uses, of `kinds` (every kind when empty; see
     /// `crate::purge`). A dry run only lists it (no step); otherwise it goes as one undo step.
     /// `Outcome::Purged`.
+    #[schemars(extend("x-category" = "manage", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "purge", "kinds": ["layers", "blocks"], "dry_run": true}))]
+    #[schemars(example = json!({"type": "purge", "kinds": [], "dry_run": false}))]
     Purge {
         #[serde(default)]
         kinds: Vec<crate::purge::PurgeKind>,
@@ -657,6 +751,9 @@ pub enum Command {
     },
     /// AutoCAD's AUDIT: what points at something the drawing does not have (see
     /// `crate::audit`); with `fix` the safe repairs, as one undo step. `Outcome::Audited`.
+    #[schemars(extend("x-category" = "manage"))]
+    #[schemars(example = json!({"type": "audit", "fix": false}))]
+    #[schemars(example = json!({"type": "audit", "fix": true}))]
     Audit {
         #[serde(default)]
         fix: bool,
@@ -667,6 +764,8 @@ pub enum Command {
     /// perpendicular, collinear and symmetric's third a line or straight segment; concentric
     /// circles or arcs; tangent, smooth and equal any edge. The first entity picked stays
     /// where it is when it can; the rest move to hold it. `Outcome::Constrained`.
+    #[schemars(extend("x-category" = "parametric"))]
+    #[schemars(example = json!({"type": "add_constraint", "kind": "horizontal", "targets": [{"handle": 1234}], "points": [[2, 0]]}))]
     AddConstraint {
         kind: crate::ConstraintKind,
         targets: Vec<Target>,
@@ -674,16 +773,18 @@ pub enum Command {
         points: Vec<[f64; 2]>,
     },
     /// Removes the constraint `id` (a dimensional one with its Dimension).
-    DeleteConstraint {
-        id: u32,
-    },
+    #[schemars(extend("x-category" = "parametric", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_constraint", "id": 3}))]
+    DeleteConstraint { id: u32 },
     /// Removes every constraint holding one of `targets` (AutoCAD's DELCONSTRAINT).
     /// `Outcome::Constrained` with the ids removed.
-    DeleteConstraintsOn {
-        targets: Vec<Target>,
-    },
+    #[schemars(extend("x-category" = "parametric", "x-destructive" = true))]
+    #[schemars(example = json!({"type": "delete_constraints_on", "targets": [{"handle": 1234}]}))]
+    DeleteConstraintsOn { targets: Vec<Target> },
     /// The constraints already true of `targets` within `settings`' tolerances (AutoCAD's
     /// AUTOCONSTRAIN), less those there already. `Outcome::Constrained`.
+    #[schemars(extend("x-category" = "parametric"))]
+    #[schemars(example = json!({"type": "auto_constrain", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
     AutoConstrain {
         targets: Vec<Target>,
         #[serde(default)]
@@ -692,6 +793,8 @@ pub enum Command {
     /// The dimensional constraint `kind` (linear, aligned, angular, radius, diameter) on the
     /// parts of `targets` picked at `points`, its Dimension through `line_point`, its value
     /// `expression` (the value measured now when none). `Outcome::Constrained`.
+    #[schemars(extend("x-category" = "parametric"))]
+    #[schemars(example = json!({"type": "add_dim_constraint", "kind": "linear", "targets": [{"handle": 1234}], "points": [[2, 0]], "line_point": [2, -1], "expression": "4.5"}))]
     AddDimConstraint {
         kind: crate::ConstraintKind,
         targets: Vec<Target>,
@@ -704,13 +807,16 @@ pub enum Command {
     /// The parameter `name` (a dimensional constraint's) takes `expression` (a number, or a
     /// formula of other parameters such as `2*d2 + 1.5`); its constraints and every one using it
     /// are solved again.
-    SetParameter {
-        name: String,
-        expression: String,
-    },
+    #[schemars(extend("x-category" = "parametric"))]
+    #[schemars(example = json!({"type": "set_parameter", "name": "d1", "expression": "2*d2 + 1.5"}))]
+    SetParameter { name: String, expression: String },
     /// The constraints of the sheet on screen. `Outcome::Constraints`; not an undo step.
+    #[schemars(extend("x-category" = "parametric"))]
+    #[schemars(example = json!({"type": "list_constraints"}))]
     ListConstraints,
     /// Every parameter of the drawing. `Outcome::Parameters`; not an undo step.
+    #[schemars(extend("x-category" = "parametric"))]
+    #[schemars(example = json!({"type": "list_parameters"}))]
     ListParameters,
 }
 
@@ -722,7 +828,7 @@ fn one() -> f64 {
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
 /// outermost first (empty, the default, for an entity on the sheet). A chain ending in an xref
 /// reference names an entity of that xref.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Target {
     pub handle: u64,
     #[serde(default)]

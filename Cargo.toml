@@ -14,6 +14,8 @@ opencadcodec = { git = "https://github.com/HakanSeven12/opencadcodec.git", rev =
 opencadkernel = { git = "https://github.com/HakanSeven12/opencadkernel.git", rev = "99b6b48", default-features = false, features = ["geom2d", "offset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# JSON schemas of the commands, generated from the enum (MIT): the command registry.
+schemars = "1.2"
 thiserror = "2"
 tauri = "2.11"
 tauri-build = "2.6"

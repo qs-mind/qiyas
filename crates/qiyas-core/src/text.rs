@@ -12,6 +12,7 @@ use opencadcodec::entities::{AttachmentPoint, EntityCommon};
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{AppId, EntityType, Handle, MText, Text, Vector3};
 use qiyas_geom::LOGICAL_TEXT_APP;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::field::{cell_fields, has_fields, set_text_field, text_field};
@@ -22,7 +23,7 @@ use crate::{CoreError, Session, Target};
 /// Where find and replace looks: the sheet on screen, or every sheet of the drawing (model and
 /// the paper layouts). Never inside block definitions or xrefs; attributes of block references
 /// on those sheets are searched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TextScope {
     Sheet,

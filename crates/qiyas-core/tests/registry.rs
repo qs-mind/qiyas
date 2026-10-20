@@ -1,0 +1,211 @@
+//! The command registry's guards: every command describes itself (a doc comment, a category, an
+//! example that reads back), names are unique, and a command that says it only reads leaves the
+//! session as it was. A command added without these fails here, so the AI, MCP and the command
+//! line never see a command they cannot use.
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use qiyas_core::registry::{effect_of, registry, Effect};
+use qiyas_core::{Command, Session};
+use serde_json::Value;
+
+const CATEGORIES: [&str; 18] = [
+    "attach",
+    "blocks",
+    "boq",
+    "clipboard",
+    "dimensions",
+    "draw",
+    "groups",
+    "inquiry",
+    "layers",
+    "layouts",
+    "manage",
+    "markup",
+    "modify",
+    "parametric",
+    "tables",
+    "takeoff",
+    "text",
+    "view",
+];
+
+fn sample() -> Session {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/test-plan.dwg");
+    Session::open(&path).expect("sample plan")
+}
+
+#[test]
+fn every_command_has_a_doc_a_category_and_an_example() {
+    let reg = registry();
+    let top: Vec<_> = reg
+        .commands()
+        .iter()
+        .filter(|c| !c.name.contains('.'))
+        .collect();
+    assert!(top.len() >= 100, "{} commands", top.len());
+    let mut missing = Vec::new();
+    for c in reg.commands() {
+        if c.doc.trim().is_empty() {
+            missing.push(format!("{}: no doc comment", c.name));
+        }
+        if !CATEGORIES.contains(&c.category.as_str()) {
+            missing.push(format!("{}: category {:?}", c.name, c.category));
+        }
+        if c.examples.is_empty() {
+            missing.push(format!("{}: no example", c.name));
+        }
+        if !c.kinds.is_empty() && c.examples.is_empty() {
+            missing.push(format!("{}: no example of the whole command", c.name));
+        }
+    }
+    assert!(missing.is_empty(), "\n{}", missing.join("\n"));
+}
+
+#[test]
+fn names_are_unique_and_found_in_any_case() {
+    let reg = registry();
+    let mut seen = BTreeSet::new();
+    for c in reg.commands() {
+        assert!(seen.insert(c.name.clone()), "{} twice", c.name);
+    }
+    assert_eq!(reg.get("Draw.Line").unwrap().name, "draw.line");
+    assert_eq!(reg.get("new-layer").unwrap().name, "new_layer");
+    assert!(reg
+        .get("draw")
+        .unwrap()
+        .kinds
+        .contains(&"hatch".to_string()));
+    assert!(reg.get("no_such_command").is_none());
+}
+
+#[test]
+fn every_example_reads_back_as_its_command() {
+    for c in registry().commands() {
+        for e in &c.examples {
+            let parsed: Command = serde_json::from_value(e.clone())
+                .unwrap_or_else(|err| panic!("{}: example {e} does not read: {err}", c.name));
+            let wire = serde_json::to_value(&parsed).unwrap();
+            let base = c.name.split('.').next().unwrap();
+            assert_eq!(wire["type"], base, "{}", c.name);
+            if let Some(kind) = c.name.split('.').nth(1) {
+                assert_eq!(wire["kind"], kind, "{}", c.name);
+            }
+        }
+    }
+}
+
+#[test]
+fn schemas_are_self_contained_and_name_their_type() {
+    for c in registry().commands() {
+        let text = c.schema.to_string();
+        assert!(!text.contains("\"$ref\""), "{} keeps a $ref", c.name);
+        assert!(!text.contains("\"x-"), "{} keeps an extension", c.name);
+        let base = c.name.split('.').next().unwrap();
+        let tag = &c.schema["properties"]["type"];
+        let named = tag["const"] == base || tag["enum"][0] == base;
+        assert!(named, "{}: {}", c.name, c.schema);
+    }
+}
+
+#[test]
+fn effects_and_undo_parts_follow_the_command() {
+    let reg = registry();
+    let get = |n: &str| reg.get(n).unwrap();
+    assert_eq!(get("draw.line").effect, Effect::Edit);
+    assert_eq!(get("draw.line").undo.as_deref(), Some("drawing"));
+    assert_eq!(get("new_layer").undo.as_deref(), Some("drawing+tables"));
+    assert_eq!(get("measure_distance").undo.as_deref(), Some("takeoff"));
+    assert_eq!(get("set_layer_hidden").effect, Effect::View);
+    assert_eq!(get("write_block").effect, Effect::File);
+    assert_eq!(get("edit_block_in_place").effect, Effect::Session);
+    assert_eq!(get("id_point").effect, Effect::Read);
+    assert!(get("delete_entities").destructive);
+    assert!(!get("batch").batchable);
+    assert!(get("set_conflicts").internal);
+    let dry: Command = serde_json::from_str(r#"{"type":"purge","dry_run":true}"#).unwrap();
+    assert_eq!(effect_of(&dry), Effect::Read);
+    let real: Command = serde_json::from_str(r#"{"type":"purge","dry_run":false}"#).unwrap();
+    assert_eq!(effect_of(&real), Effect::Edit);
+}
+
+/// What a read must not change: the drawing, the take-off, the history and the view.
+fn fingerprint(s: &Session) -> Value {
+    let info = serde_json::to_value(s.info()).unwrap();
+    serde_json::json!({
+        "batch": s.batch_version(),
+        "dirty": s.is_dirty(),
+        "takeoff": serde_json::to_value(&s.takeoff).unwrap(),
+        "can_undo": s.can_undo(),
+        "can_redo": s.can_redo(),
+        "info": info,
+    })
+}
+
+#[test]
+fn a_command_that_reads_leaves_the_session_as_it_was() {
+    let mut session = sample();
+    let before = fingerprint(&session);
+    let mut ran = 0;
+    for c in registry().commands() {
+        for e in &c.examples {
+            let command: Command = serde_json::from_value(e.clone()).unwrap();
+            if effect_of(&command) != Effect::Read || c.needs.is_some() {
+                continue;
+            }
+            // Handles in examples may not exist here: an error is fine, a change is not.
+            let _ = session.run(command);
+            ran += 1;
+            assert_eq!(
+                fingerprint(&session),
+                before,
+                "{} changed the session: {e}",
+                c.name
+            );
+        }
+    }
+    assert!(ran >= 8, "only {ran} reads ran");
+}
+
+#[test]
+fn the_index_lists_every_public_command_once_and_stays_small() {
+    let reg = registry();
+    let index = reg.index_text();
+    for c in reg
+        .commands()
+        .iter()
+        .filter(|c| !c.internal && !c.name.contains('.'))
+    {
+        let word = format!(" {}", c.name);
+        let found = index.contains(&format!("{word},"))
+            || index.contains(&format!("{word} ("))
+            || index.contains(&format!("{word}\n"))
+            || index.ends_with(&word);
+        assert!(found, "{} missing from the index", c.name);
+    }
+    assert!(
+        !index.contains("set_conflicts"),
+        "internal commands stay out"
+    );
+    assert!(index.len() < 4_000, "index is {} characters", index.len());
+    assert_eq!(index, reg.index_text(), "deterministic");
+}
+
+#[test]
+fn search_finds_commands_by_what_they_do() {
+    let reg = registry();
+    let names = |q: &str| -> Vec<String> {
+        reg.search(q, 5)
+            .into_iter()
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    assert_eq!(
+        names("hatch").first().map(String::as_str),
+        Some("draw.hatch")
+    );
+    assert!(names("layer lineweight").iter().any(|n| n == "set_layer"));
+    assert!(names("viewport").iter().any(|n| n == "mview"));
+    assert!(names("set_conflicts").is_empty(), "internal");
+}

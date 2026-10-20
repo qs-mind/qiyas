@@ -1,9 +1,10 @@
 //! A conflict or gap found by comparing the BOQ, the take-off, the schedules on the drawings and
 //! the block counts (the engine is `qiyas_takeoff::compare`).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictKind {
     /// The linked measurements add up to more or less than the BOQ quantity, beyond tolerance.
@@ -44,7 +45,7 @@ impl ConflictKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictStatus {
     #[default]
@@ -62,7 +63,7 @@ impl ConflictStatus {
 }
 
 /// One conflict. Quantities are in `unit` ("m", "m2", "m3", "pcs", or a BOQ item's own unit).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Conflict {
     /// 16 hex digits, the same on every comparison for the same finding (see `hash_key`).
     pub id: String,

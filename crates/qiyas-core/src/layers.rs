@@ -8,6 +8,7 @@
 //! keeps them too, in the project file (`Project::qiyas_hidden`), so restoring a state brings
 //! both back.
 
+use schemars::JsonSchema;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -23,7 +24,7 @@ use crate::{CoreError, Drawing, LayerInfo, Session, Target};
 /// A layer property `Command::SetLayer` changes. Its value: `on`, `frozen`, `locked` and `plot`
 /// take true or false; `color` "ACI n" (1 to 255) or "#rrggbb"; `linetype` a linetype of the
 /// drawing; `lineweight` hundredths of a millimetre from AutoCAD's set, or -3 (Default).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerProp {
     On,
@@ -37,7 +38,7 @@ pub enum LayerProp {
 
 /// One line of the layer translator: the drawing's layer `from` becomes `to` (renamed, or merged
 /// into `to` when the drawing has it), then takes `color` ("ACI n" or "#rrggbb") when given.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LayerMapping {
     pub from: String,
     pub to: String,
