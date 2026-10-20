@@ -175,12 +175,29 @@ impl Session {
         if rows.saturating_mul(cols) > MAX_CELLS {
             return Err(invalid(format!("A table takes {MAX_CELLS} cells at most")));
         }
-        if col_width <= 0.0 || row_height <= 0.0 {
-            return Err(invalid("Column widths and row heights must be more than 0"));
+        if col_width < 0.0 || row_height < 0.0 {
+            return Err(invalid("Column widths and row heights must be 0 or more"));
         }
         if data.len() > rows || data.iter().any(|r| r.len() > cols) {
             return Err(invalid("There is more text than cells"));
         }
+        let row_height = if row_height == 0.0 {
+            self.default_text_height() / TEXT_IN_ROW
+        } else {
+            row_height
+        };
+        let col_width = if col_width == 0.0 {
+            let longest = data
+                .iter()
+                .flatten()
+                .flat_map(|cell| cell.lines())
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0);
+            longest as f64 * 0.7 * row_height * TEXT_IN_ROW + row_height
+        } else {
+            col_width
+        };
         let style = self.text_style();
         let doc = &self.drawing.doc;
         let style_handle = doc.text_styles.get(&style).map(|s| s.handle);

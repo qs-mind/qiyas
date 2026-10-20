@@ -161,6 +161,7 @@ fn a_pick_inside_the_xref_names_it_and_the_entity_measures_in_world() {
     let sum = measure(
         &mut session,
         Command::AddMeasurement {
+            empty_item: false,
             kind: Kind::Length,
             value: None,
             unit: None,

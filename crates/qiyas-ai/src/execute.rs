@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use qiyas_core::{
-    Command, ConflictStatus, CoreError, DimSpec, EntityFilter, Field, Kind, Outcome, Session,
-    Source, Target, COMMENT_LAYER,
+    Command, ConflictStatus, CoreError, DimSpec, EntityFilter, Field, Kind, MarkupKind, Outcome,
+    Session, Source, Target, COMMENT_LAYER,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -475,13 +475,6 @@ struct Resolve {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum MarkupKind {
-    Cloud,
-    Note,
-}
-
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MarkupInput {
     points: Vec<[f64; 2]>,
@@ -731,6 +724,7 @@ fn measure(
                 chain: input.chain,
                 description: format!("{} on {}", entity.kind, entity.layer_short),
                 note: String::new(),
+                empty_item: false,
             }
         }
         (None, Some(points)) if kind == Kind::Length => Command::MeasureDistance { points },
@@ -873,33 +867,12 @@ fn add_measurement(
     if input.unit.as_deref() == Some("markup") {
         return Err(bad("Use add_markup for markups"));
     }
-    // Notes and analysis are not take-off rows: a row needs a measured quantity.
-    if input.kind == Kind::Item
-        && input.points.is_empty()
-        && input.handles.is_empty()
-        && input.value.is_none_or(|v| v == 0.0)
-        && !input.empty_item
-    {
-        return Err(bad(
-            "A take-off row needs a real measured quantity, and this one has no geometry and a \
-             quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
-             comments) are not rows: write them in your answer, or into the drawing with \
-             add_text or add_comment. Only if the user explicitly asked for an empty item, call \
-             again with empty_item true.",
-        ));
-    }
     let mut seen = HashSet::new();
     for &h in &input.handles {
         if !seen.insert(h) {
             return Err(bad(&format!("Handle {h} is given twice")));
         }
-        let entity = session.entity_info(h, &[])?;
-        if input.kind == Kind::Count && entity.kind != "Insert" {
-            return Err(bad(&format!(
-                "Handle {h} is a {}, not a block reference; a count takes block references only",
-                entity.kind
-            )));
-        }
+        session.entity_info(h, &[])?;
     }
     let to_drawing_units = session.drawing.units.to_metres();
     let cmd = Command::AddMeasurement {
@@ -913,6 +886,7 @@ fn add_measurement(
         chain: Vec::new(),
         description: input.description,
         note: input.note,
+        empty_item: input.empty_item,
     };
     measured(session.run_as(cmd, source)?)
 }
@@ -944,24 +918,11 @@ fn add_markup(
     input: MarkupInput,
     source: Source,
 ) -> Result<Value, ToolError> {
-    let (note, least) = match input.kind {
-        MarkupKind::Cloud => ("cloud", 3),
-        MarkupKind::Note => ("note", 1),
-    };
-    if input.points.len() < least {
-        return Err(bad(&format!("A {note} needs at least {least} point(s)")));
-    }
     let bounds = bounds_of(&input.points);
-    let cmd = Command::AddMeasurement {
-        kind: Kind::Item,
-        value: Some(0.0),
-        unit: Some("markup".to_string()),
-        height: None,
+    let cmd = Command::AddMarkup {
+        kind: input.kind,
         points: input.points,
-        handles: Vec::new(),
-        chain: Vec::new(),
-        description: input.text,
-        note: note.to_string(),
+        text: input.text,
     };
     let mut out = measured(session.run_as(cmd, source)?)?;
     let id = out["measurement"]["id"].clone();

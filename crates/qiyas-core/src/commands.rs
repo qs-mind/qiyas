@@ -93,7 +93,8 @@ pub enum Command {
     /// (drawing coordinates) or `handles` (measured from the entities' flattened paths, summed),
     /// not both. A length, area or count is worked out from the geometry, so `value` must be
     /// `None`; a volume is an area from the geometry times `height` (drawing units, above 0); an
-    /// item needs `value` and `unit` and may have no geometry.
+    /// item needs `value` and `unit` and may have no geometry. For AI and MCP, an item with no
+    /// geometry and no value or a value of 0 needs `empty_item`; counts take block references only.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "add_measurement", "kind": "area", "points": [], "handles": [1234], "description": "Living room floor", "note": ""}))]
     #[schemars(example = json!({"type": "add_measurement", "kind": "item", "value": 1, "unit": "lump sum", "points": [], "handles": [], "description": "Site mobilisation", "note": ""}))]
@@ -110,6 +111,9 @@ pub enum Command {
         chain: Vec<u64>,
         description: String,
         note: String,
+        /// Allows an empty item the user asked for. A missing value becomes 0.
+        #[serde(default)]
+        empty_item: bool,
     },
     /// Turns an area into a volume of that area times `height` (drawing units, above 0), keeping
     /// its geometry; on a volume, changes its height.
@@ -310,11 +314,14 @@ pub enum Command {
     /// One line of text at `at` on the sheet on screen, `height` drawing units tall, turned
     /// `rotation` degrees, in the text style `style` (the drawing's current one when `None`),
     /// with the current layer, colour and linetype: one undo step, `Outcome::Added`. Stored in
-    /// reading order (see `crate::text`).
+    /// reading order (see `crate::text`). An omitted or zero height is 2.5 mm on paper at the
+    /// annotation scale. Negative heights are refused. A line break, including a literal `\n`,
+    /// makes an MText with no wrapping, top left at `[at.x, at.y + height]`.
     #[schemars(extend("x-category" = "text"))]
     #[schemars(example = json!({"type": "text", "at": [2, 3], "height": 0.25, "rotation": 0, "value": "LIVING ROOM"}))]
     Text {
         at: [f64; 2],
+        #[serde(default)]
         height: f64,
         rotation: f64,
         value: String,
@@ -322,13 +329,15 @@ pub enum Command {
         style: Option<String>,
     },
     /// Multiline text: `value` is plain text, lines split by `\n`, in a box `width` drawing units
-    /// wide (0: no wrapping) whose top left corner is `at`. As `Text` otherwise.
+    /// wide (0: no wrapping) whose top left corner is `at`. A literal `\n` is a line break too.
+    /// An omitted or zero height is 2.5 mm on paper at the annotation scale. As `Text` otherwise.
     #[serde(rename = "mtext")]
     #[schemars(extend("x-category" = "text"))]
     #[schemars(example = json!({"type": "mtext", "at": [2, 6], "width": 4, "height": 0.2, "value": "Floor: porcelain tiles\nSkirting: 100 mm"}))]
     MText {
         at: [f64; 2],
         width: f64,
+        #[serde(default)]
         height: f64,
         value: String,
         #[serde(default)]
@@ -336,7 +345,8 @@ pub enum Command {
     },
     /// Changes the text of `target` (a text or an MText at the top of the sheet on screen) to
     /// `value`, plain text (an MText's formatting goes); for a block reference the value of its
-    /// attribute `tag` (which may be cleared). One undo step.
+    /// attribute `tag` (which may be cleared). A literal `\n` is a line break; a Text with a
+    /// line break becomes an MText as in `Text`. One undo step.
     #[schemars(extend("x-category" = "text"))]
     #[schemars(example = json!({"type": "edit_text", "target": {"handle": 1234}, "value": "KITCHEN"}))]
     EditText {
@@ -451,13 +461,18 @@ pub enum Command {
     /// `row_height` drawing units, cells filled row by row from `data` (plain text; field codes
     /// make a cell a field), on the current layer in the current text style (its text half the
     /// row height), with its `*T` block: one undo step, `Outcome::Added` (see `crate::table`).
+    /// Omitted or zero sizes are automatic: rows twice the default text height (2.5 mm on paper
+    /// at the annotation scale), columns fitting the longest cell line at about 0.7 text
+    /// heights per character plus one row height of padding. Negative sizes are refused.
     #[schemars(extend("x-category" = "tables"))]
     #[schemars(example = json!({"type": "table", "at": [0, 10], "rows": 3, "cols": 2, "col_width": 4, "row_height": 0.8, "data": [["Room", "Area (m²)"], ["Living", "58.28"], ["Kitchen", "17.39"]]}))]
     Table {
         at: [f64; 2],
         rows: usize,
         cols: usize,
+        #[serde(default)]
         col_width: f64,
+        #[serde(default)]
         row_height: f64,
         #[serde(default)]
         data: Vec<Vec<String>>,
@@ -498,10 +513,12 @@ pub enum Command {
         last: [usize; 2],
     },
     /// A one-line text at `at`, `height` tall, holding the field `field` (see `crate::field`).
+    /// An omitted or zero height is 2.5 mm on paper at the annotation scale.
     #[schemars(extend("x-category" = "tables"))]
     #[schemars(example = json!({"type": "field", "at": [2, 2], "height": 0.25, "field": {"kind": "area", "target": {"handle": 1234}}}))]
     Field {
         at: [f64; 2],
+        #[serde(default)]
         height: f64,
         field: FieldKind,
     },
@@ -566,6 +583,7 @@ pub enum Command {
     DiscardBlockEdits,
     /// An attribute definition `tag` (one word, upper-cased) on the current layer at `at`,
     /// `height` tall: it asks `prompt` on insert and takes `default` when nothing is given.
+    /// An omitted or zero height is 2.5 mm on paper at the annotation scale.
     #[schemars(extend("x-category" = "blocks"))]
     #[schemars(example = json!({"type": "att_def", "tag": "ROOM_NO", "prompt": "Room number", "default": "G01", "at": [0, 0], "height": 0.25}))]
     AttDef {
@@ -573,6 +591,7 @@ pub enum Command {
         prompt: String,
         default: String,
         at: [f64; 2],
+        #[serde(default)]
         height: f64,
     },
     /// The block reference `target`'s attributes take `values` by tag.
@@ -867,6 +886,58 @@ pub enum Command {
         #[serde(default)]
         sheet: Option<String>,
     },
+    /// The rooms round room-name texts (on `text_layer`, named in `names`, inside `within`) or
+    /// round seed points: the smallest closed region round each, as Hatch finds one, with the
+    /// area its line work encloses and its net candidate area (islands such as a shaft taken off
+    /// unless `subtract_islands` is false), in square metres. These are unapproved candidate
+    /// areas for the engineer to approve, never approved net areas. `Outcome::Rooms`; not an
+    /// undo step.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "rooms", "query": {"text_layer": "A-ROOM-NAME"}}))]
+    #[schemars(example = json!({"type": "rooms", "query": {"seeds": [{"name": "KITCHEN", "point": [12.5, 4.0]}]}}))]
+    Rooms { query: crate::rooms::RoomsQuery },
+    /// Writes each room's unapproved candidate area ("Unapproved candidate 58.28 m²", or in
+    /// Arabic) as a text just under its name, or at its seed: on `layer` (made when missing; the
+    /// current layer by default), `height` metres tall (the name's height by default), to
+    /// `decimals` places (2), in `language` (the name's). One undo step. `Outcome::Rooms` with
+    /// each label's handle.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
+    LabelSpaces {
+        query: crate::rooms::RoomsQuery,
+        #[serde(default)]
+        layer: Option<String>,
+        #[serde(default)]
+        height: Option<f64>,
+        #[serde(default)]
+        decimals: Option<usize>,
+        #[serde(default)]
+        language: Option<crate::rooms::LabelLanguage>,
+    },
+    /// Checks the drawing as a reviewer would: lines that stop short of or run past another,
+    /// repeats and overlaps, scraps, rooms whose outline is open or whose size label disagrees,
+    /// colliding or unreadable text, layer 0 and colours of their own, dimension text that
+    /// disagrees with what it measures, `\n` written as two characters, entities far off, and
+    /// take-off rows whose entity is gone (`crate::check::RULES`). On the sheet on screen (or
+    /// `scope.sheet`); `scope.handles` keeps the findings about those entities, `scope.rules` the
+    /// rules named. `Outcome::Checked`; not an undo step.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type": "check_drawing"}))]
+    #[schemars(example = json!({"type": "check_drawing", "scope": {"handles": [1234, 1235], "rules": ["dangling_end", "room_open"]}}))]
+    CheckDrawing {
+        #[serde(default)]
+        scope: crate::check::CheckScope,
+    },
+    /// A markup on the take-off, not in the drawing: a cloud round `points` (3 or more) or a note
+    /// at `points[0]`, with `text`. It is a take-off row of quantity 0 in the unit "markup".
+    #[schemars(extend("x-category" = "markup"))]
+    #[schemars(example = json!({"type": "add_markup", "kind": "cloud", "points": [[0, 0], [4, 0], [4, 3]], "text": "Check the slab edge here"}))]
+    #[schemars(example = json!({"type": "add_markup", "kind": "note", "points": [[2, 3]], "text": "Confirm this opening"}))]
+    AddMarkup {
+        kind: MarkupKind,
+        points: Vec<[f64; 2]>,
+        text: String,
+    },
     /// The constraints of the sheet on screen. `Outcome::Constraints`; not an undo step.
     #[schemars(extend("x-category" = "parametric"))]
     #[schemars(example = json!({"type": "list_constraints"}))]
@@ -875,6 +946,14 @@ pub enum Command {
     #[schemars(extend("x-category" = "parametric"))]
     #[schemars(example = json!({"type": "list_parameters"}))]
     ListParameters,
+}
+
+/// What `Command::AddMarkup` adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkupKind {
+    Cloud,
+    Note,
 }
 
 /// `InsertBlock`'s scale when none is given.
@@ -947,6 +1026,8 @@ impl Command {
             | Command::ListParameters
             | Command::Records { .. }
             | Command::RecordSchema { .. }
+            | Command::Rooms { .. }
+            | Command::CheckDrawing { .. }
             | Command::ListComments => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
@@ -1056,6 +1137,11 @@ impl Command {
                 tables: false,
                 takeoff: false,
             }),
+            // Its labels, as a batch (`run_as` runs it as one).
+            Command::LabelSpaces { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
+            }),
             // Any property of entities, layers, styles or the header; the take-off follows.
             Command::SetRecords { .. } => Some(Part::Document {
                 tables: true,
@@ -1107,6 +1193,14 @@ pub enum Outcome {
     /// Entities added to the drawing, by handle.
     Added {
         handles: Vec<u64>,
+    },
+    /// The rooms found (`Command::Rooms`, `LabelSpaces`).
+    Rooms {
+        report: Box<crate::rooms::RoomsReport>,
+    },
+    /// What `Command::CheckDrawing` found.
+    Checked {
+        report: Box<crate::check::CheckReport>,
     },
     /// A page of records (`Command::Records`).
     Records {
@@ -1319,9 +1413,26 @@ impl Session {
                 chain,
                 description,
                 note,
+                empty_item,
             } => {
-                let mut m =
-                    self.add_measurement(kind, value, unit, height, points, handles, chain)?;
+                if matches!(source, Source::Ai | Source::Mcp)
+                    && kind == Kind::Item
+                    && points.is_empty()
+                    && handles.is_empty()
+                    && value.is_none_or(|v| v == 0.0)
+                    && !empty_item
+                {
+                    return Err(invalid(
+                        "A take-off row needs a real measured quantity, and this one has no geometry and a \
+                         quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
+                         comments) are not rows: write them in your answer, or into the drawing with \
+                         add_text or add_comment. Only if the user explicitly asked for an empty item, call \
+                         again with empty_item true.",
+                    ));
+                }
+                let value = value.or((kind == Kind::Item && empty_item).then_some(0.0));
+                let mut m = self
+                    .add_measurement(kind, value, unit, height, points, handles, chain, source)?;
                 m.description = description;
                 m.note = note;
                 m
@@ -1894,6 +2005,50 @@ impl Session {
                 self.set_parameter(&name, &expression)?;
                 return Ok(Outcome::Changed);
             }
+            Command::Rooms { query } => {
+                return Ok(Outcome::Rooms {
+                    report: Box::new(self.rooms(&query)?),
+                });
+            }
+            Command::CheckDrawing { scope } => {
+                return Ok(Outcome::Checked {
+                    report: Box::new(self.check_drawing(&scope)),
+                });
+            }
+            // `run_as` runs it as a transaction before it gets here.
+            Command::LabelSpaces {
+                query,
+                layer,
+                height,
+                decimals,
+                language,
+            } => return self.label_spaces(&query, layer, height, decimals, language, source),
+            Command::AddMarkup { kind, points, text } => {
+                let (note, least) = match kind {
+                    MarkupKind::Cloud => ("cloud", 3),
+                    MarkupKind::Note => ("note", 1),
+                };
+                if points.len() < least {
+                    return Err(CoreError::InvalidCommand(format!(
+                        "A {note} needs at least {least} point(s)"
+                    )));
+                }
+                return self.execute(
+                    Command::AddMeasurement {
+                        kind: Kind::Item,
+                        value: Some(0.0),
+                        unit: Some("markup".to_string()),
+                        height: None,
+                        points,
+                        handles: Vec::new(),
+                        chain: Vec::new(),
+                        description: text,
+                        note: note.to_string(),
+                        empty_item: false,
+                    },
+                    source,
+                );
+            }
             Command::Records { query } => {
                 return Ok(Outcome::Records {
                     page: self.records(&query)?,
@@ -1954,6 +2109,7 @@ impl Session {
         points: Vec<[f64; 2]>,
         handles: Vec<u64>,
         chain: Vec<u64>,
+        source: Source,
     ) -> Result<Measurement, CoreError> {
         if kind != Kind::Item && points.is_empty() && handles.is_empty() {
             return Err(invalid("A measurement needs geometry"));
@@ -1987,6 +2143,16 @@ impl Session {
             .iter()
             .map(|&h| locate(&self.drawing.doc, &xrefs, h, &chain))
             .collect::<Result<Vec<_>, _>>()?;
+        if kind == Kind::Count && matches!(source, Source::Ai | Source::Mcp) {
+            for (&h, entity) in handles.iter().zip(&entities) {
+                if !matches!(entity.entity, EntityType::Insert(_)) {
+                    return Err(invalid(&format!(
+                        "Handle {h} is a {}, not a block reference; a count takes block references only",
+                        variant_name(entity.entity)
+                    )));
+                }
+            }
+        }
 
         let mut self_intersecting = false;
         let value = match kind {

@@ -289,6 +289,7 @@ fn totals_group_by_kind_and_unit() {
 /// what they need.
 fn add(kind: Kind) -> Command {
     Command::AddMeasurement {
+        empty_item: false,
         kind,
         value: None,
         unit: None,
@@ -501,6 +502,7 @@ fn run_as_ai_marks_source() {
     assert_eq!(measure(&mut session, distance()).source, "user");
 
     let cmd = Command::AddMeasurement {
+        empty_item: false,
         kind: Kind::Area,
         value: None,
         unit: None,

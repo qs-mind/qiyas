@@ -1097,6 +1097,11 @@ impl Session {
         height: f64,
     ) -> Result<u64, CoreError> {
         finite(&[at[0], at[1], height])?;
+        let height = if height == 0.0 {
+            self.default_text_height()
+        } else {
+            height
+        };
         if height <= 0.0 {
             return Err(invalid("The height must be more than 0"));
         }

@@ -447,6 +447,7 @@ fn volume_embeds_and_rebuilds_with_height() {
     let mut session = Session::open(&source).unwrap();
     let add =
         |kind, value, unit: Option<&str>, height, points: Vec<[f64; 2]>| Command::AddMeasurement {
+            empty_item: false,
             kind,
             value,
             unit: unit.map(str::to_string),
@@ -512,6 +513,7 @@ fn markup_item_embeds_on_the_markup_layer() {
     for unit in ["markup", "bags"] {
         session
             .run(Command::AddMeasurement {
+                empty_item: false,
                 kind: Kind::Item,
                 value: Some(0.0),
                 unit: Some(unit.to_string()),

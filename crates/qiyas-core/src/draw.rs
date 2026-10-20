@@ -922,12 +922,21 @@ impl Session {
 
     /// `boundary_at` with at most `max` segments in the box looked at.
     pub fn boundary_at_most(&self, p: [f64; 2], start: f64, max: usize) -> Boundary {
+        self.boundary_in_at_most(&self.sheet, p, start, max)
+    }
+
+    /// `boundary_at` on a named sheet, without changing the sheet on screen.
+    pub(crate) fn boundary_at_in(&self, sheet: &str, p: [f64; 2], start: f64) -> Boundary {
+        self.boundary_in_at_most(sheet, p, start, BOUNDARY_SEGMENTS)
+    }
+
+    fn boundary_in_at_most(&self, sheet: &str, p: [f64; 2], start: f64, max: usize) -> Boundary {
         if !(p.iter().all(|v| v.is_finite()) && start > 0.0 && start.is_finite()) {
             return Boundary::None;
         }
         let mut radius = start;
         loop {
-            let Some(near) = self.segments_near(p, radius, max) else {
+            let Some(near) = self.segments_near_in(sheet, p, radius, max) else {
                 return Boundary::TooDense;
             };
             let lo = [p[0] - radius, p[1] - radius];

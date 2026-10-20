@@ -59,7 +59,7 @@ pub fn zoom_tol(base: f64, current: f64, px_per_unit: f64) -> Option<f64> {
     let fine = current < want / 8.0 && current < base;
     (coarse || fine).then_some(want)
 }
-/// What `Session::segments_near` finds.
+/// What `Session::segments_near_in` finds.
 pub(crate) struct Near {
     /// The entities the drawn segments there draw (handle and block chain, as `locate` takes them), once
     /// each.
@@ -1303,17 +1303,21 @@ impl Session {
         })
     }
 
-    /// The entities of the sheet on screen whose drawn segments reach into the square `radius`
-    /// around `p`, text boxes and hatch pattern lines left out; `None` when more than `max`
-    /// segments do.
-    pub(crate) fn segments_near(&self, p: [f64; 2], radius: f64, max: usize) -> Option<Near> {
-        self.with_cache(None, |cached| {
-            let batch = &cached.batch;
+    /// The entities of `sheet` whose drawn segments reach into the square `radius` around `p`,
+    /// text boxes and hatch pattern lines left out; `None` when more than `max` segments do.
+    pub(crate) fn segments_near_in(
+        &self,
+        sheet: &str,
+        p: [f64; 2],
+        radius: f64,
+        max: usize,
+    ) -> Option<Near> {
+        let near = |batch: &Batch, index: &PickIndex| {
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
             // Counted after text boxes and pattern lines go: a densely hatched room nearby
             // must not refuse a plain one. The tree walk stops at the cap all the same.
-            let found = cached.index.within(lo, hi, max + 1, |i| {
+            let found = index.within(lo, hi, max + 1, |i| {
                 batch
                     .range_of(i)
                     .is_some_and(|r| r.flags & (TEXT_BOX | PATTERN) == 0)
@@ -1344,7 +1348,12 @@ impl Session {
                 drawn,
                 whole_sheet,
             })
-        })
+        };
+        if self.sheet.eq_ignore_ascii_case(sheet) {
+            self.with_cache(None, |cached| near(&cached.batch, &cached.index))
+        } else {
+            self.with_sheet(sheet, None, |batch| near(batch, &PickIndex::new(batch)))
+        }
     }
 
     /// The entity `handle` inside the block references `chain` (outermost first; empty for an
@@ -1572,6 +1581,18 @@ impl Session {
                 ));
             }
             return self.run_batch(commands, layer, color, source);
+        }
+        if let Command::LabelSpaces {
+            query,
+            layer,
+            height,
+            decimals,
+            language,
+        } = cmd
+        {
+            return self.transaction(source, "label_spaces", |s| {
+                s.label_spaces(&query, layer, height, decimals, language, source)
+            });
         }
         let label = cmd.label();
         if self.tx_depth > 0 {

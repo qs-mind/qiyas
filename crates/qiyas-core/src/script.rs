@@ -123,18 +123,7 @@ pub struct Run {
 
 /// Reads and checks the whole of `text`; the first bad line is the error.
 pub fn parse(text: &str, cx: &Context) -> Result<Script, ScriptError> {
-    let script_dir = cx
-        .script
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let mut parser = Parser {
-        script_dir: real_or_lexical(script_dir),
-        out_dir: cx.out_dir.map(real_or_lexical),
-        drawing: cx.drawing.map(real_or_lexical),
-        last: None,
-        steps: Vec::new(),
-    };
+    let mut parser = Parser::new(cx);
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
@@ -150,6 +139,17 @@ pub fn parse(text: &str, cx: &Context) -> Result<Script, ScriptError> {
     Ok(Script {
         steps: parser.steps,
     })
+}
+
+/// Resolves a command's paths, including commands in a batch, through the script's folder rule.
+/// Paths become absolute. `write_block` uses the output folder when one is given.
+/// Errors carry `line`, as they do when parsing a script.
+pub fn resolve_command_paths(
+    value: &mut serde_json::Value,
+    cx: &Context,
+    line: usize,
+) -> Result<(), ScriptError> {
+    Parser::new(cx).json_paths(line, value)
 }
 
 /// Runs `script` on `session` (none: the script must OPEN a drawing first), stopping at QUIT or
@@ -389,6 +389,21 @@ fn at(line: usize, message: impl Into<String>) -> ScriptError {
 }
 
 impl Parser {
+    fn new(cx: &Context) -> Self {
+        let script_dir = cx
+            .script
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        Self {
+            script_dir: real_or_lexical(script_dir),
+            out_dir: cx.out_dir.map(real_or_lexical),
+            drawing: cx.drawing.map(real_or_lexical),
+            last: None,
+            steps: Vec::new(),
+        }
+    }
+
     /// Reads the command on `text` (line `line`, not blank, not a comment); a measure with its
     /// points on the lines after it reads on through `lines`, moving `i` past them.
     fn line(

@@ -193,7 +193,7 @@ fn a_table_needs_cells_and_sizes() {
         data,
     };
     assert!(s.run(bad(0, 2, 1.0, 1.0, vec![])).is_err());
-    assert!(s.run(bad(2, 2, 0.0, 1.0, vec![])).is_err());
+    assert!(s.run(bad(2, 2, -1.0, 1.0, vec![])).is_err());
     assert!(s.run(bad(2, 2, 1.0, -1.0, vec![])).is_err());
     assert!(s
         .run(bad(1, 1, 1.0, 1.0, vec![vec!["a".into(), "b".into()]]))

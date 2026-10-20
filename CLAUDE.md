@@ -433,12 +433,16 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Text
 
-- `qiyas-core/src/text.rs`: `Command::Text` (one line; `rotation` in degrees) and `MText` (wire
-  `mtext`; plain text, `\n` becomes `\P`, `\`, `{`, `}` escaped; box top left and width) go on the
+- `qiyas-core/src/text.rs`: `Command::Text` (`rotation` in degrees) and `MText` (wire
+  `mtext`; plain text, line breaks become `\P`, `\`, `{`, `}` escaped; box top left and width) go on the
   current layer and state with a text style (`None`: the drawing's TEXTSTYLE, else "Standard");
   `EditText { target, value, tag }` changes a text, an MText (as plain text: its formatting goes)
   or one attribute (`tag`, may be cleared) of a block reference; chains refused. One undo step
   each.
+- `Text`, `MText`, `AttDef` and `Field` accept an omitted or zero `height`: 2.5 mm on paper at
+  the annotation scale, converted to drawing units. Negative heights are refused. `Text`,
+  `MText` and `EditText` read a literal backslash-n as a line break. A `Text` with a line break
+  becomes an MText, with top left `[at.x, at.y + height]` and width 0.
 - New and edited text is stored in reading order and marked with xdata app `QIYAS_TEXT`
   (`qiyas_geom::LOGICAL_TEXT_APP`, never `QIYAS`: `embed_measurements` deletes those);
   `FlatText::logical` makes the renderer ignore "Arabic text is reversed" for it.
@@ -598,6 +602,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   A table's block is found by name, else by `block_record_handle` (the DWG reader sets only the
   handle; `qiyas_geom::table_block`), also when copying. Find and replace reaches cells. Qiyas's
   tables are marked `QIYAS_TEXT` (reading order).
+- `Table` sizes can be omitted or zero. The row height is twice the default text height
+  (2.5 mm on paper at the annotation scale). The column width fits the longest cell text,
+  allowing about 0.7 text heights per character and one row height of padding.
 - `qiyas-core/src/field.rs`: fields are AutoCAD field codes in the text (`%<\AcVar Date ...>%`,
   `%<\AcVar Filename>%`, `%<\AcObjProp Object(%<\_ObjId HEX>%).Area|Length ...>%`, Qiyas's own
   `%<\AcVar QiyasCount "BLOCK">%`). The visible text is the value; the code (the whole text as
@@ -1053,6 +1060,18 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Inquiry
 
+- `Command::Rooms { query }` (`qiyas-core/src/rooms.rs`) reads rooms round name texts or seed
+  points, using the same closed boundaries as Hatch. `enclosed_area_m2` is the drawn area;
+  `net_area_m2` and `candidate_area_m2` take islands off unless `subtract_islands` is false.
+  These are unapproved candidate areas. `LabelSpaces { query, layer, height, decimals,
+  language }` writes "Unapproved candidate … m²" under each name, or its Arabic wording.
+  The label sits 1.6 name heights below the name, or at the seed point. An explicit `height`
+  is in metres; otherwise it uses the name's height, or the default text height for a seed.
+  Both return `Outcome::Rooms`; labelling is one transaction named `label_spaces`.
+- `AddMeasurement` refuses an empty zero-quantity Item from AI or MCP unless `empty_item` is
+  true, and their Counts given as handles accept only block references. User and script
+  commands keep their existing measurement rules. `AddMarkup { kind: cloud | note, points, text }` adds a take-off
+  markup of quantity 0, with at least three points for a cloud or one for a note.
 - Measure tab: Geometry (click an entity: radius, diameter, centre, angles, lengths, block and text
   facts in an Info card at the top of the right panel), Divide (click, then the number of parts),
   Measure along (click, then the step in metres), ID point (snapped coordinates in metres), and
@@ -1063,6 +1082,17 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   count them in the take-off; points and count are one undo step (a drawing change: Save asks).
 - The same five are AI tools: `measure_geometry`, `divide_along`, `measure_along` (step in
   metres), `id_point`, `extract_data` (paged under 40 KB).
+
+## Drawing check
+
+- `qiyas-core/src/check.rs`: `Command::CheckDrawing { scope }` (`Session::check_drawing`)
+  checks the current sheet, or `scope.sheet`. Optional `handles` and `rules` keep only the
+  findings requested. It reads without changing the drawing or undo history.
+- The 16 rules find short or overshooting ends, duplicates, overlaps, tiny segments, open
+  rooms, room-size text that differs, text collisions and poor paper height, layer 0, explicit
+  colours, dimension overrides that differ, literal backslash-n, far-off entities and lost
+  take-off links. `Outcome::Checked` gives each finding's rule, severity, handles, place and
+  message, counts by rule and a short summary. At most 200 findings are listed.
 
 ## Drawings, tabs, recents and views
 
@@ -1191,16 +1221,18 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (tested in DXF and DWG). Points are for points the engineer gave. A points measurement whose
   extent matches one drawn entity (within a tenth) still measures, but the answer carries `hint`
   and `candidates` (handle, kind, layer, length, area) so Mizan removes it and measures the
-  handle. `add_measurement` refuses a no-geometry item of quantity 0 (notes, analysis) unless
-  `empty_item` is true; `add_markup` is unaffected.
+  handle. The core refuses an AI or MCP item with no geometry and quantity 0 (notes, analysis)
+  unless `empty_item` is true; `add_markup` calls `Command::AddMarkup`.
 - Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 57 tools in all): `add_text`
   (TEXT, or MTEXT for several lines or a width; height in metres, default 2.5 mm x annotation
-  scale), `room_areas` and `label_spaces` (the smallest closed region round each room-name text
-  or seed via `Session::boundary_at`, like Hatch: `enclosed_area_m2` is what the line work
+  scale), `room_areas` and `label_spaces` over core `Rooms` and `LabelSpaces` (the smallest
+  closed region round each room-name text or seed via `Session::boundary_at`, like Hatch:
+  `enclosed_area_m2` is what the line work
   encloses, columns that overlap a wall are already out, `net_area_m2` also takes the islands off
   (fountain, shaft; `subtract_islands` false keeps them); bulged edges are exact; texts that look
-  like areas are skipped so a second run does not label labels; `label_spaces` writes "NN.NN m²"
-  just under each name), `add_table` over `Command::Table` (headings + rows of strings) and
+  like areas are skipped so a second run does not label labels; `label_spaces` writes
+  "Unapproved candidate NN.NN m²", or its Arabic wording, just under each name), `add_table`
+  over `Command::Table` (headings + rows of strings) and
   `edit_table_cell`, `draw` (line, polyline with bulges, rectangle, circle, arc, hatch, revcloud;
   drawing units) and `insert_block`. Each call is one undo step through `Command::Batch`; a layer
   that does not exist is made (white) and the current layer and colour are put back. Verified on

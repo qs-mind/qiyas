@@ -9,6 +9,12 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Check a drawing for gaps, overlaps, stray lines, unreadable or colliding text, room sizes
+  that disagree with their labels, and take-off rows whose drawing links are gone.
+- Scripts can find rooms, label their unapproved candidate areas in English or Arabic, and
+  add take-off clouds and notes, using the same commands as Mizan.
+- Text and tables can choose their own readable sizes for the drawing's units and annotation
+  scale when no size is given.
 - Choose the AI model from a list: the provider's own models (Anthropic, or an OpenAI-compatible
   service's), with a filter for long lists and "Other…" for an id the list lacks.
 - Isolating a layer can be undone: isolate it again, LAYUNISO or Un-isolate in the Layers panel
@@ -33,6 +39,9 @@ section below, so add the section before pushing the tag.
 
 ### Fixed
 
+- Text typed with a literal `\n` now breaks onto a new line. A multiline Text becomes MText
+  automatically.
+- AI and MCP measurements share the same checks for empty items and counts of block references.
 - The effort chosen for an OpenAI-compatible service (Gemini through Runware, OpenRouter, a local
   server) was never sent; it is now, with the answer's length, and the log shows thinking tokens.
 - Undoing a layer rename after showing every layer hid the old set of layers again, and the
