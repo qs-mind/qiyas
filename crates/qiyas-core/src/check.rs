@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 16] = [
+pub const RULES: [&str; 17] = [
     "literal_newline",
     "duplicate",
     "overlap",
@@ -36,7 +36,16 @@ pub const RULES: [&str; 16] = [
     "unlinked_takeoff",
     "layer_zero",
     "colour_not_bylayer",
+    "missing_center_mark",
 ];
+
+/// The pack that owns a drawing check rule.
+pub fn rule_pack(rule: &str) -> &'static str {
+    match rule {
+        "room_open" | "room_size_text_differs" | "unlinked_takeoff" => "construction",
+        _ => "general",
+    }
+}
 
 /// Two ends this close touch (metres).
 const TOUCH_M: f64 = 0.0005;
@@ -68,10 +77,13 @@ pub struct CheckScope {
     /// Only findings that involve one of these entities (what a change touched); every finding
     /// when empty.
     pub handles: Vec<u64>,
+    /// Packs to check: "general" and "construction". Empty selects general, plus construction
+    /// when the drawing has take-off rows or a layer named for rooms, spaces or areas.
+    pub packs: Vec<String>,
     /// Only these rules; every rule when empty: literal_newline, duplicate, overlap,
     /// dangling_end, overshoot, tiny_segment, room_open, room_size_text_differs,
     /// dim_override_mismatch, text_overlaps_text, text_over_lines, text_height_vs_scale,
-    /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer.
+    /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark.
     pub rules: Vec<String>,
 }
 
@@ -87,6 +99,7 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Finding {
     pub rule: &'static str,
+    pub pack: &'static str,
     pub severity: Severity,
     pub handles: Vec<u64>,
     /// Where, in drawing coordinates.
@@ -226,8 +239,23 @@ impl Session {
         let sheet = self.sheet_block(scope.sheet.as_deref());
         let to_m = self.drawing.units.to_metres();
         let unit = |metres: f64| metres / to_m;
-        let wanted = |rule: &str| scope.rules.is_empty() || scope.rules.iter().any(|r| r == rule);
         let doc = &self.drawing.doc;
+        let construction = !self.takeoff.items.is_empty()
+            || doc.layers.iter().any(|layer| {
+                let name = layer.name.to_lowercase();
+                ["room", "space", "area"]
+                    .iter()
+                    .any(|word| name.contains(word))
+            });
+        let wanted = |rule: &str| {
+            let pack = rule_pack(rule);
+            let enabled = if scope.packs.is_empty() {
+                pack == "general" || construction
+            } else {
+                scope.packs.iter().any(|p| p == pack)
+            };
+            enabled && (scope.rules.is_empty() || scope.rules.iter().any(|r| r == rule))
+        };
         let tol = unit(0.0002);
 
         let entities: Vec<&EntityType> = self.drawing.entities_in(&sheet).collect();
@@ -305,6 +333,7 @@ impl Session {
                     let len = dist(a, b);
                     push(Finding {
                         rule: "tiny_segment",
+                        pack: "general",
                         severity: Severity::Warning,
                         handles: vec![d.handle],
                         at: Some(a),
@@ -316,6 +345,9 @@ impl Session {
                     });
                 }
             }
+        }
+        if wanted("missing_center_mark") {
+            missing_center_marks(&entities, doc, &drawn, &grid, unit(TOUCH_M), &mut push);
         }
 
         // Text.
@@ -348,6 +380,7 @@ impl Session {
                 if raw.contains("\\n") {
                     push(Finding {
                         rule: "literal_newline",
+                        pack: "general",
                         severity: Severity::Error,
                         handles: vec![e.common().handle.value()],
                         at: None,
@@ -365,6 +398,7 @@ impl Session {
                     if shared > 0.1 * ia.min(ib) && ia > 0.0 && ib > 0.0 {
                         push(Finding {
                             rule: "text_overlaps_text",
+                            pack: "general",
                             severity: Severity::Warning,
                             handles: vec![a.handle, b.handle],
                             at: Some(centre(intersect(a.bounds, b.bounds).unwrap_or(a.bounds))),
@@ -389,6 +423,7 @@ impl Session {
                 if let Some(s) = crossing {
                     push(Finding {
                         rule: "text_over_lines",
+                        pack: "general",
                         severity: Severity::Warning,
                         handles: vec![t.handle, drawn[grid.segs[s].owner].handle],
                         at: Some(mid),
@@ -427,6 +462,7 @@ impl Session {
                     let small = paper_mm < PAPER_MIN_MM;
                     push(Finding {
                         rule: "text_height_vs_scale",
+                        pack: "general",
                         severity: Severity::Warning,
                         handles: vec![e.common().handle.value()],
                         at: None,
@@ -482,6 +518,7 @@ impl Session {
                 if !agrees {
                     push(Finding {
                         rule: "dim_override_mismatch",
+                        pack: "general",
                         severity: Severity::Warning,
                         handles: vec![row.handle],
                         at: Some(row.at),
@@ -514,6 +551,7 @@ impl Session {
                 if !gone.is_empty() {
                     push(Finding {
                         rule: "unlinked_takeoff",
+                        pack: "construction",
                         severity: Severity::Warning,
                         handles: gone,
                         at: None,
@@ -543,6 +581,7 @@ impl Session {
             if wanted("layer_zero") && !on_zero.is_empty() {
                 push(Finding {
                     rule: "layer_zero",
+                    pack: "general",
                     severity: Severity::Warning,
                     message: format!(
                         "{} entities on layer 0: put them on layers named for what they are",
@@ -555,6 +594,7 @@ impl Session {
             if wanted("colour_not_bylayer") && !coloured.is_empty() {
                 push(Finding {
                     rule: "colour_not_bylayer",
+                    pack: "general",
                     severity: Severity::Info,
                     message: format!(
                         "{} entities have a colour of their own instead of their layer's",
@@ -647,6 +687,7 @@ impl Session {
                 repeated.insert(first, first);
                 push(Finding {
                     rule: "duplicate",
+                    pack: "general",
                     severity: Severity::Error,
                     handles: vec![first, d.handle],
                     at: d.paths.first().and_then(|p| p.points.first().copied()),
@@ -687,6 +728,7 @@ impl Session {
                         pairs.insert(key);
                         push(Finding {
                             rule: "overlap",
+                            pack: "general",
                             severity: Severity::Warning,
                             handles: vec![h1, h2],
                             at: Some(midpoint(t.a, t.b)),
@@ -736,6 +778,7 @@ impl Session {
                     if off(lo, blo) || off(hi, bhi) {
                         push(Finding {
                             rule: "room_size_text_differs",
+                            pack: "construction",
                             severity: Severity::Warning,
                             handles: vec![row.handle],
                             at: Some(at),
@@ -747,6 +790,7 @@ impl Session {
                 }
                 Boundary::None => push(Finding {
                     rule: "room_open",
+                    pack: "construction",
                     severity: Severity::Warning,
                     handles: vec![row.handle],
                     at: Some(at),
@@ -757,6 +801,74 @@ impl Session {
                 }),
                 Boundary::TooDense => {}
             }
+        }
+    }
+}
+
+/// A CENTER line through the centre also serves as a centre mark. Resolve ByLayer so imported
+/// drawings and hand-drawn marks work like the drafting commands.
+fn missing_center_marks(
+    entities: &[&EntityType],
+    doc: &opencadcodec::CadDocument,
+    drawn: &[Drawn],
+    grid: &Grid,
+    touch: f64,
+    push: &mut impl FnMut(Finding),
+) {
+    let marked: HashSet<u64> = entities
+        .iter()
+        .filter(|e| {
+            if !matches!(
+                e,
+                EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_)
+            ) {
+                return false;
+            }
+            let common = e.common();
+            let linetype =
+                if common.linetype.is_empty() || common.linetype.eq_ignore_ascii_case("ByLayer") {
+                    doc.layers
+                        .get(&common.layer)
+                        .map(|layer| layer.line_type.as_str())
+                        .unwrap_or("")
+                } else {
+                    &common.linetype
+                };
+            ["CENTER", "CENTER2", "CENTERX2"]
+                .iter()
+                .any(|name| linetype.eq_ignore_ascii_case(name))
+        })
+        .map(|e| e.common().handle.value())
+        .collect();
+    for e in entities {
+        let (c, normal) = match e {
+            EntityType::Circle(c) => (c.center, c.normal),
+            EntityType::Arc(a)
+                if (a.end_angle - a.start_angle)
+                    .rem_euclid(std::f64::consts::TAU)
+                    .abs()
+                    < 1e-9 =>
+            {
+                (a.center, a.normal)
+            }
+            _ => continue,
+        };
+        let at = qiyas_geom::object_to_world(&normal, c.z).apply([c.x, c.y]);
+        let has_mark = grid.near(at).into_iter().any(|i| {
+            let seg = grid.segs[i];
+            marked.contains(&drawn[seg.owner].handle)
+                && dist(seg.a, seg.b) > touch
+                && point_segment(at, seg.a, seg.b) <= touch
+        });
+        if !has_mark {
+            push(Finding {
+                rule: "missing_center_mark",
+                pack: "general",
+                severity: Severity::Info,
+                handles: vec![e.common().handle.value()],
+                at: Some(at),
+                message: "a circle or full arc has no centre mark or centre line".into(),
+            });
         }
     }
 }
@@ -803,6 +915,7 @@ fn end_findings(
     if let Some((past, other, c)) = over {
         push(Finding {
             rule: "overshoot",
+            pack: "general",
             severity: Severity::Warning,
             handles: vec![drawn[own].handle, drawn[other].handle],
             at: Some(c),
@@ -811,6 +924,7 @@ fn end_findings(
     } else if let Some((d, other)) = nearest.filter(|(d, _)| *d < near) {
         push(Finding {
             rule: "dangling_end",
+            pack: "general",
             severity: Severity::Warning,
             handles: vec![drawn[own].handle, drawn[other].handle],
             at: Some(end),
@@ -870,6 +984,7 @@ fn far_off(
         if outside > 3.0 * size {
             push(Finding {
                 rule: "far_off_extents",
+                pack: "general",
                 severity: Severity::Warning,
                 handles: vec![h],
                 at: Some(c),

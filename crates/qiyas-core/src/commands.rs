@@ -26,6 +26,42 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Draws centre crosses through circles and arcs, extending past their curves, on CENTER.
+    /// `extension` is in drawing units; omitted, it is 2.5 mm on paper at the annotation scale.
+    /// Creates the layer and CENTER linetype when missing. One undo step.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "center_mark", "targets": [1234]}))]
+    CenterMark {
+        targets: Vec<u64>,
+        #[serde(default)]
+        extension: Option<f64>,
+    },
+    /// Draws a CENTER line midway between parallel lines over their shared length, or their
+    /// angle bisector when they cross. End extensions follow the units and annotation scale.
+    /// Creates the CENTER layer and linetype when missing. One undo step.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "center_line", "a": 1234, "b": 1235}))]
+    CenterLine { a: u64, b: u64 },
+    /// Draws an axis between two points in drawing units on the CENTER layer, with CENTER
+    /// linetype, creating both when missing. One undo step.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "symmetry_axis", "p1": [0, -100], "p2": [0, 100]}))]
+    SymmetryAxis { p1: [f64; 2], p2: [f64; 2] },
+    /// Draws labelled reference axes with bubbles at both ends on GRID. Coordinates, optional
+    /// extent and bubble radius use drawing units; default sizes follow the annotation scale.
+    /// Creates the layer and CENTER linetype when missing. One undo step.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "grid", "x": [{"label": "A", "at": 0}, {"label": "B", "at": 5000}], "y": [{"label": "1", "at": 0}, {"label": "2", "at": 4000}]}))]
+    Grid {
+        #[serde(default)]
+        x: Vec<crate::conventions::GridAxis>,
+        #[serde(default)]
+        y: Vec<crate::conventions::GridAxis>,
+        #[serde(default)]
+        extent: Option<crate::conventions::GridExtent>,
+        #[serde(default)]
+        bubble: Option<f64>,
+    },
     /// Draws joined walls, measurable hatches, centrelines and reusable door/window blocks.
     /// Plan sizes use drawing units; height, sill and head use metres. Returns metre quantities.
     /// One undo step includes every new layer and block. Curves use polyline approximations.
@@ -703,10 +739,12 @@ pub enum Command {
     #[schemars(example = json!({"type": "rename_layer_state", "from": "Walls only", "to": "Structure"}))]
     RenameLayerState { from: String, to: String },
     /// One property of the drawing's layer `name` (see `LayerProp` for the values).
+    /// Setting its linetype to CENTER or HIDDEN adds that standard pattern when missing.
     #[schemars(extend("x-category" = "layers"))]
     #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "color", "value": "ACI 1"}))]
     #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "lineweight", "value": 50}))]
     #[schemars(example = json!({"type": "set_layer", "name": "A-FURN", "prop": "locked", "value": true}))]
+    #[schemars(example = json!({"type": "set_layer", "name": "HIDDEN", "prop": "linetype", "value": "HIDDEN"}))]
     #[schemars(extend("x-words" = ["LAYER", "LA"]))]
     SetLayer {
         name: String,
@@ -1036,13 +1074,24 @@ pub enum Command {
     /// disagrees with what it measures, `\n` written as two characters, entities far off, and
     /// take-off rows whose entity is gone (`crate::check::RULES`). On the sheet on screen (or
     /// `scope.sheet`); `scope.handles` keeps the findings about those entities, `scope.rules` the
-    /// rules named. `Outcome::Checked`; not an undo step.
+    /// rules named. `scope.packs` selects general drafting or construction checks; empty selects
+    /// general plus construction when take-off rows or room/space/area layers are present.
+    /// `Outcome::Checked` names each finding's pack; not an undo step.
     #[schemars(extend("x-category" = "inquiry"))]
     #[schemars(example = json!({"type": "check_drawing"}))]
     #[schemars(example = json!({"type": "check_drawing", "scope": {"handles": [1234, 1235], "rules": ["dangling_end", "room_open"]}}))]
     CheckDrawing {
         #[serde(default)]
         scope: crate::check::CheckScope,
+    },
+    /// Checks stated expectations against the drawing without changing it or adding an undo
+    /// step. Targets and points pick parts as in AddConstraint. Lengths use drawing units
+    /// (or metres with in_metres), angles use degrees. Default tolerances are 0.5 mm and
+    /// 0.1 degree. Each result gives pass/fail, the measured value and the tolerance.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type": "verify", "expectations": [{"kind": "length", "targets": [{"handle": 1234}], "value": 10}]}))]
+    Verify {
+        expectations: Vec<crate::verify::Expectation>,
     },
     /// A markup on the take-off, not in the drawing: a cloud round `points` (3 or more) or a note
     /// at `points[0]`, with `text`. It is a take-off row of quantity 0 in the unit "markup".
@@ -1145,6 +1194,7 @@ impl Command {
             | Command::RecordSchema { .. }
             | Command::Rooms { .. }
             | Command::CheckDrawing { .. }
+            | Command::Verify { .. }
             | Command::ListComments => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
@@ -1186,6 +1236,10 @@ impl Command {
             | Command::CreateBlock { .. }
             | Command::DefineBlock { .. }
             | Command::Walls(_)
+            | Command::CenterMark { .. }
+            | Command::CenterLine { .. }
+            | Command::SymmetryAxis { .. }
+            | Command::Grid { .. }
             | Command::NewLayout { .. }
             | Command::RenameLayout { .. }
             | Command::TitleBlock { .. }
@@ -1329,6 +1383,10 @@ pub enum Outcome {
     Checked {
         report: Box<crate::check::CheckReport>,
     },
+    /// Pass/fail, measurement and tolerance for every stated expectation.
+    Verified {
+        results: Vec<crate::verify::VerificationResult>,
+    },
     /// A page of records (`Command::Records`).
     Records {
         page: crate::records::RecordPage,
@@ -1451,6 +1509,31 @@ impl Session {
     /// is marked as made by `source`.
     pub(crate) fn execute(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         let mut measurement = match cmd {
+            Command::CenterMark { targets, extension } => {
+                return Ok(Outcome::Added {
+                    handles: self.center_mark(&targets, extension)?,
+                });
+            }
+            Command::CenterLine { a, b } => {
+                return Ok(Outcome::Added {
+                    handles: self.center_line(a, b)?,
+                });
+            }
+            Command::SymmetryAxis { p1, p2 } => {
+                return Ok(Outcome::Added {
+                    handles: self.symmetry_axis(p1, p2)?,
+                });
+            }
+            Command::Grid {
+                x,
+                y,
+                extent,
+                bubble,
+            } => {
+                return Ok(Outcome::Added {
+                    handles: self.reference_grid(&x, &y, extent, bubble)?,
+                });
+            }
             Command::Walls(spec) => {
                 return Ok(Outcome::Walls {
                     result: self.walls(spec)?,
@@ -2180,6 +2263,11 @@ impl Session {
             Command::CheckDrawing { scope } => {
                 return Ok(Outcome::Checked {
                     report: Box::new(self.check_drawing(&scope)),
+                });
+            }
+            Command::Verify { expectations } => {
+                return Ok(Outcome::Verified {
+                    results: self.verify(&expectations)?,
                 });
             }
             // `run_as` runs it as a transaction before it gets here.

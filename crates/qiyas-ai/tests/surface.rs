@@ -351,6 +351,59 @@ fn read_run_refuses_changes_and_leaves_the_drawing_alone() {
 }
 
 #[test]
+fn verify_and_conventions_use_the_existing_three_tools() {
+    let (_dir, mut s) = sample();
+    for name in [
+        "verify",
+        "center_mark",
+        "center_line",
+        "symmetry_axis",
+        "grid",
+    ] {
+        let info = call(
+            &mut s,
+            READ,
+            json!({"op": "commands", "args": {"name": name}}),
+        )
+        .unwrap();
+        assert_eq!(info["name"], name);
+        assert_eq!(
+            info["effect"],
+            if name == "verify" { "read" } else { "edit" }
+        );
+    }
+    let line = call(
+        &mut s,
+        EXECUTE,
+        json!({"op": "run", "args": {"command": {
+            "type": "draw", "kind": "line", "a": [30, 0], "b": [35, 0]
+        }}}),
+    )
+    .unwrap();
+    let handle = line["added"][0].as_u64().unwrap();
+    let revision = s.document_revision();
+    let history = s.history_steps();
+    let answer = call(
+        &mut s,
+        READ,
+        json!({"op": "run", "args": {"command": {
+            "type": "verify", "expectations": [
+                {"kind": "length", "targets": [{"handle": handle}], "value": 5},
+                {"kind": "length", "targets": [{"handle": handle}], "value": 7}
+            ]
+        }}}),
+    )
+    .unwrap();
+    assert_eq!(answer["outcome"]["type"], "verified");
+    assert_eq!(answer["outcome"]["results"][0]["passed"], true);
+    assert_eq!(answer["outcome"]["results"][1]["passed"], false);
+    assert_eq!(answer["outcome"]["results"][1]["measured"], 5.0);
+    assert_eq!(s.document_revision(), revision);
+    assert_eq!(s.history_steps(), history);
+    assert_eq!(surface::tools().len(), 3);
+}
+
+#[test]
 fn run_batch_refuses_internal_commands_before_any_step_runs() {
     let (_dir, mut s) = sample();
     let before = count(&s);

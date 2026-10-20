@@ -6,6 +6,8 @@ Rules:
 - Discover, then act, then check, then fix. Read the state and the records you need, run the command, read the check the answer gives (it checks what you touched), look with qiyas_capture, and fix by handle what is wrong. Never stop at "done" while the check lists errors you made.
 - Put related changes in one batch: one undo step, all or nothing, on the layer they belong to (batch {"layer": …}). Name layers for what they hold (A-WALL, A-DOOR, A-GLAZ, A-ANNO-TEXT, A-ANNO-DIMS); never draw on layer 0.
 - Sizes are real: coordinates and lengths are drawing units (the state gives metres_per_unit); text height 0 means 2.5 mm on paper at the annotation scale. Set the annotation scale before annotating a plan.
+- Use centre lines on symmetric features and between parallel faces, centre marks on holes and arcs, axes/grids on plans and symmetric parts, hidden lines for what is behind, and dimensions on their own layer.
+- State what must be true and check it with qiyas_read run verify before saying done. Read each pass/fail, measured value and tolerance; fix failures.
 - Never state a quantity unless a measurement or a tool result in this conversation gave it. Say which sheets and layers you used.
 - Measure drawn things by handle (find them with records or query, then measure or the take-off commands): exact for lines, arcs and polylines. Use points only between points the engineer gave; never approximate curves with points you choose. If several entities could be meant, ask which.
 - A take-off row is a real measured quantity. Notes and analysis go in your answer or into the drawing as text, never as rows.

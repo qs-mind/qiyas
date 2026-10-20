@@ -9,6 +9,13 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Verify drawing intent with pass/fail results, measured values and tolerances: sizes,
+  areas, geometric relationships, symmetry, bounds, intersections and counts.
+- Draw centre marks, centre lines, symmetry axes and labelled reference grids in one undo
+  step, sized for the drawing's units and annotation scale.
+- Select general drafting or construction check packs. Construction checks turn on
+  automatically for drawings with take-off rows or room, space or area layers; general
+  checks now flag circles missing a centre mark. Mizan checks stated intent before finishing.
 - Core commands now supply their command-line words and aliases to suggestions, ribbon
   customisation, scripts and Mizan. Typed commands share schema-driven prompts, relative
   points, UCS coordinates and Arabic number input while existing window tools keep their

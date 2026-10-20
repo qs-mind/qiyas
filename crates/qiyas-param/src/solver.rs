@@ -472,6 +472,39 @@ fn rows(s: &Sketch) -> Result<Vec<Row>, SolveError> {
     Ok(out)
 }
 
+/// Evaluates the same residuals as the solver without moving any point. Length residuals are
+/// in sketch units; angle residuals are multiplied by `angle_scale` (use 1 for radians and
+/// dimensionless parallel/perpendicular residuals). Arc closure residuals precede constraints.
+pub fn residuals(sketch: &Sketch, angle_scale: f64) -> Result<Vec<f64>, SolveError> {
+    if !angle_scale.is_finite()
+        || angle_scale <= 0.0
+        || sketch.points.iter().flatten().any(|v| !v.is_finite())
+        || sketch.radii.iter().any(|v| !v.is_finite() || *v <= 0.0)
+    {
+        return Err(SolveError::Invalid(
+            "Residuals need finite points, positive radii and a positive angle scale".into(),
+        ));
+    }
+    let rows = rows(sketch)?;
+    let x: Vec<f64> = sketch
+        .points
+        .iter()
+        .flatten()
+        .copied()
+        .chain(sketch.radii.iter().copied())
+        .collect();
+    let mut out = Vec::new();
+    for row in rows {
+        let start = out.len();
+        out.resize(start + row.rows(), 0.0);
+        row.eval(&x, sketch.points.len(), angle_scale, &mut out[start..]);
+    }
+    if out.iter().any(|v| !v.is_finite()) {
+        return Err(SolveError::Invalid("The residual is not finite".into()));
+    }
+    Ok(out)
+}
+
 /// Union-find over the unknowns.
 fn root(parent: &mut [usize], mut i: usize) -> usize {
     while parent[i] != i {

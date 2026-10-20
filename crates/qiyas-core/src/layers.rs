@@ -23,7 +23,8 @@ use crate::{CoreError, Drawing, LayerInfo, Session, Target};
 
 /// A layer property `Command::SetLayer` changes. Its value: `on`, `frozen`, `locked` and `plot`
 /// take true or false; `color` "ACI n" (1 to 255) or "#rrggbb"; `linetype` a linetype of the
-/// drawing; `lineweight` hundredths of a millimetre from AutoCAD's set, or -3 (Default).
+/// drawing (CENTER and HIDDEN are added when missing); `lineweight` hundredths of a millimetre
+/// from AutoCAD's set, or -3 (Default).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerProp {
@@ -254,6 +255,7 @@ impl Session {
         let linetype = match prop {
             LayerProp::Linetype => {
                 let lt = as_str(value)?;
+                self.ensure_convention_linetype(lt)?;
                 Some(
                     self.drawing
                         .doc

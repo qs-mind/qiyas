@@ -1,8 +1,8 @@
 //! `Command::CheckDrawing`: every rule, sheet and handle scopes, and a clean drawing.
 //! Line faults, overlaps, dimensions and text scale are also checked in mm, cm, m and inches.
 
-use opencadcodec::{Color, EntityType, Handle, Line, MText, Vector3};
-use qiyas_core::check::{CheckReport, CheckScope};
+use opencadcodec::{Arc, Color, EntityType, Handle, Line, MText, Vector3};
+use qiyas_core::check::{CheckReport, CheckScope, Severity};
 use qiyas_core::{
     Command, DimEditOp, DimSpec, DrawSpec, Kind, Measurement, Outcome, Session, Target,
 };
@@ -444,9 +444,190 @@ fn takeoff_with_a_missing_entity_is_reported_on_its_own_sheet() {
         sheet: Some("Plan".into()),
         handles: vec![u64::MAX - 1],
         rules: vec!["unlinked_takeoff".into()],
+        ..Default::default()
     });
     assert_eq!(rules(&r), ["unlinked_takeoff"]);
     assert_eq!(r.findings[0].handles, [u64::MAX - 1]);
+}
+
+#[test]
+fn construction_checks_are_opt_in_until_the_drawing_has_a_construction_cue() {
+    for layer in ["A-ROOM-NAME", "Spaces", "floor_areas"] {
+        let (mut s, _) = blank(6);
+        let h = run(
+            &mut s,
+            Command::Text {
+                at: [0.0, 0.0],
+                height: 0.2,
+                rotation: 0.0,
+                value: "5.25m x 3.25m".into(),
+                style: None,
+            },
+        )[0];
+        let scope = CheckScope {
+            rules: vec!["room_open".into()],
+            ..Default::default()
+        };
+        assert!(s.check_drawing(&scope).findings.is_empty());
+        let enabled = CheckScope {
+            packs: vec!["construction".into()],
+            ..scope.clone()
+        };
+        let r = s.check_drawing(&enabled);
+        assert_eq!(rules(&r), ["room_open"]);
+        assert_eq!(r.findings[0].pack, "construction");
+        assert_eq!(r.findings[0].handles, [h]);
+
+        s.run(Command::NewLayer { name: layer.into() }).unwrap();
+        assert_eq!(rules(&s.check_drawing(&scope)), ["room_open"], "{layer}");
+        let general = CheckScope {
+            packs: vec!["general".into()],
+            ..scope
+        };
+        assert!(s.check_drawing(&general).findings.is_empty(), "{layer}");
+    }
+}
+
+#[test]
+fn takeoff_rows_enable_construction_but_an_explicit_pack_still_controls_it() {
+    let (mut s, _) = blank(6);
+    let h = line(&mut s, 1.0, [0.0, 0.0], [1.0, 0.0]);
+    let mut measurement = Measurement::new(
+        Kind::Length,
+        1.0,
+        s.drawing.units,
+        "Length".into(),
+        "0".into(),
+        s.sheet.clone(),
+    );
+    measurement.handles = vec![u64::MAX];
+    s.takeoff.items.push(measurement);
+    let r = check(&s);
+    assert!(r
+        .findings
+        .iter()
+        .any(|f| f.rule == "unlinked_takeoff" && f.pack == "construction"));
+    assert!(r
+        .findings
+        .iter()
+        .any(|f| f.rule == "layer_zero" && f.pack == "general" && f.handles == [h]));
+
+    let general = s.check_drawing(&CheckScope {
+        packs: vec!["general".into()],
+        ..Default::default()
+    });
+    assert_eq!(rules(&general), ["layer_zero"]);
+    let construction = s.check_drawing(&CheckScope {
+        packs: vec!["construction".into()],
+        ..Default::default()
+    });
+    assert_eq!(rules(&construction), ["unlinked_takeoff"]);
+}
+
+#[test]
+fn centre_marks_are_checked_in_every_unit_and_resolve_layer_linetypes() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        let circle = run(
+            &mut s,
+            Command::Draw(DrawSpec::Circle {
+                centre: [2.0 * k, 3.0 * k],
+                radius: k,
+            }),
+        )[0];
+        let scope = CheckScope {
+            rules: vec!["missing_center_mark".into()],
+            ..Default::default()
+        };
+        let r = s.check_drawing(&scope);
+        assert_eq!(rules(&r), ["missing_center_mark"], "{units}");
+        assert_eq!(r.findings[0].handles, [circle]);
+        assert_eq!(r.findings[0].pack, "general");
+        assert_eq!(r.findings[0].severity, Severity::Info);
+        assert_eq!(r.findings[0].at, Some([2.0 * k, 3.0 * k]));
+
+        // An ordinary line through the centre is not a centre mark.
+        let mark = line(&mut s, k, [0.0, 3.0], [4.0, 3.0]);
+        assert_eq!(rules(&s.check_drawing(&scope)), ["missing_center_mark"]);
+        s.drawing
+            .doc
+            .get_entity_mut(Handle::new(mark))
+            .unwrap()
+            .common_mut()
+            .linetype = "CENTER".into();
+        assert!(s.check_drawing(&scope).findings.is_empty(), "{units}");
+
+        // The same mark may inherit CENTER from its layer.
+        s.drawing
+            .doc
+            .get_entity_mut(Handle::new(mark))
+            .unwrap()
+            .common_mut()
+            .linetype = "ByLayer".into();
+        s.drawing.doc.layers.get_mut("0").unwrap().line_type = "CENTER".into();
+        assert!(s.check_drawing(&scope).findings.is_empty(), "{units}");
+
+        // The tolerance stays 0.5 mm in each drawing unit.
+        let EntityType::Line(mark) = s.drawing.doc.get_entity_mut(Handle::new(mark)).unwrap()
+        else {
+            panic!("expected a line");
+        };
+        mark.start.y += 0.001 * k;
+        mark.end.y += 0.001 * k;
+        assert_eq!(
+            rules(&s.check_drawing(&scope)),
+            ["missing_center_mark"],
+            "{units}"
+        );
+    }
+}
+
+#[test]
+fn only_full_arcs_need_a_centre_mark() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        let owner = s
+            .drawing
+            .doc
+            .block_records
+            .get("*Model_Space")
+            .unwrap()
+            .handle;
+        let mut full = Vec::new();
+        for (i, end) in [0.0, std::f64::consts::TAU, std::f64::consts::FRAC_PI_2]
+            .into_iter()
+            .enumerate()
+        {
+            let mut arc = Arc::from_center_radius_angles(
+                Vector3::new(i as f64 * 4.0 * k, 0.0, 0.0),
+                k,
+                0.0,
+                end,
+            );
+            arc.common.owner_handle = owner;
+            let h = s
+                .drawing
+                .doc
+                .add_entity(EntityType::Arc(arc))
+                .unwrap()
+                .value();
+            if i < 2 {
+                full.push(h);
+            }
+        }
+        let r = s.check_drawing(&CheckScope {
+            rules: vec!["missing_center_mark".into()],
+            ..Default::default()
+        });
+        assert_eq!(r.findings.len(), 2, "{units}: {:?}", r.findings);
+        assert_eq!(
+            r.findings
+                .iter()
+                .flat_map(|f| f.handles.iter().copied())
+                .collect::<Vec<_>>(),
+            full
+        );
+    }
 }
 
 #[test]

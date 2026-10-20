@@ -2,6 +2,11 @@
 
 Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS Mind. It opens DWG and DXF drawings, lets the QS measure and edit, and uses AI to build and check BOQs against the drawing. Public repo (`qs-mind/qiyas`, Apache-2.0, `LICENSE`). Stack: Tauri 2, React, TypeScript, Vite, Rust.
 
+The engine is general; the product focuses on construction. Checks, verification and drafting
+conventions must work on any drawing. Trade rules belong in optional packs: construction first,
+interiors and fit-out next, MEP and structure later. No plane-specific or mechanical-specific
+features, and no general CAD marketing. See `docs/2026-10-20-qiyas-scope-decision.md`.
+
 ## Layout
 
 ```
@@ -389,6 +394,23 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Command line: L, PL, REC, C, A, EL, SPL, PO, H, REVCLOUD, WIPEOUT; typed whole: POLYGON (POL)
   sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y, SOLID (SO) 3 or
   4 points, TRACE width points, MLINE (ML) points, SKETCH points.
+
+## Drafting conventions
+
+- `qiyas-core/src/conventions.rs`: `CenterMark { targets, extension? }` draws crosses through
+  circle and arc centres, extending past the radius. `CenterLine { a, b }` draws the middle
+  of two parallel lines over their shared length plus an extension, or their acute angle
+  bisector. `SymmetryAxis { p1, p2 }` draws an axis between two points. Handles name entities
+  on the current sheet. These use layer `CENTER` and the `CENTER` linetype.
+- `Grid { x: [{label, at}], y: [{label, at}], extent?, bubble? }` draws axes with labelled
+  bubbles at both ends on `GRID`. `extent` is `{min: [x, y], max: [x, y]}`; omitted, the current
+  sheet and axes determine the extent. `bubble` is the radius. Explicit sizes and coordinates use drawing
+  units. Default extension is 2.5 mm on paper, bubble radius 3.5 mm, text height 2.5 mm, all
+  converted using the drawing's units and annotation scale. Long labels shrink to fit their bubble.
+- Each command is one undo step including missing layers and linetypes. Setting a layer's
+  linetype to `CENTER` or `HIDDEN` also adds that standard linetype when absent, in the same
+  undo step. Existing definitions are kept. The command registry exposes these to Mizan
+  through its existing tools.
 
 ## Walls
 
@@ -1164,12 +1186,45 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 - `qiyas-core/src/check.rs`: `Command::CheckDrawing { scope }` (`Session::check_drawing`)
   checks the current sheet, or `scope.sheet`. Optional `handles` and `rules` keep only the
-  findings requested. It reads without changing the drawing or undo history.
-- The 16 rules find short or overshooting ends, duplicates, overlaps, tiny segments, open
+  findings requested. `scope.packs` selects `general` and/or `construction`. Empty selects
+  general, plus construction when the drawing has take-off rows or a layer suggesting rooms,
+  spaces or areas. An explicit `["general"]` keeps construction rules off.
+  It reads without changing the drawing or undo history.
+- Rules find short or overshooting ends, duplicates, overlaps, tiny segments, open
   rooms, room-size text that differs, text collisions and poor paper height, layer 0, explicit
   colours, dimension overrides that differ, literal backslash-n, far-off entities and lost
-  take-off links. `Outcome::Checked` gives each finding's rule, severity, handles, place and
-  message, counts by rule and a short summary. At most 200 findings are listed.
+  take-off links. `room_open`, `room_size_text_differs` and `unlinked_takeoff` belong to
+  construction; the others belong to general. General's informational `missing_center_mark`
+  flags circles and full arcs without a centre mark or centre line through their centre.
+  Automatic `missing_axis` detection is omitted: arbitrary outlines do not reliably identify
+  their intended axis. Use an explicit symmetry expectation instead.
+- `Outcome::Checked` gives each finding's rule, pack, severity, handles, place and message,
+  counts by rule and a short summary. At most 200 findings are listed.
+
+## Verify
+
+- `qiyas-core/src/verify.rs`: `Command::Verify { expectations }` is read-only and returns
+  `Outcome::Verified { results }`, one pass/fail result per expectation, with its measured
+  value and tolerance. Invalid targets fail their own expectation with an explanation.
+  Mizan uses `qiyas_read` with `op: "run"` and `args.command.type: "verify"` before saying done.
+- Each expectation has a `kind`, `targets: [{handle}]`, optional picking `points`, `value`,
+  `tolerance` and `in_metres`. Targets and pick points use the same part selection as
+  `AddConstraint`; distance can also use two literal points. Kinds cover length, distance,
+  angle, radius, area, closed, parallel, perpendicular, tangent, concentric, collinear,
+  horizontal, vertical, coincident, equal, symmetric, inside_bounds, no_self_intersection
+  and count. Count can filter by `layer`, `entity_type` or `block`; bounds are
+  `[[min_x, min_y], [max_x, max_y]]` in drawing coordinates.
+- Lengths use drawing units, or metres with `in_metres`; areas use the corresponding square
+  units and angles use degrees. Defaults are 0.5 mm, 0.1 degree, (0.5 mm)² for areas and zero
+  for counts and intersections. Geometric
+  relations reuse qiyas-param's constraint kinds and residuals without solving or moving
+  the drawing. Whole-outline symmetry accepts a flat closed straight polyline with 3–1024
+  vertices and an axis line; picked point symmetry uses two points and an axis line.
+  Self-intersection checks flatten paths and refuse more than 4096 vertices per path.
+- Relationship results measure deviation from zero: angle or distance error, the largest
+  open-end gap for `closed`, distance outside for `inside_bounds`, or the number of paths
+  crossing or doubling back for `no_self_intersection`. Bounds use analytic extrema and
+  refuse shapes without exact bounds rather than reporting an approximate pass.
 
 ## Drawings, tabs, recents and views
 

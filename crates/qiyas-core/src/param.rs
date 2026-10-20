@@ -1294,6 +1294,16 @@ impl Session {
         targets: &[Target],
         points: &[[f64; 2]],
     ) -> Result<Vec<Ref>, CoreError> {
+        self.picked_refs_for(kind, targets, points, true)
+    }
+
+    fn picked_refs_for(
+        &self,
+        kind: ConstraintKind,
+        targets: &[Target],
+        points: &[[f64; 2]],
+        editing: bool,
+    ) -> Result<Vec<Ref>, CoreError> {
         if targets.is_empty() {
             return Err(invalid("Pick the entities first"));
         }
@@ -1313,7 +1323,11 @@ impl Session {
             if !at.iter().all(|v| v.is_finite()) {
                 return Err(invalid("The points must be numbers"));
             }
-            let h = self.sheet_targets(std::slice::from_ref(t))?[0];
+            let h = if editing {
+                self.sheet_targets(std::slice::from_ref(t))?[0]
+            } else {
+                self.sheet_targets_any(std::slice::from_ref(t))?[0]
+            };
             let geo = geo_of(self.entity(h)).map_err(invalid)?;
             refs.push(Ref {
                 handle: h.value(),
@@ -1324,6 +1338,75 @@ impl Session {
             return Err(invalid("Pick two different parts"));
         }
         Ok(refs)
+    }
+
+    /// A read-only sketch of the same parts AddConstraint picks. Dimensional kinds measure
+    /// against zero; the caller supplies its expectation and tolerance without adding a constraint.
+    pub(crate) fn verification_sketch(
+        &self,
+        kind: ConstraintKind,
+        targets: &[Target],
+        points: &[[f64; 2]],
+    ) -> Result<Sketch, CoreError> {
+        let mut refs = self.picked_refs_for(kind, targets, points, false)?;
+        if matches!(kind, ConstraintKind::Linear | ConstraintKind::Aligned) && refs.len() == 1 {
+            let r = refs[0];
+            let Part::Edge { index } = r.part else {
+                unreachable!("picked a straight edge")
+            };
+            let geo = self.geo(r.handle).expect("validated target");
+            refs = geo
+                .edge_ends(index)
+                .expect("a straight edge")
+                .map(|index| Ref {
+                    handle: r.handle,
+                    part: Part::Point { index },
+                })
+                .to_vec();
+        }
+        let mut built = Built::default();
+        for r in &refs {
+            if !built.ents.contains_key(&r.handle) {
+                let geo = self
+                    .geo(r.handle)
+                    .ok_or_else(|| invalid("The entity has no geometry"))?;
+                built.add(r.handle, &geo);
+            }
+        }
+        // A zero-length direction cannot meaningfully be parallel, tangent or symmetric.
+        for curve in &built.sketch.curves {
+            if let Curve::Line { a, b } = curve {
+                if dist(built.sketch.points[*a], built.sketch.points[*b]) == 0.0 {
+                    return Err(invalid("A zero-length line has no direction"));
+                }
+            }
+        }
+        for (index, curve) in built.sketch.curves.iter().enumerate() {
+            if matches!(curve, Curve::Arc { .. })
+                && built
+                    .sketch
+                    .radius_of(index)
+                    .is_none_or(|r| !r.is_finite() || r <= 0.0)
+            {
+                return Err(invalid("A zero or invalid radius has no round curve"));
+            }
+        }
+        let stored = Stored {
+            id: 0,
+            holder: 0,
+            kind,
+            refs,
+            at: None,
+            dim: kind.is_dimensional().then(|| DimData {
+                name: "verify".into(),
+                expression: "0".into(),
+                rotation: 0.0,
+                sides: [1.0, 1.0],
+            }),
+        };
+        built.sketch.constraints =
+            Self::to_solver(&built, &stored, &BTreeMap::from([("verify".into(), 0.0)]))?;
+        Ok(built.sketch)
     }
 
     /// `Command::AddConstraint`: the geometric constraint `kind` on the parts `targets` pick at
