@@ -1671,7 +1671,7 @@ export const SESSION_CHANGED = "session:changed";
 
 /** What the window should do after a tool, from the tool's result. Bounds in drawing coordinates. */
 export type AiUi = {
-  /** "zoom", "show_sheet", "show_markup" or "redraw". */
+  /** "reveal", "zoom", "show_sheet", "show_markup" or "redraw". */
   action: string;
   bounds?: [[number, number], [number, number]];
   handles?: number[];

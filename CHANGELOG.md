@@ -9,6 +9,8 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Mizan's drawing changes appear live, entity by entity, with consecutive steps queued.
+  Reduced motion shows them at once; a command, undo or drawing switch ends the animation.
 - Mizan can now use every command in Qiyas, discover the properties of drawing objects, and
   make related changes together as one undo step. Outside AI apps have the same access.
 - Check a drawing for gaps, overlaps, stray lines, unreadable or colliding text, room sizes
@@ -41,6 +43,7 @@ section below, so add the section before pushing the tag.
 
 ### Fixed
 
+- Layers and layouts made by Mizan now appear in their panels as soon as the change arrives.
 - Text typed with a literal `\n` now breaks onto a new line. A multiline Text becomes MText
   automatically.
 - AI and MCP measurements share the same checks for empty items and counts of block references.

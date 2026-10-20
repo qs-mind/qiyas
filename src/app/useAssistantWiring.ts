@@ -36,7 +36,7 @@ import type { Sheets } from "./useSheets";
 import type { TakeoffState } from "./useTakeoff";
 
 type Deps = Pick<Shell, "run" | "setSettingsOpen" | "viewport" | "setSideTab"> &
-  Pick<Sheets, "batch" | "setSheetBlock" | "setHidden" | "setRenderProgress" | "redraw"> &
+  Pick<Sheets, "batch" | "sheet" | "queueReveal" | "cancelReveal" | "setSheetBlock" | "setHidden" | "setRenderProgress" | "redraw"> &
   Pick<TakeoffState, "refreshTakeoffAndBoq" | "setCompared" | "setAiHighlight"> &
   Pick<Layers, "syncInfo"> & {
     t: T;
@@ -82,6 +82,9 @@ export function useAssistantWiring({
   setSettingsOpen,
   viewport,
   batch,
+  sheet,
+  queueReveal,
+  cancelReveal,
   setSheetBlock,
   setHidden,
   setRenderProgress,
@@ -97,6 +100,16 @@ export function useAssistantWiring({
 }: Deps) {
   /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
   function applyAiUi(ui: AiUi) {
+    if (ui.action === "reveal") {
+      if (ui.sheet?.toLowerCase() === sheet.toLowerCase() &&
+          !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        queueReveal(ui.handles ?? []);
+      } else {
+        cancelReveal(false);
+        void run(() => redraw());
+      }
+      return;
+    }
     run(async () => {
       if (ui.hidden) {
         // The model may write a layer's name in another case; the panel uses the drawing's.
@@ -104,6 +117,7 @@ export function useAssistantWiring({
         setHidden(new Set(info?.layers.map((l) => l.name).filter((n) => names.has(n.toUpperCase()))));
       }
       if (ui.sheet && (ui.action === "show_sheet" || ui.action === "zoom")) {
+        cancelReveal(false);
         setSheetBlock(ui.sheet);
         measure.cancel();
         await redraw(!ui.bounds);
@@ -119,12 +133,11 @@ export function useAssistantWiring({
 
   const assistant = useAssistant({
     lang,
-    // The take-off is drawn from `items`; the batch is fetched again only when the drawing
-    // itself changed (divide_along, measure_along).
     onMutated: async (label) => {
       if (label === "compare") setCompared(true);
       await run(async () => {
         await refreshTakeoffAndBoq();
+        await syncInfo();
         await redraw();
       });
       await autosave();
@@ -139,6 +152,7 @@ export function useAssistantWiring({
   onMcpChange.current = async () => {
     await run(async () => {
       await refreshTakeoffAndBoq();
+      await syncInfo();
       await redraw();
     });
     await autosave();
@@ -184,6 +198,7 @@ export function useAssistantWiring({
   /** Undoes the card's change, unless the take-off changed since (then the card says so). */
   const undoCard = useCallback(
     async (card: ToolCardItem) => {
+      cancelReveal();
       let undone = false;
       await run(async () => {
         undone = await aiUndo();

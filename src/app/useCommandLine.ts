@@ -35,7 +35,7 @@ type Deps = {
   commands: Commands;
   sheets: Pick<
     Sheets,
-    "batch" | "renderProgress" | "split" | "setSplit" | "hidden" | "chooseSheet" | "ucsIcon" | "chooseUcsIcon"
+    "batch" | "renderProgress" | "split" | "setSplit" | "hidden" | "chooseSheet" | "ucsIcon" | "chooseUcsIcon" | "cancelReveal"
   >;
   layers: Pick<
     Layers,
@@ -200,6 +200,7 @@ export function useCommandLine({
 
   /** Runs what the command line asks for, through the same handlers as the ribbon and keys. */
   function onCommand(a: Action) {
+    sheets.cancelReveal();
     setNotice(null);
     // A running script: nothing else runs until it ends or is stopped.
     if (scriptLine !== null) {

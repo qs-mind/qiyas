@@ -47,8 +47,14 @@ export default function App() {
   // The BOQ and conflicts tabs want a wider right panel: their width is kept apart.
   const rightSlot = shell.sideTab === "boq" || shell.sideTab === "conflicts" ? "rightWide" : "right";
   const options = useOptions({ t, info, setError: shell.setError });
-  const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
+  const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, focusDrawing } =
     shell;
+  /** User commands end Mizan's animation before running. Background refreshes use shell.run. */
+  const cancelRevealRef = useRef<(() => void) | null>(null);
+  const run = async (step: () => Promise<void>) => {
+    cancelRevealRef.current?.();
+    await shell.run(step);
+  };
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
   const { autosaveOff, autosave } = useAutosave(t, setError);
   /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
@@ -60,7 +66,8 @@ export default function App() {
   const { items, setSelectedId, setCompared, aiHighlight, setAiHighlight, setInfoCard, refreshTakeoffAndBoq } = takeoffState;
   /** The tool hook comes after the sheets (it takes their state); the sheets cancel it through this. */
   const measureRef = useRef<{ cancel(): void } | null>(null);
-  const sheets = useSheets({ switchGen, viewport, run, autosave, setInfo, refreshTabs, items, measure: measureRef });
+  const sheets = useSheets({ switchGen, viewport, run: shell.run, autosave, setInfo, refreshTabs, items, measure: measureRef });
+  cancelRevealRef.current = sheets.cancelReveal;
   const {
     batch,
     batchHeld,
@@ -71,10 +78,14 @@ export default function App() {
     hidden,
     setHidden,
     fitMatch,
-    redraw,
+    redraw: redrawSheet,
     syncPictures,
     chooseSheet,
   } = sheets;
+  const redraw = async (fit = false) => {
+    sheets.cancelReveal(false);
+    await redrawSheet(fit);
+  };
   const layers = useLayers({
     switchGen,
     info,
@@ -83,12 +94,16 @@ export default function App() {
     run,
     autosave,
     redraw,
+    cancelReveal: sheets.cancelReveal,
     refreshTakeoffAndBoq,
     hidden,
     setHidden,
   });
   const { setGroupAsk, runDrawingCommand, runLayerCommand, groupOf, syncInfo } = layers;
-  const toolChoice = useToolChoice(focusDrawing);
+  const toolChoice = useToolChoice(() => {
+    sheets.cancelReveal();
+    focusDrawing();
+  });
   const { tool, lastPoint, preset, chooseTool } = toolChoice;
   const attach = useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, syncPictures });
   /** `apply` and `onCommand` come after the hooks that call them back (a block placed, a
@@ -202,15 +217,18 @@ export default function App() {
     switchGen,
     info,
     setInfo,
-    run,
+    run: shell.run,
     autosave,
     setSettingsOpen,
     viewport,
     batch,
+    sheet,
+    queueReveal: sheets.queueReveal,
+    cancelReveal: sheets.cancelReveal,
     setSheetBlock,
     setHidden,
     setRenderProgress,
-    redraw,
+    redraw: redrawSheet,
     refreshTakeoffAndBoq,
     setCompared,
     setAiHighlight,
@@ -271,7 +289,7 @@ export default function App() {
     info,
     measure,
     assistant,
-    shell,
+    shell: { ...shell, run },
     drafting: { toggleDrafting },
     toolChoice,
     commands,
@@ -289,7 +307,9 @@ export default function App() {
   });
   onCommandRef.current = onCommand;
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
-  const { highlight, overlay } = useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight });
+  const { highlight, overlay } = useOverlay({
+    tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight, revealOverlay: sheets.revealOverlay,
+  });
   const comments = useComments({ sideTab: shell.sideTab, viewport, sheet, chooseSheet, switchGen, info, batch });
 
   // An empty model is said next to the file name, not counted as a reading problem.

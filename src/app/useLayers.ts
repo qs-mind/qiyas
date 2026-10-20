@@ -22,6 +22,7 @@ type Deps = {
   run(step: () => Promise<void>): Promise<void>;
   autosave(): Promise<void>;
   redraw(): Promise<void>;
+  cancelReveal(): void;
   refreshTakeoffAndBoq(): Promise<void>;
   hidden: Set<string>;
   setHidden(hidden: Set<string>): void;
@@ -35,6 +36,7 @@ export function useLayers({
   run,
   autosave,
   redraw,
+  cancelReveal,
   refreshTakeoffAndBoq,
   hidden,
   setHidden,
@@ -55,6 +57,7 @@ export function useLayers({
   /** Runs a layer, group or property command (its error goes to the caller), then reads the
    *  drawing again: the batch, the take-off, the layers, groups and hidden layers. */
   async function runDrawingCommand(cmd: Command) {
+    cancelReveal();
     const gen = switchGen.current;
     const outcome = await runCommand(cmd);
     await redraw();
@@ -100,6 +103,7 @@ export function useLayers({
    *  shows the calls that went through and the canvas is redrawn from the core. */
   async function applyHidden(target: Set<string>) {
     if (layerBusy.current) return;
+    cancelReveal();
     layerBusy.current = true;
     setLayersBusy(true);
     const done = new Set(hidden);
@@ -141,6 +145,7 @@ export function useLayers({
    *  and redraws. Not an undo step. */
   async function viewCommand(cmd: Command) {
     if (layerBusy.current) return;
+    cancelReveal();
     layerBusy.current = true;
     setLayersBusy(true);
     let failure: string | null = null;
@@ -168,6 +173,7 @@ export function useLayers({
 
   /** Shows every layer, ending an isolation too. */
   const showAll = useCallback(async () => {
+    cancelReveal();
     if (info?.isolated_layer) {
       try {
         await runCommand({ type: "unisolate_layers" });

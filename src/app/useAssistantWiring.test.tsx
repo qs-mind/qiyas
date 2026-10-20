@@ -23,6 +23,7 @@ function setup() {
   const setHidden = vi.fn();
   const cancel = vi.fn();
   const setAiHighlight = vi.fn();
+  const cancelReveal = vi.fn();
   const deps = {
     t: (key: string) => key,
     lang: "en",
@@ -31,6 +32,9 @@ function setup() {
     run: (step: () => Promise<void>) => step(),
     viewport: { current: { fitTo } },
     batch: null,
+    sheet: "*Model_Space",
+    queueReveal: vi.fn(),
+    cancelReveal,
     setSheetBlock,
     setHidden,
     redraw,
@@ -39,7 +43,7 @@ function setup() {
     tool: "select",
   } as unknown as Parameters<typeof useAssistantWiring>[0];
   renderHook(() => useAssistantWiring(deps));
-  return { order, fitTo, redraw, setSheetBlock, setHidden, cancel, setAiHighlight };
+  return { order, fitTo, redraw, setSheetBlock, setHidden, cancel, setAiHighlight, cancelReveal };
 }
 
 test("a view result changes the sheet before zooming to its bounds", async () => {
@@ -52,6 +56,7 @@ test("a view result changes the sheet before zooming to its bounds", async () =>
   expect(view.order).toEqual(["sheet", "redraw", "zoom"]);
   expect(view.setSheetBlock).toHaveBeenCalledWith("*Paper_Space");
   expect(view.cancel).toHaveBeenCalledTimes(1);
+  expect(view.cancelReveal).toHaveBeenCalledWith(false);
   expect(view.redraw).toHaveBeenCalledWith(false);
   expect(view.setAiHighlight).toHaveBeenCalledWith([7]);
 });

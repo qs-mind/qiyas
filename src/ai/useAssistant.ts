@@ -79,8 +79,9 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       }
       if (event.type === "tool_result" && !event.is_error) {
         const tool = mutating.current.get(event.id);
-        if (tool) callbacks.current.onMutated(tool);
+        // Reserve a reveal before the mutation's redraw can fetch the changed drawing.
         if (event.ui) callbacks.current.onUi(event.ui);
+        if (tool) callbacks.current.onMutated(tool);
       }
     });
     on<AiDone>("ai:done", ({ error }) => {

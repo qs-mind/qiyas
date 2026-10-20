@@ -1126,6 +1126,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## AI assistant and settings
 
+Mizan's `reveal` results draw the changed entities in order in the highlight overlay over the
+previous batch, then show the new batch (`viewport/reveal.ts`, `useSheets`, `useAssistantWiring`).
+Steps queue; redraws wait, and zoom cannot expose a pending batch. Reduced motion, another
+sheet, empty or very large steps show at once. A user command, undo or drawing/sheet switch
+cancels the queue and shows the current drawing. Mutation refreshes also sync layers and layouts.
+
 - `qiyas-ai/src/surface.rs` is the catalogue shared by Mizan and MCP. It offers exactly three
   tools: `qiyas_read { op, args }`, `qiyas_execute { op, args }` and
   `qiyas_capture { source, args }`. `args` is a JSON object written as a string (an object is
@@ -1163,7 +1169,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `QIYAS_AI_MOCK=1` with a debug build (`pnpm tauri dev`) uses a canned provider: it says a
   sentence, measures the first polyline on layer A-WALL and answers; with a selection in the
   message's `[state]` it calls `qiyas_capture` with source screen and `qiyas_execute` select on it instead. No key, no
-  network. Release builds leave it out.
+  network. Ask "draw a demo" or "ارسم" without a selection to see an outline and its partitions
+  drawn in two steps on MIZAN-DEMO. Release builds leave it out.
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.

@@ -10,6 +10,7 @@ import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import type { Batch } from "../viewport/batch";
 
 /** Shows a ribbon tab; the ones after Annotate are under "More". */
 function goTab(name: string) {
@@ -48,6 +49,11 @@ const core = vi.hoisted(() => ({
   /** The block edited in place, as drawing_info says. */
   blockEdit: null as string | null,
   hasBoq: false,
+  batch: null as ArrayBuffer | null,
+  batchVersion: 1,
+  layers: ["0"],
+  undoBatch: null as ArrayBuffer | null,
+  otherBatch: null as ArrayBuffer | null,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -87,7 +93,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "boq":
         return core.hasBoq ? { source: "/d/bill.xlsx", imported: "", items: [], skipped_rows: 0 } : null;
       case "drawing_info":
-        return info(PLAN);
+        return info(core.active === 2 && core.otherBatch ? "/d/other.dwg" : PLAN);
       case "get_drafting":
         return {
           osnap: true,
@@ -101,9 +107,25 @@ vi.mock("@tauri-apps/api/core", () => ({
           precision: 3,
         };
       case "batch_version":
-        return 1;
+        return core.batchVersion;
       case "tabs":
-        return { tabs: [{ id: 1, path: PLAN, title: "plan.dwg", dirty: false }], active: core.active };
+        return {
+          tabs: [
+            { id: 1, path: PLAN, title: "plan.dwg", dirty: false },
+            ...(core.otherBatch ? [{ id: 2, path: "/d/other.dwg", title: "other.dwg", dirty: false }] : []),
+          ],
+          active: core.active,
+        };
+      case "activate_tab":
+        core.active = args!.id as number;
+        core.batch = core.otherBatch;
+        core.batchVersion += 1;
+        return info("/d/other.dwg");
+      case "undo":
+        if (!core.undoBatch) return false;
+        core.batch = core.undoBatch;
+        core.batchVersion += 1;
+        return true;
       case "run_script":
         if (core.scriptHold) await core.scriptHold;
         if (core.scriptOpens) core.active = 2;
@@ -118,7 +140,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         };
       case "render_batch":
         // "Not modified": the window keeps the batch it has.
-        return new Uint8Array([0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0]).buffer;
+        return core.batch ?? new Uint8Array([0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0]).buffer;
       case "pick":
         return { top: 42, entity: 42, chain: [], xref: null, kind: "Line" };
       case "paper_catalog":
@@ -192,9 +214,15 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   message: vi.fn(async () => "No"),
 }));
 /** The canvas needs WebGL; the fake keeps its props so a test can click the drawing. */
-const canvas = vi.hoisted(() => ({ props: null as null | { onClick(...a: unknown[]): void } }));
+type CanvasProps = {
+  onClick(...a: unknown[]): void;
+  onZoomHint(px: number): Promise<void>;
+  batch: Batch | null;
+  overlay: Float64Array | null;
+};
+const canvas = vi.hoisted(() => ({ props: null as CanvasProps | null }));
 vi.mock("../viewport/Viewport", () => ({
-  Viewport: (props: { onClick(...a: unknown[]): void }) => {
+  Viewport: (props: CanvasProps) => {
     canvas.props = props;
     return null;
   },
@@ -207,7 +235,7 @@ function info(path: string) {
       { name: "Model", block: "*Model_Space", is_model: true },
       { name: "Layout1", block: "*Paper_Space", is_model: false },
     ],
-    layers: [{ name: "0", color: [255, 255, 255], off: false, frozen: false, locked: false }],
+    layers: core.layers.map((name) => ({ name, color: [255, 255, 255], off: false, frozen: false, locked: false })),
     units: "millimetres",
     problems: [],
     arabic_reversed: false,
@@ -253,9 +281,17 @@ beforeEach(() => {
   core.settings = {};
   core.blockEdit = null;
   core.hasBoq = false;
+  core.batch = null;
+  core.batchVersion = 1;
+  core.layers = ["0"];
+  core.undoBatch = null;
+  core.otherBatch = null;
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 /** Lets the window's async work finish. */
 const settle = async () => {
@@ -284,6 +320,78 @@ const typeLine = async (text: string) => {
   fireEvent.keyDown(input, { key: "Enter" });
   await settle();
 };
+
+/** A small real render batch: one horizontal segment per top-level handle, no text or fills. */
+function drawingBatch(handles: number[]): ArrayBuffer {
+  const rangesAt = 112;
+  const segmentsAt = rangesAt + 32 * handles.length;
+  const colorsAt = segmentsAt + 16 * handles.length;
+  const buf = new ArrayBuffer(Math.ceil((colorsAt + 4 * handles.length) / 8) * 8);
+  const view = new DataView(buf);
+  view.setUint32(0, 0x51495942, true);
+  view.setUint32(4, 2, true);
+  [0, 0, 100, 10, 0, 0].forEach((n, i) => view.setFloat64(8 + 8 * i, n, true));
+  const sections = [[3, rangesAt, 32 * handles.length], [4, segmentsAt, 0],
+    [5, segmentsAt, 16 * handles.length], [6, colorsAt, 4 * handles.length]];
+  view.setUint32(56, sections.length, true);
+  sections.forEach((section, i) => section.forEach((n, j) => view.setUint32(60 + 12 * i + 4 * j, n, true)));
+  handles.forEach((handle, i) => {
+    const at = rangesAt + 32 * i;
+    view.setBigUint64(at, BigInt(handle), true);
+    view.setBigUint64(at + 8, BigInt(handle), true);
+    view.setUint32(at + 16, 0xffffffff, true);
+    view.setUint32(at + 20, i, true);
+    view.setUint32(at + 24, 1, true);
+    [handle * 10, 0, handle * 10 + 10, 0].forEach((n, j) => view.setFloat32(segmentsAt + 16 * i + 4 * j, n, true));
+    view.setUint32(colorsAt + 4 * i, 0xffffff, true);
+  });
+  return buf;
+}
+
+function setDrawing(handles: number[]) {
+  core.batch = drawingBatch(handles);
+  core.batchVersion += 1;
+}
+
+const shownHandles = () => {
+  const ranges = canvas.props?.batch?.ranges;
+  return ranges ? Array.from({ length: ranges.length }, (_, i) => Number(ranges.top(i))) : [];
+};
+
+/** Advances just the callbacks requested before this frame; a queued reveal starts next frame. */
+function manualFrames() {
+  let id = 0;
+  let now = performance.now();
+  const pending = new Map<number, FrameRequestCallback>();
+  const request = vi.fn((callback: FrameRequestCallback) => {
+    pending.set(++id, callback);
+    return id;
+  });
+  vi.stubGlobal("requestAnimationFrame", request);
+  vi.stubGlobal("cancelAnimationFrame", (key: number) => pending.delete(key));
+  return {
+    request,
+    async advance(ms: number) {
+      now += ms;
+      const callbacks = [...pending.values()];
+      pending.clear();
+      await act(async () => callbacks.forEach((callback) => callback(now)));
+      await settle();
+    },
+  };
+}
+
+async function reveal(id: string, handles: number[], sheet = "*Model_Space") {
+  await emit("ai:event", {
+    type: "tool_call", id, name: "qiyas_execute", label: "draw",
+    input: { op: "draw", args: "{}" }, mutating: true,
+  });
+  await emit("ai:event", {
+    type: "tool_result", id, is_error: false, summary: "Drawn", handles,
+    ui: { action: "reveal", sheet, handles },
+  });
+  await settle();
+}
 
 /** What the drawing's open sends to the core after the core has it: its drafting settings, its
  *  take-off, BOQ and conflicts, then its batch. */
@@ -881,6 +989,174 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
   await settle();
   expect(panel.getByText(en["conflicts.none"])).toBeTruthy();
   expect(panel.queryByText(en["conflicts.notCompared"])).toBeNull();
+});
+
+test("a reveal is queued and layers sync while the previous drawing stays on screen", async () => {
+  setDrawing([1]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+  expect(shownHandles()).toEqual([1]);
+
+  core.layers.push("AI-WALLS");
+  setDrawing([1, 7]);
+  await reveal("first", [7]);
+  expect(screen.getAllByText("AI-WALLS").length).toBeGreaterThan(0);
+  expect(shownHandles()).toEqual([1]);
+  await frames.advance(0);
+  await frames.advance(200);
+  expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 75, 0]);
+
+  setDrawing([1, 7, 8]);
+  await reveal("second", [8]);
+  // A zoom asks for new glyphs, but it must keep the new entities out of the base drawing.
+  await act(async () => canvas.props!.onZoomHint(2));
+  await settle();
+  expect(shownHandles()).toEqual([1]);
+  expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 75, 0]);
+  expect(core.calls).toContain("takeoff null");
+  expect(core.calls).toContain("drawing_info null");
+
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([1, 7]);
+  await frames.advance(0);
+  await frames.advance(200);
+  expect(Array.from(canvas.props!.overlay!)).toEqual([80, 0, 85, 0]);
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([1, 7, 8]);
+  expect(canvas.props!.overlay).toBeNull();
+});
+
+test("a fetched batch containing a later reveal keeps those entities hidden until their turn", async () => {
+  setDrawing([1]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+  // The core already finished both steps before the first render batch was fetched.
+  setDrawing([1, 7, 8]);
+  await reveal("first", [7]);
+  await reveal("second", [8]);
+  await frames.advance(0);
+  await frames.advance(200);
+  expect(shownHandles()).toEqual([1]);
+  expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 75, 0]);
+
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([1]);
+  expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 80, 0]);
+  await frames.advance(0);
+  await frames.advance(200);
+  expect(shownHandles()).toEqual([1]);
+  expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 80, 0, 80, 0, 85, 0]);
+
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([1, 7, 8]);
+  expect(canvas.props!.overlay).toBeNull();
+});
+
+test("reduced motion reveals nothing and shows the final drawing at once", async () => {
+  const matchMedia = window.matchMedia;
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    ...matchMedia(query),
+    matches: query === "(prefers-reduced-motion: reduce)",
+  }));
+  setDrawing([1]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+
+  setDrawing([1, 7]);
+  await reveal("still", [7]);
+  expect(shownHandles()).toEqual([1, 7]);
+  expect(canvas.props!.overlay).toBeNull();
+  expect(frames.request).not.toHaveBeenCalled();
+});
+
+test.each([
+  { reason: "another sheet", sheet: "*Paper_Space", handles: [7] },
+  { reason: "no drawable handles", sheet: "*Model_Space", handles: [] },
+])("a reveal with $reason shows the current drawing without animation", async ({ sheet, handles }) => {
+  setDrawing([1]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+  setDrawing([1, 7]);
+
+  await reveal("immediate", handles, sheet);
+  expect(shownHandles()).toEqual([1, 7]);
+  expect(canvas.props!.overlay).toBeNull();
+  expect(frames.request).not.toHaveBeenCalled();
+});
+
+test("a user command cancels the active and queued reveals and shows the final drawing", async () => {
+  setDrawing([1]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+  setDrawing([1, 7]);
+  await reveal("first", [7]);
+  await frames.advance(0);
+  await frames.advance(200);
+  setDrawing([1, 7, 8]);
+  await reveal("second", [8]);
+  expect(shownHandles()).toEqual([1]);
+  expect(canvas.props!.overlay!.length).toBeGreaterThan(0);
+
+  await typeLine("COUNT DOOR");
+  expect(shownHandles()).toEqual([1, 7, 8]);
+  expect(canvas.props!.overlay).toBeNull();
+  // Finishing the old timeline cannot bring either snapshot or overlay back.
+  await frames.advance(3000);
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([1, 7, 8]);
+  expect(canvas.props!.overlay).toBeNull();
+});
+
+test("undo cancels the active and queued reveals and keeps the undone drawing", async () => {
+  setDrawing([1]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+  setDrawing([1, 7]);
+  await reveal("first", [7]);
+  await frames.advance(0);
+  await frames.advance(200);
+  setDrawing([1, 7, 8]);
+  await reveal("second", [8]);
+  core.undoBatch = drawingBatch([1, 7]);
+
+  await typeLine("UNDO");
+  expect(core.calls).toContain("undo null");
+  expect(shownHandles()).toEqual([1, 7]);
+  expect(canvas.props!.overlay).toBeNull();
+  await frames.advance(3000);
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([1, 7]);
+  expect(canvas.props!.overlay).toBeNull();
+});
+
+test("switching drawings cancels the active and queued reveals from the drawing left behind", async () => {
+  setDrawing([1]);
+  core.otherBatch = drawingBatch([9]);
+  await mount();
+  await clickOpen();
+  const frames = manualFrames();
+  setDrawing([1, 7]);
+  await reveal("first", [7]);
+  await frames.advance(0);
+  await frames.advance(200);
+  setDrawing([1, 7, 8]);
+  await reveal("second", [8]);
+
+  fireEvent.click(screen.getByRole("tab", { name: "other.dwg" }));
+  await settle();
+  expect(core.calls).toContain('activate_tab {"id":2,"keepConversation":false}');
+  expect(shownHandles()).toEqual([9]);
+  expect(canvas.props!.overlay).toBeNull();
+  await frames.advance(3000);
+  await frames.advance(3000);
+  expect(shownHandles()).toEqual([9]);
+  expect(canvas.props!.overlay).toBeNull();
 });
 
 test("an area marked with the area tool reaches Mizan's composer, made after the tool", async () => {
