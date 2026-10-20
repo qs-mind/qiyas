@@ -92,6 +92,12 @@ pub fn command_schema() -> Schema {
     schema_for!(Command)
 }
 
+/// Reads a command, keeping the field path in a bad input's error.
+pub fn parse_command(value: Value) -> Result<Command, String> {
+    serde_path_to_error::deserialize(value)
+        .map_err(|error| format!("{} at {}", error.inner(), error.path()))
+}
+
 impl Registry {
     fn build() -> Registry {
         let root = command_schema().to_value();

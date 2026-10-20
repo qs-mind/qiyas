@@ -1685,7 +1685,7 @@ export type AiUi = {
 export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_call"; id: string; name: string; input: unknown; mutating: boolean }
+  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean }
   | {
       type: "tool_result";
       id: string;

@@ -158,18 +158,17 @@ impl Session {
         }
     }
 
-    /// `Command::Batch`: `commands` in order as one undo step, all or nothing. With `layer` they
-    /// run on that layer (made when the drawing has none of that name) and with `color` as the
-    /// current colour; the current state is put back after. A failing command's error says
-    /// which one it was (`CoreError::Step`, from 0).
-    pub(crate) fn run_batch(
+    /// Runs `f` in one transaction, on `layer` and with `color` when given. A missing layer is
+    /// made inside the transaction. The temporary current state is put back after `f`.
+    pub fn batch_with<T>(
         &mut self,
-        commands: Vec<Command>,
+        source: Source,
+        label: &str,
         layer: Option<String>,
         color: Option<String>,
-        source: Source,
-    ) -> Result<Outcome, CoreError> {
-        self.transaction(source, "batch", |s| {
+        f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        self.transaction(source, label, |s| {
             let before = s.current.clone();
             let mut now = before.clone();
             if let Some(name) = layer.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -193,6 +192,24 @@ impl Session {
             if restore {
                 s.run_as(Command::SetCurrent { current: now }, source)?;
             }
+            let value = f(s)?;
+            if restore {
+                s.run_as(Command::SetCurrent { current: before }, source)?;
+            }
+            Ok(value)
+        })
+    }
+
+    /// `Command::Batch`: `commands` in order as one undo step, all or nothing. A failing
+    /// command's error says which one it was (`CoreError::Step`, from 0).
+    pub(crate) fn run_batch(
+        &mut self,
+        commands: Vec<Command>,
+        layer: Option<String>,
+        color: Option<String>,
+        source: Source,
+    ) -> Result<Outcome, CoreError> {
+        self.batch_with(source, "batch", layer, color, |s| {
             let mut outcomes = Vec::with_capacity(commands.len());
             for (index, command) in commands.into_iter().enumerate() {
                 let label = command.label();
@@ -207,9 +224,6 @@ impl Session {
                     }
                 }
             }
-            if restore {
-                s.run_as(Command::SetCurrent { current: before }, source)?;
-            }
             Ok(Outcome::Batch {
                 added: s.last_change.added.clone(),
                 outcomes,
@@ -220,6 +234,16 @@ impl Session {
     /// What the last `run`, `run_as` or transaction did to the drawing's entities.
     pub fn last_change(&self) -> &Change {
         &self.last_change
+    }
+
+    /// Changes when the drawing changes, including its layers and styles.
+    pub fn document_revision(&self) -> u64 {
+        self.document_revision
+    }
+
+    /// Changes when a step is committed, even when the undo stack is full.
+    pub fn history_revision(&self) -> u64 {
+        self.history.revision()
     }
 
     /// The steps that can be undone (oldest first) and redone (next first).

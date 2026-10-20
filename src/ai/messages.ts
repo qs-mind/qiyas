@@ -7,6 +7,8 @@ export type ToolCardItem = {
   kind: "tool";
   id: string;
   name: string;
+  /** The command or operation shown on the card. */
+  label?: string | null;
   input: unknown;
   status: ToolStatus;
   /** One line from the tool's result; empty while it runs. */
@@ -95,6 +97,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
             kind: "tool",
             id: action.id,
             name: action.name,
+            label: action.label,
             input: action.input,
             status: "running",
             summary: "",

@@ -498,6 +498,8 @@ pub(crate) struct History {
     /// The steps of the groups open now (a batch, a transaction), innermost last: each closes
     /// into one step of the group around it, or of the history.
     groups: Vec<Vec<Entry>>,
+    /// Changes whenever a step reaches the undo stack, even when the stack is full.
+    revision: u64,
 }
 
 impl History {
@@ -520,6 +522,7 @@ impl History {
     /// Pushes a step on the undo stack, dropping the oldest past `MAX_STEPS` (the floor drops
     /// with it).
     fn push(&mut self, entry: Entry) {
+        self.revision = self.revision.wrapping_add(1);
         if push_capped(&mut self.undo, entry) {
             self.floor = self.floor.saturating_sub(1);
         }
@@ -582,6 +585,10 @@ impl History {
     /// How many steps can be undone, floor or not.
     pub(crate) fn undo_len(&self) -> usize {
         self.undo.len()
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Undo stops with `floor` steps left (0: never stops).

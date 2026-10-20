@@ -98,18 +98,19 @@ export function useAssistantWiring({
   /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
   function applyAiUi(ui: AiUi) {
     run(async () => {
-      if (ui.action === "show_sheet" && ui.sheet) {
+      if (ui.hidden) {
+        // The model may write a layer's name in another case; the panel uses the drawing's.
+        const names = new Set(ui.hidden.map((n) => n.toUpperCase()));
+        setHidden(new Set(info?.layers.map((l) => l.name).filter((n) => names.has(n.toUpperCase()))));
+      }
+      if (ui.sheet && (ui.action === "show_sheet" || ui.action === "zoom")) {
         setSheetBlock(ui.sheet);
         measure.cancel();
-        await redraw(true);
+        await redraw(!ui.bounds);
       } else if (ui.action === "redraw") {
-        if (ui.hidden) {
-          // The model may write a layer's name in another case; the panel uses the drawing's.
-          const names = new Set(ui.hidden.map((n) => n.toUpperCase()));
-          setHidden(new Set(info?.layers.map((l) => l.name).filter((n) => names.has(n.toUpperCase()))));
-        }
         await redraw();
-      } else if (ui.bounds) {
+      }
+      if (ui.bounds) {
         setAiHighlight(ui.handles ?? []);
         viewport.current?.fitTo(ui.bounds);
       }
@@ -120,8 +121,8 @@ export function useAssistantWiring({
     lang,
     // The take-off is drawn from `items`; the batch is fetched again only when the drawing
     // itself changed (divide_along, measure_along).
-    onMutated: async (tool) => {
-      if (tool === "compare_boq") setCompared(true);
+    onMutated: async (label) => {
+      if (label === "compare") setCompared(true);
       await run(async () => {
         await refreshTakeoffAndBoq();
         await redraw();

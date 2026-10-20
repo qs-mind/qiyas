@@ -70,68 +70,7 @@ fn assert_strict_keywords(name: &str, v: &Value) {
 fn catalogue_schemas_are_strict_objects() {
     let tools = catalogue();
     let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-    assert_eq!(
-        names,
-        [
-            "list_drawings",
-            "new_drawing",
-            "open_drawing",
-            "switch_drawing",
-            "save_drawing",
-            "close_drawing",
-            "list_sheets",
-            "set_sheet",
-            "list_layers",
-            "show_layers",
-            "find_entities",
-            "get_entity",
-            "read_text",
-            "read_tables",
-            "read_dimensions",
-            "block_summary",
-            "measure_length",
-            "measure_area",
-            "count_blocks",
-            "add_measurement",
-            "set_height",
-            "list_takeoff",
-            "remove_measurement",
-            "set_description",
-            "import_boq",
-            "list_boq",
-            "link_boq",
-            "compare_boq",
-            "list_conflicts",
-            "resolve_conflict",
-            "add_markup",
-            "add_dimension",
-            "set_annotation_scale",
-            "add_comment",
-            "list_comments",
-            "measure_geometry",
-            "divide_along",
-            "measure_along",
-            "id_point",
-            "extract_data",
-            "zoom_to",
-            "add_text",
-            "room_areas",
-            "label_spaces",
-            "add_table",
-            "edit_table_cell",
-            "draw",
-            "insert_block",
-            "modify",
-            "edit",
-            "erase",
-            "set_text",
-            "undo_last",
-            "view_image",
-            "view_screen",
-            "get_selection",
-            "select_entities",
-        ]
-    );
+    assert_eq!(names, ["qiyas_read", "qiyas_execute", "qiyas_capture"]);
     for tool in &tools {
         let schema = &tool.input_schema;
         assert_eq!(schema["type"], "object", "{}", tool.name);
@@ -392,19 +331,21 @@ fn view_image_shows_text_and_solid_fills() {
         dark_pixels(&png)
     };
     assert_eq!(picture(&mut session), 0, "an empty corner of the sheet");
-    execute(
+    qiyas_ai::surface::run_session(
         &mut session,
-        "add_text",
-        &json!({ "texts": [{ "text": "MAJLIS", "point": [101, 102], "height": 1.0 }] }),
+        qiyas_ai::surface::EXECUTE,
+        "run",
+        &json!({ "command": {"type":"text", "value": "MAJLIS", "at": [101, 102], "height": 1.0, "rotation":0} }),
         Source::Ai,
     )
     .unwrap();
     let text = picture(&mut session);
     assert!(text > 500, "the letters: {text} dark pixels");
-    execute(
+    qiyas_ai::surface::run_session(
         &mut session,
-        "draw",
-        &json!({ "shapes": [{ "kind": "hatch", "points": [[107, 101], [109, 101], [109, 104], [107, 104]] }] }),
+        qiyas_ai::surface::EXECUTE,
+        "run",
+        &json!({ "command": {"type":"draw", "kind": "hatch", "points": [[107, 101], [109, 101], [109, 104], [107, 104]], "pattern":"solid"} }),
         Source::Ai,
     )
     .unwrap();
@@ -453,16 +394,28 @@ fn unknown_tool_is_an_error() {
     let (_dir, mut session) = sample();
     let err = execute(&mut session, "delete_everything", &json!({}), Source::Ai).unwrap_err();
     assert!(matches!(err, ToolError::UnknownTool(ref n) if n == "delete_everything"));
-    // Every tool in the catalogue is known to `execute`, but the file and window tools: the
-    // app's host runs those, outside the session.
-    for tool in catalogue()
-        .into_iter()
-        .filter(|t| !qiyas_ai::is_host_tool(t.name) && !qiyas_ai::is_window_tool(t.name))
-    {
-        let result = execute(&mut session, tool.name, &json!({}), Source::Ai);
+    // Every offered tool routes to its runner with valid input.
+    for tool in catalogue() {
+        let input = match tool.name {
+            qiyas_ai::surface::READ => json!({"op": "state", "args": "{}"}),
+            qiyas_ai::surface::EXECUTE => json!({"op": "run", "args": {"command": {
+                "type": "draw", "kind": "line", "a": [30, 0], "b": [35, 0]
+            }}}),
+            qiyas_ai::surface::CAPTURE => json!({"source": "picture", "args": {"width": 64}}),
+            name => panic!("No dispatch input for {name}"),
+        };
+        let qiyas_ai::surface::Route::Session {
+            tool: name,
+            op,
+            args,
+        } = qiyas_ai::surface::route(tool.name, &input).unwrap()
+        else {
+            panic!("{} did not route to the session", tool.name);
+        };
+        let result = qiyas_ai::surface::run_session(&mut session, &name, &op, &args, Source::Ai);
         assert!(
-            !matches!(result, Err(ToolError::UnknownTool(_))),
-            "{} is not dispatched",
+            result.is_ok(),
+            "{} is not dispatched: {result:?}",
             tool.name
         );
     }

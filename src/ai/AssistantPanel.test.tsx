@@ -12,8 +12,9 @@ afterEach(cleanup);
 const card: ToolCardItem = {
   kind: "tool",
   id: "t1",
-  name: "measure_area",
-  input: { handle: 7 },
+  name: "qiyas_execute",
+  label: "measure_area",
+  input: { op: "run", args: JSON.stringify({ command: { type: "measure_area", handle: 7 } }) },
   status: "done",
   summary: "12.000 m2: wall",
   handles: [7],
@@ -79,6 +80,19 @@ test("a transcript shows messages, Markdown and a tool card with Show and Undo",
   expect(onShow).toHaveBeenCalledWith(card);
   fireEvent.click(screen.getByText("Undo"));
   expect(onUndo).toHaveBeenCalledWith(card);
+});
+
+test("tool cards translate command labels and make unknown labels readable", () => {
+  setup({
+    items: [
+      { ...card, id: "line", label: "draw.line" },
+      { ...card, id: "ellipse", label: "draw.ellipse" },
+      { ...card, id: "read", name: "qiyas_read", label: null, mutating: false },
+    ],
+  });
+  expect(screen.getByText("Draw line")).toBeTruthy();
+  expect(screen.getByText("Draw · ellipse")).toBeTruthy();
+  expect(screen.getByText("Read drawing")).toBeTruthy();
 });
 
 test("Undo is only offered on the newest change, and not while busy", () => {

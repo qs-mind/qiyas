@@ -20,7 +20,7 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
-    qiyas-ai        the 57 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        three generic AI tools over the command registry, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
@@ -1126,6 +1126,29 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## AI assistant and settings
 
+- `qiyas-ai/src/surface.rs` is the catalogue shared by Mizan and MCP. It offers exactly three
+  tools: `qiyas_read { op, args }`, `qiyas_execute { op, args }` and
+  `qiyas_capture { source, args }`. `args` is a JSON object written as a string (an object is
+  accepted too). Their schemas are strict and closed for Claude and Gemini; every property is
+  required, with no open objects or references. The old tool names in `execute.rs`, `window.rs`
+  and `host.rs` are private runners, never offered to a model.
+- Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
+  and examples; `search`: matching commands), records, record_schema, query, measure (numbers
+  only), run (read-only commands), check, history, drawings, selection and rooms. Execute
+  operations: run (any core command), batch, set_records, create_entities, undo_own, select,
+  view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
+  compare, export_takeoff and export_conflicts. Capture's source is screen or picture.
+- A batch is one undo step, all or nothing, and can read earlier results through
+  `{"$step": 0, "pointer": "/added/0"}`. `Session::batch_with` sets the batch's layer and colour,
+  making a missing layer, then puts the previous current state back. Errors name the field,
+  schema and example; unknown names suggest close matches. Changed geometry comes with a
+  drawing check. The loop discovers a command, acts, checks and fixes by handle.
+- Each user message allows 40 calls, raised to 120 after a call changes the drawing. When 10
+  or fewer remain, each result includes `budget: "N calls left"`. At most 10 destructive
+  commands per message, counted from registry metadata in run and every batch step. A tool
+  card carries its command label (`draw.line`), batch or operation; the window translates
+  `command.<label>` when present, otherwise makes the label readable. Execute calls are
+  mutating except select and view.
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
   `openai_compatible`), model (default `claude-opus-5-5`), base URL, effort, MCP on/off, port and
@@ -1139,7 +1162,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Agents never read or type a real key; the founder pastes it himself.
 - `QIYAS_AI_MOCK=1` with a debug build (`pnpm tauri dev`) uses a canned provider: it says a
   sentence, measures the first polyline on layer A-WALL and answers; with a selection in the
-  message's `[state]` it calls `view_screen` and `select_entities` on it instead. No key, no
+  message's `[state]` it calls `qiyas_capture` with source screen and `qiyas_execute` select on it instead. No key, no
   network. Release builds leave it out.
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
@@ -1150,8 +1173,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   when the request is clear it acts. The question is a plain text answer: the turn ends
   (`StopReason::EndTurn`, `AgentEvent::Done`), the question stays in the history and the next
   message is the answer (`agent.rs` test `a_question_ends_the_turn_cleanly...`). The fixed prompt
-  stays under 900 words (a test), English and Arabic saying the same rules.
-- Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `execute.rs` `picture`): `view_image` draws a
+  stays under 900 words (a test, excluding the index), in `prompt_en.txt` and `prompt_ar.txt`.
+  Both languages append the registry's deterministic `index_text()` under "Commands by category",
+  then the drawing facts. The stable index keeps prompt caching working.
+- Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `execute.rs` `picture`): `qiyas_capture` source picture draws a
   sheet (`sheet`, by layout or block name; the one on screen by default; it never moves the
   user's view) as the engineer sees it on white: model space inside a layout's viewports
   (`Session::picture_batch_of`, `paper_views_against`, clipped to each frame), pictures and PDF
@@ -1164,11 +1189,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   tallest glyph, in px; letters read from about 8 px), so Mizan zooms in with `bounds` to read.
 - Window tools (`qiyas-ai/src/window.rs`, `DrawingHost::capture_screen`, `select`, `pointed`;
   `qiyas-desktop/src/ai_window.rs`): the core asks the window and waits at most 5 s for
-  `ai_window_reply { id, value, error }`, without the session's lock. `view_screen` (`ai:capture
+  `ai_window_reply { id, value, error }`, without the session's lock. `qiyas_capture` source screen (`ai:capture
   { id, maxSide }`: the window draws its main view and reads it back in the same task,
   `Renderer.read`, `Viewport.capture`, `viewport/capture.ts`; the core then marks it, what the user
-  selected first), `get_selection` (`ai:pointed { id }`: the selection, the marked area, the
-  view), `select_entities` (`ai:select { handles, zoom }`: the Select tool's selection set,
+  selected first), `qiyas_read` selection (`ai:pointed { id }`: the selection, the marked area, the
+  view), `qiyas_execute` select (`ai:select { handles, zoom }`: the Select tool's selection set,
   entities drawn at the top of the sheet only; no undo step). Without a window they say so.
   MCP clients reach them too.
 - What the user points at (`qiyas-ai/src/context.rs`, `src/ai/pointing.ts`,
@@ -1192,10 +1217,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   while Mizan works or the thread is empty.
 - Mizan never explains how Qiyas draws or fails unless a tool result shows it, and writes formulas
   as plain text; a stray TeX formula in an answer reads as text anyway (`ai/plainMath.ts`). It
-  fixes what it drew by changing it (`set_text`: words, height in metres, rotation, layer;
-  `modify`, `erase`), never by drawing it again, never hides layers to hide a mistake, and
-  dimensions only with `add_dimension`.
-- view_image draws what the engineer sees: `Session::picture_batch` (the sheet drawn afresh for the
+  fixes what it drew through core commands (`edit_text`, `modify`, `delete_entities`) or writable records,
+  never by drawing it again, never hides layers to hide a mistake, and makes dimensions with
+  the core dimension commands.
+- Capture source picture draws what the engineer sees: `Session::picture_batch` (the sheet drawn afresh for the
   picture's zoom, nothing cached, so the window's batch and curves stay) and
   `render_png_with_text`: solid fills under the lines, the text as its glyphs from the atlas
   (the text boxes left out). Mizan once saw no text at all and drew labels over labels.
@@ -1203,9 +1228,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   -- <drawing> <out.pdf>` (fit on A1; `pdftoppm -png` for a picture) and `cargo run -p qiyas-ai
   --example inspect -- <drawing> [tool[={json}] …]` (read-only tools' JSON; a picture tool writes
   `<drawing>.<tool>.png`).
-- Mizan's file tools (`qiyas-ai/src/host.rs`, the first six of the catalogue): `list_drawings`
-  (tabs and recents), `new_drawing { units }` (ask when not given), `open_drawing { path }`,
-  `switch_drawing { id }`, `save_drawing`, `close_drawing { id? }`. They run through the
+- Mizan's file operations (`qiyas-ai/src/host.rs` behind `surface::route`): `qiyas_read` drawings
+  (tabs and recents), and `qiyas_execute` new_drawing (`units`, ask when not given), open_drawing
+  (`path`), switch_drawing (`id`), save_drawing and close_drawing (`id` optional). They run through the
   `DrawingHost` trait (`Agent::with_host`, `mcp::serve`'s `host`), outside the session's lock,
   implemented by `qiyas-desktop/src/drawing_host.rs` over the tabs. The assistant chose the
   drawing, so its conversation goes on (`tabs::activate`/`add`/`close` `keep_conversation`) and the
@@ -1216,26 +1241,23 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   refused (`script::open`); an untitled or repaired drawing's save is the window's Save
   (`drawing:save`); closing unsaved changes is the window's question (`drawing:close`, keeping the
   conversation). Without a host they answer `NO_HOST`.
-- Measuring a drawn thing is by handle (find_entities / get_entity, then `measure_length` /
-  `measure_area`): exact for lines, arcs, circles, LWPOLYLINE and heavy POLYLINE with bulges
+- Measuring a drawn thing is by handle (`qiyas_read` records or query, then measure for
+  numbers or `qiyas_execute` run with the take-off commands): exact for lines, arcs, circles, LWPOLYLINE and heavy POLYLINE with bulges
   (tested in DXF and DWG). Points are for points the engineer gave. A points measurement whose
   extent matches one drawn entity (within a tenth) still measures, but the answer carries `hint`
   and `candidates` (handle, kind, layer, length, area) so Mizan removes it and measures the
   handle. The core refuses an AI or MCP item with no geometry and quantity 0 (notes, analysis)
   unless `empty_item` is true; `add_markup` calls `Command::AddMarkup`.
-- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 57 tools in all): `add_text`
-  (TEXT, or MTEXT for several lines or a width; height in metres, default 2.5 mm x annotation
-  scale), `room_areas` and `label_spaces` over core `Rooms` and `LabelSpaces` (the smallest
-  closed region round each room-name text or seed via `Session::boundary_at`, like Hatch:
-  `enclosed_area_m2` is what the line work
-  encloses, columns that overlap a wall are already out, `net_area_m2` also takes the islands off
-  (fountain, shaft; `subtract_islands` false keeps them); bulged edges are exact; texts that look
-  like areas are skipped so a second run does not label labels; `label_spaces` writes
-  "Unapproved candidate NN.NN m²", or its Arabic wording, just under each name), `add_table`
-  over `Command::Table` (headings + rows of strings) and
-  `edit_table_cell`, `draw` (line, polyline with bulges, rectangle, circle, arc, hatch, revcloud;
-  drawing units) and `insert_block`. Each call is one undo step through `Command::Batch`; a layer
-  that does not exist is made (white) and the current layer and colour are put back. Verified on
+- Mizan writes into the drawing with any core command through `qiyas_execute` run or batch:
+  text (TEXT or MTEXT), tables and cells, lines, polylines with bulges, rectangles, circles,
+  arcs, hatches, clouds and block references. Sizes are drawing units; default text height is
+  2.5 mm on paper at the annotation scale. `qiyas_read` rooms and the core `LabelSpaces` command
+  find the smallest closed region round each room-name text or seed via `Session::boundary_at`,
+  like Hatch: `enclosed_area_m2` is what the line work encloses, columns that overlap a wall
+  are already out, `net_area_m2` also takes the islands off (fountain, shaft;
+  `subtract_islands` false keeps them). Bulged edges are exact; texts that look like areas are
+  skipped so a second run does not label labels. `label_spaces` writes
+  "Unapproved candidate NN.NN m²", or its Arabic wording, just under each name. Verified on
   `samples/test-plan.dwg`: living room 58.29 - 4 x 0.0025 = 58.28 enclosed, 51.211 net of the
   fountain; bedroom 22.085; kitchen 17.385 (the 0.4 m columns overlap the inset corners by
   0.05 x 0.05).
@@ -1262,9 +1284,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## MCP
 
-Outside AI apps can drive Qiyas through its MCP server (the same tools as the in-app assistant,
-the window tools included: `view_screen`, `get_selection`, `select_entities`; their measurements
-are marked `mcp`).
+Outside AI apps can drive Qiyas through its MCP server. `tools/list` offers exactly the same
+three tools as Mizan: `qiyas_read`, `qiyas_execute` and `qiyas_capture`, using `surface::tools`.
+`surface::route` sends window operations to the window runner, file operations to the host,
+and session operations to the shared surface runner. Measurements are marked `mcp`; undo_own
+only undoes that source's newest step. Mizan runs session operations on the blocking pool with
+cancel and epoch checks; MCP runs them synchronously. File operations move the active drawing
+and Mizan's turn epoch together.
 
 - Turn it on in Settings, MCP server. It listens on `127.0.0.1:48123/mcp` (port in Settings) and
   needs `Authorization: Bearer <token>`; a request with an `Origin` other than the server's own

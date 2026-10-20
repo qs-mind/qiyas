@@ -1426,7 +1426,7 @@ impl Session {
                         "A take-off row needs a real measured quantity, and this one has no geometry and a \
                          quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
                          comments) are not rows: write them in your answer, or into the drawing with \
-                         add_text or add_comment. Only if the user explicitly asked for an empty item, call \
+                         text or comment. Only if the user explicitly asked for an empty item, call \
                          again with empty_item true.",
                     ));
                 }

@@ -17,9 +17,6 @@ use qiyas_render::Batch;
 use crate::image::{self, normalized, Inset, Raster, Scene, TextSize, View, MAX_SIDE};
 use crate::marks::Mark;
 
-mod author;
-mod edit;
-
 /// Largest JSON result, in bytes. Longer results lose rows (or have their strings cut).
 const MAX_OUTPUT: usize = 40_960;
 /// `find_entities` rows per page when the model gives no limit.
@@ -218,7 +215,7 @@ pub fn execute(
             match session.run_as(cmd, source)? {
                 Outcome::Nothing => {
                     return Err(bad(&format!(
-                        "No conflict with id {id}; list_conflicts gives the ids"
+                        "No conflict with id {id}; qiyas_read records with collection conflicts gives the ids"
                     )))
                 }
                 _ => {
@@ -229,24 +226,6 @@ pub fn execute(
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
         "add_dimension" => (add_dimension(session, parse(input)?, source)?, 0),
-        "add_text" => (author::add_text(session, parse(input)?, source)?, 0),
-        "room_areas" => (
-            author::room_areas(session, parse(input)?, false, source)?,
-            0,
-        ),
-        "label_spaces" => (author::room_areas(session, parse(input)?, true, source)?, 0),
-        "add_table" => (author::add_table(session, parse(input)?, source)?, 0),
-        "edit_table_cell" => (author::edit_table_cell(session, parse(input)?, source)?, 0),
-        "draw" => (author::draw(session, parse(input)?, source)?, 0),
-        "insert_block" => (author::insert_block(session, parse(input)?, source)?, 0),
-        "modify" => (edit::modify(session, parse(input)?, source)?, 0),
-        "edit" => (edit::edit(session, parse(input)?, source)?, 0),
-        "erase" => (edit::erase(session, parse(input)?, source)?, 0),
-        "set_text" => (edit::set_text(session, parse(input)?, source)?, 0),
-        "undo_last" => {
-            parse::<NoInput>(input)?;
-            (edit::undo_last(session, source)?, 0)
-        }
         "set_annotation_scale" => {
             let ScaleInput { scale } = parse(input)?;
             session.run_as(Command::AnnotationScale { name: scale }, source)?;
@@ -661,7 +640,7 @@ fn show_layers(
         .collect();
     if !unknown.is_empty() {
         return Err(ToolError::BadInput(format!(
-            "No layer named {}; list_layers gives the names",
+            "No layer named {}; qiyas_read query with kind layers gives the names",
             unknown.join(", ")
         )));
     }
@@ -1319,8 +1298,20 @@ pub(crate) fn resolve_in_drawing_folder(
         .canonicalize()
         .map_err(|e| ToolError::Failed(format!("The drawing's folder can't be read: {e}")))?;
     let full = folder.join(path);
-    // A file that doesn't exist yet can't be resolved; its path is cleaned up as written.
-    let real = full.canonicalize().unwrap_or_else(|_| lexical(&full));
+    // Resolve the existing parent too: a new export inside a symlink must stay in the folder.
+    let mut ancestor = full.as_path();
+    let mut suffix = Vec::new();
+    let real = loop {
+        if let Ok(mut real) = ancestor.canonicalize() {
+            for part in suffix.iter().rev() {
+                real.push(part);
+            }
+            break lexical(&real);
+        }
+        let name = ancestor.file_name().ok_or_else(|| bad(OUTSIDE_FOLDER))?;
+        suffix.push(name);
+        ancestor = ancestor.parent().ok_or_else(|| bad(OUTSIDE_FOLDER))?;
+    };
     if real.starts_with(&folder) {
         Ok(real)
     } else {
@@ -1378,7 +1369,7 @@ fn sheet_block(session: &Session, name: Option<&str>) -> Result<String, ToolErro
         .map(|s| s.block)
         .ok_or_else(|| {
             bad(&format!(
-                "No sheet named {name}; list_sheets gives the names"
+                "No sheet named {name}; qiyas_read state gives the sheets"
             ))
         })
 }
@@ -1450,7 +1441,7 @@ fn edit(session: &mut Session, cmd: Command, id: &str, source: Source) -> Result
 
 fn no_measurement(id: &str) -> ToolError {
     bad(&format!(
-        "No measurement with id {id}; list_takeoff gives the ids"
+        "No measurement with id {id}; qiyas_read records with collection takeoff gives the ids"
     ))
 }
 

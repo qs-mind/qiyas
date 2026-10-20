@@ -4,11 +4,14 @@ import { EMPTY, reduce, startNewOffered, undoableCard, type Action, type Transcr
 
 const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
 
-const call = (id: string, name = "measure_area", mutating = true): AgentEvent => ({
+const call = (id: string, label = "measure_area", mutating = true): AgentEvent => ({
   type: "tool_call",
   id,
-  name,
-  input: { handle: 7 },
+  name: mutating ? "qiyas_execute" : "qiyas_read",
+  label,
+  input: mutating
+    ? { op: "run", args: JSON.stringify({ command: { type: label, handle: 7 } }) }
+    : { op: label, args: "{}" },
   mutating,
 });
 
@@ -45,7 +48,9 @@ test("text deltas join into one streamed message that finishes at the next item"
 
 test("a tool card runs, then is done with its summary, handles and ui", () => {
   const running = run([call("a")]);
-  expect(running.items[0]).toMatchObject({ kind: "tool", id: "a", status: "running", mutating: true });
+  expect(running.items[0]).toMatchObject({
+    kind: "tool", id: "a", name: "qiyas_execute", label: "measure_area", status: "running", mutating: true,
+  });
   const ui = { action: "zoom", bounds: [[0, 0], [1, 1]] as [[number, number], [number, number]] };
   const done = run([result("a", { ui })], running);
   expect(done.items[0]).toMatchObject({
@@ -59,7 +64,7 @@ test("a tool card runs, then is done with its summary, handles and ui", () => {
 
 test("a failed tool shows as an error, and the right card of several is updated", () => {
   const t = run([
-    call("a", "list_layers", false),
+    call("a", "records", false),
     call("b"),
     result("b", { is_error: true, summary: "Not closed", handles: [] }),
     result("a", { summary: "3 found", handles: [] }),
@@ -119,7 +124,7 @@ test("unsend takes back the last user message only", () => {
 });
 
 test("the undoable card is the newest change not undone; a stale undo is kept on the card", () => {
-  const t = run([call("a"), result("a"), call("b", "list_layers", false), result("b"), call("c"), result("c")]);
+  const t = run([call("a"), result("a"), call("b", "records", false), result("b"), call("c"), result("c")]);
   expect(undoableCard(t)?.id).toBe("c");
   const afterUndo = run([{ type: "undone", id: "c" }], t);
   expect(undoableCard(afterUndo)?.id).toBe("a");

@@ -9,6 +9,8 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Mizan can now use every command in Qiyas, discover the properties of drawing objects, and
+  make related changes together as one undo step. Outside AI apps have the same access.
 - Check a drawing for gaps, overlaps, stray lines, unreadable or colliding text, room sizes
   that disagree with their labels, and take-off rows whose drawing links are gone.
 - Scripts can find rooms, label their unapproved candidate areas in English or Arabic, and

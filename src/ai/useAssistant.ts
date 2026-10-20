@@ -24,8 +24,8 @@ export type SendExtras = { context?: AiContext; images?: AiImage[]; shown?: Atta
 
 type Options = {
   lang: Lang;
-  /** A tool changed the take-off (`tool` is its name): refresh it and redraw. */
-  onMutated(tool: string): void;
+  /** A tool changed the drawing or take-off: refresh it and redraw. */
+  onMutated(label: string): void;
   /** A tool asks the window to show something (a sheet, a zoom, other layers). */
   onUi(ui: AiUi): void;
   /** Sending failed for want of a key or an address: open the settings. */
@@ -55,7 +55,7 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   // The listeners are set up once; they call the latest callbacks through this.
   const callbacks = useRef({ onMutated, onUi, onNeedSettings });
   callbacks.current = { onMutated, onUi, onNeedSettings };
-  /** The turn's tool calls that change the take-off: their names, by id. */
+  /** The turn's tool calls that change the drawing or take-off: their labels, by id. */
   const mutating = useRef(new Map<string, string>());
 
   const refreshStatus = useCallback(() => {
@@ -74,7 +74,9 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       });
     on<AgentEvent>("ai:event", (event) => {
       dispatch(event);
-      if (event.type === "tool_call" && event.mutating) mutating.current.set(event.id, event.name);
+      if (event.type === "tool_call" && event.mutating) {
+        mutating.current.set(event.id, event.label ?? event.name);
+      }
       if (event.type === "tool_result" && !event.is_error) {
         const tool = mutating.current.get(event.id);
         if (tool) callbacks.current.onMutated(tool);

@@ -126,16 +126,27 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     let client = connect(server.addr, TOKEN).await.unwrap();
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 57);
-    let measure = tools.iter().find(|t| t.name == "measure_area").unwrap();
-    assert!(measure.description.as_deref().unwrap().contains("area"));
-    assert_eq!(measure.input_schema["type"], "object");
+    let specs = qiyas_ai::catalogue();
+    assert_eq!(tools.len(), 3);
+    for (tool, spec) in tools.iter().zip(specs) {
+        assert_eq!(tool.name, spec.name);
+        assert_eq!(tool.description.as_deref(), Some(spec.description));
+        assert_eq!(
+            Value::Object((*tool.input_schema).clone()),
+            spec.input_schema
+        );
+    }
 
     let handle = rectangle(&server);
-    let result = call(&client, "measure_area", json!({ "handle": handle })).await;
+    let result = call(
+        &client,
+        "qiyas_execute",
+        json!({"op":"run","args":{"command":{"type":"measure_entity","handle":handle}}}),
+    )
+    .await;
     assert_ne!(result.is_error, Some(true), "{result:?}");
     let out: Value = serde_json::from_str(text(&result, 0)).unwrap();
-    assert_eq!(out["measurement"]["source"], "mcp");
+    assert_eq!(out["outcome"]["measurement"]["source"], "mcp");
     {
         let guard = server.session.lock().unwrap();
         let items = &guard.as_ref().unwrap().takeoff.items;
@@ -146,7 +157,7 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     assert_eq!(server.mutated.load(Ordering::SeqCst), 1);
 
     // A read-only tool does not count as a change.
-    let result = call(&client, "list_sheets", json!({})).await;
+    let result = call(&client, "qiyas_read", json!({"op":"state","args":"{}"})).await;
     assert_ne!(result.is_error, Some(true), "{result:?}");
     assert_eq!(server.mutated.load(Ordering::SeqCst), 1);
     client.cancel().await.unwrap();
@@ -157,14 +168,20 @@ async fn sheet_layer_and_zoom_changes_reach_the_window() {
     let server = start(true).await;
     let client = connect(server.addr, TOKEN).await.unwrap();
     for (tool, args) in [
-        ("set_sheet", json!({ "sheet": "Model" })),
         (
-            "show_layers",
-            json!({ "names": ["A-DOOR"], "visible": false }),
+            "qiyas_execute",
+            json!({"op":"view","args":{"sheet":"Model"}}),
         ),
-        ("zoom_to", json!({ "bounds": [[0, 0], [5, 5]] })),
+        (
+            "qiyas_execute",
+            json!({"op":"run","args":{"command":{"type":"set_layer_hidden","name":"A-DOOR","hidden":true}}}),
+        ),
+        (
+            "qiyas_execute",
+            json!({"op":"view","args":{"bounds":[[0,0],[5,5]]}}),
+        ),
         // No ui: nothing is sent.
-        ("list_layers", json!({})),
+        ("qiyas_read", json!({"op":"query","args":{"kind":"layers"}})),
     ] {
         let result = call(&client, tool, args).await;
         assert_ne!(result.is_error, Some(true), "{tool}: {result:?}");
@@ -174,8 +191,17 @@ async fn sheet_layer_and_zoom_changes_reach_the_window() {
     assert_eq!(actions, ["show_sheet", "redraw", "zoom"]);
     assert_eq!(ui[0]["sheet"], "*Model_Space");
     assert_eq!(ui[1]["hidden"], json!(["A-DOOR"]));
-    // Showing a sheet or hiding layers is not a take-off change.
-    assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
+    assert!(server
+        .session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .hidden_layers()
+        .iter()
+        .any(|name| name == "A-DOOR"));
+    // Execute run refreshes the window; view and reads leave it to their ui result.
+    assert_eq!(server.mutated.load(Ordering::SeqCst), 1);
     client.cancel().await.unwrap();
 }
 
@@ -205,13 +231,21 @@ async fn concurrent_counts_both_land() {
     let server = start(true).await;
     let client = connect(server.addr, TOKEN).await.unwrap();
     let (a, b) = tokio::join!(
-        call(&client, "count_blocks", json!({ "block_name": "door" })),
-        call(&client, "count_blocks", json!({ "block_name": "door" })),
+        call(
+            &client,
+            "qiyas_execute",
+            json!({"op":"run","args":{"command":{"type":"count_block","block_name":"door"}}})
+        ),
+        call(
+            &client,
+            "qiyas_execute",
+            json!({"op":"run","args":{"command":{"type":"count_block","block_name":"door"}}})
+        ),
     );
     for result in [&a, &b] {
         assert_ne!(result.is_error, Some(true), "{result:?}");
         let out: Value = serde_json::from_str(text(result, 0)).unwrap();
-        assert_eq!(out["measurement"]["value"], 3.0);
+        assert_eq!(out["outcome"]["measurement"]["value"], 3.0);
     }
     let guard = server.session.lock().unwrap();
     assert_eq!(guard.as_ref().unwrap().takeoff.items.len(), 2);
@@ -222,7 +256,12 @@ async fn concurrent_counts_both_land() {
 async fn view_image_is_an_image_block() {
     let server = start(true).await;
     let client = connect(server.addr, TOKEN).await.unwrap();
-    let result = call(&client, "view_image", json!({ "width": 320 })).await;
+    let result = call(
+        &client,
+        "qiyas_capture",
+        json!({"source":"picture","args":{"width":320}}),
+    )
+    .await;
     assert_ne!(result.is_error, Some(true), "{result:?}");
     let image = result.content[0].as_image().expect("an image block");
     assert_eq!(image.mime_type, "image/png");
@@ -239,7 +278,12 @@ async fn tool_errors_are_error_results() {
     let server = start(true).await;
     let client = connect(server.addr, TOKEN).await.unwrap();
 
-    let result = call(&client, "measure_area", json!({ "handle": 999_999 })).await;
+    let result = call(
+        &client,
+        "qiyas_execute",
+        json!({"op":"run","args":{"command":{"type":"measure_entity","handle":999_999}}}),
+    )
+    .await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(text(&result, 0), "No entity with handle 999999");
 
@@ -250,11 +294,16 @@ async fn tool_errors_are_error_results() {
     // No drawing open.
     let empty = start(false).await;
     let client = connect(empty.addr, TOKEN).await.unwrap();
-    let result = call(&client, "list_sheets", json!({})).await;
+    let result = call(&client, "qiyas_read", json!({"op":"state","args":"{}"})).await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(text(&result, 0), "No drawing is open");
     // The file tools need the app behind them; without it they say what to do instead.
-    let result = call(&client, "new_drawing", json!({ "units": "m" })).await;
+    let result = call(
+        &client,
+        "qiyas_execute",
+        json!({"op":"new_drawing","args":{"units":"m"}}),
+    )
+    .await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(text(&result, 0), qiyas_ai::host::NO_HOST);
 }
@@ -278,7 +327,7 @@ async fn a_restart_on_the_same_port_binds_again() {
     .unwrap();
     assert_eq!(addr.port(), port);
     let client = connect(addr, TOKEN).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 57);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 3);
     shutdown.cancel();
 }
 
@@ -321,6 +370,6 @@ async fn other_origins_are_refused_even_with_the_token() {
 
     // Clients that send no Origin (the bridge, Claude Code) still work.
     let client = connect(server.addr, TOKEN).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 57);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 3);
     assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
 }

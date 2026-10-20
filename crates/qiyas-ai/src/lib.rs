@@ -24,6 +24,7 @@ pub mod models;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+pub mod surface;
 mod tools;
 pub mod window;
 
@@ -37,5 +38,6 @@ pub use provider::{
     from_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
     StreamEvent, TurnRequest, TurnResult, Usage,
 };
-pub use tools::{catalogue, ToolSpec};
+pub use surface::tools as catalogue;
+pub use tools::ToolSpec;
 pub use window::{is_window_tool, run_window};

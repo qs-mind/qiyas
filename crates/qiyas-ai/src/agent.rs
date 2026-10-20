@@ -11,18 +11,21 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::{self, TurnContext, UserMessage};
-use crate::host::{changes_drawing, is_host_tool, run_host, DrawingHost, NO_HOST, NO_WINDOW};
+use crate::host::{changes_drawing, run_host, DrawingHost, NO_HOST, NO_WINDOW};
 use crate::log::{clip, AgentLog};
 use crate::prompt::{state_block, system_prompt, DrawingFacts, Lang, LiveState};
 use crate::provider::{
     png_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
     StreamEvent, TurnRequest, Usage, INVALID_JSON,
 };
-use crate::window::{is_window_tool, run_window};
-use crate::{catalogue, execute, ToolOutput, ToolSpec};
+use crate::surface::{self, Route};
+use crate::window::run_window;
+use crate::{catalogue, ToolOutput};
 
 /// Most tool calls in one user turn.
 pub const MAX_TOOL_CALLS: usize = 40;
+/// Most calls once a tool of the turn has changed the drawing.
+pub const MAX_DRAWING_CALLS: usize = 120;
 /// Longest conversation sent. The history is append-only (the API ties the model's thinking to
 /// everything before it; only old pictures give way, see `trim_pictures`), so instead of
 /// trimming, a longer one asks for a new conversation.
@@ -40,7 +43,7 @@ pub const KEEP_PICTURES: usize = 8;
 pub const KEEP_PICTURE_BYTES: usize = 10 * 1024 * 1024;
 /// What an old picture becomes.
 pub const PICTURE_REMOVED: &str = "[earlier picture removed; look again if you need it]";
-/// Most `remove_measurement` (and, apart, `resolve_conflict`) calls in one user turn.
+/// Most commands marked destructive by the registry in one user turn.
 pub const MAX_DESTRUCTIVE: usize = 10;
 const NO_IMAGE_BUDGET: &str =
     "Image budget for this conversation is used up; start a new conversation to look again";
@@ -81,7 +84,9 @@ pub enum AgentEvent {
         id: String,
         name: String,
         input: Value,
-        /// The tool changes the take-off or the BOQ work (see `ToolSpec::mutating`).
+        /// The command or operation shown on the tool card.
+        label: Option<String>,
+        /// An execute operation other than selecting or viewing.
         mutating: bool,
     },
     ToolResult {
@@ -141,28 +146,26 @@ struct Opening {
 #[derive(Default)]
 struct TurnCounts {
     calls: usize,
-    removals: usize,
-    resolutions: usize,
+    destructive: usize,
+    changed_drawing: bool,
 }
 
 impl TurnCounts {
-    /// Counts a removal or resolution; `Some(why)` when the turn has had its share of them.
-    fn over_cap(&mut self, name: &str) -> Option<&'static str> {
-        let (n, why) = match name {
-            "remove_measurement" => (
-                &mut self.removals,
-                "Too many removals in one turn; ask the user to confirm",
-            ),
-            "resolve_conflict" => (
-                &mut self.resolutions,
-                "Too many resolutions in one turn; ask the user to confirm",
-            ),
-            _ => return None,
-        };
-        if *n >= MAX_DESTRUCTIVE {
-            return Some(why);
+    fn limit(&self) -> usize {
+        if self.changed_drawing {
+            MAX_DRAWING_CALLS
+        } else {
+            MAX_TOOL_CALLS
         }
-        *n += 1;
+    }
+
+    /// Reserve the destructive commands before running any part of a call.
+    fn over_cap(&mut self, name: &str, input: &Value) -> Option<&'static str> {
+        let count = surface::destructive_count(name, input);
+        if self.destructive.saturating_add(count) > MAX_DESTRUCTIVE {
+            return Some("Too many destructive commands in one turn; ask the user to confirm");
+        }
+        self.destructive += count;
         None
     }
 }
@@ -397,20 +400,13 @@ impl Agent {
                 StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
                     let results = self
-                        .run_tools(
-                            &assistant,
-                            &tools,
-                            &mut counts,
-                            &events,
-                            &cancel,
-                            &mut epoch,
-                        )
+                        .run_tools(&assistant, &mut counts, &events, &cancel, &mut epoch)
                         .await;
                     self.history.push(assistant);
                     self.history.push(Message::user(results));
                     self.trim_pictures();
-                    if counts.calls >= MAX_TOOL_CALLS {
-                        let why = format!("stopped after {MAX_TOOL_CALLS} steps");
+                    if counts.calls >= counts.limit() {
+                        let why = format!("stopped after {} steps", counts.limit());
                         return self.stop(&events, &why).await;
                     }
                 }
@@ -483,13 +479,12 @@ impl Agent {
 
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
     /// for one user message. Once `cancel` fires, past `MAX_TOOL_CALLS`, and past
-    /// `MAX_DESTRUCTIVE` removals or resolutions, the calls are answered but not run. `epoch` is
+    /// `MAX_DESTRUCTIVE` destructive commands, the calls are answered but not run. `epoch` is
     /// the session's at the start of the turn (see `run_tool`), moved on when a file tool of the
     /// turn put another drawing on screen.
     async fn run_tools(
         &mut self,
         assistant: &Message,
-        tools: &[ToolSpec],
         counts: &mut TurnCounts,
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancellationToken,
@@ -502,40 +497,54 @@ impl Agent {
                     id: id.to_string(),
                     name: name.to_string(),
                     input: input.clone(),
-                    mutating: tools.iter().any(|t| t.name == name && t.mutating),
+                    label: surface::label(name, input),
+                    mutating: surface::mutating(name, input),
                 })
                 .await;
             let started = Instant::now();
             // Every answered call counts, bad input included.
-            let (block, event) = if cancel.is_cancelled() {
+            let (mut block, event) = if cancel.is_cancelled() {
                 (error_result(id, CANCELLED), error_event(id, CANCELLED))
-            } else if counts.calls >= MAX_TOOL_CALLS {
+            } else if counts.calls >= counts.limit() {
                 let why = "Not run: the limit of tool calls for this message was reached.";
                 (error_result(id, why), error_event(id, why))
-            } else if !input.is_object() {
-                counts.calls += 1;
-                (
-                    error_result(id, INVALID_JSON),
-                    error_event(id, INVALID_JSON),
-                )
-            } else if let Some(why) = counts.over_cap(name) {
-                counts.calls += 1;
-                (error_result(id, why), error_event(id, why))
-            } else if is_window_tool(name) {
-                counts.calls += 1;
-                self.run_window_tool(id, name, input).await
-            } else if is_host_tool(name) {
-                counts.calls += 1;
-                let ran = self.run_host_tool(id, name, input).await;
-                // The calls after it work on the drawing on screen now.
-                if changes_drawing(name) && !is_error(&ran.0) {
-                    *epoch = self.epoch_now();
-                }
-                ran
             } else {
                 counts.calls += 1;
-                self.run_tool(id, name, input, cancel, *epoch).await
+                if !input.is_object() {
+                    (
+                        error_result(id, INVALID_JSON),
+                        error_event(id, INVALID_JSON),
+                    )
+                } else if let Some(why) = counts.over_cap(name, input) {
+                    (error_result(id, why), error_event(id, why))
+                } else {
+                    match surface::route(name, input) {
+                        Err(why) => (error_result(id, &why), error_event(id, &why)),
+                        Ok(Route::Window { tool, input }) => {
+                            self.run_window_tool(id, tool, &input).await
+                        }
+                        Ok(Route::Host { tool, input }) => {
+                            let before = self.epoch_now();
+                            let ran = self.run_host_tool(id, tool, &input).await;
+                            if changes_drawing(tool) && !is_error(&ran.0) {
+                                *epoch = self.epoch_now();
+                                counts.changed_drawing |= before != *epoch;
+                            }
+                            ran
+                        }
+                        Ok(Route::Session { tool, op, args }) => {
+                            let (block, event, changed) =
+                                self.run_tool(id, (&tool, &op), &args, cancel, *epoch).await;
+                            counts.changed_drawing |= changed;
+                            (block, event)
+                        }
+                    }
+                }
             };
+            let left = counts.limit().saturating_sub(counts.calls);
+            if left <= 10 {
+                add_budget(&mut block, left);
+            }
             self.log(
                 &format!("TOOL {name} ({} ms)", started.elapsed().as_millis()),
                 || tool_entry(id, input, &block),
@@ -554,19 +563,21 @@ impl Agent {
     async fn run_tool(
         &mut self,
         id: &str,
-        name: &str,
+        operation: (&str, &str),
         input: &Value,
         cancel: &CancellationToken,
         epoch: Option<u64>,
-    ) -> (ContentBlock, AgentEvent) {
-        if name == "view_image" && self.image_bytes >= self.image_budget {
+    ) -> (ContentBlock, AgentEvent, bool) {
+        let (name, op) = operation;
+        if name == surface::CAPTURE && self.image_bytes >= self.image_budget {
             return (
                 error_result(id, NO_IMAGE_BUDGET),
                 error_event(id, NO_IMAGE_BUDGET),
+                false,
             );
         }
         let session = self.session.clone();
-        let (tool, args) = (name.to_string(), input.clone());
+        let (tool, op, args) = (name.to_string(), op.to_string(), input.clone());
         let cancel = cancel.clone();
         let ran = tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
@@ -576,18 +587,27 @@ impl Agent {
             match guard.as_mut() {
                 None => Err("No drawing is open. Ask the user to open one."),
                 Some(s) if epoch.is_some_and(|e| e != s.epoch()) => Err(DRAWING_CHANGED),
-                Some(s) => Ok(execute(s, &tool, &args, Source::Ai)),
+                Some(s) => {
+                    let before = s.document_revision();
+                    let output = surface::run_session(s, &tool, &op, &args, Source::Ai);
+                    let changed = before != s.document_revision();
+                    Ok((output, changed))
+                }
             }
         })
         .await;
-        match ran {
-            Ok(Ok(output)) => self.output_result(id, output.map_err(|e| e.to_string())),
-            Ok(Err(why)) => (error_result(id, why), error_event(id, why)),
+        let (result, changed) = match ran {
+            Ok(Ok((output, changed))) => (
+                self.output_result(id, output.map_err(|e| e.to_string())),
+                changed,
+            ),
+            Ok(Err(why)) => ((error_result(id, why), error_event(id, why)), false),
             Err(e) => {
                 let why = format!("The tool {name} crashed: {e}");
-                (error_result(id, &why), error_event(id, &why))
+                ((error_result(id, &why), error_event(id, &why)), false)
             }
-        }
+        };
+        (result.0, result.1, changed)
     }
 
     /// Runs a window tool (see `crate::window`) off the async workers: the window first, then
@@ -799,6 +819,31 @@ fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
     (block, event)
 }
 
+/// Remind the model of the calls left, including in errors and picture captions.
+fn add_budget(block: &mut ContentBlock, left: usize) {
+    let ContentBlock::ToolResult {
+        content, is_error, ..
+    } = block
+    else {
+        return;
+    };
+    let budget = format!("{left} calls left");
+    if let Some(ResultPart::Text(text)) = content.first_mut() {
+        let mut value = serde_json::from_str::<Value>(text).unwrap_or_else(|_| {
+            if *is_error {
+                serde_json::json!({ "error": text })
+            } else {
+                serde_json::json!({ "caption": text })
+            }
+        });
+        if !value.is_object() {
+            value = serde_json::json!({ "result": value });
+        }
+        value["budget"] = Value::String(budget);
+        *text = value.to_string();
+    }
+}
+
 /// Whether a result block is an error.
 fn is_error(block: &ContentBlock) -> bool {
     matches!(block, ContentBlock::ToolResult { is_error: true, .. })
@@ -895,6 +940,10 @@ fn error_event(id: &str, why: &str) -> AgentEvent {
 
 /// One line about a tool's JSON result.
 fn summary(value: &Value) -> String {
+    let value = value
+        .get("outcome")
+        .filter(|v| v.is_object())
+        .unwrap_or(value);
     if let Some(m) = value.get("measurement").filter(|m| m.is_object()) {
         let shown = m["shown"].as_f64().unwrap_or(0.0);
         return format!(
@@ -920,6 +969,8 @@ fn summary(value: &Value) -> String {
 fn handles(value: &Value) -> Vec<u64> {
     let list = if value["measurement"]["handles"].is_array() {
         &value["measurement"]["handles"]
+    } else if value["outcome"]["measurement"]["handles"].is_array() {
+        &value["outcome"]["measurement"]["handles"]
     } else {
         &value["ui"]["handles"]
     };

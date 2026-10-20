@@ -1312,7 +1312,8 @@ mod tests {
         assert_eq!(kinds[first_call + 1], "tool_result");
         assert_eq!(kinds.last(), Some(&"done"));
         let call = &events[first_call];
-        assert_eq!(call["name"], "measure_area");
+        assert_eq!(call["name"], "qiyas_execute");
+        assert_eq!(call["label"], "measure_entity");
         assert_eq!(call["mutating"], true);
         let result = &events[first_call + 1];
         assert_eq!(result["is_error"], false, "{result}");
@@ -1346,7 +1347,7 @@ mod tests {
             "NEW CONVERSATION\n    provider: mock",
             "USER\n    Measure the wall",
             "REQUEST 1",
-            "TOOL measure_area (",
+            "TOOL qiyas_execute (",
             "DONE",
         ] {
             assert!(text.contains(part), "the log lacks {part:?}:\n{text}");

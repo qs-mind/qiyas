@@ -2,7 +2,7 @@
 //! underlays under the lines, model space inside a layout's viewports), marks entities with
 //! numbers the caption ties to handles, highlights entities, and says how readable the text is.
 
-use qiyas_ai::{execute, ToolOutput};
+use qiyas_ai::{surface, ToolOutput};
 use qiyas_core::{Command, EntityFilter, Outcome, Session, Source};
 use serde_json::{json, Value};
 
@@ -14,7 +14,8 @@ fn sample(ext: &str) -> (tempfile::TempDir, Session) {
 }
 
 fn picture(session: &mut Session, input: Value) -> (tiny_skia::Pixmap, String) {
-    let out = execute(session, "view_image", &input, Source::Ai).unwrap();
+    let out =
+        surface::run_session(session, surface::CAPTURE, "picture", &input, Source::Ai).unwrap();
     let ToolOutput::Image { png, caption } = out else {
         panic!("expected an image");
     };
@@ -142,9 +143,10 @@ fn a_picture_of_another_sheet_leaves_the_screen_alone() {
     assert_eq!(session.sheet, model);
     assert!(caption.contains(&paper.name), "{caption}");
     assert!(dark_pixels(&pixmap) > 0, "the viewport and what it shows");
-    let empty = execute(
+    let empty = surface::run_session(
         &mut session,
-        "view_image",
+        surface::CAPTURE,
+        "picture",
         &json!({ "sheet": "No such sheet" }),
         Source::Ai,
     );

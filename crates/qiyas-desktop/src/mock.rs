@@ -1,8 +1,8 @@
 //! A canned AI provider for trying the assistant panel without a key or the network:
 //! `QIYAS_AI_MOCK=1` in a debug build. It says a sentence, measures the area of the first polyline
 //! on layer A-WALL, and closes with another sentence. With a selection in the message's `[state]`
-//! block it looks at the screen (`view_screen`) and selects what was selected
-//! (`select_entities`) instead. Not compiled into release builds.
+//! block it looks at the screen (`qiyas_capture`) and selects what was selected
+//! (`qiyas_execute select`) instead. Not compiled into release builds.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -113,13 +113,13 @@ impl Provider for Mock {
                         ContentBlock::Text { text: text.into() },
                         ContentBlock::ToolUse {
                             id: "mock_screen".into(),
-                            name: "view_screen".into(),
-                            input: json!({}),
+                            name: "qiyas_capture".into(),
+                            input: json!({ "source": "screen", "args": "{}" }),
                         },
                         ContentBlock::ToolUse {
                             id: "mock_select".into(),
-                            name: "select_entities".into(),
-                            input: json!({ "handles": pointed, "zoom": true }),
+                            name: "qiyas_execute".into(),
+                            input: json!({ "op": "select", "args": json!({ "handles": pointed, "zoom": true }).to_string() }),
                         },
                     ],
                     stop_reason: StopReason::ToolUse,
@@ -143,8 +143,8 @@ impl Provider for Mock {
                     ContentBlock::Text { text: text.into() },
                     ContentBlock::ToolUse {
                         id: "mock_1".into(),
-                        name: "measure_area".into(),
-                        input: json!({ "handle": self.first_wall() }),
+                        name: "qiyas_execute".into(),
+                        input: json!({ "op": "run", "args": json!({ "command": { "type": "measure_entity", "handle": self.first_wall() } }).to_string() }),
                     },
                 ],
                 stop_reason: StopReason::ToolUse,

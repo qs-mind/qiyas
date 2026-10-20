@@ -372,10 +372,10 @@ async fn tool_use_round_trip_executes_against_the_session() {
         0 => tool_turn(&[
             (
                 "toolu_1",
-                "measure_area",
-                &[r#"{"points": [[0, 0], [10"#, r#", 0], [10, 10], [0, 10]]}"#],
+                "qiyas_execute",
+                &[r#"{"op":"run","args":{"command":{"type":"measure_area","points": [[0, 0], [10"#, r#", 0], [10, 10], [0, 10]]}}}"#],
             ),
-            ("toolu_2", "list_layers", &[]),
+            ("toolu_2", "qiyas_read", &[r#"{"op":"query","args":"{\"kind\":\"layers\"}"}"#]),
         ]),
         _ => text_turn(&["Measured 100 m2."]),
     })
@@ -406,7 +406,7 @@ async fn tool_use_round_trip_executes_against_the_session() {
             _ => None,
         })
         .collect();
-    assert_eq!(calls, [("measure_area", true), ("list_layers", false)]);
+    assert_eq!(calls, [("qiyas_execute", true), ("qiyas_read", false)]);
     let first_call = events
         .iter()
         .position(|e| matches!(e, AgentEvent::ToolCall { id, .. } if id == "toolu_1"))
@@ -435,7 +435,7 @@ async fn tool_use_round_trip_executes_against_the_session() {
     assert_eq!(messages[1]["content"][0]["type"], "tool_use");
     assert_eq!(
         messages[1]["content"][0]["input"],
-        json!({"points": [[0, 0], [10, 0], [10, 10], [0, 10]]})
+        json!({"op":"run","args":{"command":{"type":"measure_area","points": [[0, 0], [10, 0], [10, 10], [0, 10]]}}})
     );
     assert_eq!(messages[2]["role"], "user");
     let results = messages[2]["content"].as_array().unwrap();
@@ -449,7 +449,7 @@ async fn tool_use_round_trip_executes_against_the_session() {
 #[tokio::test]
 async fn invalid_tool_json_is_answered_with_an_error_and_not_run() {
     let mock = serve(|n| match n {
-        0 => tool_turn(&[("toolu_1", "measure_area", &[r#"{"points": [[0, "#])]),
+        0 => tool_turn(&[("toolu_1", "qiyas_execute", &[r#"{"points": [[0, "#])]),
         _ => text_turn(&["Sorry."]),
     })
     .await;
@@ -517,7 +517,11 @@ async fn loop_stops_after_40_tool_calls() {
     let mock = serve(|n| {
         let id = format!("toolu_{n}");
         let id: &'static str = Box::leak(id.into_boxed_str());
-        tool_turn(&[(id, "list_layers", &["{}"])])
+        tool_turn(&[(
+            id,
+            "qiyas_read",
+            &[r#"{"op":"query","args":{"kind":"layers"}}"#],
+        )])
     })
     .await;
     let (_dir, session) = sample();
@@ -558,7 +562,7 @@ async fn loop_stops_after_40_tool_calls() {
 async fn malformed_tool_input_still_stops_after_40_calls() {
     let mock = serve(|n| {
         let id: &'static str = Box::leak(format!("toolu_{n}").into_boxed_str());
-        tool_turn(&[(id, "measure_area", &[r#"{"points": [[0, "#])])
+        tool_turn(&[(id, "qiyas_execute", &[r#"{"points": [[0, "#])])
     })
     .await;
     let (_dir, session) = sample();
@@ -598,8 +602,8 @@ async fn history_is_append_only_and_system_prompt_is_stable() {
     let mock = serve(|n| match n {
         0 => tool_turn(&[(
             "toolu_1",
-            "measure_area",
-            &[r#"{"points": [[0, 0], [10, 0], [10, 10], [0, 10]]}"#],
+            "qiyas_execute",
+            &[r#"{"op":"run","args":{"command":{"type":"measure_area","points": [[0, 0], [10, 0], [10, 10], [0, 10]]}}}"#],
         )]),
         _ => text_turn(&["Done."]),
     })
@@ -656,7 +660,11 @@ async fn a_question_ends_the_turn_cleanly_and_the_answer_carries_on() {
     let question = "Which one: the wall on A-WALL, or the arc on A-WALL-CURVE?";
     let mock = serve(move |n| match n {
         0 => text_turn(&[question]),
-        1 => tool_turn(&[("toolu_1", "list_layers", &["{}"])]),
+        1 => tool_turn(&[(
+            "toolu_1",
+            "qiyas_read",
+            &[r#"{"op":"query","args":{"kind":"layers"}}"#],
+        )]),
         _ => text_turn(&["The arc is 6.28 m."]),
     })
     .await;
@@ -843,9 +851,9 @@ async fn openai_compatible_streams_text_and_tool_calls() {
         0 => Reply::Data(vec![
             json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"Let me look."}}]}).to_string(),
             json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",
-                "function":{"name":"list_layers","arguments":""}}]}}]}).to_string(),
-            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"off"}}]}}]}).to_string(),
-            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"set\": 0}"}}]}}]}).to_string(),
+                "function":{"name":"qiyas_read","arguments":""}}]}}]}).to_string(),
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"op\":\"query\",\"args\":{\"kind\":\"layers\",\"off"}}]}}]}).to_string(),
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"set\": 0}}"}}]}}]}).to_string(),
             json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}).to_string(),
             "[DONE]".into(),
         ]),
@@ -867,9 +875,9 @@ async fn openai_compatible_streams_text_and_tool_calls() {
     result.unwrap();
     assert_eq!(texts(&events), ["Let me look.", "Three layers."]);
     assert!(events.iter().any(|e| matches!(e,
-        AgentEvent::ToolCall { id, name, input, mutating }
-            if id == "call_1" && name == "list_layers" && *input == json!({"offset": 0})
-                && !mutating)));
+        AgentEvent::ToolCall { id, name, input, mutating, label }
+            if id == "call_1" && name == "qiyas_read" && *input == json!({"op":"query","args":{"kind":"layers","offset":0}})
+                && !mutating && label.as_deref() == Some("query"))));
 
     let reqs = mock.requests();
     assert_eq!(reqs.len(), 2);
@@ -895,15 +903,18 @@ async fn openai_compatible_streams_text_and_tool_calls() {
 #[tokio::test]
 async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
     // Gemini behind an OpenAI-compatible gateway: each parallel call whole, all at index 0.
-    let call = |id: &str, name: &str| {
+    let call = |id: &str, input: Value| {
         json!({"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":id,
-            "type":"function","function":{"name":name,"arguments":"{}"}}]}}]})
+            "type":"function","function":{"name":"qiyas_read","arguments":input.to_string()}}]}}]})
         .to_string()
     };
     let first = vec![
-        call("f1", "list_layers"),
-        call("f2", "list_sheets"),
-        call("f3", "list_takeoff"),
+        call("f1", json!({"op":"query","args":{"kind":"layers"}})),
+        call("f2", json!({"op":"state","args":"{}"})),
+        call(
+            "f3",
+            json!({"op":"records","args":{"collection":"takeoff"}}),
+        ),
         json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}).to_string(),
         "[DONE]".into(),
     ];
@@ -934,14 +945,14 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
             _ => None,
         })
         .collect();
-    assert_eq!(ran, ["list_layers", "list_sheets", "list_takeoff"]);
+    assert_eq!(ran, ["qiyas_read", "qiyas_read", "qiyas_read"]);
     assert!(events
         .iter()
         .all(|e| !matches!(e, AgentEvent::ToolResult { is_error: true, .. })));
     let second = &mock.requests()[1].body["messages"];
     let calls = second[2]["tool_calls"].as_array().unwrap();
     assert_eq!(calls.len(), 3);
-    assert_eq!(calls[2]["function"]["name"], "list_takeoff");
+    assert_eq!(calls[2]["function"]["name"], "qiyas_read");
     assert_eq!(
         second[2]["content"], "",
         "never null beside calls (Gemini refuses it)"
@@ -959,9 +970,8 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
         "USER\n    What is in the drawing?",
         "REQUEST 1\n",
         "ANSWER 1 (",
-        "call list_sheets (f2): {}",
-        "TOOL list_takeoff (",
-        "TOOL list_layers (",
+        r#"call qiyas_read (f2): {"args":"{}","op":"state"}"#,
+        "TOOL qiyas_read (",
         "text: Done.",
         "DONE\n",
         "ERROR\n    The AI service answered 400: The request was rejected",
@@ -975,18 +985,19 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
     ] {
         assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
     }
+    assert_eq!(text.matches("TOOL qiyas_read (").count(), 3);
     assert!(!text.contains(KEY));
 }
 
-const SLAB: &str = r#"{"points": [[0, 0], [10, 0], [10, 10], [0, 10]]}"#;
+const SLAB: &str = r#"{"op":"run","args":{"command":{"type":"measure_area","points": [[0, 0], [10, 0], [10, 10], [0, 10]]}}}"#;
 
 #[tokio::test]
 async fn cancel_between_tool_calls_runs_no_more_of_them() {
     let mock = serve(|n| match n {
         0 => tool_turn(&[
-            ("toolu_1", "measure_area", &[SLAB]),
-            ("toolu_2", "measure_area", &[SLAB]),
-            ("toolu_3", "measure_area", &[SLAB]),
+            ("toolu_1", "qiyas_execute", &[SLAB]),
+            ("toolu_2", "qiyas_execute", &[SLAB]),
+            ("toolu_3", "qiyas_execute", &[SLAB]),
         ]),
         _ => text_turn(&["Should not be asked."]),
     })
@@ -1085,11 +1096,11 @@ async fn removals_and_resolutions_stop_after_10_in_one_turn() {
     };
     let removals = ids.clone();
     let mock = serve(move |n| match n {
-        0 => many("remove_measurement", 11, |i| {
-            json!({ "id": removals[i] }).to_string()
+        0 => many("qiyas_execute", 11, |i| {
+            json!({"op":"run","args":{"command":{"type":"remove_measurement", "id": removals[i] }}}).to_string()
         }),
-        1 => many("resolve_conflict", 11, |i| {
-            json!({ "id": format!("c{i}"), "status": "resolved", "note": "" }).to_string()
+        1 => many("qiyas_execute", 11, |i| {
+            json!({"op":"run","args":{"command":{"type":"resolve_conflict", "id": format!("c{i}"), "status": "resolved", "note": "" }}}).to_string()
         }),
         _ => text_turn(&["Done."]),
     })
@@ -1123,14 +1134,17 @@ async fn removals_and_resolutions_stop_after_10_in_one_turn() {
     };
     assert_eq!(
         summary("toolu_10", 0),
-        "Too many removals in one turn; ask the user to confirm"
+        "Too many destructive commands in one turn; ask the user to confirm"
     );
     assert_eq!(
         summary("toolu_10", 1),
-        "Too many resolutions in one turn; ask the user to confirm"
+        "Too many destructive commands in one turn; ask the user to confirm"
     );
-    // The first ten resolutions ran (and failed: there are no such conflicts).
-    assert!(summary("toolu_9", 1).starts_with("No conflict with id c9"));
+    // Resolutions share the cap with removals, so none of them run.
+    assert_eq!(
+        summary("toolu_9", 1),
+        "Too many destructive commands in one turn; ask the user to confirm"
+    );
 }
 
 #[tokio::test]
@@ -1154,8 +1168,16 @@ async fn view_image_stops_when_the_image_budget_is_used() {
     };
     let mock = serve(|n| match n {
         0 | 2 => tool_turn(&[
-            ("toolu_1", "view_image", &[r#"{"width": 64}"#]),
-            ("toolu_2", "view_image", &[r#"{"width": 64}"#]),
+            (
+                "toolu_1",
+                "qiyas_capture",
+                &[r#"{"source":"picture","args":{"width":64}}"#],
+            ),
+            (
+                "toolu_2",
+                "qiyas_capture",
+                &[r#"{"source":"picture","args":{"width":64}}"#],
+            ),
         ]),
         _ => text_turn(&["Looked."]),
     })
@@ -1223,7 +1245,7 @@ impl Provider for HoldsTheLock {
             Ok(qiyas_ai::TurnResult {
                 content: vec![qiyas_ai::ContentBlock::ToolUse {
                     id: "toolu_1".into(),
-                    name: "measure_area".into(),
+                    name: "qiyas_execute".into(),
                     input: serde_json::from_str(SLAB).unwrap(),
                 }],
                 stop_reason: qiyas_ai::StopReason::ToolUse,
@@ -1316,7 +1338,7 @@ async fn a_call_waiting_through_a_tab_switch_is_not_run_on_the_new_drawing() {
 async fn rejected_request_after_find_entities_is_logged_without_retry() {
     let mock = serve(|n| match n {
         0 => Reply::Data(vec![
-            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_446341","type":"function","function":{"name":"find_entities","arguments":"{\"layer\":\"A-WALL\"}"}}]},"finish_reason":"tool_calls"}]}).to_string(),
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_446341","type":"function","function":{"name":"qiyas_read","arguments":"{\"op\":\"query\",\"args\":{\"kind\":\"window\",\"layer\":\"A-WALL\"}}"}}]},"finish_reason":"tool_calls"}]}).to_string(),
             "[DONE]".into(),
         ]),
         _ => Reply::Status(400, vec![], json!({"error":{"message":"The request was rejected","type":"invalid_request_error","param":null,"code":"invalid_value"}}).to_string()),
@@ -1343,7 +1365,7 @@ async fn rejected_request_after_find_entities_is_logged_without_retry() {
     assert_eq!(assistant["tool_calls"][0]["id"], "call_446341");
     assert_eq!(
         assistant["tool_calls"][0]["function"]["arguments"],
-        r#"{"layer":"A-WALL"}"#
+        r#"{"args":{"kind":"window","layer":"A-WALL"},"op":"query"}"#
     );
     let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
     assert_eq!(tool["tool_call_id"], "call_446341");
@@ -1400,18 +1422,18 @@ impl qiyas_ai::DrawingHost for FakeHost {
 #[tokio::test]
 async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_the_user() {
     let mock = serve(|n| match n {
-        0 => tool_turn(&[("toolu_1", "new_drawing", &[r#"{"units":"m"}"#])]),
+        0 => tool_turn(&[("toolu_1", "qiyas_execute", &[r#"{"op":"new_drawing","args":{"units":"m"}}"#])]),
         1 => tool_turn(&[(
             "toolu_2",
-            "draw",
-            &[r#"{"shapes":[{"kind":"line","a":[0,0],"b":[5,0]}]}"#],
+            "qiyas_execute",
+            &[r#"{"op":"run","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[5,0]}}}"#],
         )]),
         2 => tool_turn(&[
-            ("toolu_3", "save_drawing", &[]),
+            ("toolu_3", "qiyas_execute", &[r#"{"op":"save_drawing","args":"{}"}"#]),
             (
                 "toolu_4",
-                "open_drawing",
-                &[r#"{"path":"/jobs/villa.dwg"}"#],
+                "qiyas_execute",
+                &[r#"{"op":"open_drawing","args":{"path":"/jobs/villa.dwg"}}"#],
             ),
         ]),
         _ => text_turn(&["Drawn; choose where to save it."]),
@@ -1465,7 +1487,11 @@ async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_
 #[tokio::test]
 async fn file_tools_without_a_host_say_to_use_the_app() {
     let mock = serve(|n| match n {
-        0 => tool_turn(&[("toolu_1", "new_drawing", &[r#"{"units":"m"}"#])]),
+        0 => tool_turn(&[(
+            "toolu_1",
+            "qiyas_execute",
+            &[r#"{"op":"new_drawing","args":{"units":"m"}}"#],
+        )]),
         _ => text_turn(&["Use New in Qiyas."]),
     })
     .await;
@@ -1673,7 +1699,11 @@ async fn old_pictures_give_way_to_a_line() {
     let mock = serve(move |n| {
         if n < 15 {
             let id: &'static str = Box::leak(calls[n].clone().into_boxed_str());
-            tool_turn(&[(id, "view_image", &[r#"{"width": 64}"#])])
+            tool_turn(&[(
+                id,
+                "qiyas_capture",
+                &[r#"{"source":"picture","args":{"width":64}}"#],
+            )])
         } else {
             text_turn(&["Looked."])
         }

@@ -56,10 +56,14 @@ async fn lists_and_calls_through_the_bridge() {
     let client = bridge(&url, TOKEN).await;
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 57);
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    assert_eq!(names, ["qiyas_read", "qiyas_execute", "qiyas_capture"]);
 
+    let mut args = rmcp::model::JsonObject::new();
+    args.insert("op".into(), "state".into());
+    args.insert("args".into(), "{}".into());
     let result = client
-        .call_tool(CallToolRequestParams::new("list_sheets"))
+        .call_tool(CallToolRequestParams::new("qiyas_read").with_arguments(args))
         .await
         .unwrap();
     assert_ne!(result.is_error, Some(true), "{result:?}");

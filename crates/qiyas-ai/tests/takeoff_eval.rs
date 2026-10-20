@@ -53,15 +53,23 @@ impl Provider for ScriptedModel {
     }
 }
 
-fn query(session: &mut Session, name: &str, input: Value) -> Value {
-    match qiyas_ai::execute(session, name, &input, Source::Ai).unwrap() {
+fn query(session: &mut Session, input: Value) -> Value {
+    match qiyas_ai::surface::run_session(
+        session,
+        qiyas_ai::surface::READ,
+        "query",
+        &input,
+        Source::Ai,
+    )
+    .unwrap()
+    {
         qiyas_ai::ToolOutput::Json(value) => value,
         _ => panic!("expected JSON"),
     }
 }
 
 fn locate(session: &mut Session, layer: &str, kind: &str, x: f64, y: f64) -> Value {
-    let found = query(session, "find_entities", json!({"layer":layer,"kind":kind}));
+    let found = query(session, json!({"kind":"window","layer":layer,"type":kind}));
     let row = found["rows"]
         .as_array()
         .unwrap()
@@ -72,6 +80,22 @@ fn locate(session: &mut Session, layer: &str, kind: &str, x: f64, y: f64) -> Val
         })
         .unwrap();
     json!({"handle":row["handle"]})
+}
+
+fn measurement_call(kind: &str, input: Value) -> (String, Value) {
+    let command = if kind == "count_blocks" {
+        json!({"type":"count_block","block_name":input["block_name"]})
+    } else {
+        json!({
+            "type":"add_measurement",
+            "kind":if kind == "measure_area" { "area" } else { "length" },
+            "handles":[input["handle"]], "points":[], "description":"", "note":""
+        })
+    };
+    (
+        "qiyas_execute".into(),
+        json!({"op":"run","args":{"command":command}}),
+    )
 }
 
 async fn ask(session: Session, prompt: &str, calls: Vec<(String, Value)>) -> Session {
@@ -202,7 +226,7 @@ async fn ten_takeoff_questions_with_independent_answers() {
         } else {
             locate(&mut session, layer, kind, x, y)
         };
-        let session = ask(session, question, vec![(tool.into(), input)]).await;
+        let session = ask(session, question, vec![measurement_call(tool, input)]).await;
         assert_eq!(session.takeoff.items.len(), 1, "{question}");
         let m = &session.takeoff.items[0];
         assert!(
@@ -233,15 +257,21 @@ async fn ten_takeoff_questions_with_independent_answers() {
             locate(&mut session, layer, kind, x, y)
         };
         // Actual measurements run through the Agent. Links are explicit in this case.
-        calls.push((tool.into(), input));
+        calls.push(measurement_call(tool, input));
     }
     let mut session = ask(session, "احصر الرسم وقارنه بجدول الكميات", calls).await;
     let codes = ["A.1", "A.2", "A.2", "A.3", "A.4", "B.1", "B.2"];
-    let mut calls = vec![("import_boq".into(), json!({"path":"test-boq.xlsx"}))];
+    let mut calls = vec![(
+        "qiyas_execute".into(),
+        json!({"op":"import_boq","args":{"path":"test-boq.xlsx"}}),
+    )];
     for (m, code) in session.takeoff.items.iter().zip(codes) {
-        calls.push(("link_boq".into(), json!({"id":m.id,"code":code})));
+        calls.push((
+            "qiyas_execute".into(),
+            json!({"op":"run","args":{"command":{"type":"link_boq","id":m.id,"code":code}}}),
+        ));
     }
-    calls.push(("compare_boq".into(), json!({})));
+    calls.push(("qiyas_execute".into(), json!({"op":"compare","args":"{}"})));
     session = ask(session, "قارن الكميات المقاسة بالجدول", calls).await;
     let conflicts = serde_json::to_value(&session.conflicts).unwrap();
     assert_eq!(session.conflicts.len(), 2, "{conflicts}");
@@ -279,7 +309,10 @@ async fn two_private_drawing_reference_answers() {
         let session = ask(
             session,
             case["question"].as_str().unwrap(),
-            vec![("measure_length".into(), json!({"handle":case["handle"]}))],
+            vec![measurement_call(
+                "measure_length",
+                json!({"handle":case["handle"]}),
+            )],
         )
         .await;
         assert_eq!(session.takeoff.items.len(), 1);

@@ -47,6 +47,7 @@ const core = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
   /** The block edited in place, as drawing_info says. */
   blockEdit: null as string | null,
+  hasBoq: false,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -83,6 +84,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "compare":
         if (core.compareHold) await core.compareHold;
         return [];
+      case "boq":
+        return core.hasBoq ? { source: "/d/bill.xlsx", imported: "", items: [], skipped_rows: 0 } : null;
       case "drawing_info":
         return info(PLAN);
       case "get_drafting":
@@ -249,6 +252,7 @@ beforeEach(() => {
   core.compareHold = null;
   core.settings = {};
   core.blockEdit = null;
+  core.hasBoq = false;
 });
 
 afterEach(cleanup);
@@ -855,6 +859,28 @@ test("opening a drawing and comparing show dots beside the status bar's text, an
   await expectToasts([en["conflicts.none"]]);
   expect(bar().textContent).toBe("plan.dwg");
   expect(bar().querySelector(".dot-loader")).toBeNull();
+});
+
+test("Mizan's compare label marks an empty comparison as complete", async () => {
+  core.hasBoq = true;
+  await mount();
+  await clickOpen();
+  fireEvent.click(screen.getByRole("tab", { name: en.conflicts }));
+  await settle();
+  const panel = within(screen.getByRole("tabpanel", { name: en.conflicts }));
+  expect(panel.getByText(en["conflicts.notCompared"])).toBeTruthy();
+
+  await emit("ai:event", {
+    type: "tool_call", id: "compare", name: "qiyas_execute", label: "compare",
+    input: { op: "compare", args: "{}" }, mutating: true,
+  });
+  await emit("ai:event", {
+    type: "tool_result", id: "compare", is_error: false, summary: "No conflicts",
+    handles: [], ui: null,
+  });
+  await settle();
+  expect(panel.getByText(en["conflicts.none"])).toBeTruthy();
+  expect(panel.queryByText(en["conflicts.notCompared"])).toBeNull();
 });
 
 test("an area marked with the area tool reaches Mizan's composer, made after the tool", async () => {

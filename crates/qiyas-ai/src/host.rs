@@ -80,7 +80,8 @@ pub struct Screen {
 }
 
 /// What a window tool answers when there is no window to ask.
-pub const NO_WINDOW: &str = "The Qiyas window can't be asked from here; use view_image to look \
+pub const NO_WINDOW: &str =
+    "The Qiyas window can't be asked from here; use qiyas_capture with source picture to look \
                              at the drawing";
 
 /// Runs the host tool `name` with `input`. `user_text` is the user's message of this turn (the
@@ -122,7 +123,7 @@ fn tab_id(input: &Value) -> Result<Option<u32>, String> {
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
             .map(Some)
-            .ok_or_else(|| "id must be a tab id from list_drawings".to_string()),
+            .ok_or_else(|| "id must be a tab id from qiyas_read drawings".to_string()),
     }
 }
 

@@ -78,7 +78,7 @@ fn view_screen(
     let mut caption = format!(
         "What the user sees now, as the window draws it (its own colours and background; the \
          selection highlighted): sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in drawing \
-         units ({}). It shows only the view on screen: use view_image to look at another part \
+         units ({}). It shows only the view on screen: use qiyas_capture with source picture to look at another part \
          or closer.",
         s.sheet,
         lo[0],

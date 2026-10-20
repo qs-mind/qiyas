@@ -26,7 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::host::{run_host, DrawingHost, NO_HOST};
 use crate::provider::png_base64;
-use crate::{catalogue, execute, AiError, ToolError, ToolOutput};
+use crate::surface::{self, Route};
+use crate::{catalogue, AiError, ToolError, ToolOutput};
 
 /// Called after a tool changed the take-off or the BOQ work, so the window refreshes.
 pub type OnMutated = Arc<dyn Fn() + Send + Sync>;
@@ -144,8 +145,6 @@ struct Qiyas {
     on_mutated: OnMutated,
     on_ui: OnUi,
     tools: Arc<Vec<Tool>>,
-    /// The tools that change the take-off or the BOQ work.
-    mutating: Arc<Vec<&'static str>>,
 }
 
 impl Qiyas {
@@ -156,11 +155,6 @@ impl Qiyas {
         on_ui: OnUi,
     ) -> Qiyas {
         let specs = catalogue();
-        let mutating = specs
-            .iter()
-            .filter(|s| s.mutating)
-            .map(|s| s.name)
-            .collect();
         let tools = specs
             .into_iter()
             .map(|spec| {
@@ -177,35 +171,38 @@ impl Qiyas {
             on_mutated,
             on_ui,
             tools: Arc::new(tools),
-            mutating: Arc::new(mutating),
         }
     }
 
     /// Runs one tool on the session, holding the lock only while it runs; a file tool through the
     /// host, without the session's lock (the host locks the app's tabs first).
     fn run(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
-        if crate::is_window_tool(name) {
-            let host = self
-                .host
-                .as_deref()
-                .ok_or(ToolError::Failed(crate::host::NO_WINDOW.into()))?;
-            return crate::run_window(host, &self.session, name, input, crate::prompt::Lang::En)
-                .map_err(ToolError::Failed);
+        match surface::route(name, input).map_err(ToolError::BadInput)? {
+            Route::Window { tool, input } => {
+                let host = self
+                    .host
+                    .as_deref()
+                    .ok_or(ToolError::Failed(crate::host::NO_WINDOW.into()))?;
+                crate::run_window(host, &self.session, tool, &input, crate::prompt::Lang::En)
+                    .map_err(ToolError::Failed)
+            }
+            Route::Host { tool, input } => {
+                let host = self
+                    .host
+                    .as_deref()
+                    .ok_or(ToolError::Failed(NO_HOST.into()))?;
+                run_host(host, tool, &input, None)
+                    .map(ToolOutput::Json)
+                    .map_err(ToolError::Failed)
+            }
+            Route::Session { tool, op, args } => {
+                let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+                let session = guard
+                    .as_mut()
+                    .ok_or_else(|| ToolError::Failed(NO_DRAWING.into()))?;
+                surface::run_session(session, &tool, &op, &args, Source::Mcp)
+            }
         }
-        if crate::is_host_tool(name) {
-            let host = self
-                .host
-                .as_deref()
-                .ok_or(ToolError::Failed(NO_HOST.into()))?;
-            return run_host(host, name, input, None)
-                .map(ToolOutput::Json)
-                .map_err(ToolError::Failed);
-        }
-        let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-        let session = guard
-            .as_mut()
-            .ok_or_else(|| ToolError::Failed(NO_DRAWING.into()))?;
-        execute(session, name, input, Source::Mcp)
     }
 }
 
@@ -216,8 +213,9 @@ impl ServerHandler for Qiyas {
             .with_instructions(
                 "Qiyas is a measurement CAD for quantity surveyors. These tools read the drawing \
                  open in Qiyas and add measurements to its take-off; the user sees each change \
-                 in the app and can undo it. list_drawings, new_drawing, open_drawing and \
-                 switch_drawing choose the drawing the others work on; opening a file the user \
+                 in the app and can undo it. qiyas_read discovers commands and records, \
+                 qiyas_execute runs commands and file operations, and qiyas_capture looks. \
+                 File operations choose the drawing the others work on; opening a file the user \
                  has not opened before, Save As and closing unsaved work are asked in the app.",
             )
     }
@@ -241,7 +239,7 @@ impl ServerHandler for Qiyas {
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.to_string();
         let input = request.arguments.map_or(Value::Null, Value::Object);
-        let mutating = self.mutating.contains(&name.as_str());
+        let mutating = surface::mutating(&name, &input);
         // Tools are synchronous and a picture takes a while to draw: off the async workers.
         let this = self.clone();
         let tool = name.clone();
@@ -276,7 +274,26 @@ impl ServerHandler for Qiyas {
 
 #[cfg(test)]
 mod tests {
-    use super::same;
+    use super::*;
+
+    #[test]
+    fn the_server_offers_exactly_the_agents_three_tools() {
+        let server = Qiyas::new(
+            Arc::new(Mutex::new(None)),
+            None,
+            Arc::new(|| {}),
+            Arc::new(|_| {}),
+        );
+        let specs = catalogue();
+        assert_eq!(server.tools.len(), 3);
+        assert_eq!(server.tools.len(), specs.len());
+        for spec in specs {
+            let tool = server.get_tool(spec.name).expect("the same tool");
+            assert_eq!(tool.description.as_deref(), Some(spec.description));
+            assert_eq!(serde_json::json!(tool.input_schema), spec.input_schema);
+        }
+        assert!(server.get_tool("measure_area").is_none());
+    }
 
     #[test]
     fn same_compares_whole_values() {

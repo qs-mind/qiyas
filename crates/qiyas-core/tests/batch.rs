@@ -341,3 +341,110 @@ fn the_history_names_each_step() {
     s.undo();
     assert_eq!(s.history_steps().1[0].label, "new_layer");
 }
+
+#[test]
+fn batch_with_runs_a_closure_on_its_layer_and_restores_failed_work() {
+    let (_dir, mut s) = session();
+    let entities = model_count(&s);
+    let current = s.current.clone();
+    let revision = s.document_revision();
+    let history = s.history_revision();
+    let failed: Result<(), CoreError> = s.batch_with(
+        Source::Ai,
+        "draft",
+        Some("Q-TEMP".into()),
+        Some("ACI 3".into()),
+        |s| {
+            assert_eq!(s.current.layer, "Q-TEMP");
+            assert_eq!(s.current.color, "ACI 3");
+            s.run_as(line([0.0, 0.0], [3.0, 0.0]), Source::Ai)?;
+            Err(CoreError::InvalidCommand("stop here".into()))
+        },
+    );
+    assert!(failed.is_err());
+    assert_eq!(model_count(&s), entities);
+    assert_eq!(s.current, current);
+    assert!(s.drawing.doc.layers.get("Q-TEMP").is_none());
+    assert_eq!(s.document_revision(), revision);
+    assert_eq!(s.history_revision(), history);
+
+    let handle = s
+        .batch_with(
+            Source::Ai,
+            "draft",
+            Some("Q-TEMP".into()),
+            Some("ACI 3".into()),
+            |s| {
+                s.run_as(line([0.0, 0.0], [3.0, 0.0]), Source::Ai)?;
+                Ok(s.last_change().added[0])
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        s.drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(handle))
+            .unwrap()
+            .common()
+            .layer,
+        "Q-TEMP"
+    );
+    assert_eq!(s.current, current);
+    assert_eq!(s.history_revision(), history + 1);
+    let step = s.history_steps().0.pop().unwrap();
+    assert_eq!(step.label, "draft");
+    assert_eq!(step.source, Source::Ai);
+    assert!(s.undo_if(Source::Ai));
+    assert_eq!(model_count(&s), entities);
+    assert!(s.drawing.doc.layers.get("Q-TEMP").is_none());
+}
+
+#[test]
+fn history_revision_distinguishes_no_op_from_a_step_after_the_history_is_full() {
+    let (_dir, mut s) = session();
+    let was_locked = s.drawing.doc.layers.get("0").unwrap().flags.locked;
+    let revision = s.history_revision();
+    for index in 0..201 {
+        s.run_as(
+            Command::SetLayer {
+                name: "0".into(),
+                prop: qiyas_core::LayerProp::Locked,
+                value: serde_json::json!(if index % 2 == 0 {
+                    !was_locked
+                } else {
+                    was_locked
+                }),
+            },
+            Source::User,
+        )
+        .unwrap();
+        assert_eq!(s.history_revision(), revision + index + 1);
+    }
+    assert_eq!(s.history_steps().0.len(), 200);
+    let revision = s.history_revision();
+    for _ in 0..2 {
+        s.run_as(
+            Command::SetLayer {
+                name: "0".into(),
+                prop: qiyas_core::LayerProp::Locked,
+                value: serde_json::json!(!was_locked),
+            },
+            Source::Ai,
+        )
+        .unwrap();
+        assert_eq!(s.history_revision(), revision);
+        assert_eq!(s.history_steps().0.last().unwrap().source, Source::User);
+    }
+    s.run_as(
+        Command::SetLayer {
+            name: "0".into(),
+            prop: qiyas_core::LayerProp::Locked,
+            value: serde_json::json!(was_locked),
+        },
+        Source::Ai,
+    )
+    .unwrap();
+    assert_eq!(s.history_steps().0.len(), 200);
+    assert_eq!(s.history_revision(), revision + 1);
+    assert_eq!(s.history_steps().0.last().unwrap().source, Source::Ai);
+}
