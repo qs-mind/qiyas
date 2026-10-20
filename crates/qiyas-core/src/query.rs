@@ -430,7 +430,7 @@ impl Session {
             .map_or_else(|| name.to_string(), |s| s.block)
     }
 
-    fn entity_row(&self, xrefs: &XrefDocs, c: Candidate) -> EntityRow {
+    pub(crate) fn entity_row(&self, xrefs: &XrefDocs, c: Candidate) -> EntityRow {
         let e = c.entity;
         let Extent { length, area, .. } = self.extent(c.doc, e, &c.xf);
         let texts = texts_of(e);

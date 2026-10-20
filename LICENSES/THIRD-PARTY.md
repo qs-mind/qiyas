@@ -132,6 +132,7 @@ where to get the source of the MPL-2.0 libraries.
 | enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 | crates.io |
 | enumflags2 | 0.7.12 | MIT OR Apache-2.0 | crates.io |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT | crates.io |
+| erased-discriminant | 1.0.1 | MIT OR Apache-2.0 | crates.io |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 | crates.io |
 | errno | 0.3.14 | MIT OR Apache-2.0 | crates.io |
 | error-code | 3.4.0 | BSL-1.0 | crates.io |
@@ -371,6 +372,8 @@ where to get the source of the MPL-2.0 libraries.
 | serde_derive_internals | 0.30.0 | MIT OR Apache-2.0 | crates.io |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | crates.io |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | crates.io |
+| serde_path_to_error | 0.1.20 | MIT OR Apache-2.0 | crates.io |
+| serde-reflection | 0.6.0 | MIT OR Apache-2.0 | crates.io |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 | crates.io |
 | serde_spanned | 0.6.9 | MIT OR Apache-2.0 | crates.io |
 | serde_spanned | 1.1.2 | MIT OR Apache-2.0 | crates.io |

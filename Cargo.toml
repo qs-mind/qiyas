@@ -16,6 +16,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # JSON schemas of the commands, generated from the enum (MIT): the command registry.
 schemars = "1.2"
+# The record types' formats, traced from their serde (MIT OR Apache-2.0): `record_schema`.
+serde-reflection = "0.6"
+# Which field of a record an edit broke (MIT OR Apache-2.0): `SetRecords`.
+serde_path_to_error = "0.1"
 thiserror = "2"
 tauri = "2.11"
 tauri-build = "2.6"

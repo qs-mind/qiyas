@@ -33,6 +33,8 @@ mod project;
 mod props;
 pub mod purge;
 mod query;
+pub mod record_edit;
+pub mod records;
 pub mod registry;
 pub mod script;
 mod session;
@@ -82,6 +84,7 @@ pub use param::{
 pub use project::{project_path, Project};
 pub use props::{EntityProp, MatchProp};
 pub use query::{BlockCount, DimRow, EntityFilter, EntityRow, Page, TextRow};
+pub use record_edit::{NewEntity, RecordUpdate};
 pub use script::Script;
 pub use session::{
     batch_tol_for, zoom_tol, DrawingInfo, EntityInfo, Picked, Session, BATCH_TOL, EMPTY_MODEL,

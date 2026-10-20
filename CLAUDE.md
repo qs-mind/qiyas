@@ -183,6 +183,42 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `x-destructive`, `x-batch` false, `x-internal` (hosts only: `set_boq`, `set_conflicts`),
   `x-needs`.
 
+## Records
+
+- `qiyas-core/src/records.rs`: every object as a record, `{key, type, …summary, data}`, where
+  `data` is the object as opencadcodec serialises it (an entity without its variant wrapper:
+  `/common/layer`, `/radius`). `Command::Records { query }` (`Session::records`,
+  `Outcome::Records`): collections entities (a sheet, the one on screen by default, or `block`;
+  an xref's entities carry `xref` and `chain` and are read-only), layers, linetypes, text and dim
+  styles, blocks, layouts, viewports, groups, views, header, layer states, xrefs, take-off, BOQ,
+  conflicts, schedules, comments, constraints, parameters; filters handles, names, type, layer,
+  sheet, bounds and `where` (eq, ne, lt, le, gt, ge, contains, exists on a JSON pointer into
+  `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) under 40 KB
+  (`MAX_BYTES`, `truncated`); arrays past 100 items say how many they left out.
+- `qiyas-core/src/record_edit.rs`: `Command::SetRecords { collection, updates: [{key, path,
+  value, expected}] }`: serialise, set the JSON pointer, read back with `serde_path_to_error` (the
+  error names the field), `entity_from_record` puts back what serde skips (and a block
+  reference's attributes'); `expected` refuses a record changed since it was read. Entities
+  (and viewports) on a sheet's top level, not locked, layers (not an xref's; the current one
+  can't freeze), text styles, and the header variables in `HEADER_WRITABLE` (kept in the undo
+  step's `HeaderBits`). Refused, each naming its command: identity and ownership, extended data,
+  a text's value (edit_text), a block reference's place and attributes (modify, set_property,
+  edit_attributes), a dimension's block (dim_edit), a table's cells (edit_cell), a layer's name
+  (rename_layer), units (new_drawing), dimension variables (set_dim_style), other collections
+  (`collection_via`). One undo step (tables and take-off kept); dimensions and tables are drawn
+  again, the take-off and fields follow, an edited entity's constraints go (`Reshape::Edited`).
+- `Command::CreateEntities { entities: [{type, data}], sheet }`: the type's default
+  (`default_entity`, `CREATABLE`), the current layer, colour, linetype and lineweight, then `data`
+  merged over; a layer it names that is missing is made (white); texts are marked as Qiyas's;
+  dimensions, tables, viewports, references, pictures and attributes are refused with their
+  command. `Outcome::Added`.
+- `Command::RecordSchema { name }` (`record_schema`): every path of an entity type, "layer",
+  "text_style" or "header" (four levels deep) with its value type, `write: false` with `why` and
+  `via` where refused, the shapes of the named types (enums as their variants: `Color` is
+  `"ByLayer" | … | {"Index": …} | {"Rgb": {…}}`), whether the type can be created, and that
+  angles are radians there. Traced once off the types' serde (`serde-reflection`, MIT OR
+  Apache-2.0: repeated passes until every enum variant is seen, about 12 ms) and kept as JSON.
+
 ## Undo
 
 - `qiyas-core/src/undo.rs`: one step per command, at most 200, each with its `Source`

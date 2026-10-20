@@ -215,6 +215,20 @@ struct HeaderBits {
     dimstyle_handle: Handle,
     dim: [f64; 7],
     dim_decimal_places: i16,
+    // The variables `SetRecords` may set (`record_edit::HEADER_WRITABLE`).
+    linetype_scale: f64,
+    point_display_mode: i16,
+    point_display_size: f64,
+    text_height: f64,
+    fill_mode: bool,
+    mirror_text: bool,
+    lineweight_display: bool,
+    linear_unit_format: i16,
+    linear_unit_precision: i16,
+    angular_unit_format: i16,
+    angular_unit_precision: i16,
+    attribute_visibility: i16,
+    project_name: String,
 }
 
 impl HeaderBits {
@@ -235,6 +249,19 @@ impl HeaderBits {
                 h.dim_linear_scale,
             ],
             dim_decimal_places: h.dim_decimal_places,
+            linetype_scale: h.linetype_scale,
+            point_display_mode: h.point_display_mode,
+            point_display_size: h.point_display_size,
+            text_height: h.text_height,
+            fill_mode: h.fill_mode,
+            mirror_text: h.mirror_text,
+            lineweight_display: h.lineweight_display,
+            linear_unit_format: h.linear_unit_format,
+            linear_unit_precision: h.linear_unit_precision,
+            angular_unit_format: h.angular_unit_format,
+            angular_unit_precision: h.angular_unit_precision,
+            attribute_visibility: h.attribute_visibility,
+            project_name: h.project_name.clone(),
         }
     }
 
@@ -254,6 +281,19 @@ impl HeaderBits {
             h.dim_linear_scale,
         ] = self.dim;
         h.dim_decimal_places = self.dim_decimal_places;
+        h.linetype_scale = self.linetype_scale;
+        h.point_display_mode = self.point_display_mode;
+        h.point_display_size = self.point_display_size;
+        h.text_height = self.text_height;
+        h.fill_mode = self.fill_mode;
+        h.mirror_text = self.mirror_text;
+        h.lineweight_display = self.lineweight_display;
+        h.linear_unit_format = self.linear_unit_format;
+        h.linear_unit_precision = self.linear_unit_precision;
+        h.angular_unit_format = self.angular_unit_format;
+        h.angular_unit_precision = self.angular_unit_precision;
+        h.attribute_visibility = self.attribute_visibility;
+        h.project_name = self.project_name;
     }
 }
 

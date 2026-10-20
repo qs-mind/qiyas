@@ -723,7 +723,7 @@ pub(crate) enum Reshape {
 impl Reshape {
     pub(crate) fn of(cmd: &crate::Command) -> Reshape {
         match cmd {
-            crate::Command::Edit(_) => Reshape::Edited,
+            crate::Command::Edit(_) | crate::Command::SetRecords { .. } => Reshape::Edited,
             crate::Command::Modify(crate::ModifySpec::Mirror { .. }) => Reshape::Mirrored,
             _ => Reshape::Placed,
         }

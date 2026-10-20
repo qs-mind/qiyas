@@ -820,6 +820,53 @@ pub enum Command {
     #[schemars(extend("x-category" = "parametric"))]
     #[schemars(example = json!({"type": "set_parameter", "name": "d1", "expression": "2*d2 + 1.5"}))]
     SetParameter { name: String, expression: String },
+    /// Records of a collection (`crate::records`): the entities of a sheet or block, layers,
+    /// linetypes, text and dimension styles, blocks, layouts, viewports, groups, views, the header,
+    /// layer states, xrefs, the take-off, BOQ, conflicts, schedules, comments, constraints and
+    /// parameters. Filter by handles, names, type, layer, sheet, bounds and `where` conditions on
+    /// JSON pointers into each record's `data`; `fields` picks values; `detail` "full" gives the
+    /// whole `data`. Pages of 20 (200 at most), under 40 KB. `Outcome::Records`; not an undo step.
+    #[schemars(extend("x-category" = "records"))]
+    #[schemars(example = json!({"type": "records", "query": {"collection": "entities", "type": "Line", "layer": "A-WALL"}}))]
+    #[schemars(example = json!({"type": "records", "query": {"collection": "layers", "detail": "full", "names": ["A-WALL"]}}))]
+    #[schemars(example = json!({"type": "records", "query": {"collection": "entities", "where": [{"path": "/radius", "op": "gt", "value": 0.5}], "fields": ["/center", "/radius"]}}))]
+    Records {
+        query: Box<crate::records::RecordQuery>,
+    },
+    /// The paths of a record type ("Line", "LwPolyline", "Text", "Viewport", "layer",
+    /// "text_style", "header"), each with its value type and whether `set_records` may set it (and
+    /// the command to use when not), with the shapes of the types they use. Not an undo step.
+    #[schemars(extend("x-category" = "records"))]
+    #[schemars(example = json!({"type": "record_schema", "name": "Circle"}))]
+    RecordSchema { name: String },
+    /// Sets properties of records: each update puts `value` at the JSON pointer `path` of the
+    /// record `key`'s data (an entity's handle, a layer's or text style's name, "header"), checked
+    /// by the drawing library's types; `expected` refuses it when the record changed since it was
+    /// read. Entities (and viewports), layers, text styles and some header variables; other paths
+    /// and collections say which command does it (record_schema lists them). One undo step, all
+    /// or nothing; the take-off, fields and blocks of dimensions and tables follow, and an edited
+    /// entity loses its constraints.
+    #[schemars(extend("x-category" = "records"))]
+    #[schemars(example = json!({"type": "set_records", "collection": "entities", "updates": [{"key": 1234, "path": "/radius", "value": 0.75}]}))]
+    #[schemars(example = json!({"type": "set_records", "collection": "layers", "updates": [{"key": "A-WALL", "path": "/line_weight", "value": "W50"}]}))]
+    #[schemars(example = json!({"type": "set_records", "collection": "viewports", "updates": [{"key": 1234, "path": "/view_height", "value": 50.0}]}))]
+    SetRecords {
+        collection: crate::records::Collection,
+        updates: Vec<crate::RecordUpdate>,
+    },
+    /// Adds entities of any type the drawing library makes (record_schema says which): each
+    /// starts as its type's default on the current layer, colour and linetype, `data` merged over
+    /// it as its record's data would be (missing fields keep the default). On `sheet` (its name or
+    /// block; the sheet on screen by default); a layer named that the drawing lacks is made. One
+    /// undo step; `Outcome::Added`. Dimensions, tables, viewports, block references and pictures
+    /// are refused with their own command.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type": "create_entities", "entities": [{"type": "Circle", "data": {"center": {"x": 2, "y": 2, "z": 0}, "radius": 0.3, "common": {"layer": "A-COLS"}}}]}))]
+    CreateEntities {
+        entities: Vec<crate::NewEntity>,
+        #[serde(default)]
+        sheet: Option<String>,
+    },
     /// The constraints of the sheet on screen. `Outcome::Constraints`; not an undo step.
     #[schemars(extend("x-category" = "parametric"))]
     #[schemars(example = json!({"type": "list_constraints"}))]
@@ -898,6 +945,8 @@ impl Command {
             | Command::UcsObject { .. }
             | Command::ListConstraints
             | Command::ListParameters
+            | Command::Records { .. }
+            | Command::RecordSchema { .. }
             | Command::ListComments => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
@@ -1007,6 +1056,16 @@ impl Command {
                 tables: false,
                 takeoff: false,
             }),
+            // Any property of entities, layers, styles or the header; the take-off follows.
+            Command::SetRecords { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: true,
+            }),
+            // New layers, the text mark's application, a wipeout's class.
+            Command::CreateEntities { .. } => Some(Part::Document {
+                tables: true,
+                takeoff: false,
+            }),
             // Points on their own layer, and their count in the take-off.
             Command::DivideAlong { .. } | Command::MeasureAlong { .. } => Some(Part::Document {
                 tables: true,
@@ -1048,6 +1107,14 @@ pub enum Outcome {
     /// Entities added to the drawing, by handle.
     Added {
         handles: Vec<u64>,
+    },
+    /// A page of records (`Command::Records`).
+    Records {
+        page: crate::records::RecordPage,
+    },
+    /// A record type's paths (`Command::RecordSchema`).
+    RecordSchema {
+        schema: serde_json::Value,
     },
     /// A batch's commands' outcomes, in order, and every entity it added.
     Batch {
@@ -1826,6 +1893,25 @@ impl Session {
             Command::SetParameter { name, expression } => {
                 self.set_parameter(&name, &expression)?;
                 return Ok(Outcome::Changed);
+            }
+            Command::Records { query } => {
+                return Ok(Outcome::Records {
+                    page: self.records(&query)?,
+                });
+            }
+            Command::RecordSchema { name } => {
+                return Ok(Outcome::RecordSchema {
+                    schema: crate::record_edit::record_schema(&name)?,
+                });
+            }
+            Command::SetRecords {
+                collection,
+                updates,
+            } => return self.set_records(collection, updates),
+            Command::CreateEntities { entities, sheet } => {
+                return Ok(Outcome::Added {
+                    handles: self.create_entities(entities, sheet)?,
+                });
             }
             Command::ListConstraints => {
                 return Ok(Outcome::Constraints {

@@ -10,7 +10,7 @@ use qiyas_core::registry::{effect_of, registry, Effect};
 use qiyas_core::{Command, Session};
 use serde_json::Value;
 
-const CATEGORIES: [&str; 18] = [
+const CATEGORIES: [&str; 19] = [
     "attach",
     "blocks",
     "boq",
@@ -25,6 +25,7 @@ const CATEGORIES: [&str; 18] = [
     "markup",
     "modify",
     "parametric",
+    "records",
     "tables",
     "takeoff",
     "text",
