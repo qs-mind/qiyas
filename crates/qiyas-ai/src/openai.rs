@@ -1,7 +1,7 @@
 //! Any OpenAI-compatible chat service (OpenAI, OpenRouter, a local server, ...): Chat Completions
 //! with streaming and function calling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -21,7 +21,20 @@ pub struct OpenAiCompatible {
     /// thought signature there (`{"google": {"thought_signature": ...}}`) and refuses a request
     /// whose calls of the current turn come back without it.
     extras: Mutex<HashMap<String, Value>>,
+    /// The optional request fields this service refused once (`OPTIONAL_FIELDS`): left out of
+    /// every request after.
+    refused: Mutex<HashSet<&'static str>>,
 }
+
+/// The request fields some services refuse with a 400: `reasoning_effort` (a model that doesn't
+/// reason), `max_completion_tokens` (an older server: `max_tokens` is sent instead),
+/// `stream_options` (a server without usage in streams). Asked for first, dropped when refused.
+pub const OPTIONAL_FIELDS: [&str; 4] = [
+    "reasoning_effort",
+    "max_completion_tokens",
+    "max_tokens",
+    "stream_options",
+];
 
 impl OpenAiCompatible {
     /// `api_key` may be `None` for local servers that take none.
@@ -31,6 +44,7 @@ impl OpenAiCompatible {
             api_key,
             client: http_client(),
             extras: Mutex::new(HashMap::new()),
+            refused: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -43,20 +57,49 @@ impl Provider for OpenAiCompatible {
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
             let extras = self.extras.lock().map(|m| m.clone()).unwrap_or_default();
-            let body = request_body(&req, &extras);
             let url = format!("{}/chat/completions", self.base_url);
-            let response = send(
-                || {
-                    let r = self.client.post(&url).json(&body);
-                    match &self.api_key {
-                        Some(key) => r.bearer_auth(key),
-                        None => r,
-                    }
-                },
-                self.api_key.as_deref().unwrap_or(""),
-                &body,
-            )
-            .await?;
+            let secret = self.api_key.as_deref().unwrap_or("");
+            // A 400 that names one of the optional fields drops it, and the request goes again
+            // once per field.
+            let response = loop {
+                let refused = self.refused.lock().map(|r| r.clone()).unwrap_or_default();
+                let body = request_body(&req, &extras, &refused);
+                let sent = send(
+                    || {
+                        let r = self.client.post(&url).json(&body);
+                        match &self.api_key {
+                            Some(key) => r.bearer_auth(key),
+                            None => r,
+                        }
+                    },
+                    secret,
+                    &body,
+                )
+                .await;
+                match sent {
+                    Err(AiError::Api {
+                        status: 400,
+                        message,
+                        body: answer,
+                        request,
+                    }) => match refused_field(&format!("{message} {answer}"), &refused) {
+                        Some(field) => {
+                            if let Ok(mut r) = self.refused.lock() {
+                                r.insert(field);
+                            }
+                        }
+                        None => {
+                            return Err(AiError::Api {
+                                status: 400,
+                                message,
+                                body: answer,
+                                request,
+                            })
+                        }
+                    },
+                    other => break other?,
+                }
+            };
             let mut turn = Turn::default();
             read_events(response, |e| turn.on_event(&e.data, sink))
                 .await
@@ -69,10 +112,34 @@ impl Provider for OpenAiCompatible {
     }
 }
 
-/// The JSON body. `effort` and `max_tokens` are not sent: services differ on those names
-/// (`max_tokens` is refused by OpenAI's reasoning models) and each has its own default.
-/// `extras` are the calls' `extra_content` as streamed, by call id.
-pub fn request_body(req: &TurnRequest, extras: &HashMap<String, Value>) -> Value {
+/// The optional field a 400's text names, among those not refused yet.
+fn refused_field(text: &str, refused: &HashSet<&'static str>) -> Option<&'static str> {
+    OPTIONAL_FIELDS
+        .into_iter()
+        .filter(|f| !refused.contains(f))
+        .find(|f| text.contains(f))
+}
+
+/// `effort` as OpenAI's `reasoning_effort`: low, medium or high (the deeper levels are high,
+/// the most every service takes).
+fn reasoning_effort(effort: &str) -> &'static str {
+    match effort {
+        "low" | "minimal" => "low",
+        "medium" => "medium",
+        _ => "high",
+    }
+}
+
+/// The JSON body. Asks for the effort as `reasoning_effort`, the answer's length as
+/// `max_completion_tokens` (OpenAI's reasoning models refuse `max_tokens`; `max_tokens` when a
+/// service refused that) and the usage at the end of the stream, leaving out what the service
+/// refused before (`refused`, see `OPTIONAL_FIELDS`). `extras` are the calls' `extra_content` as
+/// streamed, by call id.
+pub fn request_body(
+    req: &TurnRequest,
+    extras: &HashMap<String, Value>,
+    refused: &HashSet<&'static str>,
+) -> Value {
     let mut messages = vec![json!({ "role": "system", "content": req.system })];
     for m in &req.messages {
         push_messages(&mut messages, m, extras);
@@ -99,6 +166,19 @@ pub fn request_body(req: &TurnRequest, extras: &HashMap<String, Value>) -> Value
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
         body["tool_choice"] = json!("auto");
+    }
+    if !refused.contains("reasoning_effort") && !req.effort.is_empty() {
+        body["reasoning_effort"] = json!(reasoning_effort(&req.effort));
+    }
+    if req.max_tokens > 0 {
+        if !refused.contains("max_completion_tokens") {
+            body["max_completion_tokens"] = json!(req.max_tokens);
+        } else if !refused.contains("max_tokens") {
+            body["max_tokens"] = json!(req.max_tokens);
+        }
+    }
+    if !refused.contains("stream_options") {
+        body["stream_options"] = json!({ "include_usage": true });
     }
     body
 }
@@ -230,8 +310,16 @@ impl Turn {
             return Err(AiError::Stream(message));
         }
         if let Some(u) = e.get("usage").filter(|u| u.is_object()) {
-            self.usage.input_tokens = u["prompt_tokens"].as_u64().unwrap_or(0);
+            let prompt = u["prompt_tokens"].as_u64().unwrap_or(0);
+            let cached = u["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap_or(0);
+            self.usage.input_tokens = prompt.saturating_sub(cached);
+            self.usage.cache_read_input_tokens = cached;
             self.usage.output_tokens = u["completion_tokens"].as_u64().unwrap_or(0);
+            self.usage.reasoning_tokens = u["completion_tokens_details"]["reasoning_tokens"]
+                .as_u64()
+                .unwrap_or(0);
         }
         let choice = &e["choices"][0];
         let delta = &choice["delta"];
@@ -380,6 +468,88 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(effort: &str, max_tokens: u32) -> TurnRequest {
+        TurnRequest {
+            system: "s".into(),
+            messages: vec![Message::user(vec![ContentBlock::Text {
+                text: "hi".into(),
+            }])],
+            tools: vec![],
+            model: "google:gemini@3.8-flash".into(),
+            effort: effort.into(),
+            max_tokens,
+        }
+    }
+
+    /// The effort the user chose reaches the service (it was never sent), with the answer's
+    /// length and the usage at the end of the stream.
+    #[test]
+    fn effort_tokens_and_usage_are_asked_for() {
+        let body = request_body(&request("xhigh", 16_000), &HashMap::new(), &HashSet::new());
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["max_completion_tokens"], 16_000);
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        for (effort, sent) in [
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("max", "high"),
+        ] {
+            let body = request_body(&request(effort, 1), &HashMap::new(), &HashSet::new());
+            assert_eq!(body["reasoning_effort"], sent, "{effort}");
+        }
+    }
+
+    #[test]
+    fn a_refused_parameter_is_dropped_and_remembered() {
+        let none = HashSet::new();
+        assert_eq!(
+            refused_field(
+                "Unrecognized request argument supplied: reasoning_effort",
+                &none
+            ),
+            Some("reasoning_effort")
+        );
+        assert_eq!(refused_field("model not found", &none), None);
+        let mut refused: HashSet<&'static str> = HashSet::new();
+        refused.insert("reasoning_effort");
+        refused.insert("max_completion_tokens");
+        let body = request_body(&request("high", 4_000), &HashMap::new(), &refused);
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("max_completion_tokens").is_none());
+        assert_eq!(body["max_tokens"], 4_000, "the older name instead");
+        // OpenAI's own answer to max_tokens names both: the one not refused yet is dropped.
+        assert_eq!(
+            refused_field(
+                "'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+                &refused
+            ),
+            Some("max_tokens")
+        );
+    }
+
+    #[test]
+    fn reasoning_and_cached_tokens_are_read() {
+        let mut turn = Turn::default();
+        let mut sink = |_: StreamEvent| {};
+        let end = json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 300,
+                "prompt_tokens_details": { "cached_tokens": 800 },
+                "completion_tokens_details": { "reasoning_tokens": 250 }
+            }
+        });
+        turn.on_event(&end.to_string(), &mut sink).unwrap();
+        let usage = turn.finish(&mut sink).usage;
+        assert_eq!(usage.input_tokens, 200);
+        assert_eq!(usage.cache_read_input_tokens, 800);
+        assert_eq!(usage.output_tokens, 300);
+        assert_eq!(usage.reasoning_tokens, 250);
+    }
 
     /// The calls a stream of `data:` payloads ends with, as (id, name, input).
     fn calls_of(events: &[Value]) -> Vec<(String, String, Value)> {

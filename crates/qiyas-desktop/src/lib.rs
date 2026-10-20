@@ -116,6 +116,7 @@ pub fn run() {
             updater::cancel_update,
             launch::take_open_requests,
             commands::ai_send,
+            commands::ai_models,
             ai_window::ai_window_reply,
             commands::ai_cancel,
             commands::ai_clear,

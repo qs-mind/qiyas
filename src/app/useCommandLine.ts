@@ -37,7 +37,10 @@ type Deps = {
     Sheets,
     "batch" | "renderProgress" | "split" | "setSplit" | "hidden" | "chooseSheet" | "ucsIcon" | "chooseUcsIcon"
   >;
-  layers: Pick<Layers, "applyHidden" | "isolateLayer" | "showAll" | "setLayerStatesOpen" | "setTranslatorOpen">;
+  layers: Pick<
+    Layers,
+    "applyHidden" | "isolateLayer" | "unisolateLayers" | "showAll" | "setLayerStatesOpen" | "setTranslatorOpen"
+  >;
   attach: Pick<
     Attach,
     "attachOpen" | "setAttachOpen" | "setAttachImageOpen" | "pending" | "setPending" | "setPickedInsert" | "pendingPoint"
@@ -101,7 +104,7 @@ export function useCommandLine({
   const { tool, setTool, lastPoint, preset, chooseTool } = toolChoice;
   const { apply, history } = commands;
   const { batch, renderProgress, split, setSplit, hidden, chooseSheet, ucsIcon, chooseUcsIcon } = sheets;
-  const { applyHidden, isolateLayer, showAll, setLayerStatesOpen, setTranslatorOpen } = layers;
+  const { applyHidden, isolateLayer, unisolateLayers, showAll, setLayerStatesOpen, setTranslatorOpen } = layers;
   const { attachOpen, setAttachOpen, setAttachImageOpen, pending, setPending, setPickedInsert, pendingPoint } = attach;
   const { setBlockPaletteOpen, closeBlockEdit, openAttributeManager } = blocks;
   const { setFindOpen, openDimStyle, updateFields, setTextEditor, setFieldTarget } = annotate;
@@ -263,6 +266,9 @@ export function useCommandLine({
         if (name) isolateLayer(name);
         return;
       }
+      case "unisolate":
+        if (!needDrawing()) unisolateLayers();
+        return;
       case "showAll":
         if (!needDrawing()) showAll();
         return;

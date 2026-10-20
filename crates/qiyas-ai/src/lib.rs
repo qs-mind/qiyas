@@ -20,6 +20,7 @@ mod image;
 pub mod log;
 mod marks;
 pub mod mcp;
+pub mod models;
 pub mod openai;
 pub mod prompt;
 pub mod provider;

@@ -137,14 +137,47 @@ export function useLayers({
     [hidden, info],
   );
 
-  /** Shows only `name`: hides every other layer and unhides it. */
+  /** Runs a view command on the layers (isolate, un-isolate), then reads the hidden layers back
+   *  and redraws. Not an undo step. */
+  async function viewCommand(cmd: Command) {
+    if (layerBusy.current) return;
+    layerBusy.current = true;
+    setLayersBusy(true);
+    let failure: string | null = null;
+    try {
+      await runCommand(cmd);
+      await syncInfo();
+      await redraw();
+    } catch (e) {
+      failure = String(e);
+    }
+    setError(failure);
+    layerBusy.current = false;
+    setLayersBusy(false);
+  }
+
+  /** Shows only `name` (LAYISO); the layer isolated already un-isolates. The core keeps what it
+   *  hid, so un-isolating puts back only that. */
   const isolateLayer = useCallback(
-    (name: string) =>
-      applyHidden(new Set(info?.layers.map((l) => l.name).filter((n) => n !== name))),
+    (name: string) => viewCommand({ type: "isolate_layer", name }),
     [hidden, info],
   );
 
-  const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
+  /** Puts back what isolating hid (LAYUNISO). */
+  const unisolateLayers = useCallback(() => viewCommand({ type: "unisolate_layers" }), [hidden, info]);
+
+  /** Shows every layer, ending an isolation too. */
+  const showAll = useCallback(async () => {
+    if (info?.isolated_layer) {
+      try {
+        await runCommand({ type: "unisolate_layers" });
+      } catch (e) {
+        setError(String(e));
+      }
+    }
+    await applyHidden(new Set());
+    if (info?.isolated_layer) await syncInfo();
+  }, [hidden, info]);
 
   /** One property of the drawing's layer `name` (one undo step). */
   const setLayerProp = useCallback(
@@ -223,6 +256,7 @@ export function useLayers({
     applyHidden,
     toggleLayer,
     isolateLayer,
+    unisolateLayers,
     showAll,
     setLayerProp,
     renameLayer,

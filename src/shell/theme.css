@@ -721,6 +721,18 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* The layer isolated (LAYISO) and the way back, under the panel's heading. */
+.layers-isolated {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--accent-soft);
+  border-radius: 4px;
+}
 .layers-head {
   display: flex;
   align-items: center;
@@ -3584,4 +3596,25 @@ span.grid-sort {
     animation: none;
     opacity: 1;
   }
+}
+
+/* The AI model list in the settings: a filter for long lists, the list with its refresh button,
+   an id field for "Other…", and why the built-in list shows. */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.model-row {
+  display: flex;
+  gap: 4px;
+}
+.model-row select {
+  flex: 1;
+  min-width: 0;
+}
+.model-picker .note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
 }

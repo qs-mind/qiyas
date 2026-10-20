@@ -103,6 +103,7 @@ export type Action =
   | { type: "count"; block: string }
   | { type: "layers"; hide: boolean; names: string[] }
   | { type: "isolate"; name: string }
+  | { type: "unisolate" }
   | { type: "showAll" }
   | { type: "zoom"; how: "extents" | "in" | "out" }
   | { type: "toggle"; toggle: DraftingToggle }
@@ -497,6 +498,8 @@ function command(
     }
     case "LAYISO":
       return rest ? { type: "isolate", name: oneName(rest) } : needs("cmd.needLayer");
+    case "LAYUNISO":
+      return { type: "unisolate" };
     case "LAYALL":
       return { type: "showAll" };
     case "ZOOM":

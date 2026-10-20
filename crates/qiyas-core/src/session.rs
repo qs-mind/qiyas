@@ -26,7 +26,7 @@ use crate::drawing::short_layer_name;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::underlay::{rebase_links, Underlays};
-use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot, ViewRefs};
+use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot, ViewDelta, ViewRefs};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Current, DimStyleInfo, Drafting, Drawing, LayerInfo,
@@ -123,6 +123,9 @@ pub struct Session {
     pub current: Current,
     /// The hidden layers kept with each layer state, by state name. Saved in the project file.
     pub(crate) state_hidden: BTreeMap<String, Vec<String>>,
+    /// The layer isolated on screen (LAYISO), with what isolating it hid; LAYUNISO puts back only
+    /// that. Not an undo step, like hiding a layer.
+    pub(crate) isolated: Option<crate::layers::Isolation>,
     /// The user coordinate system (see `crate::ucs`). Saved in the project file and the
     /// drawing; not an undo step.
     pub ucs: Ucs,
@@ -192,6 +195,8 @@ pub struct DrawingInfo {
     pub sheet: String,
     /// The layers the user has hidden, sorted.
     pub hidden_layers: Vec<String>,
+    /// The layer isolated on screen (LAYISO), if one is.
+    pub isolated_layer: Option<String>,
     /// What new entities are drawn with (`Session::current`).
     pub current: Current,
     /// The drawing's own text styles, sorted (`Session::text_styles`).
@@ -651,6 +656,7 @@ impl Session {
             xref_overrides,
             current,
             state_hidden,
+            isolated: None,
             ucs,
             history: History::default(),
             block_edit: None,
@@ -835,6 +841,7 @@ impl Session {
             xrefs: self.xrefs.info(&self.xref_overrides),
             sheet: self.sheet.clone(),
             hidden_layers: self.hidden_layers(),
+            isolated_layer: self.isolated.as_ref().map(|i| i.layer.clone()),
             current: self.current.clone(),
             text_styles: self.text_styles(),
             text_style: self.text_style(),
@@ -910,6 +917,10 @@ impl Session {
     /// Hides or shows a layer on top of the drawing's own layer state. Names match case-insensitively.
     pub fn set_layer_hidden(&mut self, name: &str, hidden: bool) {
         let key = normalize_name(name);
+        // The user chose for this layer: un-isolating leaves it as they set it.
+        if let Some(iso) = &mut self.isolated {
+            iso.hid.retain(|n| normalize_name(n) != key);
+        }
         let layers = &mut self.visibility.hidden_layers;
         layers.retain(|n| normalize_name(n) != key);
         if hidden {
@@ -1639,8 +1650,11 @@ impl Session {
             tables,
             takeoff,
         );
-        // Kept only when the change moved it, so undoing an unrelated step never touches it.
-        change.view = view.filter(|before| *before != self.view_refs().get());
+        // Kept only when the change moved it, and then only what it moved, so undoing a step
+        // never touches layers hidden or shown since.
+        change.view = view
+            .and_then(|before| ViewDelta::between(&before, &self.view_refs().get()))
+            .map(Box::new);
         match done {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {

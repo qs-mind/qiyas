@@ -193,6 +193,8 @@ impl Session {
             .map(|(_, v)| v.clone());
         if let Some(hidden) = hidden {
             self.visibility.hidden_layers = hidden.into_iter().collect();
+            // The state says what is hidden now: nothing is isolated any more.
+            self.isolated = None;
         }
         Ok(())
     }
@@ -342,6 +344,12 @@ impl Session {
         self.visibility
             .hidden_layers
             .retain(|n| normalize_name(n) != key);
+        if let Some(iso) = &mut self.isolated {
+            iso.hid.retain(|n| normalize_name(n) != key);
+            if normalize_name(&iso.layer) == key {
+                self.isolated = None;
+            }
+        }
         Ok(())
     }
 
@@ -410,6 +418,16 @@ impl Session {
         if hidden.iter().any(|n| normalize_name(n) == key) {
             hidden.retain(|n| normalize_name(n) != key);
             hidden.insert(to.to_string());
+        }
+        if let Some(iso) = &mut self.isolated {
+            if normalize_name(&iso.layer) == key {
+                iso.layer = to.to_string();
+            }
+            for n in iso.hid.iter_mut() {
+                if normalize_name(n) == key {
+                    *n = to.to_string();
+                }
+            }
         }
         for list in self.state_hidden.values_mut() {
             for n in list.iter_mut() {
@@ -575,5 +593,71 @@ impl Session {
             .collect();
         names.sort();
         names
+    }
+}
+
+/// A layer isolated on screen (LAYISO): the layer, the layers isolating it hid, and whether it
+/// was hidden itself and so shown.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Isolation {
+    pub layer: String,
+    pub hid: Vec<String>,
+    pub showed: bool,
+}
+
+impl Session {
+    /// Shows only the layer `name` (AutoCAD's LAYISO): every other layer of the drawing and its
+    /// xrefs is hidden, and `name` shown. Isolating the layer already isolated un-isolates it;
+    /// isolating another first puts back what the first hid. Not an undo step.
+    pub fn isolate_layer(&mut self, name: &str) -> Result<(), CoreError> {
+        let key = normalize_name(name);
+        let layer = self
+            .layers()
+            .into_iter()
+            .map(|l| l.name)
+            .find(|n| normalize_name(n) == key)
+            .ok_or_else(|| CoreError::InvalidCommand(format!("No layer {name}")))?;
+        let again = self
+            .isolated
+            .as_ref()
+            .is_some_and(|i| normalize_name(&i.layer) == key);
+        self.unisolate_layers();
+        if again {
+            return Ok(());
+        }
+        let hidden = &mut self.visibility.hidden_layers;
+        let showed = hidden.iter().any(|n| normalize_name(n) == key);
+        hidden.retain(|n| normalize_name(n) != key);
+        let mut hid = Vec::new();
+        for other in self.layers().into_iter().map(|l| l.name) {
+            let other_key = normalize_name(&other);
+            if other_key == key {
+                continue;
+            }
+            let hidden = &mut self.visibility.hidden_layers;
+            if !hidden.iter().any(|n| normalize_name(n) == other_key) {
+                hidden.insert(other.clone());
+                hid.push(other);
+            }
+        }
+        self.isolated = Some(Isolation { layer, hid, showed });
+        Ok(())
+    }
+
+    /// Puts back what isolating a layer changed (AutoCAD's LAYUNISO): shows the layers it hid
+    /// that are still hidden, and hides the isolated layer again if it was hidden before. Layers
+    /// the user hid or showed since stay as they are. Nothing to do when no layer is isolated.
+    pub fn unisolate_layers(&mut self) {
+        let Some(iso) = self.isolated.take() else {
+            return;
+        };
+        let hidden = &mut self.visibility.hidden_layers;
+        for name in &iso.hid {
+            let key = normalize_name(name);
+            hidden.retain(|n| normalize_name(n) != key);
+        }
+        if iso.showed {
+            hidden.insert(iso.layer);
+        }
     }
 }

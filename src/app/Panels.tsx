@@ -63,6 +63,7 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
     layersBusy,
     toggleLayer,
     isolateLayer,
+    unisolateLayers,
     showAll,
     makeCurrent,
     setLayerProp,
@@ -87,6 +88,8 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
         busy={layersBusy}
         onToggle={toggleLayer}
         onIsolate={isolateLayer}
+        isolated={info?.isolated_layer ?? null}
+        onUnisolate={unisolateLayers}
         onShowAll={showAll}
         current={info?.current.layer}
         onMakeCurrent={info ? makeCurrent : undefined}

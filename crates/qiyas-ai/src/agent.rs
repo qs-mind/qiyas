@@ -866,9 +866,10 @@ fn tool_entry(id: &str, input: &Value, block: &ContentBlock) -> String {
 
 fn tokens(usage: &Usage) -> String {
     format!(
-        "tokens: {} in, {} out, {} cache read, {} cache written",
+        "tokens: {} in, {} out ({} thinking), {} cache read, {} cache written",
         usage.input_tokens,
         usage.output_tokens,
+        usage.reasoning_tokens,
         usage.cache_read_input_tokens,
         usage.cache_creation_input_tokens
     )

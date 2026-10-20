@@ -595,8 +595,16 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   freezes, a match's source). Field values on a locked layer still follow what they read
   (`follow_fields`, `UpdateFields`): the lock blocks user-initiated changes only (find and
   replace, attribute sync, edits). A document step that moves `Session::current`, the hidden layers
-  or the layer states' hidden layers keeps them as they were (`undo::ViewState`) and undo and
-  redo put them back. Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
+  or the layer states' hidden layers keeps only what it changed (`undo::ViewDelta`: current before
+  and after, layers it hid and showed, each state's list before and after), and undo and redo put
+  back only that: layers hidden or shown since stay as they are, and a renamed hidden layer is
+  hidden again under its old name only while it is still hidden under the new one (undoing a
+  rename after Show all once hid the whole old set again). Isolating is the core's
+  (`Command::IsolateLayer` / `UnisolateLayers`, LAYISO / LAYUNISO, `Session::isolated`, not undo
+  steps): isolating the isolated layer again, LAYUNISO or Show all put back only what isolating
+  hid (a layer the user showed or hid meanwhile stays so); a rename follows it; restoring a layer
+  state ends it. `DrawingInfo::isolated_layer`; the Layers panel says "Isolated: X" with
+  Un-isolate, and the row's isolate button is pressed. Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
   `capture_layer_state`): `SaveLayerState` (Qiyas's current layer as the state's; the layer
   table's extension dictionary is made outside the step so an undo never leaves a dangling
   pointer), `RestoreLayerState` (the header's current layer is put back), `RenameLayerState`,
@@ -1018,7 +1026,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
   `openai_compatible`), model (default `claude-opus-5-5`), base URL, effort, MCP on/off, port and
-  token, language, theme.
+  token, language, theme. The model is chosen from a list (`src/shell/ModelPicker.tsx`, IPC
+  `ai_models`, `qiyas-ai/src/models.rs`): Anthropic's Models API (`GET /v1/models`, paged with
+  `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with the key from the
+  keychain; the saved model stays listed, a filter shows past 12 models, "Other…" takes a typed id,
+  and when the service can't be asked Claude's built-in list shows (`CLAUDE_MODELS`) with why.
 - The API key is never in a file: it lives in the OS keychain (service `qiyas`, account = the
   provider name), is set only in the Settings dialog, and is never sent back to the window.
   Agents never read or type a real key; the founder pastes it himself.
@@ -1136,7 +1148,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   every later request fail. An assistant message with calls and no text sends `"content": ""`
   (Gemini's endpoint, Runware in front of it, refuses `null`); a tool message holds only `role`,
   `tool_call_id` and string `content`. A call's streamed `extra_content` (Gemini 3's thought
-  signature) is kept by call id in the provider and sent back on that call.
+  signature) is kept by call id in the provider and sent back on that call. Each request asks for
+  the effort (`reasoning_effort`: low, medium, high for high/xhigh/max), the answer's length
+  (`max_completion_tokens`, else `max_tokens`) and the usage (`stream_options.include_usage`); a
+  400 naming one of those (`OPTIONAL_FIELDS`) drops it, sends again, and leaves it out for the rest
+  of the conversation. Cached and reasoning tokens are read into `Usage` and the log ("(n
+  thinking)").
 
 ## MCP
 

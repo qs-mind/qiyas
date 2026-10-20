@@ -111,6 +111,8 @@ export type DrawingInfo = {
   sheet: string;
   /** The layers the user has hidden, sorted. */
   hidden_layers: string[];
+  /** The layer isolated on screen (LAYISO), if one is. */
+  isolated_layer?: string | null;
   /** What new entities are drawn with. */
   current: Current;
   /** The drawing's own text styles, sorted. */
@@ -864,6 +866,10 @@ export type Command =
   | { type: "remove_measurement"; id: string }
   | { type: "set_description"; id: string; text: string }
   | { type: "set_layer_hidden"; name: string; hidden: boolean }
+  /** Shows only the layer (LAYISO); the layer isolated already un-isolates. Not an undo step. */
+  | { type: "isolate_layer"; name: string }
+  /** Puts back what isolating hid (LAYUNISO). Not an undo step. */
+  | { type: "unisolate_layers" }
   | { type: "set_sheet"; block: string }
   /** The drawing holds its Arabic text backwards; not an undo step. */
   | { type: "set_arabic_reversed"; on: boolean }
@@ -1750,6 +1756,17 @@ export const aiCancel = () => invoke<void>("ai_cancel");
 export const aiClear = () => invoke<void>("ai_clear");
 
 export const aiStatus = () => invoke<AiStatus>("ai_status");
+
+/** One model a provider offers: its id, as the API takes it, and a name to show. */
+export type ModelInfo = { id: string; label: string };
+/** The models a provider offers (`qiyas_ai::models::ModelList`): from the service, or the
+ *  built-in list with why (`error`; "no_base_url" when there is no address to ask). */
+export type ModelList = { models: ModelInfo[]; from_service: boolean; error: string | null };
+
+/** The models `provider` offers at `base_url` (the saved ones when left out); the key stays in
+ *  the core. */
+export const aiModels = (provider?: Provider, baseUrl?: string | null) =>
+  invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null });
 
 /** The agent log: where the file is and its newest part (empty before the first conversation). */
 export type AiLog = { path: string; text: string };

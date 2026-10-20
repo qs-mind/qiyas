@@ -74,6 +74,7 @@ export const COMMANDS = [
   "LAYON",
   "LAYSTATE",
   "LAYTRANS",
+  "LAYUNISO",
   "LEADER",
   "LENGTHEN",
   "LINE",

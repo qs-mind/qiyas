@@ -366,3 +366,30 @@ test("the row's buttons are in the row for the pointer and the keyboard; a name 
   expect(row.querySelector(".name")!.getAttribute("title")).toBe("A-WALL-FULL-DETAIL-LONG");
   expect(row.querySelectorAll("button")).toHaveLength(3);
 });
+
+test("an isolated layer says so, its isolate button is pressed, and Un-isolate puts it back", () => {
+  const onUnisolate = vi.fn();
+  render(
+    <LayersPanel
+      layers={[layer("A-WALL"), layer("A-DOOR"), layer("QIYAS-AREA")]}
+      hidden={new Set(["A-WALL", "A-DOOR"])}
+      onToggle={() => {}}
+      onIsolate={() => {}}
+      isolated="QIYAS-AREA"
+      onUnisolate={onUnisolate}
+      onShowAll={() => {}}
+    />,
+  );
+  expect(screen.getByRole("status").textContent).toContain("Isolated: QIYAS-AREA");
+  expect(screen.getByRole("button", { name: "Isolate: QIYAS-AREA" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Isolate: A-WALL" }).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Un-isolate" }));
+  expect(onUnisolate).toHaveBeenCalledTimes(1);
+});
+
+test("nothing isolated shows no isolation line", () => {
+  render(
+    <LayersPanel layers={[layer("A-WALL")]} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />,
+  );
+  expect(screen.queryByText(/Isolated/)).toBeNull();
+});

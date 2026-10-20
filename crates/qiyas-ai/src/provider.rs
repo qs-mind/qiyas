@@ -178,6 +178,9 @@ pub struct Usage {
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
+    /// Output tokens the model spent thinking, when the service says (OpenAI-compatible
+    /// `completion_tokens_details.reasoning_tokens`); part of `output_tokens`.
+    pub reasoning_tokens: u64,
 }
 
 impl Usage {
@@ -186,6 +189,7 @@ impl Usage {
         self.output_tokens += other.output_tokens;
         self.cache_creation_input_tokens += other.cache_creation_input_tokens;
         self.cache_read_input_tokens += other.cache_read_input_tokens;
+        self.reasoning_tokens += other.reasoning_tokens;
     }
 }
 

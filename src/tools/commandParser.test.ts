@@ -105,6 +105,7 @@ test("LAYOFF and LAYON take names, quoted when they hold spaces", () => {
   expect(parse("LAYOFF", cmd)).toEqual({ type: "error", key: "cmd.needLayer", args: { name: "LAYOFF" } });
   expect(parse("LAYISO Ground Floor", cmd)).toEqual({ type: "isolate", name: "Ground Floor" });
   expect(parse("LAYALL", cmd)).toEqual({ type: "showAll" });
+  expect(parse("LAYUNISO", cmd)).toEqual({ type: "unisolate" });
   expect(tokenize('a "b c" "d')).toEqual(["a", "b c", "d"]);
 });
 
@@ -161,6 +162,7 @@ test("suggestions list commands, then aliases, the exact match first", () => {
     "LAYON",
     "LAYSTATE",
     "LAYTRANS",
+    "LAYUNISO",
     "LAS",
   ]);
   expect(suggest("dis", aliases)).toEqual([{ name: "DIST" }, { name: "DISTANCE", target: "DIST" }]);

@@ -9,6 +9,10 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Choose the AI model from a list: the provider's own models (Anthropic, or an OpenAI-compatible
+  service's), with a filter for long lists and "Other…" for an id the list lacks.
+- Isolating a layer can be undone: isolate it again, LAYUNISO or Un-isolate in the Layers panel
+  puts back only what isolating hid; the panel says which layer is isolated.
 - New drawing (New on the quick-access bar, Ctrl+N or NEW): an empty drawing in metres,
   centimetres or millimetres, saved with Save As the first time.
 - Mizan can list, make, open, switch, save and close drawings, in the same conversation. Opening a
@@ -29,6 +33,10 @@ section below, so add the section before pushing the tag.
 
 ### Fixed
 
+- The effort chosen for an OpenAI-compatible service (Gemini through Runware, OpenRouter, a local
+  server) was never sent; it is now, with the answer's length, and the log shows thinking tokens.
+- Undoing a layer rename after showing every layer hid the old set of layers again, and the
+  drawing seemed to vanish; undo now takes back only what the rename changed.
 - Circles and arcs drew as polygons in metre and centimetre drawings: curves are now drawn within
   0.05 mm in every unit, with 64 segments a circle at least, and again finer when zoomed in close.
 - New drawings get readable dimensions and text (a metric template at 1:100), a metre grid and

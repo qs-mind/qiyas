@@ -58,6 +58,13 @@ pub enum Command {
         name: String,
         hidden: bool,
     },
+    /// Shows only the layer `name`, hiding every other (LAYISO); the layer isolated already
+    /// un-isolates. Not an undo step.
+    IsolateLayer {
+        name: String,
+    },
+    /// Puts back what isolating a layer hid (LAYUNISO). Not an undo step.
+    UnisolateLayers,
     SetSheet {
         block: String,
     },
@@ -743,6 +750,8 @@ impl Command {
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
             Command::SetLayerHidden { .. }
+            | Command::IsolateLayer { .. }
+            | Command::UnisolateLayers
             | Command::SetSheet { .. }
             | Command::SetArabicReversed { .. }
             | Command::SetDrafting { .. }
@@ -1076,6 +1085,14 @@ impl Session {
             }
             Command::SetLayerHidden { name, hidden } => {
                 self.set_layer_hidden(&name, hidden);
+                return Ok(Outcome::Changed);
+            }
+            Command::IsolateLayer { name } => {
+                self.isolate_layer(&name)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::UnisolateLayers => {
+                self.unisolate_layers();
                 return Ok(Outcome::Changed);
             }
             Command::SetSheet { block } => {

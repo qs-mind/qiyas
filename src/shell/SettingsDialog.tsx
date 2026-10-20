@@ -16,8 +16,8 @@ import {
 import { normalizeDigits } from "../tools/commandParser";
 import { useT } from "../i18n";
 import { ModalDialog } from "../ui/ModalDialog";
+import { ModelPicker } from "./ModelPicker";
 
-const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"];
 
 /** The MCP bridge next to the app, with the platform's separator and extension. */
 function bridgePath(dir: string) {
@@ -145,20 +145,15 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <option value="openai_compatible">{t("settings.providerOpenai")}</option>
               </select>
             </label>
-            <label>
+            <div className="field">
               <span>{t("settings.model")}</span>
-              <input
-                dir="ltr"
-                list="settings-models"
+              <ModelPicker
+                provider={draft.provider}
+                baseUrl={draft.base_url ?? null}
                 value={draft.model}
-                onChange={(e) => change({ model: e.target.value })}
+                onChange={(model) => change({ model })}
               />
-              <datalist id="settings-models">
-                {MODELS.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            </label>
+            </div>
             {draft.provider === "openai_compatible" && (
               <label>
                 <span>{t("settings.baseUrl")}</span>

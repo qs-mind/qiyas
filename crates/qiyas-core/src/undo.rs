@@ -46,9 +46,106 @@ pub(crate) struct DocChange {
     pub tables: Option<Box<TablesSnapshot>>,
     /// The take-off before the change, for a command that changes it too.
     pub takeoff: Option<Takeoff>,
-    /// The session's view of the drawing's tables before the change, when the change moved it
-    /// (a renamed layer is the current or a hidden one; a layer state's hidden layers).
-    pub view: Option<ViewState>,
+    /// What the change did to the session's view of the drawing's tables, when it moved it (a
+    /// renamed layer is the current or a hidden one; a layer state's hidden layers). Only that
+    /// difference is undone, so layers hidden or shown since are left as they are.
+    pub view: Option<Box<ViewDelta>>,
+}
+
+/// What one drawing change did to the session's `ViewState`: the current state before and
+/// after, the layers it hid and showed, and each layer state's hidden layers before and after.
+/// Undo applies it backwards, redo forwards; what changed since in the same place is kept.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct ViewDelta {
+    pub current: Option<(Current, Current)>,
+    pub hidden_added: Vec<String>,
+    pub hidden_removed: Vec<String>,
+    pub state_hidden: Vec<StateHidden>,
+}
+
+/// A layer state's name, its hidden layers before and after (`None`: not there).
+pub(crate) type StateHidden = (String, Option<Vec<String>>, Option<Vec<String>>);
+
+impl ViewDelta {
+    /// The difference from `before` to `after`; `None` when they are the same.
+    pub(crate) fn between(before: &ViewState, after: &ViewState) -> Option<ViewDelta> {
+        let mut delta = ViewDelta::default();
+        if before.current != after.current {
+            delta.current = Some((before.current.clone(), after.current.clone()));
+        }
+        let mut added: Vec<String> = after.hidden.difference(&before.hidden).cloned().collect();
+        let mut removed: Vec<String> = before.hidden.difference(&after.hidden).cloned().collect();
+        added.sort();
+        removed.sort();
+        delta.hidden_added = added;
+        delta.hidden_removed = removed;
+        let names: std::collections::BTreeSet<&String> = before
+            .state_hidden
+            .keys()
+            .chain(after.state_hidden.keys())
+            .collect();
+        for name in names {
+            let (b, a) = (before.state_hidden.get(name), after.state_hidden.get(name));
+            if b != a {
+                delta
+                    .state_hidden
+                    .push((name.clone(), b.cloned(), a.cloned()));
+            }
+        }
+        (delta != ViewDelta::default()).then_some(delta)
+    }
+
+    /// Takes the change back in `view` and returns the delta that does it again. A current state
+    /// or a layer state's hidden layers changed since is left as it is; the hidden layers lose
+    /// only what the change hid and get back only what it showed (see `still_hidden`).
+    fn undo(self, view: &mut ViewRefs) -> ViewDelta {
+        if let Some((before, after)) = &self.current {
+            if *view.current == *after {
+                *view.current = before.clone();
+            }
+        }
+        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        // A renamed hidden layer is hidden again under its old name only while it is still
+        // hidden under the new one: the user may have shown it since. A deleted one (nothing
+        // hidden in its place) comes back hidden.
+        let still_hidden = self.hidden_added.is_empty()
+            || self
+                .hidden_added
+                .iter()
+                .any(|name| view.hidden.iter().any(|h| same(h, name)));
+        for name in &self.hidden_added {
+            view.hidden.retain(|h| !same(h, name));
+        }
+        if still_hidden {
+            for name in &self.hidden_removed {
+                if !view.hidden.iter().any(|h| same(h, name)) {
+                    view.hidden.insert(name.clone());
+                }
+            }
+        }
+        for (state, before, after) in &self.state_hidden {
+            if view.state_hidden.get(state) == after.as_ref() {
+                match before {
+                    Some(hidden) => {
+                        view.state_hidden.insert(state.clone(), hidden.clone());
+                    }
+                    None => {
+                        view.state_hidden.remove(state);
+                    }
+                }
+            }
+        }
+        ViewDelta {
+            current: self.current.map(|(before, after)| (after, before)),
+            hidden_added: self.hidden_removed,
+            hidden_removed: self.hidden_added,
+            state_hidden: self
+                .state_hidden
+                .into_iter()
+                .map(|(state, before, after)| (state, after, before))
+                .collect(),
+        }
+    }
 }
 
 /// What the session keeps about the drawing's layers outside the drawing: the current drawing
@@ -74,15 +171,6 @@ impl ViewRefs<'_> {
             current: self.current.clone(),
             hidden: self.hidden.clone(),
             state_hidden: self.state_hidden.clone(),
-        }
-    }
-
-    /// Puts `state` in and returns the one it replaced.
-    fn swap(&mut self, state: ViewState) -> ViewState {
-        ViewState {
-            current: std::mem::replace(self.current, state.current),
-            hidden: std::mem::replace(self.hidden, state.hidden),
-            state_hidden: std::mem::replace(self.state_hidden, state.state_hidden),
         }
     }
 }
@@ -275,7 +363,7 @@ impl DocChange {
         }
         redo.tables = self.tables.map(|t| t.swap(doc));
         redo.takeoff = self.takeoff.map(|t| std::mem::replace(takeoff, t));
-        redo.view = self.view.map(|v| view.swap(v));
+        redo.view = self.view.map(|delta| Box::new(delta.undo(view)));
         redo
     }
 }

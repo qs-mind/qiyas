@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   deleteApiKey: vi.fn(),
   appDir: vi.fn(),
   mcpStatus: vi.fn(),
+  aiModels: vi.fn(),
 }));
 
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
@@ -55,6 +56,14 @@ function setup(hasKey = false) {
   api.setSettings.mockResolvedValue(undefined);
   api.setApiKey.mockResolvedValue(undefined);
   api.deleteApiKey.mockResolvedValue(undefined);
+  api.aiModels.mockResolvedValue({
+    models: [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+    ],
+    from_service: true,
+    error: null,
+  });
   render(<SettingsDialog onClose={() => {}} />);
 }
 
@@ -62,7 +71,7 @@ test("settings dialog shows its fields; base URL only for OpenAI-compatible", as
   setup();
   const provider = (await screen.findByLabelText("Provider")) as HTMLSelectElement;
   expect(provider.value).toBe("anthropic");
-  expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("claude-opus-5-5");
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("claude-opus-5-5");
   expect((screen.getByLabelText("Effort") as HTMLSelectElement).value).toBe("high");
   expect((screen.getByLabelText("API key") as HTMLInputElement).type).toBe("password");
   expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe("48123");

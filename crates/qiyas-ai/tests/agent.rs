@@ -1700,3 +1700,50 @@ async fn old_pictures_give_way_to_a_line() {
     let newest = &messages[messages.len() - 1]["content"][0]["content"];
     assert_eq!(newest[1]["type"], "image");
 }
+
+/// The effort reaches an OpenAI-compatible service; one that refuses `reasoning_effort` gets the
+/// request again without it, and never again in this conversation.
+#[tokio::test]
+async fn openai_compatible_drops_a_refused_field_and_asks_again() {
+    let refusal =
+        r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#;
+    let mock = serve(move |n| match n {
+        0 => Reply::Status(400, vec![], refusal.to_string()),
+        _ => Reply::Data(vec![
+            json!({"choices":[{"index":0,"delta":{"content":"Hello."}}]}).to_string(),
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}).to_string(),
+            json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,
+                "completion_tokens_details":{"reasoning_tokens":3}}})
+            .to_string(),
+            "[DONE]".into(),
+        ]),
+    })
+    .await;
+    let (_dir, session) = sample();
+    let provider = OpenAiCompatible::new(&format!("{}/v1", mock.base), Some(KEY.into()));
+    let settings = AgentSettings {
+        model: "google:gemini@3.8-flash".into(),
+        effort: "high".into(),
+        ..AgentSettings::default()
+    };
+    let mut agent = Agent::new(Box::new(provider), session, settings);
+    let (result, events) = turn(&mut agent, "hi").await;
+    result.unwrap();
+    assert_eq!(texts(&events), ["Hello."]);
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].body["reasoning_effort"], "high");
+    assert!(reqs[0].body["max_completion_tokens"].is_u64());
+    assert!(reqs[1].body.get("reasoning_effort").is_none());
+    assert!(
+        reqs[1].body["max_completion_tokens"].is_u64(),
+        "only the refused field goes"
+    );
+    assert!(events.iter().any(|e| matches!(e,
+        AgentEvent::Done { usage } if usage.reasoning_tokens == 3)));
+
+    turn(&mut agent, "again").await.0.unwrap();
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 3, "no second refusal");
+    assert!(reqs[2].body.get("reasoning_effort").is_none());
+}

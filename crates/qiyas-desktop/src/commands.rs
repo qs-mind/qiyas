@@ -574,6 +574,56 @@ async fn keychain<R: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// The models the provider offers, for the settings' list: `provider` and `base_url` as chosen in
+/// the dialog (the saved ones when left out). The key is read from the keychain and never sent
+/// to the window. When the service can't be asked, the built-in list with why.
+#[tauri::command]
+pub async fn ai_models(
+    provider: Option<String>,
+    base_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<qiyas_ai::models::ModelList, String> {
+    use qiyas_ai::models::{model_list, ModelSource};
+    let settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let anthropic = match provider.as_deref() {
+        Some(p) => p == "anthropic",
+        None => settings.provider == settings::Provider::Anthropic,
+    };
+    let name = if anthropic {
+        settings::Provider::Anthropic.name()
+    } else {
+        settings::Provider::OpenaiCompatible.name()
+    };
+    let key = keychain(move || secrets::get_api_key(name))
+        .await
+        .ok()
+        .flatten();
+    if anthropic {
+        return Ok(model_list(ModelSource::Anthropic, key.as_deref()).await);
+    }
+    let base = base_url
+        .or(settings.base_url)
+        .filter(|b| !b.trim().is_empty());
+    match base {
+        Some(base_url) => Ok(model_list(
+            ModelSource::OpenAiCompatible {
+                base_url: &base_url,
+            },
+            key.as_deref(),
+        )
+        .await),
+        None => Ok(qiyas_ai::models::ModelList {
+            models: Vec::new(),
+            from_service: false,
+            error: Some("no_base_url".into()),
+        }),
+    }
+}
+
 /// Stores the provider's API key in the OS keychain. The key never comes back to the window. The
 /// assistant's next message starts a new conversation with it.
 #[tauri::command]
