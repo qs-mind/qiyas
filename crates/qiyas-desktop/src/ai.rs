@@ -150,7 +150,7 @@ impl AiRun {
 /// What the agent needs from the settings, in the window's language.
 pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
     AgentSettings {
-        model: s.model.clone(),
+        model: s.profile().model.clone(),
         effort: s.effort.clone(),
         language,
         ..AgentSettings::default()
@@ -195,9 +195,9 @@ pub fn log_tail(path: &Path) -> std::io::Result<String> {
 pub fn conversation_entry(provider: &str, s: &Settings, language: Lang) -> String {
     let mut lines = vec![
         format!("provider: {provider}"),
-        format!("model: {}", s.model),
+        format!("model: {}", s.profile().model),
     ];
-    if let (settings::Provider::OpenaiCompatible, Some(url)) = (s.provider, &s.base_url) {
+    if let (settings::Provider::OpenaiCompatible, Some(url)) = (s.provider, &s.profile().base_url) {
         lines.push(format!("address: {url}"));
     }
     lines.push(format!("effort: {}", s.effort));
@@ -208,12 +208,12 @@ pub fn conversation_entry(provider: &str, s: &Settings, language: Lang) -> Strin
 /// Whether going from `old` to `new` changes who answers (provider, address or model), which needs
 /// a new conversation. Effort changes apply to the next message.
 pub fn answerer_changed(old: &Settings, new: &Settings) -> bool {
-    (old.provider, &old.base_url, &old.model) != (new.provider, &new.base_url, &new.model)
+    (old.provider, old.profile()) != (new.provider, new.profile())
 }
 
 /// The provider the settings name, with `key` from the keychain. `Err("no_api_key")` for Claude
-/// without a key and `Err("no_base_url")` for an OpenAI-compatible service without an address;
-/// the window opens the settings for both.
+/// without a key, `Err("no_base_url")` without an OpenAI-compatible service address, or
+/// `Err("no_model")` until its model is chosen. The window opens Settings for all three.
 pub fn build_provider(s: &Settings, key: Option<String>) -> Result<Box<dyn Provider>, String> {
     match s.provider {
         settings::Provider::Anthropic => {
@@ -222,11 +222,15 @@ pub fn build_provider(s: &Settings, key: Option<String>) -> Result<Box<dyn Provi
         }
         settings::Provider::OpenaiCompatible => {
             let url = s
+                .profile()
                 .base_url
                 .as_deref()
                 .map(str::trim)
                 .filter(|u| !u.is_empty())
                 .ok_or("no_base_url")?;
+            if s.profile().model.trim().is_empty() {
+                return Err("no_model".into());
+            }
             Ok(Box::new(OpenAiCompatible::new(url, key)))
         }
     }
@@ -262,8 +266,13 @@ mod tests {
     fn a_conversation_entry_names_who_answers_and_never_the_key() {
         let s = Settings {
             provider: settings::Provider::OpenaiCompatible,
-            base_url: Some("https://api.runware.ai/v1".into()),
-            model: "google:gemini@3.8-flash".into(),
+            providers: settings::ProviderProfiles {
+                openai_compatible: settings::ProviderProfile {
+                    base_url: Some("https://api.runware.ai/v1".into()),
+                    model: "google:gemini@3.8-flash".into(),
+                },
+                ..Default::default()
+            },
             ..Settings::default()
         };
         let entry = conversation_entry("openai_compatible", &s, Lang::Ar);
@@ -339,7 +348,9 @@ mod tests {
             build_provider(&s, None).err().as_deref(),
             Some("no_base_url")
         );
-        s.base_url = Some("http://localhost:11434/v1".into());
+        s.profile_mut().base_url = Some("http://localhost:11434/v1".into());
+        assert_eq!(build_provider(&s, None).err().as_deref(), Some("no_model"));
+        s.profile_mut().model = "local-model".into();
         assert!(
             build_provider(&s, None).is_ok(),
             "a local server may take no key"
@@ -352,7 +363,9 @@ mod tests {
         let mut new = old.clone();
         new.effort = "low".into();
         assert!(!answerer_changed(&old, &new));
-        new.model = "claude-sonnet-5-5".into();
+        new.providers.openai_compatible.model = "other-provider-model".into();
+        assert!(!answerer_changed(&old, &new));
+        new.profile_mut().model = "claude-sonnet-5-5".into();
         assert!(answerer_changed(&old, &new));
     }
 }

@@ -19,7 +19,7 @@ fn measure(session: &mut Session, cmd: Command) -> Measurement {
 
 fn area(points: &[[f64; 2]]) -> Command {
     Command::MeasureArea {
-        points: points.to_vec(),
+        points: points.to_vec().into(),
     }
 }
 
@@ -43,7 +43,7 @@ fn distance_and_area_commands() {
     let d = measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0]].into(),
         },
     );
     assert_eq!(d.kind, Kind::Length);
@@ -70,7 +70,7 @@ fn distance_and_area_commands() {
 
     assert!(matches!(
         session.run(Command::MeasureDistance {
-            points: vec![[0.0, 0.0]]
+            points: vec![[0.0, 0.0]].into()
         }),
         Err(CoreError::InvalidCommand(_))
     ));
@@ -187,7 +187,7 @@ fn unknown_units_assume_mm() {
     let m = measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [1000.0, 0.0]],
+            points: vec![[0.0, 0.0], [1000.0, 0.0]].into(),
         },
     );
     assert_eq!(m.value, 1000.0);
@@ -208,7 +208,7 @@ fn undo_redo_measurements() {
     measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
         },
     );
     assert_eq!(session.takeoff.items.len(), 2);
@@ -278,7 +278,7 @@ fn totals_group_by_kind_and_unit() {
     measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [2.0, 0.0]],
+            points: vec![[0.0, 0.0], [2.0, 0.0]].into(),
         },
     );
     let kinds: Vec<_> = session.takeoff.totals().iter().map(|t| t.kind).collect();
@@ -294,7 +294,7 @@ fn add(kind: Kind) -> Command {
         value: None,
         unit: None,
         height: None,
-        points: Vec::new(),
+        points: Vec::new().into(),
         handles: Vec::new(),
         chain: Vec::new(),
         description: String::new(),
@@ -489,7 +489,7 @@ fn add_measurement_requires_geometry() {
 fn run_as_ai_marks_source() {
     let (_dir, mut session) = sample_session();
     let distance = || Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 0.0]],
+        points: vec![[0.0, 0.0], [3.0, 0.0]].into(),
     };
     let sources: Vec<String> = [Source::Ai, Source::Mcp, Source::User]
         .into_iter()
@@ -507,7 +507,7 @@ fn run_as_ai_marks_source() {
         value: None,
         unit: None,
         height: None,
-        points: RECT_4X3.to_vec(),
+        points: RECT_4X3.to_vec().into(),
         handles: Vec::new(),
         chain: Vec::new(),
         description: "Slab".to_string(),
@@ -564,7 +564,7 @@ fn set_height_is_undoable() {
     let d = measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
         },
     );
     assert!(is_invalid(session.run(Command::SetHeight {
@@ -615,7 +615,7 @@ fn default_descriptions_are_marked_auto() {
     let (_dir, mut session) = sample_session();
     let rect = handle_of(&session, |e| matches!(e, EntityType::LwPolyline(_)));
     let distance = Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 0.0]],
+        points: vec![[0.0, 0.0], [3.0, 0.0]].into(),
     };
     let count = Command::CountBlock {
         block_name: "DOOR".to_string(),
@@ -660,8 +660,8 @@ fn a_hatch_with_an_island_measures_without_it_and_after_a_move() {
     let Outcome::Added { handles } = s
         .run(Command::Draw(qiyas_core::DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: square,
-            holes: vec![island],
+            points: square.into(),
+            holes: vec![island].into_iter().map(Into::into).collect(),
             bulges: Vec::new(),
             pattern: qiyas_core::HatchPattern::Solid,
         }))

@@ -336,7 +336,7 @@ fn a_solid_hatch_plots_as_a_filled_path_in_its_colour() {
     s.current.layer = "A-WALL".to_string();
     s.run(Command::Draw(DrawSpec::Hatch {
         boundary_handles: Vec::new(),
-        points: vec![[30.0, 0.0], [34.0, 0.0], [34.0, 3.0], [30.0, 3.0]],
+        points: vec![[30.0, 0.0], [34.0, 0.0], [34.0, 3.0], [30.0, 3.0]].into(),
         holes: Vec::new(),
         bulges: Vec::new(),
         pattern: HatchPattern::Solid,

@@ -16,7 +16,7 @@ pub const WALL_APP: &str = "QIYAS_WALL";
 /// A centreline in drawing units. Approximate curves with straight polyline segments.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WallRun {
-    pub points: Vec<[f64; 2]>,
+    pub points: crate::PointRun<true>,
     #[serde(default)]
     pub closed: bool,
 }
@@ -57,21 +57,27 @@ pub struct WallOpening {
     pub kind: OpeningKind,
     #[serde(default)]
     pub swing: DoorSwing,
-    /// Windows require a sill; doors start at floor level by default.
+    /// Conventional sill in metres: windows 0.9 m; doors at floor level (0 m).
     #[serde(default)]
     pub sill: Option<f64>,
-    /// Windows require a head; doors default to 2.1 m or the wall height, whichever is lower.
+    /// Conventional head in metres: 2.1 m or the wall height, whichever is lower.
     #[serde(default)]
     pub head: Option<f64>,
 }
 
 /// Optional layer names; missing names use the architectural wall, door and glazing layers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
 pub struct WallLayers {
+    /// Conventional outline layer: A-WALL.
     pub outline: Option<String>,
+    /// Conventional hatch layer: A-WALL-PATT.
     pub hatch: Option<String>,
+    /// Conventional centreline layer: A-WALL-CNTR.
     pub centreline: Option<String>,
+    /// Conventional door-symbol layer: A-DOOR.
     pub doors: Option<String>,
+    /// Conventional window-symbol layer: A-GLAZ.
     pub windows: Option<String>,
 }
 
@@ -85,9 +91,15 @@ pub struct WallSpec {
     pub justification: WallJustification,
     #[serde(default)]
     pub openings: Vec<WallOpening>,
+    /// Conventional wall height: 3 m when omitted.
+    #[serde(default = "default_wall_height")]
     pub height: f64,
     #[serde(default)]
     pub layers: WallLayers,
+}
+
+fn default_wall_height() -> f64 {
+    3.0
 }
 
 /// The created sheet entities and physical quantities, in metres, square metres and cubic metres.
@@ -121,7 +133,8 @@ fn size_name(mm: f64) -> String {
 
 impl Session {
     /// `Command::Walls`: one recorded change including the layers, blocks and xdata application.
-    pub(crate) fn walls(&mut self, spec: WallSpec) -> Result<WallResult, CoreError> {
+    pub(crate) fn walls(&mut self, mut spec: WallSpec) -> Result<WallResult, CoreError> {
+        spec.normalize_runs(self.drawing.units);
         if !spec.height.is_finite() || spec.height <= 0.0 {
             return Err(invalid(
                 "The wall height must be a positive number in metres",
@@ -137,12 +150,8 @@ impl Session {
                         opening.head.unwrap_or(spec.height.min(2.1)),
                     ),
                     OpeningKind::Window => (
-                        opening
-                            .sill
-                            .ok_or_else(|| invalid("A window needs its sill in metres"))?,
-                        opening
-                            .head
-                            .ok_or_else(|| invalid("A window needs its head in metres"))?,
+                        opening.sill.unwrap_or(0.9),
+                        opening.head.unwrap_or(spec.height.min(2.1)),
                     ),
                 };
                 if !sill.is_finite()
@@ -162,7 +171,7 @@ impl Session {
             .runs
             .iter()
             .map(|r| walls::Run {
-                points: r.points.clone(),
+                points: r.points.to_vec(),
                 closed: r.closed,
             })
             .collect();
@@ -247,7 +256,7 @@ impl Session {
             for region in &built.regions {
                 for ring in std::iter::once(&region.outer).chain(&region.holes) {
                     result.outlines.extend(self.draw(DrawSpec::Polyline {
-                        points: ring.clone(),
+                        points: ring.clone().into(),
                         closed: true,
                         bulges: Vec::new(),
                     })?);
@@ -256,8 +265,8 @@ impl Session {
             self.current.layer = layers[1].to_string();
             for region in &built.regions {
                 result.hatches.extend(self.draw(DrawSpec::Hatch {
-                    points: region.outer.clone(),
-                    holes: region.holes.clone(),
+                    points: region.outer.clone().into(),
+                    holes: region.holes.iter().cloned().map(Into::into).collect(),
                     boundary_handles: Vec::new(),
                     bulges: Vec::new(),
                     pattern: HatchPattern::Solid,
@@ -266,7 +275,7 @@ impl Session {
             self.current.layer = layers[2].to_string();
             for run in &spec.runs {
                 let mut entities = self.draw_entities(DrawSpec::Polyline {
-                    points: run.points.clone(),
+                    points: run.points.to_vec().into(),
                     closed: run.closed,
                     bulges: Vec::new(),
                 })?;

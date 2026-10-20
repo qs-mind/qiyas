@@ -138,6 +138,8 @@ pub enum ResultPart {
 /// What arrives while a turn streams.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// The optional fields in an actual HTTP request, including retries after a refusal.
+    RequestSent(String),
     TextDelta(String),
     ToolUseStart {
         id: String,
@@ -203,6 +205,8 @@ pub struct TurnResult {
 /// Errors from a provider. None of them ever holds the API key.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AiError {
+    #[error("{service} has no model {model}: choose one in Settings")]
+    ModelNotFound { service: String, model: String },
     #[error("The API key was refused. Check it in Settings.")]
     Auth,
     #[error("The AI service is busy or the rate limit was reached; try again shortly")]
@@ -228,6 +232,39 @@ pub enum AiError {
 }
 
 impl AiError {
+    /// Give both providers the same actionable model selection error.
+    pub(crate) fn for_model(self, service: &str, model: &str) -> AiError {
+        let missing = match &self {
+            AiError::Api { status, body, .. } => {
+                let value: Value = serde_json::from_str(body).unwrap_or_default();
+                let error = if value.is_array() {
+                    &value[0]["error"]
+                } else {
+                    &value["error"]
+                };
+                *status == 404
+                    || ["type", "code"].iter().any(|key| {
+                        matches!(
+                            error[*key].as_str(),
+                            Some("model_not_found" | "not_found_error" | "model_not_found_error")
+                        )
+                    })
+            }
+            AiError::Stream(message) => {
+                message.contains("model_not_found") || message.contains("not_found_error")
+            }
+            _ => false,
+        };
+        if missing {
+            AiError::ModelNotFound {
+                service: service.into(),
+                model: model.into(),
+            }
+        } else {
+            self
+        }
+    }
+
     /// The same error with every copy of `secret` blanked out of its text.
     pub(crate) fn scrubbed(self, secret: &str) -> AiError {
         match self {
@@ -334,6 +371,32 @@ pub(crate) async fn send(
             request,
         });
     }
+}
+
+/// Only request controls, never messages, URLs or credentials.
+pub(crate) fn sent_fields(body: &Value) -> String {
+    [
+        "reasoning_effort",
+        "max_completion_tokens",
+        "max_tokens",
+        "stream_options",
+        "output_config",
+        "thinking",
+        "fallbacks",
+    ]
+    .into_iter()
+    .filter_map(|key| {
+        body.get(key).map(|value| {
+            format!(
+                "{key}={}",
+                value
+                    .as_str()
+                    .map_or_else(|| value.to_string(), str::to_string)
+            )
+        })
+    })
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// A request body as the log keeps it: compact JSON, pictures as `<image>`, the tool definitions
@@ -563,6 +626,36 @@ mod tests {
         let e = r.next_event().unwrap();
         assert_eq!(e.data, "[DONE]");
         assert!(r.next_event().is_none());
+    }
+
+    #[test]
+    fn missing_models_name_the_service_and_settings_for_both_providers() {
+        for service in ["Anthropic", "api.example.test"] {
+            for (status, body) in [
+                (404, "{}"),
+                (400, r#"{"error":{"code":"model_not_found"}}"#),
+                (400, r#"{"error":{"type":"not_found_error"}}"#),
+            ] {
+                let error = AiError::Api {
+                    status,
+                    body: body.into(),
+                    message: "missing".into(),
+                    request: None,
+                }
+                .for_model(service, "chosen-model");
+                assert_eq!(
+                    error.to_string(),
+                    format!("{service} has no model chosen-model: choose one in Settings")
+                );
+            }
+        }
+        let refused = AiError::Api {
+            status: 400,
+            body: "{}".into(),
+            message: "bad input".into(),
+            request: None,
+        };
+        assert_eq!(refused.clone().for_model("Anthropic", "model"), refused);
     }
 
     #[test]

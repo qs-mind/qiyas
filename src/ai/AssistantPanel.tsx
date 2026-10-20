@@ -131,6 +131,9 @@ export const AssistantPanel = memo(function AssistantPanel({
     if (e === "busy") return t("ai.busy");
     if (e === "no_api_key") return t("ai.noKey");
     if (e === "no_base_url") return t("ai.noBaseUrl");
+    if (e === "no_model") return t("ai.noModel");
+    const missingModel = /^(.+) has no model (.+): choose one in Settings$/.exec(e);
+    if (missingModel) return t("ai.modelNotFound", { service: missingModel[1], model: missingModel[2] });
     if (e === "restarted") return t("ai.restarted");
     if (e === "crashed") return t("ai.crashed");
     return e;

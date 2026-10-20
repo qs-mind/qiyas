@@ -48,6 +48,29 @@ fn fixed_points_work_inline_or_one_prompt_at_a_time() {
 }
 
 #[test]
+fn completed_input_keeps_omitted_defaults_for_execution() {
+    let mut machine = Machine::default();
+    let Step::Command(Command::Text { height, .. }) = machine.step("TEXT 0,0 Room").unwrap() else {
+        panic!("expected a plain text command");
+    };
+    assert_eq!(height, 0.0);
+    let input = machine.take_input().expect("completed wire input");
+    assert_eq!(input, json!({"type":"text","at":[0.0,0.0],"value":"Room"}));
+    assert!(machine.take_input().is_none());
+    let mut session = qiyas_core::Session::new_blank(std::path::Path::new("typed.dxf"), 6);
+    let report = session.run_input(&input, qiyas_core::Source::User).unwrap();
+    assert!(matches!(report.outcome, qiyas_core::Outcome::Added { .. }));
+    assert!(report
+        .defaults_used
+        .iter()
+        .any(|default| default.field == "/height" && default.value == json!(0.25)));
+    assert!(report
+        .defaults_used
+        .iter()
+        .any(|default| default.field == "/rotation"));
+}
+
+#[test]
 fn arabic_digits_and_both_relative_forms_use_the_ucs() {
     let mut machine = Machine::default();
     machine.set_ucs(Ucs::new([100., 200.], [0., 1.]).unwrap());

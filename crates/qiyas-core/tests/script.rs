@@ -69,8 +69,8 @@ fn error(text: &str, dir: &Path, drawing: Option<&Path>) -> (usize, String) {
 
 fn points(action: &Action) -> &[[f64; 2]] {
     match action {
-        Action::Command(Command::MeasureDistance { points })
-        | Action::Command(Command::MeasureArea { points }) => points,
+        Action::Command(Command::MeasureDistance { points }) => points,
+        Action::Command(Command::MeasureArea { points }) => points,
         other => panic!("expected a measure, got {other:?}"),
     }
 }
@@ -178,6 +178,28 @@ fn registry_words_share_points_with_the_legacy_grammar() {
     let command = serde_json::to_value(command).unwrap();
     assert_eq!(command["kind"], "polyline");
     assert_eq!(command["closed"], true);
+}
+
+#[test]
+fn json_and_typed_script_lines_keep_omissions_and_report_input_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+        dir.path(),
+        None,
+    );
+    for step in &script.steps {
+        assert!(step.input.as_ref().unwrap().get("height").is_none());
+        assert!(matches!(step.action, Action::Command(Command::Text { .. })));
+    }
+    assert_eq!(script.steps[0].input.as_ref().unwrap()["typo"], true);
+    let session = Session::new_blank(&dir.path().join("input-notes.dxf"), 6);
+    let run = script::run(&script, Some(session), &mut Stub::default()).unwrap();
+    assert!(run.steps[0].text.contains("/typo"), "{}", run.steps[0].text);
+    for step in run.steps {
+        assert!(step.text.contains("height=0.25 m"), "{}", step.text);
+        assert!(step.text.contains("rotation=0"), "{}", step.text);
+    }
 }
 
 #[test]

@@ -88,12 +88,18 @@ pub enum DimSpec {
     /// `points`, each line a baseline spacing (DIMDLI) further out.
     #[schemars(example = json!({"kind": "baseline", "from": {"handle": 1234}, "points": [[8, 0], [12, 0]]}))]
     #[schemars(extend("x-words" = ["DIMBASELINE", "DBA"]))]
-    Baseline { from: Target, points: Vec<[f64; 2]> },
+    Baseline {
+        from: Target,
+        points: crate::PointRun,
+    },
     /// Dimensions on the line of `from`, from its second point to the first of `points`, then
     /// from each point to the next.
     #[schemars(example = json!({"kind": "continue", "from": {"handle": 1234}, "points": [[8, 0], [12, 0]]}))]
     #[schemars(extend("x-words" = ["DIMCONTINUE", "DCO"]))]
-    Continue { from: Target, points: Vec<[f64; 2]> },
+    Continue {
+        from: Target,
+        points: crate::PointRun,
+    },
     /// One dimension per entity: a line its horizontal or vertical length (its line through
     /// `line_point`), an arc its radius, a circle its diameter.
     #[schemars(example = json!({"kind": "quick", "targets": [{"handle": 1234}, {"handle": 1235}], "line_point": [0, -1.5]}))]
@@ -273,7 +279,7 @@ fn linear_dimension(p1: [f64; 2], p2: [f64; 2], line_point: [f64; 2], angle: f64
 
 /// Horizontal (0) or vertical (90 degrees) for a line through `line_point`: vertical when it lies
 /// further beside the points than above or below them.
-fn auto_angle(p1: [f64; 2], p2: [f64; 2], line_point: [f64; 2]) -> f64 {
+pub(crate) fn auto_angle(p1: [f64; 2], p2: [f64; 2], line_point: [f64; 2]) -> f64 {
     let outside = |v: f64, a: f64, b: f64| (a.min(b) - v).max(v - a.max(b)).max(0.0);
     let beside = outside(line_point[0], p1[0], p2[0]);
     let above = outside(line_point[1], p1[1], p2[1]);
@@ -641,7 +647,7 @@ impl Session {
     }
 
     /// The dimensions `spec` describes, not yet in the drawing.
-    fn dimensions_of(&self, spec: DimSpec) -> Result<Vec<Dimension>, CoreError> {
+    pub(crate) fn dimensions_of(&self, spec: DimSpec) -> Result<Vec<Dimension>, CoreError> {
         let out = match spec {
             DimSpec::Linear {
                 p1,
@@ -1148,6 +1154,12 @@ impl Session {
         self.replace_line(line, &[zigzag])
     }
 
+    /// The automatic spacing follows the base dimension's style and text-height overrides.
+    pub(crate) fn dimension_spacing_default(&self, base: &Target) -> Result<f64, CoreError> {
+        let (_, dimension) = self.linear_target(base)?;
+        Ok(2.0 * DimLook::of(&self.drawing.doc, &dimension).text_height)
+    }
+
     /// `Command::DimSpace`: the linear or aligned dimensions `targets`, parallel to `base`, get
     /// their lines `spacing` apart going out from `base`'s (none: twice the text height), in the
     /// order they were out from it.
@@ -1166,7 +1178,7 @@ impl Session {
         let step = match spacing {
             Some(s) if s > 0.0 && s.is_finite() => s,
             Some(_) => return Err(invalid("The spacing must be more than 0")),
-            None => 2.0 * DimLook::of(&self.drawing.doc, &b).text_height,
+            None => self.dimension_spacing_default(base)?,
         };
         let mut placed = Vec::with_capacity(targets.len());
         for t in targets {

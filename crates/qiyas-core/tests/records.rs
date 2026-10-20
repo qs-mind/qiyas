@@ -119,7 +119,7 @@ fn entities_read_as_records_filtered_paged_and_projected() {
 fn every_collection_reads() {
     let (_dir, mut s) = session("dxf");
     s.run(Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 4.0]],
+        points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
     })
     .unwrap();
     for collection in [

@@ -121,6 +121,12 @@ struct Room {
     first: [f64; 2],
 }
 
+pub(crate) struct RoomLabelDefault {
+    pub name: Option<String>,
+    pub height_metres: f64,
+    pub language: LabelLanguage,
+}
+
 impl Room {
     fn net(&self) -> f64 {
         self.gross - self.islands.iter().map(|i| i.0).sum::<f64>()
@@ -249,6 +255,48 @@ impl Session {
         }
     }
 
+    fn room_label(
+        &self,
+        room: &Room,
+        height: Option<f64>,
+        language: Option<LabelLanguage>,
+    ) -> (f64, [f64; 2], LabelLanguage) {
+        let label_height = height.map(|m| m / self.drawing.units.to_metres());
+        let (h, at) = match room.from_text {
+            Some((h, at)) => (label_height.unwrap_or(h), [at[0], at[1] - LABEL_GAP * h]),
+            None => (
+                label_height.unwrap_or_else(|| self.default_text_height()),
+                room.point,
+            ),
+        };
+        let language = language.unwrap_or_else(|| {
+            let arabic = room.name.as_deref().unwrap_or_default().chars().any(|c| {
+                matches!(c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')
+            });
+            if arabic { LabelLanguage::Ar } else { LabelLanguage::En }
+        });
+        (h, at, language)
+    }
+
+    /// Label conventions for each found room; height follows the input field's metre units.
+    pub(crate) fn room_label_defaults(
+        &self,
+        query: &RoomsQuery,
+    ) -> Result<Vec<RoomLabelDefault>, CoreError> {
+        let (rooms, _) = self.find_rooms(query)?;
+        Ok(rooms
+            .iter()
+            .map(|room| {
+                let (height, _, language) = self.room_label(room, None, None);
+                RoomLabelDefault {
+                    name: room.name.clone(),
+                    height_metres: height * self.drawing.units.to_metres(),
+                    language,
+                }
+            })
+            .collect())
+    }
+
     /// `Command::LabelSpaces`: the rooms of `q`, each with its candidate area written as a text
     /// just under its name (or at its seed point), on `layer` (made when missing; the current
     /// layer when none), `height` metres tall (the name's height, else 2.5 mm at the annotation
@@ -277,26 +325,11 @@ impl Session {
         if rooms.is_empty() {
             return Err(invalid("Nothing was drawn"));
         }
-        let default = self.default_text_height();
-        let label_height = height.map(|m| m / to_m);
         let mut commands = Vec::new();
         let mut points = Vec::new();
         for room in &rooms {
-            let (h, at) = match room.from_text {
-                Some((h, at)) => (label_height.unwrap_or(h), [at[0], at[1] - LABEL_GAP * h]),
-                None => (label_height.unwrap_or(default), room.point),
-            };
+            let (h, at, language) = self.room_label(room, height, language);
             points.push(at);
-            let language = language.unwrap_or_else(|| {
-                let arabic = room.name.as_deref().unwrap_or_default().chars().any(|c| {
-                    matches!(c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')
-                });
-                if arabic {
-                    LabelLanguage::Ar
-                } else {
-                    LabelLanguage::En
-                }
-            });
             let (prefix, unit) = match language {
                 LabelLanguage::Ar => ("مساحة مرشحة غير معتمدة", "م²"),
                 LabelLanguage::En => ("Unapproved candidate", "m²"),

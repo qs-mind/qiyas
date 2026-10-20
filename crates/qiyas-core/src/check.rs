@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use opencadcodec::{Color, EntityType};
+use opencadkernel::geom2d::Curve;
 use qiyas_geom::Xform;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -131,6 +132,10 @@ struct Drawn {
     paths: Vec<qiyas_geom::Path>,
     /// Whether its ends are ends (a line, an open polyline or arc), not a closed outline.
     open: bool,
+    /// Actual straight edges, excluding the chords used to display curves.
+    straight: Vec<([f64; 2], [f64; 2])>,
+    /// Actual edge lengths; a smooth sampled curve contributes its whole path length.
+    lengths: Vec<([f64; 2], f64)>,
 }
 
 /// One segment of the line work, for the grid.
@@ -234,10 +239,56 @@ impl Grid {
 }
 
 impl Session {
+    /// Definitions inherit the space of their reference. A dimension/table block is not a
+    /// paper layout merely because its name differs from Model_Space.
+    fn check_space(&self, block: &str) -> (f64, f64) {
+        let doc = &self.drawing.doc;
+        let mut name = block.to_string();
+        let mut seen = HashSet::new();
+        while seen.insert(name.to_uppercase()) {
+            if name.eq_ignore_ascii_case("*Model_Space") {
+                break;
+            }
+            let handle = doc.block_records.get(&name).map(|b| b.handle);
+            if let Some(layout) = doc.objects.values().find_map(|object| match object {
+                opencadcodec::objects::ObjectType::Layout(layout)
+                    if Some(layout.block_record) == handle =>
+                {
+                    Some(layout)
+                }
+                _ => None,
+            }) {
+                let inches = layout.plot_paper_units == 0
+                    && layout.paper_width > 0.0
+                    && layout.paper_height > 0.0;
+                return (if inches { 0.0254 } else { 0.001 }, 1.0);
+            }
+            let parent = doc.entities().find_map(|entity| {
+                let reference = match entity {
+                    EntityType::Insert(insert) => &insert.block_name,
+                    EntityType::Dimension(dimension) => &dimension.base().block_name,
+                    EntityType::Table(table) => &table.block_name,
+                    _ => return None,
+                };
+                reference
+                    .eq_ignore_ascii_case(&name)
+                    .then_some(entity.common().owner_handle)
+            });
+            let Some(owner) = parent else {
+                break;
+            };
+            let Some(parent) = doc.block_records.iter().find(|b| b.handle == owner) else {
+                break;
+            };
+            name = parent.name.clone();
+        }
+        (self.drawing.units.to_metres(), self.annotation_scale().1)
+    }
+
     /// Checks the sheet `scope.sheet` (the one on screen by default) and lists what it finds.
     pub fn check_drawing(&self, scope: &CheckScope) -> CheckReport {
         let sheet = self.sheet_block(scope.sheet.as_deref());
-        let to_m = self.drawing.units.to_metres();
+        let (to_m, paper_scale) = self.check_space(&sheet);
         let unit = |metres: f64| metres / to_m;
         let doc = &self.drawing.doc;
         let construction = !self.takeoff.items.is_empty()
@@ -257,6 +308,26 @@ impl Session {
             enabled && (scope.rules.is_empty() || scope.rules.iter().any(|r| r == rule))
         };
         let tol = unit(0.0002);
+        let dimension = doc.entities().find_map(|entity| match entity {
+            EntityType::Dimension(dimension)
+                if dimension.base().block_name.eq_ignore_ascii_case(&sheet) =>
+            {
+                Some(dimension)
+            }
+            _ => None,
+        });
+        let extension = dimension.map(|d| qiyas_geom::DimLook::of(doc, d).ext_extension);
+        let dimension_ends: Vec<_> = dimension
+            .into_iter()
+            .flat_map(|d| qiyas_geom::dimension_entities(doc, d).entities)
+            .filter_map(|entity| match entity {
+                EntityType::Line(line) => {
+                    Some([[line.start.x, line.start.y], [line.end.x, line.end.y]])
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
 
         let entities: Vec<&EntityType> = self.drawing.entities_in(&sheet).collect();
         let mut drawn: Vec<Drawn> = Vec::new();
@@ -270,10 +341,36 @@ impl Session {
             };
             let paths = qiyas_geom::flatten(doc, e, &Xform::identity(), tol).into_paths();
             let open = open && paths.iter().all(|p| !p.closed);
+            let mut straight = Vec::new();
+            let mut lengths = Vec::new();
+            for shape in qiyas_geom::snap_shapes(doc, e, &Xform::identity(), tol) {
+                if shape.exact {
+                    for piece in shape.pieces {
+                        if let Curve::Line(line) = &piece {
+                            straight.push((line.start, line.end));
+                        }
+                        lengths.push((piece.point_at(0.0), piece.length()));
+                    }
+                    // Snapping omits zero-length edges. They are still drawing faults.
+                    for pair in shape.vertices.windows(2) {
+                        if pair[0] == pair[1] {
+                            lengths.push((pair[0], 0.0));
+                        }
+                    }
+                } else {
+                    lengths.extend(
+                        paths
+                            .iter()
+                            .filter_map(|path| path.points.first().map(|&at| (at, path.length()))),
+                    );
+                }
+            }
             drawn.push(Drawn {
                 handle: e.common().handle.value(),
                 paths,
                 open,
+                straight,
+                lengths,
             });
         }
         let mut segs = Vec::new();
@@ -315,6 +412,11 @@ impl Session {
                             &drawn,
                             unit(TOUCH_M),
                             unit(NEAR_M),
+                            extension.filter(|_| {
+                                dimension_ends
+                                    .iter()
+                                    .any(|&p| dist(p, end) <= unit(TOUCH_M))
+                            }),
                             &fmt_m,
                             &mut push,
                         );
@@ -325,12 +427,11 @@ impl Session {
         if wanted("tiny_segment") {
             for d in &drawn {
                 let tiny = d
-                    .paths
+                    .lengths
                     .iter()
-                    .flat_map(segments)
-                    .find(|(a, b)| dist(*a, *b) < unit(TINY_M));
-                if let Some((a, b)) = tiny {
-                    let len = dist(a, b);
+                    .copied()
+                    .find(|(_, len)| *len < unit(TINY_M));
+                if let Some((a, len)) = tiny {
                     push(Finding {
                         rule: "tiny_segment",
                         pack: "general",
@@ -414,11 +515,16 @@ impl Session {
         }
         if wanted("text_over_lines") {
             for t in &texts {
-                let inner = shrink(t.bounds, 0.2);
-                let mid = centre(inner);
-                let crossing = grid.within(inner).into_iter().find(|&s| {
+                let Some(entity) = doc.get_entity(opencadcodec::Handle::new(t.handle)) else {
+                    continue;
+                };
+                let paths = qiyas_geom::flatten(doc, entity, &Xform::identity(), tol).into_paths();
+                let Some(outline) = paths.first().filter(|p| p.points.len() >= 4) else {
+                    continue;
+                };
+                let crossing = grid.within(t.bounds).into_iter().find(|&s| {
                     let s = grid.segs[s];
-                    segment_hits_box(s.a, s.b, inner)
+                    segment_hits_text(s.a, s.b, &outline.points)
                 });
                 if let Some(s) = crossing {
                     push(Finding {
@@ -426,19 +532,13 @@ impl Session {
                         pack: "general",
                         severity: Severity::Warning,
                         handles: vec![t.handle, drawn[grid.segs[s].owner].handle],
-                        at: Some(mid),
+                        at: Some(centre(t.bounds)),
                         message: format!("a line runs through \"{}\"", clip(t.text.as_deref())),
                     });
                 }
             }
         }
         if wanted("text_height_vs_scale") {
-            let is_model = sheet.eq_ignore_ascii_case("*Model_Space");
-            let factor = if is_model {
-                self.annotation_scale().1
-            } else {
-                1.0
-            };
             let (scale_name, _) = self.annotation_scale();
             for e in &entities {
                 let height = match e {
@@ -446,18 +546,7 @@ impl Session {
                     EntityType::MText(t) => t.height,
                     _ => continue,
                 };
-                let paper_mm = if is_model {
-                    height * to_m * 1000.0 / factor
-                } else {
-                    let block = doc.block_records.get(&sheet).map(|b| b.handle);
-                    let inches = doc.objects.values().any(|o| {
-                        matches!(o,
-                        opencadcodec::objects::ObjectType::Layout(l)
-                            if Some(l.block_record) == block && l.plot_paper_units == 0
-                                && l.paper_width > 0.0 && l.paper_height > 0.0)
-                    });
-                    height * if inches { 25.4 } else { 1.0 }
-                };
+                let paper_mm = height * to_m * 1000.0 / paper_scale;
                 if paper_mm > 0.0 && !(PAPER_MIN_MM..=PAPER_MAX_MM).contains(&paper_mm) {
                     let small = paper_mm < PAPER_MIN_MM;
                     push(Finding {
@@ -564,6 +653,13 @@ impl Session {
             }
         }
         if wanted("layer_zero") || wanted("colour_not_bylayer") {
+            // Layer 0 is right inside a block definition (its contents take the layer of the
+            // reference), so only entities drawn on a sheet itself count.
+            let on_sheet = self
+                .drawing
+                .sheets()
+                .iter()
+                .any(|s| s.block.eq_ignore_ascii_case(&sheet));
             let mut on_zero = Vec::new();
             let mut coloured = Vec::new();
             for e in &entities {
@@ -571,7 +667,7 @@ impl Session {
                 if matches!(e, EntityType::Viewport(_)) {
                     continue;
                 }
-                if c.layer == "0" {
+                if on_sheet && c.layer == "0" {
                     on_zero.push(c.handle.value());
                 }
                 if !matches!(c.color, Color::ByLayer | Color::ByBlock) {
@@ -697,6 +793,14 @@ impl Session {
                 seen.insert(k, d.handle);
             }
         }
+        // Overlaps require actual straight CAD edges. A tangent to a displayed circle can
+        // lie within tolerance of its sampled chords without sharing any of the curve.
+        let straight = drawn
+            .iter()
+            .enumerate()
+            .flat_map(|(owner, d)| d.straight.iter().map(move |&(a, b)| Seg { owner, a, b }))
+            .collect();
+        let grid = Grid::new(straight, grid.cell);
         // Overlaps: collinear segments of two entities sharing a stretch.
         let mut pairs: HashSet<(usize, usize)> = HashSet::new();
         for (i, s) in grid.segs.iter().enumerate() {
@@ -883,12 +987,21 @@ fn end_findings(
     drawn: &[Drawn],
     touch: f64,
     near: f64,
+    dimension_extension: Option<f64>,
     fmt_m: &dyn Fn(f64) -> String,
     push: &mut impl FnMut(Finding),
 ) {
     let mut nearest: Option<(f64, usize)> = None;
     let mut touching = false;
     let mut over: Option<(f64, usize, [f64; 2])> = None;
+    let length = dist(prev, end);
+    if length == 0.0 {
+        return;
+    }
+    let ahead = [
+        end[0] + (end[0] - prev[0]) * near / length,
+        end[1] + (end[1] - prev[1]) * near / length,
+    ];
     for j in grid.near(end) {
         let s = grid.segs[j];
         if s.owner == own {
@@ -899,8 +1012,19 @@ fn end_findings(
             touching = true;
             break;
         }
-        if nearest.is_none_or(|(best, _)| d < best) {
-            nearest = Some((d, s.owner));
+        // A gap is along the endpoint's continuation, not merely beside a nearby line.
+        // Collinear facing endpoints also meet, although `crossing` excludes parallel lines.
+        let meeting = crossing(end, ahead, s.a, s.b).or_else(|| {
+            [s.a, s.b]
+                .into_iter()
+                .filter(|&p| point_segment(p, end, ahead) <= touch)
+                .min_by(|a, b| dist(end, *a).total_cmp(&dist(end, *b)))
+        });
+        if let Some(meeting) = meeting {
+            let gap = dist(end, meeting);
+            if gap > touch && nearest.is_none_or(|(best, _)| gap < best) {
+                nearest = Some((gap, s.owner));
+            }
         }
         if let Some(c) = crossing(prev, end, s.a, s.b) {
             let past = dist(c, end);
@@ -913,6 +1037,11 @@ fn end_findings(
         return;
     }
     if let Some((past, other, c)) = over {
+        // A dimension's exact generated endpoint is allowed the style's DIMEXE extension.
+        // A moved endpoint or any different overrun still gets the ordinary finding.
+        if dimension_extension.is_some_and(|extension| (past - extension).abs() <= touch) {
+            return;
+        }
         push(Finding {
             rule: "overshoot",
             pack: "general",
@@ -1198,13 +1327,24 @@ fn area_of(b: Option<[[f64; 2]; 2]>) -> f64 {
     b.map_or(0.0, area)
 }
 
-/// The box shrunk by `fraction` of its size on each side.
-fn shrink(b: [[f64; 2]; 2], fraction: f64) -> [[f64; 2]; 2] {
-    let (w, h) = (b[1][0] - b[0][0], b[1][1] - b[0][1]);
-    [
-        [b[0][0] + w * fraction, b[0][1] + h * fraction],
-        [b[1][0] - w * fraction, b[1][1] - h * fraction],
-    ]
+/// Work in the text's own rotated box. Its axis-aligned bounds include empty corners, which
+/// would falsely collide with a dimension line parallel to the text's baseline.
+fn segment_hits_text(a: [f64; 2], b: [f64; 2], corners: &[[f64; 2]]) -> bool {
+    let origin = corners[0];
+    let x = [corners[1][0] - origin[0], corners[1][1] - origin[1]];
+    let y = [corners[3][0] - origin[0], corners[3][1] - origin[1]];
+    let determinant = x[0] * y[1] - x[1] * y[0];
+    if determinant.abs() <= f64::MIN_POSITIVE {
+        return false;
+    }
+    let local = |p: [f64; 2]| {
+        let p = [p[0] - origin[0], p[1] - origin[1]];
+        [
+            (p[0] * y[1] - p[1] * y[0]) / determinant,
+            (x[0] * p[1] - x[1] * p[0]) / determinant,
+        ]
+    };
+    segment_hits_box(local(a), local(b), [[0.2, 0.2], [0.8, 0.8]])
 }
 
 /// Whether the segment crosses into the box.

@@ -86,7 +86,7 @@ fn a_layout_shows_model_space_inside_its_viewports() {
     session
         .run(Command::Draw(qiyas_core::DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]].into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: qiyas_core::HatchPattern::Solid,

@@ -2,7 +2,7 @@
  *  conflicts, the inquiry info card, and what each highlights on the drawing) and its handlers
  *  (`useTakeoff`: BOQ import, compare, export, selecting rows, BOQ items and conflicts). */
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "../fileDialogs";
 import {
   boq as readBoq,
   compare,

@@ -35,7 +35,7 @@ fn set_boq_is_undoable() {
     // A take-off change in between: undoing it leaves the BOQ alone.
     session
         .run(Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 0.0]],
+            points: vec![[0.0, 0.0], [3.0, 0.0]].into(),
         })
         .unwrap();
     session

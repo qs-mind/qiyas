@@ -267,7 +267,7 @@ fn drawing_changes_mark_the_drawing_unsaved_until_it_is_saved() {
     // A take-off change is saved in the project file, not the drawing.
     session
         .run(qiyas_core::Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
         })
         .unwrap();
     assert!(!session.is_dirty());

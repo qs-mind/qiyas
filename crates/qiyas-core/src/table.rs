@@ -122,6 +122,33 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
 }
 
 impl Session {
+    /// The conventional table sizes, shared with the input-default report.
+    pub(crate) fn table_sizes(
+        &self,
+        col_width: f64,
+        row_height: f64,
+        data: &[Vec<String>],
+    ) -> (f64, f64) {
+        let row_height = if row_height == 0.0 {
+            self.default_text_height() / TEXT_IN_ROW
+        } else {
+            row_height
+        };
+        let col_width = if col_width == 0.0 {
+            let longest = data
+                .iter()
+                .flatten()
+                .flat_map(|cell| cell.lines())
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0);
+            longest as f64 * 0.7 * row_height * TEXT_IN_ROW + row_height
+        } else {
+            col_width
+        };
+        (col_width, row_height)
+    }
+
     /// The table `target` at the top of the sheet on screen.
     fn table_target(&self, target: &Target) -> Result<(Handle, Table), CoreError> {
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
@@ -181,23 +208,7 @@ impl Session {
         if data.len() > rows || data.iter().any(|r| r.len() > cols) {
             return Err(invalid("There is more text than cells"));
         }
-        let row_height = if row_height == 0.0 {
-            self.default_text_height() / TEXT_IN_ROW
-        } else {
-            row_height
-        };
-        let col_width = if col_width == 0.0 {
-            let longest = data
-                .iter()
-                .flatten()
-                .flat_map(|cell| cell.lines())
-                .map(|line| line.chars().count())
-                .max()
-                .unwrap_or(0);
-            longest as f64 * 0.7 * row_height * TEXT_IN_ROW + row_height
-        } else {
-            col_width
-        };
+        let (col_width, row_height) = self.table_sizes(col_width, row_height, data);
         let style = self.text_style();
         let doc = &self.drawing.doc;
         let style_handle = doc.text_styles.get(&style).map(|s| s.handle);

@@ -146,7 +146,7 @@ fn a_hatch_names_its_pattern() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]].into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,

@@ -166,6 +166,9 @@ mod tests {
     }
 
     impl DrawingHost for Window {
+        fn has_window(&self) -> bool {
+            true
+        }
         fn list(&self) -> Result<Value, String> {
             Ok(json!({}))
         }

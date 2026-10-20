@@ -64,6 +64,9 @@ impl Provider for OpenAiCompatible {
             let response = loop {
                 let refused = self.refused.lock().map(|r| r.clone()).unwrap_or_default();
                 let body = request_body(&req, &extras, &refused);
+                sink(StreamEvent::RequestSent(crate::provider::sent_fields(
+                    &body,
+                )));
                 let sent = send(
                     || {
                         let r = self.client.post(&url).json(&body);
@@ -94,22 +97,36 @@ impl Provider for OpenAiCompatible {
                                 message,
                                 body: answer,
                                 request,
-                            })
+                            }
+                            .for_model(&service_name(&self.base_url), &req.model))
                         }
                     },
-                    other => break other?,
+                    other => {
+                        break other
+                            .map_err(|e| e.for_model(&service_name(&self.base_url), &req.model))?
+                    }
                 }
             };
             let mut turn = Turn::default();
             read_events(response, |e| turn.on_event(&e.data, sink))
                 .await
-                .map_err(|e| e.scrubbed(self.api_key.as_deref().unwrap_or("")))?;
+                .map_err(|e| {
+                    e.scrubbed(self.api_key.as_deref().unwrap_or(""))
+                        .for_model(&service_name(&self.base_url), &req.model)
+                })?;
             if let Ok(mut kept) = self.extras.lock() {
                 kept.extend(turn.extras());
             }
             Ok(turn.finish(sink))
         })
     }
+}
+
+fn service_name(base_url: &str) -> String {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| "OpenAI-compatible service".into())
 }
 
 /// The optional field a 400's text names, among those not refused yet.
@@ -306,7 +323,14 @@ impl Turn {
             return Err(AiError::Stream("an event was not valid JSON".into()));
         };
         if let Some(err) = e.get("error") {
-            let message = err["message"].as_str().unwrap_or("error").to_string();
+            let message = format!(
+                "{}: {}",
+                err["type"]
+                    .as_str()
+                    .or_else(|| err["code"].as_str())
+                    .unwrap_or("error"),
+                err["message"].as_str().unwrap_or("error")
+            );
             return Err(AiError::Stream(message));
         }
         if let Some(u) = e.get("usage").filter(|u| u.is_object()) {
@@ -317,9 +341,17 @@ impl Turn {
             self.usage.input_tokens = prompt.saturating_sub(cached);
             self.usage.cache_read_input_tokens = cached;
             self.usage.output_tokens = u["completion_tokens"].as_u64().unwrap_or(0);
-            self.usage.reasoning_tokens = u["completion_tokens_details"]["reasoning_tokens"]
-                .as_u64()
-                .unwrap_or(0);
+            if let Some(reasoning) = [
+                u["completion_tokens_details"]["reasoning_tokens"].as_u64(),
+                u["reasoning_tokens"].as_u64(),
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            {
+                // Some bridges keep an empty details object beside their own counter.
+                self.usage.reasoning_tokens = reasoning;
+            }
         }
         let choice = &e["choices"][0];
         let delta = &choice["delta"];
@@ -528,6 +560,40 @@ mod tests {
             ),
             Some("max_tokens")
         );
+    }
+
+    #[test]
+    fn reasoning_usage_accepts_both_confirmed_compatible_shapes() {
+        for usage in [
+            json!({"completion_tokens_details":{"reasoning_tokens":71}}),
+            json!({"reasoning_tokens":71}),
+            json!({"completion_tokens_details":{"reasoning_tokens":0},"reasoning_tokens":71}),
+        ] {
+            let mut turn = Turn::default();
+            let mut sink = |_: StreamEvent| {};
+            turn.on_event(&json!({"choices":[],"usage":usage}).to_string(), &mut sink)
+                .unwrap();
+            turn.on_event(
+                &json!({"choices":[],"usage":{"completion_tokens":90}}).to_string(),
+                &mut sink,
+            )
+            .unwrap();
+            assert_eq!(turn.finish(&mut sink).usage.reasoning_tokens, 71);
+        }
+    }
+
+    #[test]
+    fn sent_fields_match_the_request_after_optional_fields_are_refused() {
+        let first = request_body(&request("high", 16_000), &HashMap::new(), &HashSet::new());
+        let sent = crate::provider::sent_fields(&first);
+        assert!(sent.contains("reasoning_effort=high"));
+        assert!(sent.contains("max_completion_tokens=16000"));
+        let refused = HashSet::from(["reasoning_effort", "max_completion_tokens"]);
+        let retry = request_body(&request("high", 16_000), &HashMap::new(), &refused);
+        let sent = crate::provider::sent_fields(&retry);
+        assert!(!sent.contains("reasoning_effort"));
+        assert!(!sent.contains("max_completion_tokens"));
+        assert!(sent.contains("max_tokens=16000"));
     }
 
     #[test]

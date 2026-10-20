@@ -476,7 +476,10 @@ async fn invalid_tool_json_is_answered_with_an_error_and_not_run() {
     let body = &mock.requests()[1].body;
     let result = &body["messages"][2]["content"][0];
     assert_eq!(result["is_error"], true);
-    assert_eq!(result["content"][0]["text"], "invalid JSON input");
+    let error: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(error["message"], "invalid JSON input");
+    assert_eq!(error["code"], "invalid_value");
     // The broken input goes back as an empty object, so the history stays valid.
     assert_eq!(body["messages"][1]["content"][0]["input"], json!({}));
 }
@@ -968,7 +971,7 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
     let text = std::fs::read_to_string(dir.path().join("logs").join("agent.log")).unwrap();
     for part in [
         "USER\n    What is in the drawing?",
-        "REQUEST 1\n",
+        "REQUEST 1; sent: ",
         "ANSWER 1 (",
         r#"call qiyas_read (f2): {"args":"{}","op":"state"}"#,
         "TOOL qiyas_read (",
@@ -1085,7 +1088,7 @@ async fn removals_and_resolutions_stop_after_10_in_one_turn() {
         (0..12)
             .map(|_| {
                 let cmd = qiyas_core::Command::MeasureDistance {
-                    points: vec![[0.0, 0.0], [1.0, 0.0]],
+                    points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
                 };
                 match s.run(cmd).unwrap() {
                     qiyas_core::Outcome::Measured { measurement } => measurement.id,
@@ -1196,8 +1199,11 @@ async fn view_image_stops_when_the_image_budget_is_used() {
     assert!(results[0].get("is_error").is_none(), "{}", results[0]);
     assert_eq!(results[0]["content"][1]["type"], "image");
     assert_eq!(results[1]["is_error"], true);
+    let error: Value =
+        serde_json::from_str(results[1]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(error["code"], "budget");
     assert_eq!(
-        results[1]["content"][0]["text"],
+        error["message"],
         "Image budget for this conversation is used up; start a new conversation to look again"
     );
 
@@ -1372,6 +1378,17 @@ async fn rejected_request_after_find_entities_is_logged_without_retry() {
     assert!(tool["content"].is_string());
     let log = std::fs::read_to_string(log_path).unwrap();
     assert!(log.contains("The request: {"));
+    let requests: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("  REQUEST "))
+        .collect();
+    assert_eq!(requests.len(), 2, "{log}");
+    assert!(
+        requests
+            .iter()
+            .all(|line| line.contains("sent: ") && line.contains("max_completion_tokens=")),
+        "{log}"
+    );
     assert!(log.contains("invalid_value"));
     assert!(log.contains("call_446341"));
     assert!(!log.contains(KEY));

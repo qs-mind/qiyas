@@ -197,7 +197,7 @@ fn convert_writes_the_drawing_only_and_never_the_project() {
     let mut session = Session::open(&dwg).unwrap();
     session
         .run(qiyas_core::Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
         })
         .unwrap();
     let project = session.save_project().unwrap();
@@ -309,6 +309,28 @@ fn run_drives_a_script_on_a_drawing_and_writes_only_its_export() {
 }
 
 #[test]
+fn run_reports_defaults_and_unknown_fields_for_json_and_typed_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let dwg = dir.path().join("plan.dwg");
+    // The new-drawing template has a 1:100 annotation scale: 2.5 mm on paper is 0.25 m.
+    Session::new_blank(&dwg, 6).save_as_headless(&dwg).unwrap();
+    let script = dir.path().join("input-notes.scr");
+    std::fs::write(
+        &script,
+        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+    )
+    .unwrap();
+    let text = ok(cli(&["run", s(&script), s(&dwg)]));
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    for line in &lines {
+        assert!(line.contains("/height=0.25 m"), "{line}");
+        assert!(line.contains("/rotation=0"), "{line}");
+    }
+    assert!(lines[0].contains("/typo"), "{text}");
+}
+
+#[test]
 fn run_reads_the_project_beside_the_drawing_and_writes_it_only_on_save() {
     let dir = tempfile::tempdir().unwrap();
     let dwg = write_plan(dir.path(), "plan.dwg");
@@ -316,7 +338,7 @@ fn run_reads_the_project_beside_the_drawing_and_writes_it_only_on_save() {
     let mut session = Session::open(&dwg).unwrap();
     session
         .run(qiyas_core::Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
         })
         .unwrap();
     let project = session.save_project().unwrap();

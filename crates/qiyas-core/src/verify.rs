@@ -64,9 +64,10 @@ pub struct Expectation {
     #[serde(default)]
     pub targets: Vec<Target>,
     /// One point per target for part picking. Distance without targets takes two literal
-    /// points. Whole-entity length, area, bounds and closure do not need points.
+    /// points. Whole-entity length, area, bounds and closure do not need points. Repeated
+    /// points are retained as separate picks; they never imply a closed boundary.
     #[serde(default)]
-    pub points: Vec<[f64; 2]>,
+    pub points: crate::PointRun,
     /// Required for length, distance, angle, radius, area and count. Relationships expect zero
     /// deviation. Angles are degrees; lengths and areas follow in_metres.
     #[serde(default)]
@@ -139,14 +140,15 @@ impl Session {
         Ok(expectations.iter().map(|e| self.verify_one(e)).collect())
     }
 
-    fn verify_one(&self, e: &Expectation) -> VerificationResult {
+    /// The omitted tolerance follows the expected quantity and its reported units.
+    pub(crate) fn verification_default_tolerance(&self, e: &Expectation) -> f64 {
         let factor = if e.in_metres {
             self.drawing.units.to_metres()
         } else {
             1.0
         };
         let distance_tolerance = 0.0005 / self.drawing.units.to_metres() * factor;
-        let default_tolerance = if e.kind.angular() {
+        if e.kind.angular() {
             0.1
         } else if e.kind.discrete() {
             0.0
@@ -154,7 +156,16 @@ impl Session {
             distance_tolerance.powi(2)
         } else {
             distance_tolerance
+        }
+    }
+
+    fn verify_one(&self, e: &Expectation) -> VerificationResult {
+        let factor = if e.in_metres {
+            self.drawing.units.to_metres()
+        } else {
+            1.0
         };
+        let default_tolerance = self.verification_default_tolerance(e);
         let tolerance = e.tolerance.unwrap_or(default_tolerance);
         let expected = if e.kind.needs_value() {
             e.value.unwrap_or(0.0)
@@ -428,7 +439,7 @@ impl Session {
             }
             vec![[0.0, 0.0]; e.targets.len()]
         } else {
-            e.points.clone()
+            e.points.to_vec()
         };
         if e.kind == Distance && e.targets.len() != 2 {
             return Err(invalid(

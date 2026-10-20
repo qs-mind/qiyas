@@ -109,9 +109,49 @@ pub fn command_schema() -> Schema {
 }
 
 /// Reads a command, keeping the field path in a bad input's error.
-pub fn parse_command(value: Value) -> Result<Command, String> {
+pub fn parse_command(mut value: Value) -> Result<Command, String> {
+    let report = crate::validation::validate_command(&value, None);
+    if !report.valid {
+        let serde_error = serde_path_to_error::deserialize::<_, Command>(value)
+            .err()
+            .map(|error| format!("; {} at {}", error.inner(), error.path()))
+            .unwrap_or_default();
+        let warnings = if report.warnings.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; warnings: {}",
+                serde_json::to_string(&report.warnings).unwrap_or_default()
+            )
+        };
+        return Err(format!("{}{serde_error}{warnings}", report.message()));
+    }
+    canonicalize(&mut value);
     serde_path_to_error::deserialize(value)
         .map_err(|error| format!("{} at {}", error.inner(), error.path()))
+}
+
+pub(crate) fn canonicalize(value: &mut Value) {
+    let Some(name) = value["type"].as_str() else {
+        return;
+    };
+    let Some(top) = registry().get(name) else {
+        return;
+    };
+    let info = value["kind"]
+        .as_str()
+        .and_then(|kind| registry().get(&format!("{name}.{kind}")))
+        .unwrap_or(top);
+    let mut parts = info.name.split('.');
+    value["type"] = json!(parts.next().unwrap_or_default());
+    if let Some(kind) = parts.next() {
+        value["kind"] = json!(kind);
+    }
+    if let Some(commands) = value.get_mut("commands").and_then(Value::as_array_mut) {
+        for command in commands {
+            canonicalize(command);
+        }
+    }
 }
 
 impl Registry {
@@ -201,6 +241,7 @@ impl Registry {
             }
         }
         for c in &mut commands {
+            describe_defaults(&mut c.schema);
             let mut words = String::new();
             schema_words(&c.schema, &mut words);
             c.search_text = format!(
@@ -319,6 +360,37 @@ impl Registry {
             .map(|(category, names)| format!("{category}: {}", names.join(", ")))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+/// Schemars supplies serde defaults; make their convention visible even in a field-only view.
+fn describe_defaults(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            if let Some(default) = object.get("default").cloned() {
+                let description = object.entry("description").or_insert_with(|| json!(""));
+                if let Some(text) = description
+                    .as_str()
+                    .filter(|s| !s.to_lowercase().contains("default"))
+                {
+                    let convention = if default.is_null() {
+                        "Default: null selects the command's automatic convention.".into()
+                    } else {
+                        format!("Default: {default} when omitted.")
+                    };
+                    *description = json!(format!("{text} {convention}").trim());
+                }
+            }
+            for value in object.values_mut() {
+                describe_defaults(value);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                describe_defaults(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -453,7 +525,30 @@ fn inline(schema: &Value, defs: &Map<String, Value>, depth: usize) -> Value {
                 if let Value::Object(out_map) = &mut out {
                     for (k, v) in map {
                         if k != "$ref" && !k.starts_with("x-") && k != "examples" {
-                            out_map.insert(k.clone(), inline(v, defs, depth + 1));
+                            let sibling = inline(v, defs, depth + 1);
+                            match (k.as_str(), out_map.get_mut(k), &sibling) {
+                                (
+                                    "properties",
+                                    Some(Value::Object(existing)),
+                                    Value::Object(properties),
+                                ) => {
+                                    existing.extend(properties.clone());
+                                }
+                                (
+                                    "required",
+                                    Some(Value::Array(existing)),
+                                    Value::Array(required),
+                                ) => {
+                                    for field in required {
+                                        if !existing.contains(field) {
+                                            existing.push(field.clone());
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    out_map.insert(k.clone(), sibling);
+                                }
+                            }
                         }
                     }
                 }

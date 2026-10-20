@@ -55,6 +55,23 @@ fn batch(session: &mut Session, args: Value) -> Result<Value, ToolError> {
     call(session, surface::EXECUTE, "batch", args)
 }
 
+fn assert_bad_input(error: &ToolError) {
+    let detail = error.json();
+    assert!(
+        matches!(
+            detail["code"].as_str(),
+            Some("missing_field" | "invalid_value" | "unknown_field" | "refused")
+        ),
+        "{detail}"
+    );
+    assert!(
+        detail["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "{detail}"
+    );
+}
+
 fn bounds(session: &Session, handle: u64) -> [[f64; 2]; 2] {
     session
         .find_entities(&EntityFilter {
@@ -368,19 +385,15 @@ fn add_text_writes_single_and_multi_line_text_in_one_undo_step() {
 #[test]
 fn add_text_refuses_what_it_cannot_write_and_changes_nothing() {
     let (_dir, mut s) = open(&sample_doc(), "textbad.dxf");
-    for (i, input) in [
+    for input in [
         json!({"commands": []}),
         json!({"commands": [{"type": "text", "value": "  ", "at": [0, 0], "rotation": 0}]}),
         json!({"commands": [{"type": "text", "value": "x", "at": [0, 0], "height": -1, "rotation": 0}]}),
         json!({"commands": [{"type": "mtext", "value": "a\nb", "at": [0, 0], "width": -1}]}),
         json!({"commands": [{"type": "text", "value": "x", "at": [0, 0], "rotation": 0}], "layer": "XREF|WALL"}),
-    ].into_iter().enumerate() {
+    ] {
         let err = batch(&mut s, input.clone()).unwrap_err();
-        if i == 0 || i == 4 {
-            assert!(matches!(err, ToolError::BadInput(_)), "{input}: {err}");
-        } else {
-            assert!(matches!(err, ToolError::Failed(_)), "{input}: {err}");
-        }
+        assert_bad_input(&err);
     }
     assert!(!s.can_undo());
     let err = batch(
@@ -572,17 +585,32 @@ fn draw_names_what_a_shape_is_missing() {
             "3 points or more",
         ),
         (
-            json!({ "kind": "revcloud", "points": [[0, 0], [1, 0], [1, 1]] }),
+            json!({ "kind": "revcloud", "points": [[0, 0], [1, 0], [1, 1]], "arc_len": "bad" }),
             "arc_len",
         ),
     ] {
         let mut draw = shape.clone();
         draw["type"] = json!("draw");
         let err = command(&mut s, draw).unwrap_err();
-        assert!(matches!(err, ToolError::BadInput(_)), "{shape}: {err}");
+        assert_bad_input(&err);
         assert!(err.to_string().contains(word), "{shape}: {err}");
     }
     assert!(!s.can_undo());
+
+    let cloud = command(
+        &mut s,
+        json!({"type":"draw","kind":"revcloud","points":[[30,0],[31,0],[31,1]]}),
+    )
+    .unwrap();
+    assert!(
+        cloud["defaults_used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["field"] == "/arc_len"
+                && entry["value"].as_f64().is_some_and(|length| length > 0.0)),
+        "{cloud}"
+    );
 }
 
 #[test]
@@ -664,10 +692,10 @@ fn add_table_draws_a_schedule_and_edit_table_cell_changes_it() {
         json!({"type": "table", "at": [0, 0], "rows": 0, "cols": 0, "data": []}),
     ] {
         let err = command(&mut s, input).unwrap_err();
-        assert!(matches!(err, ToolError::BadInput(_)), "{err}");
+        assert_bad_input(&err);
     }
     let err = batch(&mut s, json!({"commands": []})).unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)), "{err}");
+    assert_bad_input(&err);
 }
 
 // ---- Rooms and their net areas ----

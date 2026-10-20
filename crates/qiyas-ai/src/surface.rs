@@ -31,9 +31,10 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 13] = [
+pub const READ_OPS: [&str; 14] = [
     "state",
     "capabilities",
+    "validate",
     "commands",
     "records",
     "record_schema",
@@ -67,6 +68,102 @@ pub const EXECUTE_OPS: [&str; 17] = [
     "export_conflicts",
 ];
 
+/// Every operation declares its environment here, shared by Mizan and MCP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Need {
+    Nothing,
+    Drawing,
+    Window,
+    Host,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Operation {
+    pub tool: &'static str,
+    pub op: &'static str,
+    pub needs: &'static [Need],
+    /// The private runner, when this is a host or window operation.
+    pub runner: Option<&'static str>,
+}
+
+macro_rules! operations {
+    ($(($tool:ident, $op:literal, [$($need:ident),+] $(, $runner:literal)?)),* $(,)?) => {
+        pub const OPERATIONS: &[Operation] = &[$(Operation {
+            tool: $tool, op: $op, needs: &[$(Need::$need),+], runner: operations!(@runner $($runner)?),
+        }),*];
+    };
+    (@runner $runner:literal) => {Some($runner)};
+    (@runner) => {None};
+}
+operations![
+    (READ, "state", [Drawing]),
+    (READ, "capabilities", [Nothing]),
+    (READ, "commands", [Nothing]),
+    (READ, "record_schema", [Nothing]),
+    (READ, "validate", [Nothing]),
+    (READ, "records", [Drawing]),
+    (READ, "query", [Drawing]),
+    (READ, "measure", [Drawing]),
+    (READ, "run", [Drawing]),
+    (READ, "check", [Drawing]),
+    (READ, "history", [Drawing]),
+    (READ, "rooms", [Drawing]),
+    (READ, "drawings", [Host], "list_drawings"),
+    (READ, "selection", [Window, Drawing], "get_selection"),
+    (EXECUTE, "run", [Drawing]),
+    (EXECUTE, "type", [Drawing]),
+    (EXECUTE, "batch", [Drawing]),
+    (EXECUTE, "set_records", [Drawing]),
+    (EXECUTE, "create_entities", [Drawing]),
+    (EXECUTE, "undo_own", [Drawing]),
+    (EXECUTE, "view", [Drawing]),
+    (EXECUTE, "import_boq", [Drawing]),
+    (EXECUTE, "compare", [Drawing]),
+    (EXECUTE, "export_takeoff", [Drawing]),
+    (EXECUTE, "export_conflicts", [Drawing]),
+    (EXECUTE, "select", [Window, Drawing], "select_entities"),
+    (EXECUTE, "new_drawing", [Host], "new_drawing"),
+    (EXECUTE, "open_drawing", [Host], "open_drawing"),
+    (EXECUTE, "switch_drawing", [Host], "switch_drawing"),
+    (EXECUTE, "save_drawing", [Host], "save_drawing"),
+    (EXECUTE, "close_drawing", [Host], "close_drawing"),
+    (CAPTURE, "screen", [Window, Drawing], "view_screen"),
+    (CAPTURE, "picture", [Drawing]),
+];
+
+pub fn operation(tool: &str, op: &str) -> Option<&'static Operation> {
+    OPERATIONS
+        .iter()
+        .find(|entry| entry.tool == tool && entry.op == op)
+}
+
+/// Check only the environment declared by the operation, before asking its runner.
+pub fn check_need(
+    tool: &str,
+    op: &str,
+    drawing: bool,
+    window: bool,
+    host: bool,
+) -> Result<(), ToolError> {
+    let entry = operation(tool, op).ok_or_else(|| bad(format!("{tool} has no op {op}")))?;
+    let missing = entry.needs.iter().find_map(|need| match need {
+        Need::Nothing => None,
+        Need::Drawing if !drawing => Some(("no_drawing", crate::mcp::NO_DRAWING)),
+        Need::Window if !window => Some(("needs_window", crate::host::NO_WINDOW)),
+        Need::Host if !host => Some(("needs_host", crate::host::NO_HOST)),
+        _ => None,
+    });
+    match missing {
+        Some((code, message)) => Err(ToolError::Structured {
+            code: code.into(),
+            message: message.into(),
+            details: json!({}),
+        }),
+        None => Ok(()),
+    }
+}
+
 pub const QUERY_KINDS: [&str; 9] = [
     "near",
     "window",
@@ -88,7 +185,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: state (units, sheet, scale, current layer, take-off and BOQ); capabilities; commands ({} the index by category, {name} one command's schema and examples, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} one command's schema and examples, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -102,7 +199,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Change the drawing, take-off or view. ops: type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [...], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Change the drawing, take-off or view. ops: type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -237,6 +334,12 @@ pub fn args_of(input: &Value) -> Result<Value, String> {
 
 /// Where the call `name` with `input` goes.
 pub fn route(name: &str, input: &Value) -> Result<Route, String> {
+    if !is_surface_tool(name) {
+        return Err(format!("No tool named {name}"));
+    }
+    if !input.is_object() {
+        return Err("Tool input must be an object".into());
+    }
     let args = args_of(input)?;
     let field = if name == CAPTURE { "source" } else { "op" };
     let op = input
@@ -244,43 +347,18 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{name} needs {field}"))?
         .to_string();
-    let host = |tool: &'static str| {
-        Ok(Route::Host {
-            tool,
-            input: args.clone(),
-        })
-    };
-    let window = |tool: &'static str| {
-        Ok(Route::Window {
-            tool,
-            input: args.clone(),
-        })
-    };
+    if let Some(entry) = operation(name, &op) {
+        return Ok(match (entry.needs.first(), entry.runner) {
+            (Some(Need::Host), Some(tool)) => Route::Host { tool, input: args },
+            (Some(Need::Window), Some(tool)) => Route::Window { tool, input: args },
+            _ => Route::Session {
+                tool: name.into(),
+                op,
+                args,
+            },
+        });
+    }
     match (name, op.as_str()) {
-        (READ, "drawings") => host("list_drawings"),
-        (READ, "selection") => window("get_selection"),
-        (EXECUTE, "select") => window("select_entities"),
-        (EXECUTE, "new_drawing") => host("new_drawing"),
-        (EXECUTE, "open_drawing") => host("open_drawing"),
-        (EXECUTE, "switch_drawing") => host("switch_drawing"),
-        (EXECUTE, "save_drawing") => host("save_drawing"),
-        (EXECUTE, "close_drawing") => host("close_drawing"),
-        (CAPTURE, "screen") => window("view_screen"),
-        (READ, op) if READ_OPS.contains(&op) => Ok(Route::Session {
-            tool: READ.into(),
-            op: op.into(),
-            args,
-        }),
-        (EXECUTE, op) if EXECUTE_OPS.contains(&op) => Ok(Route::Session {
-            tool: EXECUTE.into(),
-            op: op.into(),
-            args,
-        }),
-        (CAPTURE, "picture") => Ok(Route::Session {
-            tool: CAPTURE.into(),
-            op: "picture".into(),
-            args,
-        }),
         (READ, op) => Err(format!(
             "qiyas_read has no op {op}: {}",
             READ_OPS.join(", ")
@@ -316,6 +394,99 @@ fn read_args<T: serde::de::DeserializeOwned>(args: &Value, what: &str) -> Result
     serde_json::from_value(args.clone()).map_err(|e| bad(format!("{what}: {e}")))
 }
 
+/// Registry operations work before a drawing has been opened.
+pub fn run_without_drawing(
+    tool: &str,
+    op: &str,
+    args: &Value,
+    units: Option<qiyas_core::Units>,
+) -> Option<Result<ToolOutput, ToolError>> {
+    if tool != READ {
+        return None;
+    }
+    let value = match op {
+        "capabilities" => Ok(capabilities()),
+        "commands" => commands(args),
+        "record_schema" => args["name"]
+            .as_str()
+            .ok_or_else(|| bad("record_schema needs {name}"))
+            .and_then(|name| qiyas_core::record_edit::record_schema(name).map_err(Into::into)),
+        "validate" => validate(args, units, None),
+        _ => return None,
+    };
+    Some(value.map(ToolOutput::Json))
+}
+
+fn batch_commands_schema() -> Value {
+    json!({"type":"array", "minItems":1, "maxItems":MAX_BATCH})
+}
+
+fn batch_limits(
+    input: &Value,
+    prefix: &str,
+    report: &mut qiyas_core::validation::ValidationReport,
+) {
+    if input["type"]
+        .as_str()
+        .is_none_or(|name| !name.eq_ignore_ascii_case("batch"))
+    {
+        return;
+    }
+    let Some(commands) = input["commands"].as_array() else {
+        return;
+    };
+    let size =
+        qiyas_core::validation::validate_schema(&batch_commands_schema(), &input["commands"]);
+    report.valid &= size.valid;
+    report
+        .errors
+        .extend(size.errors.into_iter().map(|mut issue| {
+            issue.pointer = format!("{prefix}/commands{}", issue.pointer);
+            issue
+        }));
+    for (index, command) in commands.iter().enumerate() {
+        batch_limits(command, &format!("{prefix}/commands/{index}"), report);
+    }
+}
+
+fn validate(
+    args: &Value,
+    units: Option<qiyas_core::Units>,
+    session: Option<&Session>,
+) -> Result<Value, ToolError> {
+    if args.get("command").is_some() && args.get("commands").is_some() {
+        return Err(bad("validate takes command or commands, not both"));
+    }
+    let mut report = if let Some(commands) = args.get("commands") {
+        let command = json!({"type":"batch", "commands":commands});
+        match session {
+            Some(session) => session.validate_input(&command),
+            None => qiyas_core::validation::validate_command(&command, units),
+        }
+    } else if let Some(command) = args.get("command") {
+        let command = match command {
+            Value::String(text) => serde_json::from_str(text)
+                .map_err(|e| bad(format!("command is not valid JSON: {e}")))?,
+            other => other.clone(),
+        };
+        match session {
+            Some(session) => session.validate_input(&command),
+            None => qiyas_core::validation::validate_command(&command, units),
+        }
+    } else {
+        return Err(bad("validate needs {command} or {commands}"));
+    };
+    let command = if args.get("commands").is_some() {
+        json!({"type":"batch", "commands":args["commands"]})
+    } else if let Some(text) = args["command"].as_str() {
+        serde_json::from_str(text).unwrap_or_default()
+    } else {
+        args["command"].clone()
+    };
+    batch_limits(&command, "", &mut report);
+    Ok(json!(report))
+}
+
 /// Runs a session op of `tool` for `source`.
 pub fn run_session(
     session: &mut Session,
@@ -324,6 +495,12 @@ pub fn run_session(
     args: &Value,
     source: Source,
 ) -> Result<ToolOutput, ToolError> {
+    if tool == READ && op == "validate" {
+        return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
+    }
+    if let Some(result) = run_without_drawing(tool, op, args, Some(session.drawing.units)) {
+        return result;
+    }
     let json = |v: Value| Ok(ToolOutput::Json(v));
     match (tool, op) {
         (READ, "state") => json(state(session)),
@@ -342,15 +519,17 @@ pub fn run_session(
         (READ, "query") => query(session, args, source),
         (READ, "measure") => json(measure(session, args)?),
         (READ, "run") => {
-            let command = parse_command(session, &args["command"])?;
+            let (command, input) = prepare_command(session, &args["command"])?;
             if effect_of(&command) != Effect::Read {
                 return Err(bad(format!(
                     "{} changes things: run it with qiyas_execute run",
                     command.label()
                 )));
             }
-            let outcome = session.run_as(command, source)?;
-            json(json!({ "outcome": outcome }))
+            let outcome = session.run_input(&input, source)?;
+            let mut out = json!({ "outcome": outcome });
+            copy_input_metadata(&mut out);
+            json(out)
         }
         (READ, "check") => {
             let scope: qiyas_core::check::CheckScope = read_args(args, "check")?;
@@ -378,8 +557,8 @@ pub fn run_session(
             json(json!(report))
         }
         (EXECUTE, "run") => {
-            let command = parse_command(session, &args["command"])?;
-            json(run_one(session, command, source)?)
+            let (command, input) = prepare_command(session, &args["command"])?;
+            json(run_one(session, command, &input, source)?)
         }
         (EXECUTE, "type") => {
             let line = args["line"]
@@ -390,8 +569,9 @@ pub fn run_session(
             match machine.step(line).map_err(bad)? {
                 qiyas_core::cmdline::Step::Command(command) => {
                     // Apply the same internal-command and folder rules as `run`.
-                    let command = parse_command(session, &json!(command))?;
-                    json(run_one(session, command, source)?)
+                    let raw = machine.take_input().unwrap_or_else(|| json!(command));
+                    let (command, input) = prepare_command(session, &raw)?;
+                    json(run_one(session, command, &input, source)?)
                 }
                 qiyas_core::cmdline::Step::Prompt(prompt) => json(json!({
                     "ok": true,
@@ -407,14 +587,14 @@ pub fn run_session(
         (EXECUTE, "set_records") => {
             let mut body = args.clone();
             body["type"] = json!("set_records");
-            let command = parse_command(session, &body)?;
-            json(run_one(session, command, source)?)
+            let (command, input) = prepare_command(session, &body)?;
+            json(run_one(session, command, &input, source)?)
         }
         (EXECUTE, "create_entities") => {
             let mut body = args.clone();
             body["type"] = json!("create_entities");
-            let command = parse_command(session, &body)?;
-            json(run_one(session, command, source)?)
+            let (command, input) = prepare_command(session, &body)?;
+            json(run_one(session, command, &input, source)?)
         }
         (EXECUTE, "batch") => json(batch(session, args, source)?),
         (EXECUTE, "undo_own") => {
@@ -504,6 +684,9 @@ fn capabilities() -> Value {
     }
     json!({
         "read_ops": READ_OPS,
+        "operation_needs": OPERATIONS,
+        "error_codes": crate::errors::CODES,
+        "validate": {"args": "{command} or {commands}", "commands_schema": batch_commands_schema(), "changes": false, "step_references": "Only earlier step indexes are allowed; pointed results are checked when running"},
         "execute_ops": EXECUTE_OPS,
         "typed_commands": {
             "args": { "line": "PLINE 0,0 10,0 C" },
@@ -660,7 +843,11 @@ fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
             "units": session.info().units,
         }));
     }
-    let points: Vec<[f64; 2]> = read_args(&args["points"], "measure: points")?;
+    let mut points: qiyas_core::PointRun = read_args(&args["points"], "measure: points")?;
+    let closed = points.normalize(
+        session.drawing.units,
+        args["closed"].as_bool().unwrap_or(false),
+    );
     if points.len() < 2 {
         return Err(bad("measure needs {handle} or {points} (2 or more)"));
     }
@@ -668,7 +855,6 @@ fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
         .windows(2)
         .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
         .sum();
-    let closed = args["closed"].as_bool().unwrap_or(false);
     let mut out = json!({ "length_m": length * to_m });
     if closed && points.len() >= 3 {
         let ring_len = length + {
@@ -704,13 +890,37 @@ fn ring_area(ring: &[[f64; 2]], bulges: &[f64]) -> f64 {
 /// the close ones. File paths start in the drawing's folder and may not leave it. Commands
 /// Qiyas runs itself (`x-internal`) are refused.
 pub fn parse_command(session: &Session, raw: &Value) -> Result<Command, ToolError> {
-    let mut value = command_value(raw)?;
+    prepare_command(session, raw).map(|(command, _)| command)
+}
+
+/// Keep the accepted input beside its typed command; serialization would fill omitted fields.
+fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), ToolError> {
+    let mut value = command_value(raw).map_err(|error| {
+        let value = match raw {
+            Value::String(text) => serde_json::from_str(text).unwrap_or_else(|_| raw.clone()),
+            _ => raw.clone(),
+        };
+        let report = session.validate_input(&value);
+        ToolError::Structured {
+            code: report
+                .errors
+                .first()
+                .map_or("invalid_value".into(), |issue| issue.code.clone()),
+            message: format!("{error}; {}", report.message()),
+            details: json!({"errors": report.errors, "warnings": report.warnings}),
+        }
+    })?;
     let kind = value["type"].as_str().unwrap_or_default().to_string();
     let Some(info) = command_info(&value) else {
-        return Err(bad(format!(
-            "No command {kind}; close ones: {}",
-            close_commands(&kind).join(", ")
-        )));
+        let report = session.validate_input(&value);
+        return Err(ToolError::Structured {
+            code: "not_found".into(),
+            message: format!(
+                "No command {kind}; close ones: {}",
+                close_commands(&kind).join(", ")
+            ),
+            details: json!({"errors": report.errors, "warnings": report.warnings, "did_you_mean": close_commands(&kind)}),
+        });
     };
     if info.internal {
         return Err(bad(format!(
@@ -723,20 +933,53 @@ pub fn parse_command(session: &Session, raw: &Value) -> Result<Command, ToolErro
     if let Some(kind) = parts.next() {
         value["kind"] = json!(kind);
     }
+    let mut report = session.validate_input(&value);
+    batch_limits(&value, "", &mut report);
+    if !report.valid {
+        let serde_error = qiyas_core::registry::parse_command(value.clone())
+            .err()
+            .map(|e| e.to_string());
+        return Err(ToolError::Structured {
+            code: report
+                .errors
+                .first()
+                .map_or("invalid_value".into(), |issue| issue.code.clone()),
+            message: format!(
+                "{}: {}. {} Its schema: {} Example: {}",
+                info.name,
+                report
+                    .errors
+                    .iter()
+                    .map(|issue| format!("{}: {}", issue.pointer, issue.message))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                serde_error.unwrap_or_default(),
+                info.schema,
+                info.examples.first().cloned().unwrap_or_default()
+            ),
+            details: json!({"errors": report.errors, "warnings": report.warnings, "schema": info.schema, "example": info.examples.first()}),
+        });
+    }
     if info.name == "batch" {
         if let Some(commands) = value["commands"].as_array_mut() {
-            if commands.is_empty() || commands.len() > MAX_BATCH {
-                return Err(bad(format!("A batch takes 1 to {MAX_BATCH} commands")));
-            }
             for (index, command) in commands.iter_mut().enumerate() {
-                let parsed = parse_command(session, command)
+                parse_command(session, command)
                     .map_err(|error| bad(format!("Batch step {index}: {error}")))?;
-                *command = json!(parsed);
+                // Keep omitted fields omitted so the core can report their defaults.
+                *command = command_value(command)?;
+                if let Some(info) = command_info(command) {
+                    let mut parts = info.name.split('.');
+                    command["type"] = json!(parts.next().unwrap_or_default());
+                    if let Some(kind) = parts.next() {
+                        command["kind"] = json!(kind);
+                    }
+                }
+                resolve_paths(session, command)?;
             }
         }
     }
     resolve_paths(session, &mut value)?;
-    qiyas_core::registry::parse_command(value.clone()).map_err(|error| {
+    let command = qiyas_core::registry::parse_command(value.clone()).map_err(|error| {
         let path = input_path(&info.schema, &value, "");
         bad(format!(
             "{}: {error}{}. Its schema: {} Example: {}",
@@ -745,7 +988,8 @@ pub fn parse_command(session: &Session, raw: &Value) -> Result<Command, ToolErro
             info.schema,
             info.examples.first().cloned().unwrap_or_default()
         ))
-    })
+    })?;
+    Ok((command, value))
 }
 
 /// Reads a command object before binding its fields. Its type and kind must be literal.
@@ -883,10 +1127,23 @@ fn input_path(schema: &Value, value: &Value, path: &str) -> Option<String> {
 /// File fields belong to the command, not arbitrary record data or JSON pointer paths.
 fn resolve_paths(session: &Session, value: &mut Value) -> Result<(), ToolError> {
     let kind = value["type"].as_str().unwrap_or_default();
-    if matches!(
-        kind,
-        "batch" | "set_records" | "records" | "create_entities"
-    ) {
+    if kind == "batch" {
+        if let Some(commands) = value["commands"].as_array_mut() {
+            for command in commands {
+                *command = command_value(command)?;
+                if let Some(info) = command_info(command) {
+                    let mut parts = info.name.split('.');
+                    command["type"] = json!(parts.next().unwrap_or_default());
+                    if let Some(kind) = parts.next() {
+                        command["kind"] = json!(kind);
+                    }
+                }
+                resolve_paths(session, command)?;
+            }
+        }
+        return Ok(());
+    }
+    if matches!(kind, "set_records" | "records" | "create_entities") {
         return Ok(());
     }
     if let Some(map) = value.as_object_mut() {
@@ -933,18 +1190,31 @@ impl ViewState {
 }
 
 /// Runs one command and answers with what it did (`changed`).
-fn run_one(session: &mut Session, command: Command, source: Source) -> Result<Value, ToolError> {
+fn run_one(
+    session: &mut Session,
+    command: Command,
+    input: &Value,
+    source: Source,
+) -> Result<Value, ToolError> {
     let label = command.label();
     let effect = effect_of(&command);
     let history = session.history_revision();
     let view = ViewState::of(session);
-    let outcome = session.run_as(command, source)?;
+    let outcome = session.run_input(input, source)?;
     let mut out = changed(session, &label, effect, history, json!(outcome));
     if label == "set_sheet" {
         out["ui"] = json!({ "action": "show_sheet", "sheet": session.sheet });
     }
     view.update_ui(session, &mut out);
     Ok(out)
+}
+
+fn copy_input_metadata(out: &mut Value) {
+    for field in ["defaults_used", "warnings"] {
+        if let Some(value) = out["outcome"].get(field).cloned() {
+            out[field] = value;
+        }
+    }
 }
 
 /// The answer to a change: the outcome, the entities added, changed and removed, the step, the
@@ -977,6 +1247,7 @@ fn changed(
         "removed": change.removed,
         "step": step.map(|s| json!({ "label": s.label, "source": s.source, "undoable": true })),
     });
+    copy_input_metadata(&mut out);
     if !touched.is_empty() {
         if session.drawing.entities_in(&session.sheet).count() <= CHECK_UP_TO {
             let report = session.check_drawing(&qiyas_core::check::CheckScope {
@@ -1000,12 +1271,37 @@ fn changed(
 /// `batch`: commands as one undo step, all or nothing, on `layer` in `color` when given; a value
 /// `{"$step": i, "pointer": "/added/0"}` anywhere in a command takes what step i answered.
 fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, ToolError> {
-    let commands = args["commands"]
-        .as_array()
-        .ok_or_else(|| bad("batch needs {commands: [...]}"))?
-        .clone();
-    if commands.is_empty() || commands.len() > MAX_BATCH {
-        return Err(bad(format!("A batch takes 1 to {MAX_BATCH} commands")));
+    let commands = args["commands"].as_array().cloned().unwrap_or_default();
+    let mut batch_input = args.clone();
+    batch_input["type"] = json!("batch");
+    let mut report = session.validate_input(&batch_input);
+    batch_limits(&batch_input, "", &mut report);
+    if !report.valid {
+        return Err(ToolError::Structured {
+            code: report
+                .errors
+                .first()
+                .map_or("invalid_value".into(), |issue| issue.code.clone()),
+            message: report
+                .errors
+                .iter()
+                .map(|issue| format!("{}: {}", issue.pointer, issue.message))
+                .collect::<Vec<_>>()
+                .join("; "),
+            details: json!({
+                "errors": report.errors, "warnings": report.warnings,
+                "schema": registry().get("batch").map(|info| &info.schema),
+                "example": registry().get("batch").and_then(|info| info.examples.first()),
+                "commands": commands.iter().enumerate().filter_map(|(index, command)| {
+                    let info = command_info(command)?;
+                    let prefix = format!("/commands/{index}/");
+                    report.errors.iter().any(|issue| issue.pointer.starts_with(&prefix)).then(|| json!({
+                        "index": index, "schema": info.schema, "example": info.examples.first(),
+                        "serde_error": qiyas_core::registry::parse_command(command.clone()).err(),
+                    }))
+                }).collect::<Vec<_>>(),
+            }),
+        });
     }
     let layer = args
         .get("layer")
@@ -1020,16 +1316,24 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
     let mut answers: Vec<Value> = Vec::new();
     let ran = session.batch_with(source, "batch", layer, color, |s| {
         for (i, raw) in commands.iter().enumerate() {
-            let mut raw = command_value(raw)
-                .map_err(|e| CoreError::InvalidCommand(format!("Batch step {i}: {e}")))?;
-            bind(&mut raw, &answers)
-                .map_err(|why| CoreError::InvalidCommand(format!("Batch step {i}: {why}")))?;
-            let command = parse_command(s, &raw)
-                .map_err(|e| CoreError::InvalidCommand(format!("Batch step {i}: {e}")))?;
+            let input_error = |error: ToolError| CoreError::Step {
+                index: i,
+                label: "input".into(),
+                error: Box::new(CoreError::InvalidCommand(error.json().to_string())),
+            };
+            let mut raw = command_value(raw).map_err(input_error)?;
+            bind(&mut raw, &answers).map_err(|why| {
+                input_error(ToolError::Structured {
+                    code: "not_found".into(),
+                    message: why,
+                    details: json!({}),
+                })
+            })?;
+            let (command, input) = prepare_command(s, &raw).map_err(input_error)?;
             let label = command.label();
             let (outcome, change) = s
                 .transaction(source, &label, |s| {
-                    let outcome = s.run_as(command, source)?;
+                    let outcome = s.run_input(&input, source)?;
                     Ok((outcome, s.last_change().clone()))
                 })
                 .map_err(|error| CoreError::Step {
@@ -1047,16 +1351,74 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
         }
         Ok(())
     });
-    ran?;
+    if let Err(error) = ran {
+        let mut details = ToolError::from(error).json();
+        if !details["warnings"].is_array() {
+            details["warnings"] = json!([]);
+        }
+        let warnings = details["warnings"].as_array_mut().unwrap();
+        for warning in &report.warnings {
+            let warning = json!(warning);
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
+        return Err(ToolError::Structured {
+            code: details["code"].as_str().unwrap_or("failed").into(),
+            message: details["message"].as_str().unwrap_or_default().into(),
+            details,
+        });
+    }
+    let mut defaults_used: Vec<Value> = report
+        .defaults_used
+        .iter()
+        .filter(|entry| !entry.field.starts_with("/commands/"))
+        .map(|entry| json!(entry))
+        .collect();
+    let mut warnings: Vec<Value> = report
+        .warnings
+        .iter()
+        .filter(|entry| {
+            !entry.pointer.starts_with("/commands/")
+                || reference_warning(&batch_input, &entry.pointer)
+        })
+        .map(|entry| json!(entry))
+        .collect();
+    for (index, answer) in answers.iter().enumerate() {
+        for (field, target, pointer_field) in [
+            ("defaults_used", &mut defaults_used, "field"),
+            ("warnings", &mut warnings, "pointer"),
+        ] {
+            if let Some(entries) = answer["outcome"][field].as_array() {
+                for entry in entries {
+                    let mut entry = entry.clone();
+                    if let Some(pointer) = entry[pointer_field].as_str() {
+                        entry[pointer_field] = json!(format!("/commands/{index}{pointer}"));
+                    }
+                    target.push(entry);
+                }
+            }
+        }
+    }
     let mut out = changed(
         session,
         "batch",
         Effect::Edit,
         history,
-        json!({ "steps": answers }),
+        json!({ "steps": answers, "defaults_used": defaults_used, "warnings": warnings }),
     );
     view.update_ui(session, &mut out);
     Ok(out)
+}
+
+/// Binding replaces reference objects; keep their unknown-field warnings from the dry check.
+fn reference_warning(input: &Value, pointer: &str) -> bool {
+    let Some((parent, _)) = pointer.rsplit_once('/') else {
+        return false;
+    };
+    input
+        .pointer(parent)
+        .is_some_and(|value| value.get("$step").is_some())
 }
 
 /// Replaces each `{"$step": i, "pointer": "/added/0"}` in `value` with what it points at in
@@ -1064,9 +1426,6 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
 fn bind(value: &mut Value, answers: &[Value]) -> Result<(), String> {
     match value {
         Value::Object(map) if map.contains_key("$step") => {
-            if map.keys().any(|key| key != "$step" && key != "pointer") {
-                return Err("A step reference takes only $step and pointer".into());
-            }
             let i = map["$step"]
                 .as_u64()
                 .and_then(|i| usize::try_from(i).ok())

@@ -192,7 +192,7 @@ fn main() {
     let dim = s.run(Command::AddDimConstraint {
         kind: ConstraintKind::Linear,
         targets: vec![t(rect)],
-        points: vec![[rx + 2.0, ry]],
+        points: vec![[rx + 2.0, ry]].into(),
         line_point: [rx + 2.0, ry - 1.0],
         expression: None,
     });

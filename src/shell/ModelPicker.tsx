@@ -48,12 +48,17 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
 
   // Again on another provider at once, and on another address once it rests.
   useEffect(() => {
+    ++asked.current;
+    setList(null);
     if (provider === "anthropic") {
       refresh();
-      return;
+      return () => { ++asked.current; };
     }
     const timer = window.setTimeout(refresh, URL_REST_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      ++asked.current;
+      window.clearTimeout(timer);
+    };
   }, [provider, baseUrl]);
 
   const models = list?.models ?? [];
@@ -92,6 +97,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
             onChange(e.target.value);
           }}
         >
+          {!value && <option value="">{t("settings.modelChoose")}</option>}
           {!known && value && (
             <option value={value}>
               {value} {t("settings.modelSaved")}
@@ -137,6 +143,11 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
             : models.length > 0
               ? t("settings.modelBuiltin", { why: list.error ?? "" })
               : t("settings.modelNone", { why: list.error ?? "" })}
+        </p>
+      )}
+      {list?.from_service && value && !known && (
+        <p className="note" role="status">
+          {t("settings.modelMissing", { model: value })}
         </p>
       )}
     </div>

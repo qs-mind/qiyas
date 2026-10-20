@@ -278,6 +278,23 @@ impl Session {
         added
     }
 
+    /// Automatic grid bounds include the sheet and all axes, with a paper-sized lone span.
+    pub(crate) fn grid_extent_default(&self, x: &[GridAxis], y: &[GridAxis]) -> GridExtent {
+        let paper = self.default_text_height() / 2.5;
+        let [mut min, mut max] = self.sheet_bounds();
+        for (i, axes) in [x, y].into_iter().enumerate() {
+            for axis in axes {
+                min[i] = min[i].min(axis.at);
+                max[i] = max[i].max(axis.at);
+            }
+            if max[i] <= min[i] {
+                min[i] -= 10.0 * paper;
+                max[i] += 10.0 * paper;
+            }
+        }
+        GridExtent { min, max }
+    }
+
     /// `Command::Grid`: axes extend to the given bounds, with a labelled bubble at each end.
     /// Omitted bounds enclose the current sheet and axis coordinates. A lone axis gets a span
     /// of 20 mm on paper. `bubble` is a radius, defaulting to 3.5 mm on paper.
@@ -308,20 +325,7 @@ impl Session {
                 "The grid bubble radius must be a positive distance",
             ));
         }
-        let extent = extent.unwrap_or_else(|| {
-            let [mut min, mut max] = self.sheet_bounds();
-            for (i, axes) in [x, y].into_iter().enumerate() {
-                for axis in axes {
-                    min[i] = min[i].min(axis.at);
-                    max[i] = max[i].max(axis.at);
-                }
-                if max[i] <= min[i] {
-                    min[i] -= 10.0 * paper;
-                    max[i] += 10.0 * paper;
-                }
-            }
-            GridExtent { min, max }
-        });
+        let extent = extent.unwrap_or_else(|| self.grid_extent_default(x, y));
         if !finite(extent.min)
             || !finite(extent.max)
             || extent.min[0] >= extent.max[0]
@@ -344,8 +348,11 @@ impl Session {
                 } else {
                     ([extent.min[0], axis.at], [extent.max[0], axis.at])
                 };
-                lines.extend(self.draw_entities(DrawSpec::Line { a, b })?);
                 let direction = unit(sub(b, a))?;
+                // Leave one bubble radius outside the bounds before each bubble. Adjacent
+                // perpendicular axes then have separate bubbles at a boundary corner.
+                let (a, b) = (along(a, direction, -radius), along(b, direction, radius));
+                lines.extend(self.draw_entities(DrawSpec::Line { a, b })?);
                 for center in [along(a, direction, -radius), along(b, direction, radius)] {
                     let circle = self.draw_entities(DrawSpec::Circle {
                         centre: center,

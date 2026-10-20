@@ -412,3 +412,54 @@ fn empty_title_block_never_fills_in_date_project_or_author() {
         .entities_in_block(&sheet)
         .any(|e| matches!(e, EntityType::LwPolyline(_))));
 }
+
+#[test]
+fn title_block_shares_its_frame_edges_on_small_and_large_paper() {
+    for units in [4, 5, 6, 1] {
+        for paper in ["ISO A4", "ISO A1"] {
+            let (_dir, mut s) = blank(units);
+            s.run(Command::NewLayout {
+                name: "Plan".into(),
+                paper: paper.into(),
+                orientation: LayoutOrientation::Portrait,
+            })
+            .unwrap();
+            let sheet = s
+                .drawing
+                .sheets()
+                .into_iter()
+                .find(|sheet| sheet.name == "Plan")
+                .unwrap();
+            s.set_sheet(&sheet.block).unwrap();
+            // On a layer of its own: layer 0 on a sheet is a drafting fault of its own.
+            for command in [
+                serde_json::json!({"type": "new_layer", "name": "A-ANNO-TTLB"}),
+                serde_json::json!({"type": "set_current", "current": {"layer": "A-ANNO-TTLB"}}),
+            ] {
+                s.run(serde_json::from_value(command).unwrap()).unwrap();
+            }
+            let handles = added(
+                &mut s,
+                Command::TitleBlock {
+                    fields: BTreeMap::from([
+                        ("title".into(), "Ground floor".into()),
+                        ("drawing_no".into(), "A-101".into()),
+                    ]),
+                    margin_mm: 10.0,
+                    binding_mm: 20.0,
+                },
+            );
+            let check = s.check_drawing(&qiyas_core::check::CheckScope {
+                handles,
+                packs: vec!["general".into()],
+                ..Default::default()
+            });
+            assert_eq!(
+                (check.errors, check.warnings),
+                (0, 0),
+                "{units}, {paper}: {:?}",
+                check.findings
+            );
+        }
+    }
+}

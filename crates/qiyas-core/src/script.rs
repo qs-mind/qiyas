@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::{Boq, Command, Current, Kind, LayerProp, Outcome, Session};
+use crate::{Boq, Command, Current, Kind, LayerProp, Outcome, Reported, Session, Source};
 
 /// Where a script runs: the script file (relative paths are taken from its folder), the drawing
 /// it starts on when there is one, and where its written files go.
@@ -68,6 +68,8 @@ pub struct Step {
     /// The line of the script it came from (the command's line), from 1.
     pub line: usize,
     pub action: Action,
+    /// Original command input after resolving file paths, before serde supplies defaults.
+    pub input: Option<serde_json::Value>,
 }
 
 /// A script read and checked whole.
@@ -251,7 +253,10 @@ pub fn run(
             }
             Action::Command(cmd) => {
                 let session = open(&mut run.session, line)?;
-                let outcome = session.run(cmd.clone()).map_err(|e| fail(e.to_string()))?;
+                let input = step.input.clone().unwrap_or_else(|| serde_json::json!(cmd));
+                let outcome = session
+                    .run_input(&input, Source::User)
+                    .map_err(|e| fail(e.to_string()))?;
                 describe(cmd, outcome, &mut run.counts)
             }
         };
@@ -325,8 +330,9 @@ fn refuse_repaired(host: &dyn Host, line: usize) -> Result<(), ScriptError> {
 }
 
 /// What `cmd` did, in a line; a count goes into `counts` by block name.
-fn describe(cmd: &Command, outcome: Outcome, counts: &mut BTreeMap<String, f64>) -> String {
-    match outcome {
+fn describe(cmd: &Command, outcome: Reported, counts: &mut BTreeMap<String, f64>) -> String {
+    let notes = outcome.input_notes();
+    let text = match outcome.outcome {
         Outcome::Measured { measurement: m } => {
             let shown = match m.kind {
                 Kind::Count => format!("{:.0}", m.shown),
@@ -367,6 +373,11 @@ fn describe(cmd: &Command, outcome: Outcome, counts: &mut BTreeMap<String, f64>)
         ),
         Outcome::Nothing => "nothing to do".to_string(),
         other => format!("{other:?}"),
+    };
+    if notes.is_empty() {
+        text
+    } else {
+        format!("{text}; {notes}")
     }
 }
 
@@ -417,9 +428,8 @@ impl Parser {
             let mut value: serde_json::Value =
                 serde_json::from_str(text).map_err(|e| at(line, e.to_string()))?;
             self.json_paths(line, &mut value)?;
-            let cmd: Command =
-                serde_json::from_value(value).map_err(|e| at(line, e.to_string()))?;
-            self.push(line, Action::Command(cmd));
+            let cmd = crate::registry::parse_command(value.clone()).map_err(|e| at(line, e))?;
+            self.push_input(line, cmd, value);
             return Ok(());
         }
         let (first, rest) = match text.find(char::is_whitespace) {
@@ -519,7 +529,12 @@ impl Parser {
                         format!("DIST takes 2 points, {} given", points.len()),
                     ));
                 }
-                self.push(line, Action::Command(Command::MeasureDistance { points }));
+                self.push(
+                    line,
+                    Action::Command(Command::MeasureDistance {
+                        points: points.into(),
+                    }),
+                );
             }
             "AA" | "AREA" => {
                 let points = self.points(line, &args, lines, i, None)?;
@@ -532,7 +547,12 @@ impl Parser {
                         ),
                     ));
                 }
-                self.push(line, Action::Command(Command::MeasureArea { points }));
+                self.push(
+                    line,
+                    Action::Command(Command::MeasureArea {
+                        points: points.into(),
+                    }),
+                );
             }
             "MEASURE" => {
                 let handle = match args.as_slice() {
@@ -611,14 +631,15 @@ impl Parser {
         let mut answer = machine.step(text).map_err(|e| at(on, e))?;
         loop {
             match answer {
-                TypedStep::Command(command) => {
-                    let mut value =
-                        serde_json::to_value(command).map_err(|e| at(line, e.to_string()))?;
+                TypedStep::Command(_) => {
+                    let mut value = machine
+                        .take_input()
+                        .expect("a completed command has wire input");
                     self.json_paths(line, &mut value)?;
                     let command =
-                        serde_json::from_value(value).map_err(|e| at(line, e.to_string()))?;
+                        crate::registry::parse_command(value.clone()).map_err(|e| at(line, e))?;
                     self.last = machine.last();
-                    self.push(line, Action::Command(command));
+                    self.push_input(line, command, value);
                     return Ok(());
                 }
                 TypedStep::Cancelled => {
@@ -673,7 +694,23 @@ impl Parser {
     }
 
     fn push(&mut self, line: usize, action: Action) {
-        self.steps.push(Step { line, action });
+        let input = match &action {
+            Action::Command(command) => Some(serde_json::json!(command)),
+            _ => None,
+        };
+        self.steps.push(Step {
+            line,
+            action,
+            input,
+        });
+    }
+
+    fn push_input(&mut self, line: usize, command: Command, input: serde_json::Value) {
+        self.steps.push(Step {
+            line,
+            action: Action::Command(command),
+            input: Some(input),
+        });
     }
 
     /// The points of a measure: `first` are the words after the command on its line, then the

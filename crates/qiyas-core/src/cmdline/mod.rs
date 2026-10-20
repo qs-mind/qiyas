@@ -29,6 +29,7 @@ pub struct Machine {
     active: Option<Pending>,
     ucs: Ucs,
     last: Option<[f64; 2]>,
+    completed_input: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +62,11 @@ impl Machine {
         self.last
     }
 
+    /// Takes the completed wire input, preserving omitted fields for command validation.
+    pub fn take_input(&mut self) -> Option<Value> {
+        self.completed_input.take()
+    }
+
     pub fn is_active(&self) -> bool {
         self.active.is_some()
     }
@@ -68,6 +74,7 @@ impl Machine {
     /// Cancels the pending arguments, keeping the UCS and last point.
     pub fn cancel(&mut self) {
         self.active = None;
+        self.completed_input = None;
     }
 
     /// Reads a whole command or the answer to its next prompt. Fixed arguments complete as
@@ -76,6 +83,7 @@ impl Machine {
     /// Errors leave both the pending arguments and the last point unchanged for correction.
     pub fn step(&mut self, line: &str) -> Result<Step, String> {
         let mut next = self.clone();
+        next.completed_input = None;
         let step = next.advance(line)?;
         *self = next;
         Ok(step)
@@ -115,7 +123,11 @@ impl Machine {
                 && !arg.required
                 && !pending.values.contains_key(&arg.name)
             {
-                if let Some(default) = arg.default() {
+                if let Some(default) = arg
+                    .metadata
+                    .get("default")
+                    .filter(|default| Some(*default) != arg.schema.get("default"))
+                {
                     pending.values.insert(arg.name.clone(), default.clone());
                 }
                 pending.next += 1;
@@ -153,7 +165,9 @@ impl Machine {
         if let Some(extra) = words.get(index) {
             return Err(format!("{}: unexpected argument {extra}", pending.name));
         }
-        let command = parse_command(Value::Object(pending.values))?;
+        let input = Value::Object(pending.values);
+        let command = parse_command(input.clone())?;
+        self.completed_input = Some(input);
         Ok(Step::Command(command))
     }
 

@@ -4,7 +4,7 @@ use std::sync::{Mutex, PoisonError};
 
 use qiyas_core::cmdline::{Machine, Step};
 use qiyas_core::registry::{registry, CommandWord};
-use qiyas_core::{Command, Ucs};
+use qiyas_core::Ucs;
 use serde::Serialize;
 use tauri::State;
 
@@ -23,7 +23,7 @@ struct TypedLine {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
     Command {
-        command: Command,
+        command: serde_json::Value,
         last: Option<[f64; 2]>,
     },
     Prompt {
@@ -50,8 +50,11 @@ impl TypedLine {
             self.machine.set_last(last);
         }
         Ok(match self.machine.step(line)? {
-            Step::Command(command) => Reply::Command {
-                command,
+            Step::Command(_) => Reply::Command {
+                command: self
+                    .machine
+                    .take_input()
+                    .expect("a completed command has wire input"),
                 last: self.machine.last(),
             },
             Step::Prompt(prompt) => Reply::Prompt {
@@ -91,6 +94,20 @@ pub async fn cmdline_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_ipc_input_keeps_omitted_text_defaults() {
+        let mut typed = TypedLine::default();
+        let Reply::Command { command, .. } = typed
+            .step(Some(1), Ucs::default(), "TEXT 0,0 Room", None)
+            .unwrap()
+        else {
+            panic!("expected a completed command");
+        };
+        assert_eq!(command["value"], "Room");
+        assert!(command.get("height").is_none());
+        assert!(command.get("rotation").is_none());
+    }
 
     #[test]
     fn a_drawing_switch_drops_the_previous_prompt_and_last_point() {

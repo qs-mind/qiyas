@@ -190,6 +190,29 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `#[schemars(extend("x-words" = ["LINE", "L"]))]`, upper case, the full word first.
   `CommandInfo::words`, `Registry::by_word` and `Registry::words` expose them; the guard
   refuses a word owned by two commands. `x-prompts` overrides argument order or prompt text.
+- `validation.rs` checks raw inputs against those schemas before execution, collecting missing
+  fields, wrong types, enums, constants and bounds together with JSON pointers. Unknown fields
+  are returned as warnings. The existing serde path error, schema and example remain available.
+  `Session::run_input(&Value, Source)` is the JSON execution boundary: it validates the raw
+  input, deserializes a plain `Command`, resolves omitted defaults, then executes. Its separate
+  `Reported` struct holds `outcome: Outcome`, `defaults_used: [{field, value, unit}]` and
+  `warnings`; JSON keeps the ordinary outcome fields with metadata beside them. `Command`
+  uses derived serde and both enums can be matched directly. Native Rust callers keep using
+  `run` or `run_as`. Raw batch steps pass through `run_input` in order within one transaction,
+  so each step's defaults use its actual sheet, scale and geometry. The aggregate report uses
+  `/commands/i/…` pointers and the wire batch also includes each step's own metadata.
+  The command-line machine exposes its original completed input through `take_input`; script
+  steps keep that raw input beside their plain command. Desktop IPC, scripts, typed commands
+  and the shared AI/MCP surface all execute wire commands through `run_input`.
+- Serde defaults appear in each field's registry schema and description. Conventional lengths
+  are resolved using drawing units and the sheet's annotation scale; the result says which
+  values were chosen. Text rotation is zero, MText width zero means no wrapping, polygons are
+  inscribed, and hatches are solid when omitted. Geometry that defines a shape remains required.
+  `input_context_defaults.rs` shares read-only runtime calculations for grid extents, room
+  label heights/languages, viewport fitting, clipboard bases and dimensional expressions.
+  Per-room defaults carry `{index, name, value}` entries. Revision clouds and comments share
+  a default arc length of one thirty-second of their outline; explicit zero is refused.
+  Custom hatch rotation/scale default to 0/1; image brightness/contrast/fade to 50/50/0.
 
 ## Records
 
@@ -226,6 +249,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `"ByLayer" | … | {"Index": …} | {"Rgb": {…}}`), whether the type can be created, and that
   angles are radians there. Traced once off the types' serde (`serde-reflection`, MIT OR
   Apache-2.0: repeated passes until every enum variant is seen, about 12 ms) and kept as JSON.
+- `record_input_schema` caches those traced types as input schemas too. Creation and block
+  definition check all supplied data fields before merging the entity defaults. Record edits
+  stage each replacement without mutation, including sequential `expected` values, and collect
+  type, unknown-field and path problems. Required fields in a replacement object are checked
+  against the codec's actual serde by omitting each field from a valid record; serde defaults
+  and optional fields remain optional.
 
 ## Undo
 
@@ -265,6 +294,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Arabic, or the drawing's own TrueType font when the computer has it; SHX falls back to Noto.
   Arabic is shaped and joined. View tab, "Arabic text is reversed" fixes drawings whose Arabic
   was stored backwards (saved in the project file).
+  Picking and drawing checks place approximate text bounds with the same alignment, MTEXT
+  attachment and paragraph spacing as the drawing, including rotated text and attributes;
+  wrapping uses estimated character widths.
 - Snaps (end, mid, centre, node, intersection, nearest, perpendicular), ortho, polar and the dot
   grid: status bar toggles, F3 / F8 / F10 / F7, settings under the gear. Saved per drawing in the
   project file.
@@ -287,6 +319,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   next prompt. The pure machine reads points, numbers, names and options from the registry
   schema, with `x-prompts` when a command needs a different order or prompt. A new core word
   requires no window parser change.
+- Native file dialogs all go through `src/fileDialogs.ts`. Open and Save start in the folder
+  of the drawing on screen (never an untitled placeholder), then the last chosen folder in
+  `localStorage`, then the user's Documents folder from Tauri. Suggested filenames are kept.
+  This applies to drawings, PDFs, images, scripts, exports, blocks, libraries, sheet sets and
+  plot styles. A Vitest guard prevents direct dialog-plugin imports elsewhere.
 - Properties palette under Layers: what the Select tool picked, in AutoCAD's folding sections
   (`PropertiesPanel.tsx`, `propertiesGeometry.ts`; folded ones kept in `qiyas.properties.folded`):
   General (handle, type, layer, colour as drawn, linetype, weight, sheet, block path, xref),
@@ -361,6 +398,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   multiline, sketch. One undo step on the sheet on screen; `Outcome::Added` lists the handles.
   Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Mizan's `draw` (line,
   polyline, rectangle, circle, arc, hatch, revcloud).
+- Path and outline inputs use the core's transparent `PointRun<CLOSE>` type. Its schema states
+  the policy: a returned start point closes boundaries and is removed; an open path keeps the
+  vertex, like AutoCAD's plain polyline. An explicitly closed polyline removes the duplicate.
+  The test uses `SAME_POINT` converted from millimetres and `tol_near` for survey coordinates.
+  Walls, hatch rings and islands, area measurement and clouds share this rule with picking;
+  open polylines, splines, leaders, traces, multilines and sketches preserve their paths.
 - `Command::Batch { commands, layer?, color? }` runs any commands in order as ONE undo step, all
   or nothing (a transaction, see Undo): each through `run_as` with its usual follow-ups. Refused:
   what the registry marks `x-batch` false (editing a block in place, writing a block, the
@@ -407,6 +450,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   sheet and axes determine the extent. `bubble` is the radius. Explicit sizes and coordinates use drawing
   units. Default extension is 2.5 mm on paper, bubble radius 3.5 mm, text height 2.5 mm, all
   converted using the drawing's units and annotation scale. Long labels shrink to fit their bubble.
+  Grid lines extend one bubble radius beyond the extent before the bubble, keeping bubbles
+  on perpendicular axes from colliding at a corner.
 - Each command is one undo step including missing layers and linetypes. Setting a layer's
   linetype to `CENTER` or `HIDDEN` also adds that standard linetype when absent, in the same
   undo step. Existing definitions are kept. The command registry exposes these to Mizan
@@ -425,7 +470,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   approximating arcs, not bulges. Openings must fit a straight segment clear of corners and
   junctions; overlapping openings and parallel overlapping walls are refused. An opening
   cannot wrap across a closed run's start. A door defaults to a left swing, sill 0 and head
-  `min(2.1, height)`; a window requires its sill and head.
+  `min(2.1, height)`; a window defaults to sill 0.9 m and the same head convention. Wall height
+  defaults to 3 m. Explicit contradictions, including sill at or above head, are refused.
 - Optional `layers` names are `outline`, `hatch`, `centreline`, `doors`, `windows`: defaults
   `A-WALL`, `A-WALL-PATT`, `A-WALL-CNTR`, `A-DOOR`, `A-GLAZ`. Measure the hatches for wall
   plan area. Centrelines carry `QIYAS_WALL` xdata containing thickness in drawing units and
@@ -490,6 +536,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   polylines are reshaped; anything drawn can cut or bound. Trim and break keep the handle on the
   longest piece; join keeps the first's. Offset keeps exact arcs (kernel `offset_polyline`, sharp
   straight corners). Fillet and chamfer: two lines or two straight sides of one polyline.
+  Overkill's omitted tolerance is 0.000001 mm converted to the drawing's units; an explicit
+  tolerance remains in drawing units, including zero.
   `Outcome::Edited { added, removed, left_alone }`. Home tab, Modify group, after the modify tools; command line TR, EX
   (Shift+click swaps), BR, J, LEN, REVERSE, O, F, CHA, BLEND, PE, OVERKILL, FLATTEN.
 
@@ -817,7 +865,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   20 mm; the left margin is the larger of those. `fields` maps names to values, including
   `title`, `project`, `drawing_no`, `scale`, `date`, `drawn_by`, `sheet` and extra names. Only
   supplied values become text, with literal escaping; missing values stay empty, including the
-  date and scale. It requires a sized layout. NewLayout, RenameLayout, MView and TitleBlock
+  date and scale. The title grid shares the frame's outside edges without drawing them twice,
+  including on small paper where it fills the frame's width. It requires a sized layout.
+  NewLayout, RenameLayout, MView and TitleBlock
   each make one undo step, keeping their table changes too.
 
 ## Clipboard, viewports, UCS, sheet sets and recovery
@@ -1198,6 +1248,21 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   flags circles and full arcs without a centre mark or centre line through their centre.
   Automatic `missing_axis` detection is omitted: arbitrary outlines do not reliably identify
   their intended axis. Use an explicit symmetry expectation instead.
+- `layer_zero` is a warning for entities drawn on a sheet (Model or a layout); inside a block
+  definition layer 0 is right (contents take the reference's layer) and is not flagged. The
+  own-output guard draws on a layer of its own. `tiny_segment` measures
+  actual curve pieces, not display tessellation chords; `overlap` compares actual straight
+  CAD edges. A dangling end must continue towards the nearby edge, so a parallel offset
+  does not count as a gap. Text checks use the same alignment and attachment as rendering.
+  Definition scopes follow their owning layout for model or paper units. Dimension extension
+  endpoints are exempt from overshoot only when their location and extension match the style;
+  changing an end still exposes a real overshoot. Text/line collision uses oriented text bounds.
+- `tests/own_output.rs` runs registry drawing examples in mm, cm, m and inches, with declared
+  prerequisites for operations on existing geometry, and checks their additions with the
+  general pack, including additions inside block definitions. Every drawing-edit example must
+  execute successfully; there is no allowlist of refused examples. Harder cases cover closed
+  wall loops, junctions, openings near ends and corners, and small curves. No error or warning
+  is accepted; informational notes are allowed.
 - `Outcome::Checked` gives each finding's rule, pack, severity, handles, place and message,
   counts by rule and a short summary. At most 200 findings are listed.
 
@@ -1271,7 +1336,7 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   required, with no open objects or references. The old tool names in `execute.rs`, `window.rs`
   and `host.rs` are private runners, never offered to a model.
 - Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
-  and examples; `search`: matching commands), records, record_schema, query, measure (numbers
+  and examples; `search`: matching commands), validate, records, record_schema, query, measure (numbers
   only), run (read-only commands), check, history, drawings, selection and rooms. Execute
   operations: run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
   view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
@@ -1287,6 +1352,21 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   making a missing layer, then puts the previous current state back. Errors name the field,
   schema and example; unknown names suggest close matches. Changed geometry comes with a
   drawing check. The loop discovers a command, acts, checks and fixes by handle.
+- Before execution, the core checks all fields together against the command registry: missing
+  fields, wrong values and ranges are errors with JSON pointers; unknown fields are visible
+  warnings. Results include `defaults_used` with each field, value and unit. Errors preserve
+  the serde field message, schema and example; unknown names still suggest close matches.
+  All automation errors carry `code` beside `message`; `capabilities.error_codes` lists them.
+- `qiyas_read validate {command}` or `{commands}` checks inputs without changing the drawing,
+  including whether `$step` references point to earlier steps. It returns `valid`, `errors`,
+  `warnings`, `defaults_used` and `not_checked` (geometry, locks and object existence need a run).
+  Batch validation also names defaults affected by earlier sheet or scale changes and record
+  checks that depend on earlier steps; execution reports the defaults each step actually used.
+  `surface::OPERATIONS` declares each operation's environment: nothing, drawing, window or file
+  host; selection and screen capture explicitly list both window and drawing. A file host
+  reports whether it supplies a window through `DrawingHost::has_window`. Commands,
+  capabilities, record_schema and validate work without an open drawing;
+  unavailable environments answer `no_drawing`, `needs_window` or `needs_host`.
 - Each user message allows 40 calls, raised to 120 after a call changes the drawing. When 10
   or fewer remain, each result includes `budget: "N calls left"`. At most 10 destructive
   commands per message, counted from registry metadata in run and every batch step. A tool
@@ -1295,12 +1375,20 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   mutating except select and view.
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
-  `openai_compatible`), model (default `claude-opus-5-5`), base URL, effort, MCP on/off, port and
-  token, language, theme. The model is chosen from a list (`src/shell/ModelPicker.tsx`, IPC
+  `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and
+  `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), effort,
+  MCP on/off, port and token, language, theme. Loading an old flat model and base URL moves them
+  into the selected provider's profile and writes the new shape; the other provider keeps its
+  defaults. Switching providers in Settings switches the edited profile and clears any unsaved
+  key text. The model is chosen from a list (`src/shell/ModelPicker.tsx`, IPC
   `ai_models`, `qiyas-ai/src/models.rs`): Anthropic's Models API (`GET /v1/models`, paged with
   `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with the key from the
   keychain; the saved model stays listed, a filter shows past 12 models, "Other…" takes a typed id,
   and when the service can't be asked Claude's built-in list shows (`CLAUDE_MODELS`) with why.
+  A service list missing the saved model shows a warning without blocking Save; an empty
+  compatible profile can be saved, but sending asks for a model. Both providers explain a
+  missing model with the service and model name and direct the user to Settings, in English
+  or Arabic in the window.
 - The API key is never in a file: it lives in the OS keychain (service `qiyas`, account = the
   provider name), is set only in the Settings dialog, and is never sent back to the window.
   Agents never read or type a real key; the founder pastes it himself.
@@ -1433,12 +1521,19 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   (`max_completion_tokens`, else `max_tokens`) and the usage (`stream_options.include_usage`); a
   400 naming one of those (`OPTIONAL_FIELDS`) drops it, sends again, and leaves it out for the rest
   of the conversation. Cached and reasoning tokens are read into `Usage` and the log ("(n
-  thinking)").
+  thinking)"); reasoning accepts both `usage.completion_tokens_details.reasoning_tokens` and
+  `usage.reasoning_tokens`. Each actual request, including optional-field retries, logs
+  `sent:` with the controls present in its body. Both providers turn a missing-model reply
+  into the service and model name followed by “choose one in Settings”.
 
 ## MCP
 
 Outside AI apps can drive Qiyas through its MCP server. `tools/list` offers exactly the same
 three tools as Mizan: `qiyas_read`, `qiyas_execute` and `qiyas_capture`, using `surface::tools`.
+`mcp::tools` adds the optional `request_id` to execute: the same id and arguments return the
+first result without another change or UI event; different arguments answer `request_id_reused`.
+Each MCP connection retains its last 256 ids, including failed results; concurrent retries wait
+for the original result. Mizan can omit the id.
 `surface::route` sends window operations to the window runner, file operations to the host,
 and session operations to the shared surface runner. Measurements are marked `mcp`; undo_own
 only undoes that source's newest step. Mizan runs session operations on the blocking pool with

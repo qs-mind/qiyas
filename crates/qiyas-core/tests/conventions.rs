@@ -497,8 +497,9 @@ fn grid_defaults_use_the_sheet_and_scale_and_allow_a_custom_bubble_radius() {
             },
         );
         let axis = line(&session, handles[0]);
-        near(axis.start.y * factor, 0.0);
-        near(axis.end.y * factor, 3.0);
+        // One radius beyond the extents separates perpendicular corner bubbles.
+        near(axis.start.y * factor, -0.3);
+        near(axis.end.y * factor, 3.3);
         for handle in handles {
             if let Some(EntityType::Circle(circle)) =
                 session.drawing.doc.get_entity(Handle::new(handle))

@@ -166,7 +166,7 @@ fn a_pick_inside_the_xref_names_it_and_the_entity_measures_in_world() {
             value: None,
             unit: None,
             height: None,
-            points: Vec::new(),
+            points: Vec::new().into(),
             handles: vec![line, rect],
             chain: vec![insert],
             description: "Walls".to_string(),
@@ -511,7 +511,7 @@ fn embedding_never_writes_from_xref_handles_and_save_leaves_the_xref_alone() {
     let drawn = measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
         },
     );
 

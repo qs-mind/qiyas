@@ -61,7 +61,7 @@ fn expectation(kind: VerifyKind, handles: &[u64], value: Option<f64>) -> Expecta
                 chain: vec![],
             })
             .collect(),
-        points: vec![],
+        points: vec![].into(),
         value,
         tolerance: None,
         in_metres: false,

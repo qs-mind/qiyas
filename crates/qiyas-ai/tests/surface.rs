@@ -656,7 +656,7 @@ async fn destructive_commands_in_run_and_batch_share_one_cap() {
         .map(|_| {
             match s
                 .run(Command::MeasureDistance {
-                    points: vec![[0.0, 0.0], [1.0, 0.0]],
+                    points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
                 })
                 .unwrap()
             {
@@ -714,4 +714,386 @@ async fn destructive_commands_in_run_and_batch_share_one_cap() {
         remaining.iter().map(|row| &row.id).collect::<Vec<_>>(),
         ids[10..].iter().collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
+    let mut declared = BTreeSet::new();
+    for entry in surface::OPERATIONS {
+        assert!(
+            declared.insert((entry.tool, entry.op)),
+            "duplicate operation"
+        );
+        for (drawing, window, host) in [
+            (true, false, true),
+            (false, true, false),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            let missing = entry.needs.iter().find_map(|need| match need {
+                surface::Need::Drawing if !drawing => Some("no_drawing"),
+                surface::Need::Window if !window => Some("needs_window"),
+                surface::Need::Host if !host => Some("needs_host"),
+                _ => None,
+            });
+            let answer = surface::check_need(entry.tool, entry.op, drawing, window, host);
+            match missing {
+                None => assert!(answer.is_ok(), "{} {}", entry.tool, entry.op),
+                Some(code) => assert_eq!(answer.unwrap_err().json()["code"], code),
+            }
+        }
+        let need = surface::check_need(entry.tool, entry.op, false, false, false);
+        let expected = match entry.needs[0] {
+            surface::Need::Nothing => {
+                let args = match entry.op {
+                    "record_schema" => json!({"name":"line"}),
+                    "validate" => {
+                        json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}})
+                    }
+                    _ => json!({}),
+                };
+                assert!(need.is_ok(), "{}", entry.op);
+                surface::run_without_drawing(entry.tool, entry.op, &args, None)
+                    .unwrap()
+                    .unwrap();
+                continue;
+            }
+            surface::Need::Drawing => "no_drawing",
+            surface::Need::Window => "needs_window",
+            surface::Need::Host => "needs_host",
+        };
+        assert_eq!(
+            need.unwrap_err().json()["code"],
+            expected,
+            "{} {}",
+            entry.tool,
+            entry.op
+        );
+    }
+    for (tool, ops) in [
+        (READ, surface::READ_OPS.as_slice()),
+        (EXECUTE, surface::EXECUTE_OPS.as_slice()),
+        (CAPTURE, &["screen", "picture"]),
+    ] {
+        for op in ops {
+            assert!(declared.contains(&(tool, op)));
+        }
+    }
+}
+
+#[test]
+fn validate_reports_all_input_errors_and_checks_step_indexes_without_a_drawing() {
+    let input = json!({"commands":[
+        {"type":"draw","kind":"line","a":[0,0],"extra":true},
+        {"type":"draw","kind":"circle","center":[0,0],"radius":"bad"},
+        {"type":"delete_entities","targets":[{"handle":{"$step":2,"pointer":"/added/0"}}]}
+    ]});
+    let ToolOutput::Json(out) = surface::run_without_drawing(READ, "validate", &input, None)
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("JSON")
+    };
+    assert_eq!(out["valid"], false);
+    assert!(out["errors"].as_array().unwrap().len() >= 3, "{out}");
+    assert!(
+        out["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "unknown_field"),
+        "{out}"
+    );
+    assert!(out["not_checked"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
+
+    let (_dir, mut session) = sample();
+    let before = count(&session);
+    let revision = session.history_revision();
+    let out = call(
+        &mut session,
+        READ,
+        json!({"op":"validate","args":{"commands":[
+            {"type":"draw","kind":"line","a":[0,0],"b":[10,0]},
+            {"type":"delete_entities","targets":[{"handle":{"$step":0,"pointer":"/added/0"}}]}
+        ]}}),
+    )
+    .unwrap();
+    assert_eq!(out["valid"], true, "{out}");
+    assert_eq!(count(&session), before);
+    assert_eq!(session.history_revision(), revision);
+}
+
+#[test]
+fn executing_bad_inputs_reports_all_fields_and_keeps_schema_and_example() {
+    let (_dir, mut session) = sample();
+    let error = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"draw","kind":"line","a":"wrong","typo":12
+        }}}),
+    )
+    .unwrap_err()
+    .json();
+    let errors = error["errors"].as_array().unwrap();
+    assert!(
+        errors.iter().any(|issue| issue["pointer"] == "/a"),
+        "{error}"
+    );
+    assert!(
+        errors.iter().any(|issue| issue["pointer"] == "/b"),
+        "{error}"
+    );
+    assert_eq!(error["warnings"][0]["code"], "unknown_field");
+    assert!(error["schema"].is_object());
+    assert!(error["example"].is_object());
+}
+
+#[tokio::test]
+async fn mizan_reads_commands_and_validates_before_a_drawing_is_open() {
+    let (agent, events, _) = scripted(Arc::new(Mutex::new(None)), vec![
+        (READ, json!({"op":"commands"})),
+        (READ, json!({"op":"validate","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}}})),
+        (READ, json!({"op":"state"})),
+    ]).await;
+    let outputs = results(&agent);
+    assert!(!outputs[0].0, "{:?}", outputs[0]);
+    assert!(outputs[0].1["index"].is_string());
+    assert_eq!(outputs[1].1["valid"], true);
+    assert_eq!(outputs[2].1["code"], "no_drawing");
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::ToolResult { is_error: true, .. })));
+}
+
+#[test]
+fn successful_inputs_expose_ignored_fields_and_defaults_in_single_and_batch_results() {
+    let (_dir, mut session) = sample();
+    let command =
+        json!({"type":"draw","kind":"polyline","points":[[20000,0],[21000,0]],"typo":true});
+    let single = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":command}}),
+    )
+    .unwrap();
+    assert!(single["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["pointer"] == "/typo"));
+    assert!(
+        single["defaults_used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["field"] == "/closed" && entry["value"] == false),
+        "{single}"
+    );
+    let batch = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":[{
+            "type":"draw","kind":"polyline","points":[[22000,0],[23000,0]],"typo":true
+        }]}}),
+    )
+    .unwrap();
+    assert!(batch["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["pointer"] == "/commands/0/typo"));
+    assert!(
+        batch["defaults_used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["field"] == "/commands/0/closed"),
+        "{batch}"
+    );
+
+    let typed = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"type","args":{"line":"PLINE 24000,0 25000,0"}}),
+    )
+    .unwrap();
+    assert!(
+        typed["defaults_used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["field"] == "/closed" && entry["value"] == false),
+        "{typed}"
+    );
+}
+
+#[test]
+fn bad_command_shapes_have_stable_codes_and_json_pointers() {
+    let (_dir, mut session) = sample();
+    for (command, code, pointer) in [
+        (json!(12), "invalid_value", ""),
+        (json!({"kind":"line"}), "missing_field", "/type"),
+    ] {
+        let error = call(
+            &mut session,
+            EXECUTE,
+            json!({"op":"run", "args":{"command":command}}),
+        )
+        .unwrap_err()
+        .json();
+        assert_eq!(error["code"], code, "{error}");
+        assert!(
+            error["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["pointer"] == pointer),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn validate_and_execute_share_the_batch_size_schema() {
+    let (_dir, mut session) = sample();
+    let commands = json!([]);
+    let validated = call(
+        &mut session,
+        READ,
+        json!({"op":"validate","args":{"commands":commands}}),
+    )
+    .unwrap();
+    assert_eq!(validated["valid"], false);
+    assert!(validated["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["pointer"] == "/commands"));
+    let error = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":commands}}),
+    )
+    .unwrap_err()
+    .json();
+    assert!(error["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["pointer"] == "/commands"));
+    let capabilities = call(&mut session, READ, json!({"op":"capabilities"})).unwrap();
+    assert_eq!(capabilities["validate"]["commands_schema"]["minItems"], 1);
+    assert_eq!(capabilities["validate"]["commands_schema"]["maxItems"], 200);
+}
+
+#[test]
+fn unknown_reference_fields_are_reported_as_warnings_after_binding() {
+    let (_dir, mut session) = sample();
+    let commands = json!([
+        {"type":"draw","kind":"line","a":[30000,0],"b":[31000,0]},
+        {"type":"modify","kind":"move","targets":[{"handle":{"$step":0,"pointer":"/added/0","typo":true}}],"delta":[1000,0]}
+    ]);
+    let validation = call(
+        &mut session,
+        READ,
+        json!({"op":"validate","args":{"commands":commands}}),
+    )
+    .unwrap();
+    assert_eq!(validation["valid"], true, "{validation}");
+    let out = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":commands}}),
+    )
+    .unwrap();
+    assert!(
+        out["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |warning| warning["pointer"] == "/commands/1/targets/0/handle/typo"
+                    && warning["code"] == "unknown_field"
+            ),
+        "{out}"
+    );
+}
+
+#[test]
+fn runtime_refusals_keep_input_warnings() {
+    let (_dir, mut session) = sample();
+    let error = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+        "type":"draw","kind":"circle","centre":[0,0],"radius":-1,"typo":true
+        }}}),
+    )
+    .unwrap_err()
+    .json();
+    assert!(error["code"].is_string(), "{error}");
+    assert!(
+        error["message"].as_str().unwrap().contains("radius"),
+        "{error}"
+    );
+    assert!(
+        error["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["pointer"] == "/typo" && warning["code"] == "unknown_field"),
+        "{error}"
+    );
+}
+
+#[test]
+fn failed_batches_keep_warnings_and_the_bound_fields_error_path() {
+    let (_dir, mut session) = sample();
+    let before = count(&session);
+    let error = call(&mut session, EXECUTE, json!({"op":"batch","args":{"commands":[
+        {"type":"draw","kind":"polyline","points":[[30000,0],[31000,0]],"typo":true},
+        {"type":"draw","kind":"line","a":{"$step":0,"pointer":"/added/0"},"b":[32000,0],"extra":true}
+    ],"batch_typo":true}})).unwrap_err().json();
+    assert_eq!(error["code"], "invalid_value", "{error}");
+    assert!(
+        error["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["pointer"] == "/commands/1/a"),
+        "{error}"
+    );
+    let warnings = error["warnings"].as_array().unwrap();
+    for pointer in ["/batch_typo", "/commands/0/typo", "/commands/1/extra"] {
+        assert!(
+            warnings.iter().any(|issue| issue["pointer"] == pointer),
+            "{error}"
+        );
+    }
+    assert!(error["schema"].is_object(), "{error}");
+    assert_eq!(count(&session), before, "the earlier step was rolled back");
+}
+
+#[test]
+fn batch_defaults_follow_the_context_when_each_step_runs() {
+    let (_dir, mut session) = sample();
+    let out = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":[
+            {"type":"annotation_scale","name":"1:200"},
+            {"type":"text","at":[30000,0],"value":"Scaled"}
+        ]}}),
+    )
+    .unwrap();
+    let height = out["defaults_used"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["field"] == "/commands/1/height")
+        .unwrap();
+    assert_eq!(height["value"], session.default_text_height(), "{out}");
 }

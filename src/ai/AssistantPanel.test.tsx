@@ -51,6 +51,11 @@ test("empty state offers three examples; one fills the box", () => {
   expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
+test("a missing provider model explains how to choose another", () => {
+  setup(EMPTY, false, "Anthropic has no model google:gemini@3.8-flash: choose one in Settings");
+  expect(screen.getByText("Anthropic has no model google:gemini@3.8-flash: choose one in Settings")).toBeTruthy();
+});
+
 test("New chat in the header starts a new conversation; not while Mizan works", () => {
   const { assistant } = setup({ items: [{ kind: "user", text: "Measure the wall" }] });
   fireEvent.click(screen.getByRole("button", { name: "New chat" }));

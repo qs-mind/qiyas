@@ -1337,13 +1337,13 @@ export type Provider = "anthropic" | "openai_compatible";
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
+/** A provider keeps its model and service address when another provider is chosen. */
+export type ProviderProfile = { model: string; base_url?: string | null };
+
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
   provider: Provider;
-  /** Used exactly as typed. */
-  model: string;
-  /** The OpenAI-compatible service's address. */
-  base_url: string | null;
+  providers: Record<Provider, ProviderProfile>;
   effort: Effort;
   mcp_enabled: boolean;
   mcp_port: number;

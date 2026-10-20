@@ -28,14 +28,14 @@ type Options = {
   onMutated(label: string): void;
   /** A tool asks the window to show something (a sheet, a zoom, other layers). */
   onUi(ui: AiUi): void;
-  /** Sending failed for want of a key or an address: open the settings. */
+  /** Sending needs a key, service address or model: open the settings. */
   onNeedSettings(): void;
 };
 
 export type Assistant = {
   transcript: Transcript;
   busy: boolean;
-  /** "busy", "no_api_key", "no_base_url", or a message. */
+  /** "busy", "no_api_key", "no_base_url", "no_model", or a message. */
   error: string | null;
   status: AiStatus | null;
   /** Resolves false when the message was not sent (the composer keeps it). */
@@ -121,7 +121,7 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       // "busy" means a turn is still running; keep showing it as busy.
       if (why !== "busy") setBusy(false);
       setError(why);
-      if (why === "no_api_key" || why === "no_base_url") callbacks.current.onNeedSettings();
+      if (why === "no_api_key" || why === "no_base_url" || why === "no_model") callbacks.current.onNeedSettings();
       return false;
     }
   }, []);

@@ -1,7 +1,7 @@
 /** The layers panel and what goes with it: hiding and isolating layers, their properties, layer
  *  states and the translator, groups, and what new entities are drawn with. */
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../fileDialogs";
 import {
   drawingInfo,
   drawingLayers,

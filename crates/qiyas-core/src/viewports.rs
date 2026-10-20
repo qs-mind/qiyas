@@ -139,6 +139,44 @@ fn frozen_names(doc: &CadDocument, v: &Viewport) -> HashSet<String> {
 }
 
 impl Session {
+    /// Fits the model bounds in a paper rectangle without adding a viewport.
+    pub(crate) fn viewport_fit_default(
+        &self,
+        a: [f64; 2],
+        b: [f64; 2],
+    ) -> Result<([f64; 2], f64), CoreError> {
+        if ![a, b].iter().flatten().all(|v| v.is_finite()) {
+            return Err(invalid("Points must have finite coordinates"));
+        }
+        let (w, h) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
+        if !(w > 0.0 && h > 0.0) {
+            return Err(invalid("Give the viewport two opposite corners"));
+        }
+        let (bounds, empty) = self.with_model(None, |m| {
+            (
+                m.bounds,
+                m.ranges.is_empty() && m.fill_ranges.is_empty() && m.text_ranges.is_empty(),
+            )
+        });
+        let [[x0, y0], [x1, y1]] = bounds;
+        let (ew, eh) = (x1 - x0, y1 - y0);
+        Ok(if empty || !(ew > 0.0 || eh > 0.0) {
+            ([x0, y0], 1.0)
+        } else {
+            let fit = |paper: f64, model: f64| {
+                if model > 0.0 {
+                    paper / model
+                } else {
+                    f64::INFINITY
+                }
+            };
+            (
+                [(x0 + x1) / 2.0, (y0 + y1) / 2.0],
+                fit(w, ew).min(fit(h, eh)),
+            )
+        })
+    }
+
     /// `Command::MView`: a viewport on the layout on screen with the corners `a` and `b`,
     /// showing model extents unless a scale or model centre is supplied; its handle.
     pub(crate) fn mview(
@@ -163,32 +201,7 @@ impl Session {
             ));
         }
         let (w, h) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
-        if !(w > 0.0 && h > 0.0) {
-            return Err(invalid("Give the viewport two opposite corners"));
-        }
-        let (bounds, empty) = self.with_model(None, |m| {
-            (
-                m.bounds,
-                m.ranges.is_empty() && m.fill_ranges.is_empty() && m.text_ranges.is_empty(),
-            )
-        });
-        let [[x0, y0], [x1, y1]] = bounds;
-        let (ew, eh) = (x1 - x0, y1 - y0);
-        let (fit_centre, fit_scale) = if empty || !(ew > 0.0 || eh > 0.0) {
-            ([x0, y0], 1.0)
-        } else {
-            let fit = |paper: f64, model: f64| {
-                if model > 0.0 {
-                    paper / model
-                } else {
-                    f64::INFINITY
-                }
-            };
-            (
-                [(x0 + x1) / 2.0, (y0 + y1) / 2.0],
-                fit(w, ew).min(fit(h, eh)),
-            )
-        };
+        let (fit_centre, fit_scale) = self.viewport_fit_default(a, b)?;
         let centre = centre.unwrap_or(fit_centre);
         let scale = given_scale.unwrap_or(fit_scale);
         let id = self

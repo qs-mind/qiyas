@@ -1194,6 +1194,9 @@ impl Session {
     /// too) with `crossing` takes each entity with a drawn segment inside or crossing it, else
     /// each drawn wholly inside it. Whole entities at the top of the sheet, sorted by handle.
     pub fn pick_polygon(&self, points: &[[f64; 2]], crossing: bool) -> Vec<Picked> {
+        let mut run: crate::PointRun<true> = points.to_vec().into();
+        run.normalize(self.drawing.units, true);
+        let points = run.as_slice();
         if points.len() < 3 || points.iter().flatten().any(|v| !v.is_finite()) {
             return Vec::new();
         }
@@ -1572,6 +1575,24 @@ impl Session {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
         }
+        let raw = serde_json::to_value(&cmd)
+            .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
+        let report = self.validate_input(&raw);
+        if !report.valid {
+            return Err(crate::input::with_warnings(
+                CoreError::InvalidCommand(report.message()),
+                &report.warnings,
+            ));
+        }
+        self.run_command(cmd, source)
+    }
+
+    pub(crate) fn run_command(
+        &mut self,
+        mut cmd: Command,
+        source: Source,
+    ) -> Result<Outcome, CoreError> {
+        cmd.normalize_runs(self.drawing.units);
         if let Command::Batch {
             commands,
             layer,

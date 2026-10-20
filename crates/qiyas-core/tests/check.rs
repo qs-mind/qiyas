@@ -104,6 +104,163 @@ fn line_work_faults_are_found_in_every_unit() {
 }
 
 #[test]
+fn parallel_lines_and_curve_tangencies_are_clean_but_real_gaps_and_overlaps_remain() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        line(&mut s, k, [0.0, 0.0], [5.0, 0.0]);
+        line(&mut s, k, [0.0, 0.1], [5.0, 0.1]);
+        line(&mut s, k, [0.0, 5.0], [5.0, 5.0]);
+        run(
+            &mut s,
+            Command::Draw(DrawSpec::Circle {
+                centre: [2.5 * k, 6.0 * k],
+                radius: k,
+            }),
+        );
+        let report = s.check_drawing(&CheckScope {
+            rules: vec!["overlap".into(), "dangling_end".into()],
+            ..Default::default()
+        });
+        assert!(report.findings.is_empty(), "{units}: {:?}", report.findings);
+        // Two collinear lines facing each other across a gap still stop short.
+        let gap = line(&mut s, k, [5.1, 0.0], [8.0, 0.0]);
+        let overlap = line(&mut s, k, [1.0, 0.0], [3.0, 0.0]);
+        let report = check(&s);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "dangling_end" && f.handles.contains(&gap)),
+            "{units}: {:?}",
+            report.findings
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "overlap" && f.handles.contains(&overlap)),
+            "{units}: {:?}",
+            report.findings
+        );
+        assert!(report
+            .findings
+            .iter()
+            .filter(|f| f.rule == "layer_zero")
+            .all(|f| f.severity == Severity::Warning));
+    }
+}
+
+#[test]
+fn dimension_extensions_are_valid_but_a_changed_overrun_is_still_reported() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        let added = run(
+            &mut s,
+            Command::Dimension(DimSpec::Linear {
+                p1: [0.0, 0.0],
+                p2: [5.0 * k, 0.0],
+                line_point: [2.5 * k, -k],
+                rotation: None,
+            }),
+        );
+        let block = added
+            .iter()
+            .find_map(
+                |&handle| match s.drawing.doc.get_entity(Handle::new(handle)) {
+                    Some(EntityType::Dimension(d)) => Some(d.base().block_name.clone()),
+                    _ => None,
+                },
+            )
+            .unwrap();
+        let scope = CheckScope {
+            sheet: Some(block.clone()),
+            rules: vec!["overshoot".into()],
+            ..Default::default()
+        };
+        assert!(s.check_drawing(&scope).findings.is_empty(), "{units}");
+        let handle = s
+            .drawing
+            .entities_in(&block)
+            .find_map(|entity| match entity {
+                EntityType::Line(line) if line.end.x == 0.0 && line.end.y < -k => {
+                    Some(line.common.handle)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let Some(EntityType::Line(line)) = s.drawing.doc.get_entity_mut(handle) else {
+            panic!("extension line")
+        };
+        line.end.y -= 0.03 * k;
+        let report = s.check_drawing(&scope);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "overshoot" && f.handles.contains(&handle.value())),
+            "{units}: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
+fn rotated_text_checks_its_actual_box_and_paper_checks_use_paper_units() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        line(&mut s, k, [0.0, 0.0], [3.0, 3.0]);
+        run(
+            &mut s,
+            Command::Text {
+                at: [k, 1.25 * k],
+                height: 0.25 * k,
+                rotation: 45.0,
+                value: "ROTATED".into(),
+                style: None,
+            },
+        );
+        let scope = CheckScope {
+            rules: vec!["text_over_lines".into()],
+            ..Default::default()
+        };
+        assert!(s.check_drawing(&scope).findings.is_empty(), "{units}");
+        let crossing = line(&mut s, k, [1.0, 1.5], [3.0, 3.5]);
+        assert!(
+            s.check_drawing(&scope)
+                .findings
+                .iter()
+                .any(|f| f.handles.contains(&crossing)),
+            "{units}"
+        );
+
+        s.run(
+            serde_json::from_value(
+                serde_json::json!({"type":"new_layout","name":"Paper","paper":"ISO A1"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let paper = s
+            .drawing
+            .sheets()
+            .into_iter()
+            .find(|sheet| sheet.name == "Paper")
+            .unwrap();
+        s.run(Command::SetSheet { block: paper.block }).unwrap();
+        let short = line(&mut s, 1.0, [0.0, 0.0], [0.5, 0.0]);
+        let report = s.check_drawing(&CheckScope {
+            rules: vec!["tiny_segment".into()],
+            ..Default::default()
+        });
+        assert!(
+            report.findings.iter().any(|f| f.handles == [short]),
+            "{units}: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
 fn text_faults_are_found() {
     let (mut s, k) = blank(6);
     s.run(Command::AnnotationScale {
@@ -789,5 +946,37 @@ fn room_sizes_accept_multiline_names_and_spaced_units() {
             r.findings
         );
         assert_eq!(r.findings[0].handles, [h]);
+    }
+}
+
+#[test]
+fn layer_zero_is_a_warning_on_a_sheet_but_right_inside_a_block() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        let on_sheet = line(&mut s, k, [0.0, 0.0], [2.0, 0.0]);
+        let r = s.check_drawing(&CheckScope {
+            rules: vec!["layer_zero".into()],
+            ..Default::default()
+        });
+        assert!(
+            r.findings.iter().any(|f| f.rule == "layer_zero"
+                && f.severity == Severity::Warning
+                && f.handles == [on_sheet]),
+            "{units}: {:?}",
+            r.findings
+        );
+        let inside = line(&mut s, k, [0.0, 1.0], [2.0, 1.0]);
+        let block: Command = serde_json::from_value(serde_json::json!({
+            "type": "create_block", "name": "MARK", "base": [0, 0],
+            "targets": [{"handle": inside}], "convert_to_insert": false
+        }))
+        .unwrap();
+        s.run(block).unwrap();
+        let r = s.check_drawing(&CheckScope {
+            sheet: Some("MARK".into()),
+            rules: vec!["layer_zero".into()],
+            ..Default::default()
+        });
+        assert!(r.findings.is_empty(), "{units}: {:?}", r.findings);
     }
 }

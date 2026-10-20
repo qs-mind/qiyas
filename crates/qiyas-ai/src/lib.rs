@@ -14,6 +14,7 @@
 pub mod agent;
 pub mod anthropic;
 pub mod context;
+pub mod errors;
 mod execute;
 pub mod host;
 mod image;

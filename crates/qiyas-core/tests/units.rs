@@ -34,7 +34,7 @@ fn plan(dir: &std::path::Path, insunits: i16, m: f64) -> (Session, u64, u64) {
         end: 90.0,
     });
     add(DrawSpec::Polyline {
-        points: vec![[0.0, -5.0 * m], [3.0 * m, -5.0 * m], [3.0 * m, -2.0 * m]],
+        points: vec![[0.0, -5.0 * m], [3.0 * m, -5.0 * m], [3.0 * m, -2.0 * m]].into(),
         bulges: vec![0.4, 0.0, 0.0],
         closed: false,
     });
@@ -122,8 +122,8 @@ fn the_same_plan_draws_and_measures_the_same_in_every_unit() {
         let hatch = match s
             .run(Command::Draw(DrawSpec::Hatch {
                 boundary_handles: Vec::new(),
-                points: ring,
-                holes,
+                points: ring.into(),
+                holes: holes.into_iter().map(Into::into).collect(),
                 bulges,
                 pattern: HatchPattern::Solid,
             }))

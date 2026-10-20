@@ -34,7 +34,7 @@ fn line(s: &mut Session, y: f64) -> u64 {
 
 fn measure(s: &mut Session) {
     s.run(Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 4.0]],
+        points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
     })
     .unwrap();
 }

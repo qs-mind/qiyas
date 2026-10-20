@@ -19,7 +19,7 @@ use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use qiyas_core::script::{self, Action, Context};
-use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Session, Source};
+use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Reported, Session, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
@@ -195,7 +195,7 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
                         break;
                     }
                 }
-                match run_step(app, &state, &step.action, &control.stop) {
+                match run_step(app, &state, step, &control.stop) {
                     Ok((message, change)) => {
                         changed |= change;
                         unsaved = match step.action {
@@ -263,10 +263,10 @@ fn saves_over_drawing(state: &AppState, action: &Action) -> bool {
 fn run_step<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
-    action: &Action,
+    step: &script::Step,
     stop: &AtomicBool,
 ) -> Result<(String, bool), String> {
-    Ok(match action {
+    Ok(match &step.action {
         Action::Quit => ("quit".to_string(), false),
         Action::Delay(ms) => (wait(*ms, DELAY_CAP_MS, stop)?, false),
         Action::Echo(text) => (text.clone(), false),
@@ -322,9 +322,10 @@ fn run_step<R: Runtime>(
             (format!("{} conflicts", conflicts.len()), true)
         }
         Action::Command(cmd) => {
-            let outcome = with_session(state, |s| s.run(cmd.clone()))?;
+            let input = step.input.clone().unwrap_or_else(|| serde_json::json!(cmd));
+            let outcome = with_session(state, |s| s.run_input(&input, Source::User))?;
             let change = !matches!(
-                outcome,
+                &outcome.outcome,
                 Outcome::Nothing | Outcome::Info { .. } | Outcome::Table { .. }
             );
             (describe(cmd, outcome), change)
@@ -391,8 +392,9 @@ pub(crate) fn open<R: Runtime>(
 
 /// What `cmd` did, in a line, as `qiyas-cli run` says it (`qiyas_core::script` keeps its own
 /// private).
-fn describe(cmd: &Command, outcome: Outcome) -> String {
-    match outcome {
+fn describe(cmd: &Command, outcome: Reported) -> String {
+    let notes = outcome.input_notes();
+    let message = match outcome.outcome {
         Outcome::Measured { measurement: m } => {
             let shown = match m.kind {
                 Kind::Count => format!("{:.0}", m.shown),
@@ -426,6 +428,11 @@ fn describe(cmd: &Command, outcome: Outcome) -> String {
         ),
         Outcome::Nothing => "nothing to do".to_string(),
         other => format!("{other:?}"),
+    };
+    if notes.is_empty() {
+        message
+    } else {
+        format!("{message}; {notes}")
     }
 }
 
@@ -989,5 +996,49 @@ mod tests {
         .unwrap();
         let result = ipc.run("count.scr", "COUNT DOOR\n").unwrap();
         assert_eq!(result["lines"][0]["ok"], json!(true));
+    }
+
+    #[test]
+    fn command_ipc_reports_all_missing_fields_and_keeps_unknown_field_warnings() {
+        let ipc = Ipc::open();
+        let error = ipc
+            .call(
+                "run_command",
+                json!({"cmd": {"type": "draw", "kind": "line"}}),
+            )
+            .unwrap_err();
+        let message = error.as_str().unwrap();
+        assert!(message.contains("/a"), "{message}");
+        assert!(message.contains("/b"), "{message}");
+        let outcome = ipc
+            .call(
+                "run_command",
+                json!({"cmd": {
+                    "type": "draw", "kind": "line", "a": [0,0], "b": [10,0],
+                    "unexpected": true
+                }}),
+            )
+            .unwrap();
+        assert_eq!(outcome["type"], "added");
+        assert_eq!(outcome["warnings"][0]["code"], "unknown_field");
+        assert_eq!(outcome["warnings"][0]["pointer"], "/unexpected");
+    }
+
+    #[test]
+    fn script_logs_keep_defaults_and_unknown_fields_from_raw_input() {
+        let ipc = Ipc::open();
+        let result = ipc.run(
+            "input-notes.scr",
+            "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+        ).unwrap();
+        let lines = result["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            assert_eq!(line["ok"], true, "{line}");
+            let text = line["message"].as_str().unwrap();
+            assert!(text.contains("/height="), "{text}");
+            assert!(text.contains("/rotation=0"), "{text}");
+        }
+        assert!(lines[0]["message"].as_str().unwrap().contains("/typo"));
     }
 }

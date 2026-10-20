@@ -11,7 +11,7 @@ fn sample() -> (tempfile::TempDir, PathBuf) {
 
 fn distance() -> Command {
     Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 0.0]],
+        points: vec![[0.0, 0.0], [3.0, 0.0]].into(),
     }
 }
 
@@ -22,7 +22,7 @@ fn project_round_trip() {
     session.run(distance()).unwrap();
     session
         .run(Command::MeasureArea {
-            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]],
+            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]].into(),
         })
         .unwrap();
     let ids: Vec<_> = session.takeoff.items.iter().map(|m| m.id.clone()).collect();
@@ -135,7 +135,7 @@ fn link_boq_round_trips_in_project() {
     let mut session = Session::open(&drawing).unwrap();
     let Outcome::Measured { measurement } = session
         .run(Command::MeasureArea {
-            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]],
+            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]].into(),
         })
         .unwrap()
     else {

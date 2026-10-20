@@ -93,17 +93,11 @@ impl Session {
         if text.is_empty() {
             return Err(invalid("Type the comment"));
         }
-        let ring_len: f64 = (0..points.len())
-            .map(|i| {
-                let (a, b) = (points[i], points[(i + 1) % points.len()]);
-                (b[0] - a[0]).hypot(b[1] - a[1])
-            })
-            .sum();
-        let arc_len = arc_len.unwrap_or(ring_len / 32.0);
+        let arc_len = arc_len.unwrap_or_else(|| crate::draw::default_cloud_arc_len(&points));
         let mut cloud = self
             .draw_entities(DrawSpec::RevCloud {
-                points: points.clone(),
-                arc_len,
+                points: points.clone().into(),
+                arc_len: Some(arc_len),
             })?
             .remove(0);
         let [_, [max_x, max_y]] = crate::query::bounds(&points);

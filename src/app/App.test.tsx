@@ -5,11 +5,9 @@
  *  core, in order. */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { Batch } from "../viewport/batch";
 
 /** Shows a ribbon tab; the ones after Annotate are under "More". */
@@ -72,6 +70,11 @@ vi.mock("@tauri-apps/api/core", () => ({
         return [{ top: 42, entity: 42, chain: [], xref: null, kind: "Line" }];
       case "get_settings":
         return {
+          provider: "anthropic",
+          providers: {
+            anthropic: { model: "claude-opus-5-5" },
+            openai_compatible: { model: "", base_url: null },
+          },
           autosave_minutes: 5,
           tool_palette: [{ kind: "command", label: "Divide in 3", value: "DIVIDE 3" }],
           ...core.settings,
@@ -207,9 +210,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
+const { openDialog, saveDialog } = vi.hoisted(() => ({
+  openDialog: vi.fn(),
+  saveDialog: vi.fn(),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(async () => core.chosen),
-  save: vi.fn(async () => null),
+  open: openDialog,
+  save: saveDialog,
   ask: vi.fn(async () => true),
   message: vi.fn(async () => "No"),
 }));
@@ -270,6 +277,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  openDialog.mockImplementation(async () => core.chosen);
+  saveDialog.mockResolvedValue(null);
   core.calls.length = 0;
   core.autosaved.clear();
   core.chosen = PLAN;
@@ -412,7 +421,7 @@ test("open → an autosave is asked about first → Discard deletes it, then the
 
   await clickOpen();
   // Asked, not opened.
-  expect(core.calls).toEqual([`recoverable_drawings {"paths":["${PLAN}"]}`]);
+  expect(core.calls).toEqual(["drawing_info null", `recoverable_drawings {"paths":["${PLAN}"]}`]);
   expect(screen.getByRole("heading", { name: en["recovery.title"] })).toBeTruthy();
 
   core.calls.length = 0;
@@ -547,7 +556,7 @@ test("PLOT: a window clicked in the drawing (usePlot through the command line) i
     lineweights: true,
     output: null,
   };
-  expect(core.calls).toEqual([`plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf" })}`]);
+  expect(core.calls).toEqual(["drawing_info null", `plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf" })}`]);
   await expectToasts(["Plotted to \u2068/d/plan.pdf\u2069 — pictures not plotted: 2"]);
   // The status bar goes back to the drawing's name.
   expect(status()).toBe("plan.dwg");
@@ -618,9 +627,10 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
   await settle();
-  expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ filters: [{ name: en["script.file"], extensions: ["scr"] }] });
+  expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ defaultPath: "/d/", filters: [{ name: en["script.file"], extensions: ["scr"] }] });
   // The same drawing on screen after it: its info, take-off and batch read again, the take-off saved.
   expect(core.calls).toEqual([
+    "drawing_info null",
     "tabs null",
     `run_script {"path":"/d/count.scr"}`,
     "tabs null",
@@ -646,6 +656,7 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
   core.scriptOpens = true;
   await typeLine("SCR");
   expect(core.calls).toEqual([
+    "drawing_info null",
     "tabs null",
     `run_script {"path":"/d/count.scr"}`,
     "tabs null",

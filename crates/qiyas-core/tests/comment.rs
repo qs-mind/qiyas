@@ -16,7 +16,7 @@ fn session(ext: &str) -> (tempfile::TempDir, Session) {
 
 fn comment(s: &mut Session, text: &str) -> Vec<u64> {
     let cmd = Command::Comment {
-        points: SQUARE.to_vec(),
+        points: SQUARE.to_vec().into(),
         text: text.to_string(),
         arc_len: None,
     };
@@ -92,7 +92,7 @@ fn the_current_layer_is_kept_and_a_blank_comment_refused() {
     assert_eq!(s.current, current);
     let err = s
         .run(Command::Comment {
-            points: SQUARE.to_vec(),
+            points: SQUARE.to_vec().into(),
             text: "   ".to_string(),
             arc_len: None,
         })
@@ -100,7 +100,7 @@ fn the_current_layer_is_kept_and_a_blank_comment_refused() {
     assert!(matches!(err, CoreError::InvalidCommand(_)), "{err:?}");
     let err = s
         .run(Command::Comment {
-            points: SQUARE[..2].to_vec(),
+            points: SQUARE[..2].to_vec().into(),
             text: "Two points".to_string(),
             arc_len: None,
         })

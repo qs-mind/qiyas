@@ -9,6 +9,10 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Check a command or a whole batch before running it, with all input problems reported
+  together. Unknown fields are shown as warnings, and results say which defaults were used.
+- Outside agents can safely retry an edit with a request id without drawing it twice.
+- Drawing examples are checked automatically in millimetres, centimetres, metres and inches.
 - Offline drafting evaluation through Mizan's three generic tools: a villa and a flange
   check geometry, layers, quantities and captures, with regressions for earlier drafting
   faults. The scripted evaluation does not assess live model judgement.
@@ -64,6 +68,22 @@ section below, so add the section before pushing the tag.
 
 ### Fixed
 
+- A wall path that returns to its start now joins the first corner correctly. Boundaries share
+  the same closure rule; a plain open polyline keeps its return vertex.
+- Windows use a 0.9 m sill and a head at 2.1 m or the wall height when those sizes are omitted.
+  Contradictory opening heights are still refused.
+- Command descriptions and input validation work without an open drawing, and wall descriptions
+  now include their complete inputs.
+- Switching AI provider restores that provider's model and address. A missing model offers a
+  clear Settings instruction, and model lists show a warning when the saved model is absent.
+- Every file picker starts in the drawing's folder, the last folder used, or Documents.
+  The first save of an untitled drawing no longer starts in the app's working folder.
+- The agent log records the effort and output limit actually sent on each request, and reads
+  reasoning-token counts from both supported OpenAI-compatible usage formats.
+- Grid bubbles at neighbouring corners no longer collide, and title blocks share the sheet
+  frame without drawing its edges twice. Text collision checks respect text alignment.
+- Drawing checks distinguish real gaps and overlaps from nearby parallel lines and curve
+  approximations. Using the default layer is an informational note.
 - Layers and layouts made by Mizan now appear in their panels as soon as the change arrives.
 - Text typed with a literal `\n` now breaks onto a new line. A multiline Text becomes MText
   automatically.

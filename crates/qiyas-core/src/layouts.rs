@@ -309,10 +309,19 @@ impl Session {
             a: [left, bottom],
             b: [right, top],
         })?;
-        entities.extend(self.draw_entities(DrawSpec::Rectangle {
-            a: [block_left, bottom],
-            b: [right, bottom + block_h],
-        })?);
+        // The frame already supplies the block's bottom and right edges.
+        if block_left > left {
+            entities.extend(self.draw_entities(DrawSpec::Line {
+                a: [block_left, bottom],
+                b: [block_left, bottom + block_h],
+            })?);
+        }
+        if bottom + block_h < top {
+            entities.extend(self.draw_entities(DrawSpec::Line {
+                a: [block_left, bottom + block_h],
+                b: [right, bottom + block_h],
+            })?);
+        }
         let style = self.text_style();
         for (i, key) in rows.into_iter().enumerate() {
             let y = bottom + block_h - i as f64 * row_h;

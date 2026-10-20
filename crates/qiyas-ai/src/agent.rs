@@ -345,17 +345,8 @@ impl Agent {
                 max_tokens: self.settings.max_tokens,
             };
             requests += 1;
-            self.log(&format!("REQUEST {requests}"), || {
-                format!(
-                    "{} messages, {} tools, model {}, effort {}",
-                    req.messages.len(),
-                    req.tools.len(),
-                    req.model,
-                    req.effort
-                )
-            });
             let started = Instant::now();
-            let Some(turn) = self.stream(req, &events, &cancel).await else {
+            let Some(turn) = self.stream(req, requests, &events, &cancel).await else {
                 // The partial answer is dropped; the next user message joins this turn's.
                 return self.stop(&events, "cancelled").await;
             };
@@ -450,9 +441,17 @@ impl Agent {
     async fn stream(
         &self,
         req: TurnRequest,
+        request_number: usize,
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Option<Result<crate::provider::TurnResult, AiError>> {
+        let request_summary = format!(
+            "{} messages, {} tools, model {}, effort {}",
+            req.messages.len(),
+            req.tools.len(),
+            req.model,
+            req.effort
+        );
         let (tx, mut rx) = mpsc::unbounded_channel::<StreamEvent>();
         let turn = async move {
             let mut sink = move |e: StreamEvent| {
@@ -462,13 +461,27 @@ impl Agent {
             self.provider.stream_turn(req, &mut sink).await
         };
         let forward = async {
+            let mut reported = false;
             while let Some(e) = rx.recv().await {
                 let event = match e {
+                    StreamEvent::RequestSent(fields) => {
+                        reported = true;
+                        self.log(&format!("REQUEST {request_number}; sent: {fields}"), || {
+                            request_summary.clone()
+                        });
+                        continue;
+                    }
                     StreamEvent::TextDelta(text) => AgentEvent::Text { text },
                     StreamEvent::Thinking(text) => AgentEvent::Thinking { text },
                     _ => continue,
                 };
                 let _ = events.send(event).await;
+            }
+            if !reported {
+                self.log(
+                    &format!("REQUEST {request_number}; sent: not reported by provider"),
+                    || request_summary.clone(),
+                );
             }
         };
         tokio::select! {
@@ -518,7 +531,30 @@ impl Agent {
                 } else if let Some(why) = counts.over_cap(name, input) {
                     (error_result(id, why), error_event(id, why))
                 } else {
-                    match surface::route(name, input) {
+                    let op = input[if name == surface::CAPTURE {
+                        "source"
+                    } else {
+                        "op"
+                    }]
+                    .as_str()
+                    .unwrap_or_default();
+                    let routed = surface::route(name, input).and_then(|route| {
+                        // The drawing need is checked where the session is locked, off this
+                        // thread (`run_tool`): locking here would stall the turn's
+                        // events behind a long command.
+                        surface::check_need(
+                            name,
+                            op,
+                            true,
+                            self.host
+                                .as_deref()
+                                .is_some_and(crate::DrawingHost::has_window),
+                            self.host.is_some(),
+                        )
+                        .map_err(|error| error.json().to_string())?;
+                        Ok(route)
+                    });
+                    match routed {
                         Err(why) => (error_result(id, &why), error_event(id, &why)),
                         Ok(Route::Window { tool, input }) => {
                             self.run_window_tool(id, tool, &input).await
@@ -584,6 +620,11 @@ impl Agent {
             if cancel.is_cancelled() {
                 return Err(CANCELLED);
             }
+            if guard.is_none() {
+                if let Some(output) = surface::run_without_drawing(&tool, &op, &args, None) {
+                    return Ok((output, false));
+                }
+            }
             match guard.as_mut() {
                 None => Err("No drawing is open. Ask the user to open one."),
                 Some(s) if epoch.is_some_and(|e| e != s.epoch()) => Err(DRAWING_CHANGED),
@@ -598,7 +639,7 @@ impl Agent {
         .await;
         let (result, changed) = match ran {
             Ok(Ok((output, changed))) => (
-                self.output_result(id, output.map_err(|e| e.to_string())),
+                self.output_result(id, output.map_err(|e| e.json().to_string())),
                 changed,
             ),
             Ok(Err(why)) => ((error_result(id, why), error_event(id, why)), false),
@@ -923,7 +964,7 @@ fn tokens(usage: &Usage) -> String {
 fn error_result(id: &str, why: &str) -> ContentBlock {
     ContentBlock::ToolResult {
         tool_use_id: id.to_string(),
-        content: vec![ResultPart::Text(why.to_string())],
+        content: vec![ResultPart::Text(crate::errors::json_error(why).to_string())],
         is_error: true,
     }
 }
@@ -931,7 +972,7 @@ fn error_result(id: &str, why: &str) -> ContentBlock {
 fn error_event(id: &str, why: &str) -> AgentEvent {
     AgentEvent::ToolResult {
         id: id.to_string(),
-        summary: why.to_string(),
+        summary: crate::errors::message(why),
         handles: Vec::new(),
         ui: None,
         is_error: true,

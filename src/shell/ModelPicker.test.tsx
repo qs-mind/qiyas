@@ -44,10 +44,19 @@ test("keeps a saved model the service no longer lists, and Other takes a typed i
   const select = screen.getByLabelText("Model") as HTMLSelectElement;
   expect(select.value).toBe("claude-old-1");
   expect(select.options[0].textContent).toContain("(saved)");
+  expect(screen.getByRole("status").textContent).toContain("does not list claude-old-1");
   fireEvent.change(select, { target: { value: "\u0000other" } });
   const id = screen.getByLabelText("Model id") as HTMLInputElement;
   fireEvent.change(id, { target: { value: "my-model" } });
   expect(onChange).toHaveBeenLastCalledWith("my-model");
+});
+
+test("an empty profile asks for a model without silently choosing the first", async () => {
+  const { onChange } = setup(claude, "");
+  await settle();
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("");
+  expect(screen.getByRole("option", { name: "Choose a model…" })).toBeTruthy();
+  expect(onChange).not.toHaveBeenCalled();
 });
 
 test("falls back to the built-in list and says why", async () => {

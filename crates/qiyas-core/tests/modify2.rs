@@ -843,7 +843,7 @@ fn overkill_removes_an_exact_duplicate_and_merges_overlaps() {
         &mut s,
         EditSpec::Overkill {
             targets: ts(&h),
-            tol: 1e-6,
+            tol: Some(1e-6),
         },
     );
     assert!(added.is_empty());

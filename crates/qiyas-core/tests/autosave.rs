@@ -52,7 +52,7 @@ fn autosave_writes_the_drawing_and_its_project_and_recovery_finds_them() {
 
     let added = line(&mut s);
     s.run(Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 4.0]],
+        points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
     })
     .unwrap();
     let written = s.autosave().unwrap().expect("an autosave");

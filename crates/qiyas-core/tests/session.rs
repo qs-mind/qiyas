@@ -84,7 +84,7 @@ fn batch_version_ignores_the_take_off_and_follows_the_drawing_view() {
     // A measurement and its undo and redo do not change what is drawn.
     session
         .run(Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
         })
         .unwrap();
     assert_eq!(session.batch_version(), v0);

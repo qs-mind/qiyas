@@ -120,7 +120,7 @@ mod tests {
             needs_restart(&old, &new)
         };
         assert!(!same(|_| {}));
-        assert!(!same(|s| s.model = "other".into()));
+        assert!(!same(|s| s.profile_mut().model = "other".into()));
         assert!(same(|s| s.mcp_enabled = !s.mcp_enabled));
         assert!(same(|s| s.mcp_port = 48124));
         assert!(same(|s| s.mcp_token = "f".repeat(32)));

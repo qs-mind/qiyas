@@ -36,6 +36,11 @@ pub fn changes_drawing(name: &str) -> bool {
 /// The app's side of the file tools. Each answer is JSON for the model; an `Err` is said to it
 /// as the tool's error.
 pub trait DrawingHost: Send + Sync {
+    /// Whether this host supplies the window operations as well as file operations.
+    fn has_window(&self) -> bool {
+        false
+    }
+
     /// The open drawings' tabs (id, title, path, unsaved changes, untitled, on screen) and the
     /// recent drawings (path, whether the file is still there).
     fn list(&self) -> Result<Value, String>;

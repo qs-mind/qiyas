@@ -53,6 +53,9 @@ impl Provider for Anthropic {
             // header value can only be refused.
             let mut key = HeaderValue::from_str(&self.api_key).map_err(|_| AiError::Auth)?;
             key.set_sensitive(true);
+            sink(StreamEvent::RequestSent(crate::provider::sent_fields(
+                &body,
+            )));
             let response = send(
                 || {
                     self.client
@@ -65,11 +68,12 @@ impl Provider for Anthropic {
                 &self.api_key,
                 &body,
             )
-            .await?;
+            .await
+            .map_err(|e| e.for_model("Anthropic", &req.model))?;
             let mut turn = Turn::default();
             read_events(response, |e| turn.on_event(&e.data, sink))
                 .await
-                .map_err(|e| e.scrubbed(&self.api_key))?;
+                .map_err(|e| e.scrubbed(&self.api_key).for_model("Anthropic", &req.model))?;
             Ok(turn.finish())
         })
     }

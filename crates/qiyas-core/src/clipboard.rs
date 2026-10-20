@@ -77,6 +77,12 @@ fn lower_left(session: &Session, handles: &[Handle]) -> Option<[f64; 2]> {
 }
 
 impl Session {
+    /// The automatic clipboard base is the lower left of the picked geometry.
+    pub(crate) fn clipboard_base_default(&self, targets: &[Target]) -> Result<[f64; 2], CoreError> {
+        let handles = self.sheet_targets_any(targets)?;
+        Ok(lower_left(self, &handles).unwrap_or([0.0, 0.0]))
+    }
+
     /// `Command::CopyToClipboard`: the clipboard text for the entities `targets` at the top of
     /// the sheet (locked layers too: nothing changes), taken from `base` (by default the lower
     /// left corner of what they draw), and how many entities it holds. Viewports, xref
@@ -90,7 +96,7 @@ impl Session {
         let base = match base {
             Some(b) if b.iter().all(|v| v.is_finite()) => b,
             Some(_) => return Err(invalid("The base point must have finite coordinates")),
-            None => lower_left(self, &handles).unwrap_or([0.0, 0.0]),
+            None => self.clipboard_base_default(targets)?,
         };
         let src = &self.drawing.doc;
         let mut doc = CadDocument::new();

@@ -140,7 +140,7 @@ fn a_failing_step_puts_back_the_drawing_take_off_layers_and_view() {
         Command::SetCurrent { current: on_x },
         line([0.0, 0.0], [5.0, 0.0]),
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [5.0, 0.0]],
+            points: vec![[0.0, 0.0], [5.0, 0.0]].into(),
         },
         Command::SetLayerHidden {
             name: "0".into(),
@@ -187,7 +187,7 @@ fn a_batch_is_one_undo_step_undone_last_first_and_redone_in_order() {
             Command::NewLayer { name: "X".into() },
             line([0.0, 0.0], [5.0, 0.0]),
             Command::MeasureArea {
-                points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]],
+                points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]].into(),
             },
             Command::RenameLayer {
                 from: "X".into(),

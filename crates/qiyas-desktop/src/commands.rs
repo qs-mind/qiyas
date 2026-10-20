@@ -10,7 +10,7 @@ use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent, AgentLog};
 use qiyas_core::{
     Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, NamedView,
-    Outcome, Picked, Session, Snap, Source, Total,
+    Outcome, Picked, Reported, Session, Snap, Source, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -376,23 +376,20 @@ pub async fn table_cell_at(
 /// Runs one command on the command bus; see `qiyas_core::Command`. A paste without text takes
 /// the system clipboard's; a copy's text goes onto the system clipboard (and comes back empty).
 #[tauri::command]
-pub async fn run_command(mut cmd: Command, state: State<'_, AppState>) -> Result<Outcome, String> {
-    if let Command::PasteFromClipboard {
-        text: text @ None, ..
-    } = &mut cmd
-    {
-        *text = Some(files::clipboard_text(&state)?);
+pub async fn run_command(
+    mut cmd: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<Reported, String> {
+    let parsed = qiyas_core::registry::parse_command(cmd.clone())?;
+    if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
+        cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
     }
-    match with_session(&state, |s| s.run(cmd))? {
-        Outcome::Clipboard { text, count } => {
-            files::set_clipboard_text(&state, &text)?;
-            Ok(Outcome::Clipboard {
-                text: String::new(),
-                count,
-            })
-        }
-        outcome => Ok(outcome),
+    let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
+    if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
+        files::set_clipboard_text(&state, text)?;
+        text.clear();
     }
+    Ok(outcome)
 }
 
 /// Undoes the last take-off change; false when there was none.
@@ -605,9 +602,12 @@ pub async fn ai_models(
     if anthropic {
         return Ok(model_list(ModelSource::Anthropic, key.as_deref()).await);
     }
-    let base = base_url
-        .or(settings.base_url)
-        .filter(|b| !b.trim().is_empty());
+    let base = if provider.is_some() {
+        base_url
+    } else {
+        base_url.or(settings.providers.openai_compatible.base_url)
+    }
+    .filter(|b| !b.trim().is_empty());
     match base {
         Some(base_url) => Ok(model_list(
             ModelSource::OpenAiCompatible {
@@ -941,7 +941,11 @@ pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
             settings.provider.name()
         }
         .to_string(),
-        model: if mock { "mock".into() } else { settings.model },
+        model: if mock {
+            "mock".into()
+        } else {
+            settings.profile().model.clone()
+        },
         has_key,
         busy: run.busy(),
         message_count: run.message_count(),

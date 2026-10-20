@@ -2,7 +2,7 @@
  *  kept per drawing in the window's storage: the project file has no place for them yet), the
  *  plot window's two clicks in the drawing, plot to PDF, print, quick print, print all layouts,
  *  and the plot style editor. */
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "../fileDialogs";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   defaultPrinter,

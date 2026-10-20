@@ -2,7 +2,7 @@
  *  WBLOCK, ATTDEF and ATTEDIT, the attribute manager, the tool palette, and the end of an edit in
  *  place. */
 import { useRef, useState, type RefObject } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../fileDialogs";
 import {
   blocks as readBlocks,
   blockThumbnail,

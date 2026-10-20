@@ -573,14 +573,14 @@ impl Walk<'_> {
                 return;
             }
             EntityType::Text(e) => {
-                let points = text_box(&e.insertion_point, e.height, e.rotation, &e.value);
                 let text = line_text(e, xf);
+                let points = text_box(&text);
                 self.push_text(points, xf, style, handle, text);
                 return;
             }
             EntityType::MText(e) => {
-                let points = text_box(&e.insertion_point, e.height, e.rotation, &e.value);
                 let text = block_text(e, xf);
+                let points = text_box(&text);
                 self.push_text(points, xf, style, handle, text);
                 return;
             }
@@ -591,8 +591,8 @@ impl Walk<'_> {
                 let mut shown = AttributeEntity::from_definition(e, Some(value.clone()));
                 shown.common = e.common.clone();
                 let at = ocs(&e.normal, e.insertion_point.z).map_or(*xf, |o| o.then(xf));
-                let points = text_box(&e.insertion_point, e.height, e.rotation, value);
                 let text = attribute_text(&shown, &at);
+                let points = text_box(&text);
                 self.push_text(points, &at, style, handle, text);
                 return;
             }
@@ -615,9 +615,9 @@ impl Walk<'_> {
                 continue;
             }
             let at = ocs(&a.normal, a.insertion_point.z).map_or(*xf, |o| o.then(xf));
-            let points = text_box(&a.insertion_point, a.height, a.rotation, &a.value);
             let attribute_style = self.style(&a.common, Some(style));
             let text = attribute_text(a, &at);
+            let points = text_box(&text);
             self.push_text(points, &at, &attribute_style, handle, text);
         }
         if depth >= MAX_DEPTH {
@@ -1319,11 +1319,113 @@ fn block_text(e: &MText, xf: &Xform) -> FlatText {
     }
 }
 
-/// A closed rectangle standing in for a line of text, for picking.
-fn text_box(insertion: &Vector3, height: f64, rotation: f64, value: &str) -> Vec<[f64; 2]> {
-    let width = value.chars().count() as f64 * height * 0.6;
-    let place = Xform::rotate(rotation).then(&Xform::translate(insertion.x, insertion.y));
-    [[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]]
+/// Approximate glyph bounds for picking and drawing checks. Widths use the same simple
+/// estimate as before, but placement follows the text's actual attachment and alignment.
+fn text_box(text: &FlatText) -> Vec<[f64; 2]> {
+    let height = text.height;
+    let (bounds, place) = match text.layout {
+        TextLayout::Line {
+            insertion,
+            alignment,
+            rotation,
+            width_factor,
+            horizontal,
+            vertical,
+            backward,
+            upside_down,
+        } => {
+            let width = text.value.chars().count() as f64 * 0.6;
+            let factor = if width_factor > 0.0 {
+                width_factor
+            } else {
+                1.0
+            };
+            let (mut sx, mut sy) = (height * factor, height);
+            let (mut dx, mut dy) = (0.0, 0.0);
+            let (mut at, mut angle) = (insertion, rotation);
+            match alignment {
+                Some(end) if matches!(horizontal, HAlign::Aligned | HAlign::Fit) && width > 0.0 => {
+                    let (x, y) = (end[0] - insertion[0], end[1] - insertion[1]);
+                    let length = x.hypot(y);
+                    if length > 0.0 {
+                        angle = y.atan2(x);
+                        sx = length / width;
+                        if horizontal == HAlign::Aligned {
+                            sy = sx / factor;
+                        }
+                    }
+                }
+                Some(end) if horizontal != HAlign::Left || vertical != VAlign::Baseline => {
+                    at = end;
+                    dx = match horizontal {
+                        HAlign::Center | HAlign::Middle => -width / 2.0,
+                        HAlign::Right => -width,
+                        _ => 0.0,
+                    };
+                    dy = match (horizontal, vertical) {
+                        (HAlign::Middle, _) | (_, VAlign::Middle) => -0.5,
+                        (_, VAlign::Top) => -1.0,
+                        (_, VAlign::Bottom) => 1.0 / 3.0,
+                        _ => 0.0,
+                    };
+                }
+                _ => {}
+            }
+            let place = Xform::translate(dx, dy)
+                .then(&Xform::scale(
+                    if backward { -sx } else { sx },
+                    if upside_down { -sy } else { sy },
+                ))
+                .then(&Xform::rotate(angle))
+                .then(&Xform::translate(at[0], at[1]));
+            ([0.0, 0.0, width, 1.0], place)
+        }
+        TextLayout::Block {
+            insertion,
+            rotation,
+            width,
+            attachment,
+            line_spacing,
+        } => {
+            let plain = opencadcodec::entities::mtext_format::parse_mtext(&text.value, true)
+                .to_plain_text();
+            let wrap = (width > 0.0 && height > 0.0).then_some(width / height);
+            let mut line_widths = Vec::new();
+            for paragraph in plain.split('\n') {
+                if let Some(limit) = wrap {
+                    let mut line_width = 0.0;
+                    for word in paragraph.split(' ') {
+                        let word_width = word.chars().count() as f64 * 0.6;
+                        if line_width > 0.0 && line_width + 0.6 + word_width > limit {
+                            line_widths.push(line_width);
+                            line_width = 0.0;
+                        }
+                        line_width += if line_width > 0.0 { 0.6 } else { 0.0 } + word_width;
+                    }
+                    line_widths.push(line_width);
+                } else {
+                    line_widths.push(paragraph.chars().count() as f64 * 0.6);
+                }
+            }
+            let pitch = 5.0 / 3.0
+                * if line_spacing > 0.0 {
+                    line_spacing
+                } else {
+                    1.0
+                };
+            let total = 1.0 + pitch * line_widths.len().saturating_sub(1) as f64;
+            let max_width = line_widths.into_iter().fold(0.0_f64, f64::max);
+            let attachment = attachment.clamp(1, 9) - 1;
+            let x = -f64::from(attachment % 3) * max_width / 2.0;
+            let top = f64::from(attachment / 3) * total / 2.0;
+            let place = Xform::scale(height, height)
+                .then(&Xform::rotate(rotation))
+                .then(&Xform::translate(insertion[0], insertion[1]));
+            ([x, top - total, x + max_width, top], place)
+        }
+    };
+    let [left, bottom, right, top] = bounds;
+    [[left, bottom], [right, bottom], [right, top], [left, top]]
         .into_iter()
         .map(|p| place.apply(p))
         .collect()
@@ -1361,5 +1463,74 @@ mod tests {
             // Small enough for the floor to set the step.
             assert_eq!(segment_count(0.2, sweep, 0.05), k);
         }
+    }
+
+    fn box_bounds(points: &[[f64; 2]]) -> [f64; 4] {
+        points.iter().fold(
+            [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ],
+            |[left, bottom, right, top], p| {
+                [
+                    left.min(p[0]),
+                    bottom.min(p[1]),
+                    right.max(p[0]),
+                    top.max(p[1]),
+                ]
+            },
+        )
+    }
+
+    fn assert_bounds(actual: [f64; 4], expected: [f64; 4]) {
+        for (a, e) in actual.into_iter().zip(expected) {
+            assert!((a - e).abs() < 1e-9, "{actual:?} != {expected:?}");
+        }
+    }
+
+    #[test]
+    fn mtext_boxes_follow_all_nine_attachments_and_paragraphs() {
+        let e = MText::with_value("AB\\PCD", Vector3::new(20.0, 30.0, 0.0)).with_height(3.0);
+        let mut text = block_text(&e, &Xform::identity());
+        for attachment in 1_u8..=9 {
+            if let TextLayout::Block {
+                attachment: value, ..
+            } = &mut text.layout
+            {
+                *value = attachment;
+            }
+            let x = 20.0 - f64::from((attachment - 1) % 3) * 1.8;
+            let top = 30.0 + f64::from((attachment - 1) / 3) * 4.0;
+            assert_bounds(box_bounds(&text_box(&text)), [x, top - 8.0, x + 3.6, top]);
+        }
+    }
+
+    #[test]
+    fn text_boxes_follow_centering_rotation_width_and_fit() {
+        let e = Text::with_value("AB", Vector3::new(0.0, 0.0, 0.0)).with_height(2.0);
+        let mut text = line_text(&e, &Xform::identity());
+        text.layout = TextLayout::Line {
+            insertion: [0.0, 0.0],
+            alignment: Some([10.0, 20.0]),
+            rotation: std::f64::consts::FRAC_PI_2,
+            width_factor: 2.0,
+            horizontal: HAlign::Center,
+            vertical: VAlign::Middle,
+            backward: false,
+            upside_down: false,
+        };
+        assert_bounds(box_bounds(&text_box(&text)), [9.0, 17.6, 11.0, 22.4]);
+        if let TextLayout::Line {
+            horizontal,
+            alignment,
+            ..
+        } = &mut text.layout
+        {
+            *horizontal = HAlign::Fit;
+            *alignment = Some([0.0, 6.0]);
+        }
+        assert_bounds(box_bounds(&text_box(&text)), [-2.0, 0.0, 0.0, 6.0]);
     }
 }

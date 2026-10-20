@@ -126,7 +126,7 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     let client = connect(server.addr, TOKEN).await.unwrap();
 
     let tools = client.list_all_tools().await.unwrap();
-    let specs = qiyas_ai::catalogue();
+    let specs = qiyas_ai::mcp::tools();
     assert_eq!(tools.len(), 3);
     for (tool, spec) in tools.iter().zip(specs) {
         assert_eq!(tool.name, spec.name);
@@ -285,7 +285,10 @@ async fn tool_errors_are_error_results() {
     )
     .await;
     assert_eq!(result.is_error, Some(true));
-    assert_eq!(text(&result, 0), "No entity with handle 999999");
+    assert_eq!(
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["message"],
+        "No entity with handle 999999"
+    );
 
     let result = call(&client, "delete_everything", json!({})).await;
     assert_eq!(result.is_error, Some(true));
@@ -296,7 +299,14 @@ async fn tool_errors_are_error_results() {
     let client = connect(empty.addr, TOKEN).await.unwrap();
     let result = call(&client, "qiyas_read", json!({"op":"state","args":"{}"})).await;
     assert_eq!(result.is_error, Some(true));
-    assert_eq!(text(&result, 0), "No drawing is open");
+    assert_eq!(
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["message"],
+        "No drawing is open"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["code"],
+        "no_drawing"
+    );
     // The file tools need the app behind them; without it they say what to do instead.
     let result = call(
         &client,
@@ -305,7 +315,14 @@ async fn tool_errors_are_error_results() {
     )
     .await;
     assert_eq!(result.is_error, Some(true));
-    assert_eq!(text(&result, 0), qiyas_ai::host::NO_HOST);
+    assert_eq!(
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["message"],
+        qiyas_ai::host::NO_HOST
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["code"],
+        "needs_host"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -372,4 +389,27 @@ async fn other_origins_are_refused_even_with_the_token() {
     let client = connect(server.addr, TOKEN).await.unwrap();
     assert_eq!(client.list_all_tools().await.unwrap().len(), 3);
     assert_eq!(server.mutated.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_request_ids_replay_without_another_mutation_or_ui_event() {
+    let server = start(true).await;
+    let client = connect(server.addr, TOKEN).await.unwrap();
+    let args = json!({"op":"run","request_id":"line-retry","args":{"command":{
+        "type":"draw","kind":"line","a":[20000,0],"b":[21000,0]
+    }}});
+    let first = call(&client, "qiyas_execute", args.clone()).await;
+    assert_ne!(first.is_error, Some(true));
+    let second = call(&client, "qiyas_execute", args.clone()).await;
+    assert_eq!(text(&first, 0), text(&second, 0));
+    assert_eq!(server.mutated.load(Ordering::SeqCst), 1);
+    assert_eq!(server.ui.lock().unwrap().len(), 1);
+    let mut changed = args;
+    changed["args"]["command"]["b"] = json!([22000, 0]);
+    let error = call(&client, "qiyas_execute", changed).await;
+    assert_eq!(error.is_error, Some(true));
+    assert_eq!(
+        serde_json::from_str::<Value>(text(&error, 0)).unwrap()["code"],
+        "request_id_reused"
+    );
 }

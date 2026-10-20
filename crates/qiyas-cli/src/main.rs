@@ -540,7 +540,9 @@ fn written_by(script: &Script, drawing: &Path) -> Vec<PathBuf> {
             }
             Action::Save => written.push(current.clone()),
             Action::Export(path) => written.push(path.clone()),
-            Action::Command(Command::WriteBlock { path, .. }) => written.push(PathBuf::from(path)),
+            Action::Command(Command::WriteBlock { path, .. }) => {
+                written.push(PathBuf::from(path));
+            }
             _ => {}
         }
     }

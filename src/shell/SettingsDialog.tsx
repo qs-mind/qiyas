@@ -68,14 +68,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const provider = draft?.provider;
   useEffect(() => {
     if (!provider) return;
+    let current = true;
     setKeySaved(false);
     // No keychain reads as no key; saving one then says why it can't.
     hasApiKey(provider)
-      .then(setKeySaved)
-      .catch(() => setKeySaved(false));
+      .then((saved) => { if (current) setKeySaved(saved); })
+      .catch(() => { if (current) setKeySaved(false); });
+    return () => { current = false; };
   }, [provider]);
 
   const change = (patch: Partial<Settings>) => setDraft((d) => (d ? { ...d, ...patch } : d));
+  const profile = draft?.providers[draft.provider];
+  const changeProfile = (patch: Partial<Settings["providers"][Provider]>) =>
+    setDraft((d) => d ? {
+      ...d,
+      providers: { ...d.providers, [d.provider]: { ...d.providers[d.provider], ...patch } },
+    } : d);
 
   async function save() {
     if (!draft) return;
@@ -133,13 +141,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <h2 id="settings-title" className="heading">
           {t("settings")}
         </h2>
-        {draft && snippets && (
+        {draft && snippets && profile && (
           <>
             <label>
               <span>{t("settings.provider")}</span>
               <select
                 value={draft.provider}
-                onChange={(e) => change({ provider: e.target.value as Provider })}
+                onChange={(e) => {
+                  change({ provider: e.target.value as Provider });
+                  setKey("");
+                }}
               >
                 <option value="anthropic">{t("settings.providerAnthropic")}</option>
                 <option value="openai_compatible">{t("settings.providerOpenai")}</option>
@@ -148,10 +159,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="field">
               <span>{t("settings.model")}</span>
               <ModelPicker
+                key={draft.provider}
                 provider={draft.provider}
-                baseUrl={draft.base_url ?? null}
-                value={draft.model}
-                onChange={(model) => change({ model })}
+                baseUrl={profile.base_url ?? null}
+                value={profile.model}
+                onChange={(model) => changeProfile({ model })}
               />
             </div>
             {draft.provider === "openai_compatible" && (
@@ -161,8 +173,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   dir="ltr"
                   type="url"
                   placeholder="http://localhost:11434/v1"
-                  value={draft.base_url ?? ""}
-                  onChange={(e) => change({ base_url: e.target.value || null })}
+                  value={profile.base_url ?? ""}
+                  onChange={(e) => changeProfile({ base_url: e.target.value || null })}
                 />
               </label>
             )}

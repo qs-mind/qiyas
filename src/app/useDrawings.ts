@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
+import { ask, message as messageDialog, open, save } from "../fileDialogs";
 import {
   activateTab,
   autosaveDrawings,
@@ -663,8 +663,7 @@ export function useDrawings({
     return (await saveWith(() => saveDrawingAs(path))) ? path : null;
   }
 
-  /** Asks where to save `of` as DWG or DXF: beside it, or for a new drawing just its name (its
-   *  placeholder folder is the app's, no place for a drawing). */
+  /** Keeps the offered name; the shared picker chooses a folder for untitled drawings. */
   async function askSavePath(of: DrawingInfo): Promise<string | null> {
     return save({
       defaultPath: of.untitled ? (of.path.split(/[\\/]/).pop() ?? of.path) : of.path,
@@ -672,7 +671,7 @@ export function useDrawings({
         { name: "DWG", extensions: ["dwg"] },
         { name: "DXF", extensions: ["dxf"] },
       ],
-    });
+    }, of);
   }
 
   /** Asks where to save the Excel take-off, next to the drawing by default, and writes it. */

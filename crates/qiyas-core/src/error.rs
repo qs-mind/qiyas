@@ -15,6 +15,12 @@ pub enum CoreError {
     NoSuchEntity(u64),
     #[error("{0}")]
     InvalidCommand(String),
+    /// Input warnings survive a later runtime refusal as well as a successful outcome.
+    #[error("{error}. Input warnings: {warnings:?}")]
+    InputWarnings {
+        error: Box<CoreError>,
+        warnings: Vec<crate::validation::InputIssue>,
+    },
     /// A command of a batch failed: which one (from 0), what it was, and why.
     #[error("Batch step {index} ({label}): {error}")]
     Step {

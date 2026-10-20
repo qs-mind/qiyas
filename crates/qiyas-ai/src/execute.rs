@@ -46,8 +46,14 @@ pub enum ToolOutput {
     Image { png: Vec<u8>, caption: String },
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ToolError {
+    #[error("{message}")]
+    Structured {
+        code: String,
+        message: String,
+        details: Value,
+    },
     #[error("No tool named {0}")]
     UnknownTool(String),
     /// The input is wrong: bad JSON shape, a missing entity, sheet, block or measurement.
@@ -60,9 +66,78 @@ pub enum ToolError {
     Failed(String),
 }
 
+impl ToolError {
+    pub fn json(&self) -> Value {
+        match self {
+            Self::Structured {
+                code,
+                message,
+                details,
+            } => {
+                let mut out = details.clone();
+                if !out.is_object() {
+                    out = json!({});
+                }
+                out["code"] = json!(code);
+                out["message"] = json!(message);
+                out
+            }
+            other => {
+                let mut out = crate::errors::json_error(&self.to_string());
+                if out["code"] == "failed" {
+                    out["code"] = json!(match other {
+                        Self::UnknownTool(_) => "not_found",
+                        Self::BadInput(_) => "invalid_value",
+                        Self::NotAvailable(_) => "refused",
+                        _ => "failed",
+                    });
+                }
+                out
+            }
+        }
+    }
+}
+
 impl From<CoreError> for ToolError {
     fn from(e: CoreError) -> Self {
         match e {
+            CoreError::InputWarnings { error, warnings } => {
+                let underlying = ToolError::from(*error);
+                let mut details = underlying.json();
+                details["warnings"] = json!(warnings);
+                ToolError::Structured {
+                    code: details["code"].as_str().unwrap_or("failed").into(),
+                    message: details["message"].as_str().unwrap_or_default().into(),
+                    details,
+                }
+            }
+            CoreError::Step {
+                index,
+                label,
+                error,
+            } => {
+                let mut details = ToolError::from(*error).json();
+                for field in ["errors", "warnings"] {
+                    if let Some(issues) = details.get_mut(field).and_then(Value::as_array_mut) {
+                        for issue in issues {
+                            if let Some(pointer) = issue["pointer"].as_str() {
+                                issue["pointer"] = json!(format!("/commands/{index}{pointer}"));
+                            }
+                        }
+                    }
+                }
+                let message = format!(
+                    "Batch step {index} ({label}): {}",
+                    details["message"].as_str().unwrap_or_default()
+                );
+                details["step"] = json!(index);
+                details["command"] = json!(label);
+                ToolError::Structured {
+                    code: details["code"].as_str().unwrap_or("failed").into(),
+                    message,
+                    details,
+                }
+            }
             // Handles are integers in the tools' JSON, not hex as in the core's message.
             CoreError::NoSuchEntity(h) => ToolError::BadInput(format!("No entity with handle {h}")),
             CoreError::NoSuchSheet(_) | CoreError::InvalidCommand(_) => {
@@ -239,7 +314,7 @@ pub fn execute(
                 arc_length,
             } = parse(input)?;
             let cmd = Command::Comment {
-                points,
+                points: points.into(),
                 text,
                 arc_len: arc_length,
             };
@@ -698,7 +773,7 @@ fn measure(
                 value: None,
                 unit: None,
                 height: None,
-                points: Vec::new(),
+                points: Vec::new().into(),
                 handles: vec![handle],
                 chain: input.chain,
                 description: format!("{} on {}", entity.kind, entity.layer_short),
@@ -706,16 +781,19 @@ fn measure(
                 empty_item: false,
             }
         }
-        (None, Some(points)) if kind == Kind::Length => Command::MeasureDistance { points },
-        (None, Some(points)) => Command::MeasureArea { points },
+        (None, Some(points)) if kind == Kind::Length => Command::MeasureDistance {
+            points: points.into(),
+        },
+        (None, Some(points)) => Command::MeasureArea {
+            points: points.into(),
+        },
         (Some(_), Some(_)) => return Err(bad("Give handle or points, not both")),
         (None, None) => return Err(bad("Give handle or points")),
     };
     let default_name = matches!(cmd, Command::AddMeasurement { .. });
     let by_points = match &cmd {
-        Command::MeasureDistance { points } | Command::MeasureArea { points } => {
-            Some(points.clone())
-        }
+        Command::MeasureDistance { points } => Some(points.to_vec()),
+        Command::MeasureArea { points } => Some(points.to_vec()),
         _ => None,
     };
     let mut outcome = session.run_as(cmd, source)?;
@@ -860,7 +938,7 @@ fn add_measurement(
         value: input.value.or(input.empty_item.then_some(0.0)),
         unit: input.unit,
         height: input.height.map(|h| h / to_drawing_units),
-        points: input.points,
+        points: input.points.into(),
         handles: input.handles,
         chain: Vec::new(),
         description: input.description,
@@ -900,7 +978,7 @@ fn add_markup(
     let bounds = bounds_of(&input.points);
     let cmd = Command::AddMarkup {
         kind: input.kind,
-        points: input.points,
+        points: input.points.into(),
         text: input.text,
     };
     let mut out = measured(session.run_as(cmd, source)?)?;
@@ -960,11 +1038,11 @@ fn add_dimension(
         },
         DimKind::Baseline => DimSpec::Baseline {
             from: target(input.handle)?,
-            points: need(input.points, "points")?,
+            points: need(input.points, "points")?.into(),
         },
         DimKind::Continue => DimSpec::Continue {
             from: target(input.handle)?,
-            points: need(input.points, "points")?,
+            points: need(input.points, "points")?.into(),
         },
         DimKind::Quick => DimSpec::Quick {
             targets: need(input.handles, "handles")?

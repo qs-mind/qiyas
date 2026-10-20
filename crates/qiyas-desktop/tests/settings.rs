@@ -22,8 +22,8 @@ fn defaults_when_missing() {
     let dir = tempfile::tempdir().unwrap();
     let s = settings::load(dir.path());
     assert_eq!(s.provider, Provider::Anthropic);
-    assert_eq!(s.model, "claude-opus-5-5");
-    assert_eq!(s.base_url, None);
+    assert_eq!(s.profile().model, "claude-opus-5-5");
+    assert_eq!(s.profile().base_url, None);
     assert_eq!(s.effort, "high");
     assert!(!s.mcp_enabled);
     assert_eq!(s.mcp_port, 48123);
@@ -39,8 +39,13 @@ fn round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let s = Settings {
         provider: Provider::OpenaiCompatible,
-        model: "my-model".into(),
-        base_url: Some("http://localhost:11434/v1".into()),
+        providers: settings::ProviderProfiles {
+            openai_compatible: settings::ProviderProfile {
+                model: "my-model".into(),
+                base_url: Some("http://localhost:11434/v1".into()),
+            },
+            ..Default::default()
+        },
         effort: "max".into(),
         mcp_enabled: true,
         mcp_port: 50000,
@@ -57,12 +62,78 @@ fn round_trip() {
 }
 
 #[test]
+fn flat_settings_migrate_to_only_the_selected_provider() {
+    for (provider, model, address) in [
+        ("anthropic", "claude-sonnet-5-5", None),
+        (
+            "openai_compatible",
+            "google:gemini@3.8-flash",
+            Some("https://example.test/v1"),
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let original = serde_json::json!({
+            "provider": provider, "model": model, "base_url": address,
+            "effort": "max", "language": "ar", "mcp_token": "a".repeat(32)
+        });
+        fs::write(dir.path().join("settings.json"), original.to_string()).unwrap();
+        let mut s = settings::load(dir.path());
+        assert_eq!(s.profile().model, model);
+        assert_eq!(s.profile().base_url.as_deref(), address);
+        assert_eq!(s.effort, "max");
+        assert_eq!(s.language, "ar");
+        assert_eq!(s.mcp_token, "a".repeat(32));
+        let written: serde_json::Value = serde_json::from_str(&read(dir.path())).unwrap();
+        assert!(written.get("model").is_none());
+        assert!(written.get("base_url").is_none());
+        assert_eq!(written["providers"][provider]["model"], model);
+        assert_eq!(settings::load(dir.path()), s);
+        s.provider = if provider == "anthropic" {
+            Provider::OpenaiCompatible
+        } else {
+            Provider::Anthropic
+        };
+        assert_eq!(
+            s.profile().model,
+            if provider == "anthropic" {
+                ""
+            } else {
+                "claude-opus-5-5"
+            }
+        );
+        assert!(s.profile().base_url.is_none());
+    }
+}
+
+#[test]
+fn a_new_compatible_profile_can_be_saved_before_choosing_a_model() {
+    let s = Settings {
+        provider: Provider::OpenaiCompatible,
+        ..Settings::default()
+    };
+    assert!(s.profile().model.is_empty());
+    assert!(settings::validate(&s).is_ok());
+}
+
+#[test]
+fn existing_profiles_win_over_leftover_flat_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut value = serde_json::to_value(Settings::default()).unwrap();
+    value["model"] = "old-model".into();
+    value["base_url"] = "https://old.example.test".into();
+    fs::write(dir.path().join("settings.json"), value.to_string()).unwrap();
+    let s = settings::load(dir.path());
+    assert_eq!(s.profile().model, "claude-opus-5-5");
+    assert!(s.profile().base_url.is_none());
+}
+
+#[test]
 fn missing_fields_take_defaults() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("settings.json"), r#"{"effort":"low"}"#).unwrap();
     let s = settings::load(dir.path());
     assert_eq!(s.effort, "low");
-    assert_eq!(s.model, "claude-opus-5-5");
+    assert_eq!(s.profile().model, "claude-opus-5-5");
     assert_eq!(s.mcp_token.len(), 32);
     assert!(s.aliases.is_empty());
     // The new token was written back.
@@ -74,7 +145,7 @@ fn corrupt_file_is_backed_up_and_defaults_used() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("settings.json"), "{ not json").unwrap();
     let s = settings::load(dir.path());
-    assert_eq!(s.model, "claude-opus-5-5");
+    assert_eq!(s.profile().model, "claude-opus-5-5");
     assert_eq!(
         fs::read_to_string(dir.path().join("settings.json.bak")).unwrap(),
         "{ not json"

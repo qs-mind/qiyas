@@ -12,10 +12,10 @@ use qiyas_core::{
 fn measure_sample(session: &mut Session) {
     for cmd in [
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0]].into(),
         },
         Command::MeasureArea {
-            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]],
+            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]].into(),
         },
         Command::CountBlock {
             block_name: "DOOR".to_string(),
@@ -452,7 +452,7 @@ fn volume_embeds_and_rebuilds_with_height() {
             value,
             unit: unit.map(str::to_string),
             height,
-            points,
+            points: points.into(),
             handles: Vec::new(),
             chain: Vec::new(),
             description: "Slab".to_string(),
@@ -518,7 +518,7 @@ fn markup_item_embeds_on_the_markup_layer() {
                 value: Some(0.0),
                 unit: Some(unit.to_string()),
                 height: None,
-                points: vec![[1.0, 1.0], [2.0, 1.0], [2.0, 2.0]],
+                points: vec![[1.0, 1.0], [2.0, 1.0], [2.0, 2.0]].into(),
                 handles: Vec::new(),
                 chain: Vec::new(),
                 description: unit.to_string(),

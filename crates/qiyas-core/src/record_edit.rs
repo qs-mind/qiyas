@@ -11,7 +11,7 @@
 //! an edited entity go (`param::Reshape::Edited`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use opencadcodec::document::HeaderVariables;
 use opencadcodec::tables::{Layer, TextStyle};
@@ -260,6 +260,194 @@ fn by_key(updates: Vec<RecordUpdate>) -> Vec<(Value, Vec<RecordUpdate>)> {
 }
 
 impl Session {
+    /// Checks every record replacement against the target's shape without changing the
+    /// drawing. Kept copies also make expected values follow earlier updates to the same key.
+    pub(crate) fn validate_record_inputs(
+        &self,
+        input: &Value,
+    ) -> crate::validation::ValidationReport {
+        use crate::validation::{InputIssue, ValidationReport};
+        let mut report = ValidationReport::default();
+        if input["type"] != "set_records" {
+            return report;
+        }
+        let Ok(collection) = serde_json::from_value::<Collection>(input["collection"].clone())
+        else {
+            return report;
+        };
+        if collection_via(collection).is_some() {
+            return report;
+        }
+        let Some(updates) = input["updates"].as_array() else {
+            return report;
+        };
+        let mut staged = BTreeMap::<String, (String, Value, Value, Value)>::new();
+        for (index, update) in updates.iter().enumerate() {
+            let (Some(key), Some(path), Some(value)) = (
+                update.get("key"),
+                update["path"].as_str(),
+                update.get("value"),
+            ) else {
+                continue;
+            };
+            // Batch references are checked statically first, then this check runs on their
+            // resolved values before the step executes.
+            if has_step_reference(update) {
+                continue;
+            }
+            let prefix = format!("/updates/{index}");
+            let mut error = |code: &str, field: &str, message: String| {
+                report.valid = false;
+                report.errors.push(InputIssue {
+                    code: code.into(),
+                    pointer: format!("{prefix}/{field}"),
+                    message,
+                });
+            };
+            let cache_key = key
+                .as_str()
+                .map(opencadcodec::tables::normalize_name)
+                .unwrap_or_else(|| key.to_string());
+            if !staged.contains_key(&cache_key) {
+                match self.record_input_data(collection, key) {
+                    Ok((kind, data)) => match record_input_schema(&kind) {
+                        Ok(schema) => {
+                            staged.insert(cache_key.clone(), (kind, data.clone(), schema, data));
+                        }
+                        Err(why) => {
+                            error("invalid_value", "key", why.to_string());
+                            continue;
+                        }
+                    },
+                    Err((code, why)) => {
+                        error(code, "key", why);
+                        continue;
+                    }
+                }
+            }
+            let (kind, data, schema, baseline) = staged.get_mut(&cache_key).expect("loaded above");
+            let rule = match collection {
+                Collection::Entities | Collection::Viewports => entity_rule(kind, path),
+                Collection::Layers => layer_rule(path),
+                Collection::TextStyles => style_rule(path),
+                Collection::Header => header_rule(path),
+                _ => unreachable!("only writable collections"),
+            };
+            if let Err(why) = refuse(rule, kind, path) {
+                error("refused", "path", why.to_string());
+                continue;
+            }
+            let Some(previous) = data.pointer(path).filter(|_| path.starts_with('/')) else {
+                error(
+                    "not_found",
+                    "path",
+                    format!("{kind} has no {path} (record_schema lists its paths)"),
+                );
+                continue;
+            };
+            if update
+                .get("expected")
+                .filter(|value| !value.is_null())
+                .is_some_and(|expected| expected != previous)
+            {
+                error(
+                    "stale",
+                    "expected",
+                    format!("{kind} {path} changed since it was read: it is {previous} now"),
+                );
+            }
+            if let Some(value_schema) = input_schema_at(schema, data, path) {
+                let mut checked = crate::validation::validate_schema(&value_schema, value);
+                let codec_error = if checked.errors.is_empty() {
+                    None
+                } else {
+                    let mut probe = baseline.clone();
+                    if let Some(slot) = probe.pointer_mut(path) {
+                        *slot = value.clone();
+                        record_input_error(kind, probe)
+                    } else {
+                        None
+                    }
+                };
+                for issue in checked.errors.iter_mut().chain(&mut checked.warnings) {
+                    let field = format!("{path}{}", issue.pointer)
+                        .split('/')
+                        .skip(1)
+                        .map(|part| part.replace("~1", "/").replace("~0", "~"))
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    issue.message = format!("{kind}.{field}: {}", issue.message);
+                    issue.pointer = format!("{prefix}/value{}", issue.pointer);
+                }
+                if let (Some(issue), Some(message)) = (checked.errors.first_mut(), codec_error) {
+                    issue.message.push_str(&format!("; {message}"));
+                }
+                report.append(checked);
+            }
+            if let Some(original) = baseline.pointer(path) {
+                missing_replacement_fields(
+                    kind,
+                    baseline,
+                    original,
+                    value,
+                    path,
+                    &format!("{prefix}/value"),
+                    &mut report,
+                );
+            }
+            *data.pointer_mut(path).expect("read above") = value.clone();
+        }
+        report
+    }
+
+    fn record_input_data(
+        &self,
+        collection: Collection,
+        key: &Value,
+    ) -> Result<(String, Value), (&'static str, String)> {
+        let missing = || {
+            (
+                "not_found",
+                format!("The drawing has no {collection:?} record {key}"),
+            )
+        };
+        let bad_key = || {
+            (
+                "invalid_value",
+                format!("Invalid {collection:?} record key {key}"),
+            )
+        };
+        let data = match collection {
+            Collection::Entities | Collection::Viewports => {
+                let handle = key.as_u64().ok_or_else(bad_key)?;
+                let entity = self
+                    .drawing
+                    .doc
+                    .get_entity(Handle::new(handle))
+                    .ok_or_else(missing)?;
+                return Ok((variant_name(entity), entity_data(entity)));
+            }
+            Collection::Layers => {
+                let name = key.as_str().ok_or_else(bad_key)?;
+                let value = self.drawing.doc.layers.get(name).ok_or_else(missing)?;
+                ("Layer", serde_json::to_value(value))
+            }
+            Collection::TextStyles => {
+                let name = key.as_str().ok_or_else(bad_key)?;
+                let value = self.drawing.doc.text_styles.get(name).ok_or_else(missing)?;
+                ("TextStyle", serde_json::to_value(value))
+            }
+            Collection::Header if key == "header" => (
+                "HeaderVariables",
+                serde_json::to_value(&self.drawing.doc.header),
+            ),
+            _ => return Err(bad_key()),
+        };
+        data.1
+            .map(|value| (data.0.into(), value))
+            .map_err(|why| ("invalid_value", why.to_string()))
+    }
+
     /// `Command::SetRecords`.
     pub(crate) fn set_records(
         &mut self,
@@ -579,6 +767,138 @@ impl Session {
     }
 }
 
+fn has_step_reference(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.contains_key("$step") || object.values().any(has_step_reference)
+        }
+        Value::Array(values) => values.iter().any(has_step_reference),
+        _ => false,
+    }
+}
+
+/// Serde reflection describes types but does not retain serde(default). Probe one omission at
+/// a time against the original valid record, so defaults and optional fields stay optional.
+fn missing_replacement_fields(
+    kind: &str,
+    baseline: &Value,
+    original: &Value,
+    replacement: &Value,
+    record_path: &str,
+    result_path: &str,
+    report: &mut crate::validation::ValidationReport,
+) {
+    match (original, replacement) {
+        (Value::Object(old), Value::Object(new)) => {
+            for (field, old_value) in old {
+                let escaped = field.replace('~', "~0").replace('/', "~1");
+                let next_record = format!("{record_path}/{escaped}");
+                let next_result = format!("{result_path}/{escaped}");
+                if let Some(value) = new.get(field) {
+                    missing_replacement_fields(
+                        kind,
+                        baseline,
+                        old_value,
+                        value,
+                        &next_record,
+                        &next_result,
+                        report,
+                    );
+                } else {
+                    let mut probe = baseline.clone();
+                    let Some(object) = probe
+                        .pointer_mut(record_path)
+                        .and_then(Value::as_object_mut)
+                    else {
+                        continue;
+                    };
+                    object.remove(field);
+                    if let Some(message) = required_record_field(kind, probe) {
+                        report.valid = false;
+                        report.errors.push(crate::validation::InputIssue {
+                            code: "missing_field".into(),
+                            pointer: next_result,
+                            message,
+                        });
+                    }
+                }
+            }
+        }
+        (Value::Array(old), Value::Array(new)) => {
+            for (index, (old_value, value)) in old.iter().zip(new).enumerate() {
+                missing_replacement_fields(
+                    kind,
+                    baseline,
+                    old_value,
+                    value,
+                    &format!("{record_path}/{index}"),
+                    &format!("{result_path}/{index}"),
+                    report,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn required_record_field(kind: &str, data: Value) -> Option<String> {
+    record_input_error(kind, data).filter(|message| message.starts_with("missing field "))
+}
+
+fn record_input_error(kind: &str, data: Value) -> Option<String> {
+    fn diagnostic<T: serde::de::DeserializeOwned>(wire: Value) -> Option<String> {
+        let error = serde_path_to_error::deserialize::<_, T>(wire).err()?;
+        Some(format!("{} at {}", error.inner(), error.path()))
+    }
+    match kind {
+        "Layer" => diagnostic::<Layer>(data),
+        "TextStyle" => diagnostic::<TextStyle>(data),
+        "HeaderVariables" => diagnostic::<HeaderVariables>(data),
+        _ => diagnostic::<EntityType>(json!({kind:data})),
+    }
+}
+
+/// The schema of an existing field, following array indexes and the current enum variant.
+fn input_schema_at(schema: &Value, data: &Value, path: &str) -> Option<Value> {
+    fn descend(schema: &Value, data: &Value, parts: &[String]) -> Option<Value> {
+        let Some((first, rest)) = parts.split_first() else {
+            return Some(schema.clone());
+        };
+        if let Some(variants) = schema
+            .get("oneOf")
+            .or_else(|| schema.get("anyOf"))
+            .and_then(Value::as_array)
+        {
+            return variants
+                .iter()
+                .filter(|variant| crate::validation::validate_schema(variant, data).valid)
+                .find_map(|variant| descend(variant, data, parts));
+        }
+        if let Some(index) = first.parse::<usize>().ok().filter(|_| data.is_array()) {
+            let sub = schema
+                .get("prefixItems")
+                .and_then(|items| items.get(index))
+                .or_else(|| schema.get("items"))?;
+            return descend(sub, data.get(index)?, rest);
+        }
+        let sub = schema
+            .get("properties")
+            .and_then(|properties| properties.get(first))
+            .or_else(|| {
+                schema
+                    .get("additionalProperties")
+                    .filter(|value| value.is_object())
+            })?;
+        descend(sub, data.get(first)?, rest)
+    }
+    let parts: Vec<String> = path
+        .strip_prefix('/')?
+        .split('/')
+        .map(|part| part.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    descend(schema, data, &parts)
+}
+
 /// The entity of type `kind` that the record `data` describes, with the storage-only data serde
 /// leaves out (DWG handles, flags) taken from `old`, the entity it was read from, and from its
 /// attributes for a block reference.
@@ -669,6 +989,11 @@ fn default_entity(kind: &str) -> Result<EntityType, CoreError> {
             )))
         }
     })
+}
+
+/// Creation and validation share the same refusals and command suggestions.
+pub(crate) fn validate_entity_creation(kind: &str) -> Result<(), CoreError> {
+    default_entity(kind).map(|_| ())
 }
 
 /// The entity types `create_entities` makes.
@@ -784,6 +1109,148 @@ pub fn record_schema(name: &str) -> Result<Value, CoreError> {
         }
     };
     Ok(describe(registry, &type_name, rule))
+}
+
+/// The JSON shape accepted inside a record's data. Struct fields are optional because entity
+/// creation merges them over the entity defaults; any supplied value still has its exact type.
+/// This uses the same serde trace as record_schema, including nested fields and enum payloads.
+pub fn record_input_schema(name: &str) -> Result<Value, CoreError> {
+    static SCHEMAS: OnceLock<Mutex<BTreeMap<String, Value>>> = OnceLock::new();
+    let mut schemas = SCHEMAS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let key = name.trim().to_ascii_lowercase();
+    if let Some(schema) = schemas.get(&key) {
+        return Ok(schema.clone());
+    }
+    let registry = traced();
+    let canonical = match name.trim().to_ascii_lowercase().as_str() {
+        "layer" | "layers" => "Layer".to_string(),
+        "textstyle" | "text_style" | "text_styles" => "TextStyle".to_string(),
+        "header" | "headervariables" => "HeaderVariables".to_string(),
+        _ => entity_type_names(&registry)
+            .into_iter()
+            .find(|kind| kind.eq_ignore_ascii_case(name.trim()))
+            .ok_or_else(|| invalid(format!("No record type {name}")))?,
+    };
+    let container = entity_struct(&registry, &canonical).unwrap_or(&canonical);
+    let format = registry
+        .get(container)
+        .ok_or_else(|| invalid(format!("No record type {name}")))?;
+    let schema = input_container(&registry, format, &mut BTreeSet::new());
+    schemas.insert(key, schema.clone());
+    Ok(schema)
+}
+
+fn input_fields(
+    registry: &Registry,
+    fields: &[Named<Format>],
+    active: &mut BTreeSet<String>,
+) -> Value {
+    let properties: serde_json::Map<String, Value> = fields
+        .iter()
+        .map(|field| {
+            (
+                field.name.clone(),
+                input_format(registry, &field.value, active),
+            )
+        })
+        .collect();
+    json!({"type":"object", "properties":properties, "additionalProperties":false})
+}
+
+fn input_tuple(registry: &Registry, fields: &[Format], active: &mut BTreeSet<String>) -> Value {
+    let items: Vec<Value> = fields
+        .iter()
+        .map(|field| input_format(registry, field, active))
+        .collect();
+    json!({"type":"array", "prefixItems":items, "minItems":fields.len(), "maxItems":fields.len()})
+}
+
+fn input_container(
+    registry: &Registry,
+    container: &ContainerFormat,
+    active: &mut BTreeSet<String>,
+) -> Value {
+    match container {
+        ContainerFormat::UnitStruct => json!({"type":"null"}),
+        ContainerFormat::NewTypeStruct(field) => input_format(registry, field, active),
+        ContainerFormat::TupleStruct(fields) => input_tuple(registry, fields, active),
+        ContainerFormat::Struct(fields) => input_fields(registry, fields, active),
+        ContainerFormat::Enum(variants) => {
+            let choices: Vec<Value> = variants
+                .values()
+                .map(|variant| {
+                    let payload = match &variant.value {
+                        VariantFormat::Unit => {
+                            return json!({"type":"string", "const":variant.name})
+                        }
+                        VariantFormat::NewType(field) => input_format(registry, field, active),
+                        VariantFormat::Tuple(fields) => input_tuple(registry, fields, active),
+                        VariantFormat::Struct(fields) => input_fields(registry, fields, active),
+                        VariantFormat::Variable(_) => json!({}),
+                    };
+                    json!({
+                        "type":"object", "properties":{&variant.name:payload},
+                        "required":[variant.name], "additionalProperties":false
+                    })
+                })
+                .collect();
+            json!({"oneOf":choices})
+        }
+    }
+}
+
+fn input_format(registry: &Registry, format: &Format, active: &mut BTreeSet<String>) -> Value {
+    match format {
+        Format::Unit => json!({"type":"null"}),
+        Format::Bool => json!({"type":"boolean"}),
+        Format::I8 => json!({"type":"integer","minimum":i8::MIN,"maximum":i8::MAX}),
+        Format::I16 => json!({"type":"integer","minimum":i16::MIN,"maximum":i16::MAX}),
+        Format::I32 => json!({"type":"integer","minimum":i32::MIN,"maximum":i32::MAX}),
+        Format::I64 => json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX}),
+        Format::I128 => {
+            json!({"type":"integer","minimum":i128::MIN as f64,"maximum":i128::MAX as f64})
+        }
+        Format::U8 => json!({"type":"integer","minimum":0,"maximum":u8::MAX}),
+        Format::U16 => json!({"type":"integer","minimum":0,"maximum":u16::MAX}),
+        Format::U32 => json!({"type":"integer","minimum":0,"maximum":u32::MAX}),
+        Format::U64 => json!({"type":"integer","minimum":0,"maximum":u64::MAX}),
+        Format::U128 => json!({"type":"integer","minimum":0,"maximum":u128::MAX as f64}),
+        Format::F32 => json!({"type":"number","minimum":f32::MIN,"maximum":f32::MAX}),
+        Format::F64 => json!({"type":"number"}),
+        Format::Char => json!({"type":"string","minLength":1,"maxLength":1}),
+        Format::Str => json!({"type":"string"}),
+        Format::Bytes => {
+            json!({"type":"array","items":{"type":"integer","minimum":0,"maximum":255}})
+        }
+        Format::Option(field) => {
+            json!({"anyOf":[input_format(registry, field, active), {"type":"null"}]})
+        }
+        Format::Seq(field) => json!({"type":"array","items":input_format(registry, field, active)}),
+        Format::Map { value, .. } => {
+            json!({"type":"object","additionalProperties":input_format(registry, value, active)})
+        }
+        Format::Tuple(fields) => input_tuple(registry, fields, active),
+        Format::TupleArray { content, size } => json!({
+            "type":"array", "items":input_format(registry, content, active),
+            "minItems":size, "maxItems":size
+        }),
+        Format::TypeName(name) => {
+            // A recursive type has no finite inline schema; the next serde read checks it.
+            if !active.insert(name.clone()) {
+                return json!({});
+            }
+            let schema = registry
+                .get(name)
+                .map(|container| input_container(registry, container, active))
+                .unwrap_or_else(|| json!({}));
+            active.remove(name);
+            schema
+        }
+        Format::Variable(_) => json!({}),
+    }
 }
 
 /// The entity types: `EntityType`'s variants.

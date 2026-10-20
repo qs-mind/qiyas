@@ -157,8 +157,9 @@ pub enum EditSpec {
     #[schemars(extend("x-words" = ["OVERKILL"]))]
     Overkill {
         targets: Vec<Target>,
-        #[serde(default = "default_overkill_tol")]
-        tol: f64,
+        /// Default: 0.000001 mm converted to drawing units. Explicit zero is allowed.
+        #[serde(default)]
+        tol: Option<f64>,
     },
     /// Puts `targets` on the plan: every height to 0 and normals up, looking the same from above.
     /// What lies tilted (or faces down, for texts and block references) is left as it is.
@@ -167,8 +168,8 @@ pub enum EditSpec {
     Flatten { targets: Vec<Target> },
 }
 
-fn default_overkill_tol() -> f64 {
-    1e-6
+pub(crate) fn default_overkill_tol(units: crate::Units) -> f64 {
+    1e-9 / units.to_metres()
 }
 
 /// How `Lengthen` changes the length: by `Delta` drawing units, to a `Total`, or to a `Percent`
@@ -787,12 +788,13 @@ impl Session {
                 self.pedit(h, op)
             }
             EditSpec::Overkill { targets, tol } => {
+                let tol = tol.unwrap_or_else(|| default_overkill_tol(self.drawing.units));
                 finite(&[tol])?;
                 if tol < 0.0 {
                     return Err(invalid("The tolerance must be 0 or more"));
                 }
                 let handles = self.sheet_targets(&targets)?;
-                self.overkill(&handles, tol.max(1e-12))
+                self.overkill(&handles, tol.max(1e-15 / self.drawing.units.to_metres()))
             }
             EditSpec::Flatten { targets } => {
                 let handles = self.sheet_targets(&targets)?;

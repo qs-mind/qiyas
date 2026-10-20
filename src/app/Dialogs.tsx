@@ -2,7 +2,7 @@
  *  layers, blocks, dimensions, tables, fields, drafting, settings, About) and the file ones after
  *  the status bar (recovery, RECOVER's report, the sheet set manager). Each renders only while
  *  its hook says it is open, in the same place among the window's children as before. */
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../fileDialogs";
 import {
   blocks as readBlocks,
   calibrate,

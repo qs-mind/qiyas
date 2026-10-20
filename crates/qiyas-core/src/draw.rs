@@ -76,9 +76,10 @@ pub(crate) fn parse_color(text: &str) -> Option<Color> {
 
 /// A hatch's fill. Angles are degrees, counter-clockwise; scale multiplies the pattern's own
 /// sizes (millimetres, as in `acadiso.pat`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HatchPattern {
+    #[default]
     Solid,
     /// 45 degree lines 3.175 apart.
     Ansi31,
@@ -88,7 +89,11 @@ pub enum HatchPattern {
     /// `angle` degrees and scaled by `scale`.
     Custom {
         name: String,
+        /// Default: no additional rotation, in degrees.
+        #[serde(default)]
         angle: f64,
+        /// Default: the pattern's original millimetre sizes, multiplied by 1.
+        #[serde(default = "pattern_scale_default")]
         scale: f64,
     },
 }
@@ -110,7 +115,7 @@ pub enum DrawSpec {
     #[schemars(extend("x-words" = ["PLINE", "PL"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point or [Close]", "close": "closed"}])))]
     Polyline {
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun,
         #[serde(default)]
         bulges: Vec<f64>,
         #[serde(default)]
@@ -130,6 +135,8 @@ pub enum DrawSpec {
         centre: [f64; 2],
         sides: u32,
         radius: f64,
+        /// Conventional polygon construction: inscribed in its radius circle when omitted.
+        #[serde(default = "inscribed_default")]
         inscribed: bool,
     },
     #[schemars(example = json!({"kind": "circle", "centre": [2, 2], "radius": 0.5}))]
@@ -167,7 +174,7 @@ pub enum DrawSpec {
     #[schemars(example = json!({"kind": "spline", "fit_points": [[0, 0], [2, 1], [4, 0], [6, 1]]}))]
     #[schemars(extend("x-words" = ["SPLINE", "SPL"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "fit_points", "min": 2, "prompt": "Next fit point"}])))]
-    Spline { fit_points: Vec<[f64; 2]> },
+    Spline { fit_points: crate::PointRun },
     #[schemars(example = json!({"kind": "point", "p": [3, 4]}))]
     #[schemars(extend("x-words" = ["POINT", "PO"]))]
     Point { p: [f64; 2] },
@@ -195,12 +202,17 @@ pub enum DrawSpec {
     #[serde(rename = "revcloud")]
     #[schemars(example = json!({"kind": "revcloud", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "arc_len": 0.5}))]
     #[schemars(extend("x-words" = ["REVCLOUD"]))]
-    RevCloud { points: Vec<[f64; 2]>, arc_len: f64 },
+    RevCloud {
+        points: crate::PointRun<true>,
+        /// Default: one thirty-second of the closed outline's length, in drawing units.
+        #[serde(default)]
+        arc_len: Option<f64>,
+    },
     /// Covers the polygon `points` with the background colour.
     #[schemars(example = json!({"kind": "wipeout", "points": [[0, 0], [2, 0], [2, 1], [0, 1]]}))]
     #[schemars(extend("x-words" = ["WIPEOUT"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "prompt": "Next corner"}])))]
-    Wipeout { points: Vec<[f64; 2]> },
+    Wipeout { points: crate::PointRun<true> },
     /// A hatch inside the closed entities `boundary_handles` (on the sheet; islands inside the
     /// outer one stay empty) or inside the ring `points`: one of the two.
     #[schemars(example = json!({"kind": "hatch", "boundary_handles": [1234], "pattern": "solid"}))]
@@ -210,14 +222,17 @@ pub enum DrawSpec {
         #[serde(default)]
         boundary_handles: Vec<u64>,
         #[serde(default)]
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun<true>,
         /// With `points`: islands inside the ring, left empty (as `Boundary::Ring` gives them).
+        /// A return-to-start vertex is dropped and each island is closed.
         #[serde(default)]
-        holes: Vec<Vec<[f64; 2]>>,
+        holes: Vec<crate::PointRun<true>>,
         /// With `points`: per ring (the ring first, then each island) the bulge of the edge from
         /// each point to the next, as `Boundary::Ring` gives them; missing ones are straight.
         #[serde(default)]
         bulges: Vec<Vec<f64>>,
+        /// Conventional fill when omitted: solid.
+        #[serde(default)]
         pattern: HatchPattern,
     },
     /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order: the
@@ -226,20 +241,20 @@ pub enum DrawSpec {
     #[schemars(example = json!({"kind": "solid2d", "points": [[0, 0], [1, 0], [0, 1], [1, 1]]}))]
     #[schemars(extend("x-words" = ["SOLID", "SO"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "max": 4, "prompt": "Next corner"}])))]
-    Solid2D { points: Vec<[f64; 2]> },
+    Solid2D { points: crate::PointRun<true> },
     /// A wide line: one TRACE quad `width` wide per segment.
     #[schemars(example = json!({"kind": "trace", "points": [[0, 0], [5, 0]], "width": 0.2}))]
     #[schemars(extend("x-words" = ["TRACE"]))]
     #[schemars(extend("x-prompts" = json!(["width", {"field": "points", "min": 2, "prompt": "Next point"}])))]
-    Trace { points: Vec<[f64; 2]>, width: f64 },
+    Trace { points: crate::PointRun, width: f64 },
     /// A multiline in the drawing's multiline style `style` ("Standard" when left out), its
-    /// offsets times `scale` (1 when left out).
+    /// offsets times `scale` (20 mm converted to drawing units when left out).
     #[serde(rename = "mline")]
     #[schemars(example = json!({"kind": "mline", "points": [[0, 0], [5, 0], [5, 4]]}))]
     #[schemars(extend("x-words" = ["MLINE", "ML"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
     MLine {
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun,
         #[serde(default)]
         style: Option<String>,
         #[serde(default)]
@@ -249,7 +264,28 @@ pub enum DrawSpec {
     #[schemars(example = json!({"kind": "sketch", "points": [[0, 0], [0.2, 0.1], [0.4, 0.05]]}))]
     #[schemars(extend("x-words" = ["SKETCH"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
-    Sketch { points: Vec<[f64; 2]> },
+    Sketch { points: crate::PointRun },
+}
+
+fn inscribed_default() -> bool {
+    true
+}
+
+fn pattern_scale_default() -> f64 {
+    1.0
+}
+
+pub(crate) fn default_cloud_arc_len(points: &[[f64; 2]]) -> f64 {
+    if points.is_empty() {
+        return 0.0;
+    }
+    (0..points.len())
+        .map(|index| {
+            let (a, b) = (points[index], points[(index + 1) % points.len()]);
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum::<f64>()
+        / 32.0
 }
 
 /// One line family of a hatch pattern as `acadiso.pat` writes it: angle (degrees), origin, the
@@ -526,7 +562,8 @@ impl Session {
     }
 
     /// The entities `spec` describes, unstyled and not yet in the drawing.
-    pub(crate) fn draw_entities(&self, spec: DrawSpec) -> Result<Vec<EntityType>, CoreError> {
+    pub(crate) fn draw_entities(&self, mut spec: DrawSpec) -> Result<Vec<EntityType>, CoreError> {
+        spec.normalize_runs(self.drawing.units);
         let one = |e: EntityType| Ok(vec![e]);
         match spec {
             DrawSpec::Line { a, b } => {
@@ -693,13 +730,15 @@ impl Session {
             }
             DrawSpec::RevCloud { points, arc_len } => {
                 check_ring(&points, "revision cloud")?;
+                let arc_len = arc_len.unwrap_or_else(|| default_cloud_arc_len(&points));
                 positive(arc_len, "arc length")?;
-                one(EntityType::LwPolyline(rev_cloud(points, arc_len)?))
+                one(EntityType::LwPolyline(rev_cloud(points.into(), arc_len)?))
             }
             DrawSpec::Wipeout { mut points } => {
                 check_ring(&points, "wipeout")?;
                 // A polygonal boundary is kept closed: the first point again at the end.
-                points.push(points[0]);
+                let first = points[0];
+                points.push(first);
                 let vertices: Vec<Vector2> =
                     points.iter().map(|p| Vector2::new(p[0], p[1])).collect();
                 one(EntityType::Wipeout(Wipeout::polygonal(&vertices, 0.0)))
@@ -797,7 +836,7 @@ impl Session {
         &self,
         handles: &[u64],
         points: &[[f64; 2]],
-        holes: &[Vec<[f64; 2]>],
+        holes: &[crate::PointRun<true>],
         bulges: &[Vec<f64>],
         pattern: HatchPattern,
     ) -> Result<Hatch, CoreError> {

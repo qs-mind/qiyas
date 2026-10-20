@@ -127,6 +127,10 @@ fn summary(s: &Session) -> Value {
 }
 
 impl<R: Runtime> DrawingHost for AppHost<R> {
+    fn has_window(&self) -> bool {
+        true
+    }
+
     fn list(&self) -> Result<Value, String> {
         let state = self.state();
         let now = tabs::snapshot(&state);

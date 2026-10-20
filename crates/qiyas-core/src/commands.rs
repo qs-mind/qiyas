@@ -73,13 +73,13 @@ pub enum Command {
     #[schemars(example = json!({"type": "measure_distance", "points": [[0, 0], [5, 0], [5, 3]]}))]
     #[schemars(extend("x-words" = ["DIST", "DI", "DISTANCE"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
-    MeasureDistance { points: Vec<[f64; 2]> },
+    MeasureDistance { points: crate::PointRun },
     /// Area inside the ring `points` (closed for you). Needs 3 points or more.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "measure_area", "points": [[0, 0], [5, 0], [5, 4], [0, 4]]}))]
     #[schemars(extend("x-words" = ["AREA", "AA"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "prompt": "Next point"}])))]
-    MeasureArea { points: Vec<[f64; 2]> },
+    MeasureArea { points: crate::PointRun<true> },
     /// Area of a closed entity, length of an open one, or 1 piece for a block reference.
     /// `chain` lists the block references the entity sits inside, outermost first (empty, the
     /// default, for an entity on the sheet); it is measured where they place it. A chain ending in
@@ -155,13 +155,18 @@ pub enum Command {
         value: Option<f64>,
         unit: Option<String>,
         height: Option<f64>,
-        points: Vec<[f64; 2]>,
+        /// Area and volume boundaries drop a return-to-start vertex and close; lengths retain it as an open path.
+        #[serde(default)]
+        points: crate::PointRun,
+        #[serde(default)]
         handles: Vec<u64>,
         /// The block references every handle sits inside, outermost first; empty (the default)
         /// for entities on the sheet.
         #[serde(default)]
         chain: Vec<u64>,
         description: String,
+        /// Empty by convention when there is no engineer's note.
+        #[serde(default)]
         note: String,
         /// Allows an empty item the user asked for. A missing value becomes 0.
         #[serde(default)]
@@ -258,8 +263,17 @@ pub enum Command {
     #[schemars(example = json!({"type": "set_image_display", "handle": 1234, "brightness": 50, "contrast": 50, "fade": 30}))]
     SetImageDisplay {
         handle: u64,
+        /// Default: 50, the image's original brightness.
+        #[serde(default = "neutral_image_level")]
+        #[schemars(range(max = 100))]
         brightness: u8,
+        /// Default: 50, the image's original contrast.
+        #[serde(default = "neutral_image_level")]
+        #[schemars(range(max = 100))]
         contrast: u8,
+        /// Default: 0, no fading.
+        #[serde(default)]
+        #[schemars(range(max = 100))]
         fade: u8,
     },
     /// The geometry of one entity as placed in the world (radius, diameter, centre and angles of
@@ -383,8 +397,11 @@ pub enum Command {
     #[schemars(extend("x-words" = ["TEXT", "DT"]))]
     Text {
         at: [f64; 2],
+        /// Default 0 selects 2.5 mm on paper at the annotation scale, in drawing units.
         #[serde(default)]
         height: f64,
+        /// Default 0 degrees: horizontal text.
+        #[serde(default)]
         rotation: f64,
         value: String,
         #[serde(default)]
@@ -399,7 +416,10 @@ pub enum Command {
     #[schemars(extend("x-words" = ["MTEXT", "MT", "T"]))]
     MText {
         at: [f64; 2],
+        /// Default 0: no line wrapping.
+        #[serde(default)]
         width: f64,
+        /// Default 0 selects 2.5 mm on paper at the annotation scale, in drawing units.
         #[serde(default)]
         height: f64,
         value: String,
@@ -455,8 +475,9 @@ pub enum Command {
     #[schemars(example = json!({"type": "comment", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "text": "Check this wall thickness"}))]
     #[schemars(extend("x-words" = ["COMMENT"]))]
     Comment {
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun<true>,
         text: String,
+        /// Default: one thirty-second of the closed outline's length, in drawing units.
         #[serde(default)]
         arc_len: Option<f64>,
     },
@@ -489,6 +510,7 @@ pub enum Command {
     DimSpace {
         base: Target,
         targets: Vec<Target>,
+        /// Default: twice the base dimension's effective text height, in drawing units.
         #[serde(default)]
         spacing: Option<f64>,
     },
@@ -503,7 +525,10 @@ pub enum Command {
     #[schemars(example = json!({"type": "leader", "points": [[3, 3], [5, 5], [6, 5]], "text": "RC column 400x400"}))]
     #[schemars(extend("x-words" = ["LEADER", "LE", "LEAD"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Leader point"}, "text"])))]
-    Leader { points: Vec<[f64; 2]>, text: String },
+    Leader {
+        points: crate::PointRun,
+        text: String,
+    },
     /// A leader with a short landing before its text (Qiyas writes a multileader as a leader and
     /// an MText).
     #[serde(rename = "mleader")]
@@ -511,7 +536,10 @@ pub enum Command {
     #[schemars(example = json!({"type": "mleader", "points": [[3, 3], [5, 5]], "text": "See detail 3"}))]
     #[schemars(extend("x-words" = ["MLEADER", "MLD"]))]
     #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Leader point"}, "text"])))]
-    MLeader { points: Vec<[f64; 2]>, text: String },
+    MLeader {
+        points: crate::PointRun,
+        text: String,
+    },
     /// A feature control frame: `frame` in AutoCAD's codes, its left middle at `at`.
     #[schemars(extend("x-category" = "dimensions"))]
     #[schemars(example = json!({"type": "tolerance", "at": [0, 0], "frame": "{\\Fgdt;p}%%v0.5%%vA"}))]
@@ -547,8 +575,10 @@ pub enum Command {
         at: [f64; 2],
         rows: usize,
         cols: usize,
+        /// Default or zero: fit the longest cell line plus one row height of padding.
         #[serde(default)]
         col_width: f64,
+        /// Default or zero: twice the default text height at the sheet's annotation scale.
         #[serde(default)]
         row_height: f64,
         #[serde(default)]
@@ -597,6 +627,7 @@ pub enum Command {
     #[schemars(extend("x-words" = ["FIELD"]))]
     Field {
         at: [f64; 2],
+        /// Default or zero: 2.5 mm on paper, converted through the sheet's annotation scale.
         #[serde(default)]
         height: f64,
         field: FieldKind,
@@ -687,6 +718,7 @@ pub enum Command {
         prompt: String,
         default: String,
         at: [f64; 2],
+        /// Default or zero: 2.5 mm on paper, converted through the sheet's annotation scale.
         #[serde(default)]
         height: f64,
     },
@@ -950,7 +982,7 @@ pub enum Command {
         kind: crate::ConstraintKind,
         targets: Vec<Target>,
         #[serde(default)]
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun,
     },
     /// Removes the constraint `id` (a dimensional one with its Dimension).
     #[schemars(extend("x-category" = "parametric", "x-destructive" = true))]
@@ -982,7 +1014,7 @@ pub enum Command {
         kind: crate::ConstraintKind,
         targets: Vec<Target>,
         #[serde(default)]
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun,
         line_point: [f64; 2],
         #[serde(default)]
         expression: Option<String>,
@@ -1021,7 +1053,7 @@ pub enum Command {
     /// entity loses its constraints.
     #[schemars(extend("x-category" = "records"))]
     #[schemars(example = json!({"type": "set_records", "collection": "entities", "updates": [{"key": 1234, "path": "/radius", "value": 0.75}]}))]
-    #[schemars(example = json!({"type": "set_records", "collection": "layers", "updates": [{"key": "A-WALL", "path": "/line_weight", "value": "W50"}]}))]
+    #[schemars(example = json!({"type": "set_records", "collection": "layers", "updates": [{"key": "A-WALL", "path": "/line_weight", "value": {"Value": 50}}]}))]
     #[schemars(example = json!({"type": "set_records", "collection": "viewports", "updates": [{"key": 1234, "path": "/view_height", "value": 50.0}]}))]
     SetRecords {
         collection: crate::records::Collection,
@@ -1100,7 +1132,8 @@ pub enum Command {
     #[schemars(example = json!({"type": "add_markup", "kind": "note", "points": [[2, 3]], "text": "Confirm this opening"}))]
     AddMarkup {
         kind: MarkupKind,
-        points: Vec<[f64; 2]>,
+        /// Clouds drop a return-to-start vertex and close; notes retain their point.
+        points: crate::PointRun,
         text: String,
     },
     /// The constraints of the sheet on screen. `Outcome::Constraints`; not an undo step.
@@ -1125,6 +1158,10 @@ pub enum MarkupKind {
 /// `InsertBlock`'s scale when none is given.
 fn one() -> f64 {
     1.0
+}
+
+fn neutral_image_level() -> u8 {
+    50
 }
 
 /// An entity as picked (see `Picked`): its handle and the block references it sits inside,
@@ -1574,7 +1611,7 @@ impl Session {
                     return Err(invalid("A distance needs at least 2 points"));
                 }
                 let path = Path {
-                    points,
+                    points: points.into(),
                     closed: false,
                 };
                 let mut m = self.measurement(Kind::Length, path.length(), "Distance", "");
@@ -1587,7 +1624,7 @@ impl Session {
                     return Err(invalid("An area needs at least 3 points"));
                 }
                 let ring = Path {
-                    points,
+                    points: points.into(),
                     closed: true,
                 };
                 let mut m = self.measurement(Kind::Area, ring.area(), "Area", "");
@@ -1676,8 +1713,16 @@ impl Session {
                     ));
                 }
                 let value = value.or((kind == Kind::Item && empty_item).then_some(0.0));
-                let mut m = self
-                    .add_measurement(kind, value, unit, height, points, handles, chain, source)?;
+                let mut m = self.add_measurement(
+                    kind,
+                    value,
+                    unit,
+                    height,
+                    points.into(),
+                    handles,
+                    chain,
+                    source,
+                )?;
                 m.description = description;
                 m.note = note;
                 m
@@ -1928,7 +1973,7 @@ impl Session {
                 text,
                 arc_len,
             } => {
-                let handles = self.add_comment(points, &text, arc_len)?;
+                let handles = self.add_comment(points.into(), &text, arc_len)?;
                 return Ok(Outcome::Added { handles });
             }
             Command::ListComments => {
