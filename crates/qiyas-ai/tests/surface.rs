@@ -1,18 +1,21 @@
 //! The model-facing surface, with scripted providers and no network.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use qiyas_ai::prompt::{system_prompt, DrawingFacts, Lang};
 use qiyas_ai::surface::{self, CAPTURE, EXECUTE, READ};
 use qiyas_ai::{
-    Agent, AgentEvent, AgentSettings, AiError, ContentBlock, Provider, ResultPart, StopReason,
-    ToolError, ToolOutput, TurnRequest, TurnResult,
+    Agent, AgentEvent, AgentSettings, ContentBlock, ResultPart, ToolError, ToolOutput, TurnRequest,
 };
 use qiyas_core::{Command, EntityFilter, Session, Source};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+#[path = "support/scripted.rs"]
+pub mod scripted;
+use scripted::Script;
 
 fn sample() -> (tempfile::TempDir, Session) {
     let dir = tempfile::tempdir().unwrap();
@@ -541,57 +544,12 @@ fn every_name_in_the_prompt_index_exists_in_the_registry() {
     }
 }
 
-/// Sends one tool call per answer, then ends the turn. Requests are kept to check the budget.
-struct Script {
-    calls: Mutex<VecDeque<(&'static str, Value)>>,
-    requests: Arc<Mutex<Vec<TurnRequest>>>,
-}
-
-impl Provider for Script {
-    fn stream_turn<'a>(
-        &'a self,
-        request: TurnRequest,
-        _: qiyas_ai::provider::Sink<'a>,
-    ) -> qiyas_ai::provider::BoxFuture<'a, Result<TurnResult, AiError>> {
-        let mut requests = self.requests.lock().unwrap();
-        let id = requests.len();
-        requests.push(request);
-        let next = self.calls.lock().unwrap().pop_front();
-        Box::pin(async move {
-            let (content, stop_reason) = match next {
-                Some((name, input)) => (
-                    vec![ContentBlock::ToolUse {
-                        id: format!("call_{id}"),
-                        name: name.into(),
-                        input,
-                    }],
-                    StopReason::ToolUse,
-                ),
-                None => (
-                    vec![ContentBlock::Text {
-                        text: "Done".into(),
-                    }],
-                    StopReason::EndTurn,
-                ),
-            };
-            Ok(TurnResult {
-                content,
-                stop_reason,
-                usage: Default::default(),
-            })
-        })
-    }
-}
-
 async fn scripted(
     session: Arc<Mutex<Option<Session>>>,
     calls: Vec<(&'static str, Value)>,
 ) -> (Agent, Vec<AgentEvent>, Arc<Mutex<Vec<TurnRequest>>>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let provider = Script {
-        calls: Mutex::new(calls.into()),
-        requests: requests.clone(),
-    };
+    let provider = Script::new(calls, requests.clone());
     let mut agent = Agent::new(Box::new(provider), session, AgentSettings::default());
     let (tx, mut rx) = mpsc::channel(1_000);
     agent

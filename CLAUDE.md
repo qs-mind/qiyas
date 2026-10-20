@@ -1406,6 +1406,14 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   `samples/test-plan.dwg`: living room 58.29 - 4 x 0.0025 = 58.28 enclosed, 51.211 net of the
   fountain; bedroom 22.085; kitchen 17.385 (the 0.4 m columns overlap the inset corners by
   0.05 x 0.05).
+- Offline drafting evaluation: `qiyas-ai/tests/drafting_eval.rs` runs the production Agent
+  through the three generic tools using the queued scripted provider shared with
+  `tests/surface.rs` (`tests/support/scripted.rs`). A villa and a flange exercise drafting,
+  checks, stated-intent verification and captures; a synthetic replay checks earlier Mizan
+  fault classes. This proves the specified tool sequence works, not model judgement or
+  design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
+  room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
+  for each live run.
 - Agent log: `logs/agent.log` beside `settings.json` (mode 0600, moved to `agent.log.1` past
   5 MB). Each conversation's provider, model and address, then every user message, request,
   answer (text, calls, tokens, time), tool run (input, result) and error with the service's

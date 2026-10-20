@@ -9,6 +9,9 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Offline drafting evaluation through Mizan's three generic tools: a villa and a flange
+  check geometry, layers, quantities and captures, with regressions for earlier drafting
+  faults. The scripted evaluation does not assess live model judgement.
 - Verify drawing intent with pass/fail results, measured values and tolerances: sizes,
   areas, geometric relationships, symmetry, bounds, intersections and counts.
 - Draw centre marks, centre lines, symmetry axes and labelled reference grids in one undo
