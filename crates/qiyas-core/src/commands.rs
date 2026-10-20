@@ -275,13 +275,23 @@ pub enum Command {
     #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type": "draw", "kind": "line", "a": [0, 0], "b": [5, 0]}))]
     Draw(DrawSpec),
-    /// Drawing commands run in order as ONE undo step (and undone together if one fails):
-    /// `Draw`, `Text`, `MText`, `InsertBlock`, `Table`, `EditCell`, `NewLayer` and `SetCurrent`
-    /// (a legend, or a text on every room). The current layer, colour and linetype are put
-    /// back by undo too. `Outcome::Added` lists every entity the commands added, in order.
+    /// Commands run in order as ONE undo step, all or nothing: when one fails, everything the
+    /// batch did is put back and the error names the command (from 0). Any command but those
+    /// that can't run in a batch (editing a block in place, writing a block, the clipboard,
+    /// another batch). With `layer` the commands draw on that layer (made when missing) and with
+    /// `color` in that colour ("ByLayer", "ACI n", "#rrggbb"); the current state is put back
+    /// after, and undo puts back a current state the commands changed. `Outcome::Batch`: each
+    /// command's outcome and every entity added.
     #[schemars(extend("x-category" = "draw", "x-batch" = false))]
     #[schemars(example = json!({"type": "batch", "commands": [{"type": "new_layer", "name": "A-WALL"}, {"type": "set_current", "current": {"layer": "A-WALL"}}, {"type": "draw", "kind": "rectangle", "a": [0, 0], "b": [5, 4]}]}))]
-    Batch { commands: Vec<Command> },
+    #[schemars(example = json!({"type": "batch", "layer": "A-DOOR", "commands": [{"type": "draw", "kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}, {"type": "draw", "kind": "line", "a": [0, 0], "b": [0.9, 0]}]}))]
+    Batch {
+        commands: Vec<Command>,
+        #[serde(default)]
+        layer: Option<String>,
+        #[serde(default)]
+        color: Option<String>,
+    },
     /// Sets the drawing state new entities take (`Session::current`). Not an undo step.
     #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
     #[schemars(example = json!({"type": "set_current", "current": {"layer": "A-WALL", "color": "ByLayer", "linetype": "ByLayer", "lineweight": -1}}))]
@@ -851,6 +861,19 @@ pub(crate) enum Part {
 }
 
 impl Command {
+    /// What the command is, as the history and errors name it: its wire name, with the kind
+    /// after a dot for one that has kinds ("draw.line", "set_layer").
+    pub fn label(&self) -> String {
+        let wire = serde_json::to_value(self).unwrap_or_default();
+        let name = wire["type"].as_str().unwrap_or("command");
+        match wire["kind"].as_str() {
+            Some(kind) if matches!(name, "draw" | "modify" | "edit" | "dimension") => {
+                format!("{name}.{kind}")
+            }
+            _ => name.to_string(),
+        }
+    }
+
     /// The part of the session the command changes, and so keeps in its undo step; `None` when
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
@@ -1025,6 +1048,11 @@ pub enum Outcome {
     /// Entities added to the drawing, by handle.
     Added {
         handles: Vec<u64>,
+    },
+    /// A batch's commands' outcomes, in order, and every entity it added.
+    Batch {
+        outcomes: Vec<Outcome>,
+        added: Vec<u64>,
     },
     /// An explode's parts, by handle, and how many entities picked had no parts and were left
     /// as they are; the take-off rows that followed, as in `TakeoffFollowed`.
@@ -1405,32 +1433,13 @@ impl Session {
                 self.set_current(current)?;
                 return Ok(Outcome::Changed);
             }
-            Command::Batch { commands } => {
-                let mut handles = Vec::new();
-                for command in commands {
-                    if !matches!(
-                        command,
-                        Command::Draw(_)
-                            | Command::Text { .. }
-                            | Command::MText { .. }
-                            | Command::InsertBlock { .. }
-                            | Command::Table { .. }
-                            | Command::EditCell { .. }
-                            | Command::NewLayer { .. }
-                            | Command::SetCurrent { .. }
-                    ) {
-                        return Err(CoreError::InvalidCommand(
-                            "A batch takes drawing commands only".to_string(),
-                        ));
-                    }
-                    // Not `run_as`: the batch is the one undo step. Its edit-in-place rules
-                    // still hold for each command (a block never goes inside itself).
-                    self.check_block_edit(&command)?;
-                    if let Outcome::Added { handles: more } = self.execute(command, source)? {
-                        handles.extend(more);
-                    }
-                }
-                return Ok(Outcome::Added { handles });
+            // `run_as` runs a batch as a transaction before it gets here.
+            Command::Batch {
+                commands,
+                layer,
+                color,
+            } => {
+                return self.run_batch(commands, layer, color, source);
             }
             Command::Modify(spec) => {
                 let outcome = self.modify(spec)?;

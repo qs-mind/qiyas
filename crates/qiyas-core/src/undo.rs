@@ -15,7 +15,7 @@ use opencadcodec::tables::{
 };
 use opencadcodec::{CadDocument, EntityType, Handle};
 
-use crate::{Boq, Conflict, Current, Schedule, Source, Takeoff};
+use crate::{Boq, Conflict, Current, HistoryStep, Schedule, Source, Takeoff};
 
 /// Most undo steps kept; the oldest is dropped first.
 const MAX_STEPS: usize = 200;
@@ -28,6 +28,9 @@ pub(crate) enum Step {
     Conflicts(Vec<Conflict>, Vec<Schedule>),
     /// A change to the drawing (and to the take-off with it, for divide and measure along).
     Document(DocChange),
+    /// Several steps made as one (a batch, a transaction), held in the order they are put back
+    /// (the last one made first), and what the group did to the current drawing state.
+    Group(Vec<Step>, Option<Box<ViewDelta>>),
 }
 
 /// One drawing change, held as what puts it back: undoing removes `added`, restores `removed`
@@ -67,6 +70,14 @@ pub(crate) struct ViewDelta {
 pub(crate) type StateHidden = (String, Option<Vec<String>>, Option<Vec<String>>);
 
 impl ViewDelta {
+    /// The current drawing state moved from `before` to `after` (a batch that ran `SetCurrent`).
+    pub(crate) fn current_only(before: Current, after: Current) -> Option<ViewDelta> {
+        (before != after).then(|| ViewDelta {
+            current: Some((before, after)),
+            ..ViewDelta::default()
+        })
+    }
+
     /// The difference from `before` to `after`; `None` when they are the same.
     pub(crate) fn between(before: &ViewState, after: &ViewState) -> Option<ViewDelta> {
         let mut delta = ViewDelta::default();
@@ -380,6 +391,25 @@ pub(crate) struct Parts<'a> {
     pub doc_changed: &'a mut bool,
 }
 
+impl Parts<'_> {
+    /// The same parts, borrowed again for one step of a group.
+    fn reborrow(&mut self) -> Parts<'_> {
+        Parts {
+            takeoff: &mut *self.takeoff,
+            boq: &mut *self.boq,
+            conflicts: &mut *self.conflicts,
+            schedules: &mut *self.schedules,
+            doc: &mut *self.doc,
+            view: ViewRefs {
+                current: &mut *self.view.current,
+                hidden: &mut *self.view.hidden,
+                state_hidden: &mut *self.view.state_hidden,
+            },
+            doc_changed: &mut *self.doc_changed,
+        }
+    }
+}
+
 impl Step {
     /// Puts this step in place and returns what it replaced.
     fn swap(self, mut parts: Parts) -> Step {
@@ -394,33 +424,119 @@ impl Step {
                 *parts.doc_changed = true;
                 Step::Document(change.swap(parts.doc, parts.takeoff, &mut parts.view))
             }
+            // Each step in the order held; what redoes them goes the other way round.
+            Step::Group(steps, view) => {
+                let mut back: Vec<Step> = steps
+                    .into_iter()
+                    .map(|step| step.swap(parts.reborrow()))
+                    .collect();
+                back.reverse();
+                let view = view.map(|delta| Box::new(delta.undo(&mut parts.view)));
+                Step::Group(back, view)
+            }
         }
     }
+}
+
+/// One undo or redo step: what puts it back, who made it and what it was ("draw.line",
+/// "batch").
+#[derive(Debug)]
+pub(crate) struct Entry {
+    step: Step,
+    source: Source,
+    label: String,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct History {
-    /// The state before each change, and who made the change.
-    undo: Vec<(Step, Source)>,
-    redo: Vec<(Step, Source)>,
+    /// The state before each change, who made it and what it was.
+    undo: Vec<Entry>,
+    redo: Vec<Entry>,
     /// Undo stops with this many steps left (a block being edited in place keeps the steps
     /// from before it began).
     floor: usize,
+    /// The steps of the groups open now (a batch, a transaction), innermost last: each closes
+    /// into one step of the group around it, or of the history.
+    groups: Vec<Vec<Entry>>,
 }
 
 impl History {
-    /// Records the state as it was before a command by `source`. Clears what could be redone.
-    pub(crate) fn record(&mut self, before: Step, source: Source) {
+    /// Records the state as it was before a command by `source`, what the command was being
+    /// `label`. Clears what could be redone; inside a group, keeps it for the group.
+    pub(crate) fn record(&mut self, before: Step, source: Source, label: &str) {
+        let entry = Entry {
+            step: before,
+            source,
+            label: label.to_string(),
+        };
+        if let Some(group) = self.groups.last_mut() {
+            group.push(entry);
+            return;
+        }
         self.redo.clear();
-        self.push(before, source);
+        self.push(entry);
     }
 
     /// Pushes a step on the undo stack, dropping the oldest past `MAX_STEPS` (the floor drops
     /// with it).
-    fn push(&mut self, step: Step, source: Source) {
-        if push_capped(&mut self.undo, (step, source)) {
+    fn push(&mut self, entry: Entry) {
+        if push_capped(&mut self.undo, entry) {
             self.floor = self.floor.saturating_sub(1);
         }
+    }
+
+    /// Opens a group: the steps recorded until it closes become one.
+    pub(crate) fn begin_group(&mut self) {
+        self.groups.push(Vec::new());
+    }
+
+    /// Closes the innermost group into one step by `source` named `label`, with what it did to
+    /// the current state (`view`). Nothing is recorded when the group changed nothing; a group of
+    /// one step records that step under `label`. True when a step was recorded.
+    pub(crate) fn commit_group(
+        &mut self,
+        source: Source,
+        label: &str,
+        view: Option<Box<ViewDelta>>,
+    ) -> bool {
+        let mut steps: Vec<Step> = self
+            .groups
+            .pop()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| entry.step)
+            .collect();
+        let step = match (steps.len(), view) {
+            (0, None) => return false,
+            (1, None) => steps.pop().expect("one step"),
+            (_, view) => {
+                steps.reverse();
+                Step::Group(steps, view)
+            }
+        };
+        self.record(step, source, label);
+        true
+    }
+
+    /// Closes the innermost group by putting back every step made in it, last first: the session
+    /// is as it was when the group opened. Nothing can be redone from it.
+    pub(crate) fn abort_group(&mut self, mut parts: Parts) {
+        let entries = self.groups.pop().unwrap_or_default();
+        for entry in entries.into_iter().rev() {
+            let _redo = entry.step.swap(parts.reborrow());
+        }
+    }
+
+    /// What can be undone (oldest first) and redone (next first): each step's label and who
+    /// made it.
+    pub(crate) fn labels(&self) -> (Vec<HistoryStep>, Vec<HistoryStep>) {
+        let step = |e: &Entry| HistoryStep {
+            label: e.label.clone(),
+            source: e.source,
+        };
+        let undo = self.undo.iter().skip(self.floor).map(step).collect();
+        let redo = self.redo.iter().rev().map(step).collect();
+        (undo, redo)
     }
 
     /// How many steps can be undone, floor or not.
@@ -453,7 +569,7 @@ impl History {
 
     /// Who made the change that `undo` would take back.
     pub(crate) fn top_source(&self) -> Option<Source> {
-        self.undo.last().map(|(_, source)| *source)
+        self.undo.last().map(|entry| entry.source)
     }
 
     /// Puts the take-off, BOQ, conflicts or drawing back to their state before the last command.
@@ -462,20 +578,23 @@ impl History {
         if self.undo.len() <= self.floor {
             return false;
         }
-        let Some((before, source)) = self.undo.pop() else {
+        let Some(entry) = self.undo.pop() else {
             return false;
         };
-        self.redo.push((before.swap(parts), source));
+        self.redo.push(Entry {
+            step: entry.step.swap(parts),
+            ..entry
+        });
         true
     }
 
     /// Redoes the last undone command. False when there is none.
     pub(crate) fn redo(&mut self, parts: Parts) -> bool {
-        let Some((after, source)) = self.redo.pop() else {
+        let Some(entry) = self.redo.pop() else {
             return false;
         };
-        let step = after.swap(parts);
-        self.push(step, source);
+        let step = entry.step.swap(parts);
+        self.push(Entry { step, ..entry });
         true
     }
 
@@ -489,7 +608,7 @@ impl History {
 }
 
 /// Pushes `step`, dropping the oldest past `MAX_STEPS`; true when one was dropped.
-fn push_capped(stack: &mut Vec<(Step, Source)>, step: (Step, Source)) -> bool {
+fn push_capped(stack: &mut Vec<Entry>, step: Entry) -> bool {
     let full = stack.len() == MAX_STEPS;
     if full {
         stack.remove(0);
@@ -516,7 +635,7 @@ mod tests {
             } else {
                 Step::Document(DocChange::default())
             };
-            history.record(step, Source::User);
+            history.record(step, Source::User, "test");
         }
         let undone = std::iter::from_fn(|| {
             let parts = Parts {

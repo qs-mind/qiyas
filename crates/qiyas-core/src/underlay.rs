@@ -597,7 +597,7 @@ impl Session {
         prepared: PreparedPdf,
         insert_at: [f64; 2],
     ) -> Result<Vec<u64>, CoreError> {
-        self.record_document_change(Source::User, true, false, |s| {
+        self.record_document_change(Source::User, "attach_pdf", true, false, |s| {
             s.apply_prepared(prepared, insert_at)
         })
     }

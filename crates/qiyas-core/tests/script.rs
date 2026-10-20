@@ -490,7 +490,7 @@ fn json_lines_follow_the_folder_rule_for_their_paths() {
         )
     };
     let script = parsed(&batch("door.dwg"), &scripts, Some(&drawing));
-    let Action::Command(Command::Batch { commands }) = &script.steps[0].action else {
+    let Action::Command(Command::Batch { commands, .. }) = &script.steps[0].action else {
         panic!("{:?}", script.steps[0].action)
     };
     let inner = serde_json::to_value(&commands[0]).unwrap();

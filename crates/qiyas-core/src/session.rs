@@ -126,6 +126,10 @@ pub struct Session {
     /// The layer isolated on screen (LAYISO), with what isolating it hid; LAYUNISO puts back only
     /// that. Not an undo step, like hiding a layer.
     pub(crate) isolated: Option<crate::layers::Isolation>,
+    /// What the last command or transaction did to the drawing's entities (`last_change`).
+    pub(crate) last_change: crate::Change,
+    /// How many transactions are open (`crate::transaction`).
+    pub(crate) tx_depth: usize,
     /// The user coordinate system (see `crate::ucs`). Saved in the project file and the
     /// drawing; not an undo step.
     pub ucs: Ucs,
@@ -657,6 +661,8 @@ impl Session {
             current,
             state_hidden,
             isolated: None,
+            last_change: crate::Change::default(),
+            tx_depth: 0,
             ucs,
             history: History::default(),
             block_edit: None,
@@ -1551,6 +1557,33 @@ impl Session {
     /// drawing, records an undo step.
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
+        if self.tx_depth == 0 {
+            self.last_change = crate::Change::default();
+        }
+        if let Command::Batch {
+            commands,
+            layer,
+            color,
+        } = cmd
+        {
+            if self.tx_depth > 0 {
+                return Err(CoreError::InvalidCommand(
+                    "A batch can't run inside another batch".to_string(),
+                ));
+            }
+            return self.run_batch(commands, layer, color, source);
+        }
+        let label = cmd.label();
+        if self.tx_depth > 0 {
+            let batchable = crate::registry::registry()
+                .get(label.split('.').next().unwrap_or(""))
+                .is_none_or(|info| info.batchable);
+            if !batchable {
+                return Err(CoreError::InvalidCommand(format!(
+                    "{label} can't run inside a batch: run it on its own"
+                )));
+            }
+        }
         self.check_block_edit(&cmd)?;
         if matches!(cmd, Command::SaveLayerState { .. }) {
             self.prepare_layer_states();
@@ -1565,6 +1598,7 @@ impl Session {
                 let reshape = crate::param::Reshape::of(&cmd);
                 return self.record_document_change(
                     source,
+                    &label,
                     tables || more_tables || param_tables,
                     takeoff || more_takeoff || param_takeoff,
                     |s| {
@@ -1588,9 +1622,24 @@ impl Session {
                 Step::Conflicts(self.conflicts.clone(), self.schedules.clone())
             }
         };
-        let outcome = self.execute(cmd, source)?;
+        let outcome = match self.execute(cmd, source) {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                // A command that failed half way leaves its part as it was.
+                match before {
+                    Step::Takeoff(takeoff) => self.takeoff = takeoff,
+                    Step::Boq(boq) => self.boq = boq,
+                    Step::Conflicts(conflicts, schedules) => {
+                        self.conflicts = conflicts;
+                        self.schedules = schedules;
+                    }
+                    Step::Document(_) | Step::Group(..) => {}
+                }
+                return Err(e);
+            }
+        };
         if !matches!(outcome, Outcome::Nothing) {
-            self.history.record(before, source);
+            self.history.record(before, source, &label);
         }
         Ok(outcome)
     }
@@ -1634,6 +1683,7 @@ impl Session {
     pub(crate) fn record_document_change<T>(
         &mut self,
         source: Source,
+        label: &str,
         tables: bool,
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
@@ -1659,7 +1709,16 @@ impl Session {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {
                     self.drawing_changed();
-                    self.history.record(Step::Document(change), source);
+                    self.last_change.merge(crate::Change {
+                        added: change.added.iter().map(|h| h.value()).collect(),
+                        changed: change.replaced.iter().map(|(h, _)| h.value()).collect(),
+                        removed: change
+                            .removed
+                            .iter()
+                            .map(|e| e.common().handle.value())
+                            .collect(),
+                    });
+                    self.history.record(Step::Document(change), source, label);
                 }
                 Ok(done)
             }
@@ -2278,7 +2337,7 @@ mod tests {
             .next()
             .unwrap();
         let first = first.common().handle;
-        let err = s.record_document_change(Source::User, true, false, |s| {
+        let err = s.record_document_change(Source::User, "test", true, false, |s| {
             s.ensure_layer("NEW", Color::Index(1));
             s.drawing
                 .doc

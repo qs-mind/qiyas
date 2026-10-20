@@ -1082,9 +1082,12 @@ fn a_batch_cannot_put_the_edited_block_inside_itself() {
             attribute_values: BTreeMap::new(),
             from_path: None,
         }],
+        layer: None,
+        color: None,
     });
     assert!(
-        matches!(&refused, Err(CoreError::InvalidCommand(m)) if m.contains("inside itself")),
+        matches!(&refused, Err(CoreError::Step { index: 0, error, .. })
+            if matches!(error.as_ref(), CoreError::InvalidCommand(m) if m.contains("inside itself"))),
         "{refused:?}"
     );
     assert_eq!(sheet_handles(&session), before);

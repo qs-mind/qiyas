@@ -248,8 +248,13 @@ fn run_batch(
     if changed {
         all.push(Command::SetCurrent { current: before });
     }
-    match session.run_as(Command::Batch { commands: all }, source)? {
-        Outcome::Added { handles } => Ok((handles, created)),
+    let batch = Command::Batch {
+        commands: all,
+        layer: None,
+        color: None,
+    };
+    match session.run_as(batch, source)? {
+        Outcome::Batch { added, .. } if !added.is_empty() => Ok((added, created)),
         _ => Err(ToolError::Failed("Nothing was drawn".to_string())),
     }
 }

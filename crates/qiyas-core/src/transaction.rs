@@ -1,0 +1,229 @@
+//! Transactions: any commands, run in order, as ONE undo step, all or nothing. Each command runs
+//! through `Session::run_as` as it would alone (its follow-ups too: fields, constraints, the
+//! take-off), recording its own step inside an open group of the history; the group closes into
+//! one step. When one fails, every step made before it is put back, last first, and the view
+//! state (sheet, hidden layers, current state, drafting, UCS, isolation) is as it was: the
+//! drawing's own change recorder can't be nested, so the group is made of steps, not one outer
+//! recording.
+
+use serde::Serialize;
+
+use crate::undo::{Parts, ViewDelta, ViewRefs};
+use crate::{Command, CoreError, Current, Drafting, Outcome, Session, Source, Ucs};
+
+/// What the last command, batch or transaction did to the drawing's entities, by handle: added,
+/// changed in place, removed. An entity added and removed again in one transaction is in none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Change {
+    pub added: Vec<u64>,
+    pub changed: Vec<u64>,
+    pub removed: Vec<u64>,
+}
+
+impl Change {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.changed.is_empty() && self.removed.is_empty()
+    }
+
+    /// This change followed by `later`.
+    pub(crate) fn merge(&mut self, later: Change) {
+        for h in later.added {
+            if !self.added.contains(&h) {
+                self.removed.retain(|r| *r != h);
+                self.added.push(h);
+            }
+        }
+        for h in later.changed {
+            if !self.added.contains(&h) && !self.changed.contains(&h) {
+                self.changed.push(h);
+            }
+        }
+        for h in later.removed {
+            if self.added.contains(&h) {
+                self.added.retain(|a| *a != h);
+            } else {
+                self.changed.retain(|c| *c != h);
+                if !self.removed.contains(&h) {
+                    self.removed.push(h);
+                }
+            }
+        }
+    }
+}
+
+/// One step of the history as the AI and the window list it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HistoryStep {
+    /// What it was: the command ("draw.line", "set_layer") or the transaction's name ("batch").
+    pub label: String,
+    pub source: Source,
+}
+
+/// The session's view state, which is no undo step but goes back with a failed transaction.
+struct TxView {
+    sheet: String,
+    hidden: std::collections::HashSet<String>,
+    arabic_reversed: bool,
+    drafting: Drafting,
+    current: Current,
+    state_hidden: std::collections::BTreeMap<String, Vec<String>>,
+    isolated: Option<crate::layers::Isolation>,
+    ucs: Ucs,
+}
+
+impl TxView {
+    fn take(s: &Session) -> TxView {
+        TxView {
+            sheet: s.sheet.clone(),
+            hidden: s.visibility.hidden_layers.clone(),
+            arabic_reversed: s.arabic_reversed,
+            drafting: s.drafting.clone(),
+            current: s.current.clone(),
+            state_hidden: s.state_hidden.clone(),
+            isolated: s.isolated.clone(),
+            ucs: s.ucs,
+        }
+    }
+
+    fn put_back(self, s: &mut Session) {
+        s.sheet = self.sheet;
+        s.visibility.hidden_layers = self.hidden;
+        s.arabic_reversed = self.arabic_reversed;
+        s.drafting = self.drafting;
+        s.current = self.current;
+        s.state_hidden = self.state_hidden;
+        s.isolated = self.isolated;
+        s.ucs = self.ucs;
+    }
+}
+
+impl Session {
+    /// Runs `f` as one undo step named `label` made by `source`: the commands it runs with
+    /// `run_as` record their steps into a group that closes into one. When `f` fails, everything
+    /// it did is put back (the drawing, take-off, BOQ, conflicts and view state) and its error
+    /// returned. Transactions nest. Commands that can't run in a batch (`x-batch` false in the
+    /// registry: editing a block in place, writing a block, the clipboard, a batch) are refused
+    /// inside one.
+    pub fn transaction<T>(
+        &mut self,
+        source: Source,
+        label: &str,
+        f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let view = TxView::take(self);
+        let current = self.current.clone();
+        let revision = self.document_revision;
+        // What an outer transaction did so far; a transaction of its own starts afresh.
+        let change = std::mem::take(&mut self.last_change);
+        let change = if self.tx_depth == 0 {
+            Change::default()
+        } else {
+            change
+        };
+        self.tx_depth += 1;
+        self.history.begin_group();
+        let done = f(self);
+        self.tx_depth -= 1;
+        match done {
+            Ok(value) => {
+                let delta = ViewDelta::current_only(current, self.current.clone()).map(Box::new);
+                self.history.commit_group(source, label, delta);
+                let inner = std::mem::replace(&mut self.last_change, change);
+                self.last_change.merge(inner);
+                Ok(value)
+            }
+            Err(e) => {
+                let mut doc_changed = false;
+                self.history.abort_group(Parts {
+                    takeoff: &mut self.takeoff,
+                    boq: &mut self.boq,
+                    conflicts: &mut self.conflicts,
+                    schedules: &mut self.schedules,
+                    doc: &mut self.drawing.doc,
+                    view: ViewRefs {
+                        current: &mut self.current,
+                        hidden: &mut self.visibility.hidden_layers,
+                        state_hidden: &mut self.state_hidden,
+                    },
+                    doc_changed: &mut doc_changed,
+                });
+                view.put_back(self);
+                self.last_change = change;
+                // The drawing is as it was at `revision`: drawn again, and no unsaved change
+                // left by steps that were put back.
+                self.drawing_changed();
+                self.document_revision = revision;
+                Err(e)
+            }
+        }
+    }
+
+    /// `Command::Batch`: `commands` in order as one undo step, all or nothing. With `layer` they
+    /// run on that layer (made when the drawing has none of that name) and with `color` as the
+    /// current colour; the current state is put back after. A failing command's error says
+    /// which one it was (`CoreError::Step`, from 0).
+    pub(crate) fn run_batch(
+        &mut self,
+        commands: Vec<Command>,
+        layer: Option<String>,
+        color: Option<String>,
+        source: Source,
+    ) -> Result<Outcome, CoreError> {
+        self.transaction(source, "batch", |s| {
+            let before = s.current.clone();
+            let mut now = before.clone();
+            if let Some(name) = layer.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                match s.drawing.doc.layers.get(name).map(|l| l.name.clone()) {
+                    Some(spelled) => now.layer = spelled,
+                    None => {
+                        s.run_as(
+                            Command::NewLayer {
+                                name: name.to_string(),
+                            },
+                            source,
+                        )?;
+                        now.layer = name.to_string();
+                    }
+                }
+            }
+            if let Some(color) = color.filter(|c| !c.trim().is_empty()) {
+                now.color = color;
+            }
+            let restore = now != before;
+            if restore {
+                s.run_as(Command::SetCurrent { current: now }, source)?;
+            }
+            let mut outcomes = Vec::with_capacity(commands.len());
+            for (index, command) in commands.into_iter().enumerate() {
+                let label = command.label();
+                match s.run_as(command, source) {
+                    Ok(outcome) => outcomes.push(outcome),
+                    Err(error) => {
+                        return Err(CoreError::Step {
+                            index,
+                            label,
+                            error: Box::new(error),
+                        })
+                    }
+                }
+            }
+            if restore {
+                s.run_as(Command::SetCurrent { current: before }, source)?;
+            }
+            Ok(Outcome::Batch {
+                added: s.last_change.added.clone(),
+                outcomes,
+            })
+        })
+    }
+
+    /// What the last `run`, `run_as` or transaction did to the drawing's entities.
+    pub fn last_change(&self) -> &Change {
+        &self.last_change
+    }
+
+    /// The steps that can be undone (oldest first) and redone (next first).
+    pub fn history_steps(&self) -> (Vec<HistoryStep>, Vec<HistoryStep>) {
+        self.history.labels()
+    }
+}

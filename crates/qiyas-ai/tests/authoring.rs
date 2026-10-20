@@ -861,7 +861,7 @@ fn label_spaces_writes_unapproved_candidate_areas_under_names_and_a_schedule_fol
 // ---- The batch command itself ----
 
 #[test]
-fn a_batch_is_one_step_takes_drawing_commands_only_and_fails_whole() {
+fn a_batch_is_one_step_and_fails_whole() {
     let (_dir, mut s) = open(&sample_doc(), "batch.dxf");
     let before = count_entities(&s);
     let line = |x: f64| {
@@ -872,28 +872,32 @@ fn a_batch_is_one_step_takes_drawing_commands_only_and_fails_whole() {
     };
     s.run(Command::Batch {
         commands: vec![line(40.0), line(41.0), line(42.0)],
+        layer: None,
+        color: None,
     })
     .unwrap();
     assert_eq!(count_entities(&s), before + 3);
     assert!(s.undo());
     assert_eq!(count_entities(&s), before);
 
-    // Something that is not a drawing command: refused, nothing drawn.
-    let wall = handles_of(&s, "Line")[0];
+    // A command that can't run in a batch: refused, nothing drawn.
     let err = s
         .run(Command::Batch {
             commands: vec![
                 line(50.0),
-                Command::DeleteEntities {
-                    targets: vec![qiyas_core::Target {
-                        handle: wall,
-                        chain: vec![],
-                    }],
+                Command::WriteBlock {
+                    name: "DOOR".into(),
+                    path: "door.dwg".into(),
                 },
             ],
+            layer: None,
+            color: None,
         })
         .unwrap_err();
-    assert!(err.to_string().contains("drawing commands only"), "{err}");
+    assert!(
+        err.to_string().contains("can't run inside a batch"),
+        "{err}"
+    );
     assert_eq!(count_entities(&s), before);
 
     // A command that fails half way puts back what the earlier ones drew.
@@ -910,6 +914,8 @@ fn a_batch_is_one_step_takes_drawing_commands_only_and_fails_whole() {
                     from_path: None,
                 },
             ],
+            layer: None,
+            color: None,
         })
         .unwrap_err();
     assert!(err.to_string().contains("NOPE"), "{err}");

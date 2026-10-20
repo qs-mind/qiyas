@@ -419,6 +419,11 @@ fn describe(cmd: &Command, outcome: Outcome) -> String {
             _ => "done".to_string(),
         },
         Outcome::Added { handles } => format!("added {} entities", handles.len()),
+        Outcome::Batch { outcomes, added } => format!(
+            "ran {} commands as one step, added {} entities",
+            outcomes.len(),
+            added.len()
+        ),
         Outcome::Nothing => "nothing to do".to_string(),
         other => format!("{other:?}"),
     }

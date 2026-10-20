@@ -186,7 +186,19 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 ## Undo
 
 - `qiyas-core/src/undo.rs`: one step per command, at most 200, each with its `Source`
-  (`undo_if` lets the AI undo only its own). Take-off, BOQ and conflict steps keep that part whole.
+  (`undo_if` lets the AI undo only its own) and label (`Command::label`: "draw.line",
+  "set_layer"; `Session::history_steps`). Take-off, BOQ and conflict steps keep that part whole;
+  one whose command fails half way is put back.
+- Transactions (`qiyas-core/src/transaction.rs`): `Session::transaction(source, label, f)` runs
+  `f`'s commands as one step: each `run_as` records its own step into an open group
+  (`History::begin_group`), which closes into one `Step::Group` (held last first, so undo runs
+  them backwards and redo forwards; a group of one is that step). On failure `abort_group` puts
+  every step back, last first, and the view state (sheet, hidden layers, current, drafting, UCS,
+  isolation, layer states' hidden layers) is restored, with `document_revision` as it was. Not one
+  outer recording: the codec's change recorder can't nest. Transactions nest; inside one, commands
+  the registry marks `x-batch` false are refused. `Session::last_change()` (`Change { added,
+  changed, removed }`): what the last command or transaction did to the entities (drawn and erased
+  in one transaction: in none).
 - A drawing command (`Part::Document` in `Command::changes`) runs inside
   `Session::record_document_change`: opencadcodec's entity change recorder keeps the before image
   of each entity it adds, removes or edits (`DocChange`), never a copy of the whole drawing.
@@ -298,10 +310,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   multiline, sketch. One undo step on the sheet on screen; `Outcome::Added` lists the handles.
   Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Mizan's `draw` (line,
   polyline, rectangle, circle, arc, hatch, revcloud).
-- `Command::Batch { commands }` runs `Draw`, `Text`, `MText`, `InsertBlock`, `Table`, `EditCell`,
-  `NewLayer` and `SetCurrent` in order as ONE undo step (tables snapshot, so the current layer
-  comes back too) and as all or nothing; `Outcome::Added` lists every entity. Anything else is
-  refused. The AI's drawing tools use it.
+- `Command::Batch { commands, layer?, color? }` runs any commands in order as ONE undo step, all
+  or nothing (a transaction, see Undo): each through `run_as` with its usual follow-ups. Refused:
+  what the registry marks `x-batch` false (editing a block in place, writing a block, the
+  clipboard copy, another batch). With `layer` they draw on that layer (made when missing), with
+  `color` in that colour, and the current state is put back after; undo puts back a current
+  state the commands changed. A failure is `CoreError::Step { index, label, error }` ("Batch step
+  2 (draw.line): …", from 0). `Outcome::Batch { outcomes, added }`. The AI's drawing tools use
+  it.
 - `Session::current` (layer, colour, linetype, lineweight; layer "0" and ByLayer by default)
   styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file;
   layer and linetype as the drawing spells them, lineweights from AutoCAD's standard set; a

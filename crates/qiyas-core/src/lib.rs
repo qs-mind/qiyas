@@ -42,6 +42,7 @@ mod table;
 mod tables;
 mod takeoff;
 mod text;
+mod transaction;
 mod ucs;
 mod underlay;
 mod undo;
@@ -95,6 +96,7 @@ pub use takeoff::{
     INSERT_COUNT_LIMITATIONS, INSERT_COUNT_SCOPE,
 };
 pub use text::{TextMatch, TextScope};
+pub use transaction::{Change, HistoryStep};
 pub use ucs::Ucs;
 pub use underlay::{AttachMode, PictureSource, PreparedPdf, UnderlayImage, UNDERLAY_LAYER};
 pub use units::Units;
