@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import {
   aiCancel,
   aiClear,
+  aiResume,
   aiSend,
   aiSetLanguage,
   aiStatus,
@@ -38,10 +39,13 @@ export type Assistant = {
   /** "busy", "no_api_key", "no_base_url", "no_model", or a message. */
   error: string | null;
   status: AiStatus | null;
+  /** A finished turn or reset has updated the saved conversation index. */
+  savedVersion: number;
   /** Resolves false when the message was not sent (the composer keeps it). */
   send(text: string, extras?: SendExtras): Promise<boolean>;
   cancel(): void;
   clear(): void;
+  resume(id: string): Promise<void>;
   markUndone(id: string): void;
   markUndoStale(id: string): void;
   refreshStatus(): void;
@@ -52,6 +56,7 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [savedVersion, setSavedVersion] = useState(0);
   // The listeners are set up once; they call the latest callbacks through this.
   const callbacks = useRef({ onMutated, onUi, onNeedSettings });
   callbacks.current = { onMutated, onUi, onNeedSettings };
@@ -90,10 +95,12 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       if (error) setError(error);
       mutating.current.clear();
       refreshStatus();
+      setSavedVersion((value) => value + 1);
     });
     on<null>("ai:cleared", () => {
       dispatch({ type: "clear" });
       setError(null);
+      setSavedVersion((value) => value + 1);
     });
     refreshStatus();
     return () => {
@@ -113,7 +120,7 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
     dispatch({ type: "user", text, ...extras.shown });
     setBusy(true);
     try {
-      await aiSend(text, extras.context, extras.images);
+      await aiSend(text, extras.context, extras.images, extras.shown?.pointed);
       return true;
     } catch (e) {
       const why = String(e);
@@ -139,9 +146,18 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   const markUndone = useCallback((id: string) => dispatch({ type: "undone", id }), []);
   const markUndoStale = useCallback((id: string) => dispatch({ type: "undo_stale", id }), []);
 
+  const resume = useCallback(async (id: string) => {
+    const saved = await aiResume(id);
+    dispatch({ type: "restore", entries: saved.transcript });
+    setBusy(false);
+    setError(null);
+    mutating.current.clear();
+    refreshStatus();
+  }, [refreshStatus]);
+
   // One object per change, so memoised panels skip the app's pointer-move renders.
   return useMemo(
-    () => ({ transcript, busy, error, status, send, cancel, clear, markUndone, markUndoStale, refreshStatus }),
-    [transcript, busy, error, status, send, cancel, clear, markUndone, markUndoStale, refreshStatus],
+    () => ({ transcript, busy, error, status, savedVersion, send, cancel, clear, resume, markUndone, markUndoStale, refreshStatus }),
+    [transcript, busy, error, status, savedVersion, send, cancel, clear, resume, markUndone, markUndoStale, refreshStatus],
   );
 }

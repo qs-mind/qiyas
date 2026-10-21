@@ -6,10 +6,12 @@ import {
   getSettings,
   hasApiKey,
   mcpStatus,
+  measurementMethods,
   setApiKey,
   setSettings,
   type Effort,
   type McpStatus,
+  type MeasurementMethod,
   type Provider,
   type Settings,
 } from "../api";
@@ -52,6 +54,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [minutes, setMinutes] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [methods, setMethods] = useState<MeasurementMethod[]>([]);
 
   useEffect(() => {
     getSettings()
@@ -63,6 +66,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     mcpStatus()
       .then(setMcp)
       .catch(() => setMcp(null));
+    measurementMethods()
+      .then(setMethods)
+      .catch((e) => setError(String(e)));
   }, []);
 
   const provider = draft?.provider;
@@ -189,6 +195,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     {t(`effort.${x}`)}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label>
+              <span>{t("settings.autonomy")}</span>
+              <select
+                value={draft.autonomy ?? "per_job"}
+                onChange={(e) => change({ autonomy: e.target.value as Settings["autonomy"] })}
+              >
+                <option value="per_job">{t("settings.perJob")}</option>
+                <option value="per_phase">{t("settings.perPhase")}</option>
+                <option value="autonomous">{t("settings.autonomous")}</option>
+              </select>
+            </label>
+            <label>
+              <span>{t("settings.measurementMethod")}</span>
+              <select
+                value={draft.measurement_method ?? ""}
+                onChange={(e) => change({ measurement_method: e.target.value || null })}
+              >
+                <option value="">{t("settings.geometric")}</option>
+                {draft.measurement_method && !methods.some((m) => m.name === draft.measurement_method) && (
+                  <option value={draft.measurement_method}>{draft.measurement_method} {t("settings.methodMissing")}</option>
+                )}
+                {methods.map((method) => <option key={method.name} value={method.name}>{method.title}</option>)}
               </select>
             </label>
             <label>

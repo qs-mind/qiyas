@@ -1,8 +1,8 @@
 //! The in-app assistant's state: one `Agent` per conversation, built at its first message from the
 //! settings and the keychain, and lent to the background task that runs each turn.
 //!
-//! A new conversation (Clear, another drawing, another language, other AI settings or key) drops
-//! the agent, so the next message builds a fresh one with a new system prompt and the current key.
+//! A new conversation saves the current one before dropping its agent. A shared checkpoint keeps
+//! the last complete model step available while the background task owns the agent.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,7 @@ pub const CRASHED: &str = "crashed";
 pub type TestProvider = Arc<dyn Fn() -> Box<dyn Provider> + Send + Sync>;
 
 use qiyas_ai::anthropic::Anthropic;
+use qiyas_ai::conversation::Conversation;
 use qiyas_ai::openai::OpenAiCompatible;
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentSettings, Provider};
@@ -41,6 +42,9 @@ pub struct AiRun {
     language: Lang,
     /// Messages in the conversation after the last finished turn.
     messages: usize,
+    /// The id and latest recoverable conversation, including while the task holds the agent.
+    checkpoint: Arc<Mutex<Option<Conversation>>>,
+    store: Option<crate::conversations::Store>,
     #[cfg(test)]
     pub test_provider: Option<TestProvider>,
 }
@@ -53,6 +57,78 @@ pub struct Turn {
 }
 
 impl AiRun {
+    pub fn new(config_dir: &Path) -> Self {
+        let store = crate::conversations::Store::new(config_dir);
+        if let Err(error) = store.recover() {
+            eprintln!("The conversation index could not be recovered: {error}");
+        }
+        Self {
+            store: Some(store),
+            ..Self::default()
+        }
+    }
+
+    pub fn conversation_id(&self) -> Option<String> {
+        self.checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|conversation| conversation.id.clone())
+    }
+
+    /// Called with the turn lock held; never takes the session lock (tab changes hold it).
+    pub fn save(&self) -> Result<(), String> {
+        let checkpoint = self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let (Some(store), Some(conversation)) = (&self.store, checkpoint.as_ref()) {
+            store.save(conversation)?;
+        }
+        Ok(())
+    }
+
+    pub fn save_logged(&self) {
+        if let Err(error) = self.save() {
+            eprintln!("The conversation could not be saved: {error}");
+        }
+    }
+
+    /// A panic hook must not wait on a lock held by the panicking thread.
+    pub fn save_if_available(&self) {
+        if let (Some(store), Ok(checkpoint)) = (&self.store, self.checkpoint.try_lock()) {
+            if let Some(conversation) = checkpoint.as_ref() {
+                if let Err(error) = store.save(conversation) {
+                    eprintln!("The conversation could not be saved after the error: {error}");
+                }
+            }
+        }
+    }
+
+    pub fn drawing_saved_as(&mut self, drawing: PathBuf) {
+        if let Some(agent) = &mut self.agent {
+            agent.drawing_saved_as(drawing.clone());
+        }
+        if let Some(conversation) = self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            conversation.phase_state.drawing = Some(drawing.clone());
+            conversation.drawing = Some(drawing);
+        }
+        self.save_logged();
+    }
+
+    pub fn resume(&mut self, agent: Agent) {
+        self.busy = false;
+        self.cancel = None;
+        self.messages = agent.history().len();
+        self.checkpoint = Arc::new(Mutex::new(Some(agent.snapshot())));
+        self.agent = Some(agent.with_checkpoint(self.checkpoint.clone()));
+    }
+
     pub fn busy(&self) -> bool {
         self.busy
     }
@@ -71,12 +147,15 @@ impl AiRun {
 
     /// Cancels a running turn and forgets the conversation.
     pub fn new_conversation(&mut self) {
+        self.save_logged();
         if let Some(cancel) = self.cancel.take() {
             cancel.cancel();
         }
         self.agent = None;
         self.generation += 1;
         self.messages = 0;
+        // The old task keeps its own checkpoint; later steps cannot replace the new chat.
+        self.checkpoint = Arc::new(Mutex::new(None));
     }
 
     /// Sets the prompt language; a change starts a new conversation. True when it changed.
@@ -116,7 +195,7 @@ impl AiRun {
         let cancel = CancellationToken::new();
         self.cancel = Some(cancel.clone());
         Ok(Turn {
-            agent,
+            agent: agent.with_checkpoint(self.checkpoint.clone()),
             cancel,
             generation,
         })
@@ -127,13 +206,18 @@ impl AiRun {
         self.busy = false;
         self.cancel = None;
         if generation == self.generation {
+            let snapshot = agent.snapshot();
+            *self
+                .checkpoint
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
+            self.save_logged();
             self.messages = agent.history().len();
             self.agent = Some(agent);
         }
     }
 
-    /// After the turn's task panicked: nothing of the conversation is trusted any more, so the next
-    /// message starts a new one.
+    /// A panicking task leaves its last complete checkpoint recoverable from History.
     pub fn crashed(&mut self) {
         self.new_conversation();
         self.busy = false;
@@ -150,11 +234,34 @@ impl AiRun {
 /// What the agent needs from the settings, in the window's language.
 pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
     AgentSettings {
+        provider: provider_identity(s),
         model: s.profile().model.clone(),
         effort: s.effort.clone(),
         language,
+        autonomy: s.autonomy,
+        measurement_method: crate::methods::selected(s.measurement_method.as_deref()),
         ..AgentSettings::default()
     }
+}
+
+/// Signatures belong to one service as well as one model. Keep a deterministic endpoint
+/// fingerprint in conversations without copying the address or its optional credentials.
+/// FNV-1a is an identity checksum here, not a security hash.
+fn provider_identity(settings: &Settings) -> String {
+    if settings.provider == settings::Provider::Anthropic {
+        return settings.provider.name().into();
+    }
+    let endpoint = settings
+        .profile()
+        .base_url
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .trim_end_matches('/');
+    let hash = endpoint.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    format!("{}:{hash:016x}", settings.provider.name())
 }
 
 /// The agent log, beside `settings.json`: `logs/agent.log` in the app's config folder.
@@ -305,6 +412,31 @@ mod tests {
     }
 
     #[test]
+    fn save_as_updates_the_agent_before_the_next_turn_is_claimed() {
+        let mut run = AiRun::default();
+        let (_, generation) = run.reserve().unwrap();
+        let turn = run.start(agent(), generation).unwrap();
+        run.finish(turn.agent, generation);
+
+        let drawing = PathBuf::from("named.dxf");
+        run.drawing_saved_as(drawing.clone());
+        let (kept, generation) = run.reserve().unwrap();
+        assert_eq!(
+            kept.as_ref().unwrap().snapshot().drawing,
+            Some(drawing.clone())
+        );
+        run.release(kept, generation);
+        let (kept, generation) = run.reserve().unwrap();
+        let turn = run.start(kept.unwrap(), generation).unwrap();
+        assert_eq!(turn.agent.snapshot().drawing, Some(drawing.clone()));
+        assert_eq!(
+            run.checkpoint.lock().unwrap().as_ref().unwrap().drawing,
+            Some(drawing)
+        );
+        run.finish(turn.agent, generation);
+    }
+
+    #[test]
     fn a_new_conversation_cancels_the_turn_and_drops_its_agent() {
         let mut run = AiRun::default();
         let (_, generation) = run.reserve().unwrap();
@@ -367,5 +499,23 @@ mod tests {
         assert!(!answerer_changed(&old, &new));
         new.profile_mut().model = "claude-sonnet-5-5".into();
         assert!(answerer_changed(&old, &new));
+    }
+
+    #[test]
+    fn compatible_endpoint_changes_the_saved_provider_identity() {
+        let mut settings = Settings::default();
+        assert_eq!(agent_settings(&settings, Lang::En).provider, "anthropic");
+        settings.provider = settings::Provider::OpenaiCompatible;
+        settings.profile_mut().model = "same-model".into();
+        settings.profile_mut().base_url = Some("https://first.invalid/v1".into());
+        let first = agent_settings(&settings, Lang::En);
+        assert!(!first.provider.contains("first.invalid"));
+        settings.profile_mut().base_url = Some(" https://first.invalid/v1/ ".into());
+        assert_eq!(agent_settings(&settings, Lang::En).provider, first.provider);
+        settings.profile_mut().base_url = Some("https://second.invalid/v1".into());
+        let second = agent_settings(&settings, Lang::En);
+        assert_eq!(first.model, second.model);
+        assert_ne!(first.provider, second.provider);
+        assert!(!second.provider.contains("second.invalid"));
     }
 }

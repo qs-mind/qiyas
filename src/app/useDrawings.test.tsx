@@ -387,3 +387,31 @@ test("Recover of the main autosave keeps the older copies listed, and Later no l
   expect(result.current.recovery?.items.map((i) => [i.autosave, i.older_copies.length])).toEqual([[null, 1]]);
   expect(laterOpens(result.current.recovery!)).toBeNull();
 });
+
+test("continuing a chat waits for autosave recovery before restoring the conversation", async () => {
+  const tower = "/jobs/tower.dwg";
+  recoverable.found = [item({ drawing: tower, autosave: `${tower}.sv$` })];
+  const { result } = await launch();
+  let finished: boolean | undefined;
+  let pending!: Promise<boolean>;
+  await act(async () => {
+    pending = result.current.prepareConversation({ id: "saved", title: "Tower", drawing: tower, drawing_exists: true, updated: 1, turns: 1 });
+    void pending.then((value) => { finished = value; });
+  });
+  expect(result.current.recovery?.then).toBe(tower);
+  expect(finished).toBeUndefined();
+  expect(core.calls.some((call) => call.startsWith("open_drawing"))).toBe(false);
+  await act(async () => { result.current.dismissRecovery(result.current.recovery!); await pending; });
+  expect(core.calls).toContain(`open_drawing {"path":"${tower}"}`);
+  expect(finished).toBe(true);
+});
+
+test("a missing chat drawing continues on screen with a notice and an open tab keeps the conversation", async () => {
+  const notices: string[] = [];
+  const { result } = await launch(notices);
+  const chat = { id: "saved", title: "Villa", drawing: VILLA, drawing_exists: true, updated: 1, turns: 1 };
+  await act(async () => { expect(await result.current.prepareConversation(chat)).toBe(true); });
+  expect(core.calls.some((call) => call.startsWith("open_drawing"))).toBe(false);
+  await act(async () => { expect(await result.current.prepareConversation({ ...chat, drawing: null, drawing_exists: false })).toBe(true); });
+  expect(notices).toContain("The original drawing is unavailable. Continuing on the drawing on screen.");
+});

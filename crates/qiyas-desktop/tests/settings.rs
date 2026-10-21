@@ -25,6 +25,8 @@ fn defaults_when_missing() {
     assert_eq!(s.profile().model, "claude-opus-5-5");
     assert_eq!(s.profile().base_url, None);
     assert_eq!(s.effort, "high");
+    assert_eq!(s.autonomy, qiyas_ai::Autonomy::PerJob);
+    assert_eq!(s.measurement_method, None);
     assert!(!s.mcp_enabled);
     assert_eq!(s.mcp_port, 48123);
     assert_eq!(s.mcp_token.len(), 32);
@@ -59,6 +61,31 @@ fn round_trip() {
     assert_eq!(settings::load(dir.path()), s);
     // Saving leaves no temporary file behind.
     assert!(!dir.path().join("settings.json.tmp").exists());
+}
+
+#[test]
+fn approval_modes_and_measurement_method_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    for autonomy in [
+        qiyas_ai::Autonomy::PerJob,
+        qiyas_ai::Autonomy::PerPhase,
+        qiyas_ai::Autonomy::Autonomous,
+    ] {
+        let s = Settings {
+            autonomy,
+            measurement_method: Some("local-test".into()),
+            ..Settings::default()
+        };
+        assert_eq!(settings::validate(&s), Ok(()));
+        settings::save(dir.path(), &s).unwrap();
+        assert_eq!(settings::load(dir.path()), s);
+    }
+    assert!(serde_json::from_str::<Settings>(r#"{"autonomy":"unknown"}"#).is_err());
+    let s = Settings {
+        measurement_method: Some(" ".into()),
+        ..Settings::default()
+    };
+    assert!(settings::validate(&s).is_err());
 }
 
 #[test]

@@ -39,6 +39,7 @@ import {
   tabs as readTabs,
   untitledAutosaves,
   type Drafting,
+  type ConversationSummary,
   type DrawingInfo,
   type EntityFilter,
   type Field,
@@ -50,7 +51,7 @@ import {
 import { useLanguage } from "../i18n";
 import { cycleTab } from "../shell/FileTabs";
 import { useOpenRequests } from "../shell/openRequests";
-import { atLaunch, drop, enqueue, forgetThen, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
+import { atLaunch, drop, enqueue, forgetThen, laterOpens, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
 import { isStale, serial } from "../shell/switcher";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
@@ -178,6 +179,16 @@ export function useDrawings({
   /** The drawing on screen now, for checks inside queued work. */
   const infoRef = useRef(info);
   infoRef.current = info;
+  /** A resumed chat waits until the usual autosave question has selected its drawing. */
+  const conversationOpen = useRef(new Map<string, (opened: boolean) => void>());
+  function finishConversationOpen(path: string, opened: boolean) {
+    conversationOpen.current.get(path)?.(opened);
+    conversationOpen.current.delete(path);
+  }
+  useEffect(() => () => {
+    conversationOpen.current.forEach((finish) => finish(false));
+    conversationOpen.current.clear();
+  }, []);
 
   /** Before the open drawing is left: asks "Save changes to the drawing?" when the drawing itself
    *  has unsaved changes, and saves when told to. False when the user cancels. */
@@ -352,15 +363,44 @@ export function useDrawings({
       }
     }
     setOpening(true);
+    let opened = false;
     await drawingChange(() =>
       run(async () => {
         const next = await openDrawing(path);
+        opened = true;
         // The drawing on screen asked for again: the core changed nothing.
         if (infoRef.current && next.path === infoRef.current.path) return;
         await showDrawing(next, beginShow());
       }),
     );
     setOpening(false);
+    finishConversationOpen(path, opened);
+  }
+
+  async function prepareConversation(chat: ConversationSummary): Promise<boolean> {
+    const now = await readTabs();
+    const tab = chat.drawing && now.tabs.find((item) => item.path === chat.drawing);
+    if (tab) return now.active === tab.id || drawingChange(() => activate(tab.id, true));
+    if (!chat.drawing || !chat.drawing_exists) {
+      setNotice(t("ai.drawingMissing"));
+      return true;
+    }
+    const path = chat.drawing;
+    const opened = new Promise<boolean>((resolve) => conversationOpen.current.set(path, resolve));
+    try {
+      await openPath(path);
+    } catch (e) {
+      finishConversationOpen(path, false);
+      throw e;
+    }
+    return opened;
+  }
+
+  function dismissRecovery(ask: RecoveryAsk) {
+    const then = laterOpens(ask);
+    setRecoveries((q) => q.filter((item) => item.id !== ask.id));
+    if (then) void openPath(then, false);
+    else if (ask.then) finishConversationOpen(ask.then, false);
   }
 
   // Drawings the OS asks to open (a double click on one, a second launch) come the same way.
@@ -429,6 +469,7 @@ export function useDrawings({
     setRecoveries((q) => forgetThen(drop(q, ask.id, drawing, copy), ask.id, drawing));
     // The recovered drawing itself: this render's `info` is the one before it (none at launch).
     const savedTo = await saveAs(recovered);
+    finishConversationOpen(drawing, true);
     // Times and paths isolated (FSI … PDI): they keep their own order inside Arabic. One notice,
     // so where it came from never hides where it went.
     const iso = (text: string) => `\u2068${text}\u2069`;
@@ -732,6 +773,8 @@ export function useDrawings({
     setExtractOpen,
     switching,
     openPath,
+    prepareConversation,
+    dismissRecovery,
     openFile,
     newOpen,
     setNewOpen,

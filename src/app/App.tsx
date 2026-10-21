@@ -19,6 +19,7 @@ import { LeftPanels, SidePanel, WorkArea } from "./Panels";
 import { readProblems } from "./shared";
 import { useAnnotate } from "./useAnnotate";
 import { useAssistantWiring } from "./useAssistantWiring";
+import { useConversationHistory } from "../ai/ConversationHistory";
 import { useAttach } from "./useAttach";
 import { useBlocks } from "./useBlocks";
 import { useCommandLine } from "./useCommandLine";
@@ -268,6 +269,14 @@ export default function App() {
     lastPoint,
     measure,
   });
+  const conversationHistory = useConversationHistory({
+    drawing: info?.path ?? null,
+    busy: assistant.busy,
+    empty: assistant.transcript.items.length === 0,
+    savedVersion: assistant.savedVersion,
+    prepare: drawings.prepareConversation,
+    resume: assistant.resume,
+  });
   const takeoff = useTakeoff({
     t,
     info,
@@ -424,6 +433,7 @@ export default function App() {
           takeoffState={takeoffState}
           takeoff={takeoff}
           ai={ai}
+          conversationHistory={conversationHistory}
           comments={comments}
         />
       </div>

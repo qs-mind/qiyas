@@ -10,7 +10,8 @@ use qiyas_core::{EntityFilter, Kind, Session, Total};
 const MAX_LAYERS: usize = 60;
 const MAX_BLOCKS: usize = 40;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Lang {
     #[default]
     En,

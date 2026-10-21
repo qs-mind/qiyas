@@ -212,7 +212,14 @@ impl Provider for Mock {
                     usage: Usage::default(),
                 });
             }
-            if let Some(turn) = self.drawing_turn(&req) {
+            let session = self.session.clone();
+            let drawing =
+                tokio::task::spawn_blocking(move || Mock::new(session).drawing_turn(&req))
+                    .await
+                    .map_err(|error| {
+                        AiError::Stream(format!("Mock drawing read failed: {error}"))
+                    })?;
+            if let Some(turn) = drawing {
                 if let ContentBlock::Text { text } = &turn.content[0] {
                     stream(text, sink).await;
                 }
@@ -230,13 +237,17 @@ impl Provider for Mock {
             }
             let text = "I'll measure the first wall on A-WALL.";
             stream(text, sink).await;
+            let session = self.session.clone();
+            let wall = tokio::task::spawn_blocking(move || Mock::new(session).first_wall())
+                .await
+                .map_err(|error| AiError::Stream(format!("Mock drawing read failed: {error}")))?;
             Ok(TurnResult {
                 content: vec![
                     ContentBlock::Text { text: text.into() },
                     ContentBlock::ToolUse {
                         id: "mock_1".into(),
                         name: "qiyas_execute".into(),
-                        input: json!({ "op": "run", "args": json!({ "command": { "type": "measure_entity", "handle": self.first_wall() } }).to_string() }),
+                        input: json!({ "op": "run", "args": json!({ "command": { "type": "measure_entity", "handle": wall } }).to_string() }),
                     },
                 ],
                 stop_reason: StopReason::ToolUse,

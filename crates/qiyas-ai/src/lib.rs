@@ -14,6 +14,7 @@
 pub mod agent;
 pub mod anthropic;
 pub mod context;
+pub mod conversation;
 pub mod errors;
 mod execute;
 pub mod host;
@@ -29,8 +30,9 @@ pub mod surface;
 mod tools;
 pub mod window;
 
-pub use agent::{Agent, AgentEvent, AgentSettings};
+pub use agent::{Agent, AgentEvent, AgentSettings, Autonomy, MeasurementMethod};
 pub use context::{Region, RegionKind, TurnContext, UserImage, UserMessage};
+pub use conversation::{Conversation, TranscriptEntry};
 pub use execute::{execute, ToolError, ToolOutput};
 pub use host::{is_host_tool, run_host, DrawingHost, Screen};
 pub use image::{render_png, render_png_with_text};

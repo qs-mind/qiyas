@@ -291,6 +291,16 @@ impl Session {
 
     /// Checks the sheet `scope.sheet` (the one on screen by default) and lists what it finds.
     pub fn check_drawing(&self, scope: &CheckScope) -> CheckReport {
+        self.check_drawing_with_limit(scope, MAX_FINDINGS)
+    }
+
+    /// The same check without truncating its findings. Approval compares complete error sets
+    /// so an old error beyond the display limit cannot be mistaken for a newly introduced one.
+    pub fn check_drawing_all(&self, scope: &CheckScope) -> CheckReport {
+        self.check_drawing_with_limit(scope, usize::MAX)
+    }
+
+    fn check_drawing_with_limit(&self, scope: &CheckScope, limit: usize) -> CheckReport {
         let sheet = self.sheet_block(scope.sheet.as_deref());
         let (to_m, paper_scale) = self.check_space(&sheet);
         let unit = |metres: f64| metres / to_m;
@@ -735,7 +745,7 @@ impl Session {
             .iter()
             .filter(|f| f.severity == Severity::Warning)
             .count();
-        found.truncate(MAX_FINDINGS);
+        found.truncate(limit);
         let line = check_line(errors, warnings, found.len(), &counts);
         CheckReport {
             sheet,

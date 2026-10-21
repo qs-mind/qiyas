@@ -1347,6 +1347,10 @@ export type Settings = {
   provider: Provider;
   providers: Record<Provider, ProviderProfile>;
   effort: Effort;
+  /** The plan approval setting (per_job when absent in older settings). */
+  autonomy?: "per_job" | "per_phase" | "autonomous";
+  /** A local rule set name; null means geometric quantities. */
+  measurement_method?: string | null;
   mcp_enabled: boolean;
   mcp_port: number;
   /** 32 hex characters, made once. */
@@ -1490,6 +1494,15 @@ export const sheetSetFromTabs = (qss: string, name: string) =>
   invoke<{ set: SheetSet; skipped: string[] }>("sheet_set_from_tabs", { qss, name });
 
 export const getSettings = () => invoke<Settings>("get_settings");
+
+export type MeasurementMethod = {
+  name: string;
+  title: string;
+  based_on: string;
+  source_note: string;
+  rules_loaded: boolean;
+};
+export const measurementMethods = () => invoke<MeasurementMethod[]>("measurement_methods");
 
 /** One button of the tool palette: a block to insert or a command line to run. */
 export type PaletteItem = { kind: "block" | "command"; label: string; value: string };
@@ -1711,6 +1724,7 @@ export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "plan"; phases: PlanPhase[] }
+  | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
   | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean }
   | {
       type: "tool_result";
@@ -1755,8 +1769,29 @@ export type AiImage = { media_type: string; data: string };
 
 /** Starts a turn and returns at once; events follow as `ai:event`, then `ai:done`. Rejects with
  *  "busy", "no_api_key" or "no_base_url". */
-export const aiSend = (text: string, context?: AiContext, images?: AiImage[]) =>
-  invoke<void>("ai_send", { text, context: context ?? null, images: images ?? null });
+export const aiSend = (text: string, context?: AiContext, images?: AiImage[], pointed?: string[]) =>
+  invoke<void>("ai_send", { text, context: context ?? null, images: images ?? null, pointed: pointed ?? null });
+
+export type TranscriptEntry =
+  | { type: "user"; text: string; pointed: string[]; images: string[] }
+  | { type: "event"; event: AgentEvent };
+
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  drawing: string | null;
+  drawing_exists: boolean;
+  /** Milliseconds since 1970. */
+  updated: number;
+  turns: number;
+};
+
+export const aiConversations = (drawing?: string) =>
+  invoke<ConversationSummary[]>("ai_conversations", { drawing: drawing ?? null });
+export const aiResume = (id: string) =>
+  invoke<{ transcript: TranscriptEntry[]; drawing: string | null }>("ai_resume", { id });
+export const aiDeleteConversation = (id: string) => invoke<void>("ai_delete_conversation", { id });
+export const aiDeleteConversations = () => invoke<void>("ai_delete_conversations");
 
 /** Mizan's `view_screen` asks for a picture of the main view: `{ id, maxSide }`, answered with
  *  `{ png, bounds }` (a base64 PNG and the drawing area it shows). */

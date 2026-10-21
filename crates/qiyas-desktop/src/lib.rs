@@ -3,10 +3,12 @@ mod ai_window;
 mod blocks;
 mod cmdline;
 mod commands;
+mod conversations;
 mod drawing_host;
 mod files;
 mod launch;
 mod mcp;
+pub mod methods;
 #[cfg(debug_assertions)]
 mod mock;
 mod pdf;
@@ -126,6 +128,11 @@ pub fn run() {
             ai_window::ai_window_reply,
             commands::ai_cancel,
             commands::ai_clear,
+            commands::ai_conversations,
+            commands::ai_resume,
+            commands::ai_delete_conversation,
+            commands::ai_delete_conversations,
+            methods::measurement_methods,
             commands::ai_status,
             commands::ai_log,
             commands::ai_set_language,
@@ -160,6 +167,9 @@ pub fn run() {
         .expect("error while running Qiyas")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<state::AppState>() {
+                    commands::ai_run(&state).save_logged();
+                }
                 files::release_locks(app);
             }
         });

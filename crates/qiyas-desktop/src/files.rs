@@ -248,7 +248,12 @@ pub(crate) fn install_panic_hook<R: Runtime>(app: AppHandle<R>) {
         let app = app.clone();
         let flushed = flush_within(FLUSH_TIMEOUT, move || {
             let _flushing = flushing;
-            app.try_state::<AppState>().map(|state| flush_dirty(&state))
+            app.try_state::<AppState>().map(|state| {
+                if let Ok(run) = state.ai.try_lock() {
+                    run.save_if_available();
+                }
+                flush_dirty(&state)
+            })
         });
         let mut err = std::io::stderr();
         let _ = match flushed {

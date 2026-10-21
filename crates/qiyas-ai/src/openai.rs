@@ -50,6 +50,29 @@ impl OpenAiCompatible {
 }
 
 impl Provider for OpenAiCompatible {
+    fn save_state(&self) -> Value {
+        json!({
+            "extras": self.extras.lock().map(|v| v.clone()).unwrap_or_default(),
+            "refused": self.refused.lock().map(|v| v.clone()).unwrap_or_default(),
+        })
+    }
+
+    fn restore_state(&self, state: Value) {
+        if let Ok(mut extras) = self.extras.lock() {
+            *extras = serde_json::from_value(state["extras"].clone()).unwrap_or_default();
+        }
+        if let Ok(mut refused) = self.refused.lock() {
+            *refused = OPTIONAL_FIELDS
+                .into_iter()
+                .filter(|field| {
+                    state["refused"]
+                        .as_array()
+                        .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(*field)))
+                })
+                .collect();
+        }
+    }
+
     fn stream_turn<'a>(
         &'a self,
         req: TurnRequest,
@@ -500,6 +523,44 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resumed_calls_keep_gemini_extras_and_refused_fields() {
+        let original = OpenAiCompatible::new("http://localhost/v1", None);
+        let signature = json!({"google":{"thought_signature":"opaque+/=\r\n"}});
+        original
+            .extras
+            .lock()
+            .unwrap()
+            .insert("c1".into(), signature.clone());
+        original.refused.lock().unwrap().insert("reasoning_effort");
+        let saved = serde_json::to_vec(&original.save_state()).unwrap();
+        let resumed = OpenAiCompatible::new("http://localhost/v1", None);
+        resumed.restore_state(serde_json::from_slice(&saved).unwrap());
+        let request = TurnRequest {
+            system: "Unchanged".into(),
+            messages: vec![Message::assistant(vec![ContentBlock::ToolUse {
+                id: "c1".into(),
+                name: "qiyas_read".into(),
+                input: json!({"op":"state","args":"{}"}),
+            }])],
+            tools: vec![],
+            model: "gemini".into(),
+            effort: "high".into(),
+            max_tokens: 1000,
+        };
+        let body = request_body(
+            &request,
+            &resumed.extras.lock().unwrap(),
+            &resumed.refused.lock().unwrap(),
+        );
+        assert_eq!(
+            body["messages"][1]["tool_calls"][0]["extra_content"],
+            signature
+        );
+        assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(original.save_state(), resumed.save_state());
+    }
 
     fn request(effort: &str, max_tokens: u32) -> TurnRequest {
         TurnRequest {

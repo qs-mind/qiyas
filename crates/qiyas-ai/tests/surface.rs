@@ -866,6 +866,251 @@ async fn plan_events_follow_valid_snapshots_and_the_history_keeps_them_without_a
     assert_eq!(saved, [pending, active, done]);
 }
 
+async fn events_for(agent: &mut Agent, message: &str) -> Vec<AgentEvent> {
+    let (tx, mut rx) = mpsc::channel(100);
+    agent
+        .run_turn(message.into(), tx, CancellationToken::new())
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = rx.recv().await {
+        events.push(event);
+    }
+    events
+}
+
+#[tokio::test]
+async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
+    use qiyas_ai::Autonomy;
+    for mode in [Autonomy::PerJob, Autonomy::PerPhase, Autonomy::Autonomous] {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let initial = json!({"phases":[{"id":"one","title":"First phase","status":"active"},{"id":"two","title":"Second phase","status":"pending"}]});
+        let done = json!({"phases":[{"id":"one","title":"First phase","status":"done"},{"id":"two","title":"Second phase","status":"active"}]});
+        let provider = Script::new(
+            vec![
+                (EXECUTE, json!({"op":"plan","args":initial})),
+                (EXECUTE, json!({"op":"plan","args":done})),
+            ],
+            requests.clone(),
+        );
+        let mut agent = Agent::new(
+            Box::new(provider),
+            Arc::new(Mutex::new(None)),
+            AgentSettings {
+                autonomy: mode,
+                ..Default::default()
+            },
+        );
+        let events = events_for(&mut agent, "Start the job").await;
+        if mode == Autonomy::Autonomous {
+            assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+            assert!(!events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::AwaitingApproval { .. })));
+            assert_eq!(requests.lock().unwrap().len(), 3);
+        } else {
+            assert!(
+                matches!(events.last(), Some(AgentEvent::AwaitingApproval { plan }) if plan.phases.len() == 2)
+            );
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                1,
+                "no request after the plan result until approval"
+            );
+            assert!(agent.history().last().unwrap().has_tool_results());
+            let events = events_for(&mut agent, "Approved, continue.").await;
+            if mode == Autonomy::PerPhase {
+                assert!(matches!(
+                    events.last(),
+                    Some(AgentEvent::AwaitingApproval { .. })
+                ));
+                assert_eq!(requests.lock().unwrap().len(), 2);
+            } else {
+                assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+                assert_eq!(requests.lock().unwrap().len(), 3);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_mode_pauses_for_unfixed_new_errors_but_allows_repairs_and_existing_errors() {
+    use qiyas_ai::Autonomy;
+    let line = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}});
+    for mode in [Autonomy::PerJob, Autonomy::PerPhase, Autonomy::Autonomous] {
+        for repair in [false, true] {
+            let (_dir, session) = sample();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let mut calls = vec![(EXECUTE, line.clone()), (EXECUTE, line.clone())];
+            if repair {
+                calls.push((EXECUTE, json!({"op":"undo_own","args":{}})));
+            }
+            let mut agent = Agent::new(
+                Box::new(Script::new(calls, requests)),
+                Arc::new(Mutex::new(Some(session))),
+                AgentSettings {
+                    autonomy: mode,
+                    ..Default::default()
+                },
+            );
+            let events = events_for(&mut agent, "Draw").await;
+            assert_eq!(
+                matches!(events.last(), Some(AgentEvent::AwaitingApproval { .. })),
+                !repair,
+                "{mode:?}, repair={repair}: {events:?}"
+            );
+        }
+        let (_dir, mut session) = sample();
+        call(&mut session, EXECUTE, line.clone()).unwrap();
+        call(&mut session, EXECUTE, line.clone()).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let elsewhere = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[200,200],"b":[210,200]}}});
+        let mut agent = Agent::new(
+            Box::new(Script::new(vec![(EXECUTE, elsewhere)], requests)),
+            Arc::new(Mutex::new(Some(session))),
+            AgentSettings {
+                autonomy: mode,
+                ..Default::default()
+            },
+        );
+        let events = events_for(&mut agent, "Draw elsewhere").await;
+        assert!(
+            matches!(events.last(), Some(AgentEvent::Done { .. })),
+            "pre-existing errors must not be attributed to Mizan: {events:?}"
+        );
+    }
+}
+
+#[test]
+fn state_read_reports_method_name_and_whether_rules_are_loaded() {
+    let (_dir, mut session) = sample();
+    for loaded in [false, true] {
+        let method = qiyas_ai::MeasurementMethod {
+            name: Some("office-method".into()),
+            rules_loaded: loaded,
+        };
+        let ToolOutput::Json(state) = surface::run_session_with_method(
+            &mut session,
+            READ,
+            "state",
+            &json!({}),
+            Source::Ai,
+            &method,
+        )
+        .unwrap() else {
+            panic!("JSON state");
+        };
+        assert_eq!(
+            state["measurement_method"],
+            json!({"name":"office-method","rules_loaded":loaded})
+        );
+    }
+}
+
+#[tokio::test]
+async fn unfinished_phase_error_attribution_survives_restart_until_repaired() {
+    let (_dir, session) = sample();
+    let shared = Arc::new(Mutex::new(Some(session)));
+    let settings = AgentSettings {
+        autonomy: qiyas_ai::Autonomy::Autonomous,
+        ..Default::default()
+    };
+    let line = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}});
+    let mut agent = Agent::new(
+        Box::new(Script::new(
+            vec![(EXECUTE, line.clone()), (EXECUTE, line)],
+            Default::default(),
+        )),
+        shared.clone(),
+        settings.clone(),
+    );
+    assert!(matches!(
+        events_for(&mut agent, "Draw").await.last(),
+        Some(AgentEvent::AwaitingApproval { .. })
+    ));
+    let saved = serde_json::to_vec(&agent.snapshot()).unwrap();
+    let conversation = serde_json::from_slice(&saved).unwrap();
+    let mut resumed = Agent::resume(
+        conversation,
+        Box::new(Script::new(vec![], Default::default())),
+        shared.clone(),
+        settings.clone(),
+    );
+    assert!(
+        matches!(
+            events_for(&mut resumed, "Approved, continue.").await.last(),
+            Some(AgentEvent::AwaitingApproval { .. })
+        ),
+        "approval alone does not erase errors from the unfinished phase"
+    );
+    let mut repairing = Agent::resume(
+        resumed.snapshot(),
+        Box::new(Script::new(
+            vec![(EXECUTE, json!({"op":"undo_own","args":{}}))],
+            Default::default(),
+        )),
+        shared,
+        settings,
+    );
+    assert!(matches!(
+        events_for(&mut repairing, "Fix the error").await.last(),
+        Some(AgentEvent::Done { .. })
+    ));
+}
+
+#[tokio::test]
+async fn preexisting_errors_after_the_display_limit_are_not_attributed_to_mizan() {
+    use opencadcodec::{EntityType, MText, Vector3};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("Untitled.dwg"), 6);
+    let owner = session
+        .drawing
+        .doc
+        .block_records
+        .get("*Model_Space")
+        .unwrap()
+        .handle;
+    let mut last = 0;
+    for index in 0..205 {
+        let mut text = MText::with_value(
+            "BED\\nROOM",
+            Vector3::new(f64::from(index) * 100.0, 0.0, 0.0),
+        );
+        text.common.owner_handle = owner;
+        last = session
+            .drawing
+            .doc
+            .add_entity(EntityType::MText(text))
+            .unwrap()
+            .value();
+    }
+    let report = session.check_drawing(&Default::default());
+    assert!(report.errors > 200);
+    assert_eq!(report.findings.len(), 200);
+    assert!(!report
+        .findings
+        .iter()
+        .any(|finding| finding.handles.contains(&last)));
+    let edit = json!({"op":"run","args":{"command":{"type":"set_property","target":{"handle":last},"prop":"text_height","value":0.3}}});
+    let mut agent = Agent::new(
+        Box::new(Script::new(vec![(EXECUTE, edit)], Default::default())),
+        Arc::new(Mutex::new(Some(session))),
+        AgentSettings::default(),
+    );
+    let events = events_for(&mut agent, "Change the height only").await;
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Done { .. })),
+        "the existing text error beyond the display cap was not made by Mizan: {events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolResult {
+            is_error: false,
+            ..
+        }
+    )));
+}
+
 #[test]
 fn validate_reports_all_input_errors_and_checks_step_indexes_without_a_drawing() {
     let input = json!({"commands":[

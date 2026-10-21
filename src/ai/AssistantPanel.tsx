@@ -5,6 +5,7 @@ import { useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
+import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
 import { ToolCard } from "./ToolCard";
@@ -22,6 +23,7 @@ type Props = {
   /** What the user points at (the selection, a marked area) as chips above the box, and the send
    *  that takes them along. Without it the message goes alone. */
   pointing?: Pointing;
+  history?: ConversationHistoryState;
   /** Reads a picture pasted, dropped or picked (tests give their own). */
   read?(file: File): Promise<Picture>;
 };
@@ -36,10 +38,12 @@ export const AssistantPanel = memo(function AssistantPanel({
   onUndo,
   onSettings,
   pointing,
+  history,
   read = readPicture,
 }: Props) {
   const t = useT();
   const { transcript, busy, error } = assistant;
+  const unavailable = busy || !!history?.pending;
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
@@ -89,7 +93,7 @@ export const AssistantPanel = memo(function AssistantPanel({
 
   async function submit() {
     const text = draft.trim();
-    if ((!text && pictures.length === 0) || busy) return;
+    if ((!text && pictures.length === 0) || unavailable) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
     const sent = pointing
@@ -143,7 +147,10 @@ export const AssistantPanel = memo(function AssistantPanel({
   function show(item: Item, i: number): ReactNode {
     switch (item.kind) {
       case "plan":
-        return <PlanChecklist key={i} phases={item.phases} />;
+        return <PlanChecklist key={i} phases={item.phases}
+          onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
+            ? () => { void assistant.send("Approved, continue."); } : undefined}
+          onChange={() => box.current?.focus()} />;
       case "user":
         return (
           <div key={i} className="msg user" dir="auto">
@@ -155,7 +162,9 @@ export const AssistantPanel = memo(function AssistantPanel({
                   </span>
                 ))}
                 {item.images?.map((url, k) => (
-                  <img key={k} src={url} alt={t("ai.picture")} className="thumb" />
+                  url === "[picture removed]"
+                    ? <span key={k} className="chip">{t("ai.pictureRemoved")}</span>
+                    : <img key={k} src={url} alt={t("ai.picture")} className="thumb" />
                 ))}
               </div>
             )}
@@ -178,7 +187,7 @@ export const AssistantPanel = memo(function AssistantPanel({
       case "tool": {
         if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
-        const canUndo = !busy && item === undoable;
+        const canUndo = !unavailable && item === undoable;
         return (
           <ToolCard
             key={i}
@@ -213,7 +222,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           type="button"
           className="new-chat"
           onClick={assistant.clear}
-          disabled={busy || empty}
+          disabled={unavailable || empty}
           title={t("ai.newChatTip")}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -221,6 +230,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           </svg>
           {t("ai.newChat")}
         </button>
+        {history && <ConversationHistory history={history} disabled={busy} />}
         <button type="button" aria-pressed={showLog} onClick={() => setShowLog((on) => !on)}>
           {t("ai.log")}
         </button>
@@ -242,6 +252,7 @@ export const AssistantPanel = memo(function AssistantPanel({
       <p className="sr-only" role="status" aria-live="polite">
         {announce}
       </p>
+      {history?.error && <p className="msg notice" role="alert">{history.error}</p>}
       {showLog ? (
         <div className="agent-log">
           <div className="agent-log-bar">
@@ -262,6 +273,10 @@ export const AssistantPanel = memo(function AssistantPanel({
           {empty ? (
             <div className="assistant-empty">
               <p>{t("ai.emptyTitle")}</p>
+              {history?.latest && <button type="button" className="continue-chat" disabled={busy || history.pending}
+                onClick={() => { void history.resume(history.latest!); }}>
+                {t("ai.continue", { title: history.latest.title })}
+              </button>}
               <ul>
                 {EXAMPLES.map((key) => (
                   <li key={key}>
@@ -287,7 +302,7 @@ export const AssistantPanel = memo(function AssistantPanel({
               {t("ai.working")}
             </p>
           )}
-          {!busy && (startNewOffered(transcript) || error === "crashed") && (
+          {!unavailable && (startNewOffered(transcript) || error === "crashed") && (
             <button type="button" className="primary new-conversation" onClick={assistant.clear}>
               {t("ai.newConversation")}
             </button>
@@ -456,7 +471,7 @@ export const AssistantPanel = memo(function AssistantPanel({
               {t("ai.stop")}
             </button>
           ) : (
-            <button type="submit" className="primary" disabled={!draft.trim() && pictures.length === 0}>
+            <button type="submit" className="primary" disabled={unavailable || (!draft.trim() && pictures.length === 0)}>
               {t("ai.send")}
             </button>
           )}

@@ -266,16 +266,49 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         window and one 900 mm partition door, then name the rooms. Dimensions, table and sheet \
         are covered by the original villa evaluation; mark those phases skipped here."
                 .into(),
-            tx,
+            tx.clone(),
             CancellationToken::new(),
         )
         .await
         .unwrap();
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    assert!(
+        matches!(events.last(), Some(AgentEvent::AwaitingApproval { plan })
+        if serde_json::to_value(&plan.phases).unwrap() == json!(phase_values(0)))
+    );
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        2,
+        "read state, then stop at the first plan"
+    );
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .drawing
+            .entities_in(MODEL)
+            .count(),
+        0,
+        "the unapproved plan must not draw anything"
+    );
+    agent
+        .run_turn("Approved, continue.".into(), tx, CancellationToken::new())
+        .await
+        .unwrap();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
     let mut plans = Vec::new();
     let mut errors = Vec::new();
     let mut calls = 0;
     let mut completed = false;
-    while let Ok(event) = rx.try_recv() {
+    let mut approvals = 0;
+    for event in events {
         match event {
             AgentEvent::Plan { phases } => plans.push(serde_json::to_value(phases).unwrap()),
             AgentEvent::ToolCall { name, .. } => {
@@ -288,10 +321,16 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
                 ..
             } => errors.push(summary),
             AgentEvent::Done { .. } => completed = true,
+            AgentEvent::AwaitingApproval { plan } => {
+                approvals += 1;
+                assert_eq!(serde_json::to_value(plan.phases).unwrap(), json!(phase_values(0)),
+                    "only the initial job approval is expected; unresolved drawing errors must fail the evaluation");
+            }
             AgentEvent::Stopped { reason } => panic!("{reason}"),
             _ => {}
         }
     }
+    assert_eq!(approvals, 1);
     assert!(completed);
     assert_eq!(calls, call_count);
     assert_eq!(requests.lock().unwrap().len(), call_count + 1);

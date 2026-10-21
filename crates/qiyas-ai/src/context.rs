@@ -95,6 +95,8 @@ impl UserImage {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UserMessage {
     pub text: String,
+    /// The labels displayed beside this message in the window, without pictures.
+    pub pointed: Vec<String>,
     pub context: TurnContext,
     pub images: Vec<UserImage>,
 }

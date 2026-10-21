@@ -9,6 +9,7 @@ import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
 import type { Batch } from "../viewport/batch";
+import type { ConversationSummary } from "../api";
 
 /** Shows a ribbon tab; the ones after Annotate are under "More". */
 function goTab(name: string) {
@@ -52,6 +53,8 @@ const core = vi.hoisted(() => ({
   layers: ["0"],
   undoBatch: null as ArrayBuffer | null,
   otherBatch: null as ArrayBuffer | null,
+  untitled: false,
+  savedConversations: [] as ConversationSummary[],
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -65,7 +68,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "totals":
       case "conflicts":
       case "paper_views":
+      case "measurement_methods":
         return [];
+      case "ai_conversations":
+        return core.savedConversations;
       case "pick_polygon":
         return [{ top: 42, entity: 42, chain: [], xref: null, kind: "Line" }];
       case "get_settings":
@@ -238,6 +244,7 @@ vi.mock("../viewport/Viewport", () => ({
 function info(path: string) {
   return {
     path,
+    untitled: core.untitled,
     sheets: [
       { name: "Model", block: "*Model_Space", is_model: true },
       { name: "Layout1", block: "*Paper_Space", is_model: false },
@@ -295,6 +302,8 @@ beforeEach(() => {
   core.layers = ["0"];
   core.undoBatch = null;
   core.otherBatch = null;
+  core.untitled = false;
+  core.savedConversations = [];
 });
 
 afterEach(() => {
@@ -1210,4 +1219,19 @@ test("Mizan selects for the user, and the window says what the user points at", 
   await emit("ai:capture", { id: 8, maxSide: 1600 });
   await settle();
   expect(core.calls).toEqual([`ai_window_reply {"id":8,"value":null,"error":"No drawing is on screen"}`]);
+});
+
+test("an untitled drawing keeps its own Continue offer through its placeholder path", async () => {
+  core.untitled = true;
+  core.savedConversations = [{
+    id: "untitled-chat", title: "Draw the new plan", drawing: PLAN,
+    drawing_exists: false, updated: 1_792_598_400_000, turns: 1,
+  }];
+  await mount();
+  // An existing untitled tab is shown directly; its placeholder is not a file to open.
+  await emit("drawing:shown", null);
+  await settle();
+  fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
+  await settle();
+  expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();
 });

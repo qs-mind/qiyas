@@ -1,16 +1,19 @@
 //! The agent loop: stream a turn, run the tools the model asks for on the shared session, send
 //! the results back, and repeat until the model ends its turn.
 
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use qiyas_core::{Session, Source};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::{self, TurnContext, UserMessage};
+use crate::conversation::{self, Conversation, PhaseState, TranscriptEntry};
 use crate::host::{changes_drawing, run_host, DrawingHost, NO_HOST, NO_WINDOW};
 use crate::log::{clip, AgentLog};
 use crate::prompt::{state_block, system_prompt, DrawingFacts, Lang, LiveState};
@@ -60,25 +63,47 @@ pub const DRAWING_CHANGED: &str = "Not run: the drawing changed. Another drawing
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentSettings {
+    pub provider: String,
     pub model: String,
     pub effort: String,
     pub max_tokens: u32,
     pub language: Lang,
+    pub autonomy: Autonomy,
+    pub measurement_method: MeasurementMethod,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Autonomy {
+    #[default]
+    PerJob,
+    PerPhase,
+    Autonomous,
+}
+
+/// Only the rule-set envelope is understood here; applying rules belongs to Phase 17.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeasurementMethod {
+    pub name: Option<String>,
+    pub rules_loaded: bool,
 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
         AgentSettings {
+            provider: "anthropic".into(),
             model: "claude-opus-5-5".into(),
             effort: "high".into(),
             max_tokens: 16_000,
             language: Lang::En,
+            autonomy: Autonomy::PerJob,
+            measurement_method: MeasurementMethod::default(),
         }
     }
 }
 
 /// What the agent tells the window while a turn runs.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     Text {
@@ -90,6 +115,9 @@ pub enum AgentEvent {
     /// The current task's checklist, also kept in the tool result in history.
     Plan {
         phases: Vec<surface::PlanPhase>,
+    },
+    AwaitingApproval {
+        plan: surface::Plan,
     },
     ToolCall {
         id: String,
@@ -143,6 +171,16 @@ pub struct Agent {
     image_bytes: usize,
     image_budget: usize,
     log: Option<AgentLog>,
+    id: String,
+    title: String,
+    created: u64,
+    transcript: Mutex<Vec<TranscriptEntry>>,
+    checkpoint: Option<Arc<Mutex<Option<Conversation>>>>,
+    resumed: bool,
+    plan: Option<surface::Plan>,
+    phase_state: PhaseState,
+    /// Metadata captured while the session is locked on a blocking worker.
+    phase_epoch: Option<u64>,
 }
 
 /// What a user turn starts from: the `[state]` block, the session's epoch (none without a
@@ -150,6 +188,8 @@ pub struct Agent {
 struct Opening {
     state: String,
     epoch: Option<u64>,
+    drawing: Option<PathBuf>,
+    system: Option<String>,
     picture: Option<(Vec<u8>, String)>,
 }
 
@@ -159,6 +199,9 @@ struct TurnCounts {
     calls: usize,
     destructive: usize,
     changed_drawing: bool,
+    plan_seen: bool,
+    approved: bool,
+    awaiting: Option<surface::Plan>,
 }
 
 impl TurnCounts {
@@ -198,7 +241,154 @@ impl Agent {
             image_bytes: 0,
             image_budget: IMAGE_BUDGET,
             log: None,
+            id: String::new(),
+            title: String::new(),
+            created: 0,
+            transcript: Mutex::new(Vec::new()),
+            checkpoint: None,
+            resumed: false,
+            plan: None,
+            phase_state: PhaseState::default(),
+            phase_epoch: None,
         }
+    }
+
+    pub fn with_checkpoint(mut self, checkpoint: Arc<Mutex<Option<Conversation>>>) -> Self {
+        self.checkpoint = Some(checkpoint);
+        self.update_checkpoint();
+        self
+    }
+
+    pub fn snapshot(&self) -> Conversation {
+        // Streaming and desktop resets call this while another thread may own the session.
+        // Only use metadata returned by the blocking opening/tool steps; never lock it here.
+        let drawing = self.phase_state.drawing.clone();
+        let phase_state = self.phase_state.clone();
+        let mut history = conversation::history_without_pictures(&self.history);
+        // A crash during a group of calls must still leave one result for every call.
+        if let Some(index) = history.iter().rposition(|m| m.role == Role::Assistant) {
+            let ids: Vec<String> = history[index]
+                .tool_uses()
+                .map(|(id, _, _)| id.to_string())
+                .collect();
+            if !ids.is_empty() {
+                if index + 1 == history.len() {
+                    history.push(Message::user(Vec::new()));
+                }
+                for id in ids {
+                    if !history[index + 1].content.iter().any(|b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == &id)) {
+                        history[index + 1].content.push(error_result(&id, "Interrupted before the result was saved; it may have run. Read the drawing before retrying."));
+                    }
+                }
+            }
+        }
+        Conversation {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            created: self.created,
+            updated: conversation::now(),
+            drawing,
+            provider: self.settings.provider.clone(),
+            model: self.settings.model.clone(),
+            language: self.settings.language,
+            system: self.system.clone(),
+            history,
+            image_bytes: self.image_bytes,
+            provider_state: self.provider.save_state(),
+            transcript: self
+                .transcript
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+            phase_state,
+        }
+        .without_pictures()
+    }
+
+    pub fn resume(
+        mut conv: Conversation,
+        provider: Box<dyn Provider>,
+        session: Arc<Mutex<Option<Session>>>,
+        settings: AgentSettings,
+    ) -> Self {
+        if conv.provider == settings.provider && conv.model == settings.model {
+            provider.restore_state(conv.provider_state);
+        } else {
+            for message in &mut conv.history {
+                let boundary = message.fallback_boundary();
+                message.content = std::mem::take(&mut message.content)
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(index, block)| {
+                        (*index >= boundary || matches!(block, ContentBlock::Text { .. }))
+                            && !matches!(
+                                block,
+                                ContentBlock::Thinking { .. } | ContentBlock::Raw(_)
+                            )
+                    })
+                    .map(|(_, block)| block)
+                    .collect();
+            }
+            conv.history.retain(|message| !message.content.is_empty());
+            let mut history: Vec<Message> = Vec::with_capacity(conv.history.len());
+            for message in conv.history {
+                if let Some(last) = history.last_mut().filter(|last| last.role == message.role) {
+                    last.content.extend(message.content);
+                } else {
+                    history.push(message);
+                }
+            }
+            conv.history = history;
+        }
+        let plan = conv.transcript.iter().rev().find_map(|entry| match entry {
+            TranscriptEntry::Event {
+                event: AgentEvent::Plan { phases },
+            } => Some(surface::Plan {
+                phases: phases.clone(),
+            }),
+            _ => None,
+        });
+        let mut agent = Self::new(provider, session, settings);
+        agent.id = conv.id;
+        agent.title = conv.title;
+        agent.created = conv.created;
+        agent.system = conv.system;
+        agent.history = conv.history;
+        agent.image_bytes = conv.image_bytes;
+        agent.transcript = Mutex::new(conv.transcript);
+        agent.resumed = true;
+        agent.plan = plan;
+        // The first blocking opening validates this saved attribution against its drawing.
+        // Epochs are process-local, so a resumed phase is matched by path once.
+        agent.phase_state = conv.phase_state;
+        agent.phase_state.drawing = conv.drawing;
+        agent
+    }
+
+    /// Save As changes a drawing's path without changing its epoch or phase attribution.
+    pub fn drawing_saved_as(&mut self, drawing: PathBuf) {
+        self.phase_state.drawing = Some(drawing);
+    }
+
+    fn update_checkpoint(&self) {
+        if let Some(checkpoint) = &self.checkpoint {
+            let snapshot = self.snapshot();
+            *checkpoint.lock().unwrap_or_else(PoisonError::into_inner) = Some(snapshot);
+        }
+    }
+
+    async fn emit(&self, events: &mpsc::Sender<AgentEvent>, event: AgentEvent) {
+        conversation::append(
+            &mut self
+                .transcript
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            TranscriptEntry::Event {
+                event: event.clone(),
+            },
+        );
+        self.update_checkpoint();
+        let _ = events.send(event).await;
     }
 
     /// The agent with the app's drawings behind its file tools (`crate::host`).
@@ -235,6 +425,17 @@ impl Agent {
         self.history.clear();
         self.system = None;
         self.image_bytes = 0;
+        self.id.clear();
+        self.title.clear();
+        self.created = 0;
+        self.transcript
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.plan = None;
+        self.resumed = false;
+        self.phase_state = PhaseState::default();
+        self.phase_epoch = None;
     }
 
     /// The new settings apply to the next request; the language of the system prompt changes
@@ -264,10 +465,38 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
         cancel: CancellationToken,
     ) -> Result<(), AiError> {
+        if self.id.is_empty() {
+            self.id = uuid::Uuid::new_v4().to_string();
+            self.created = conversation::now();
+            self.title = message.text.chars().take(60).collect();
+        }
+        conversation::append(
+            &mut self
+                .transcript
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            TranscriptEntry::User {
+                text: message.text.clone(),
+                pointed: message.pointed.clone(),
+                images: vec![conversation::PICTURE_REMOVED.to_string(); message.images.len()],
+            },
+        );
+        let result = self.run_turn_inner(message, events, cancel).await;
+        self.update_checkpoint();
+        result
+    }
+
+    async fn run_turn_inner(
+        &mut self,
+        message: UserMessage,
+        events: mpsc::Sender<AgentEvent>,
+        cancel: CancellationToken,
+    ) -> Result<(), AiError> {
         let UserMessage {
             text: user_text,
             context: pointed,
             images,
+            pointed: _,
         } = message;
         self.log("USER", || {
             let mut entry = user_text.clone();
@@ -292,21 +521,26 @@ impl Agent {
         if let Some(why) = images.iter().find_map(context::UserImage::refused) {
             return self.stop(&events, &why).await;
         }
-        let system = match &self.system {
-            Some(s) => s.clone(),
-            None => {
-                let s = self.build_system();
-                self.system = Some(s.clone());
-                s
-            }
-        };
         let Opening {
             state,
             mut epoch,
+            drawing,
+            system,
             picture,
-        } = self.state(&pointed);
+        } = match self.opening(pointed, &cancel).await {
+            Ok(opening) => opening,
+            Err(why) => return self.stop(&events, &why).await,
+        };
+        self.refresh_phase_drawing(drawing, epoch);
+        if self.system.is_none() {
+            self.system = system;
+        }
+        let system = self.system.clone().unwrap_or_default();
         self.turn_text = user_text.clone();
         let mut content = vec![ContentBlock::Text { text: state }];
+        if std::mem::take(&mut self.resumed) {
+            content.push(ContentBlock::Text { text: "[resumed] This conversation continues after a pause; the drawing may have changed: read it before acting.".into() });
+        }
         if let Some((png, caption)) = picture {
             let data = png_base64(&png);
             if self.image_bytes + data.len() <= self.image_budget {
@@ -337,8 +571,12 @@ impl Agent {
         }
         self.push_user(content);
         self.trim_pictures();
+        self.update_checkpoint();
         let tools = catalogue();
-        let mut counts = TurnCounts::default();
+        let mut counts = TurnCounts {
+            approved: self.turn_text.trim() == "Approved, continue.",
+            ..TurnCounts::default()
+        };
         let mut usage = Usage::default();
         let mut requests = 0;
         // Grows when an answer spends all its room thinking (see `MAX_TOKENS_CAP`).
@@ -398,19 +636,28 @@ impl Agent {
                             category.as_deref().unwrap_or("none")
                         )
                     });
-                    let _ = events.send(AgentEvent::Refused { category, text }).await;
+                    self.emit(&events, AgentEvent::Refused { category, text })
+                        .await;
                     return Ok(());
                 }
                 // With no call to answer (all were in a declined attempt before a fallback), an
                 // empty user message would be refused, so the turn ends below instead.
                 StopReason::ToolUse if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
-                    let results = self
+                    self.history.push(assistant.clone());
+                    self.history.push(Message::user(Vec::new()));
+                    if let Err(why) = self
                         .run_tools(&assistant, &mut counts, &events, &cancel, &mut epoch)
-                        .await;
-                    self.history.push(assistant);
-                    self.history.push(Message::user(results));
+                        .await
+                    {
+                        return self.stop(&events, &why).await;
+                    }
                     self.trim_pictures();
+                    if let Some(plan) = counts.awaiting.take() {
+                        self.emit(&events, AgentEvent::AwaitingApproval { plan })
+                            .await;
+                        return Ok(());
+                    }
                     if counts.calls >= counts.limit() {
                         let why = format!("stopped after {} steps", counts.limit());
                         return self.stop(&events, &why).await;
@@ -444,7 +691,17 @@ impl Agent {
                     return match reason {
                         StopReason::EndTurn | StopReason::ToolUse => {
                             self.log("DONE", || tokens(&usage));
-                            let _ = events.send(AgentEvent::Done { usage }).await;
+                            let errors = match self.unfixed_errors(&cancel, epoch).await {
+                                Ok(errors) => errors,
+                                Err(why) => return self.stop(&events, &why).await,
+                            };
+                            if !errors.is_empty() {
+                                let plan = Self::error_approval_plan(self.approval_plan(), &errors);
+                                self.emit(&events, AgentEvent::AwaitingApproval { plan })
+                                    .await;
+                            } else {
+                                self.emit(&events, AgentEvent::Done { usage }).await;
+                            }
                             Ok(())
                         }
                         StopReason::MaxTokens => self.stop(&events, "max_tokens").await,
@@ -458,8 +715,21 @@ impl Agent {
 
     /// Ends the turn early for `reason`, in the log too.
     async fn stop(&self, events: &mpsc::Sender<AgentEvent>, reason: &str) -> Result<(), AiError> {
+        // Tool results name an unrun call; the turn event keeps its existing cancellation code.
+        let reason = if reason == CANCELLED {
+            "cancelled"
+        } else {
+            reason
+        };
         self.log("STOPPED", || reason.to_string());
-        stopped(events, reason).await
+        self.emit(
+            events,
+            AgentEvent::Stopped {
+                reason: reason.to_string(),
+            },
+        )
+        .await;
+        Ok(())
     }
 
     /// Streams one turn, forwarding text and thinking as they arrive. `None` when cancelled:
@@ -501,7 +771,7 @@ impl Agent {
                     StreamEvent::Thinking(text) => AgentEvent::Thinking { text },
                     _ => continue,
                 };
-                let _ = events.send(event).await;
+                self.emit(events, event).await;
             }
             if !reported {
                 self.log(
@@ -528,21 +798,28 @@ impl Agent {
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancellationToken,
         epoch: &mut Option<u64>,
-    ) -> Vec<ContentBlock> {
-        let mut results = Vec::new();
+    ) -> Result<(), String> {
+        let mut stopped = None;
         for (id, name, input) in assistant.tool_uses() {
-            let _ = events
-                .send(AgentEvent::ToolCall {
+            self.emit(
+                events,
+                AgentEvent::ToolCall {
                     id: id.to_string(),
                     name: name.to_string(),
                     input: input.clone(),
                     label: surface::label(name, input),
                     mutating: surface::mutating(name, input),
-                })
-                .await;
+                },
+            )
+            .await;
             let started = Instant::now();
             // Every answered call counts, bad input included.
-            let (mut block, event) = if cancel.is_cancelled() {
+            let (mut block, event) = if let Some(why) = stopped.as_deref() {
+                (error_result(id, why), error_event(id, why))
+            } else if counts.awaiting.is_some() {
+                let why = "Not run: waiting for the user's approval.";
+                (error_result(id, why), error_event(id, why))
+            } else if cancel.is_cancelled() {
                 (error_result(id, CANCELLED), error_event(id, CANCELLED))
             } else if counts.calls >= counts.limit() {
                 let why = "Not run: the limit of tool calls for this message was reached.";
@@ -583,20 +860,28 @@ impl Agent {
                     match routed {
                         Err(why) => (error_result(id, &why), error_event(id, &why)),
                         Ok(Route::Window { tool, input }) => {
-                            self.run_window_tool(id, tool, &input).await
+                            self.run_window_tool(id, tool, &input, cancel, *epoch).await
                         }
                         Ok(Route::Host { tool, input }) => {
-                            let before = self.epoch_now();
-                            let ran = self.run_host_tool(id, tool, &input).await;
+                            let before = *epoch;
+                            let ran = self.run_host_tool(id, tool, &input, cancel, *epoch).await;
                             if changes_drawing(tool) && !is_error(&ran.0) {
-                                *epoch = self.epoch_now();
+                                *epoch = self.phase_epoch;
                                 counts.changed_drawing |= before != *epoch;
                             }
                             ran
                         }
                         Ok(Route::Session { tool, op, args }) => {
-                            let (block, event, changed) =
-                                self.run_tool(id, (&tool, &op), &args, cancel, *epoch).await;
+                            let (block, event, changed) = self
+                                .run_tool(
+                                    id,
+                                    (&tool, &op),
+                                    &args,
+                                    cancel,
+                                    *epoch,
+                                    surface::mutating(name, input),
+                                )
+                                .await;
                             counts.changed_drawing |= changed;
                             (block, event)
                         }
@@ -616,17 +901,139 @@ impl Agent {
                     .map_err(ToolError::BadInput)
                     .and_then(|args| surface::read_plan(&args))
                 {
-                    let _ = events
-                        .send(AgentEvent::Plan {
+                    let completed = plan.phases.iter().any(|phase| {
+                        phase.status == surface::PlanStatus::Done
+                            && !self.plan.as_ref().is_some_and(|old| {
+                                old.phases.iter().any(|p| {
+                                    p.id == phase.id && p.status == surface::PlanStatus::Done
+                                })
+                            })
+                    });
+                    let switched = self.plan.as_ref().and_then(active_phase) != active_phase(&plan);
+                    let errors = if completed || switched {
+                        match self.unfixed_errors(cancel, *epoch).await {
+                            Ok(errors) => errors,
+                            Err(why) => {
+                                // Finish answering this batch so every tool use still has a result.
+                                stopped = Some(why);
+                                BTreeSet::new()
+                            }
+                        }
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let first = !counts.plan_seen;
+                    counts.plan_seen = true;
+                    if stopped.is_some() {
+                        counts.awaiting = None;
+                    } else if !errors.is_empty() {
+                        counts.awaiting = Some(Self::error_approval_plan(plan.clone(), &errors));
+                    } else if self.settings.autonomy != Autonomy::Autonomous
+                        && ((first && plan.phases.len() >= 2 && !counts.approved)
+                            || (self.settings.autonomy == Autonomy::PerPhase && completed))
+                    {
+                        counts.awaiting = Some(plan.clone());
+                    }
+                    if stopped.is_none() && (completed || switched) && errors.is_empty() {
+                        self.phase_state.baseline_errors = None;
+                        self.phase_state.touched.clear();
+                    }
+                    self.plan = Some(plan.clone());
+                    self.emit(
+                        events,
+                        AgentEvent::Plan {
                             phases: plan.phases,
-                        })
-                        .await;
+                        },
+                    )
+                    .await;
                 }
             }
-            results.push(block);
-            let _ = events.send(event).await;
+            if let Some(last) = self.history.last_mut() {
+                last.content.push(block);
+            }
+            self.emit(events, event).await;
         }
-        results
+        stopped.map_or(Ok(()), Err)
+    }
+
+    /// Check on a blocking worker, against the same drawing, once per phase boundary or end.
+    /// The returned set also supplies the approval text without a second drawing check.
+    async fn unfixed_errors(
+        &mut self,
+        cancel: &CancellationToken,
+        epoch: Option<u64>,
+    ) -> Result<BTreeSet<String>, String> {
+        if self.phase_state.touched.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let Some(baseline) = self.phase_state.baseline_errors.clone() else {
+            return Ok(BTreeSet::new());
+        };
+        let handles = self.phase_state.touched.iter().copied().collect::<Vec<_>>();
+        let session = self.session.clone();
+        let cancel = cancel.clone();
+        let (drawing, errors) = tokio::task::spawn_blocking(move || {
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            check_turn(guard.as_ref(), &cancel, epoch)?;
+            let drawing = guard.as_ref().map(|s| s.drawing.path.clone());
+            let errors = guard.as_ref().map_or_else(BTreeSet::new, |s| {
+                drawing_errors(s, &handles)
+                    .difference(&baseline)
+                    .cloned()
+                    .collect()
+            });
+            check_turn(guard.as_ref(), &cancel, epoch)?;
+            Ok::<_, String>((drawing, errors))
+        })
+        .await
+        .map_err(|e| format!("The drawing check crashed: {e}"))??;
+        self.refresh_phase_drawing(drawing, epoch);
+        Ok(errors)
+    }
+
+    fn error_approval_plan(mut plan: surface::Plan, errors: &BTreeSet<String>) -> surface::Plan {
+        let errors = errors
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        for phase in &mut plan.phases {
+            if phase.status == surface::PlanStatus::Active {
+                phase.status = surface::PlanStatus::Pending;
+            }
+        }
+        plan.phases.push(surface::PlanPhase {
+            id: "drawing-check-review".into(),
+            title: clip_to(&format!("Review drawing errors: {errors}"), 159),
+            status: surface::PlanStatus::Active,
+        });
+        plan
+    }
+
+    /// Apply metadata captured off-thread. Resume validates by path once; Save As keeps the
+    /// epoch, while an ordinary tab switch starts fresh error attribution.
+    fn refresh_phase_drawing(&mut self, drawing: Option<PathBuf>, epoch: Option<u64>) {
+        let same_drawing = if self.resumed {
+            self.phase_state.drawing == drawing
+        } else {
+            self.phase_epoch == epoch
+        };
+        if !same_drawing {
+            self.phase_state = PhaseState::default();
+        }
+        self.phase_state.drawing = drawing;
+        self.phase_epoch = epoch;
+    }
+
+    fn approval_plan(&self) -> surface::Plan {
+        self.plan.clone().unwrap_or_else(|| surface::Plan {
+            phases: vec![surface::PlanPhase {
+                id: "drawing-check".into(),
+                title: "Review drawing check errors".into(),
+                status: surface::PlanStatus::Active,
+            }],
+        })
     }
 
     /// Runs one tool off the async workers (a picture takes a while to draw), holding the
@@ -641,6 +1048,7 @@ impl Agent {
         input: &Value,
         cancel: &CancellationToken,
         epoch: Option<u64>,
+        mutating: bool,
     ) -> (ContentBlock, AgentEvent, bool) {
         let (name, op) = operation;
         if name == surface::CAPTURE && self.image_bytes >= self.image_budget {
@@ -652,35 +1060,57 @@ impl Agent {
         }
         let session = self.session.clone();
         let (tool, op, args) = (name.to_string(), op.to_string(), input.clone());
+        let method = self.settings.measurement_method.clone();
         let cancel = cancel.clone();
+        let mut phase = self.phase_state.clone();
         let ran = tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
-            if cancel.is_cancelled() {
-                return Err(CANCELLED);
-            }
+            check_turn(guard.as_ref(), &cancel, epoch)?;
+            phase.drawing = guard.as_ref().map(|s| s.drawing.path.clone());
             if guard.is_none() {
                 if let Some(output) = surface::run_without_drawing(&tool, &op, &args, None) {
-                    return Ok((output, false));
+                    return Ok((output, false, phase));
                 }
             }
-            match guard.as_mut() {
-                None => Err("No drawing is open. Ask the user to open one."),
-                Some(s) if epoch.is_some_and(|e| e != s.epoch()) => Err(DRAWING_CHANGED),
-                Some(s) => {
-                    let before = s.document_revision();
-                    let output = surface::run_session(s, &tool, &op, &args, Source::Ai);
-                    let changed = before != s.document_revision();
-                    Ok((output, changed))
+            let s = guard
+                .as_mut()
+                .ok_or("No drawing is open. Ask the user to open one.")?;
+            // Baseline and mutation share this critical section: no tab switch or other edit
+            // can slip between them, and rejected/cancelled calls never establish a baseline.
+            if mutating && phase.baseline_errors.is_none() {
+                phase.baseline_errors = Some(drawing_errors(s, &[]));
+            }
+            check_turn(Some(s), &cancel, epoch)?;
+            let before = s.document_revision();
+            let output =
+                surface::run_session_with_method(s, &tool, &op, &args, Source::Ai, &method);
+            let changed = before != s.document_revision();
+            if mutating {
+                if let Ok(ToolOutput::Json(value)) = &output {
+                    for field in ["added", "changed", "removed"] {
+                        phase.touched.extend(
+                            value[field]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(Value::as_u64),
+                        );
+                    }
                 }
             }
+            Ok::<_, String>((output, changed, phase))
         })
         .await;
         let (result, changed) = match ran {
-            Ok(Ok((output, changed))) => (
-                self.output_result(id, output.map_err(|e| e.json().to_string())),
-                changed,
-            ),
-            Ok(Err(why)) => ((error_result(id, why), error_event(id, why)), false),
+            Ok(Ok((output, changed, phase))) => {
+                self.phase_state = phase;
+                self.phase_epoch = epoch;
+                (
+                    self.output_result(id, output.map_err(|e| e.json().to_string())),
+                    changed,
+                )
+            }
+            Ok(Err(why)) => ((error_result(id, &why), error_event(id, &why)), false),
             Err(e) => {
                 let why = format!("The tool {name} crashed: {e}");
                 ((error_result(id, &why), error_event(id, &why)), false)
@@ -696,6 +1126,8 @@ impl Agent {
         id: &str,
         name: &str,
         input: &Value,
+        cancel: &CancellationToken,
+        epoch: Option<u64>,
     ) -> (ContentBlock, AgentEvent) {
         if name == "view_screen" && self.image_bytes >= self.image_budget {
             return (
@@ -708,11 +1140,25 @@ impl Agent {
         };
         let session = self.session.clone();
         let (tool, args, lang) = (name.to_string(), input.clone(), self.settings.language);
-        let ran =
-            tokio::task::spawn_blocking(move || run_window(&*host, &session, &tool, &args, lang))
-                .await;
+        let cancel = cancel.clone();
+        let ran = tokio::task::spawn_blocking(move || {
+            {
+                let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+                check_turn(guard.as_ref(), &cancel, epoch)?;
+            }
+            // Window requests must run outside the session lock: rendering takes it too.
+            let output = run_window(&*host, &session, &tool, &args, lang)?;
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            check_turn(guard.as_ref(), &cancel, epoch)?;
+            Ok::<_, String>((output, guard.as_ref().map(|s| s.drawing.path.clone())))
+        })
+        .await;
         match ran {
-            Ok(output) => self.output_result(id, output),
+            Ok(Ok((output, drawing))) => {
+                self.refresh_phase_drawing(drawing, epoch);
+                self.output_result(id, Ok(output))
+            }
+            Ok(Err(why)) => (error_result(id, &why), error_event(id, &why)),
             Err(e) => {
                 let why = format!("The tool {name} crashed: {e}");
                 (error_result(id, &why), error_event(id, &why))
@@ -759,19 +1205,46 @@ impl Agent {
     /// Runs a file tool through the host, off the async workers and outside the session's lock
     /// (the host locks the app's tabs first).
     async fn run_host_tool(
-        &self,
+        &mut self,
         id: &str,
         name: &str,
         input: &Value,
+        cancel: &CancellationToken,
+        epoch: Option<u64>,
     ) -> (ContentBlock, AgentEvent) {
         let Some(host) = self.host.clone() else {
             return (error_result(id, NO_HOST), error_event(id, NO_HOST));
         };
         let (tool, args, text) = (name.to_string(), input.clone(), self.turn_text.clone());
-        let ran =
-            tokio::task::spawn_blocking(move || run_host(&*host, &tool, &args, Some(&text))).await;
+        let session = self.session.clone();
+        let cancel = cancel.clone();
+        let ran = tokio::task::spawn_blocking(move || {
+            {
+                let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+                check_turn(guard.as_ref(), &cancel, epoch)?;
+            }
+            // The host takes tabs before session. Never hold session while calling it.
+            let value = run_host(&*host, &tool, &args, Some(&text))?;
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            let next_epoch = guard.as_ref().map(Session::epoch);
+            check_turn(
+                guard.as_ref(),
+                &cancel,
+                if changes_drawing(&tool) {
+                    next_epoch
+                } else {
+                    epoch
+                },
+            )?;
+            let drawing = guard.as_ref().map(|s| s.drawing.path.clone());
+            Ok::<_, String>((value, drawing, next_epoch))
+        })
+        .await;
         match ran {
-            Ok(Ok(value)) => json_result(id, &value),
+            Ok(Ok((value, drawing, epoch))) => {
+                self.refresh_phase_drawing(drawing, epoch);
+                json_result(id, &value)
+            }
             Ok(Err(why)) => (error_result(id, &why), error_event(id, &why)),
             Err(e) => {
                 let why = format!("The tool {name} crashed: {e}");
@@ -780,40 +1253,59 @@ impl Agent {
         }
     }
 
-    /// The epoch of the drawing on screen now (none without one).
-    fn epoch_now(&self) -> Option<u64> {
-        let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-        guard.as_ref().map(Session::epoch)
-    }
-
-    /// The system prompt for a new conversation: the rules and the drawing as it is now.
-    fn build_system(&self) -> String {
-        let facts = {
-            let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-            guard
-                .as_ref()
-                .map_or_else(DrawingFacts::none, DrawingFacts::of)
-        };
-        system_prompt(self.settings.language, &facts)
-    }
-
-    /// The `[state]` block for the next user message with what the user points at, the
-    /// session's epoch, and a picture of a new selection or region.
-    fn state(&self, pointed: &TurnContext) -> Opening {
-        let lang = self.settings.language;
-        let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-        let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
-        let mut text = state_block(lang, &state);
-        let mut picture = None;
-        if let Some(session) = guard.as_ref() {
-            text.push_str(&context::describe(session, pointed, lang));
-            picture = context::picture(session, pointed);
-        }
-        Opening {
-            state: text,
-            epoch: guard.as_ref().map(Session::epoch),
-            picture,
-        }
+    /// Capture prompt facts, live state, picture and metadata under one off-thread lock.
+    /// Checkpoints only use the returned values and never wait for the drawing themselves.
+    async fn opening(
+        &self,
+        pointed: TurnContext,
+        cancel: &CancellationToken,
+    ) -> Result<Opening, String> {
+        let session = self.session.clone();
+        let settings = self.settings.clone();
+        let build_system = self.system.is_none();
+        let cancel = cancel.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            let epoch = guard.as_ref().map(Session::epoch);
+            check_turn(guard.as_ref(), &cancel, epoch)?;
+            let lang = settings.language;
+            let system = build_system.then(|| {
+                let facts = guard
+                    .as_ref()
+                    .map_or_else(DrawingFacts::none, DrawingFacts::of);
+                system_prompt(lang, &facts)
+            });
+            let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
+            let mut text = state_block(lang, &state);
+            text.push_str(&format!(
+                "Measurement method: {}; rules loaded: {}.\nApproval mode: {}.\n",
+                settings
+                    .measurement_method
+                    .name
+                    .as_deref()
+                    .unwrap_or("None (geometric quantities)"),
+                settings.measurement_method.rules_loaded,
+                serde_json::to_value(settings.autonomy)
+                    .unwrap_or_default()
+                    .as_str()
+                    .unwrap_or("per_job")
+            ));
+            let mut picture = None;
+            if let Some(session) = guard.as_ref() {
+                text.push_str(&context::describe(session, &pointed, lang));
+                picture = context::picture(session, &pointed);
+            }
+            check_turn(guard.as_ref(), &cancel, epoch)?;
+            Ok(Opening {
+                state: text,
+                epoch,
+                drawing: guard.as_ref().map(|s| s.drawing.path.clone()),
+                system,
+                picture,
+            })
+        })
+        .await
+        .map_err(|e| format!("The drawing state could not be read: {e}"))?
     }
 
     /// Replaces the oldest pictures in the history with `PICTURE_REMOVED` once it holds more
@@ -1115,13 +1607,43 @@ fn has_calls(content: &[ContentBlock]) -> bool {
         .is_some()
 }
 
-async fn stopped(events: &mpsc::Sender<AgentEvent>, reason: &str) -> Result<(), AiError> {
-    let _ = events
-        .send(AgentEvent::Stopped {
-            reason: reason.to_string(),
+fn active_phase(plan: &surface::Plan) -> Option<&str> {
+    plan.phases
+        .iter()
+        .find(|p| p.status == surface::PlanStatus::Active)
+        .map(|p| p.id.as_str())
+}
+
+/// Called only with the session locked on a blocking worker, before reading or changing it.
+fn check_turn(
+    session: Option<&Session>,
+    cancel: &CancellationToken,
+    epoch: Option<u64>,
+) -> Result<(), String> {
+    if cancel.is_cancelled() {
+        Err(CANCELLED.into())
+    } else if session.map(Session::epoch) != epoch {
+        Err(DRAWING_CHANGED.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Stable error identities allow a phase to repair its own changes before asking for review.
+fn drawing_errors(session: &Session, handles: &[u64]) -> BTreeSet<String> {
+    let report = session.check_drawing_all(&qiyas_core::check::CheckScope {
+        handles: handles.to_vec(),
+        ..Default::default()
+    });
+    report
+        .findings
+        .into_iter()
+        .filter(|f| f.severity == qiyas_core::check::Severity::Error)
+        .map(|mut f| {
+            f.handles.sort_unstable();
+            format!("{}:{}:{:?}", report.sheet, f.rule, f.handles)
         })
-        .await;
-    Ok(())
+        .collect()
 }
 
 /// The log entry of one answer: why it stopped, its tokens, its text and the calls it made.
@@ -1242,6 +1764,287 @@ mod tests {
     use super::*;
     use crate::provider::{BoxFuture, Sink, TurnResult};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Recording {
+        requests: Arc<Mutex<Vec<TurnRequest>>>,
+        state: Arc<Mutex<Value>>,
+    }
+
+    impl Provider for Recording {
+        fn save_state(&self) -> Value {
+            self.state.lock().unwrap().clone()
+        }
+        fn restore_state(&self, state: Value) {
+            *self.state.lock().unwrap() = state;
+        }
+        fn stream_turn<'a>(
+            &'a self,
+            req: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            self.requests.lock().unwrap().push(req);
+            sink(StreamEvent::TextDelta("An".into()));
+            sink(StreamEvent::TextDelta(" answer".into()));
+            Box::pin(async {
+                Ok(TurnResult {
+                    content: vec![ContentBlock::Text {
+                        text: "An answer".into(),
+                    }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage::default(),
+                })
+            })
+        }
+    }
+
+    async fn record_turn(agent: &mut Agent, text: &str) {
+        let (tx, _rx) = mpsc::channel(100);
+        agent
+            .run_turn(text.into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_resume_keeps_the_request_bytes_and_provider_memory() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let state = Arc::new(Mutex::new(
+            serde_json::json!({"extras":{"c1":{"google":{"thought_signature":"sig+/=\r\n"}}}}),
+        ));
+        let session = Arc::new(Mutex::new(None));
+        let mut agent = Agent::new(
+            Box::new(Recording {
+                requests: requests.clone(),
+                state: state.clone(),
+            }),
+            session.clone(),
+            AgentSettings::default(),
+        );
+        record_turn(&mut agent, "First message").await;
+        agent.history.last_mut().unwrap().content.extend([
+            ContentBlock::Thinking {
+                thinking: "Thought\r\n".into(),
+                signature: "sig+/=\r\n".into(),
+            },
+            ContentBlock::Raw(
+                serde_json::json!({"type":"redacted_thinking","data":"unchanged+/="}),
+            ),
+        ]);
+        let saved = agent.snapshot();
+        assert_eq!(saved.title, "First message");
+        assert!(uuid::Uuid::parse_str(&saved.id).is_ok());
+        assert!(
+            matches!(&saved.transcript[1], TranscriptEntry::Event { event: AgentEvent::Text { text } } if text == "An answer")
+        );
+        let bytes = serde_json::to_vec(&saved).unwrap();
+        let saved: Conversation = serde_json::from_slice(&bytes).unwrap();
+        record_turn(&mut agent, "Continue").await;
+        let restored_state = Arc::new(Mutex::new(Value::Null));
+        let mut resumed = Agent::resume(
+            saved,
+            Box::new(Recording {
+                requests: requests.clone(),
+                state: restored_state.clone(),
+            }),
+            session,
+            AgentSettings::default(),
+        );
+        assert_eq!(*restored_state.lock().unwrap(), *state.lock().unwrap());
+        record_turn(&mut resumed, "Continue").await;
+        record_turn(&mut resumed, "Again").await;
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests[1].system.as_bytes(), requests[2].system.as_bytes());
+        let mut after = requests[2].messages.clone();
+        let last = after.last_mut().unwrap();
+        assert!(
+            matches!(&last.content[1], ContentBlock::Text { text } if text.starts_with("[resumed]"))
+        );
+        last.content.remove(1);
+        assert_eq!(
+            serde_json::to_vec(&requests[1].messages).unwrap(),
+            serde_json::to_vec(&after).unwrap()
+        );
+        assert!(!requests[3]
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.starts_with("[resumed]"))));
+    }
+
+    #[tokio::test]
+    async fn another_model_or_provider_discards_signatures_and_extras() {
+        for change_provider in [false, true] {
+            let session = Arc::new(Mutex::new(None));
+            let mut agent = Agent::new(
+                Box::<Recording>::default(),
+                session.clone(),
+                AgentSettings::default(),
+            );
+            record_turn(&mut agent, "First").await;
+            agent.history.last_mut().unwrap().content.extend([
+                ContentBlock::Thinking {
+                    thinking: "thought".into(),
+                    signature: "signature".into(),
+                },
+                ContentBlock::Raw(serde_json::json!({"type":"redacted_thinking","data":"opaque"})),
+            ]);
+            let mut settings = AgentSettings::default();
+            if change_provider {
+                settings.provider = "another service".into();
+            } else {
+                settings.model = "another model".into();
+            }
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let state = Arc::new(Mutex::new(Value::Null));
+            let mut resumed = Agent::resume(
+                agent.snapshot(),
+                Box::new(Recording {
+                    requests: requests.clone(),
+                    state: state.clone(),
+                }),
+                session,
+                settings,
+            );
+            record_turn(&mut resumed, "Continue").await;
+            assert_eq!(*state.lock().unwrap(), Value::Null);
+            for message in &requests.lock().unwrap()[0].messages {
+                assert!(!message.content.is_empty());
+                assert!(!message
+                    .content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Thinking { .. } | ContentBlock::Raw(_))));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn changing_model_does_not_resurrect_calls_before_a_fallback() {
+        let session = Arc::new(Mutex::new(None));
+        let mut agent = Agent::new(
+            Box::<Recording>::default(),
+            session.clone(),
+            AgentSettings::default(),
+        );
+        record_turn(&mut agent, "Start").await;
+        agent.history.push(Message::user(vec![ContentBlock::Text {
+            text: "Read".into(),
+        }]));
+        agent.history.push(Message::assistant(vec![
+            ContentBlock::ToolUse {
+                id: "declined".into(),
+                name: surface::READ.into(),
+                input: serde_json::json!({"op":"state"}),
+            },
+            ContentBlock::Raw(serde_json::json!({"type":"fallback"})),
+            ContentBlock::ToolUse {
+                id: "accepted".into(),
+                name: surface::READ.into(),
+                input: serde_json::json!({"op":"state"}),
+            },
+        ]));
+        agent
+            .history
+            .push(Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: "accepted".into(),
+                content: vec![ResultPart::Text("ok".into())],
+                is_error: false,
+            }]));
+        let mut resumed = Agent::resume(
+            agent.snapshot(),
+            Box::<Recording>::default(),
+            session,
+            AgentSettings {
+                model: "another model".into(),
+                ..Default::default()
+            },
+        );
+        record_turn(&mut resumed, "Continue").await;
+        let calls: Vec<_> = resumed
+            .history
+            .iter()
+            .flat_map(Message::tool_uses)
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(calls, ["accepted"]);
+        assert_well_formed(&resumed.history);
+    }
+
+    #[tokio::test]
+    async fn snapshot_removes_every_picture_but_keeps_accounting_and_pointed_labels() {
+        let session = Arc::new(Mutex::new(None));
+        let mut agent = Agent::new(
+            Box::<Recording>::default(),
+            session.clone(),
+            AgentSettings::default(),
+        );
+        let (tx, _rx) = mpsc::channel(100);
+        agent
+            .run_turn_with(
+                UserMessage {
+                    text: "Picture".into(),
+                    pointed: vec!["Selected: 2".into()],
+                    images: vec![context::UserImage {
+                        media_type: "image/png".into(),
+                        data: "c2VjcmV0LXNjcmVlbnNob3Q=".into(),
+                    }],
+                    ..Default::default()
+                },
+                tx,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        step(&mut agent.history, 1);
+        let ContentBlock::ToolResult { content, .. } =
+            &mut agent.history.last_mut().unwrap().content[0]
+        else {
+            panic!("result");
+        };
+        content.push(ResultPart::Png("dG9vbC1zY3JlZW5zaG90".into()));
+        let saved = agent.snapshot();
+        let json = serde_json::to_string(&saved).unwrap();
+        assert!(!json.contains("c2VjcmV0LXNjcmVlbnNob3Q="));
+        assert!(!json.contains("dG9vbC1zY3JlZW5zaG90"));
+        assert_eq!(json.matches(conversation::PICTURE_REMOVED).count(), 3);
+        assert!(
+            matches!(&saved.transcript[0], TranscriptEntry::User { pointed, images, .. } if pointed == &["Selected: 2"] && images == &[conversation::PICTURE_REMOVED])
+        );
+        assert_eq!(saved.image_bytes, agent.image_bytes);
+        let resumed = Agent::resume(
+            saved,
+            Box::<Recording>::default(),
+            session,
+            AgentSettings::default(),
+        );
+        assert_eq!(resumed.image_bytes, agent.image_bytes);
+    }
+
+    #[tokio::test]
+    async fn state_reports_the_selected_method_without_changing_the_system() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            Box::new(Recording {
+                requests: requests.clone(),
+                ..Default::default()
+            }),
+            Arc::new(Mutex::new(None)),
+            AgentSettings {
+                measurement_method: MeasurementMethod {
+                    name: Some("office-method".into()),
+                    rules_loaded: true,
+                },
+                ..Default::default()
+            },
+        );
+        record_turn(&mut agent, "Measure").await;
+        let requests = requests.lock().unwrap();
+        assert!(
+            matches!(&requests[0].messages[0].content[0], ContentBlock::Text { text } if text.contains("Measurement method: office-method; rules loaded: true"))
+        );
+    }
 
     /// Counts the requests it is asked to send, and answers each with a short text.
     struct Counting(Arc<AtomicUsize>);

@@ -81,8 +81,8 @@ test("the checklist translates all states into Arabic and follows the page direc
     const assistant = {
       transcript: { items: [{ kind: "plan" as const, phases: [
         { id: "a", title: "A", status: "pending" as const },
-        { id: "b", title: "B", status: "active" as const },
-        { id: "c", title: "C", status: "done" as const },
+        { id: "drawing-check", title: "Review drawing check errors", status: "active" as const },
+        { id: "drawing-check-review", title: "Review drawing errors: rule:[7]", status: "done" as const },
         { id: "d", title: "D", status: "skipped" as const },
       ] }] },
       busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn(),
@@ -91,6 +91,8 @@ test("the checklist translates all states into Arabic and follows the page direc
     expect(screen.getByRole("region", { name: ar["ai.plan"] })).toBeTruthy();
     for (const key of ["ai.plan.pending", "ai.plan.active", "ai.plan.done", "ai.plan.skipped"] as const) expect(screen.getByText(ar[key])).toBeTruthy();
     expect(document.documentElement.dir).toBe("rtl");
+    expect(screen.getByText(ar["ai.reviewDrawingErrors"])).toBeTruthy();
+    expect(screen.getByText(`${ar["ai.reviewDrawingErrors"]}: rule:[7]`)).toBeTruthy();
   } finally {
     localStorage.removeItem("qiyas.lang");
     document.documentElement.dir = "ltr";
@@ -425,4 +427,44 @@ test("a user's message shows what went with it", () => {
   });
   expect(screen.getByText("Selection · 2")).toBeTruthy();
   expect(screen.getByAltText("Picture").getAttribute("src")).toBe("data:image/png;base64,QUJD");
+});
+
+test("an awaiting plan offers Approve and Change only until the next message", () => {
+  const plan = { kind: "plan" as const, phases: [{ id: "walls", title: "Walls", status: "pending" as const }], awaitingApproval: true };
+  const { assistant } = setup({ items: [{ kind: "user", text: "Draw" }, plan] });
+  fireEvent.click(screen.getByRole("button", { name: "Change" }));
+  expect(document.activeElement).toBe(screen.getByRole("textbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  expect(assistant.send).toHaveBeenCalledWith("Approved, continue.");
+  cleanup();
+  setup({ items: [plan, { kind: "user", text: "Approved, continue." }] });
+  expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  cleanup();
+  setup({ items: [plan] }, true);
+  expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+});
+
+test("restored pictures are placeholders and old tool cards have no Undo action", () => {
+  setup({ items: [
+    { kind: "user", text: "This drawing", images: ["[picture removed]"] },
+    { ...card, restored: true },
+  ] });
+  expect(screen.getByText("[picture removed]")).toBeTruthy();
+  expect(screen.queryByRole("img", { name: "Picture" })).toBeNull();
+  expect(screen.queryByText("Undo")).toBeNull();
+});
+
+test("a pending resume cannot send, approve, undo, or start another chat", () => {
+  const value = assistant({ transcript: { items: [card] } });
+  const history: import("./ConversationHistory").ConversationHistoryState = {
+    chats: [], drawing: null, latest: null, pending: true, error: null,
+    resume: vi.fn(), remove: vi.fn(),
+  };
+  render(<AssistantPanel assistant={value} history={history} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Continue" } });
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  expect(value.send).not.toHaveBeenCalled();
+  expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
 });

@@ -644,6 +644,25 @@ pub fn run_session(
     args: &Value,
     source: Source,
 ) -> Result<ToolOutput, ToolError> {
+    run_session_with_method(
+        session,
+        tool,
+        op,
+        args,
+        source,
+        &crate::MeasurementMethod::default(),
+    )
+}
+
+/// The in-app agent supplies the selected method without storing app settings in a drawing.
+pub fn run_session_with_method(
+    session: &mut Session,
+    tool: &str,
+    op: &str,
+    args: &Value,
+    source: Source,
+    method: &crate::MeasurementMethod,
+) -> Result<ToolOutput, ToolError> {
     let argument_warnings = crate::surface_args::validate(tool, op, args)?;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
@@ -663,7 +682,11 @@ pub fn run_session(
         Ok(ToolOutput::Json(v))
     };
     match (tool, op) {
-        (READ, "state") => json(state(session)),
+        (READ, "state") => {
+            let mut value = state(session);
+            value["measurement_method"] = json!(method);
+            json(value)
+        }
         (READ, "capabilities") => json(capabilities()),
         (READ, "commands") => json(commands(args)?),
         (READ, "records") => {

@@ -47,7 +47,6 @@ import { PlotDialog } from "../shell/PlotDialog";
 import { PlotStyleEditor } from "../shell/PlotStyleEditor";
 import { PurgeDialog } from "../shell/PurgeDialog";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
-import { laterOpens } from "../shell/recoveryQueue";
 import { ScriptResultDialog } from "../shell/ScriptResultDialog";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { SheetSetManager } from "../shell/SheetSetManager";
@@ -667,11 +666,10 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
   const t = useT();
   const {
     recovery,
-    setRecoveries,
     recoverFrom,
     discardFrom,
     openAnyway,
-    openPath,
+    dismissRecovery,
     recoverReport,
     setRecoverReport,
     scriptRun,
@@ -698,9 +696,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
           onDiscard={(drawing, copy) => discardFrom(recovery, drawing, copy)}
           onOpen={(drawing) => openAnyway(recovery, drawing)}
           onClose={() => {
-            const then = laterOpens(recovery);
-            setRecoveries((q) => q.filter((r) => r.id !== recovery.id));
-            if (then) openPath(then, false);
+            dismissRecovery(recovery);
           }}
         />
       )}

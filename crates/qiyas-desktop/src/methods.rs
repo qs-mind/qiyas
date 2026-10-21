@@ -1,0 +1,226 @@
+//! Local measurement rule set envelopes. Rules are opaque until the measurement phase.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use qiyas_ai::MeasurementMethod;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// The data home is separate from the app config and from shared drawing project files.
+pub fn qiyas_dir() -> Result<PathBuf, String> {
+    let dir = home_path(std::env::var_os("QIYAS_HOME").map(PathBuf::from))?;
+    for child in ["methods", "projects"] {
+        fs::create_dir_all(dir.join(child)).map_err(|e| e.to_string())?;
+    }
+    Ok(dir)
+}
+
+fn home_path(override_path: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(path) = override_path.filter(|p| !p.as_os_str().is_empty()) {
+        return Ok(path);
+    }
+    if cfg!(debug_assertions) {
+        return Ok(Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(".local/qiyas-home"));
+    }
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(|home| PathBuf::from(home).join(".qiyas"))
+        .ok_or_else(|| "The Qiyas data home could not be found; set QIYAS_HOME".into())
+}
+
+fn version_one() -> u32 {
+    1
+}
+
+#[derive(Deserialize)]
+struct RuleSet {
+    /// An envelope without an explicit version is the original version 1 shape.
+    #[serde(default = "version_one")]
+    version: u32,
+    name: String,
+    title: String,
+    based_on: String,
+    source_note: String,
+    rules: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MeasurementMethodInfo {
+    pub name: String,
+    pub title: String,
+    pub based_on: String,
+    pub source_note: String,
+    pub rules_loaded: bool,
+}
+
+fn read(path: &Path) -> Result<MeasurementMethodInfo, String> {
+    let text = fs::read(path).map_err(|e| e.to_string())?;
+    let rules: RuleSet = serde_json::from_slice(&text).map_err(|e| e.to_string())?;
+    if rules.version != 1 {
+        return Err(format!(
+            "Unsupported measurement rule set version {}",
+            rules.version
+        ));
+    }
+    if rules.name.trim().is_empty() || rules.title.trim().is_empty() {
+        return Err("A measurement rule set needs a name and title".into());
+    }
+    Ok(MeasurementMethodInfo {
+        name: rules.name,
+        title: rules.title,
+        based_on: rules.based_on,
+        source_note: rules.source_note,
+        rules_loaded: !rules.rules.is_empty(),
+    })
+}
+
+pub fn list_at(home: &Path) -> Result<Vec<MeasurementMethodInfo>, String> {
+    let dir = home.join("methods");
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    paths.sort();
+    let mut methods = Vec::new();
+    for path in paths {
+        if path.extension().is_none_or(|e| e != "json") || !path.is_file() {
+            continue;
+        }
+        match read(&path) {
+            Ok(method) => {
+                if !methods
+                    .iter()
+                    .any(|m: &MeasurementMethodInfo| m.name == method.name)
+                {
+                    methods.push(method);
+                }
+            }
+            Err(e) => eprintln!(
+                "Measurement method {} could not be read: {e}",
+                path.display()
+            ),
+        }
+    }
+    methods.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.name.cmp(&b.name)));
+    Ok(methods)
+}
+
+#[tauri::command]
+pub fn measurement_methods() -> Result<Vec<MeasurementMethodInfo>, String> {
+    list_at(&qiyas_dir()?)
+}
+
+pub fn selected(name: Option<&str>) -> MeasurementMethod {
+    let loaded = name.is_some_and(|name| {
+        measurement_methods()
+            .is_ok_and(|methods| methods.iter().any(|m| m.name == name && m.rules_loaded))
+    });
+    MeasurementMethod {
+        name: name.map(str::to_owned),
+        rules_loaded: loaded,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fixture(rules: Value) -> Value {
+        json!({"version":1,"name":"local-test","title":"Local test","based_on":"",
+            "source_note":"Test fixture only","rules":rules})
+    }
+
+    #[test]
+    fn validates_only_the_envelope_and_lists_json() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("methods");
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("local.json"),
+            fixture(json!([{"future_rule":true}])).to_string(),
+        )
+        .unwrap();
+        fs::write(dir.join("ignored.txt"), fixture(json!([])).to_string()).unwrap();
+        fs::write(dir.join("broken.json"), "{").unwrap();
+        let list = list_at(home.path()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "local-test");
+        assert!(list[0].rules_loaded);
+        fs::write(dir.join("local.json"), fixture(json!([])).to_string()).unwrap();
+        assert!(!list_at(home.path()).unwrap()[0].rules_loaded);
+        for value in [
+            json!({"name":"local-test"}),
+            {
+                let mut v = fixture(json!([]));
+                v["version"] = json!(2);
+                v
+            },
+            {
+                let mut v = fixture(json!([]));
+                v["title"] = json!("");
+                v
+            },
+            fixture(json!({"not":"an array"})),
+        ] {
+            fs::write(dir.join("local.json"), value.to_string()).unwrap();
+            assert!(read(&dir.join("local.json")).is_err());
+        }
+        let mut original = fixture(json!([]));
+        original.as_object_mut().unwrap().remove("version");
+        fs::write(dir.join("local.json"), original.to_string()).unwrap();
+        assert!(read(&dir.join("local.json")).is_ok());
+    }
+
+    #[test]
+    fn development_home_is_inside_the_repository() {
+        if cfg!(debug_assertions) {
+            assert!(home_path(None).unwrap().ends_with(".local/qiyas-home"));
+        }
+    }
+
+    #[test]
+    fn qiyas_home_override_lists_methods_in_an_isolated_process() {
+        let home = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "methods::tests::home_override_child"])
+            .env("QIYAS_HOME", home.path())
+            .env("QIYAS_METHODS_TEST_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(home.path().join("methods").is_dir());
+        assert!(home.path().join("projects").is_dir());
+    }
+
+    #[test]
+    fn home_override_child() {
+        if std::env::var_os("QIYAS_METHODS_TEST_CHILD").is_none() {
+            return;
+        }
+        let home = qiyas_dir().unwrap();
+        assert_eq!(home, PathBuf::from(std::env::var_os("QIYAS_HOME").unwrap()));
+        fs::write(
+            home.join("methods/local.json"),
+            fixture(json!([{"opaque":true}])).to_string(),
+        )
+        .unwrap();
+        assert_eq!(measurement_methods().unwrap()[0].name, "local-test");
+        assert!(selected(Some("local-test")).rules_loaded);
+        assert_eq!(
+            selected(Some("missing")),
+            MeasurementMethod {
+                name: Some("missing".into()),
+                rules_loaded: false
+            }
+        );
+        assert_eq!(selected(None), MeasurementMethod::default());
+    }
+}

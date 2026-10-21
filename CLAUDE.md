@@ -1436,6 +1436,38 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## AI assistant and settings
 
+- Agent session access always runs on a blocking worker, including turn-opening state, drawing
+  paths/epochs and drawing checks. Snapshot/checkpoint/resume use cached metadata returned by
+  those workers. The first mutation's error baseline is captured under the same session lock,
+  after cancellation/epoch validation and before execution; phase/end checks validate again
+  after checking. Never hold a `std::sync::MutexGuard` across `.await`: both AI and desktop
+  packages deny Clippy's `await_holding_lock` for every target. Agent integration tests and
+  desktop AI turn tests have named 60-second timeouts.
+
+- Conversations are app-wide, outside the shared `.qiyas` drawing project: one private JSON
+  file per chat in `<app config>/conversations/`, with a small `index.json`. Mizan saves after
+  each turn and before resetting for New chat, another drawing, settings or a failed turn.
+  The store keeps at most 100 chats, removing the least recently updated first. History defaults
+  to the drawing on screen; All drawings, individual delete and Delete all are available there.
+  An empty panel offers the latest saved chat for the current drawing.
+- Resume restores the visible thread and the compacted model conversation, the exact saved
+  system prompt and provider memory (including Gemini call signatures). Changing provider or
+  model discards old thinking, raw provider blocks and provider memory. The first resumed turn
+  tells Mizan to read the drawing before acting. Old tool cards cannot undo earlier sessions.
+  Pictures and thumbnails become `[picture removed]` on disk; keys are never included.
+- Settings include `autonomy` (`per_job`, the default; `per_phase`; `autonomous`) and
+  `measurement_method` (a local rule set name, or null for geometric quantities). Multi-phase
+  plans wait for approval per the selected mode; Approve sends `Approved, continue.`, while
+  Change focuses the composer. Unfixed errors introduced by Mizan also stop a phase.
+- `qiyas-desktop/src/methods.rs::qiyas_dir()` is the Qiyas data home: release builds use
+  `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
+  `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
+  on first use. Settings lists local `methods/*.json`; no measurement rules ship with Qiyas.
+  Version 1 validates only `{name, title, based_on, source_note, rules: []}` (an explicit
+  `version: 1` is accepted; an omitted version means 1). Rule contents are opaque until
+  Phase 17. Mizan's live state reports the name and whether a nonempty rule set was loaded;
+  without rules, quantities are geometric and answers say so.
+
 Mizan's `reveal` results draw the changed entities in order in the highlight overlay over the
 previous batch, then show the new batch (`viewport/reveal.ts`, `useSheets`, `useAssistantWiring`).
 Steps queue; redraws wait, and zoom cannot expose a pending batch. Reduced motion, another

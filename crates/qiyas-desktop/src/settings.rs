@@ -133,6 +133,10 @@ pub struct Settings {
     pub providers: ProviderProfiles,
     /// One of `EFFORTS`.
     pub effort: String,
+    /// When Mizan waits for approval of its plan.
+    pub autonomy: qiyas_ai::Autonomy,
+    /// The name of a local measurement rule set; none means geometric quantities.
+    pub measurement_method: Option<String>,
     pub mcp_enabled: bool,
     pub mcp_port: u16,
     /// 32 hex characters, made once and kept. Empty when missing from the file, so `load` makes
@@ -215,6 +219,8 @@ impl Default for Settings {
             provider: Provider::Anthropic,
             providers: ProviderProfiles::default(),
             effort: "high".into(),
+            autonomy: qiyas_ai::Autonomy::default(),
+            measurement_method: None,
             mcp_enabled: false,
             mcp_port: 48123,
             mcp_token: new_token(),
@@ -260,6 +266,12 @@ fn valid_token(token: &str) -> bool {
 
 /// Checks settings coming from the window before they are kept.
 pub fn validate(s: &Settings) -> Result<(), String> {
+    if s.measurement_method
+        .as_ref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err("The measurement method name is empty; choose None instead".into());
+    }
     if s.mcp_port < 1024 {
         return Err(format!(
             "The MCP port must be between 1024 and 65535, not {}",

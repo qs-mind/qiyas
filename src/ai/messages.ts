@@ -1,5 +1,5 @@
 /** The assistant's transcript, built from the agent's events by a pure reducer. */
-import type { AgentEvent, AiUi, PlanPhase } from "../api";
+import type { AgentEvent, AiUi, PlanPhase, TranscriptEntry } from "../api";
 
 export type ToolStatus = "running" | "done" | "error";
 
@@ -22,6 +22,8 @@ export type ToolCardItem = {
   undone: boolean;
   /** Undo was refused: the take-off changed since this card's change. */
   stale: boolean;
+  /** A saved turn has no live undo step. */
+  restored?: boolean;
 };
 
 /** What went with a user's message besides their words: the selection or area they pointed at
@@ -33,7 +35,7 @@ export type Item =
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
-  | { kind: "plan"; phases: PlanPhase[] }
+  | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
   | { kind: "stopped"; reason: string };
@@ -50,6 +52,7 @@ export type Action =
   | { type: "end" }
   | { type: "undone"; id: string }
   | { type: "undo_stale"; id: string }
+  | { type: "restore"; entries: TranscriptEntry[] }
   | { type: "clear" };
 
 export const EMPTY: Transcript = { items: [] };
@@ -88,6 +91,13 @@ export function reduce(state: Transcript, action: Action): Transcript {
         return { items: items.map((item, i) => i === previous ? plan : item) };
       }
       return { items: [...items.slice(0, start), plan, ...items.slice(start)] };
+    }
+    case "awaiting_approval": {
+      const next = reduce(state, { type: "plan", phases: action.plan.phases });
+      const plan = next.items.map((item) => item.kind).lastIndexOf("plan");
+      return { items: finishText(next.items).map((item, i) =>
+        i === plan && item.kind === "plan" ? { ...item, awaitingApproval: true } : item,
+      ) };
     }
     case "text":
       if (last?.kind === "assistant" && !last.finished) {
@@ -152,6 +162,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
       return { items: updateCard(items, action.id, (card) => ({ ...card, stale: true })) };
     case "clear":
       return EMPTY;
+    case "restore":
+      return replay(action.entries);
   }
 }
 
@@ -160,9 +172,19 @@ export function reduce(state: Transcript, action: Action): Transcript {
 export function undoableCard(t: Transcript): ToolCardItem | null {
   for (let i = t.items.length - 1; i >= 0; i--) {
     const item = t.items[i];
-    if (item.kind === "tool" && item.mutating && item.status === "done" && !item.undone) return item;
+    if (item.kind === "tool" && item.mutating && item.status === "done" && !item.undone && !item.restored) return item;
   }
   return null;
+}
+
+/** Reuses the live reducer; old cards finish without reviving their drawing undo steps. */
+export function replay(entries: TranscriptEntry[]): Transcript {
+  const transcript = entries.reduce((state, entry) =>
+    reduce(state, entry.type === "event" ? entry.event : entry), EMPTY);
+  const finished = reduce(transcript, { type: "end" });
+  return { items: finished.items.map((item) =>
+    item.kind === "tool" ? { ...item, restored: true } : item,
+  ) };
 }
 
 /** The transcript ends where only a new conversation helps: a refusal, or one grown too long. */

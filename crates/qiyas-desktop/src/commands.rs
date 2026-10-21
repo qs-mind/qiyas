@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, MutexGuard, PoisonError};
 
+use qiyas_ai::conversation::{Conversation, TranscriptEntry};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent, AgentLog};
 use qiyas_core::{
@@ -457,6 +458,7 @@ pub async fn save_drawing(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result<(), String> {
     with_session(&state, |s| s.save_as(Path::new(&path)))?;
+    ai_run(&state).drawing_saved_as(Path::new(&path).to_path_buf());
     remember_recent(&state, &path);
     Ok(())
 }
@@ -705,7 +707,7 @@ pub(crate) fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
     state.ai.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Forgets the assistant's conversation (cancelling a running turn) and tells the window, which
+/// Saves and resets the assistant's conversation (cancelling a running turn), then tells the window, which
 /// clears its transcript on `ai:cleared`.
 pub(crate) fn new_conversation<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     ai_run(state).new_conversation();
@@ -726,6 +728,7 @@ struct AiDone {
 #[tauri::command]
 pub async fn ai_send<R: Runtime>(
     text: String,
+    pointed: Option<Vec<String>>,
     context: Option<qiyas_ai::TurnContext>,
     images: Option<Vec<qiyas_ai::UserImage>>,
     app: AppHandle<R>,
@@ -746,6 +749,7 @@ pub async fn ai_send<R: Runtime>(
     }
     let message = qiyas_ai::UserMessage {
         text,
+        pointed: pointed.unwrap_or_default(),
         context: context.unwrap_or_default(),
         images,
     };
@@ -755,6 +759,7 @@ pub async fn ai_send<R: Runtime>(
         state: &state,
         generation,
         armed: true,
+        kept: None,
     };
     let language = ai_run(&state).language();
     let settings = state
@@ -765,7 +770,7 @@ pub async fn ai_send<R: Runtime>(
     let mut agent = match kept {
         Some(agent) => agent,
         // Its file tools run on the app's tabs.
-        None => new_agent(&state, &settings, language)
+        None => new_agent(&state, &settings, language, None)
             .await?
             .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() })),
     };
@@ -783,27 +788,35 @@ struct Claim<'a> {
     state: &'a AppState,
     generation: u64,
     armed: bool,
+    kept: Option<Agent>,
 }
 
 impl Drop for Claim<'_> {
     fn drop(&mut self) {
         if self.armed {
-            ai_run(self.state).release(None, self.generation);
+            ai_run(self.state).release(self.kept.take(), self.generation);
         }
     }
 }
 
 /// A new agent for the settings' provider, with its key from the keychain (or the mock).
-async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Result<Agent, String> {
+async fn new_agent(
+    state: &AppState,
+    settings: &Settings,
+    language: Lang,
+    conversation: Option<Conversation>,
+) -> Result<Agent, String> {
     #[cfg(test)]
     let test_provider = ai_run(state).test_provider.clone();
     #[cfg(test)]
     if let Some(make) = test_provider {
-        return Ok(Agent::new(
-            make(),
-            state.session.clone(),
-            ai::agent_settings(settings, language),
-        ));
+        let settings = ai::agent_settings(settings, language);
+        return Ok(match conversation {
+            Some(conversation) => {
+                Agent::resume(conversation, make(), state.session.clone(), settings)
+            }
+            None => Agent::new(make(), state.session.clone(), settings),
+        });
     }
     let (provider, name) = match ai::mock_provider(&state.session) {
         Some(mock) => (mock, "mock"),
@@ -823,12 +836,14 @@ async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Res
         "NEW CONVERSATION",
         &ai::conversation_entry(name, settings, language),
     );
-    Ok(Agent::new(
-        provider,
-        state.session.clone(),
-        ai::agent_settings(settings, language),
-    )
-    .with_log(log))
+    let settings = ai::agent_settings(settings, language);
+    let agent = match conversation {
+        Some(conversation) => {
+            Agent::resume(conversation, provider, state.session.clone(), settings)
+        }
+        None => Agent::new(provider, state.session.clone(), settings),
+    };
+    Ok(agent.with_log(log))
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current.
@@ -843,7 +858,13 @@ async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, message: qiyas_ai:
             result.err().map(|e| e.to_string())
         }
         Err(_) => {
-            ai_run(&app.state::<AppState>()).crashed();
+            let state = app.state::<AppState>();
+            let mut run = ai_run(&state);
+            if run.generation() == generation {
+                run.crashed();
+            } else {
+                run.release(None, generation);
+            }
             Some(ai::CRASHED.to_string())
         }
     };
@@ -864,9 +885,40 @@ async fn run_turn<R: Runtime>(
     } = turn;
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     let forward = async {
-        while let Some(event) = rx.recv().await {
+        let mut first = true;
+        let mut opening_saved = false;
+        let mut opening = tokio::time::interval(std::time::Duration::from_millis(25));
+        loop {
+            let event = tokio::select! {
+                event = rx.recv() => {
+                    let Some(event) = event else { break };
+                    event
+                }
+                _ = opening.tick(), if !opening_saved => {
+                    let state = app.state::<AppState>();
+                    let run = ai_run(&state);
+                    if run.generation() != generation {
+                        opening_saved = true;
+                    } else if run.conversation_id().is_some_and(|id| !id.is_empty()) {
+                        // The first request may wait on the network without emitting anything.
+                        // Keep its user message recoverable if the process exits at that point.
+                        run.save_logged();
+                        opening_saved = true;
+                    }
+                    continue;
+                }
+            };
             let state = app.state::<AppState>();
-            if ai_run(&state).generation() == generation {
+            let run = ai_run(&state);
+            if run.generation() == generation {
+                // Persist the opening message and each completed step, including during a long
+                // turn. Text deltas stay in the shared checkpoint until the next step or reset.
+                if first || !matches!(event, AgentEvent::Text { .. } | AgentEvent::Thinking { .. })
+                {
+                    run.save_logged();
+                    opening_saved = true;
+                }
+                first = false;
                 let _ = app.emit("ai:event", &event);
             }
         }
@@ -898,6 +950,117 @@ pub async fn ai_clear<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     new_conversation(&app, &state);
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ConversationSummary {
+    #[serde(flatten)]
+    summary: crate::conversations::Summary,
+    drawing_exists: bool,
+}
+
+/// A small index only: conversation bodies are loaded when the user chooses Continue.
+#[tauri::command]
+pub async fn ai_conversations(
+    drawing: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ConversationSummary>, String> {
+    // Serialize store access with finish/reset/delete so the index cannot lose a concurrent save.
+    let _run = ai_run(&state);
+    crate::conversations::Store::new(&state.config_dir)
+        .list(drawing.as_deref().map(Path::new))
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(|summary| ConversationSummary {
+                    drawing_exists: summary.drawing.as_ref().is_some_and(|path| path.is_file()),
+                    summary,
+                })
+                .collect()
+        })
+}
+
+#[derive(Serialize)]
+pub struct ResumedConversation {
+    transcript: Vec<TranscriptEntry>,
+    drawing: Option<std::path::PathBuf>,
+}
+
+/// The window first activates or opens the drawing through the usual autosave-aware path.
+#[tauri::command]
+pub async fn ai_resume<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<ResumedConversation, String> {
+    let (kept, generation, language, conversation) = {
+        let mut run = ai_run(&state);
+        if run.busy() {
+            return Err("busy".into());
+        }
+        run.save()?;
+        let conversation = crate::conversations::Store::new(&state.config_dir).load(&id)?;
+        let (kept, generation) = run.reserve()?;
+        (kept, generation, run.language(), conversation)
+    };
+    let mut claim = Claim {
+        state: &state,
+        generation,
+        armed: true,
+        kept,
+    };
+    let response = ResumedConversation {
+        transcript: conversation.transcript.clone(),
+        drawing: conversation.drawing.clone(),
+    };
+    let settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let agent = new_agent(&state, &settings, language, Some(conversation))
+        .await?
+        .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() }));
+    let mut run = ai_run(&state);
+    if run.generation() != generation {
+        return Err(ai::RESTARTED.into());
+    }
+    run.new_conversation();
+    run.resume(agent);
+    claim.armed = false;
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn ai_delete_conversation<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut run = ai_run(&state);
+    if run.conversation_id().as_deref() == Some(&id) {
+        if run.busy() {
+            return Err("busy".into());
+        }
+        run.new_conversation();
+        let _ = app.emit("ai:cleared", ());
+    }
+    crate::conversations::Store::new(&state.config_dir).delete(&id)
+}
+
+#[tauri::command]
+pub async fn ai_delete_conversations<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut run = ai_run(&state);
+    if run.busy() {
+        return Err("busy".into());
+    }
+    run.new_conversation();
+    crate::conversations::Store::new(&state.config_dir).delete_all()?;
+    let _ = app.emit("ai:cleared", ());
     Ok(())
 }
 
@@ -993,6 +1156,23 @@ mod tests {
 
     use super::*;
 
+    /// Give the timeout its own clock, so blocked IPC or Tauri workers cannot stop it.
+    fn ai_test(name: &'static str, test: impl FnOnce() + Send + 'static) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(60),
+                    tauri::async_runtime::spawn_blocking(test),
+                )
+                .await
+                .unwrap_or_else(|_| panic!("{name} timed out after 60 seconds"))
+                .unwrap_or_else(|error| panic!("{name} failed: {error}"));
+            });
+    }
+
     struct Ipc {
         _dir: tempfile::TempDir,
         _app: App<MockRuntime>,
@@ -1003,65 +1183,70 @@ mod tests {
 
     #[test]
     fn window_sheet_changes_cannot_interrupt_an_assistant_turn() {
-        let ipc = Ipc::open();
-        let state = ipc._app.state::<AppState>();
-        let layout = with_session(&state, |session| {
-            Ok(session
-                .info()
-                .sheets
-                .into_iter()
-                .find(|sheet| !sheet.is_model)
-                .unwrap()
-                .block)
-        })
-        .unwrap();
-        let (agent, generation) = ai_run(&state).reserve().unwrap();
-        // The assistant uses the session directly, while stale window messages arrive by IPC.
-        with_session(&state, |session| {
-            session.run_as(
-                Command::SetSheet {
-                    block: layout.clone(),
-                },
-                Source::Ai,
-            )
-        })
-        .unwrap();
-        for (name, input) in [
-            ("set_sheet", json!({"block":"*Model_Space"})),
-            ("undo", json!({})),
-            ("redo", json!({})),
-            ("ai_undo", json!({})),
-            (
-                "run_command",
-                json!({"cmd":{"type":"set_sheet","block":"*Model_Space"}}),
-            ),
-            (
-                "run_command",
-                json!({"cmd":{"type":"batch","commands":[{"type":"set_sheet","block":"*Model_Space"}]}}),
-            ),
-        ] {
-            let error = ipc.call(name, input).unwrap_err();
-            assert!(
-                error.as_str().unwrap().contains("Mizan owns the sheet"),
-                "{name}: {error}"
-            );
-            assert_eq!(
-                with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
-                layout
-            );
-        }
-        ipc.bytes("render_batch", json!({}));
-        ipc.bytes("sheet_batch", json!({"sheet":"*Model_Space"}));
-        assert_eq!(
-            with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
-            layout
-        );
-        ai_run(&state).release(agent, generation);
-        ipc.call("set_sheet", json!({"block":"*Model_Space"}))
-            .unwrap();
-        assert_eq!(
-            with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
-            "*Model_Space"
+        ai_test(
+            "window_sheet_changes_cannot_interrupt_an_assistant_turn",
+            || {
+                let ipc = Ipc::open();
+                let state = ipc._app.state::<AppState>();
+                let layout = with_session(&state, |session| {
+                    Ok(session
+                        .info()
+                        .sheets
+                        .into_iter()
+                        .find(|sheet| !sheet.is_model)
+                        .unwrap()
+                        .block)
+                })
+                .unwrap();
+                let (agent, generation) = ai_run(&state).reserve().unwrap();
+                // The assistant uses the session directly, while stale window messages arrive by IPC.
+                with_session(&state, |session| {
+                    session.run_as(
+                        Command::SetSheet {
+                            block: layout.clone(),
+                        },
+                        Source::Ai,
+                    )
+                })
+                .unwrap();
+                for (name, input) in [
+                    ("set_sheet", json!({"block":"*Model_Space"})),
+                    ("undo", json!({})),
+                    ("redo", json!({})),
+                    ("ai_undo", json!({})),
+                    (
+                        "run_command",
+                        json!({"cmd":{"type":"set_sheet","block":"*Model_Space"}}),
+                    ),
+                    (
+                        "run_command",
+                        json!({"cmd":{"type":"batch","commands":[{"type":"set_sheet","block":"*Model_Space"}]}}),
+                    ),
+                ] {
+                    let error = ipc.call(name, input).unwrap_err();
+                    assert!(
+                        error.as_str().unwrap().contains("Mizan owns the sheet"),
+                        "{name}: {error}"
+                    );
+                    assert_eq!(
+                        with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
+                        layout
+                    );
+                }
+                ipc.bytes("render_batch", json!({}));
+                ipc.bytes("sheet_batch", json!({"sheet":"*Model_Space"}));
+                assert_eq!(
+                    with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
+                    layout
+                );
+                ai_run(&state).release(agent, generation);
+                ipc.call("set_sheet", json!({"block":"*Model_Space"}))
+                    .unwrap();
+                assert_eq!(
+                    with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
+                    "*Model_Space"
+                );
+            },
         );
     }
 
@@ -1074,6 +1259,7 @@ mod tests {
             let app = mock_builder()
                 .invoke_handler(tauri::generate_handler![
                     open_drawing,
+                    new_drawing,
                     drawing_info,
                     recents,
                     clear_recents,
@@ -1095,6 +1281,10 @@ mod tests {
                     ai_send,
                     ai_cancel,
                     ai_clear,
+                    ai_conversations,
+                    ai_resume,
+                    ai_delete_conversation,
+                    ai_delete_conversations,
                     ai_status,
                     ai_log,
                     get_settings,
@@ -1391,63 +1581,185 @@ mod tests {
 
     #[test]
     fn a_turn_streams_its_events_and_measures_on_the_session() {
-        let ipc = Ipc::open();
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
-            .unwrap();
-        assert_eq!(
-            ipc.call("ai_send", json!({ "text": "And again" })),
-            Err(json!("busy")),
-            "one turn at a time"
+        ai_test(
+            "a_turn_streams_its_events_and_measures_on_the_session",
+            || {
+                let ipc = Ipc::open();
+                ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                    .unwrap();
+                assert_eq!(
+                    ipc.call("ai_send", json!({ "text": "And again" })),
+                    Err(json!("busy")),
+                    "one turn at a time"
+                );
+                let (events, done) = ipc.turn();
+                assert_eq!(done, json!({ "error": null }));
+
+                let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+                let first_call = kinds.iter().position(|k| *k == "tool_call").unwrap();
+                assert!(kinds[..first_call].iter().all(|k| *k == "text"));
+                assert_eq!(kinds[first_call + 1], "tool_result");
+                assert_eq!(kinds.last(), Some(&"done"));
+                let call = &events[first_call];
+                assert_eq!(call["name"], "qiyas_execute");
+                assert_eq!(call["label"], "measure_entity");
+                assert_eq!(call["mutating"], true);
+                let result = &events[first_call + 1];
+                assert_eq!(result["is_error"], false, "{result}");
+                assert_eq!(result["handles"].as_array().unwrap().len(), 1);
+
+                let items = ipc.call("takeoff", json!({})).unwrap();
+                assert_eq!(items[0]["source"], "ai");
+
+                let status = ipc.call("ai_status", json!({})).unwrap();
+                assert_eq!(status["provider"], "mock");
+                assert_eq!(status["busy"], false);
+                assert_eq!(status["message_count"], 4);
+
+                ipc.call("ai_clear", json!({})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                let status = ipc.call("ai_status", json!({})).unwrap();
+                assert_eq!(status["message_count"], 0);
+            },
         );
-        let (events, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": null }));
-
-        let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
-        let first_call = kinds.iter().position(|k| *k == "tool_call").unwrap();
-        assert!(kinds[..first_call].iter().all(|k| *k == "text"));
-        assert_eq!(kinds[first_call + 1], "tool_result");
-        assert_eq!(kinds.last(), Some(&"done"));
-        let call = &events[first_call];
-        assert_eq!(call["name"], "qiyas_execute");
-        assert_eq!(call["label"], "measure_entity");
-        assert_eq!(call["mutating"], true);
-        let result = &events[first_call + 1];
-        assert_eq!(result["is_error"], false, "{result}");
-        assert_eq!(result["handles"].as_array().unwrap().len(), 1);
-
-        let items = ipc.call("takeoff", json!({})).unwrap();
-        assert_eq!(items[0]["source"], "ai");
-
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["provider"], "mock");
-        assert_eq!(status["busy"], false);
-        assert_eq!(status["message_count"], 4);
-
-        ipc.call("ai_clear", json!({})).unwrap();
-        assert_eq!(ipc.next().0, "ai:cleared");
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["message_count"], 0);
     }
 
     #[test]
     fn the_agent_log_tells_the_turn() {
-        let ipc = Ipc::open();
-        assert_eq!(ipc.call("ai_log", json!({})).unwrap()["text"], "");
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+        ai_test("the_agent_log_tells_the_turn", || {
+            let ipc = Ipc::open();
+            assert_eq!(ipc.call("ai_log", json!({})).unwrap()["text"], "");
+            ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                .unwrap();
+            ipc.turn();
+            let log = ipc.call("ai_log", json!({})).unwrap();
+            assert!(log["path"].as_str().unwrap().ends_with("agent.log"));
+            let text = log["text"].as_str().unwrap();
+            for part in [
+                "NEW CONVERSATION\n    provider: mock",
+                "USER\n    Measure the wall",
+                "REQUEST 1",
+                "TOOL qiyas_execute (",
+                "DONE",
+            ] {
+                assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
+            }
+        });
+    }
+
+    #[test]
+    fn conversations_survive_clear_resume_and_deletion() {
+        ai_test("conversations_survive_clear_resume_and_deletion", || {
+            let ipc = Ipc::open();
+            let drawing = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+            ipc.call(
+                "ai_send",
+                json!({ "text": "Measure the wall", "pointed": ["Selection · 2"] }),
+            )
             .unwrap();
-        ipc.turn();
-        let log = ipc.call("ai_log", json!({})).unwrap();
-        assert!(log["path"].as_str().unwrap().ends_with("agent.log"));
-        let text = log["text"].as_str().unwrap();
-        for part in [
-            "NEW CONVERSATION\n    provider: mock",
-            "USER\n    Measure the wall",
-            "REQUEST 1",
-            "TOOL qiyas_execute (",
-            "DONE",
-        ] {
-            assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
-        }
+            let (live_events, done) = ipc.turn();
+            assert!(done["error"].is_null(), "{done}");
+            let list = ipc
+                .call("ai_conversations", json!({ "drawing": drawing }))
+                .unwrap();
+            assert_eq!(list.as_array().unwrap().len(), 1);
+            assert_eq!(list[0]["title"], "Measure the wall");
+            assert_eq!(list[0]["turns"], 1);
+            let id = list[0]["id"].clone();
+            // The reset must save before dropping the agent, even if the prior copy is gone.
+            let saved_file = ipc
+                ._dir
+                .path()
+                .join("config/conversations")
+                .join(format!("{}.json", id.as_str().unwrap()));
+            std::fs::remove_file(&saved_file).unwrap();
+            ipc.call("ai_clear", json!({})).unwrap();
+            assert_eq!(ipc.next().0, "ai:cleared");
+            assert!(saved_file.is_file());
+            let saved = ipc.call("ai_conversations", json!({})).unwrap();
+            assert_eq!(saved[0]["id"], id);
+            let resumed = ipc.call("ai_resume", json!({ "id": id })).unwrap();
+            assert_eq!(resumed["drawing"], drawing);
+            let transcript = resumed["transcript"].as_array().unwrap();
+            assert_eq!(transcript[0]["text"], "Measure the wall");
+            assert_eq!(transcript[0]["pointed"], json!(["Selection · 2"]));
+            assert!(transcript
+                .iter()
+                .any(|entry| entry["event"] == *live_events.last().unwrap()));
+            assert!(
+                ipc.call("ai_status", json!({})).unwrap()["message_count"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+            ipc.call("ai_delete_conversation", json!({ "id": id }))
+                .unwrap();
+            assert_eq!(ipc.next().0, "ai:cleared");
+            assert_eq!(ipc.call("ai_conversations", json!({})).unwrap(), json!([]));
+            ipc.call("ai_clear", json!({})).unwrap();
+            assert_eq!(ipc.next().0, "ai:cleared");
+            assert_eq!(
+                ipc.call("ai_conversations", json!({})).unwrap(),
+                json!([]),
+                "a deleted active chat must not return on reset"
+            );
+        });
+    }
+
+    #[test]
+    fn resume_is_refused_while_a_turn_is_reserved() {
+        ai_test("resume_is_refused_while_a_turn_is_reserved", || {
+            let ipc = Ipc::open();
+            let state = ipc.webview.state::<AppState>();
+            let (agent, generation) = ai_run(&state).reserve().unwrap();
+            assert_eq!(
+                ipc.call("ai_resume", json!({ "id": "missing" })),
+                Err(json!("busy"))
+            );
+            ai_run(&state).release(agent, generation);
+        });
+    }
+
+    #[test]
+    fn an_untitled_conversation_follows_save_as_before_another_turn() {
+        ai_test(
+            "an_untitled_conversation_follows_save_as_before_another_turn",
+            || {
+                let ipc = Ipc::open();
+                let untitled = ipc.call("new_drawing", json!({ "units": "m" })).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                ipc.call("ai_send", json!({ "text": "Hello" })).unwrap();
+                ipc.turn();
+                let list = ipc.call("ai_conversations", json!({})).unwrap();
+                let id = list[0]["id"].clone();
+                assert_eq!(list[0]["drawing"], untitled["path"]);
+                assert_eq!(
+                    ipc.call("ai_conversations", json!({ "drawing": untitled["path"] }))
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                let path = ipc._dir.path().join("named.dxf");
+                ipc.call("save_drawing_as", json!({ "path": path }))
+                    .unwrap();
+                let list = ipc
+                    .call("ai_conversations", json!({ "drawing": path }))
+                    .unwrap();
+                assert_eq!(list.as_array().unwrap().len(), 1);
+                assert_eq!(list[0]["id"], id);
+                ipc.call("ai_clear", json!({})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                assert_eq!(
+                    ipc.call("ai_resume", json!({ "id": id })).unwrap()["drawing"],
+                    json!(path)
+                );
+                ipc.call("ai_delete_conversations", json!({})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                assert_eq!(ipc.call("ai_conversations", json!({})).unwrap(), json!([]));
+            },
+        );
     }
 
     /// Panics in its first turn (counted across the providers it makes), then answers "ok".
@@ -1473,49 +1785,66 @@ mod tests {
 
     #[test]
     fn a_panicking_turn_ends_with_an_error_and_frees_the_assistant() {
-        let ipc = Ipc::open();
-        let calls = Arc::new(AtomicUsize::new(0));
-        {
-            let state = ipc.webview.state::<AppState>();
-            let calls = calls.clone();
-            ai_run(&state).test_provider =
-                Some(Arc::new(move || Box::new(PanicsFirst(calls.clone()))));
-        }
-        ipc.call("ai_send", json!({ "text": "Measure" })).unwrap();
-        let (_, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": "crashed" }));
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["busy"], false);
-        assert_eq!(status["message_count"], 0, "the conversation was dropped");
+        ai_test(
+            "a_panicking_turn_ends_with_an_error_and_frees_the_assistant",
+            || {
+                let ipc = Ipc::open();
+                let calls = Arc::new(AtomicUsize::new(0));
+                {
+                    let state = ipc.webview.state::<AppState>();
+                    let calls = calls.clone();
+                    ai_run(&state).test_provider =
+                        Some(Arc::new(move || Box::new(PanicsFirst(calls.clone()))));
+                }
+                ipc.call("ai_send", json!({ "text": "Measure" })).unwrap();
+                let (_, done) = ipc.turn();
+                assert_eq!(done, json!({ "error": "crashed" }));
+                let status = ipc.call("ai_status", json!({})).unwrap();
+                assert_eq!(status["busy"], false);
+                assert_eq!(status["message_count"], 0, "the conversation was dropped");
+                let saved = ipc.call("ai_conversations", json!({})).unwrap();
+                assert_eq!(
+                    saved.as_array().unwrap().len(),
+                    1,
+                    "the last checkpoint survives a panicking turn"
+                );
+                assert_eq!(saved[0]["title"], "Measure");
 
-        ipc.call("ai_send", json!({ "text": "Again" })).unwrap();
-        let (events, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": null }));
-        assert_eq!(events.last().unwrap()["type"], "done");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+                ipc.call("ai_send", json!({ "text": "Again" })).unwrap();
+                let (events, done) = ipc.turn();
+                assert_eq!(done, json!({ "error": null }));
+                assert_eq!(events.last().unwrap()["type"], "done");
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+            },
+        );
     }
 
     #[test]
     fn ai_undo_takes_back_only_the_assistants_newest_change() {
-        let ipc = Ipc::open();
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
-            .unwrap();
-        ipc.turn();
-        // The user measures after the assistant.
-        let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [1.0, 0.0]] });
-        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
-        assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(false)));
-        assert_eq!(
-            ipc.call("takeoff", json!({}))
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            2
+        ai_test(
+            "ai_undo_takes_back_only_the_assistants_newest_change",
+            || {
+                let ipc = Ipc::open();
+                ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                    .unwrap();
+                ipc.turn();
+                // The user measures after the assistant.
+                let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [1.0, 0.0]] });
+                ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+                assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(false)));
+                assert_eq!(
+                    ipc.call("takeoff", json!({}))
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    2
+                );
+                assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+                assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
+                assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
+            },
         );
-        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
-        assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
-        assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
     }
 
     #[test]
@@ -1599,18 +1928,20 @@ mod tests {
 
     #[test]
     fn a_cancelled_turn_says_so_and_ends() {
-        let ipc = Ipc::open();
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
-            .unwrap();
-        ipc.call("ai_cancel", json!({})).unwrap();
-        let (events, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": null }));
-        assert_eq!(
-            events.last(),
-            Some(&json!({ "type": "stopped", "reason": "cancelled" }))
-        );
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["busy"], false);
+        ai_test("a_cancelled_turn_says_so_and_ends", || {
+            let ipc = Ipc::open();
+            ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                .unwrap();
+            ipc.call("ai_cancel", json!({})).unwrap();
+            let (events, done) = ipc.turn();
+            assert_eq!(done, json!({ "error": null }));
+            assert_eq!(
+                events.last(),
+                Some(&json!({ "type": "stopped", "reason": "cancelled" }))
+            );
+            let status = ipc.call("ai_status", json!({})).unwrap();
+            assert_eq!(status["busy"], false);
+        });
     }
 
     /// Calls `mcp_status` until `done` holds for it, for up to 5 s.

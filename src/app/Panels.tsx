@@ -5,6 +5,7 @@ import { MizanMark } from "../ai/MizanMark";
 import { Tabs } from "@base-ui/react/tabs";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
+import type { ConversationHistoryState } from "../ai/ConversationHistory";
 import { BoqPanel } from "../boq/BoqPanel";
 import { ConflictsPanel } from "../boq/ConflictsPanel";
 import { openCount } from "../boq/conflictsMath";
@@ -324,12 +325,13 @@ type SideProps = {
   takeoffState: TakeoffState;
   takeoff: Takeoff;
   ai: AssistantWiring;
+  conversationHistory: ConversationHistoryState;
   comments: Comments;
 };
 
 /** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts, comments and
  *  Mizan panels (all mounted, one shown). */
-export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, comments }: SideProps) {
+export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -423,6 +425,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
       <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
         <AssistantPanel
           assistant={assistant}
+          history={conversationHistory}
           onShow={showCard}
           onUndo={undoCard}
           onSettings={openSettings}

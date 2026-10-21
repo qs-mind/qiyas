@@ -7,7 +7,7 @@ use std::sync::Once;
 use std::time::Duration;
 
 use base64::Engine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ToolSpec;
@@ -20,6 +20,13 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
+    /// Conversation-local memory only; credentials and URLs never belong here.
+    fn save_state(&self) -> Value {
+        Value::Null
+    }
+
+    fn restore_state(&self, _state: Value) {}
+
     /// Sends `req`, calls `sink` with each event as it arrives, and returns the whole turn.
     fn stream_turn<'a>(
         &'a self,
@@ -40,13 +47,14 @@ pub struct TurnRequest {
     pub max_tokens: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<ContentBlock>,
@@ -96,7 +104,8 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -128,7 +137,8 @@ pub enum ContentBlock {
     Raw(Value),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ResultPart {
     Text(String),
     /// A PNG, base64-encoded.
@@ -174,7 +184,7 @@ pub enum StopReason {
     Other(String),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,

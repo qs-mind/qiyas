@@ -161,3 +161,36 @@ test("the undoable card is the newest change not undone; a stale undo is kept on
   expect(stale.items.at(-1)).toMatchObject({ id: "c", stale: true, undone: false });
   expect(undoableCard(run([call("d"), result("d", { is_error: true })], t))?.id).toBe("c");
 });
+
+test("saved events replay through the live reducer and leave old Undo steps finished", async () => {
+  const { replay } = await import("./messages");
+  const entries: import("../api").TranscriptEntry[] = [
+    { type: "user", text: "Measure this", pointed: ["Selection · 1"], images: ["[picture removed]"] },
+    ...[
+      { type: "thinking", text: "Read first" },
+      { type: "plan", phases: [{ id: "measure", title: "Measure", status: "active" }] },
+      call("saved"), result("saved"),
+      { type: "text", text: "Measured " }, { type: "text", text: "12 m2." },
+      { type: "done", usage: {} },
+    ].map((event) => ({ type: "event" as const, event: event as AgentEvent })),
+  ];
+  const live = run(entries.map((entry) => entry.type === "event" ? entry.event : entry));
+  const saved = replay(entries);
+  expect(saved.items).toEqual(live.items.map((item) => item.kind === "tool" ? { ...item, restored: true } : item));
+  expect(undoableCard(live)?.id).toBe("saved");
+  expect(undoableCard(saved)).toBeNull();
+});
+
+test("an approval event restores the current checklist and finishes streaming text", () => {
+  const phases = [{ id: "check", title: "Check", status: "pending" as const }];
+  const transcript = run([
+    { type: "user", text: "Draw" },
+    { type: "text", text: "Here is the plan." },
+    { type: "awaiting_approval", plan: { phases } },
+  ]);
+  expect(transcript.items).toEqual([
+    { kind: "user", text: "Draw" },
+    { kind: "plan", phases, awaitingApproval: true },
+    { kind: "assistant", text: "Here is the plan.", finished: true },
+  ]);
+});
