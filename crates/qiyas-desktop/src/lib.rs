@@ -68,6 +68,8 @@ pub fn run() {
             commands::sheet_batch,
             commands::sheet_batch_version,
             files::paper_views,
+            files::clipboard_read_text,
+            files::clipboard_read_image,
             files::autosave_drawings,
             files::recoverable_drawings,
             files::untitled_autosaves,

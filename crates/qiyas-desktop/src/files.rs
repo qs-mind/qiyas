@@ -51,6 +51,37 @@ pub(crate) fn clipboard_text(state: &AppState) -> Result<String, String> {
         .map_err(|e| format!("The clipboard could not be read: {e}"))
 }
 
+/// The clipboard's text for a paste into a text field, or None when it holds none. Pastes go
+/// through here, not the web view: WebKitGTK 2.54 on Wayland hangs and then crashes reading
+/// the clipboard (`src/shell/safePaste.ts`).
+#[tauri::command(async)]
+pub fn clipboard_read_text(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    match with_clipboard(&state, |c| c.get_text()) {
+        Ok(text) => Ok(Some(text)),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(e) => Err(format!("The clipboard could not be read: {e}")),
+    }
+}
+
+/// The clipboard's picture for a paste: width and height (u32, little-endian), then its RGBA
+/// pixels; empty when it holds none.
+#[tauri::command(async)]
+pub fn clipboard_read_image(state: State<'_, AppState>) -> Result<tauri::ipc::Response, String> {
+    match with_clipboard(&state, |c| c.get_image()) {
+        Ok(img) => {
+            let mut out = Vec::with_capacity(8 + img.bytes.len());
+            out.extend_from_slice(&(img.width as u32).to_le_bytes());
+            out.extend_from_slice(&(img.height as u32).to_le_bytes());
+            out.extend_from_slice(&img.bytes);
+            Ok(tauri::ipc::Response::new(out))
+        }
+        Err(arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure) => {
+            Ok(tauri::ipc::Response::new(Vec::new()))
+        }
+        Err(e) => Err(format!("The clipboard could not be read: {e}")),
+    }
+}
+
 /// Puts `text` on the system clipboard; the app keeps it there while it runs.
 pub(crate) fn set_clipboard_text(state: &AppState, text: &str) -> Result<(), String> {
     with_clipboard(state, |c| c.set_text(text.to_string()))

@@ -329,6 +329,8 @@ impl Agent {
         let mut counts = TurnCounts::default();
         let mut usage = Usage::default();
         let mut requests = 0;
+        // Grows when an answer spends all its room thinking (see `MAX_TOKENS_CAP`).
+        let mut max_tokens = self.settings.max_tokens;
         loop {
             if cancel.is_cancelled() {
                 return self.stop(&events, "cancelled").await;
@@ -342,7 +344,7 @@ impl Agent {
                 tools: tools.clone(),
                 model: self.settings.model.clone(),
                 effort: self.settings.effort.clone(),
-                max_tokens: self.settings.max_tokens,
+                max_tokens,
             };
             requests += 1;
             let started = Instant::now();
@@ -400,6 +402,17 @@ impl Agent {
                         let why = format!("stopped after {} steps", counts.limit());
                         return self.stop(&events, &why).await;
                     }
+                }
+                // Cut off before it said or called anything: its room went on thinking (Gemini
+                // through Runware once thought for 94 s and wrote nothing). Nothing ran, so the
+                // same request goes again with twice the room; the cut-off answer is dropped.
+                StopReason::MaxTokens
+                    if says_nothing(&turn.content) && max_tokens < MAX_TOKENS_CAP =>
+                {
+                    max_tokens = (max_tokens.max(1) * 2).min(MAX_TOKENS_CAP);
+                    self.log("RETRY", || {
+                        format!("the answer was cut off before it said anything; asking again with max_tokens {max_tokens}")
+                    });
                 }
                 reason => {
                     let assistant = Message::assistant(turn.content);
@@ -891,6 +904,19 @@ fn is_error(block: &ContentBlock) -> bool {
 }
 
 /// Whether `content` holds a tool call to answer.
+/// The most room one answer gets when it ran out thinking: Gemini's output limit (65,536)
+/// with a margin; Claude's is higher.
+pub const MAX_TOKENS_CAP: u32 = 64_000;
+
+/// Whether an answer holds no text and no tool call (thinking at most).
+fn says_nothing(content: &[ContentBlock]) -> bool {
+    content.iter().all(|b| match b {
+        ContentBlock::Text { text } => text.trim().is_empty(),
+        ContentBlock::ToolUse { .. } => false,
+        _ => true,
+    })
+}
+
 fn has_calls(content: &[ContentBlock]) -> bool {
     Message::assistant(content.to_vec())
         .tool_uses()

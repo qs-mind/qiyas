@@ -706,6 +706,72 @@ async fn a_question_ends_the_turn_cleanly_and_the_answer_carries_on() {
 }
 
 #[tokio::test]
+async fn an_answer_cut_off_before_it_said_anything_is_asked_again_with_more_room() {
+    // Gemini through Runware once thought for 94 s, wrote nothing and hit the limit: the turn
+    // must not stop there.
+    let mock = serve(|n| match n {
+        0 => {
+            let mut e = vec![message_start()];
+            e.extend(stop("max_tokens"));
+            Reply::Sse(e)
+        }
+        _ => text_turn(&["Done."]),
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "Draw the villa.").await;
+    result.unwrap();
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 2, "asked again");
+    assert_eq!(reqs[0].body["max_tokens"], 16_000);
+    assert_eq!(reqs[1].body["max_tokens"], 32_000, "with twice the room");
+    assert_eq!(
+        reqs[1].body["messages"].as_array().unwrap().len(),
+        1,
+        "the empty answer is dropped"
+    );
+    assert_eq!(texts(&events).join(""), "Done.");
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Done { .. })),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_that_keeps_running_out_stops_at_the_cap() {
+    let mock = serve(|_| {
+        let mut e = vec![message_start()];
+        e.extend(stop("max_tokens"));
+        Reply::Sse(e)
+    })
+    .await;
+    let (_dir, session) = sample();
+    let mut agent = Agent::new(
+        Box::new(mock.anthropic()),
+        session,
+        AgentSettings::default(),
+    );
+    let (_result, events) = turn(&mut agent, "Draw the villa.").await;
+    let sizes: Vec<_> = mock
+        .requests()
+        .iter()
+        .map(|r| r.body["max_tokens"].clone())
+        .collect();
+    assert_eq!(sizes, [16_000, 32_000, 64_000]);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Stopped { reason } if reason == "max_tokens")),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
 async fn cancel_stops_within_one_second() {
     let mock = serve(|_| Reply::Drip).await;
     let (_dir, session) = sample();

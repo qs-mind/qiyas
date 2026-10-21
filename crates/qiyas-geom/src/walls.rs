@@ -169,6 +169,7 @@ pub fn build_walls_justified(
         &openings,
         (tol / thickness).max(1e-8),
         justification,
+        thickness,
     )?;
     for region in &mut walls.regions {
         for point in region
@@ -192,14 +193,16 @@ pub fn build_walls_justified(
     Ok(walls)
 }
 
+/// `unit`: one normalised unit in drawing units (the thickness), for messages.
 fn build_normalized(
     runs: &[Run],
     openings: &[Opening],
     tol: f64,
     justification: Justification,
+    unit: f64,
 ) -> Result<Walls, WallError> {
     check_overlaps(runs, tol, justification)?;
-    check_openings(runs, openings, tol, justification)?;
+    check_openings(runs, openings, tol, justification, unit)?;
     let centreline: f64 = runs.iter().map(run_length).sum();
     let chains = join_runs(runs, tol, justification == Justification::Centre);
     let (left, right, shift) = match justification {
@@ -361,6 +364,7 @@ fn check_openings(
     openings: &[Opening],
     tol: f64,
     justification: Justification,
+    unit: f64,
 ) -> Result<(), WallError> {
     let segments = segments(runs);
     let clearance = if justification == Justification::Centre {
@@ -368,6 +372,7 @@ fn check_openings(
     } else {
         1.0
     };
+    let fits = |index| where_it_fits(&segments, openings, index, tol, clearance, unit);
     for (index, opening) in openings.iter().enumerate() {
         let run = runs
             .get(opening.run)
@@ -379,15 +384,20 @@ fn check_openings(
             || opening.at + opening.width / 2.0 > run_length(run) + tol
         {
             return Err(bad(format!(
-                "Opening {index} does not fit in run {}",
-                opening.run
+                "Opening {index} does not fit in run {} ({} long){}",
+                opening.run,
+                number(run_length(run) * unit),
+                fits(index)
             )));
         }
         for other in &openings[..index] {
             if other.run == opening.run
                 && (other.at - opening.at).abs() < (other.width + opening.width) / 2.0 - tol
             {
-                return Err(bad(format!("Opening {index} overlaps another opening")));
+                return Err(bad(format!(
+                    "Opening {index} overlaps another opening{}",
+                    fits(index)
+                )));
             }
         }
         let host = segments
@@ -402,15 +412,44 @@ fn check_openings(
         let half = opening.width / 2.0;
         for other in &segments {
             let other_delta = difference(other.b, other.a);
-            let determinant = cross(host_delta, other_delta);
-            if determinant.abs() <= host.length * other.length * 1e-9 {
+            if cross(host_delta, other_delta).abs() <= host.length * other.length * 1e-9 {
                 continue;
             }
             if other.run == opening.run
                 && other.from < opening.at + half - tol
                 && other.from + other.length > opening.at - half + tol
             {
-                return Err(bad(format!("Opening {index} crosses a wall corner")));
+                return Err(bad(format!(
+                    "Opening {index} crosses a wall corner{}",
+                    fits(index)
+                )));
+            }
+        }
+        for (at, sine) in junctions(host, &segments, tol) {
+            if (opening.at - at).abs() <= half + clearance / sine + tol {
+                return Err(bad(format!(
+                    "Opening {index} crosses a wall junction or corner at {} along run {}{}",
+                    number(at * unit),
+                    opening.run,
+                    fits(index)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Where other walls cross or meet `host`: the distance along its run and the sine of the
+/// angle between them.
+fn junctions(host: &Segment, segments: &[Segment], tol: f64) -> Vec<(f64, f64)> {
+    let host_delta = difference(host.b, host.a);
+    segments
+        .iter()
+        .filter_map(|other| {
+            let other_delta = difference(other.b, other.a);
+            let determinant = cross(host_delta, other_delta);
+            if determinant.abs() <= host.length * other.length * 1e-9 {
+                return None;
             }
             let offset = difference(other.a, host.a);
             let along_host = cross(offset, other_delta) / determinant;
@@ -420,18 +459,106 @@ fn check_openings(
                 || along_other < -tol / other.length
                 || along_other > 1.0 + tol / other.length
             {
-                continue;
+                return None;
             }
-            let at = host.from + along_host * host.length;
             let sine = determinant.abs() / (host.length * other.length);
-            if (opening.at - at).abs() <= half + clearance / sine + tol {
-                return Err(bad(format!(
-                    "Opening {index} crosses a wall junction or corner"
-                )));
+            Some((host.from + along_host * host.length, sine))
+        })
+        .collect()
+}
+
+/// Where opening `index` could go on its run, for an error: the ranges its centre may take,
+/// in drawing units along the run, clear of corners, junctions and the run's other openings
+/// (the same rules as `check_openings`), or that it fits nowhere there. A junction's side of a
+/// range is shown rounded inwards (touching its clearance is refused); a run's end and a
+/// neighbouring opening may be touched.
+fn where_it_fits(
+    segments: &[Segment],
+    openings: &[Opening],
+    index: usize,
+    tol: f64,
+    clearance: f64,
+    unit: f64,
+) -> String {
+    let opening = &openings[index];
+    let half = opening.width / 2.0;
+    // (from, to, whether each end may be touched), in normalised units along the run.
+    let mut centres: Vec<(f64, bool, f64, bool)> = Vec::new();
+    for host in segments.iter().filter(|s| s.run == opening.run) {
+        let mut blocked: Vec<(f64, f64, bool)> = junctions(host, segments, tol)
+            .into_iter()
+            .map(|(at, sine)| {
+                (
+                    at - clearance / sine - tol,
+                    at + clearance / sine + tol,
+                    false,
+                )
+            })
+            .chain(
+                openings
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, o)| i != index && o.run == opening.run)
+                    .map(|(_, o)| (o.at - o.width / 2.0, o.at + o.width / 2.0, true)),
+            )
+            .collect();
+        blocked.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let end = host.from + host.length;
+        let (mut start, mut start_ok) = (host.from, true);
+        let mut free = Vec::new();
+        for (a, b, ok) in blocked {
+            if a > start {
+                free.push((start, start_ok, a.min(end), a >= end || ok));
+            }
+            if b > start {
+                (start, start_ok) = (b, ok);
+            }
+            if start >= end {
+                break;
             }
         }
+        if start < end {
+            free.push((start, start_ok, end, true));
+        }
+        centres.extend(
+            free.into_iter()
+                .map(|(a, a_ok, b, b_ok)| (a + half, a_ok, b - half, b_ok))
+                .filter(|(a, _, b, _)| b - a >= -tol),
+        );
     }
-    Ok(())
+    let shown: Vec<String> = centres
+        .iter()
+        .filter_map(|&(a, a_ok, b, b_ok)| {
+            let (a, b) = (a * unit * 1000.0, b * unit * 1000.0);
+            let a = if a_ok { a.round() } else { a.floor() + 1.0 } / 1000.0;
+            let b = if b_ok { b.round() } else { b.ceil() - 1.0 } / 1000.0;
+            (a <= b).then(|| format!("{} to {}", number(a), number(b)))
+        })
+        .collect();
+    if shown.is_empty() {
+        return format!(
+            "; an opening {} wide fits nowhere on run {}: make it narrower or put it on another run",
+            number(opening.width * unit),
+            opening.run
+        );
+    }
+    format!(
+        "; an opening {} wide fits on run {} with its `at` from {}",
+        number(opening.width * unit),
+        opening.run,
+        shown.join(", or from ")
+    )
+}
+
+/// A length for a message: at most 3 decimals, no trailing zeros.
+fn number(x: f64) -> String {
+    let s = format!("{x:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".into()
+    } else {
+        s.into()
+    }
 }
 
 /// A chain: points in order, closed or not.
@@ -1120,6 +1247,35 @@ mod tests {
             TOL,
         );
         assert!(result.unwrap_err().to_string().contains("corner"));
+    }
+
+    #[test]
+    fn a_refused_opening_says_where_it_fits_and_the_answer_works() {
+        let through = run(&[[0.0, 0.0], [10.0, 0.0]], false);
+        let branch = run(&[[5.0, 0.0], [5.0, 4.0]], false);
+        let at = |at| Opening {
+            run: 0,
+            at,
+            width: 0.9,
+        };
+        let err = build_walls(&[through.clone(), branch.clone()], T, &[at(5.0)], TOL)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("junction or corner at 5 along run 0"), "{err}");
+        assert!(
+            err.contains("fits on run 0 with its `at` from 0.45 to 4.449, or from 5.551 to 9.55"),
+            "{err}"
+        );
+        for ok in [0.45, 4.449, 5.551, 9.55] {
+            if let Err(e) = build_walls(&[through.clone(), branch.clone()], T, &[at(ok)], TOL) {
+                panic!("{ok}: {e}");
+            }
+        }
+        let short = run(&[[0.0, 0.0], [0.5, 0.0]], false);
+        let err = build_walls(&[short], T, &[at(0.25)], TOL)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("fits nowhere on run 0"), "{err}");
     }
 
     #[test]

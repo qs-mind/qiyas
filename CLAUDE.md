@@ -319,6 +319,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   next prompt. The pure machine reads points, numbers, names and options from the registry
   schema, with `x-prompts` when a command needs a different order or prompt. A new core word
   requires no window parser change.
+- Pastes into text fields (Ctrl+V, Ctrl+Shift+V, Shift+Insert) go through `src/shell/safePaste.ts`
+  and IPC `clipboard_read_text` / `clipboard_read_image` (arboard), never the web view's own
+  clipboard read: WebKitGTK 2.54 on Wayland hung and then crashed the app there. The field gets a
+  paste event (Mizan's composer takes pictures from it), then the text typed in as one edit. The
+  web view's right-click Paste is not covered. Keys outside text fields stay PASTECLIP.
 - Native file dialogs all go through `src/fileDialogs.ts`. Open and Save start in the folder
   of the drawing on screen (never an untitled placeholder), then the last chosen folder in
   `localStorage`, then the user's Documents folder from Tauri. Suggested filenames are kept.
@@ -468,7 +473,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   drawing units; `height`, `sill` and `head` use metres above floor. Justification is `centre`
   by default, or `left` / `right` of the directed run. Curves are supplied as polylines
   approximating arcs, not bulges. Openings must fit a straight segment clear of corners and
-  junctions; overlapping openings and parallel overlapping walls are refused. An opening
+  junctions; overlapping openings and parallel overlapping walls are refused. A refused
+  opening's error names the junction and the ranges of `at` where an opening that wide fits on
+  its run (each suggested end is accepted), or says it fits nowhere there. An opening
   cannot wrap across a closed run's start. A door defaults to a left swing, sill 0 and head
   `min(2.1, height)`; a window defaults to sill 0.9 m and the same head convention. Wall height
   defaults to 3 m. Explicit contradictions, including sill at or above head, are refused.
@@ -1502,6 +1509,10 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
   room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
   for each live run.
+- An answer cut off by its length limit before it wrote text or a call (its room went on
+  thinking: Gemini through Runware once thought 94 s and wrote nothing) is asked again with
+  twice `max_tokens`, up to `MAX_TOKENS_CAP` (64,000), the empty answer dropped; past the cap
+  the turn stops with `max_tokens` as before. Log line `RETRY`.
 - Agent log: `logs/agent.log` beside `settings.json` (mode 0600, moved to `agent.log.1` past
   5 MB). Each conversation's provider, model and address, then every user message, request,
   answer (text, calls, tokens, time), tool run (input, result) and error with the service's

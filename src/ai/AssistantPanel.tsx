@@ -394,7 +394,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={(e) => {
-            const files = [...e.clipboardData.files].filter(isPicture);
+            const files = [...(e.clipboardData?.files ?? [])].filter(isPicture);
             if (files.length === 0) return;
             e.preventDefault();
             addPictures(files);

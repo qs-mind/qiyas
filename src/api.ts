@@ -1796,3 +1796,8 @@ export const aiUndo = () => invoke<boolean>("ai_undo");
 
 /** The assistant answers in this language; a change starts a new conversation. */
 export const aiSetLanguage = (lang: "en" | "ar") => invoke<void>("ai_set_language", { lang });
+
+/** The clipboard's text for a paste into a text field, or null (`files::clipboard_read_text`). */
+export const clipboardReadText = () => invoke<string | null>("clipboard_read_text");
+/** The clipboard's picture: width, height (u32 little-endian), RGBA; empty when none. */
+export const clipboardReadImage = () => invoke<ArrayBuffer>("clipboard_read_image");
