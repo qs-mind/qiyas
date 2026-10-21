@@ -21,3 +21,6 @@ crates/qiyas-desktop/resources/
 *.pfx
 *.p8
 .tauri/
+
+# Development data: research notes, benchmark store, the dev QIYAS_HOME. Never committed.
+.local/

@@ -58,6 +58,8 @@ impl ValidationReport {
         let mut fields = std::collections::BTreeSet::new();
         self.defaults_used
             .retain(|default| fields.insert(default.field.clone()));
+        let mut notes = std::collections::BTreeSet::new();
+        self.not_checked.retain(|note| notes.insert(note.clone()));
     }
     fn error(&mut self, code: &str, pointer: &str, message: impl Into<String>) {
         self.valid = false;
@@ -73,6 +75,7 @@ impl ValidationReport {
         self.errors.extend(other.errors);
         self.warnings.extend(other.warnings);
         self.defaults_used.extend(other.defaults_used);
+        self.not_checked.extend(other.not_checked);
     }
 
     pub fn message(&self) -> String {
@@ -339,6 +342,44 @@ fn validate_at(
         canonical["kind"] = json!(kind);
     }
     walk(&info.schema, &canonical, path, step, &mut report);
+    if matches!(
+        info.name.as_str(),
+        "title_block" | "mview" | "set_layout_paper"
+    ) {
+        report.not_checked.push("active layout, its paper size, and whether annotation or viewport frames fit the paper; use new_layout or set_layout_paper for a sized sheet".into());
+    }
+    if info.name == "mview" {
+        let fitted = canonical
+            .get("model_bounds")
+            .is_some_and(|value| !value.is_null());
+        let required = if fitted {
+            ["scale", "paper_centre"]
+        } else {
+            ["corner1", "corner2"]
+        };
+        for field in required {
+            if canonical.get(field).is_none_or(Value::is_null) {
+                report.error("missing_field", &pointer(path, field), if fitted {
+                    "model_bounds requires scale (for example \"1:100\") and paper_centre: [x, y] in paper millimetres"
+                } else {
+                    "Give corner1 and corner2 as [x, y] in paper millimetres, or model_bounds with scale and paper_centre"
+                });
+            }
+        }
+        for field in if fitted {
+            &["corner1", "corner2", "centre"][..]
+        } else {
+            &["paper_centre"][..]
+        } {
+            if canonical.get(field).is_some_and(|value| !value.is_null())
+                && !(fitted
+                    && field.starts_with("corner")
+                    && canonical[*field] == json!([0.0, 0.0]))
+            {
+                report.error("invalid_value", &pointer(path, field), "Use either corner1/corner2 with optional centre, or model_bounds with scale and paper_centre");
+            }
+        }
+    }
     if matches!(info.name.as_str(), "create_entities" | "define_block") {
         if let Some(entities) = canonical["entities"].as_array() {
             for (index, entity) in entities.iter().enumerate() {

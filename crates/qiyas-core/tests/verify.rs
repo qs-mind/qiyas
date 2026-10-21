@@ -78,7 +78,7 @@ fn picked(mut e: Expectation, k: f64, points: &[[f64; 2]]) -> Expectation {
 }
 
 fn verify(session: &mut Session, expectations: Vec<Expectation>) -> Vec<VerificationResult> {
-    let Outcome::Verified { results } = session.run(Command::Verify { expectations }).unwrap()
+    let Outcome::Verified { results, .. } = session.run(Command::Verify { expectations }).unwrap()
     else {
         panic!("expected verification results");
     };
@@ -607,4 +607,37 @@ fn path_checks_do_not_silently_ignore_an_unsupported_target() {
         results.iter().all(|r| !r.passed && r.measured.is_none()),
         "{results:?}"
     );
+}
+
+#[test]
+fn literal_point_checks_disclose_that_they_prove_nothing_about_the_drawing() {
+    let (mut s, _) = blank(6);
+    let drawn = line(&mut s, 1.0, [0.0, 0.0], [3.0, 4.0]);
+    let literal = picked(
+        expectation(VerifyKind::Distance, &[], Some(5.0)),
+        1.0,
+        &[[0.0, 0.0], [3.0, 4.0]],
+    );
+    let mut count = expectation(VerifyKind::Count, &[], Some(1.0));
+    count.entity_type = Some("Line".into());
+    let outcome = s
+        .run(Command::Verify {
+            expectations: vec![
+                literal,
+                expectation(VerifyKind::Length, &[drawn], Some(5.0)),
+                count,
+            ],
+        })
+        .unwrap();
+    let value = serde_json::to_value(outcome).unwrap();
+    assert_eq!(value["untied_checks"], 1);
+    assert!(value["line"].as_str().unwrap().contains("1 checks"));
+    assert!(value["line"]
+        .as_str()
+        .unwrap()
+        .contains("prove nothing about the drawing"));
+    assert_eq!(value["results"][0]["tied_to_drawing"], false);
+    assert_eq!(value["results"][0]["passed"], true);
+    assert_eq!(value["results"][1]["tied_to_drawing"], true);
+    assert_eq!(value["results"][2]["tied_to_drawing"], true);
 }

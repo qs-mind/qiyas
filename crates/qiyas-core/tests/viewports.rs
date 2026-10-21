@@ -34,6 +34,9 @@ fn on_layout() -> (tempfile::TempDir, Session) {
 fn mview(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> u64 {
     match s
         .run(Command::MView {
+            model_bounds: None,
+            paper_centre: None,
+            target: None,
             scale: None,
             centre: None,
             corner1: a,
@@ -117,6 +120,9 @@ fn mview_creates_a_viewport_on_the_layout_that_saves() {
     s.set_sheet(MODEL).unwrap();
     assert!(s
         .run(Command::MView {
+            model_bounds: None,
+            paper_centre: None,
+            target: None,
             scale: None,
             centre: None,
             corner1: [0.0, 0.0],
@@ -247,4 +253,130 @@ fn another_sheet_draws_without_leaving_the_one_on_screen() {
     }))
     .unwrap();
     assert_ne!(s.sheet_batch_version(MODEL), version);
+}
+
+#[test]
+fn model_windows_fit_physical_scales_and_resize_the_same_viewport() {
+    for units in [4, 5, 6, 1] {
+        for denominator in [50, 100] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = Session::new_blank(&dir.path().join("window.dwg"), units);
+            s.set_sheet("*Paper_Space").unwrap();
+            let one_metre = 1.0 / s.drawing.units.to_metres();
+            let bounds = [
+                [2.0 * one_metre, 3.0 * one_metre],
+                [12.0 * one_metre, 11.0 * one_metre],
+            ];
+            let mut input = json!({"type":"mview", "model_bounds":bounds,
+                "scale":format!("1:{denominator}"), "paper_centre":[210,148.5]});
+            let report = s.validate_input(&input);
+            assert!(report.valid, "{:?}", report.errors);
+            assert!(report
+                .not_checked
+                .iter()
+                .any(|note| note.contains("paper size")));
+            let Outcome::Added { handles } = s
+                .run_input(&input, qiyas_core::Source::User)
+                .unwrap()
+                .outcome
+            else {
+                panic!("viewport")
+            };
+            let handle = handles[0];
+            let view = s
+                .paper_views()
+                .into_iter()
+                .find(|view| view.handle == handle)
+                .unwrap();
+            let width = 10000.0 / f64::from(denominator);
+            let height = 8000.0 / f64::from(denominator);
+            assert!((view.rect[0][0] - (210.0 - width / 2.0)).abs() < 1e-9);
+            assert!((view.rect[1][1] - (148.5 + height / 2.0)).abs() < 1e-9);
+            assert!((view.centre[0] - 7.0 * one_metre).abs() < 1e-9);
+            assert!((view.centre[1] - 7.0 * one_metre).abs() < 1e-9);
+            assert!((view.scale * one_metre - 1000.0 / f64::from(denominator)).abs() < 1e-9);
+            assert_eq!(s.current.layer, "0");
+            let layer = s.drawing.doc.layers.get("A-VIEW").unwrap();
+            assert!(!layer.is_plottable);
+            assert_eq!(
+                s.drawing
+                    .doc
+                    .get_entity(Handle::new(handle))
+                    .unwrap()
+                    .common()
+                    .layer,
+                "A-VIEW"
+            );
+            assert_eq!(s.history_steps().0.len(), 1);
+            assert!(s.undo());
+            assert!(!s.drawing.doc.layers.contains("A-VIEW"));
+            assert!(s.drawing.doc.get_entity(Handle::new(handle)).is_none());
+            assert!(s.redo());
+
+            let before = s
+                .drawing
+                .doc
+                .get_entity(Handle::new(handle))
+                .unwrap()
+                .clone();
+            let count = s.drawing.doc.entity_count();
+            input["target"] = json!({"handle":handle});
+            input["model_bounds"] = json!([
+                [2.0 * one_metre, 3.0 * one_metre],
+                [7.0 * one_metre, 7.0 * one_metre]
+            ]);
+            input["paper_centre"] = json!([120, 100]);
+            assert!(matches!(
+                s.run_input(&input, qiyas_core::Source::User)
+                    .unwrap()
+                    .outcome,
+                Outcome::Changed
+            ));
+            assert_eq!(s.history_steps().0.len(), 2);
+            assert_eq!(s.drawing.doc.entity_count(), count);
+            let view = s
+                .paper_views()
+                .into_iter()
+                .find(|view| view.handle == handle)
+                .unwrap();
+            assert!((view.rect[1][0] - view.rect[0][0] - width / 2.0).abs() < 1e-9);
+            assert!((view.rect[1][1] - view.rect[0][1] - height / 2.0).abs() < 1e-9);
+            assert_eq!((view.rect[1][0] + view.rect[0][0]) / 2.0, 120.0);
+            assert!(s.undo());
+            assert_eq!(s.drawing.doc.get_entity(Handle::new(handle)), Some(&before));
+            assert!(s.redo());
+            assert_eq!(s.drawing.doc.entity_count(), count);
+        }
+    }
+}
+
+#[test]
+fn viewport_input_reports_the_two_allowed_forms_before_mutating() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("window.dwg"), 6);
+    s.set_sheet("*Paper_Space").unwrap();
+    for (input, pointer) in [
+        (json!({"type":"mview"}), "/corner1"),
+        (
+            json!({"type":"mview", "model_bounds":[[0,0],[10,8]], "paper_centre":[100,100]}),
+            "/scale",
+        ),
+        (
+            json!({"type":"mview", "model_bounds":[[0,0],[10,8]], "scale":"1:100"}),
+            "/paper_centre",
+        ),
+        (
+            json!({"type":"mview", "corner1":[10,10], "corner2":[200,200], "paper_centre":[100,100]}),
+            "/paper_centre",
+        ),
+    ] {
+        let validation = s.validate_input(&input);
+        assert!(!validation.valid);
+        assert!(validation
+            .errors
+            .iter()
+            .any(|error| error.pointer == pointer));
+        assert!(s.run_input(&input, qiyas_core::Source::User).is_err());
+        assert!(!s.can_undo());
+    }
 }

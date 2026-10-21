@@ -8,9 +8,9 @@ use std::sync::{MutexGuard, PoisonError};
 
 use qiyas_core::{DrawingInfo, Session};
 use serde::Serialize;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::commands::new_conversation;
+use crate::commands::ai_run;
 use crate::pdf::pictures;
 use crate::settings::same_file;
 use crate::state::{AppState, ParkedTab};
@@ -144,6 +144,8 @@ pub(crate) fn activate<R: Runtime>(
     id: u32,
     keep_conversation: bool,
 ) -> Result<(), String> {
+    // Keep the same lock order as external sheet changes: turn, tabs, then session.
+    let mut turn = (!keep_conversation).then(|| ai_run(state));
     let mut list = lock(&state.tabs);
     if list.active == Some(id) {
         return Ok(());
@@ -155,8 +157,9 @@ pub(crate) fn activate<R: Runtime>(
         .position(|p| p.id == id)
         .ok_or_else(|| format!("No tab {id}"))?;
     // Stop a running turn first, so it can't run another tool on the other drawing.
-    if !keep_conversation {
-        new_conversation(app, state);
+    if let Some(turn) = turn.as_mut() {
+        turn.new_conversation();
+        let _ = app.emit("ai:cleared", ());
     }
     let incoming = parked.remove(at).session;
     let outgoing = session.replace(incoming);
@@ -192,6 +195,7 @@ pub(crate) fn close<R: Runtime>(
     force: bool,
     keep_conversation: bool,
 ) -> Result<(), String> {
+    let mut turn = (!keep_conversation).then(|| ai_run(state));
     let mut list = lock(&state.tabs);
     let Some(pos) = list.order.iter().position(|&t| t == id) else {
         return Err(format!("No tab {id}"));
@@ -206,8 +210,9 @@ pub(crate) fn close<R: Runtime>(
         if let Some(s) = session.as_ref().filter(|s| s.is_dirty()) {
             forget_autosave(s);
         }
-        if !keep_conversation {
-            new_conversation(app, state);
+        if let Some(turn) = turn.as_mut() {
+            turn.new_conversation();
+            let _ = app.emit("ai:cleared", ());
         }
         list.order.remove(pos);
         let next = list

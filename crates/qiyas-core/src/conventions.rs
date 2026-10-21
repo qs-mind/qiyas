@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CoreError, Current, DrawSpec, Session, Target};
 
+/// Grid bubble provenance survives moving labels, layer changes and DWG/DXF saves.
+pub(crate) const GRID_APP: &str = "QIYAS_GRID";
+
 /// A labelled axis at a coordinate in drawing units.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GridAxis {
@@ -380,8 +383,21 @@ impl Session {
             },
         );
         let added = (|| {
+            if !self.drawing.doc.app_ids.contains(GRID_APP) {
+                let mut app = opencadcodec::AppId::new(GRID_APP);
+                app.handle = self.drawing.doc.allocate_handle();
+                self.drawing.doc.app_ids.add(app).map_err(invalid)?;
+            }
             for (circle, center, label) in bubbles {
-                handles.extend(self.add_styled(circle)?);
+                let circles = self.add_styled(circle)?;
+                for handle in &circles {
+                    if let Some(entity) = self.drawing.doc.get_entity_mut(Handle::new(*handle)) {
+                        let mut record = opencadcodec::xdata::ExtendedDataRecord::new(GRID_APP);
+                        record.add_value(opencadcodec::xdata::XDataValue::String("bubble".into()));
+                        entity.common_mut().extended_data.upsert_record(record);
+                    }
+                }
+                handles.extend(circles);
                 let text_height =
                     (2.5 * paper).min(2.0 * radius / (label.chars().count() as f64 + 1.0));
                 let handle = self.add_text(center, text_height, 0.0, label, None)?;

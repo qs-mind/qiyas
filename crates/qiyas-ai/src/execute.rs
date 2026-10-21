@@ -194,7 +194,7 @@ pub fn execute(
             } = parse(input)?;
             let block = sheet_block(session, sheet.as_deref())?;
             let rows = session.read_text(Some(&block), within);
-            (with_units(session, page(rows, offset)), offset)
+            (with_units(session, &block, page(rows, offset)), offset)
         }
         "read_tables" => {
             let SheetInput { sheet, offset } = parse(input)?;
@@ -205,7 +205,7 @@ pub fn execute(
             let SheetInput { sheet, offset } = parse(input)?;
             let block = sheet_block(session, sheet.as_deref())?;
             let rows = session.read_dimensions(Some(&block));
-            (with_units(session, page(rows, offset)), offset)
+            (with_units(session, &block, page(rows, offset)), offset)
         }
         "block_summary" => {
             let SheetInput { sheet, offset } = parse(input)?;
@@ -737,6 +737,7 @@ fn find_entities(session: &Session, input: FindInput) -> Result<Value, ToolError
         Some(name) => Some(sheet_block(session, Some(&name))?),
         None => None,
     };
+    let coordinates = units_of(session, sheet.as_deref().unwrap_or(&session.sheet));
     let page = session.find_entities(&EntityFilter {
         sheet,
         layer: input.layer,
@@ -751,7 +752,7 @@ fn find_entities(session: &Session, input: FindInput) -> Result<Value, ToolError
         "rows": page.rows,
         "total": page.total,
         "next_offset": page.next_offset,
-        "units": units(session),
+        "units": coordinates,
     }))
 }
 
@@ -1249,7 +1250,7 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
         view,
     );
     let mut caption = format!(
-        "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in drawing units ({}), {} x {} px, {}. \
+        "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in {}, {} x {} px, {}. \
          Drawn as the screen draws it, on white: lines, fills and text in their colours (white \
          drawn black), the take-off in violet.",
         sheet_label(session, &sheet),
@@ -1257,10 +1258,10 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
         bounds[0][1],
         bounds[1][0],
         bounds[1][1],
-        units(session),
+        sheet_units(session, &sheet),
         drawn.width,
         drawn.height,
-        pixel_size(session, px),
+        pixel_size(session, &sheet, px),
     );
     if !shown.is_empty() {
         caption.push_str(&format!(
@@ -1283,8 +1284,11 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
 }
 
 /// How big a pixel is: drawing units, and millimetres.
-fn pixel_size(session: &Session, px_per_unit: f64) -> String {
+fn pixel_size(session: &Session, sheet: &str, px_per_unit: f64) -> String {
     let per_px = 1.0 / px_per_unit.max(f64::MIN_POSITIVE);
+    if !sheet.eq_ignore_ascii_case("*Model_Space") {
+        return format!("1 px = {per_px:.4} paper millimetres");
+    }
     let mm = per_px * session.drawing.units.to_metres() * 1000.0;
     format!("1 px = {per_px:.4} drawing units ({mm:.1} mm)")
 }
@@ -1452,12 +1456,36 @@ fn sheet_block(session: &Session, name: Option<&str>) -> Result<String, ToolErro
         })
 }
 
-fn units(session: &Session) -> String {
-    session.info().units
+pub(crate) fn sheet_units(session: &Session, sheet: &str) -> String {
+    if sheet.eq_ignore_ascii_case("*Model_Space") {
+        format!("drawing units ({})", session.info().units)
+    } else {
+        "paper millimetres".into()
+    }
 }
 
-fn with_units(session: &Session, mut out: Value) -> Value {
-    out["units"] = json!(units(session));
+fn units(session: &Session) -> String {
+    units_of(session, &session.sheet)
+}
+
+fn units_of(session: &Session, sheet: &str) -> String {
+    if sheet.eq_ignore_ascii_case("*Model_Space") {
+        session.info().units
+    } else {
+        "paper millimetres".into()
+    }
+}
+
+pub(crate) fn sheet_metres_per_unit(session: &Session) -> f64 {
+    if session.sheet.eq_ignore_ascii_case("*Model_Space") {
+        session.drawing.units.to_metres()
+    } else {
+        0.001
+    }
+}
+
+fn with_units(session: &Session, sheet: &str, mut out: Value) -> Value {
+    out["units"] = json!(units_of(session, sheet));
     out
 }
 

@@ -41,6 +41,15 @@ pub trait DrawingHost: Send + Sync {
         false
     }
 
+    /// Runs an external sheet or drawing change while the host's turn ownership is held.
+    /// The in-app assistant uses its own authority; MCP asks here before taking session locks.
+    fn with_sheet_authority(
+        &self,
+        run: &mut dyn FnMut() -> Result<crate::ToolOutput, crate::ToolError>,
+    ) -> Result<crate::ToolOutput, crate::ToolError> {
+        run()
+    }
+
     /// The open drawings' tabs (id, title, path, unsaved changes, untitled, on screen) and the
     /// recent drawings (path, whether the file is still there).
     fn list(&self) -> Result<Value, String>;

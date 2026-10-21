@@ -77,15 +77,15 @@ fn view_screen(
     let [lo, hi] = screen.bounds;
     let mut caption = format!(
         "What the user sees now, as the window draws it (its own colours and background; the \
-         selection highlighted): sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in drawing \
-         units ({}). It shows only the view on screen: use qiyas_capture with source picture to look at another part \
+         selection highlighted): sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in \
+         {}. It shows only the view on screen: use qiyas_capture with source picture to look at another part \
          or closer.",
         s.sheet,
         lo[0],
         lo[1],
         hi[0],
         hi[1],
-        s.info().units,
+        crate::execute::sheet_units(s, &s.sheet),
     );
     caption.push_str(&text_note(drawn.text));
     caption.push_str(&marks_legend(s, &drawn.marks));

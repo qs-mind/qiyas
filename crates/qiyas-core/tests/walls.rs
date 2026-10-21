@@ -363,3 +363,67 @@ fn wall_validation_leaves_no_partial_layers_or_blocks() {
     assert_eq!(table_names(&session), before);
     assert!(!session.can_undo());
 }
+
+#[test]
+fn opening_commands_report_resolved_or_retained_defaults_in_every_unit() {
+    for units in [4, 5, 6, 1] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("defaults.dxf"), units);
+        let k = 1.0 / s.drawing.units.to_metres();
+        let created = s.run_input(&json!({"type":"walls", "runs":[{"points":[[0,0],[10.0*k,0]]}], "thickness":0.2*k,"height":1.9}), qiyas_core::Source::Ai).unwrap();
+        let Outcome::Walls { result } = created.outcome else {
+            panic!()
+        };
+        let added = s
+            .run_input(
+                &json!({"type":"add_wall_openings","centreline":result.centrelines[0],"openings":[
+                    {"at":2.0*k,"width":k,"kind":"window"}, {"at":5.0*k,"width":k,"kind":"door"}
+                ]}),
+                qiyas_core::Source::Ai,
+            )
+            .unwrap();
+        for (path, expected) in [
+            ("/openings/0/sill", 0.9),
+            ("/openings/0/head", 1.9),
+            ("/openings/1/sill", 0.0),
+            ("/openings/1/head", 1.9),
+        ] {
+            let d = added
+                .defaults_used
+                .iter()
+                .find(|d| d.field == path)
+                .unwrap();
+            assert_eq!(d.value, json!(expected));
+            assert_eq!(d.unit.as_deref(), Some("m"));
+        }
+        let Outcome::Walls { result } = added.outcome else {
+            panic!()
+        };
+        let edit = s
+            .run_input(
+                &json!({"type":"edit_wall_opening","insert":result.inserts[0],"width":1.2*k}),
+                qiyas_core::Source::Ai,
+            )
+            .unwrap();
+        for (path, expected) in [("/sill", 0.9), ("/head", 1.9), ("/at", 2.0 * k)] {
+            assert_eq!(
+                edit.defaults_used
+                    .iter()
+                    .find(|d| d.field == path)
+                    .unwrap()
+                    .value,
+                json!(expected)
+            );
+        }
+        let Outcome::Walls { result } = edit.outcome else {
+            panic!()
+        };
+        let removed = s
+            .run_input(
+                &json!({"type":"remove_wall_openings","inserts":[result.inserts[0]]}),
+                qiyas_core::Source::Ai,
+            )
+            .unwrap();
+        assert!(removed.defaults_used.is_empty());
+    }
+}

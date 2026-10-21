@@ -3,7 +3,7 @@
 //!
 //! Required fields follow the schema's `required` order, then optional fields follow the
 //! schema's properties. `x-prompts` overrides that order with field names or objects containing
-//! `field`, `prompt`, `default`, `options`, `by_word`, `min`, `max`, `close`, `direction` or
+//! `field`, `prompt`, `required`, `default`, `options`, `by_word`, `min`, `max`, `close`, `direction` or
 //! `relative_to`. A `close`
 //! field names the boolean set by C/Close; `relative_to` reads a through-point as a direction.
 
@@ -340,7 +340,10 @@ impl Pending {
                 values.insert(name.into(), value.clone());
                 continue;
             }
-            let required = required.iter().any(|field| field == name);
+            let required = metadata
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| required.iter().any(|field| field == name));
             // Optional complex data stays available through JSON commands. A simple typed
             // command does not ask for arrays of objects or nested records.
             if !required && !supported(schema) && !specified.iter().any(|field| field == name) {
@@ -369,9 +372,13 @@ impl Argument {
     }
 
     fn default(&self) -> Option<&Value> {
-        self.metadata
-            .get("default")
-            .or_else(|| self.schema.get("default"))
+        self.metadata.get("default").or_else(|| {
+            if self.metadata.get("required") == Some(&Value::Bool(true)) {
+                None
+            } else {
+                self.schema.get("default")
+            }
+        })
     }
 
     fn limit(&self, metadata: &str, schema: &str) -> Option<usize> {

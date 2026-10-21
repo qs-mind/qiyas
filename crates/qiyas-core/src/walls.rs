@@ -548,6 +548,7 @@ pub struct WallRunInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct WallOpeningInfo {
     pub insert: u64,
+    pub mark: Option<String>,
     #[serde(flatten)]
     pub opening: WallOpening,
 }
@@ -610,6 +611,26 @@ fn wall_tag(entity: &EntityType) -> Option<WallTag> {
         })
         .collect();
     serde_json::from_str(&text).ok()
+}
+
+pub(crate) fn schedule_openings(
+    doc: &opencadcodec::CadDocument,
+    sheet: Handle,
+) -> Vec<(u64, WallOpening)> {
+    doc.entities()
+        .filter(|e| e.common().owner_handle == sheet && matches!(e, EntityType::Insert(_)))
+        .filter_map(|entity| {
+            let mut tag = wall_tag(entity)?;
+            if tag.role != "opening" {
+                return None;
+            }
+            explicit_runs(&mut tag.spec);
+            Some((
+                entity.common().handle.value(),
+                tag.spec.openings.get(tag.index)?.clone(),
+            ))
+        })
+        .collect()
 }
 
 fn layer_names(layers: &WallLayers) -> [String; 5] {
@@ -790,6 +811,14 @@ impl Session {
                             .enumerate()
                             .filter(|(_, o)| o.run == index)
                             .map(|(i, o)| WallOpeningInfo {
+                                mark: group
+                                    .members
+                                    .iter()
+                                    .find(|(_, role, n)| role == "opening" && *n == i)
+                                    .and_then(|(h, _, _)| {
+                                        self.drawing.doc.get_entity(Handle::new(*h))
+                                    })
+                                    .and_then(crate::opening_schedule::mark),
                                 insert: group
                                     .members
                                     .iter()

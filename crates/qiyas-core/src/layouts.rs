@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::text::{escape_mtext, mark_logical};
-use crate::{CoreError, DrawSpec, Session};
+use crate::{CoreError, Current, DrawSpec, Session, Units};
 
 pub use crate::viewports::ViewportScale;
 
@@ -64,6 +64,58 @@ pub(crate) fn default_margin() -> f64 {
 
 pub(crate) fn default_binding() -> f64 {
     20.0
+}
+
+pub(crate) fn default_title_layer() -> String {
+    "A-ANNO-TTLB".into()
+}
+
+pub(crate) const TITLE_FIELDS: [&str; 7] = [
+    "title",
+    "project",
+    "drawing_no",
+    "scale",
+    "date",
+    "drawn_by",
+    "sheet",
+];
+
+fn size_layout(layout: &mut Layout, paper: &Paper, orientation: LayoutOrientation) {
+    layout.paper_size = paper.name.clone();
+    layout.paper_width = paper.w_mm;
+    layout.paper_height = paper.h_mm;
+    layout.plot_paper_units = 1;
+    layout.plot_type = 5;
+    layout.plot_rotation = i16::from(orientation == LayoutOrientation::Landscape);
+    layout.min_limits = (0.0, 0.0);
+    layout.max_limits = match orientation {
+        LayoutOrientation::Portrait => (paper.w_mm, paper.h_mm),
+        LayoutOrientation::Landscape => (paper.h_mm, paper.w_mm),
+    };
+    layout.min_extents = (0.0, 0.0, 0.0);
+    layout.max_extents = (layout.max_limits.0, layout.max_limits.1, 0.0);
+    // The typed plot settings now own these values, including on an imported DXF layout.
+    layout.raw_plot_settings_codes = None;
+}
+
+/// Apply template paper only when making a drawing; imported layouts remain untouched.
+pub(crate) fn template_paper(doc: &mut CadDocument, units: Units) {
+    let name = if matches!(units, Units::Inches | Units::Feet) {
+        "ANSI B"
+    } else {
+        "ISO A3"
+    };
+    let paper = paper_catalog()
+        .into_iter()
+        .find(|p| p.name == name)
+        .unwrap();
+    for object in doc.objects.values_mut() {
+        if let ObjectType::Layout(layout) = object {
+            if !layout.name.eq_ignore_ascii_case("model") {
+                size_layout(layout, &paper, LayoutOrientation::Landscape);
+            }
+        }
+    }
 }
 
 /// The codec keeps DXF plot settings as text, but parses their padded integers without
@@ -193,19 +245,41 @@ impl Session {
         let Some(ObjectType::Layout(layout)) = doc.objects.get_mut(&handle) else {
             return Err(invalid("The new layout could not be found"));
         };
-        layout.paper_size = paper.name;
-        layout.paper_width = paper.w_mm;
-        layout.paper_height = paper.h_mm;
-        layout.plot_paper_units = 1;
-        layout.plot_type = 5;
-        layout.plot_rotation = i16::from(orientation == LayoutOrientation::Landscape);
-        layout.min_limits = (0.0, 0.0);
-        layout.max_limits = match orientation {
-            LayoutOrientation::Portrait => (paper.w_mm, paper.h_mm),
-            LayoutOrientation::Landscape => (paper.h_mm, paper.w_mm),
-        };
-        layout.min_extents = (0.0, 0.0, 0.0);
-        layout.max_extents = (layout.max_limits.0, layout.max_limits.1, 0.0);
+        size_layout(layout, &paper, orientation);
+        Ok(())
+    }
+
+    /// Sizes an existing layout without changing the session's sheet or its entities.
+    pub(crate) fn set_layout_paper(
+        &mut self,
+        name: &str,
+        paper: &str,
+        orientation: LayoutOrientation,
+    ) -> Result<(), CoreError> {
+        let paper = paper_catalog()
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(paper.trim()))
+            .ok_or_else(|| invalid(format!("No paper size {paper} in the paper catalog")))?;
+        let layout = self
+            .drawing
+            .doc
+            .objects
+            .values_mut()
+            .find_map(|object| match object {
+                ObjectType::Layout(layout)
+                    if !layout.name.eq_ignore_ascii_case("model")
+                        && layout.name.eq_ignore_ascii_case(name.trim()) =>
+                {
+                    Some(layout)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                invalid(format!(
+                    "No paper layout {name}: use new_layout to create one"
+                ))
+            })?;
+        size_layout(layout, &paper, orientation);
         Ok(())
     }
 
@@ -260,10 +334,11 @@ impl Session {
         fields: &BTreeMap<String, String>,
         margin_mm: f64,
         binding_mm: f64,
+        layer: &str,
     ) -> Result<Vec<u64>, CoreError> {
         let paper = self
             .paper()
-            .ok_or_else(|| invalid("Choose a layout with a paper size first"))?;
+            .ok_or_else(|| invalid("Title blocks need a sized layout: use new_layout to create one or set_layout_paper to size an existing layout, then set_sheet to select it"))?;
         if ![margin_mm, binding_mm]
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0)
@@ -280,15 +355,7 @@ impl Session {
                 "A title-block value contains a null character or is too long",
             ));
         }
-        let order = [
-            "title",
-            "project",
-            "drawing_no",
-            "scale",
-            "date",
-            "drawn_by",
-            "sheet",
-        ];
+        let order = TITLE_FIELDS;
         let mut rows: Vec<&str> = order.to_vec();
         rows.extend(
             fields
@@ -347,6 +414,43 @@ impl Session {
         if !fields.is_empty() {
             self.register_text_app();
         }
-        self.add_styled(entities)
+        self.add_on_annotation_layer(layer, entities, false)
+    }
+
+    /// Add generated sheet annotations and their layer in the surrounding command's undo step.
+    pub(crate) fn add_on_annotation_layer(
+        &mut self,
+        name: &str,
+        entities: Vec<EntityType>,
+        non_plotting: bool,
+    ) -> Result<Vec<u64>, CoreError> {
+        if !self.drawing.doc.layers.contains(name) {
+            self.new_layer(name)?;
+        }
+        let layer = self
+            .drawing
+            .doc
+            .layers
+            .get_mut(name)
+            .expect("annotation layer");
+        if layer.flags.locked {
+            return Err(invalid(format!(
+                "Layer {} is locked: unlock it first",
+                layer.name
+            )));
+        }
+        if non_plotting {
+            layer.is_plottable = false;
+        }
+        let current = std::mem::replace(
+            &mut self.current,
+            Current {
+                layer: layer.name.clone(),
+                ..Current::default()
+            },
+        );
+        let result = self.add_styled(entities);
+        self.current = current;
+        result
     }
 }

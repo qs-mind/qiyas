@@ -1051,6 +1051,15 @@ fn trace_passes(tracer: &mut Tracer, names: &BTreeSet<String>) {
         let _ = tracer.trace_type_once::<Layer>(&samples);
         let _ = tracer.trace_type_once::<TextStyle>(&samples);
         let _ = tracer.trace_type_once::<HeaderVariables>(&samples);
+        let _ = tracer.trace_type_once::<opencadcodec::objects::Layout>(&samples);
+        let _ = tracer.trace_type_once::<opencadcodec::tables::BlockRecord>(&samples);
+        let _ = tracer.trace_type_once::<opencadcodec::tables::DimStyle>(&samples);
+        let _ = tracer.trace_type_once::<opencadcodec::tables::LineType>(&samples);
+        let _ = tracer.trace_type_once::<opencadcodec::tables::View>(&samples);
+        let _ = tracer.trace_type_once::<crate::Measurement>(&samples);
+        let _ = tracer.trace_type_once::<crate::tables::Schedule>(&samples);
+        let _ = tracer.trace_type_once::<crate::boq::BoqItem>(&samples);
+        let _ = tracer.trace_type_once::<crate::conflict::Conflict>(&samples);
         let mut progress = tracer.check_incomplete_enum("EntityType").is_some();
         for n in names {
             progress |= tracer.check_incomplete_enum(n).is_some();
@@ -1090,6 +1099,43 @@ pub fn record_schema(name: &str) -> Result<Value, CoreError> {
         "layer" | "layers" => ("Layer".into(), &layer_rule),
         "textstyle" | "text_style" | "text_styles" => ("TextStyle".into(), &style_rule),
         "header" | "headervariables" => ("HeaderVariables".into(), &header_rule),
+        "layout" | "layouts" => ("Layout".into(), &|_| Rule::Refuse {
+            why: "use layout commands",
+            via: Some("new_layout, set_layout_paper"),
+        }),
+        "block" | "blocks" | "blockrecord" => ("BlockRecord".into(), &|_| Rule::Refuse {
+            why: "use block commands",
+            via: Some("create_block, edit_block_in_place"),
+        }),
+        "dim_style" | "dim_styles" | "dimstyle" => ("DimStyle".into(), &|_| Rule::Refuse {
+            why: "use dimension style commands",
+            via: Some("set_dim_style"),
+        }),
+        "linetype" | "linetypes" => ("LineType".into(), &|_| Rule::Refuse {
+            why: "use linetype commands",
+            via: Some("load_linetype"),
+        }),
+        "view" | "views" => ("View".into(), &|_| Rule::Refuse {
+            why: "use named view commands",
+            via: Some("save_view, delete_view"),
+        }),
+        "takeoff" | "measurement" => ("Measurement".into(), &|_| Rule::Refuse {
+            why: "use measurement commands",
+            via: Some("measure_entity, set_description, remove_measurement"),
+        }),
+        "schedule" | "schedules" => ("Schedule".into(), &|_| Rule::Refuse {
+            why: "read from drawing tables",
+            via: Some("table, edit_cell"),
+        }),
+        "boq" | "boqitem" => ("BoqItem".into(), &|_| Rule::Refuse {
+            why: "import the BOQ",
+            via: Some("import_boq"),
+        }),
+        "conflict" | "conflicts" => ("Conflict".into(), &|_| Rule::Refuse {
+            why: "use comparison commands",
+            via: Some("resolve_conflict"),
+        }),
+        "viewports" => return record_schema("Viewport"),
         _ => {
             let found = registry
                 .keys()
@@ -1098,7 +1144,7 @@ pub fn record_schema(name: &str) -> Result<Value, CoreError> {
                 .filter(|k| entity_type_names(registry).contains(k))
                 .ok_or_else(|| {
                     invalid(format!(
-                        "No record type {n}: entity types are {}; also layer, text_style, header",
+                        "No record type {n}. Supported record schemas: {}; layer, text_style, header, layout, viewport, block, dim_style, linetype, view, takeoff, schedule, boq, conflict. Use records detail full to inspect other collections.",
                         entity_type_names(registry).join(", ")
                     ))
                 })?;

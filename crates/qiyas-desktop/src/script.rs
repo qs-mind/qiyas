@@ -322,6 +322,11 @@ fn run_step<R: Runtime>(
             (format!("{} conflicts", conflicts.len()), true)
         }
         Action::Command(cmd) => {
+            let _turn = if crate::commands::command_changes_sheet(cmd) {
+                Some(crate::commands::window_sheet_guard(state)?)
+            } else {
+                None
+            };
             let input = step.input.clone().unwrap_or_else(|| serde_json::json!(cmd));
             let outcome = with_session(state, |s| s.run_input(&input, Source::User))?;
             let change = !matches!(
@@ -421,6 +426,14 @@ fn describe(cmd: &Command, outcome: Reported) -> String {
             _ => "done".to_string(),
         },
         Outcome::Added { handles } => format!("added {} entities", handles.len()),
+        Outcome::TitleBlock {
+            handles,
+            empty_fields,
+        } => format!(
+            "title block: {} entities; empty fields: {}",
+            handles.len(),
+            empty_fields.join(", ")
+        ),
         Outcome::Batch { outcomes, added } => format!(
             "ran {} commands as one step, added {} entities",
             outcomes.len(),

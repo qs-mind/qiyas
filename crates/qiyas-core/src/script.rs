@@ -366,6 +366,14 @@ fn describe(cmd: &Command, outcome: Reported, counts: &mut BTreeMap<String, f64>
             _ => "done".to_string(),
         },
         Outcome::Added { handles } => format!("added {} entities", handles.len()),
+        Outcome::TitleBlock {
+            handles,
+            empty_fields,
+        } => format!(
+            "title block: {} entities; empty fields: {}",
+            handles.len(),
+            empty_fields.join(", ")
+        ),
         Outcome::Batch { outcomes, added } => format!(
             "ran {} commands as one step, added {} entities",
             outcomes.len(),

@@ -106,6 +106,17 @@ pub enum Command {
         edit: crate::walls::WallOpeningEdit,
     },
 
+    /// Builds a door/window schedule from wall systems, grouped by kind and actual width and
+    /// head minus sill. Assigns persistent size marks to opening inserts. Counts are live fields;
+    /// grouping follows wall edits. source_sheet defaults to Model; at is on the current sheet.
+    #[schemars(extend("x-category" = "tables", "x-words" = ["OPENINGSCHEDULE"]))]
+    #[schemars(example = json!({"type":"opening_schedule", "at":[10,100], "source_sheet":"*Model_Space"}))]
+    OpeningSchedule {
+        at: [f64; 2],
+        #[serde(default)]
+        source_sheet: Option<String>,
+    },
+
     /// Length along `points`, in drawing coordinates. Needs 2 points or more.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "measure_distance", "points": [[0, 0], [5, 0], [5, 3]]}))]
@@ -940,14 +951,25 @@ pub enum Command {
         #[serde(default)]
         orientation: crate::LayoutOrientation,
     },
+    /// Sets an existing layout's catalog paper size and orientation without switching sheets.
+    /// Use this to size an imported layout before title_block. One undo step.
+    #[schemars(extend("x-category" = "layouts", "x-words" = ["SETLAYOUTPAPER"]))]
+    #[schemars(example = json!({"type": "set_layout_paper", "name": "Layout1", "paper": "ISO A3", "orientation": "landscape"}))]
+    SetLayoutPaper {
+        name: String,
+        paper: String,
+        #[serde(default)]
+        orientation: crate::LayoutOrientation,
+    },
     /// Renames a paper layout, refusing a name already taken. One undo step.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "rename_layout", "from": "Layout1", "to": "Ground floor"}))]
     #[schemars(extend("x-words" = ["RENAMELAYOUT"]))]
     RenameLayout { from: String, to: String },
     /// Draws Qiyas's frame and title block on the layout on screen, in paper millimetres.
-    /// Writes only supplied field values; all other cells remain empty. One undo step.
-    #[schemars(extend("x-category" = "layouts"))]
+    /// Writes only supplied values and returns empty_fields. Creates its own layer when missing.
+    /// Default layer A-ANNO-TTLB; all other cells remain empty. One undo step.
+    #[schemars(extend("x-category" = "layouts", "x-words" = ["TITLEBLOCK"]))]
     #[schemars(example = json!({"type": "title_block", "fields": {"title": "Ground floor", "drawing_no": "A-101"}, "margin_mm": 10, "binding_mm": 20}))]
     TitleBlock {
         fields: BTreeMap<String, String>,
@@ -955,23 +977,40 @@ pub enum Command {
         margin_mm: f64,
         #[serde(default = "crate::layouts::default_binding")]
         binding_mm: f64,
+        #[serde(default = "crate::layouts::default_title_layer")]
+        layer: String,
     },
     /// A paper-space viewport on the layout on screen with corners in paper millimetres.
     /// Without scale it fits model extents. A ratio such as "1:100" is a physical paper scale;
     /// a number is paper millimetres per model unit. `centre` is a model point.
-    /// `Outcome::Added`.
+    /// Alternatively supply model_bounds, scale and paper_centre to compute the frame.
+    /// Supply target to resize an existing viewport in place. One undo step; missing A-VIEW
+    /// is created non-plotting when the current layer is 0. `Outcome::Added` or `Changed`.
     #[serde(rename = "mview")]
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "mview", "corner1": [10, 10], "corner2": [400, 280]}))]
     #[schemars(example = json!({"type": "mview", "corner1": [10, 10], "corner2": [400, 280], "scale": "1:100", "centre": [5000, 4000]}))]
+    #[schemars(example = json!({"type": "mview", "model_bounds": [[0, 0], [10000, 8000]], "scale": "1:100", "paper_centre": [210, 148.5]}))]
     #[schemars(extend("x-words" = ["MVIEW", "MV"]))]
+    #[schemars(extend("x-prompts" = json!([{"field":"corner1","required":true}, {"field":"corner2","required":true}, "scale", "centre"])))]
     MView {
+        #[serde(default)]
         corner1: [f64; 2],
+        #[serde(default)]
         corner2: [f64; 2],
         #[serde(default)]
         scale: Option<crate::ViewportScale>,
         #[serde(default)]
         centre: Option<[f64; 2]>,
+        /// Model window in drawing units; requires scale and paper_centre instead of corners.
+        #[serde(default)]
+        model_bounds: Option<[[f64; 2]; 2]>,
+        /// Frame centre in paper millimetres for model_bounds.
+        #[serde(default)]
+        paper_centre: Option<[f64; 2]>,
+        /// Existing viewport to resize, preserving its handle and per-viewport settings.
+        #[serde(default)]
+        target: Option<Target>,
     },
     /// The user coordinate system becomes the one at `origin` with its x axis along `x_axis`
     /// (`[1, 0]` from `[0, 0]` is the world's). View state: not an undo step (see `crate::ucs`).
@@ -1138,6 +1177,31 @@ pub enum Command {
         #[serde(default)]
         language: Option<crate::rooms::LabelLanguage>,
     },
+    /// Builds a room schedule with live candidate-area fields and a total from retained rooms.
+    /// Run label_spaces first; labels can select particular live labels or boundary handles.
+    /// The source sheet defaults to Model; the table is placed on the current sheet. One undo step.
+    #[schemars(extend("x-category" = "takeoff", "x-words" = ["ROOMSCHEDULE"]))]
+    #[schemars(example = json!({"type":"room_schedule", "at":[12,8]}))]
+    RoomSchedule {
+        at: [f64; 2],
+        #[serde(default)]
+        source_sheet: Option<String>,
+        #[serde(default)]
+        labels: Vec<Target>,
+        #[serde(default = "crate::rooms::default_room_decimals")]
+        decimals: usize,
+    },
+    /// Measures a room by its live label (or retained boundary) handle, or by a seed point.
+    /// Reuses the same boundary and island policy as label_spaces and room_schedule; a new
+    /// seed retains the drawn closed region. This is an unapproved candidate area. One undo step.
+    #[schemars(extend("x-category" = "takeoff", "x-words" = ["MEASUREROOM"]))]
+    #[schemars(example = json!({"type":"measure_room", "point":[2,3]}))]
+    MeasureRoom {
+        #[serde(default)]
+        label: Option<Target>,
+        #[serde(default)]
+        point: Option<[f64; 2]>,
+    },
     /// Checks the drawing as a reviewer would: lines that stop short of or run past another,
     /// repeats and overlaps, scraps, rooms whose outline is open or whose size label disagrees,
     /// colliding or unreadable text, layer 0 and colours of their own, dimension text that
@@ -1300,6 +1364,7 @@ impl Command {
             | Command::SetDimStyle { .. }
             // A table's block; the field mark's application.
             | Command::Table { .. }
+            | Command::RoomSchedule { .. }
             | Command::EditCell { .. }
             | Command::InsertRow { .. }
             | Command::InsertCol { .. }
@@ -1312,6 +1377,7 @@ impl Command {
             | Command::CreateBlock { .. }
             | Command::DefineBlock { .. }
             | Command::Walls(_)
+            | Command::OpeningSchedule { .. }
             | Command::AddWallOpenings { .. }
             | Command::RemoveWallOpenings { .. }
             | Command::EditWallOpening { .. }
@@ -1320,8 +1386,10 @@ impl Command {
             | Command::SymmetryAxis { .. }
             | Command::Grid { .. }
             | Command::NewLayout { .. }
+            | Command::SetLayoutPaper { .. }
             | Command::RenameLayout { .. }
             | Command::TitleBlock { .. }
+            | Command::MView { .. }
             | Command::RedefineBlock { .. }
             // The layers, linetypes, styles and blocks the pasted entities bring.
             | Command::PasteFromClipboard { .. } => Some(Part::Document {
@@ -1385,8 +1453,7 @@ impl Command {
                 })
             }
             // The tables and take-off when a target needs them (`document_extras`).
-            Command::MView { .. }
-            | Command::SetViewportFrozen { .. }
+            Command::SetViewportFrozen { .. }
             | Command::MatchProperties { .. }
             | Command::SetProperty { .. } => Some(Part::Document {
                 tables: false,
@@ -1408,7 +1475,7 @@ impl Command {
                 takeoff: false,
             }),
             // Points on their own layer, and their count in the take-off.
-            Command::DivideAlong { .. } | Command::MeasureAlong { .. } => Some(Part::Document {
+            Command::DivideAlong { .. } | Command::MeasureAlong { .. } | Command::MeasureRoom { .. } => Some(Part::Document {
                 tables: true,
                 takeoff: true,
             }),
@@ -1457,6 +1524,11 @@ pub enum Outcome {
     Added {
         handles: Vec<u64>,
     },
+    /// Generated title block and the standard or supplied fields left empty.
+    TitleBlock {
+        handles: Vec<u64>,
+        empty_fields: Vec<String>,
+    },
     /// The rooms found (`Command::Rooms`, `LabelSpaces`).
     Rooms {
         report: Box<crate::rooms::RoomsReport>,
@@ -1468,6 +1540,8 @@ pub enum Outcome {
     /// Pass/fail, measurement and tolerance for every stated expectation.
     Verified {
         results: Vec<crate::verify::VerificationResult>,
+        untied_checks: usize,
+        line: String,
     },
     /// A page of records (`Command::Records`).
     Records {
@@ -1621,6 +1695,11 @@ impl Session {
                     result: self.walls(spec)?,
                 })
             }
+            Command::OpeningSchedule { at, source_sheet } => {
+                return Ok(Outcome::Added {
+                    handles: vec![self.add_opening_schedule(at, source_sheet.as_deref())?],
+                });
+            }
             Command::WallGroups { width } => {
                 return Ok(Outcome::WallGroups {
                     groups: self.wall_groups(width)?,
@@ -1665,13 +1744,41 @@ impl Session {
                 self.rename_layout(&from, &to)?;
                 return Ok(Outcome::Changed);
             }
+            Command::SetLayoutPaper {
+                name,
+                paper,
+                orientation,
+            } => {
+                self.set_layout_paper(&name, &paper, orientation)?;
+                return Ok(Outcome::Changed);
+            }
             Command::TitleBlock {
                 fields,
                 margin_mm,
                 binding_mm,
+                layer,
             } => {
-                return Ok(Outcome::Added {
-                    handles: self.title_block(&fields, margin_mm, binding_mm)?,
+                let mut empty_fields: Vec<String> = crate::layouts::TITLE_FIELDS
+                    .iter()
+                    .filter(|key| {
+                        fields
+                            .get(**key)
+                            .is_none_or(|value| value.trim().is_empty())
+                    })
+                    .map(|key| (*key).to_string())
+                    .collect();
+                empty_fields.extend(
+                    fields
+                        .iter()
+                        .filter(|(key, value)| {
+                            !crate::layouts::TITLE_FIELDS.contains(&key.as_str())
+                                && value.trim().is_empty()
+                        })
+                        .map(|(key, _)| key.clone()),
+                );
+                return Ok(Outcome::TitleBlock {
+                    handles: self.title_block(&fields, margin_mm, binding_mm, &layer)?,
+                    empty_fields,
                 });
             }
             Command::MeasureDistance { points } => {
@@ -2302,8 +2409,23 @@ impl Session {
                 corner2,
                 scale,
                 centre,
+                model_bounds,
+                paper_centre,
+                target,
             } => {
-                let h = self.mview(corner1, corner2, scale.as_ref(), centre)?;
+                let frame = self.viewport_frame(
+                    corner1,
+                    corner2,
+                    scale.as_ref(),
+                    centre,
+                    model_bounds,
+                    paper_centre,
+                )?;
+                if let Some(target) = target {
+                    self.resize_viewport(&target, frame)?;
+                    return Ok(Outcome::Changed);
+                }
+                let h = self.mview(frame)?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::CopyToClipboard { targets, base } => {
@@ -2368,6 +2490,17 @@ impl Session {
                 self.set_parameter(&name, &expression)?;
                 return Ok(Outcome::Changed);
             }
+            Command::MeasureRoom { label, point } => self.measure_room(label, point)?,
+            Command::RoomSchedule {
+                at,
+                source_sheet,
+                labels,
+                decimals,
+            } => {
+                return Ok(Outcome::Added {
+                    handles: vec![self.room_schedule(at, source_sheet, &labels, decimals)?],
+                });
+            }
             Command::Rooms { query } => {
                 return Ok(Outcome::Rooms {
                     report: Box::new(self.rooms(&query)?),
@@ -2379,8 +2512,12 @@ impl Session {
                 });
             }
             Command::Verify { expectations } => {
+                let results = self.verify(&expectations)?;
+                let untied_checks = results.iter().filter(|r| !r.tied_to_drawing).count();
                 return Ok(Outcome::Verified {
-                    results: self.verify(&expectations)?,
+                    results,
+                    untied_checks,
+                    line: format!("{untied_checks} checks use only literal inputs and prove nothing about the drawing"),
                 });
             }
             // `run_as` runs it as a transaction before it gets here.

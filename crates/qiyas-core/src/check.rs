@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 17] = [
+pub const RULES: [&str; 18] = [
     "literal_newline",
     "duplicate",
     "overlap",
@@ -29,6 +29,7 @@ pub const RULES: [&str; 17] = [
     "tiny_segment",
     "room_open",
     "room_size_text_differs",
+    "room_area_mismatch",
     "dim_override_mismatch",
     "text_overlaps_text",
     "text_over_lines",
@@ -43,7 +44,9 @@ pub const RULES: [&str; 17] = [
 /// The pack that owns a drawing check rule.
 pub fn rule_pack(rule: &str) -> &'static str {
     match rule {
-        "room_open" | "room_size_text_differs" | "unlinked_takeoff" => "construction",
+        "room_open" | "room_size_text_differs" | "room_area_mismatch" | "unlinked_takeoff" => {
+            "construction"
+        }
         _ => "general",
     }
 }
@@ -571,6 +574,10 @@ impl Session {
             }
         }
 
+        if wanted("room_area_mismatch") {
+            self.check_room_areas(&sheet, &mut push);
+        }
+
         // Rooms.
         if wanted("room_open") || wanted("room_size_text_differs") {
             self.check_rooms(&texts, &sheet, to_m, &mut push);
@@ -924,6 +931,18 @@ fn missing_center_marks(
     touch: f64,
     push: &mut impl FnMut(Finding),
 ) {
+    // Labels may be on a different layer from the bubble that surrounds them.
+    let labels: Vec<_> = doc
+        .entities()
+        .filter_map(|entity| {
+            let point = match entity {
+                EntityType::Text(text) if !text.value.trim().is_empty() => text.insertion_point,
+                EntityType::MText(text) if !text.value.trim().is_empty() => text.insertion_point,
+                _ => return None,
+            };
+            Some((entity.common().owner_handle, [point.x, point.y]))
+        })
+        .collect();
     let marked: HashSet<u64> = entities
         .iter()
         .filter(|e| {
@@ -950,19 +969,29 @@ fn missing_center_marks(
         .map(|e| e.common().handle.value())
         .collect();
     for e in entities {
-        let (c, normal) = match e {
-            EntityType::Circle(c) => (c.center, c.normal),
+        let (c, normal, radius) = match e {
+            EntityType::Circle(c) => (c.center, c.normal, c.radius),
             EntityType::Arc(a)
                 if (a.end_angle - a.start_angle)
                     .rem_euclid(std::f64::consts::TAU)
                     .abs()
                     < 1e-9 =>
             {
-                (a.center, a.normal)
+                (a.center, a.normal, a.radius)
             }
             _ => continue,
         };
         let at = qiyas_geom::object_to_world(&normal, c.z).apply([c.x, c.y]);
+        if e.common()
+            .extended_data
+            .get_record(crate::conventions::GRID_APP)
+            .is_some()
+            || labels.iter().any(|(owner, point)| {
+                *owner == e.common().owner_handle && dist(at, *point) <= radius + touch
+            })
+        {
+            continue;
+        }
         let has_mark = grid.near(at).into_iter().any(|i| {
             let seg = grid.segs[i];
             marked.contains(&drawn[seg.owner].handle)

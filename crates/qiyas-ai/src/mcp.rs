@@ -280,6 +280,15 @@ impl Qiyas {
             self.host.as_deref().is_some_and(DrawingHost::has_window),
             self.host.is_some(),
         )?;
+        if surface::needs_sheet_authority(&route) {
+            if let Some(host) = self.host.as_deref() {
+                return host.with_sheet_authority(&mut || self.run_route(route.clone()));
+            }
+        }
+        self.run_route(route)
+    }
+
+    fn run_route(&self, route: Route) -> Result<ToolOutput, ToolError> {
         match route {
             Route::Window { tool, input } => {
                 let host = self
@@ -445,6 +454,95 @@ mod tests {
             Arc::new(|| {}),
             Arc::new(|_| {}),
         )
+    }
+
+    #[derive(Default)]
+    struct TurnHost {
+        busy: std::sync::atomic::AtomicBool,
+    }
+
+    impl DrawingHost for TurnHost {
+        fn with_sheet_authority(
+            &self,
+            run: &mut dyn FnMut() -> Result<ToolOutput, ToolError>,
+        ) -> Result<ToolOutput, ToolError> {
+            if self.busy.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(ToolError::Failed("Mizan owns the sheet".into()));
+            }
+            run()
+        }
+        fn list(&self) -> Result<Value, String> {
+            Ok(serde_json::json!({}))
+        }
+        fn new_drawing(&self, _units: &str) -> Result<Value, String> {
+            panic!("a busy turn must refuse the host change")
+        }
+        fn open(&self, _path: &str, _user_named: bool) -> Result<Value, String> {
+            panic!("a busy turn must refuse the host change")
+        }
+        fn switch(&self, _id: u32) -> Result<Value, String> {
+            panic!("a busy turn must refuse the host change")
+        }
+        fn save(&self) -> Result<Value, String> {
+            Ok(serde_json::json!({}))
+        }
+        fn close(&self, _id: Option<u32>) -> Result<Value, String> {
+            panic!("a busy turn must refuse the host change")
+        }
+    }
+
+    #[test]
+    fn external_sheet_changes_obey_turn_authority_but_reads_and_geometry_still_run() {
+        use serde_json::json;
+        use std::sync::atomic::Ordering;
+        let mut server = test_server();
+        let host = Arc::new(TurnHost::default());
+        host.busy.store(true, Ordering::SeqCst);
+        server.host = Some(host.clone());
+        let sheet = json!({"type":"set_sheet", "block":"*Model_Space"});
+        let inputs = [
+            json!({"op":"run","args":{"command":sheet}}),
+            json!({"op":"run","args":{"command":sheet.to_string()}}),
+            json!({"op":"run","args":{"command":{"type":"SET_SHEET", "block":"*Model_Space"}}}),
+            json!({"op":"run","args":{"command":{"type":"batch","commands":[sheet]}}}),
+            json!({"op":"batch","args":{"commands":[{"type":"batch","commands":[sheet]}]}}),
+            json!({"op":"type","args":{"line":"SHEET *Model_Space"}}),
+            json!({"op":"view","args":{"sheet":"Model"}}),
+            json!({"op":"undo_own"}),
+            json!({"op":"new_drawing","args":{"units":"m"}}),
+            json!({"op":"open_drawing","args":{"path":"drawing.dxf"}}),
+            json!({"op":"switch_drawing","args":{"id":1}}),
+            json!({"op":"close_drawing"}),
+        ];
+        for input in inputs {
+            let error = server.run(surface::EXECUTE, &input).unwrap_err();
+            assert!(
+                error.to_string().contains("Mizan owns the sheet"),
+                "{input}: {error}"
+            );
+        }
+        server.run(surface::READ, &json!({"op":"state"})).unwrap();
+        server
+            .run(surface::READ, &json!({"op":"drawings"}))
+            .unwrap();
+        server
+            .run(surface::EXECUTE, &json!({"op":"save_drawing"}))
+            .unwrap();
+        server
+            .run(
+                surface::EXECUTE,
+                &json!({"op":"run","args":{"command":{
+                    "type":"draw","kind":"line","a":[0,0],"b":[1,1]
+                }}}),
+            )
+            .unwrap();
+        host.busy.store(false, Ordering::SeqCst);
+        server
+            .run(
+                surface::EXECUTE,
+                &json!({"op":"run","args":{"command":sheet}}),
+            )
+            .unwrap();
     }
 
     #[test]

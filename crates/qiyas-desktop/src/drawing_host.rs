@@ -131,6 +131,16 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         true
     }
 
+    fn with_sheet_authority(
+        &self,
+        run: &mut dyn FnMut() -> Result<qiyas_ai::ToolOutput, qiyas_ai::ToolError>,
+    ) -> Result<qiyas_ai::ToolOutput, qiyas_ai::ToolError> {
+        let state = self.state();
+        let _turn =
+            crate::commands::window_sheet_guard(&state).map_err(qiyas_ai::ToolError::Failed)?;
+        run()
+    }
+
     fn list(&self) -> Result<Value, String> {
         let state = self.state();
         let now = tabs::snapshot(&state);
@@ -275,6 +285,39 @@ mod tests {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .generation()
+    }
+
+    #[test]
+    fn external_sheet_authority_holds_the_turn_lock_through_host_changes() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+        };
+        let state = app.state::<AppState>();
+        let (_, generation) = state.ai.lock().unwrap().reserve().unwrap();
+        let refused = host.with_sheet_authority(&mut || panic!("the turn owns the sheet"));
+        assert!(refused
+            .unwrap_err()
+            .to_string()
+            .contains("Mizan owns the sheet"));
+        state.ai.lock().unwrap().release(None, generation);
+
+        host.with_sheet_authority(&mut || {
+            assert!(matches!(
+                state.ai.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            host.new_drawing("m").map_err(qiyas_ai::ToolError::Failed)?;
+            let first = tabs::snapshot(&state).active.unwrap();
+            host.new_drawing("mm")
+                .map_err(qiyas_ai::ToolError::Failed)?;
+            host.switch(first).map_err(qiyas_ai::ToolError::Failed)?;
+            host.close(Some(first))
+                .map_err(qiyas_ai::ToolError::Failed)?;
+            Ok(qiyas_ai::ToolOutput::Json(serde_json::json!({})))
+        })
+        .unwrap();
+        assert!(state.ai.try_lock().is_ok());
     }
 
     #[test]

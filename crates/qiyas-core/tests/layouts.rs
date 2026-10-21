@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use opencadcodec::objects::ObjectType;
 use opencadcodec::{EntityType, Handle};
 use qiyas_core::{Command, DimSpec, LayoutOrientation, Outcome, Session, ViewportScale};
+use serde_json::json;
 
 const MODEL: &str = "*Model_Space";
 
@@ -30,10 +31,10 @@ fn add_layout(s: &mut Session, name: &str, orientation: LayoutOrientation) -> St
 }
 
 fn added(s: &mut Session, command: Command) -> Vec<u64> {
-    let Outcome::Added { handles } = s.run(command).unwrap() else {
-        panic!("new entities");
-    };
-    handles
+    match s.run(command).unwrap() {
+        Outcome::Added { handles } | Outcome::TitleBlock { handles, .. } => handles,
+        other => panic!("new entities: {other:?}"),
+    }
 }
 
 fn values(s: &Session) -> BTreeSet<String> {
@@ -46,6 +47,154 @@ fn values(s: &Session) -> BTreeSet<String> {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn new_drawings_have_template_paper_without_a_history_step() {
+    for (units, name, size) in [
+        (4, "ISO A3", (420.0, 297.0)),
+        (5, "ISO A3", (420.0, 297.0)),
+        (6, "ISO A3", (420.0, 297.0)),
+        (1, "ANSI B", (431.8, 279.4)),
+        (2, "ANSI B", (431.8, 279.4)),
+    ] {
+        let (_dir, mut s) = blank(units);
+        assert_eq!(s.sheet, MODEL);
+        assert!(!s.can_undo());
+        let sheet = s
+            .drawing
+            .sheets()
+            .into_iter()
+            .find(|sheet| sheet.name == "Layout1")
+            .unwrap();
+        s.set_sheet(&sheet.block).unwrap();
+        let paper = s.paper().unwrap();
+        assert_eq!(paper.name, name);
+        assert_eq!((paper.w_mm, paper.h_mm), size);
+        assert!(!s.can_undo());
+    }
+}
+
+#[test]
+fn imported_unsized_layouts_stay_unsized_and_can_be_sized_in_one_step() {
+    for ext in ["dwg", "dxf"] {
+        let (dir, mut s) = blank(6);
+        let sheet = s
+            .drawing
+            .sheets()
+            .into_iter()
+            .find(|sheet| sheet.name == "Layout1")
+            .unwrap();
+        for object in s.drawing.doc.objects.values_mut() {
+            if let ObjectType::Layout(layout) = object {
+                if layout.name == "Layout1" {
+                    layout.paper_width = 0.0;
+                    layout.paper_height = 0.0;
+                    layout.paper_size.clear();
+                }
+            }
+        }
+        let path = dir.path().join(format!("unsized.{ext}"));
+        s.save_as(&path).unwrap();
+        let mut s = Session::open(&path).unwrap();
+        s.set_sheet(&sheet.block).unwrap();
+        assert!(
+            s.paper().is_none(),
+            "opening must not assign an imported layout's paper"
+        );
+        let command = json!({"type":"title_block", "fields":{}});
+        let validation = s.validate_input(&command);
+        assert!(validation.valid);
+        assert!(validation
+            .not_checked
+            .iter()
+            .any(|note| note.contains("paper size")));
+        let error = s
+            .run_input(&command, qiyas_core::Source::User)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("new_layout") && error.contains("set_layout_paper"),
+            "{error}"
+        );
+        assert!(!s.can_undo());
+        let objects = s.drawing.doc.objects.clone();
+        s.run(Command::SetLayoutPaper {
+            name: "Layout1".into(),
+            paper: "ISO A3".into(),
+            orientation: LayoutOrientation::Landscape,
+        })
+        .unwrap();
+        assert_eq!(s.sheet, sheet.block);
+        assert_eq!(s.history_steps().0.len(), 1);
+        assert_eq!(s.paper().map(|p| (p.w_mm, p.h_mm)), Some((420.0, 297.0)));
+        assert!(s.undo());
+        assert_eq!(s.drawing.doc.objects, objects);
+        assert!(s.paper().is_none());
+        assert!(s.redo());
+        s.save().unwrap();
+        let mut again = Session::open(&path).unwrap();
+        again.set_sheet(&sheet.block).unwrap();
+        assert_eq!(
+            again.paper().map(|p| (p.w_mm, p.h_mm)),
+            Some((420.0, 297.0))
+        );
+    }
+}
+
+#[test]
+fn title_blocks_report_empty_fields_and_own_their_layer_in_the_same_step() {
+    for layer in ["A-ANNO-TTLB", "PROJECT-TITLE"] {
+        let (_dir, mut s) = blank(6);
+        s.set_sheet("*Paper_Space").unwrap();
+        let current = s.current.clone();
+        let mut input =
+            json!({"type":"title_block", "fields":{"title":"Plan", "date":"", "revision":""}});
+        if layer != "A-ANNO-TTLB" {
+            input["layer"] = json!(layer);
+        }
+        let result = s.run_input(&input, qiyas_core::Source::User).unwrap();
+        let Outcome::TitleBlock {
+            handles,
+            empty_fields,
+        } = result.outcome
+        else {
+            panic!("title block result")
+        };
+        assert_eq!(
+            empty_fields,
+            [
+                "project",
+                "drawing_no",
+                "scale",
+                "date",
+                "drawn_by",
+                "sheet",
+                "revision"
+            ]
+        );
+        assert!(!handles.is_empty());
+        assert!(handles.iter().all(|handle| s
+            .drawing
+            .doc
+            .get_entity(Handle::new(*handle))
+            .unwrap()
+            .common()
+            .layer
+            == layer));
+        assert_eq!(s.current, current);
+        assert_eq!(s.history_steps().0.len(), 1);
+        assert!(s.drawing.doc.layers.contains(layer));
+        assert!(s.undo());
+        assert!(!s.drawing.doc.layers.contains(layer));
+        assert!(handles.iter().all(|handle| s
+            .drawing
+            .doc
+            .get_entity(Handle::new(*handle))
+            .is_none()));
+        assert!(s.redo());
+        assert!(s.drawing.doc.layers.contains(layer));
+    }
 }
 
 #[test]
@@ -233,6 +382,9 @@ fn a_viewport_ratio_uses_model_units_and_custom_scale_is_kept() {
         let h = added(
             &mut s,
             Command::MView {
+                model_bounds: None,
+                paper_centre: None,
+                target: None,
                 corner1: [20.0, 20.0],
                 corner2: [820.0, 570.0],
                 scale: Some(ViewportScale::Ratio("1:100".into())),
@@ -253,6 +405,9 @@ fn a_viewport_ratio_uses_model_units_and_custom_scale_is_kept() {
         let custom = added(
             &mut s,
             Command::MView {
+                model_bounds: None,
+                paper_centre: None,
+                target: None,
                 corner1: [20.0, 20.0],
                 corner2: [120.0, 120.0],
                 scale: Some(ViewportScale::Number(0.125)),
@@ -272,6 +427,9 @@ fn a_viewport_ratio_uses_model_units_and_custom_scale_is_kept() {
         ] {
             assert!(s
                 .run(Command::MView {
+                    model_bounds: None,
+                    paper_centre: None,
+                    target: None,
                     corner1: [0.0, 0.0],
                     corner2: [1.0, 1.0],
                     scale: Some(scale),
@@ -357,6 +515,7 @@ fn title_block_writes_only_supplied_values_and_undo_removes_it_all() {
         ("revision".into(), "P02".into()),
     ]);
     let command = Command::TitleBlock {
+        layer: "A-ANNO-TTLB".into(),
         fields,
         margin_mm: 10.0,
         binding_mm: 20.0,
@@ -441,6 +600,7 @@ fn title_block_shares_its_frame_edges_on_small_and_large_paper() {
             let handles = added(
                 &mut s,
                 Command::TitleBlock {
+                    layer: "A-ANNO-TTLB".into(),
                     fields: BTreeMap::from([
                         ("title".into(), "Ground floor".into()),
                         ("drawing_no".into(), "A-101".into()),

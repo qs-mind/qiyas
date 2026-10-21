@@ -314,7 +314,7 @@ pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
     Ok(plan)
 }
 
-fn plan_info() -> Value {
+pub(super) fn plan_info() -> Value {
     json!({
         "name": "plan",
         "tool": EXECUTE,
@@ -401,6 +401,42 @@ pub enum Route {
     Host { tool: &'static str, input: Value },
 }
 
+/// External callers must share the host's turn authority before changing the selected sheet
+/// or replacing its drawing. Reads and ordinary geometry edits do not need that authority.
+pub(crate) fn needs_sheet_authority(route: &Route) -> bool {
+    fn changes(raw: &Value) -> bool {
+        let Ok(command) = command_value(raw) else {
+            return false;
+        };
+        match command_info(&command).map(|info| info.name.as_str()) {
+            Some("set_sheet") => true,
+            Some("batch") => command["commands"]
+                .as_array()
+                .is_some_and(|commands| commands.iter().any(changes)),
+            _ => false,
+        }
+    }
+    match route {
+        Route::Host { tool, .. } => crate::host::changes_drawing(tool),
+        Route::Session { tool, op, args } if tool == EXECUTE => match op.as_str() {
+            "run" => changes(&args["command"]),
+            "batch" => args["commands"]
+                .as_array()
+                .is_some_and(|commands| commands.iter().any(changes)),
+            "type" => args["line"].as_str().is_some_and(|line| {
+                matches!(
+                    qiyas_core::cmdline::Machine::default().step(line),
+                    Ok(qiyas_core::cmdline::Step::Command(command)) if changes(&json!(command))
+                )
+            }),
+            "view" => args["sheet"].is_string(),
+            "undo_own" => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// The op's arguments: an object, a JSON object written as a string, or nothing.
 pub fn args_of(input: &Value) -> Result<Value, String> {
     match input.get("args") {
@@ -421,17 +457,40 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
     if !is_surface_tool(name) {
         return Err(format!("No tool named {name}"));
     }
-    if !input.is_object() {
-        return Err("Tool input must be an object".into());
-    }
-    let args = args_of(input)?;
     let field = if name == CAPTURE { "source" } else { "op" };
+    let mut envelope = tools()
+        .into_iter()
+        .find(|tool| tool.name == name)
+        .expect("surface tool")
+        .input_schema;
+    envelope["properties"]["args"] =
+        json!({"type":["object","string","null"],"additionalProperties":true});
+    envelope["required"] = json!([field]);
+    let mut probe = input.clone();
+    if probe["args"].is_object() {
+        probe["args"] = json!({});
+    }
+    let report = qiyas_core::validation::validate_schema(&envelope, &probe);
+    if !report.valid {
+        return Err(ToolError::Structured {
+            code: report.errors[0].code.clone(),
+            message: format!("{name}: {}. Expected form: {envelope}. Example: {{{field:?}: {:?}, \"args\": \"{{}}\"}}", report.message(), if name == CAPTURE { "picture" } else { "state" }),
+            details: json!({"errors":report.errors,"schema":envelope,"example":{field:if name == CAPTURE { "picture" } else { "state" },"args":"{}"}}),
+        }.json().to_string());
+    }
+    let args = args_of(input).map_err(|message| ToolError::Structured {
+        code: "invalid_value".into(),
+        message: format!("/args: {message}. Expected form: a JSON object or its JSON string. Example: {{\"args\":\"{{}}\"}}"),
+        details: json!({"errors":[{"code":"invalid_value","pointer":"/args","message":message}],"schema":envelope["properties"]["args"],"example":{"args":"{}"}}),
+    }.json().to_string())?;
     let op = input
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{name} needs {field}"))?
         .to_string();
     if let Some(entry) = operation(name, &op) {
+        crate::surface_args::validate(name, &op, &args)
+            .map_err(|error| error.json().to_string())?;
         return Ok(match (entry.needs.first(), entry.runner) {
             (Some(Need::Host), Some(tool)) => Route::Host { tool, input: args },
             (Some(Need::Window), Some(tool)) => Route::Window { tool, input: args },
@@ -485,6 +544,9 @@ pub fn run_without_drawing(
     args: &Value,
     units: Option<qiyas_core::Units>,
 ) -> Option<Result<ToolOutput, ToolError>> {
+    if let Err(error) = crate::surface_args::validate(tool, op, args) {
+        return Some(Err(error));
+    }
     if tool == EXECUTE && op == "plan" {
         return Some(read_plan(args).map(|plan| ToolOutput::Json(json!({"plan": plan}))));
     }
@@ -582,13 +644,24 @@ pub fn run_session(
     args: &Value,
     source: Source,
 ) -> Result<ToolOutput, ToolError> {
+    let argument_warnings = crate::surface_args::validate(tool, op, args)?;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
     }
     if let Some(result) = run_without_drawing(tool, op, args, Some(session.drawing.units)) {
         return result;
     }
-    let json = |v: Value| Ok(ToolOutput::Json(v));
+    let json = |mut v: Value| {
+        // Mutating registry operations report their own warnings, with command-relative paths.
+        // These read shortcuts have no run_input outcome, so retain their argument warnings here.
+        if tool == READ
+            && matches!(op, "records" | "check" | "rooms")
+            && !argument_warnings.is_empty()
+        {
+            v["warnings"] = json!(argument_warnings);
+        }
+        Ok(ToolOutput::Json(v))
+    };
     match (tool, op) {
         (READ, "state") => json(state(session)),
         (READ, "capabilities") => json(capabilities()),
@@ -738,10 +811,13 @@ fn state(session: &Session) -> Value {
     let (scale, factor) = session.annotation_scale();
     let to_m = session.drawing.units.to_metres();
     json!({
+        "local_date": chrono::Local::now().format("%Y-%m-%d").to_string(),
         "file": session.drawing.path.file_name().map(|f| f.to_string_lossy().to_string()),
         "units": info.units,
         "metres_per_unit": to_m,
-        "text_height_2_5mm": 0.0025 / to_m * factor,
+        "text_height_2_5mm": if session.sheet.eq_ignore_ascii_case("*Model_Space") { 0.0025 / to_m * factor } else { 2.5 },
+        "sheet_units": crate::execute::sheet_units(session, &session.sheet),
+        "paper": info.paper,
         "annotation_scale": scale,
         "sheet": session.sheet,
         "sheets": info.sheets,
@@ -772,6 +848,10 @@ fn capabilities() -> Value {
     json!({
         "read_ops": READ_OPS,
         "operation_needs": OPERATIONS,
+        "operation_arguments": OPERATIONS.iter().map(|operation| {
+            let (schema, example) = crate::surface_args::contract(operation.tool, operation.op);
+            json!({"tool":operation.tool,"op":operation.op,"schema":schema,"example":example})
+        }).collect::<Vec<_>>(),
         "error_codes": crate::errors::CODES,
         "validate": {"args": "{command} or {commands}", "commands_schema": batch_commands_schema(), "changes": false, "step_references": "Only earlier step indexes are allowed; pointed results are checked when running"},
         "execute_ops": EXECUTE_OPS,
@@ -867,7 +947,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             let p: [f64; 2] = read_args(&args["point"], "query near: point")?;
             let r = args["radius"]
                 .as_f64()
-                .unwrap_or(0.5 / session.drawing.units.to_metres());
+                .unwrap_or(0.5 / crate::execute::sheet_metres_per_unit(session));
             let mut find = json!({ "within": [[p[0] - r, p[1] - r], [p[0] + r, p[1] + r]] });
             for k in ["layer", "type", "limit"] {
                 if let Some(v) = args.get(k) {
@@ -893,7 +973,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
         "layers" => execute(session, "list_layers", &rest, source),
         "boundary" => {
             let p: [f64; 2] = read_args(&args["point"], "query boundary: point")?;
-            let to_m = session.drawing.units.to_metres();
+            let to_m = crate::execute::sheet_metres_per_unit(session);
             match session.boundary_at(p, 1.0 / to_m) {
                 qiyas_core::Boundary::Ring {
                     ring,
@@ -923,7 +1003,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
 
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
 fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
-    let to_m = session.drawing.units.to_metres();
+    let to_m = crate::execute::sheet_metres_per_unit(session);
     if let Some(h) = args.get("handle").and_then(Value::as_u64) {
         let chain: Vec<u64> = args
             .get("chain")
@@ -936,7 +1016,7 @@ fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
             "length_m": info.length.map(|length| length * to_m),
             "area_m2": info.area.map(|area| area * to_m * to_m),
             "entity": info,
-            "units": session.info().units,
+            "units": if session.sheet.eq_ignore_ascii_case("*Model_Space") { session.info().units } else { "paper millimetres".into() },
         }));
     }
     let mut points: qiyas_core::PointRun = read_args(&args["points"], "measure: points")?;

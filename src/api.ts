@@ -1071,10 +1071,11 @@ export type Command =
   | { type: "paste_from_clipboard"; at: P; as_block: boolean; height?: number | null }
   /** Paper layouts and a title block containing only supplied values. */
   | { type: "new_layout"; name: string; paper: string; orientation?: "portrait" | "landscape" }
+  | { type: "set_layout_paper"; name: string; paper: string; orientation?: "portrait" | "landscape" }
   | { type: "rename_layout"; from: string; to: string }
-  | { type: "title_block"; fields: Record<string, string>; margin_mm?: number; binding_mm?: number }
+  | { type: "title_block"; fields: Record<string, string>; margin_mm?: number; binding_mm?: number; layer?: string }
   /** A viewport: ratio string or paper millimetres per model unit, centred at a model point. */
-  | { type: "mview"; corner1: P; corner2: P; scale?: string | number | null; centre?: P | null }
+  | { type: "mview"; corner1?: P; corner2?: P; scale?: string | number | null; centre?: P | null; model_bounds?: [P, P] | null; paper_centre?: P | null; target?: EntityTarget | null }
   /** The user coordinate system (not an undo step): an origin and an x axis, or an entity's. */
   | { type: "ucs"; origin: P; x_axis: P }
   | { type: "ucs_object"; target: EntityTarget }
@@ -1207,6 +1208,7 @@ export type Outcome =
   | { type: "changed" }
   /** Entities added to the drawing (PDF import or underlay). */
   | { type: "added"; handles: number[] }
+  | { type: "title_block"; handles: number[]; empty_fields: string[] }
   /** An explode's parts, how many entities picked had none and were left as they are, and the
    *  take-off rows that followed (as `takeoff_followed`). */
   | { type: "exploded"; handles: number[]; left_alone: number; remeasured: number; unlinked: number }

@@ -1049,6 +1049,13 @@ impl Session {
         };
         let across = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
         for (i, (handle, chain)) in near.sources.iter().enumerate() {
+            // Retained room boundaries describe a region; they must never keep an old wall closed.
+            if doc
+                .get_entity(Handle::new(*handle))
+                .is_some_and(crate::room_objects::is_room_boundary)
+            {
+                continue;
+            }
             let arrayed = chain.iter().any(|&h| {
                 matches!(doc.get_entity(Handle::new(h)),
                     Some(EntityType::Insert(r)) if r.row_count > 1 || r.column_count > 1)

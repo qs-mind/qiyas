@@ -98,7 +98,12 @@ export function useAssistantWiring({
   chooseTool,
   setSideTab,
 }: Deps) {
-  /** Does what a tool's result asks of the window: another sheet, other layers, a zoom. */
+  // Refreshes after mutations (including new_layout) follow the session, never select a tab.
+  useEffect(() => {
+    if (info?.sheet) setSheetBlock(info.sheet);
+  }, [info?.sheet]);
+
+  /** Follows the core's sheet, layers and zoom; never calls the sheet-changing IPC. */
   function applyAiUi(ui: AiUi) {
     if (ui.action === "reveal") {
       if (ui.sheet?.toLowerCase() === sheet.toLowerCase() &&

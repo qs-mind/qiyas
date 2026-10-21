@@ -99,6 +99,8 @@ pub struct Expectation {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct VerificationResult {
     pub kind: VerifyKind,
+    /// False for arithmetic on literal points with no drawn target.
+    pub tied_to_drawing: bool,
     pub passed: bool,
     pub measured: Option<f64>,
     pub expected: f64,
@@ -189,6 +191,7 @@ impl Session {
         };
         let mut result = VerificationResult {
             kind: e.kind,
+            tied_to_drawing: !e.targets.is_empty() || e.kind == VerifyKind::Count,
             passed: false,
             measured: None,
             expected: if expected.is_finite() { expected } else { 0.0 },
@@ -241,6 +244,11 @@ impl Session {
                 );
             }
             Err(error) => result.message = error.to_string(),
+        }
+        if !result.tied_to_drawing {
+            result
+                .message
+                .push_str("; literal inputs only: this check proves nothing about the drawing");
         }
         result
     }

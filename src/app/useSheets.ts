@@ -409,9 +409,11 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     run(async () => {
       cancelReveal(false);
       await setSheet(block);
-      setSheetBlock(block);
+      // Read the session after the IPC: the assistant may have selected another sheet meanwhile.
+      const next = await drawingInfo();
+      setSheetBlock(next.sheet);
       // The layers panel's VP freeze column lists this sheet's viewports.
-      setInfo(await drawingInfo());
+      setInfo(next);
       measure.current?.cancel();
       fitIds.current = fit ?? null;
       await redraw(true);

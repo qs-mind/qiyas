@@ -2,6 +2,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AiUi } from "../api";
+import * as api from "../api";
 import { useAssistantWiring } from "./useAssistantWiring";
 
 const callbacks = vi.hoisted(() => ({ onUi: null as null | ((ui: AiUi) => void) }));
@@ -72,4 +73,15 @@ test("sheet and redraw results keep hidden layer names; a sheet without bounds f
   await act(async () => callbacks.onUi!({ action: "redraw", hidden: [] }));
   expect(view.setHidden).toHaveBeenLastCalledWith(new Set());
   expect(view.redraw).toHaveBeenCalledTimes(2);
+});
+
+
+test("assistant sheet events and reveals never send a sheet selection back to the core", async () => {
+  const select = vi.spyOn(api, "setSheet").mockResolvedValue();
+  const view = setup();
+  await act(async () => callbacks.onUi!({ action: "show_sheet", sheet: "*Paper_Space" }));
+  await act(async () => callbacks.onUi!({ action: "reveal", sheet: "*Model_Space", handles: [1] }));
+  expect(select).not.toHaveBeenCalled();
+  expect(view.setSheetBlock).toHaveBeenCalledWith("*Paper_Space");
+  select.mockRestore();
 });

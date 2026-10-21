@@ -75,6 +75,7 @@ fn scale_example(value: &mut Value, factor: f64, command: &str) {
                         | "at_b"
                         | "side_point"
                         | "bounds"
+                        | "model_bounds"
                         | "insert_at"
                         | "radius"
                         | "inner"
@@ -471,6 +472,14 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
             session,
             json!({"type":"draw","kind":"polyline","points":[[0,0],[5,0],[5,5]]}),
         );
+    } else if matches!(name, "room_schedule" | "measure_room") {
+        added_by(
+            session,
+            json!({"type":"draw", "kind":"rectangle", "a":[0,0], "b":[10,8]}),
+        );
+        if name == "room_schedule" {
+            session.run(serde_json::from_value(json!({"type":"label_spaces", "query":{"seeds":[{"name":"Room", "point":[2,3]}]}, "layer":"A-ROOM-LABEL"})).unwrap()).unwrap();
+        }
     } else if name == "label_spaces" {
         added_by(
             session,

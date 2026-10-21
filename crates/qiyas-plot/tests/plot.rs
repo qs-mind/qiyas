@@ -63,6 +63,19 @@ fn page_of(p: [f64; 2], lo: [f64; 2], mm: f64) -> [f32; 2] {
 fn a_10_m_line_in_a_1_to_100_viewport_measures_100_mm_on_a1() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::open(&write_sample(dir.path(), "dwg")).unwrap();
+    s.run(Command::NewLayer {
+        name: "PLOT-VIEWPORT".to_string(),
+    })
+    .unwrap();
+    s.current.layer = "PLOT-VIEWPORT".to_string();
+    assert!(
+        s.drawing
+            .doc
+            .layers
+            .get("PLOT-VIEWPORT")
+            .unwrap()
+            .is_plottable
+    );
     let layout = s
         .drawing
         .sheets()
@@ -72,6 +85,9 @@ fn a_10_m_line_in_a_1_to_100_viewport_measures_100_mm_on_a1() {
     s.set_sheet(&layout.block).unwrap();
     let Outcome::Added { handles } = s
         .run(Command::MView {
+            model_bounds: None,
+            paper_centre: None,
+            target: None,
             scale: None,
             centre: None,
             corner1: [20.0, 20.0],
@@ -138,6 +154,55 @@ fn a_10_m_line_in_a_1_to_100_viewport_measures_100_mm_on_a1() {
     assert_eq!(wall.0.stroke, [1.0, 0.0, 0.0], "red, as A-WALL draws");
     // The frame itself draws on the layout, 800 mm wide.
     assert!(page.strokes().iter().any(|(_, p, q)| {
+        close((q[0] - p[0]).abs(), 800.0 * PT_PER_MM, 0.05) && close(p[1], q[1], 0.01)
+    }));
+}
+
+/// The default viewport layer hides its frame on paper while model geometry still plots.
+#[test]
+fn a_viewport_on_a_view_plots_model_geometry_without_its_frame() {
+    let (dir, mut s) = sample();
+    assert_eq!(s.current.layer, "0");
+    let layout = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| !sh.is_model)
+        .unwrap();
+    s.set_sheet(&layout.block).unwrap();
+    let Outcome::Added { handles } = s
+        .run(Command::MView {
+            model_bounds: None,
+            paper_centre: None,
+            target: None,
+            scale: None,
+            centre: None,
+            corner1: [20.0, 20.0],
+            corner2: [820.0, 570.0],
+        })
+        .unwrap()
+    else {
+        panic!("a viewport");
+    };
+    let viewport = s
+        .drawing
+        .doc
+        .get_entity(opencadcodec::Handle::new(handles[0]))
+        .unwrap();
+    assert_eq!(viewport.common().layer, "A-VIEW");
+    assert!(!s.drawing.doc.layers.get("A-VIEW").unwrap().is_plottable);
+    let mut j = job(&layout.block);
+    j.paper = paper("ISO A1");
+    j.scale = Scale::Ratio(1.0, 1.0);
+    let out = plot_pdf_to(&s, &j, &dir.path().join("no-frame.pdf")).unwrap();
+    let page = read(&out.path);
+    let strokes = page.strokes();
+    assert!(!strokes.is_empty(), "model geometry still plots");
+    assert!(
+        strokes.iter().all(|(paint, _, _)| paint.clipped),
+        "only model geometry inside the viewport, with no paper-space frame"
+    );
+    assert!(!strokes.iter().any(|(_, p, q)| {
         close((q[0] - p[0]).abs(), 800.0 * PT_PER_MM, 0.05) && close(p[1], q[1], 0.01)
     }));
 }
@@ -758,6 +823,9 @@ fn defpoints_never_plots() {
     s.set_sheet(&layout.block).unwrap();
     s.current.layer = "Defpoints".to_string();
     s.run(Command::MView {
+        model_bounds: None,
+        paper_centre: None,
+        target: None,
         scale: None,
         centre: None,
         corner1: [20.0, 20.0],
@@ -810,6 +878,9 @@ fn a_viewport_plots_the_picture_under_it_and_a_missing_one_is_reported() {
     s.set_sheet(&layout.block).unwrap();
     let Outcome::Added { handles } = s
         .run(Command::MView {
+            model_bounds: None,
+            paper_centre: None,
+            target: None,
             scale: None,
             centre: None,
             corner1: [20.0, 20.0],

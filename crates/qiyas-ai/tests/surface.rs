@@ -1182,3 +1182,192 @@ fn batch_defaults_follow_the_context_when_each_step_runs() {
         .unwrap();
     assert_eq!(height["value"], session.default_text_height(), "{out}");
 }
+
+#[test]
+fn surface_errors_show_pointers_expected_forms_and_examples() {
+    let (_dir, mut session) = sample();
+    for (tool, op, args, pointer, form) in [
+        (
+            READ,
+            "records",
+            json!({"detail":true}),
+            "/args/detail",
+            "summary",
+        ),
+        (
+            CAPTURE,
+            "picture",
+            json!({"bounds":[-2,-2,22,27]}),
+            "/args/bounds",
+            "[[x1, y1], [x2, y2]]",
+        ),
+        (
+            EXECUTE,
+            "run",
+            json!({"commands":[]}),
+            "/args/command",
+            "For several commands use op batch",
+        ),
+        (
+            READ,
+            "query",
+            json!({"kind":"near","point":[0]}),
+            "/args/point",
+            "[x, y]",
+        ),
+        (
+            EXECUTE,
+            "type",
+            json!({"line":true}),
+            "/args/line",
+            "string",
+        ),
+        (
+            EXECUTE,
+            "new_drawing",
+            json!({"units":true}),
+            "/args/units",
+            "mm",
+        ),
+        (
+            EXECUTE,
+            "select",
+            json!({"handles":"all"}),
+            "/args/handles",
+            "array",
+        ),
+    ] {
+        let error = call(&mut session, tool, json!({"op":op,"source":op,"args":args}))
+            .unwrap_err()
+            .json();
+        assert!(
+            error["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["pointer"].as_str().unwrap().starts_with(pointer)),
+            "{error}"
+        );
+        assert!(error["message"].as_str().unwrap().contains(form), "{error}");
+        assert!(
+            error.get("schema").is_some() && error.get("example").is_some(),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn state_reports_local_date_and_layout_sizes_in_paper_units() {
+    let (_dir, mut session) = sample();
+    let before = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let state = call(&mut session, READ, json!({"op":"state"})).unwrap();
+    let after = chrono::Local::now().format("%Y-%m-%d").to_string();
+    assert!([before, after].contains(&state["local_date"].as_str().unwrap().to_string()));
+    let layout = session
+        .info()
+        .sheets
+        .iter()
+        .find(|sheet| !sheet.is_model)
+        .unwrap()
+        .block
+        .clone();
+    session.drawing.units = qiyas_core::Units::Metres;
+    session.set_sheet(&layout).unwrap();
+    let measured = call(
+        &mut session,
+        READ,
+        json!({"op":"measure","args":{"points":[[0,0],[100,0]]}}),
+    )
+    .unwrap();
+    assert_eq!(measured["length_m"], 0.1);
+    let state = call(&mut session, READ, json!({"op":"state"})).unwrap();
+    assert_eq!(state["sheet_units"], "paper millimetres");
+    assert_eq!(state["text_height_2_5mm"], 2.5);
+    let ToolOutput::Image { caption, .. } = surface::run_session(
+        &mut session,
+        CAPTURE,
+        "picture",
+        &json!({"bounds":[[0,0],[100,100]],"width":1000}),
+        Source::Ai,
+    )
+    .unwrap() else {
+        panic!("picture")
+    };
+    assert!(caption.contains("in paper millimetres"), "{caption}");
+    assert!(
+        caption.contains("1 px = 0.1000 paper millimetres"),
+        "{caption}"
+    );
+    assert!(!caption.contains("drawing units"), "{caption}");
+}
+
+#[test]
+fn collection_schemas_answer_or_explicitly_name_supported_schemas() {
+    let (_dir, mut session) = sample();
+    for name in [
+        "layout",
+        "viewport",
+        "block",
+        "dim_style",
+        "linetype",
+        "view",
+        "takeoff",
+        "schedule",
+        "boq",
+        "conflict",
+    ] {
+        let schema = call(
+            &mut session,
+            READ,
+            json!({"op":"record_schema","args":{"name":name}}),
+        )
+        .unwrap();
+        assert!(
+            !schema["paths"].as_array().unwrap().is_empty(),
+            "{name}: {schema}"
+        );
+    }
+    for name in [
+        "group",
+        "layer_state",
+        "xrefs",
+        "comments",
+        "constraints",
+        "parameters",
+    ] {
+        let error = call(
+            &mut session,
+            READ,
+            json!({"op":"record_schema","args":{"name":name}}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Supported record schemas:"), "{error}");
+        assert!(error.contains("records detail full"), "{error}");
+    }
+}
+
+#[test]
+fn registry_read_shortcuts_retain_unknown_argument_warnings() {
+    let (_dir, mut session) = sample();
+    for (op, mut args) in [
+        ("records", json!({"collection":"layers"})),
+        ("check", json!({"rules":["layer_zero"]})),
+        (
+            "rooms",
+            json!({"seeds":[{"name":"Test room","point":[2,2]}]}),
+        ),
+    ] {
+        args["misspelled"] = json!(true);
+        let result = call(&mut session, READ, json!({"op":op,"args":args})).unwrap();
+        if op == "rooms" {
+            assert_eq!(result["rooms"].as_array().unwrap().len(), 1, "{result}");
+        }
+        assert!(
+            result["warnings"].as_array().unwrap().iter().any(|issue| {
+                issue["code"] == "unknown_field" && issue["pointer"] == "/args/misspelled"
+            }),
+            "{op}: {result}"
+        );
+    }
+}

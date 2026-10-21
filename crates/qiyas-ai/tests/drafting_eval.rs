@@ -380,13 +380,38 @@ async fn villa_ground_floor_through_mizans_three_tools() {
             assert_eq!(room["measurement_basis"], "unapproved_net");
         }
     }
+    let mut after_grid = (*room_reports[1]).clone();
+    for room in after_grid["rooms"].as_array_mut().unwrap() {
+        // LabelSpaces adds persistent links between these reads; geometry must still agree.
+        let boundary = room
+            .as_object_mut()
+            .unwrap()
+            .remove("boundary_handle")
+            .expect("a retained room after LabelSpaces")
+            .as_u64()
+            .unwrap();
+        assert!(matches!(
+            eval.session.drawing.doc.get_entity(Handle::new(boundary)),
+            Some(EntityType::LwPolyline(p)) if p.is_closed && p.common.layer == "A-ROOM-BOUNDARY"
+        ));
+    }
     assert_eq!(
-        room_reports[0], room_reports[1],
+        room_reports[0], &after_grid,
         "grid must not close or subdivide rooms"
     );
     let labels = command_result(&eval.results, "label_spaces");
     assert_eq!(labels["outcome"]["report"]["labels_written"], 4);
-    on_layer(&eval.session, &labels["added"], "A-ANNO-TEXT");
+    let rooms = labels["outcome"]["report"]["rooms"].as_array().unwrap();
+    let label_handles: Vec<_> = rooms
+        .iter()
+        .map(|room| room["label_handle"].clone())
+        .collect();
+    let boundary_handles: Vec<_> = rooms
+        .iter()
+        .map(|room| room["boundary_handle"].clone())
+        .collect();
+    on_layer(&eval.session, &json!(label_handles), "A-ANNO-TEXT");
+    on_layer(&eval.session, &json!(boundary_handles), "A-ROOM-BOUNDARY");
     on_layer(
         &eval.session,
         &command_result(&eval.results, "grid")["added"],
@@ -433,7 +458,12 @@ async fn villa_ground_floor_through_mizans_three_tools() {
         if matches!(entity, EntityType::Viewport(v) if v.id == 1) {
             continue;
         }
-        assert_eq!(entity.common().layer, "A-ANNO-TEXT");
+        let expected_layer = if matches!(entity, EntityType::Viewport(_)) {
+            "A-ANNO-TEXT"
+        } else {
+            "A-ANNO-TTLB"
+        };
+        assert_eq!(entity.common().layer, expected_layer);
         match entity {
             EntityType::Viewport(v) => {
                 near(&json!(1000.0 / v.scale()), 100.0);

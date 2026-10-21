@@ -96,6 +96,7 @@ impl Drawing {
     pub fn blank(path: &Path, insunits: i16) -> Drawing {
         let mut doc = CadDocument::new();
         doc.header.insertion_units = insunits;
+        crate::layouts::template_paper(&mut doc, Units::from_header(insunits));
         Drawing {
             path: path.to_path_buf(),
             units: Units::from_header(insunits),

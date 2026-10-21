@@ -168,6 +168,20 @@ fn new_words_need_only_the_registry_and_support_names_and_options() {
 }
 
 #[test]
+fn viewport_corner_prompts_remain_required_in_the_typed_command_form() {
+    let mut machine = Machine::default();
+    prompt(&mut machine, "MVIEW");
+    prompt(&mut machine, "0,0");
+    let view = command(&mut machine, "200,160");
+    assert_eq!(view["type"], "mview");
+    assert_eq!(view["corner1"], json!([0.0, 0.0]));
+    assert_eq!(view["corner2"], json!([200.0, 160.0]));
+    let view = command(&mut machine, "MVIEW 10,20 210,180");
+    assert_eq!(view["corner1"], json!([10.0, 20.0]));
+    assert_eq!(view["corner2"], json!([210.0, 180.0]));
+}
+
+#[test]
 fn errors_preserve_pending_points_and_cancel_keeps_the_last_point() {
     let mut machine = Machine::default();
     assert!(machine

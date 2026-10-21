@@ -873,6 +873,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Layouts
 
+- Fresh drawings size their default paper layouts in `Drawing::blank`: ISO A3 landscape
+  (420 x 297 mm) for metric templates, ANSI B landscape (431.8 x 279.4 mm) for inches/feet.
+  This is initialization, with no undo step. Existing drawings' unsized layouts stay unsized
+  on open; `SetLayoutPaper { name, paper, orientation }` (`SETLAYOUTPAPER`) explicitly sizes
+  them or changes their paper in one undo step, preserving the selected sheet and entities.
+  Sized-layout errors name both `new_layout` and `set_layout_paper`. Input validation lists
+  layout selection, paper sizing and whether frames fit the paper in `not_checked`; a schema
+  success alone does not certify those drawing-dependent conditions.
 - `qiyas-core/src/layouts.rs` owns `Paper { name, w_mm, h_mm }` and `paper_catalog()` (ISO A0
   to A4, ANSI A to E, ARCH A to E1, portrait), re-exported by `qiyas-plot` to avoid a dependency
   cycle. `NewLayout { name, paper, orientation }` creates a sized paper layout through the
@@ -888,14 +896,26 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   string such as `"1:100"` (model units are accounted for), or a numeric custom scale in
   paper millimetres per model unit. `centre` is the model point shown at the viewport's middle.
   Without them it fits and centres the model extents.
-- `TitleBlock { fields, margin_mm?, binding_mm? }` draws Qiyas's frame and title grid at the
+  Its alternative form `{ model_bounds: [[x1,y1],[x2,y2]], scale: "1:100",
+  paper_centre: [x,y] }` computes the paper frame from the model window and drawing units.
+  The two forms are validated together; model bounds use drawing units and paper centre uses
+  paper millimetres. Either form accepts `target: {handle}` to resize the same viewport,
+  preserving its handle, frozen layers and other settings. A new viewport made on current
+  layer 0 goes on non-plotting `A-VIEW`, creating that layer in the same undo step; another
+  chosen current layer is respected. Tests cover mm, cm, m and inches at 1:50 and 1:100.
+  `x-prompts.required` retains the two corner questions in the typed `MVIEW` form while the
+  JSON command also accepts model bounds; explicit prompt requirements ignore schema defaults.
+- `TitleBlock { fields, margin_mm?, binding_mm?, layer? }` draws Qiyas's frame and title grid at the
   bottom right of the layout on screen, in paper millimetres. Defaults: margin 10 mm, binding
   20 mm; the left margin is the larger of those. `fields` maps names to values, including
   `title`, `project`, `drawing_no`, `scale`, `date`, `drawn_by`, `sheet` and extra names. Only
   supplied values become text, with literal escaping; missing values stay empty, including the
-  date and scale. The title grid shares the frame's outside edges without drawing them twice,
+  date and scale. `Outcome::TitleBlock { handles, empty_fields }` explicitly lists every
+  standard or supplied field left empty. The default layer is `A-ANNO-TTLB`; `layer` can
+  override it. Missing layers are made in the same undo step and the current layer is kept.
+  The title grid shares the frame's outside edges without drawing them twice,
   including on small paper where it fills the frame's width. It requires a sized layout.
-  NewLayout, RenameLayout, MView and TitleBlock
+  NewLayout, SetLayoutPaper, RenameLayout, MView and TitleBlock
   each make one undo step, keeping their table changes too.
 
 ## Clipboard, viewports, UCS, sheet sets and recovery
@@ -1245,6 +1265,31 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   The label sits 1.6 name heights below the name, or at the seed point. An explicit `height`
   is in metres; otherwise it uses the name's height, or the default text height for a seed.
   Both return `Outcome::Rooms`; labelling is one transaction named `label_spaces`.
+  Labels now contain live `QiyasRoomArea` fields. `LabelSpaces` retains each closed outer ring
+  as a polyline on non-plotting `A-ROOM-BOUNDARY`, with its seed, name, exact bulges and islands
+  in `QIYAS_ROOM` xdata. The report includes `boundary_handle`. This is a durable room object
+  through DWG/DXF; it keeps the existing "Unapproved candidate" wording and approval status.
+  Changed generated boundaries invalidate the codec's whole `raw_record` and graphics cache;
+  changed room metadata also invalidates only its own application's raw DWG EED blob, preserving
+  other applications' data. Tests save, reopen, edit, save and reopen again, checking the retained
+  area before any command can refresh it.
+  Repeated labels reuse the room; conflicting island policies are refused. Every drawing edit
+  retraces rooms from their seeds, excluding retained boundaries from the search, then updates
+  labels, schedules and linked take-off inside the same undo step. A broken enclosure shows
+  `####`; its take-off is explicitly stale, and the construction check reports it.
+- `RoomSchedule { at, source_sheet?, labels?, decimals? }` (`ROOMSCHEDULE`) builds a drawing
+  table from retained rooms, with per-room area fields and a total field. Source defaults to
+  Model; the table goes on the current sheet, using `A-ANNO-TABL` when the current layer is 0.
+  `MeasureRoom { label? , point? }` (`MEASUREROOM`) accepts exactly one live label/boundary
+  target or a seed. It measures the same net boundary in square metres, retaining a newly found
+  seed region when needed; all quantities remain unapproved candidates. Both commands are one
+  undo step. Construction rule `room_area_mismatch` compares linked labels, schedule cells and
+  take-off rows with their canonical room, including missing or opened boundaries.
+  The drafting replay still compares every room geometry and quantity before/after Grid;
+  it removes only `boundary_handle` from that comparison because LabelSpaces between the reads
+  now retains room objects, and separately checks their closed polylines and boundary layer.
+  Its layer assertions now check label texts and retained boundaries separately, and title-block
+  entities on `A-ANNO-TTLB` while the explicitly chosen viewport layer stays `A-ANNO-TEXT`.
 - `AddMeasurement` refuses an empty zero-quantity Item from AI or MCP unless `empty_item` is
   true, and their Counts given as handles accept only block references. User and script
   commands keep their existing measurement rules. `AddMarkup { kind: cloud | note, points, text }` adds a take-off
@@ -1352,6 +1397,42 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   to it, Save current view… (Model sheet only) or × to delete; both are undoable drawing changes.
 - A drawing that opens with nothing in model space says "This drawing has no geometry in Model"
   in the status bar.
+
+## Automation contracts and sheet ownership (2026-10-21)
+
+- Item 2: `qiyas-ai/src/surface_args.rs` describes every operation's arguments and calls core
+  `validate_schema` before routing, including window and host operations. Failures carry JSON
+  pointers, the expected schema and an example. Private surface contracts refuse unknown
+  properties through that validator before serde; registry-backed operations retain the core's
+  warnings and command-relative paths. Read shortcuts include their warnings in the result.
+  Query contracts match each runner and preserve nullable options. Run with several commands directs callers to
+  batch. Command payloads still use registry validation. Capabilities expose these contracts.
+  Record schemas now include layouts, block records, dimension styles, linetypes, views,
+  viewports, measurements, schedules, BOQ and conflicts. Other collections explicitly name
+  supported schemas and direct callers to `records` with `detail: "full"`.
+- Item 6: state includes the computer's current local ISO date in `local_date`. Both prompt
+  languages require title-block/project metadata from the user or drawing, leaving and listing
+  empty fields. Neither the date nor a drawing number is silently chosen for a title block.
+- Item 9: both prompt languages require schedules generated from drawing objects; quantities
+  must come from measurements or tool results, never typed schedule quantities.
+- Item 10: capture captions distinguish model drawing units from layout paper millimetres,
+  including pixels' physical size. State reports `sheet_units`, physical `paper`, and layout
+  annotation height in paper units while retaining model `metres_per_unit` for model geometry.
+- Item 12: while the assistant owns a turn, desktop `set_sheet` and `run_command` containing
+  SetSheet (including nested batches and desktop scripts), plus history Undo/Redo that can
+  remove a selected layout, reject window writes under the assistant lock. Assistant
+  calls still select sheets directly. `useAssistantWiring` mirrors session information locally;
+  its show/reveal actions never issue sheet IPC. `useSheets.chooseSheet` reads back the core's
+  selected sheet after an accepted selection. Rendering other sheets stays read-only.
+  MCP uses the same host authority for SetSheet (including nested batches and typed commands),
+  view sheet changes, undo and host drawing replacements. The authority stays locked until the
+  operation ends; unrelated edits and reads remain available. User tab switches still cancel
+  the previous conversation, taking the turn lock before tabs/session to prevent lock inversion.
+  The live log already reports Model in set_records' 17:42:33 result with action `reveal`, so the
+  sheet changed before that command (a change during it would produce `show_sheet`), before the
+  17:42:39 mview refusal. The log has no window IPC and cannot identify the triggering event.
+  The exposed path was `useSheets.chooseSheet` into unguarded desktop `set_sheet`, not an
+  observed write in `with_sheet` (which takes `&self`) or the current show_sheet handler.
 
 ## AI assistant and settings
 
@@ -1858,6 +1939,7 @@ and Mizan's turn epoch together.
 
 In this repo, `docs/` (write new specs, plans, checks and reports here, never in the workspace):
 
+- QS roadmap: [docs/2026-10-21-qiyas-qs-roadmap.md](docs/2026-10-21-qiyas-qs-roadmap.md)
 - Spec: `docs/superpowers/specs/2026-10-08-qiyas-design.md`
 - Plan (Phase 1a): `docs/superpowers/plans/2026-10-08-qiyas-foundation.md`
 - Plan (Phase 2, AI and BOQ): `docs/superpowers/plans/2026-10-08-qiyas-phase2-ai-boq.md`
@@ -1869,3 +1951,25 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
   `docs/2026-10-12-qiyas-phase4-check.md`, `docs/2026-10-19-qiyas-units-mizan-check.md`
 - Deferred (Phase 3, left for later): `docs/2026-10-09-qiyas-phase3-deferred.md`
 - Deferred (Phase 4, left for later): `docs/2026-10-12-qiyas-phase4-deferred.md`
+
+## Drawing package rules (live-run corrections, 21 October 2026)
+
+- (1) `missing_center_mark` excludes circles containing a nonempty TEXT/MTEXT insertion on
+  the same sheet, regardless of layer. Grid bubbles carry `QIYAS_GRID` provenance, so removing
+  their labels or changing their layer never turns them into holes. Plain circles still need marks.
+- (3) `add_wall_openings` reports resolved sill/head in metres from the picked run (window 0.9,
+  door 0, head min(2.1, height)). `edit_wall_opening` reports retained omitted properties and
+  their physical units; removing openings has no implicit size defaults.
+- (7) Verification results include `tied_to_drawing`. Arithmetic on literal points is false;
+  entity targets and counts read the drawing. The overall `untied_checks` and `line` explicitly
+  say how many checks prove nothing about the drawing, even when their arithmetic passes.
+- (9) `opening_schedule {at, source_sheet?}` / `OPENINGSCHEDULE` builds an ACAD_TABLE on the
+  current sheet from wall systems on the source (Model by default). Rows group by kind, width,
+  and head minus sill, with physical dimensions in mm. Size marks such as D-900x2100 are
+  assigned to inserts in `QIYAS_OPENING_MARK` xdata and returned by `wall_groups`; those marks
+  can be used in plan tags. Count cells and the total use `QiyasOpeningCount` fields linked
+  to the source sheet handle. `QIYAS_OPENING_SCHEDULE` keeps the source on the table. Drawing
+  edits refresh groups, marks and counts within their undo step, including newly added sizes;
+  DWG/DXF retain the values and links. Table location and column widths stay as placed.
+  On layer 0 the generated table uses `A-ANNO-TABL`, created in the same undo step without
+  changing the current layer. Initial cells are sized from displayed quantities, not field code.

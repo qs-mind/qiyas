@@ -76,8 +76,10 @@ pub(crate) fn has_fields(text: &str) -> bool {
 /// True when `text` holds a field reading an entity (area, length): one to follow edits.
 fn has_object_fields(text: &str) -> bool {
     text.contains("%<\\AcObjProp")
+        || text.contains("%<\\AcVar QiyasOpeningCount")
         || text.contains("%<\\AcVar QiyasArea")
         || text.contains("%<\\AcVar QiyasLength")
+        || text.contains("%<\\AcVar QiyasRoomArea")
 }
 
 /// What one field code reads.
@@ -87,7 +89,9 @@ enum Code {
     Area(u64),
     Length(u64),
     Sum { handles: Vec<u64>, area: bool },
+    RoomArea { handles: Vec<u64>, decimals: usize },
     Count(String),
+    OpeningCount(u64, String),
     Unknown,
 }
 
@@ -129,6 +133,24 @@ fn parse_code(code: &str) -> Code {
         let rest = rest.trim_start();
         let word: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
         return match word.to_ascii_lowercase().as_str() {
+            "qiyasroomarea" => {
+                let mut parts = rest.split('"');
+                let _ = parts.next();
+                let handles = parts.next().and_then(|ids| {
+                    ids.split(',')
+                        .map(|h| u64::from_str_radix(h, 16).ok())
+                        .collect::<Option<Vec<_>>>()
+                });
+                let decimals = parts
+                    .next()
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .unwrap_or(2)
+                    .min(6);
+                handles.map_or(Code::Unknown, |handles| Code::RoomArea {
+                    handles,
+                    decimals,
+                })
+            }
             "date" => Code::Date,
             "filename" => Code::FileName,
             "qiyasarea" | "qiyaslength" => rest
@@ -147,6 +169,15 @@ fn parse_code(code: &str) -> Code {
                 .split('"')
                 .nth(1)
                 .map_or(Code::Unknown, |name| Code::Count(name.to_string())),
+            "qiyasopeningcount" => {
+                let mut quoted = rest.split('"');
+                let source = quoted.nth(1).and_then(|s| u64::from_str_radix(s, 16).ok());
+                let mark = quoted.nth(1);
+                match (source, mark) {
+                    (Some(source), Some(mark)) => Code::OpeningCount(source, mark.to_string()),
+                    _ => Code::Unknown,
+                }
+            }
             _ => Code::Unknown,
         };
     }
@@ -318,6 +349,7 @@ impl Session {
             Some(format!("{shown:.3}"))
         };
         let value = match parse_code(code) {
+            Code::RoomArea { handles, decimals } => self.room_field_value(&handles, decimals),
             Code::Date => Some(today()),
             Code::FileName => self
                 .drawing
@@ -359,6 +391,9 @@ impl Session {
                         .to_string()
                 })
             }
+            Code::OpeningCount(source, mark) => self
+                .opening_count(Handle::new(source), &mark)
+                .map(|count| count.to_string()),
             Code::Unknown => None,
         };
         value.unwrap_or_else(|| UNKNOWN.to_string())

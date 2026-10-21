@@ -16,7 +16,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::session::{locate, Picked};
-use crate::{CoreError, Session};
+use crate::{CoreError, Session, Target};
 
 const MODEL: &str = "*Model_Space";
 
@@ -79,6 +79,13 @@ pub struct PaperView {
     pub lines: Option<Vec<[u32; 2]>>,
     pub fills: Option<Vec<[u32; 2]>>,
     pub texts: Option<Vec<[u32; 2]>>,
+}
+
+pub(crate) struct ViewportFrame {
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    pub centre: [f64; 2],
+    pub scale: f64,
 }
 
 /// The model point at `v`'s centre and its scale; `None` when it shows nothing (the sheet's own,
@@ -177,15 +184,19 @@ impl Session {
         })
     }
 
-    /// `Command::MView`: a viewport on the layout on screen with the corners `a` and `b`,
-    /// showing model extents unless a scale or model centre is supplied; its handle.
-    pub(crate) fn mview(
-        &mut self,
+    /// Resolve either an explicit paper frame or a model window at a physical scale.
+    pub(crate) fn viewport_frame(
+        &self,
         a: [f64; 2],
         b: [f64; 2],
         scale: Option<&ViewportScale>,
         centre: Option<[f64; 2]>,
-    ) -> Result<u64, CoreError> {
+        model_bounds: Option<[[f64; 2]; 2]>,
+        paper_centre: Option<[f64; 2]>,
+    ) -> Result<ViewportFrame, CoreError> {
+        if self.sheet.eq_ignore_ascii_case(MODEL) {
+            return Err(invalid("Viewports go on a layout: use new_layout to create one or set_layout_paper to size an existing layout, then set_sheet to select it"));
+        }
         if ![a, b].iter().flatten().all(|v| v.is_finite()) {
             return Err(invalid("Points must have finite coordinates"));
         }
@@ -195,15 +206,68 @@ impl Session {
         let given_scale = scale
             .map(|s| s.custom_scale(self.drawing.units.to_metres()))
             .transpose()?;
-        if self.sheet.eq_ignore_ascii_case(MODEL) {
+        if let Some(bounds) = model_bounds {
+            if a != [0.0, 0.0] || b != [0.0, 0.0] || centre.is_some() {
+                return Err(invalid("Use model_bounds with scale and paper_centre, or corner1/corner2 with centre; do not combine the two forms"));
+            }
+            let Some(paper_centre) = paper_centre else {
+                return Err(invalid(
+                    "model_bounds needs paper_centre: [x, y] in paper millimetres",
+                ));
+            };
+            let Some(scale) = given_scale else {
+                return Err(invalid("model_bounds needs scale, for example \"1:100\""));
+            };
+            if !bounds
+                .iter()
+                .flatten()
+                .chain(paper_centre.iter())
+                .all(|v| v.is_finite())
+            {
+                return Err(invalid(
+                    "model_bounds and paper_centre must have finite coordinates",
+                ));
+            }
+            let w = (bounds[1][0] - bounds[0][0]).abs() * scale;
+            let h = (bounds[1][1] - bounds[0][1]).abs() * scale;
+            if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+                return Err(invalid(
+                    "model_bounds must enclose a finite nonzero width and height",
+                ));
+            }
+            return Ok(ViewportFrame {
+                a: [paper_centre[0] - w / 2.0, paper_centre[1] - h / 2.0],
+                b: [paper_centre[0] + w / 2.0, paper_centre[1] + h / 2.0],
+                centre: [
+                    (bounds[0][0] + bounds[1][0]) / 2.0,
+                    (bounds[0][1] + bounds[1][1]) / 2.0,
+                ],
+                scale,
+            });
+        }
+        if paper_centre.is_some() {
             return Err(invalid(
-                "Viewports go on a layout: choose a layout tab first",
+                "paper_centre needs model_bounds; explicit frames use corner1 and corner2",
             ));
         }
-        let (w, h) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
         let (fit_centre, fit_scale) = self.viewport_fit_default(a, b)?;
-        let centre = centre.unwrap_or(fit_centre);
-        let scale = given_scale.unwrap_or(fit_scale);
+        Ok(ViewportFrame {
+            a,
+            b,
+            centre: centre.unwrap_or(fit_centre),
+            scale: given_scale.unwrap_or(fit_scale),
+        })
+    }
+
+    /// Create a viewport from a checked frame; the generated layer is part of this command.
+    pub(crate) fn mview(&mut self, frame: ViewportFrame) -> Result<u64, CoreError> {
+        let ViewportFrame {
+            a,
+            b,
+            centre,
+            scale,
+        } = frame;
+        let (w, h) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
         let id = self
             .drawing
             .doc
@@ -222,7 +286,64 @@ impl Session {
         v.view_target = Vector3::ZERO;
         v.view_center = Vector3::new(centre[0], centre[1], 0.0);
         v.set_scale(scale);
-        Ok(self.add_styled(vec![EntityType::Viewport(v)])?[0])
+        let entities = vec![EntityType::Viewport(v)];
+        let added = if self.current.layer.eq_ignore_ascii_case("0") {
+            self.add_on_annotation_layer("A-VIEW", entities, true)?
+        } else {
+            self.add_styled(entities)?
+        };
+        Ok(added[0])
+    }
+
+    /// Resize the same viewport, preserving identity, frozen layers and its other settings.
+    pub(crate) fn resize_viewport(
+        &mut self,
+        target: &Target,
+        frame: ViewportFrame,
+    ) -> Result<(), CoreError> {
+        let handle = Handle::new(target.handle);
+        if !target.chain.is_empty() {
+            return Err(invalid("Choose a viewport directly on the current layout"));
+        }
+        let entity = self
+            .drawing
+            .doc
+            .entities_in_block(&self.sheet)
+            .find(|entity| entity.common().handle == handle)
+            .ok_or_else(|| invalid("The viewport target must be on the current layout"))?;
+        let EntityType::Viewport(view) = entity else {
+            return Err(invalid("The target is not a viewport"));
+        };
+        if view.id == 1 {
+            return Err(invalid(
+                "The layout's overall viewport cannot be resized; choose a model viewport",
+            ));
+        }
+        if self
+            .drawing
+            .doc
+            .layers
+            .get(&view.common.layer)
+            .is_some_and(|layer| layer.flags.locked)
+        {
+            return Err(invalid("The viewport's layer is locked: unlock it first"));
+        }
+        let Some(EntityType::Viewport(view)) = self.drawing.doc.get_entity_mut(handle) else {
+            unreachable!("checked viewport");
+        };
+        let ViewportFrame {
+            a,
+            b,
+            centre,
+            scale,
+        } = frame;
+        view.center = Vector3::new((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, 0.0);
+        view.width = (b[0] - a[0]).abs();
+        view.height = (b[1] - a[1]).abs();
+        view.view_target = Vector3::ZERO;
+        view.view_center = Vector3::new(centre[0], centre[1], 0.0);
+        view.set_scale(scale);
+        Ok(())
     }
 
     /// The viewports of the layout on screen and how the window draws model space inside each

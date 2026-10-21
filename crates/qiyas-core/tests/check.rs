@@ -1028,3 +1028,65 @@ fn layer_zero_is_a_warning_on_a_sheet_but_right_inside_a_block() {
         assert!(r.findings.is_empty(), "{units}: {:?}", r.findings);
     }
 }
+
+#[test]
+fn labelled_circles_and_grid_bubbles_are_annotations_but_plain_holes_need_marks() {
+    for units in [4, 5, 6, 1] {
+        let (mut s, k) = blank(units);
+        let grid: Command = serde_json::from_value(serde_json::json!({
+            "type":"grid", "x":[{"label":"A","at":0}],
+            "y":[{"label":"1","at":0}],
+            "extent":{"min":[0,0],"max":[5.0*k,4.0*k]}
+        }))
+        .unwrap();
+        run(&mut s, grid);
+        let scope = CheckScope {
+            rules: vec!["missing_center_mark".into()],
+            ..Default::default()
+        };
+        assert!(s.check_drawing(&scope).findings.is_empty());
+        // Even after the text goes, the Grid command's bubbles keep their provenance.
+        let labels: Vec<_> = s
+            .drawing
+            .doc
+            .entities()
+            .filter(|e| matches!(e, EntityType::Text(_)))
+            .map(|e| Target {
+                handle: e.common().handle.value(),
+                chain: vec![],
+            })
+            .collect();
+        s.run(Command::DeleteEntities { targets: labels }).unwrap();
+        assert!(s.check_drawing(&scope).findings.is_empty());
+        let tagged = run(
+            &mut s,
+            Command::Draw(DrawSpec::Circle {
+                centre: [20.0 * k, 0.0],
+                radius: k,
+            }),
+        )[0];
+        s.run(Command::NewLayer {
+            name: "TAGS".into(),
+        })
+        .unwrap();
+        let mut current = s.current.clone();
+        current.layer = "TAGS".into();
+        s.run(Command::SetCurrent { current }).unwrap();
+        let text: Command = serde_json::from_value(serde_json::json!({
+            "type":"text", "at":[20.3*k,0.0], "value":"D1", "height":0.2*k
+        }))
+        .unwrap();
+        s.run(text).unwrap();
+        let hole = run(
+            &mut s,
+            Command::Draw(DrawSpec::Circle {
+                centre: [25.0 * k, 0.0],
+                radius: k,
+            }),
+        )[0];
+        let report = s.check_drawing(&scope);
+        assert_eq!(report.findings.len(), 1, "{units}: {:?}", report.findings);
+        assert_eq!(report.findings[0].handles, vec![hole]);
+        assert!(!report.findings[0].handles.contains(&tagged));
+    }
+}

@@ -1733,11 +1733,24 @@ impl Session {
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        // Room boundaries, schedules and quantities follow all drawing mutations in this step.
+        let rooms = self.has_rooms();
+        let tables = tables || rooms || self.has_opening_schedules();
+        let takeoff = takeoff || rooms;
         let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
         let recorder = self.drawing.doc.begin_entity_change_recording();
-        let done = f(self);
+        let done = f(self).and_then(|value| {
+            if self.has_rooms() {
+                self.park();
+                self.refresh_rooms()?;
+            }
+            if self.has_opening_schedules() {
+                self.refresh_opening_schedules()?;
+            }
+            Ok(value)
+        });
         self.drawing.doc.end_entity_change_recording();
         let mut change = DocChange::from_before_images(
             &self.drawing.doc,
@@ -1876,6 +1889,19 @@ impl Session {
     /// exact for lines, arcs, circles, full ellipses and (bulged) polylines under a uniform scale;
     /// otherwise the length of all its flattened paths and the area of the closed ones.
     pub(crate) fn extent(&self, doc: &CadDocument, entity: &EntityType, xf: &Xform) -> Extent {
+        if crate::room_objects::is_room_boundary(entity) {
+            let origin = xf.apply([0.0, 0.0]);
+            let x = xf.apply([1.0, 0.0]);
+            let y = xf.apply([0.0, 1.0]);
+            let scale = ((x[0] - origin[0]) * (y[1] - origin[1])
+                - (x[1] - origin[1]) * (y[0] - origin[0]))
+                .abs();
+            return Extent {
+                area: crate::room_objects::room_area(entity).map(|area| area * scale),
+                length: exact_length(entity, xf),
+                self_intersecting: false,
+            };
+        }
         // A dimension measures what it says (an angle measures no length), not its lines.
         if let EntityType::Dimension(d) = entity {
             let [x0, y0] = xf.apply([0.0, 0.0]);

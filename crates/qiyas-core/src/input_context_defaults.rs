@@ -36,6 +36,82 @@ impl Session {
             });
         };
         match &command {
+            Command::AddWallOpenings {
+                centreline,
+                openings,
+            } => {
+                if let Ok(groups) = self.wall_groups(None) {
+                    if let Some(run) = groups
+                        .iter()
+                        .flat_map(|g| &g.runs)
+                        .find(|r| r.centreline == *centreline)
+                    {
+                        for (index, opening) in openings.iter().enumerate() {
+                            if opening.sill.is_none() {
+                                let sill = match opening.kind {
+                                    crate::walls::OpeningKind::Door => 0.0,
+                                    crate::walls::OpeningKind::Window => 0.9,
+                                };
+                                set(&format!("openings/{index}/sill"), json!(sill), Some("m"));
+                            }
+                            if opening.head.is_none() {
+                                set(
+                                    &format!("openings/{index}/head"),
+                                    json!(run.height.min(2.1)),
+                                    Some("m"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Command::EditWallOpening { insert, edit } => {
+                if let Ok(groups) = self.wall_groups(None) {
+                    if let Some(opening) = groups
+                        .iter()
+                        .flat_map(|g| &g.runs)
+                        .flat_map(|r| &r.openings)
+                        .find(|o| o.insert == *insert)
+                    {
+                        for (field, omitted, value, unit) in [
+                            (
+                                "at",
+                                edit.at.is_none(),
+                                json!(opening.opening.at),
+                                model_unit,
+                            ),
+                            (
+                                "width",
+                                edit.width.is_none(),
+                                json!(opening.opening.width),
+                                model_unit,
+                            ),
+                            (
+                                "sill",
+                                edit.sill.is_none(),
+                                json!(opening.opening.sill),
+                                "m",
+                            ),
+                            (
+                                "head",
+                                edit.head.is_none(),
+                                json!(opening.opening.head),
+                                "m",
+                            ),
+                        ] {
+                            if omitted {
+                                set(field, value, Some(unit));
+                            }
+                        }
+                        if edit.kind.is_none() {
+                            set("kind", json!(opening.opening.kind), None);
+                        }
+                        if edit.swing.is_none() {
+                            set("swing", json!(opening.opening.swing), None);
+                        }
+                    }
+                }
+            }
             Command::Grid {
                 x, y, extent: None, ..
             } if !x.is_empty() || !y.is_empty() => {
@@ -80,15 +156,31 @@ impl Session {
                 corner2,
                 scale,
                 centre,
-            } if (scale.is_none() || centre.is_none())
-                && !self.sheet.eq_ignore_ascii_case("*Model_Space") =>
-            {
-                if let Ok((fit_centre, fit_scale)) = self.viewport_fit_default(*corner1, *corner2) {
+                model_bounds,
+                paper_centre,
+                ..
+            } if !self.sheet.eq_ignore_ascii_case("*Model_Space") => {
+                if let Ok(frame) = self.viewport_frame(
+                    *corner1,
+                    *corner2,
+                    scale.as_ref(),
+                    *centre,
+                    *model_bounds,
+                    *paper_centre,
+                ) {
                     if centre.is_none() {
-                        set("centre", json!(fit_centre), Some(model_unit));
+                        set("centre", json!(frame.centre), Some(model_unit));
                     }
                     if scale.is_none() {
-                        set("scale", json!(fit_scale), Some(&format!("mm/{model_unit}")));
+                        set(
+                            "scale",
+                            json!(frame.scale),
+                            Some(&format!("mm/{model_unit}")),
+                        );
+                    }
+                    if model_bounds.is_some() {
+                        set("corner1", json!(frame.a), Some("mm"));
+                        set("corner2", json!(frame.b), Some("mm"));
                     }
                 }
             }

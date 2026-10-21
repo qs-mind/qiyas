@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Boundary, Command, CoreError, EntityFilter, Outcome, Session, Source};
+use crate::{Boundary, CoreError, EntityFilter, Outcome, Session, Source};
 
 /// Most rooms one call looks for.
 const MAX_ROOMS: usize = 500;
@@ -26,6 +26,10 @@ const LABEL_GAP: f64 = 1.6;
 const CHAR_WIDTH: f64 = 0.6;
 /// Areas are given to 6 decimals.
 const DECIMALS: f64 = 1e6;
+
+pub(crate) fn default_room_decimals() -> usize {
+    2
+}
 
 /// One point to look round, with the room's name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -85,6 +89,9 @@ pub struct RoomRow {
     pub label_point: Option<[f64; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_handle: Option<u64>,
+    /// Persistent closed boundary used by labels, schedules and take-off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary_handle: Option<u64>,
 }
 
 /// A seed that found no room, and why.
@@ -119,6 +126,7 @@ struct Room {
     islands: Vec<(f64, [[f64; 2]; 2])>,
     also_named: Vec<String>,
     first: [f64; 2],
+    boundary: Boundary,
 }
 
 pub(crate) struct RoomLabelDefault {
@@ -243,6 +251,7 @@ impl Session {
                 also_named: room.also_named.clone(),
                 label_point: labels.map(|(points, _)| points[i]),
                 label_handle: labels.and_then(|(_, handles)| handles.get(i).copied()),
+                boundary_handle: self.room_at(&self.sheet, room.point).map(|(h, _)| h),
             })
             .collect();
         RoomsReport {
@@ -310,74 +319,65 @@ impl Session {
         language: Option<LabelLanguage>,
         source: Source,
     ) -> Result<Outcome, CoreError> {
-        let to_m = self.drawing.units.to_metres();
-        let sq = to_m * to_m;
         let decimals = decimals.unwrap_or(2);
         if decimals > 6 {
             return Err(invalid("decimals is 0 to 6"));
         }
-        if let Some(h) = height {
-            if !(h > 0.0 && h.is_finite()) {
-                return Err(invalid("The label height must be more than 0"));
-            }
+        if height.is_some_and(|h| !(h > 0.0 && h.is_finite())) {
+            return Err(invalid("The label height must be more than 0"));
         }
         let (rooms, skipped) = self.find_rooms(q)?;
         if rooms.is_empty() {
             return Err(invalid("Nothing was drawn"));
         }
-        let mut commands = Vec::new();
-        let mut points = Vec::new();
-        for room in &rooms {
-            let (h, at, language) = self.room_label(room, height, language);
-            points.push(at);
-            let (prefix, unit) = match language {
-                LabelLanguage::Ar => ("مساحة مرشحة غير معتمدة", "م²"),
-                LabelLanguage::En => ("Unapproved candidate", "m²"),
-            };
-            commands.push(Command::Text {
-                at,
-                height: h,
-                rotation: 0.0,
-                // The number the report gives (rounded as it is), so label and list agree even
-                // on a value that ends in 5.
-                value: format!(
-                    "{} {:.*} {}",
-                    prefix,
-                    decimals,
-                    rounded(room.net() * sq),
-                    unit
-                ),
-                style: None,
-            });
-        }
         let layer = layer
             .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty());
-        let created = layer
-            .as_deref()
-            .is_some_and(|l| self.drawing.doc.layers.get(l).is_none());
-        if layer.as_deref().is_some_and(|l| l.contains('|')) {
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| self.current.layer.clone());
+        if layer.contains('|') {
             return Err(invalid("A layer of an xref can't take new entities"));
         }
-        let outcome = self.run_batch(commands, layer.clone(), None, source)?;
-        let handles = match outcome {
-            Outcome::Batch { added, .. } => added,
-            _ => Vec::new(),
-        };
-        let mut report = self.report(&rooms, skipped, Some((&points, &handles)));
-        report.layer = Some(match &layer {
-            Some(l) => self
-                .drawing
-                .doc
-                .layers
-                .get(l)
-                .map(|x| x.name.clone())
-                .unwrap_or_else(|| l.clone()),
-            None => self.current.layer.clone(),
-        });
-        report.layer_created = Some(created);
-        Ok(Outcome::Rooms {
-            report: Box::new(report),
+        let layer = self
+            .drawing
+            .doc
+            .layers
+            .get(&layer)
+            .map(|l| l.name.clone())
+            .unwrap_or(layer);
+        let created = self.drawing.doc.layers.get(&layer).is_none();
+        self.record_document_change(source, "label_spaces", true, true, |s| {
+            if created {
+                s.new_layer(&layer)?;
+            }
+            let previous = s.current.clone();
+            let mut points = Vec::new();
+            let mut handles = Vec::new();
+            for room in &rooms {
+                let boundary = s.keep_room(
+                    room.name.clone(),
+                    room.point,
+                    &room.boundary,
+                    q.subtract_islands.unwrap_or(true),
+                )?;
+                let (h, at, language) = s.room_label(room, height, language);
+                points.push(at);
+                let template = match language {
+                    LabelLanguage::Ar => include_str!("room_label_ar.txt").trim(),
+                    LabelLanguage::En => "Unapproved candidate {area} m²",
+                };
+                let code = crate::room_objects::room_area_code(&[boundary], decimals);
+                s.current.layer = layer.clone();
+                let handle = s.add_text(at, h, 0.0, template.replace("{area}", &code), None)?;
+                s.mark_room_label(handle, boundary, decimals);
+                handles.push(handle);
+            }
+            s.current = previous;
+            let mut report = s.report(&rooms, skipped, Some((&points, &handles)));
+            report.layer = Some(layer);
+            report.layer_created = Some(created);
+            Ok(Outcome::Rooms {
+                report: Box::new(report),
+            })
         })
     }
 
@@ -553,6 +553,11 @@ impl Session {
                 islands: if subtract { islands } else { Vec::new() },
                 also_named: Vec::new(),
                 first,
+                boundary: Boundary::Ring {
+                    ring,
+                    holes,
+                    bulges,
+                },
             });
         }
         Ok((rooms, skipped))

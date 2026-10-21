@@ -164,7 +164,25 @@ pub async fn drawing_info(state: State<'_, AppState>) -> Result<DrawingInfo, Str
 
 #[tauri::command]
 pub async fn set_sheet(block: String, state: State<'_, AppState>) -> Result<(), String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| s.set_sheet(&block))
+}
+
+pub(crate) fn window_sheet_guard(state: &AppState) -> Result<MutexGuard<'_, AiRun>, String> {
+    let turn = ai_run(state);
+    if turn.busy() {
+        return Err("Mizan owns the sheet during its turn; wait until the turn finishes".into());
+    }
+    Ok(turn)
+}
+
+/// A queued window action cannot take the sheet away from the assistant's active turn.
+pub(crate) fn command_changes_sheet(command: &Command) -> bool {
+    match command {
+        Command::SetSheet { .. } => true,
+        Command::Batch { commands, .. } => commands.iter().any(command_changes_sheet),
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -384,7 +402,12 @@ pub async fn run_command(
     if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
         cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
     }
-    let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
+    let mut outcome = if command_changes_sheet(&parsed) {
+        let _turn = window_sheet_guard(&state)?;
+        with_session(&state, |s| s.run_input(&cmd, Source::User))?
+    } else {
+        with_session(&state, |s| s.run_input(&cmd, Source::User))?
+    };
     if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
         files::set_clipboard_text(&state, text)?;
         text.clear();
@@ -395,12 +418,14 @@ pub async fn run_command(
 /// Undoes the last take-off change; false when there was none.
 #[tauri::command]
 pub async fn undo(state: State<'_, AppState>) -> Result<bool, String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.undo()))
 }
 
 /// Redoes the last undone take-off change; false when there was none.
 #[tauri::command]
 pub async fn redo(state: State<'_, AppState>) -> Result<bool, String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.redo()))
 }
 
@@ -676,7 +701,7 @@ pub async fn mcp_status(state: State<'_, AppState>) -> Result<McpStatus, String>
 
 // ---- The in-app assistant ----
 
-fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
+pub(crate) fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
     state.ai.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -855,6 +880,7 @@ async fn run_turn<R: Runtime>(
 /// False when the user (or nothing) changed it since.
 #[tauri::command]
 pub async fn ai_undo(state: State<'_, AppState>) -> Result<bool, String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.undo_if(qiyas_core::Source::Ai)))
 }
 
@@ -975,6 +1001,70 @@ mod tests {
         events: Receiver<(String, Value)>,
     }
 
+    #[test]
+    fn window_sheet_changes_cannot_interrupt_an_assistant_turn() {
+        let ipc = Ipc::open();
+        let state = ipc._app.state::<AppState>();
+        let layout = with_session(&state, |session| {
+            Ok(session
+                .info()
+                .sheets
+                .into_iter()
+                .find(|sheet| !sheet.is_model)
+                .unwrap()
+                .block)
+        })
+        .unwrap();
+        let (agent, generation) = ai_run(&state).reserve().unwrap();
+        // The assistant uses the session directly, while stale window messages arrive by IPC.
+        with_session(&state, |session| {
+            session.run_as(
+                Command::SetSheet {
+                    block: layout.clone(),
+                },
+                Source::Ai,
+            )
+        })
+        .unwrap();
+        for (name, input) in [
+            ("set_sheet", json!({"block":"*Model_Space"})),
+            ("undo", json!({})),
+            ("redo", json!({})),
+            ("ai_undo", json!({})),
+            (
+                "run_command",
+                json!({"cmd":{"type":"set_sheet","block":"*Model_Space"}}),
+            ),
+            (
+                "run_command",
+                json!({"cmd":{"type":"batch","commands":[{"type":"set_sheet","block":"*Model_Space"}]}}),
+            ),
+        ] {
+            let error = ipc.call(name, input).unwrap_err();
+            assert!(
+                error.as_str().unwrap().contains("Mizan owns the sheet"),
+                "{name}: {error}"
+            );
+            assert_eq!(
+                with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
+                layout
+            );
+        }
+        ipc.bytes("render_batch", json!({}));
+        ipc.bytes("sheet_batch", json!({"sheet":"*Model_Space"}));
+        assert_eq!(
+            with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
+            layout
+        );
+        ai_run(&state).release(agent, generation);
+        ipc.call("set_sheet", json!({"block":"*Model_Space"}))
+            .unwrap();
+        assert_eq!(
+            with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
+            "*Model_Space"
+        );
+    }
+
     impl Ipc {
         /// The app on the mock runtime with the canned AI provider and the sample drawing open.
         fn open() -> Ipc {
@@ -996,6 +1086,7 @@ mod tests {
                     takeoff,
                     run_command,
                     undo,
+                    redo,
                     boq,
                     compare,
                     conflicts,
@@ -1013,6 +1104,7 @@ mod tests {
                     get_drafting,
                     set_drafting,
                     render_batch,
+                    set_sheet,
                     crate::pdf::pdf_page_count,
                     crate::pdf::pdf_thumbnails,
                     crate::pdf::attach_pdf,
