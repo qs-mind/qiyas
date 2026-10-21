@@ -679,7 +679,7 @@ impl Session {
         let ucs = ucs
             .or_else(|| Ucs::from_header(&drawing.doc))
             .unwrap_or_default();
-        Session {
+        let mut session = Session {
             drawing,
             sheet,
             visibility: Visibility::default(),
@@ -711,7 +711,39 @@ impl Session {
             others: RefCell::new(Vec::new()),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
+        };
+        if session.drawing.doc.app_ids.contains(crate::walls::WALL_APP)
+            || session
+                .drawing
+                .doc
+                .app_ids
+                .contains(crate::room_objects::ROOM_APP)
+            || session
+                .drawing
+                .doc
+                .app_ids
+                .contains("QIYAS_OPENING_SCHEDULE")
+            || session.drawing.doc.app_ids.contains("QIYAS_ROOM_SCHEDULE")
+        {
+            let before = session.drawing.doc.clone();
+            if let Err(error) = session
+                .migrate_legacy_objects()
+                .and_then(|()| session.migrate_object_schedules())
+            {
+                session.drawing.doc = before;
+                session
+                    .drawing
+                    .problems
+                    .push(format!("Legacy object conversion needs review: {error}"));
+            }
         }
+        if let Err(error) = session.validate_object_metadata() {
+            session
+                .drawing
+                .problems
+                .push(format!("Object metadata needs review: {error}"));
+        }
+        session
     }
 
     /// Saves the take-off, the BOQ, the conflicts and the schedules to the drawing's project file
@@ -1764,22 +1796,31 @@ impl Session {
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
-        // Room boundaries, schedules and quantities follow all drawing mutations in this step.
-        let rooms = self.has_rooms();
-        let tables = tables || rooms || self.has_opening_schedules();
-        let takeoff = takeoff || rooms;
+        self.validate_object_metadata()?;
+        let (derived_tables, derived_takeoff) = self.derived_extras();
+        let tables = tables || derived_tables;
+        let takeoff = takeoff || derived_takeoff;
+        // Object commands may allocate several drivers before a later definition is refused.
+        // Their unpublished handles and side maps must roll back too. The codec omits entities
+        // from this checkpoint; successful undo retains its monotonic-handle policy. Limit the
+        // extra structure copy to these commands, preserving ordinary large-drawing edit cost.
+        let failed_structure = matches!(
+            label,
+            "define_object_type"
+                | "redefine_object_type"
+                | "delete_object_type"
+                | "place_objects"
+                | "set_object_props"
+                | "object_schedule"
+                | "set_knowledge"
+        )
+        .then(|| self.drawing.doc.snapshot_structure());
         let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
         let recorder = self.drawing.doc.begin_entity_change_recording();
         let done = f(self).and_then(|value| {
-            if self.has_rooms() {
-                self.park();
-                self.refresh_rooms()?;
-            }
-            if self.has_opening_schedules() {
-                self.refresh_opening_schedules()?;
-            }
+            self.rederive()?;
             Ok(value)
         });
         self.drawing.doc.end_entity_change_recording();
@@ -1818,6 +1859,9 @@ impl Session {
                     state_hidden: &mut self.state_hidden,
                 };
                 change.swap(&mut self.drawing.doc, &mut self.takeoff, &mut view);
+                if let Some(structure) = failed_structure {
+                    self.drawing.doc.swap_structure(structure);
+                }
                 *self.cache.get_mut() = None;
                 Err(e)
             }
@@ -1920,7 +1964,8 @@ impl Session {
     /// exact for lines, arcs, circles, full ellipses and (bulged) polylines under a uniform scale;
     /// otherwise the length of all its flattened paths and the area of the closed ones.
     pub(crate) fn extent(&self, doc: &CadDocument, entity: &EntityType, xf: &Xform) -> Extent {
-        if crate::room_objects::is_room_boundary(entity) {
+        let retained = crate::object_regions::retained_region(entity).is_some();
+        if retained || crate::room_objects::is_room_boundary(entity) {
             let origin = xf.apply([0.0, 0.0]);
             let x = xf.apply([1.0, 0.0]);
             let y = xf.apply([0.0, 1.0]);
@@ -1928,7 +1973,12 @@ impl Session {
                 - (x[1] - origin[1]) * (y[0] - origin[0]))
                 .abs();
             return Extent {
-                area: crate::room_objects::room_area(entity).map(|area| area * scale),
+                area: (if retained {
+                    crate::object_regions::retained_region_area(entity)
+                } else {
+                    crate::room_objects::room_area(entity)
+                })
+                .map(|area| area * scale),
                 length: exact_length(entity, xf),
                 self_intersecting: false,
             };

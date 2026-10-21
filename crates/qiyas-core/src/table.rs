@@ -180,7 +180,11 @@ impl Session {
             plain.to_string()
         };
         set_cell_value(t, r, c, &escape_mtext(&shown));
-        set_cell_fields(t, &fields);
+        set_cell_fields(
+            t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
     }
 
     /// `Command::Table`: a table of `rows` x `cols` cells with its top left corner at `at`,
@@ -384,7 +388,11 @@ impl Session {
             .into_iter()
             .map(|(r, c, f)| (if r >= at { r + 1 } else { r }, c, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 
@@ -408,7 +416,11 @@ impl Session {
             .into_iter()
             .map(|(r, c, f)| (r, if c >= at { c + 1 } else { c }, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 
@@ -427,7 +439,11 @@ impl Session {
             .filter(|(r, _, _)| *r != row)
             .map(|(r, c, f)| (if r > row { r - 1 } else { r }, c, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 
@@ -446,7 +462,11 @@ impl Session {
             .filter(|(_, c, _)| *c != col)
             .map(|(r, c, f)| (r, if c > col { c - 1 } else { c }, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 

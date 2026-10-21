@@ -14,9 +14,10 @@
 //! counts change on `UpdateFields`. Areas and lengths are in square metres and metres (as the
 //! take-off shows them), 3 decimals; an entity gone, or a code Qiyas does not know, shows `####`.
 
+pub(crate) use crate::xdata::chunks;
 use opencadcodec::entities::Table;
 use opencadcodec::tables::normalize_name;
-use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
+use opencadcodec::xdata::XDataValue;
 use opencadcodec::{AppId, EntityType, Handle};
 use qiyas_geom::Xform;
 use schemars::JsonSchema;
@@ -32,8 +33,6 @@ use crate::{CoreError, Kind, Session, Target};
 pub const FIELD_APP: &str = "QIYAS_FIELD";
 /// What a field shows when it can't be worked out, as AutoCAD does.
 const UNKNOWN: &str = "####";
-/// Longest xdata string written (DXF allows 255 bytes).
-const CHUNK: usize = 250;
 
 /// A field to insert (`Command::Field`).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -80,6 +79,7 @@ fn has_object_fields(text: &str) -> bool {
         || text.contains("%<\\AcVar QiyasArea")
         || text.contains("%<\\AcVar QiyasLength")
         || text.contains("%<\\AcVar QiyasRoomArea")
+        || text.contains("%<\\AcVar QiyasObject")
 }
 
 /// What one field code reads.
@@ -92,6 +92,7 @@ enum Code {
     RoomArea { handles: Vec<u64>, decimals: usize },
     Count(String),
     OpeningCount(u64, String),
+    ObjectValue(Vec<u64>, String, usize),
     Unknown,
 }
 
@@ -169,6 +170,25 @@ fn parse_code(code: &str) -> Code {
                 .split('"')
                 .nth(1)
                 .map_or(Code::Unknown, |name| Code::Count(name.to_string())),
+            "qiyasobject" => {
+                let parts: Vec<_> = rest.split('"').collect();
+                match (parts.get(1), parts.get(3)) {
+                    (Some(ids), Some(name)) => ids
+                        .split(',')
+                        .filter(|id| !id.is_empty())
+                        .map(|id| u64::from_str_radix(id, 16).ok())
+                        .collect::<Option<Vec<_>>>()
+                        .map_or(Code::Unknown, |ids| {
+                            let decimals = parts
+                                .get(4)
+                                .and_then(|s| s.trim().parse::<usize>().ok())
+                                .unwrap_or(3)
+                                .min(6);
+                            Code::ObjectValue(ids, (*name).into(), decimals)
+                        }),
+                    _ => Code::Unknown,
+                }
+            }
             "qiyasopeningcount" => {
                 let mut quoted = rest.split('"');
                 let source = quoted.nth(1).and_then(|s| u64::from_str_radix(s, 16).ok());
@@ -215,54 +235,18 @@ fn today() -> String {
     format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
 }
 
-/// `template`'s strings as xdata values, cut to fit.
-pub(crate) fn chunks(template: &str) -> Vec<XDataValue> {
-    let mut out = Vec::new();
-    let mut rest = template;
-    while !rest.is_empty() {
-        let mut cut = rest.len().min(CHUNK);
-        while !rest.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        let (head, tail) = rest.split_at(cut);
-        out.push(XDataValue::String(head.to_string()));
-        rest = tail;
-    }
-    out
-}
-
 /// The field code a text keeps, if any.
 pub(crate) fn text_field(common: &opencadcodec::entities::EntityCommon) -> Option<String> {
-    let record = common.extended_data.get_record(FIELD_APP)?;
-    Some(
-        record
-            .values
-            .iter()
-            .filter_map(|v| match v {
-                XDataValue::String(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .collect(),
-    )
+    crate::xdata::read_text(common, FIELD_APP)
 }
 
 /// Keeps `template` as the text's field code; `None` drops it.
 pub(crate) fn set_text_field(
     common: &mut opencadcodec::entities::EntityCommon,
     template: Option<&str>,
+    app_handle: u64,
 ) {
-    match template {
-        Some(template) => {
-            let mut record = ExtendedDataRecord::new(FIELD_APP);
-            for v in chunks(template) {
-                record.add_value(v);
-            }
-            common.extended_data.upsert_record(record);
-        }
-        None => {
-            common.extended_data.remove_record(FIELD_APP);
-        }
-    }
+    crate::xdata::write_text(common, FIELD_APP, app_handle, template);
 }
 
 /// The field codes a table keeps, as (row, column, code).
@@ -289,20 +273,19 @@ pub(crate) fn cell_fields(t: &Table) -> Vec<(usize, usize, String)> {
 }
 
 /// Keeps `fields` as the table's field codes (none: the record goes).
-pub(crate) fn set_cell_fields(t: &mut Table, fields: &[(usize, usize, String)]) {
-    if fields.is_empty() {
-        t.common.extended_data.remove_record(FIELD_APP);
-        return;
-    }
-    let mut record = ExtendedDataRecord::new(FIELD_APP);
+pub(crate) fn set_cell_fields(t: &mut Table, fields: &[(usize, usize, String)], app_handle: u64) {
+    let mut values = Vec::new();
     for (r, c, code) in fields {
-        record.add_value(XDataValue::Integer32(*r as i32));
-        record.add_value(XDataValue::Integer32(*c as i32));
-        for v in chunks(code) {
-            record.add_value(v);
-        }
+        values.push(XDataValue::Integer32(*r as i32));
+        values.push(XDataValue::Integer32(*c as i32));
+        values.extend(chunks(code));
     }
-    t.common.extended_data.upsert_record(record);
+    crate::xdata::write_values(
+        &mut t.common,
+        FIELD_APP,
+        app_handle,
+        (!fields.is_empty()).then_some(values),
+    );
 }
 
 impl Session {
@@ -394,6 +377,9 @@ impl Session {
             Code::OpeningCount(source, mark) => self
                 .opening_count(Handle::new(source), &mark)
                 .map(|count| count.to_string()),
+            Code::ObjectValue(ids, name, decimals) => {
+                self.object_field_value(&ids, &name, decimals)
+            }
             Code::Unknown => None,
         };
         value.unwrap_or_else(|| UNKNOWN.to_string())
@@ -544,6 +530,7 @@ impl Session {
             .filter(|e| e.common().extended_data.get_record(FIELD_APP).is_some())
             .map(|e| e.common().handle)
             .collect();
+        let field_app = crate::xdata::app_handle(&self.drawing.doc, FIELD_APP);
         for handle in holders {
             let entity = self
                 .drawing
@@ -556,11 +543,15 @@ impl Session {
                         .into_iter()
                         .map(|(r, c, text)| (r, c, remap(&text, mapping)))
                         .collect::<Vec<_>>();
-                    set_cell_fields(table, &fields);
+                    set_cell_fields(table, &fields, field_app);
                 }
                 _ => {
                     if let Some(text) = text_field(entity.common()) {
-                        set_text_field(entity.common_mut(), Some(&remap(&text, mapping)));
+                        set_text_field(
+                            entity.common_mut(),
+                            Some(&remap(&text, mapping)),
+                            field_app,
+                        );
                     }
                 }
             }
@@ -635,9 +626,9 @@ mod tests {
         let values = chunks(&long);
         assert_eq!(values.len(), 3);
         let mut t = Table::new(opencadcodec::Vector3::ZERO, 2, 2);
-        set_cell_fields(&mut t, &[(1, 0, long.clone()), (0, 1, "x".into())]);
+        set_cell_fields(&mut t, &[(1, 0, long.clone()), (0, 1, "x".into())], 0);
         assert_eq!(cell_fields(&t), [(1, 0, long), (0, 1, "x".to_string())]);
-        set_cell_fields(&mut t, &[]);
+        set_cell_fields(&mut t, &[], 0);
         assert!(cell_fields(&t).is_empty());
     }
 }

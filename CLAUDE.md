@@ -52,7 +52,8 @@ order they always ran: `useShell`, `useOptions`, `useFileTabs`, `useAutosave`, `
 `usePlot`, `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and
 the tool's `cancel` to hooks made before them through refs filled right after they exist, and
 renders `Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
-in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. The
+in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. It uses condition waits and a file-only 30-second
+test timeout because it renders the whole shell; the five-repeat load check uses two workers. The
 three late refs are `measureRef` (`useSheets` cancels the tool when the sheet changes), `applyRef`
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
 with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
@@ -393,6 +394,46 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   points); points draw as a cross (PDSIZE, or 1% of the sheet). Splines flatten from control
   points and knots (the curve through the fit points when there are none). Measuring sees
   outlines only (`FlattenOutcome::into_paths`).
+
+## Data-defined elements (Phase 16)
+
+- `knowledge.rs`: versioned JSON XRecords in `NOD/QIYAS_KNOWLEDGE`, with subdictionaries
+  types, levels, tables, rules, sheets, mappings, views and measurement. Objects and the NOD
+  pointer participate in undo; stale DWG raw payloads are cleared on write. `xdata.rs` shares
+  UTF-8 chunking and application-specific raw EED invalidation among walls, rooms and fields.
+- `objects.rs`: `define_object_type`, `redefine_object_type`, `delete_object_type`,
+  `place_objects`, `set_object_props`, `object_schedule` and `set_knowledge`. Type properties,
+  geometry recipes and quantity expressions are data. Physical property values use metres,
+  m², m³, degrees or counts; driver coordinates use drawing units. `unit` converts metres to
+  drawing coordinates in symbol recipes. Records expose `object_types`, `objects` and
+  `knowledge_<kind>`. Generated graphics carry `QIYAS_OBJECT_PART` owner/role links; drivers
+  carry `QIYAS_OBJECT`. Generic part move/copy/erase resolves to the driver.
+  Point symbols retain rotation and reflection through DWG/DXF. Scaling a point driver moves
+  its insertion; explicit physical dimensions and their quantities change through properties.
+  Union bands share graphics within the same type, sheet and level; automatic groups also
+  share a vertical span, while an explicit assembly supports mixed heights. The shared band
+  service integrates volume by vertical span and applies hosted cuts. Deleting an owner transfers
+  shared graphics to a survivor so quantity and field references follow. Justification, role
+  layers and hosted offsets/reflection are recipe data. Property bindings can read `host.*`.
+  The existing geometry kernel refuses overlapping parallel runs in a union group; failed
+  placements roll back atomically.
+- `derived.rs`: one ordered derivation list inside `record_document_change` (objects, views,
+  schedules, BOQ rows, fields). The views/BOQ slots are reserved for later phases. Object
+  schedules are CAD field tables that follow edits and grouping in the same undo step.
+- Expressions now include powers, comparisons, logic, typed strings/booleans, lazy `if`,
+  `min/max/round/ceil/floor` and resolver lookups; the numeric constraint API is preserved.
+  Arabic digits inside strings remain literal. `geometry.*` is separate from named quantities.
+- Legacy wall, room and opening definitions are stored in `data/legacy-object-types.json`.
+  The converter runs on open and edits, retaining visible geometry and old quantity behavior.
+  Door/window symbols use the stored recipes; redefining them repoints their existing inserts
+  to regenerated symbol blocks, retaining placement, schedules and references.
+  Wall commands translate old arguments into ordinary typed drivers and shared band rendering;
+  legacy tags remain for old API/field compatibility. Rooms use the shared seeded-region source
+  (`QIYAS_OBJECT_REGION`), with holes and validity; invalid regions expose no usable quantity.
+  Old room/opening schedule commands select JSON recipes for the shared schedule renderer.
+  Headers, templates, decimal precision, totals, explicit IDs and default layers are data;
+  manual room overrides remain detectable until the source quantity changes.
+- Details and verification: `docs/2026-10-21-qiyas-phase16.md`. No new dependencies.
 
 ## Drawing
 
@@ -1817,6 +1858,8 @@ and Mizan's turn epoch together.
   explicit approval for each run, reads saved provider settings and the OS keychain itself.
   - `bench generate`: 60 deterministic dev cases in six project types, each with 12 variants,
     in git-ignored `.local/benchmark`; six separate holdout cases are sealed and listed by hash.
+    ResPlan conversion skips and reports invalid whole plans before writing any case, continuing
+    to later plans; `<source stem>.conversion.json` and stdout retain rejection reasons.
   - `bench run`: automatic counts, closed areas and candidate rooms, three repetitions,
     with scored JSON/Markdown reports. `bench score --case ID --submission FILE` accepts
     JSON take-off/BOQ or Excel. Dev commands never enumerate or open the holdout.

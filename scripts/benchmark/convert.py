@@ -232,20 +232,30 @@ def resplan(args, path):
         data = data.get("plans", data)
     records = data.items() if isinstance(data, dict) else enumerate(data)
     written = []
+    skipped = []
     for index, plan in records:
         if len(written) >= args.limit:
             break
+        plan_geometry = list(geometries(plan))
+        invalid = [category for category, geometry in plan_geometry if not geometry.is_valid]
+        if invalid:
+            # Reject the whole plan before drawing anything: partial plans would falsify truth.
+            reason = "Invalid geometry needs explicit review"
+            skipped.append({"plan": str(index), "categories": invalid, "reason": reason})
+            print(f"ResPlan {index}: skipped ({', '.join(invalid)}): {reason}", file=sys.stderr)
+            continue
         case = Case(f"{args.prefix}-{slug(index)}", "apartment-floor", args.source, path)
-        for n, (category, geometry) in enumerate(geometries(plan)):
-            if not geometry.is_valid:
-                raise ValueError(f"ResPlan {index}/{category}: invalid geometry needs explicit review")
+        for n, (category, geometry) in enumerate(plan_geometry):
             # Separate instances within opening/fixture multipolygons preserve count truth.
             countable = any(word in category.lower() for word in ("door", "window", "fixture"))
             for part_index, geometry_part in enumerate(parts(geometry) if countable else [geometry]):
                 case.item(f"resplan-{index}-{n}-{part_index}", category, geometry_part, category)
         case.notes.append("Coordinates interpreted as metres, as declared by ResPlan. Polygon areas are net of holes; no wall centreline is inferred.")
         written.append(case.write())
-    return written
+    report = {"cases": written, "skipped_plans": skipped}
+    audit = STORE / "sources" / args.source / (path.stem + ".conversion.json")
+    audit.write_text(json.dumps(report, indent=2) + "\n")
+    return report
 
 
 def footprint(vertices, faces):
@@ -372,11 +382,15 @@ def main():
         parser.error("--limit and --cut-height must be positive")
     args.prefix = slug(args.prefix or args.source)
     path = verify_input(args.input, args.source)
-    converter = swiss if args.source == "swiss-dwellings" else resplan if args.source == "resplan" else ifc
-    written = converter(args, path)
+    if args.source == "resplan":
+        report = resplan(args, path)
+    else:
+        converter = swiss if args.source == "swiss-dwellings" else ifc
+        report = {"cases": converter(args, path)}
+    written = report["cases"]
     if not written:
         raise ValueError("No cases converted; inspect the publisher format before using this source")
-    print(json.dumps({"source": args.source, "cases": written, "count": len(written)}, indent=2))
+    print(json.dumps({"source": args.source, **report, "count": len(written)}, indent=2))
 
 
 if __name__ == "__main__":

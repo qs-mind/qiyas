@@ -361,10 +361,7 @@ impl Session {
                 )?;
                 let (h, at, language) = s.room_label(room, height, language);
                 points.push(at);
-                let template = match language {
-                    LabelLanguage::Ar => include_str!("room_label_ar.txt").trim(),
-                    LabelLanguage::En => "Unapproved candidate {area} m²",
-                };
+                let template = s.room_label_template(boundary, language)?;
                 let code = crate::room_objects::room_area_code(&[boundary], decimals);
                 s.current.layer = layer.clone();
                 let handle = s.add_text(at, h, 0.0, template.replace("{area}", &code), None)?;

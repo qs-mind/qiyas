@@ -41,6 +41,19 @@ fn scale_example(value: &mut Value, factor: f64, command: &str) {
     match value {
         Value::Object(map) => {
             for (field, child) in map {
+                // Object property values and limits use physical units, independent of the
+                // drawing coordinates that this fixture scales for each unit system.
+                if matches!(field.as_str(), "props" | "properties")
+                    && matches!(
+                        command,
+                        "define_object_type"
+                            | "redefine_object_type"
+                            | "place_objects"
+                            | "set_object_props"
+                    )
+                {
+                    continue;
+                }
                 let geometric = matches!(
                     field.as_str(),
                     "points"
@@ -230,6 +243,33 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     let mut handles = Vec::new();
     if let Some(prepared) = record_fixtures::prepare(session, name, example) {
         handles = prepared;
+    } else if matches!(
+        name,
+        "redefine_object_type" | "delete_object_type" | "place_objects" | "set_object_props"
+    ) {
+        let definition = if name == "redefine_object_type" {
+            example["definition"].clone()
+        } else {
+            json!({
+                "name":"Run", "category":"example", "geometry":"path",
+                "properties":{"width":{"kind":"number","unit":"length","default":0.2}},
+                "quantities":{"measured":"length"}
+            })
+        };
+        session
+            .run(
+                serde_json::from_value(
+                    json!({"type":"define_object_type","definition":definition}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        if matches!(name, "redefine_object_type" | "set_object_props") {
+            handles = added_by(
+                session,
+                json!({"type":"place_objects","objects":[{"type":"Run","points":[[0,0],[5,0]]}]}),
+            );
+        }
     } else if matches!(
         name,
         "add_wall_openings" | "remove_wall_openings" | "edit_wall_opening"
@@ -665,6 +705,8 @@ fn registry_drawing_examples_pass_the_general_check_in_every_unit() {
                             | "attach_pdf_underlay"
                             | "redefine_block"
                             | "add_dim_constraint"
+                            | "place_objects"
+                            | "object_schedule"
                     ))
         }) {
             if !produced.contains(&info.name) {

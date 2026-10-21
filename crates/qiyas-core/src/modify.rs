@@ -170,6 +170,14 @@ impl Placing {
             shift: Some(d),
         }
     }
+
+    pub(crate) fn mirror(transform: Transform, line: f64) -> Placing {
+        Placing {
+            transform,
+            mirror_line: Some(line),
+            shift: None,
+        }
+    }
 }
 
 fn v3([x, y]: [f64; 2]) -> Vector3 {
@@ -226,6 +234,35 @@ fn check_placeable(e: &EntityType, copying: bool, translation: bool) -> Result<(
 
 /// Places `e` by `p`, its stored DWG graphics dropped (they would show it where it was).
 pub(crate) fn place(e: &mut EntityType, p: &Placing) {
+    // A typed point is also the local frame for its data-defined symbol. The codec moves
+    // points but does not transform their display angle, so retain that frame explicitly.
+    let object_angle = match e {
+        EntityType::Point(point)
+            if point
+                .common
+                .extended_data
+                .get_record(crate::objects::OBJECT_APP)
+                .is_some() =>
+        {
+            let direction = p.transform.apply_rotation(Vector3::new(
+                point.x_axis_angle.cos(),
+                point.x_axis_angle.sin(),
+                0.0,
+            ));
+            let x = p.transform.apply_rotation(Vector3::UNIT_X);
+            let y = p.transform.apply_rotation(Vector3::UNIT_Y);
+            let reflection = if x.x * y.y - x.y * y.x < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            Some((
+                direction.y.atan2(direction.x).rem_euclid(TAU),
+                point.normal.z * reflection,
+            ))
+        }
+        _ => None,
+    };
     match p.mirror_line {
         Some(line) => {
             e.apply_mirror(&p.transform);
@@ -233,6 +270,13 @@ pub(crate) fn place(e: &mut EntityType, p: &Placing) {
         }
         None => e.apply_transform(&p.transform),
     }
+    if let (Some((angle, normal_z)), EntityType::Point(point)) = (object_angle, &mut *e) {
+        point.x_axis_angle = angle;
+        // A reflected local frame needs both its X direction and its handedness. Point
+        // normals are native DWG/DXF data, so this also survives reopening without xdata edits.
+        point.normal.z = normal_z;
+    }
+    crate::object_regions::transform_region_source(e, &p.transform);
     e.common_mut().graphic_data = None;
 }
 
@@ -418,7 +462,8 @@ impl Session {
     /// `Command::Modify`: see `ModifySpec`. `Changed` for a change in place (`Nothing` when a
     /// stretch moved nothing), `Added` with the new handles for copies, arrays and explode.
     pub(crate) fn modify(&mut self, spec: ModifySpec) -> Result<Outcome, CoreError> {
-        let handles = self.sheet_targets(spec.targets())?;
+        let targets = self.object_edit_targets(spec.targets());
+        let handles = self.sheet_targets(&targets)?;
         match spec {
             ModifySpec::Move { delta, .. } => {
                 finite(&delta)?;

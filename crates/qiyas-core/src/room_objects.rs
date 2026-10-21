@@ -1,13 +1,13 @@
-//! Persistent room boundaries and all the values derived from them. The outline is an ordinary
-//! closed polyline; its seed, islands and links are xdata, preserved by both DWG and DXF.
+//! Compatibility commands and links for retained rooms. Geometry, recipes, quantities and
+//! schedules use the shared object engines; old metadata remains readable for existing labels.
 
+use crate::xdata::read_json as get_data;
 use opencadcodec::entities::EntityCommon;
-use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
-use opencadcodec::{AppId, EntityType, Handle, LwPolyline, Vector2};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use opencadcodec::{AppId, EntityType, Handle};
+use serde::{Deserialize, Serialize};
 
 use crate::check::{Finding, Severity};
-use crate::rooms::ring_area;
+use crate::object_regions::{region_polyline as polyline, retained_region, RetainedRegion};
 use crate::{Boundary, CoreError, Kind, Measurement, Session, Target};
 
 pub(crate) const ROOM_APP: &str = "QIYAS_ROOM";
@@ -17,13 +17,13 @@ const BOUNDARY_LAYER: &str = "A-ROOM-BOUNDARY";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RoomObject {
-    holder: u64,
+    pub(crate) holder: u64,
     pub name: Option<String>,
     pub seed: [f64; 2],
     subtract_islands: bool,
     holes: Vec<Vec<[f64; 2]>>,
     hole_bulges: Vec<Vec<f64>>,
-    valid: bool,
+    pub(crate) valid: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,99 +42,26 @@ fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
 }
 
-fn get_data<T: DeserializeOwned>(common: &EntityCommon, app: &str) -> Option<T> {
-    let text: String = common
-        .extended_data
-        .get_record(app)?
-        .values
-        .iter()
-        .filter_map(|v| {
-            if let XDataValue::String(s) = v {
-                Some(s.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
-    serde_json::from_str(&text).ok()
-}
-
 fn set_data(common: &mut EntityCommon, app: &str, app_handle: u64, value: &impl Serialize) {
-    let text = serde_json::to_string(value).expect("finite room metadata");
-    let mut record = ExtendedDataRecord::new(app);
-    for chunk in crate::field::chunks(&text) {
-        record.add_value(chunk);
-    }
-    if common.extended_data.get_record(app) != Some(&record) {
-        common.raw_record = None;
-        // DWG prefers its original raw EED blob; discard only this application's stale copy.
-        common
-            .extended_data
-            .raw_dwg_eed
-            .retain(|(handle, _)| *handle != app_handle);
-        common.extended_data.upsert_record(record);
-    }
+    crate::xdata::write_json(common, app, app_handle, value).expect("finite room metadata");
 }
 
 pub(crate) fn is_room_boundary(entity: &EntityType) -> bool {
     room_object(entity).is_some()
 }
 
-fn room_object(entity: &EntityType) -> Option<RoomObject> {
+pub(crate) fn room_object(entity: &EntityType) -> Option<RoomObject> {
     let room: RoomObject = get_data(entity.common(), ROOM_APP)?;
     (room.holder == entity.common().handle.value()).then_some(room)
 }
 
-fn polyline(ring: &[[f64; 2]], bulges: &[f64]) -> LwPolyline {
-    let mut polyline = LwPolyline::new();
-    polyline.is_closed = true;
-    for (i, p) in ring.iter().enumerate() {
-        polyline.add_point_with_bulge(
-            Vector2::new(p[0], p[1]),
-            bulges.get(i).copied().unwrap_or(0.0),
-        );
-    }
-    polyline
-}
-
 /// The canonical room area, in drawing units squared, including its island policy.
 pub(crate) fn room_area(entity: &EntityType) -> Option<f64> {
-    let room = room_object(entity)?;
-    if !room.valid {
-        return None;
-    }
-    let EntityType::LwPolyline(p) = entity else {
-        return None;
-    };
-    if !p.is_closed {
-        return None;
-    }
-    let ring: Vec<_> = p
-        .vertices
-        .iter()
-        .map(|v| [v.location.x, v.location.y])
-        .collect();
-    let bulges: Vec<_> = p.vertices.iter().map(|v| v.bulge).collect();
-    let area = ring_area(&ring, &bulges);
-    let islands = if room.subtract_islands {
-        room.holes
-            .iter()
-            .enumerate()
-            .map(|(i, hole)| ring_area(hole, room.hole_bulges.get(i).map_or(&[], Vec::as_slice)))
-            .sum::<f64>()
-    } else {
-        0.0
-    };
-    Some((area - islands).max(0.0))
+    crate::object_regions::retained_region_area(entity)
 }
 
 pub(crate) fn room_area_code(handles: &[u64], decimals: usize) -> String {
-    let ids = handles
-        .iter()
-        .map(|h| format!("{h:X}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(r#"%<\AcVar QiyasRoomArea "{ids}" {decimals}>%"#)
+    crate::object_schedules::object_value_code(handles, "net_floor_area", decimals)
 }
 
 impl Session {
@@ -155,6 +82,110 @@ impl Session {
 
     pub(crate) fn has_rooms(&self) -> bool {
         self.drawing.doc.app_ids.contains(ROOM_APP)
+    }
+
+    /// Convert only the former room API's identity and source. Geometry and quantities then
+    /// follow the same engine as every other region type.
+    pub(crate) fn migrate_legacy_rooms(&mut self) -> Result<(), CoreError> {
+        if !self.has_rooms() {
+            return Ok(());
+        }
+        self.validate_object_metadata()?;
+        let rooms: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter_map(|entity| {
+                room_object(entity).map(|room| {
+                    (
+                        entity.common().handle.value(),
+                        room,
+                        retained_region(entity),
+                        crate::objects::instance(entity),
+                    )
+                })
+            })
+            .collect();
+        if rooms.is_empty() {
+            return Ok(());
+        }
+        let definition = self.ensure_legacy_type("room")?;
+        for (handle, room, region, old) in rooms {
+            if region.is_none() {
+                self.stamp_retained_region(
+                    handle,
+                    &RetainedRegion {
+                        seed: room.seed,
+                        subtract_islands: room.subtract_islands,
+                        holes: room.holes,
+                        hole_bulges: room.hole_bulges,
+                        valid: room.valid,
+                        app_handle: 0,
+                    },
+                )?;
+            }
+            let mut object = old.unwrap_or_else(|| crate::objects::ObjectInstance {
+                id: handle,
+                type_name: definition.name.clone(),
+                props: std::collections::BTreeMap::from([(
+                    "name".into(),
+                    serde_json::json!(room.name.unwrap_or_default()),
+                )]),
+                level: None,
+                host: None,
+                assembly: None,
+                layers: std::collections::BTreeMap::new(),
+                compatibility: None,
+            });
+            object.id = handle;
+            object.compatibility = None;
+            object.props = self
+                .object_type(&object.type_name)?
+                .properties(&object.props)?;
+            self.stamp_object(handle, &object)?;
+        }
+        self.sync_legacy_room_regions()
+    }
+
+    /// Keep old label and checking links readable without letting their metadata drive geometry.
+    pub(crate) fn sync_legacy_room_regions(&mut self) -> Result<(), CoreError> {
+        let rooms: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter_map(|entity| {
+                let mut room: RoomObject = get_data(entity.common(), ROOM_APP)?;
+                let region = retained_region(entity)?;
+                let object = crate::objects::instance(entity)?;
+                room.holder = entity.common().handle.value();
+                room.seed = region.seed;
+                room.subtract_islands = region.subtract_islands;
+                room.holes = region.holes;
+                room.hole_bulges = region.hole_bulges;
+                room.valid = region.valid;
+                if let Some(name) = object.props.get("name").and_then(serde_json::Value::as_str) {
+                    room.name = Some(name.into());
+                }
+                Some((room.holder, room))
+            })
+            .collect();
+        if rooms.is_empty() {
+            return Ok(());
+        }
+        let app = self.register_room_app(ROOM_APP);
+        for (handle, room) in rooms {
+            crate::xdata::write_json(
+                self.drawing
+                    .doc
+                    .get_entity_mut(Handle::new(handle))
+                    .expect("listed room")
+                    .common_mut(),
+                ROOM_APP,
+                app,
+                &room,
+            )?;
+        }
+        Ok(())
     }
 
     /// The persistent room containing a seed. Smallest first, with the same island policy.
@@ -251,6 +282,7 @@ impl Session {
             app_handle,
             &room,
         );
+        self.migrate_legacy_rooms()?;
         Ok(h.value())
     }
 
@@ -269,129 +301,42 @@ impl Session {
     }
 
     pub(crate) fn room_field_value(&self, handles: &[u64], decimals: usize) -> Option<String> {
-        let area: f64 = handles
-            .iter()
-            .map(|h| room_area(self.drawing.doc.get_entity(Handle::new(*h))?))
-            .sum::<Option<f64>>()?;
-        let area = area * self.drawing.units.to_metres().powi(2);
-        // Match Rooms' six-place report before applying the label's displayed precision.
-        Some(format!(
-            "{:.*}",
-            decimals.min(6),
-            (area * 1e6).round() / 1e6
-        ))
+        self.object_field_value(handles, "net_floor_area", decimals)
     }
 
-    /// Follows changed wall geometry while the command's undo recording is still open.
-    pub(crate) fn refresh_rooms(&mut self) -> Result<(), CoreError> {
-        if !self.has_rooms() {
-            return Ok(());
-        }
-        let rooms: Vec<_> = self
+    pub(crate) fn room_label_template(
+        &self,
+        boundary: u64,
+        language: crate::rooms::LabelLanguage,
+    ) -> Result<String, CoreError> {
+        let property = match language {
+            crate::rooms::LabelLanguage::En => "label_en",
+            crate::rooms::LabelLanguage::Ar => "label_ar",
+        };
+        if let Some(template) = self
             .drawing
             .doc
-            .entities()
-            .filter_map(|entity| {
-                let room = room_object(entity)?;
-                let sheet = self
-                    .drawing
-                    .doc
-                    .block_records
-                    .iter()
-                    .find(|b| b.handle == entity.common().owner_handle)?
-                    .name
-                    .clone();
-                Some((entity.common().handle, room, sheet))
+            .get_entity(Handle::new(boundary))
+            .and_then(crate::objects::instance)
+            .and_then(|object| {
+                object
+                    .props
+                    .get(property)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
             })
-            .collect();
-        let start = 1.0 / self.drawing.units.to_metres();
-        let app_handle = self.register_room_app(ROOM_APP);
-        for (handle, mut room, sheet) in rooms {
-            let found = self.boundary_at_in(&sheet, room.seed, start);
-            match found {
-                Boundary::Ring {
-                    ring,
-                    holes,
-                    bulges,
-                } => {
-                    room.holes = holes;
-                    room.hole_bulges = bulges.iter().skip(1).cloned().collect();
-                    room.valid = true;
-                    let mut replacement =
-                        polyline(&ring, bulges.first().map_or(&[], Vec::as_slice));
-                    replacement.common = self
-                        .drawing
-                        .doc
-                        .get_entity(handle)
-                        .expect("listed boundary")
-                        .common()
-                        .clone();
-                    // A cloned common can restore the original whole DWG record after
-                    // get_entity_mut clears it. The replacement geometry must be encoded.
-                    replacement.common.raw_record = None;
-                    replacement.common.graphic_data = None;
-                    set_data(&mut replacement.common, ROOM_APP, app_handle, &room);
-                    let entity = EntityType::LwPolyline(replacement);
-                    let before = self
-                        .drawing
-                        .doc
-                        .get_entity(handle)
-                        .expect("listed boundary");
-                    if serde_json::to_value(before).ok() != serde_json::to_value(&entity).ok() {
-                        *self
-                            .drawing
-                            .doc
-                            .get_entity_mut(handle)
-                            .expect("listed boundary") = entity;
-                    }
-                }
-                Boundary::None | Boundary::TooDense => {
-                    if room.valid {
-                        room.valid = false;
-                        set_data(
-                            self.drawing
-                                .doc
-                                .get_entity_mut(handle)
-                                .expect("listed boundary")
-                                .common_mut(),
-                            ROOM_APP,
-                            app_handle,
-                            &room,
-                        );
-                    }
-                }
-            }
+        {
+            return Ok(template);
         }
-        let quantities: Vec<_> = self
-            .takeoff
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, row)| {
-                if row.kind != Kind::Area || row.handles.len() != 1 {
-                    return None;
-                }
-                let entity = self.drawing.doc.get_entity(Handle::new(row.handles[0]))?;
-                if !is_room_boundary(entity) {
-                    return None;
-                }
-                Some((i, room_area(entity)))
-            })
-            .collect();
-        for (i, area) in quantities {
-            let row = &mut self.takeoff.items[i];
-            if let Some(area) = area {
-                row.value = area;
-                row.shown = area * self.drawing.units.to_metres().powi(2);
-                row.note =
-                    "Unapproved candidate room area; linked to the retained boundary".to_string();
-            } else {
-                row.note =
-                    "Room boundary is no longer closed; quantity is stale and must not be used"
-                        .to_string();
-            }
-        }
-        self.follow_fields()
+        // Older stored definitions lack the annotation defaults; the alias reads the same
+        // compatibility data rather than introducing a second rendering rule.
+        let defaults: serde_json::Value =
+            serde_json::from_str(include_str!("../data/legacy-object-types.json"))
+                .map_err(|error| invalid(error.to_string()))?;
+        defaults["room"]["properties"][property]["default"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| invalid("Room label template is missing from its type data"))
     }
 
     pub(crate) fn room_schedule(
@@ -425,61 +370,24 @@ impl Session {
                 "No retained rooms: run label_spaces first, or measure_room with a seed point",
             ));
         }
-        let mut data = vec![vec!["Room".to_string(), "Candidate area (m2)".to_string()]];
-        for h in &rooms {
-            let entity = self
-                .drawing
+        let mut spec = crate::object_schedules::legacy_recipe("room")?;
+        spec.at = at;
+        spec.ids = Some(rooms.clone());
+        spec.decimals.insert("net_floor_area".into(), decimals);
+        let handle = self.add_object_schedule(spec)?;
+        // Keep the old link metadata so existing discrepancy checks read the same cells.
+        let app_handle = self.register_room_app(SCHEDULE_APP);
+        set_data(
+            self.drawing
                 .doc
-                .get_entity(Handle::new(*h))
-                .expect("resolved room");
-            let room = room_object(entity)
-                .ok_or_else(|| invalid("A selected room boundary no longer exists"))?;
-            data.push(vec![
-                room.name.unwrap_or_else(|| format!("Room {h:X}")),
-                room_area_code(&[*h], decimals),
-            ]);
-        }
-        data.push(vec![
-            "Total candidate area".to_string(),
-            room_area_code(&rooms, decimals),
-        ]);
-        let saved = self.current.clone();
-        let result = (|| {
-            if self.current.layer == "0" {
-                if !self.drawing.doc.layers.contains("A-ANNO-TABL") {
-                    self.new_layer("A-ANNO-TABL")?;
-                }
-                self.current.layer = "A-ANNO-TABL".to_string();
-            }
-            // Size from rendered values rather than the internal field code.
-            let owner = self
-                .sheet_owner()
-                .ok_or_else(|| invalid("Choose a sheet first"))?;
-            let shown = data
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| self.evaluate_fields(cell, owner))
-                        .collect()
-                })
-                .collect::<Vec<Vec<_>>>();
-            let (width, height) = self.table_sizes(0.0, 0.0, &shown);
-            let h = self.add_table(at, data.len(), 2, width, height, &data)?;
-            let app_handle = self.register_room_app(SCHEDULE_APP);
-            set_data(
-                self.drawing
-                    .doc
-                    .get_entity_mut(Handle::new(h))
-                    .expect("added schedule")
-                    .common_mut(),
-                SCHEDULE_APP,
-                app_handle,
-                &RoomSchedule { rooms, decimals },
-            );
-            Ok(h)
-        })();
-        self.current = saved;
-        result
+                .get_entity_mut(Handle::new(handle))
+                .expect("added schedule")
+                .common_mut(),
+            SCHEDULE_APP,
+            app_handle,
+            &RoomSchedule { rooms, decimals },
+        );
+        Ok(handle)
     }
 
     fn room_from_label(&self, label: &Target) -> Result<u64, CoreError> {

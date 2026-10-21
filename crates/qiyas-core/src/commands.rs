@@ -26,6 +26,58 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Stores an element type as drawing knowledge. Properties and quantities are data;
+    /// no trade is built in. Numeric property units are metres, m², m³, degrees or counts.
+    /// One undo step includes the knowledge dictionary.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["DEFINEOBJECTTYPE"]))]
+    #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]
+    DefineObjectType {
+        definition: Box<crate::objects::ObjectType>,
+    },
+    /// Replaces an existing type and re-derives every instance, graphics and schedule in
+    /// one undo step. Invalid properties or expressions roll back the entire change.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["REDEFINEOBJECTTYPE"]))]
+    #[schemars(example = json!({"type":"redefine_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]
+    RedefineObjectType {
+        definition: Box<crate::objects::ObjectType>,
+    },
+    /// Deletes an unused type. Refused while any instance remains on any sheet.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["DELETEOBJECTTYPE"], "x-destructive" = true))]
+    #[schemars(example = json!({"type":"delete_object_type","name":"Run"}))]
+    DeleteObjectType { name: String },
+    /// Places instances of drawing-defined types on existing drivers or new point/path/region
+    /// geometry. Coordinates are drawing units; property numbers use their declared physical
+    /// unit kind. Generated parts follow driver edits. One undo step for all instances.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["PLACEOBJECTS"]))]
+    #[schemars(example = json!({"type":"place_objects","objects":[{"type":"Run","points":[[0,0],[5,0]]}]}))]
+    PlaceObjects {
+        objects: Vec<crate::objects::ObjectPlacement>,
+    },
+    /// Changes declared instance properties or level, validates limits and re-derives graphics
+    /// and live tables in one undo step. Targets are driver handles on the current sheet.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["SETOBJECTPROPS"]))]
+    #[schemars(example = json!({"type":"set_object_props","targets":[1234],"props":{"width":0.2}}))]
+    SetObjectProps {
+        targets: Vec<u64>,
+        props: BTreeMap<String, serde_json::Value>,
+        #[serde(default)]
+        level: Option<String>,
+    },
+    /// Draws a live field table of typed objects, optionally grouped by property or type.
+    /// Columns name properties, quantities, geometry facts, id, type, category or level.
+    /// Grouped numeric columns are summed. Placement uses drawing units and drawing text sizes.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["OBJECTSCHEDULE"]))]
+    #[schemars(example = json!({"type":"object_schedule","at":[0,10],"columns":["type","length"],"group_by":["type"]}))]
+    ObjectSchedule(Box<crate::objects::ObjectSchedule>),
+    /// Writes versioned drawing knowledge (levels, lookup tables, rules and future engine data).
+    /// Types use define_object_type/redefine_object_type so their schema can be validated.
+    #[schemars(extend("x-category" = "objects", "x-words" = ["SETKNOWLEDGE"]))]
+    #[schemars(example = json!({"type":"set_knowledge","kind":"levels","name":"Ground","data":{"elevation":0}}))]
+    SetKnowledge {
+        kind: crate::knowledge::Kind,
+        name: String,
+        data: serde_json::Value,
+    },
     /// Draws centre crosses through circles and arcs, extending past their curves, on CENTER.
     /// `extension` is in drawing units; omitted, it is 2.5 mm on paper at the annotation scale.
     /// Creates the layer and CENTER linetype when missing. One undo step.
@@ -1376,6 +1428,13 @@ impl Command {
             // A new or changed block record (and what a copied one uses).
             | Command::CreateBlock { .. }
             | Command::DefineBlock { .. }
+            | Command::DefineObjectType { .. }
+            | Command::RedefineObjectType { .. }
+            | Command::DeleteObjectType { .. }
+            | Command::PlaceObjects { .. }
+            | Command::SetObjectProps { .. }
+            | Command::ObjectSchedule(_)
+            | Command::SetKnowledge { .. }
             | Command::Walls(_)
             | Command::OpeningSchedule { .. }
             | Command::AddWallOpenings { .. }
@@ -1689,6 +1748,45 @@ impl Session {
                 return Ok(Outcome::Added {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
+            }
+            Command::DefineObjectType { definition } => {
+                self.define_object_type(*definition, false)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::RedefineObjectType { definition } => {
+                self.define_object_type(*definition, true)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::DeleteObjectType { name } => {
+                self.delete_object_type(&name)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::PlaceObjects { objects } => {
+                return Ok(Outcome::Added {
+                    handles: self.place_objects(objects)?,
+                });
+            }
+            Command::SetObjectProps {
+                targets,
+                props,
+                level,
+            } => {
+                self.set_object_props(&targets, &props, level)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::ObjectSchedule(spec) => {
+                return Ok(Outcome::Added {
+                    handles: vec![self.add_object_schedule(*spec)?],
+                });
+            }
+            Command::SetKnowledge { kind, name, data } => {
+                if kind == crate::knowledge::Kind::Types {
+                    return Err(CoreError::InvalidCommand(
+                        "Use define_object_type or redefine_object_type".into(),
+                    ));
+                }
+                crate::knowledge::put(&mut self.drawing.doc, kind, &name, &data)?;
+                return Ok(Outcome::Changed);
             }
             Command::Walls(spec) => {
                 return Ok(Outcome::Walls {
@@ -2446,6 +2544,7 @@ impl Session {
                 prop,
                 value,
             } => {
+                let target = self.object_edit_targets(std::slice::from_ref(&target))[0].clone();
                 self.set_property(&target, prop, &value)?;
                 self.follow_fields()?;
                 return Ok(Outcome::Changed);
@@ -2824,8 +2923,10 @@ impl Session {
     /// Images and PDF underlays leave their definitions' links; take-off rows measuring a
     /// deleted entity follow (`Outcome::TakeoffFollowed` says how, `Changed` when none did).
     fn delete_entities(&mut self, targets: &[Target]) -> Result<Outcome, CoreError> {
-        let handles = self.sheet_targets(targets)?;
+        let targets = self.object_edit_targets(targets);
+        let handles = self.sheet_targets(&targets)?;
         self.refuse_wall_insert_erase(&handles)?;
+        self.transfer_union_parts_before_erase(&handles)?;
         for &h in &handles {
             let doc = &mut self.drawing.doc;
             match doc.get_entity(h) {

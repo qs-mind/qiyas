@@ -89,6 +89,67 @@ class SourceToolsTests(unittest.TestCase):
         with self.assertRaisesRegex(pickle.UnpicklingError, "Unsupported pickle class"):
             convert.GeometryUnpickler(io.BytesIO(pickle.dumps(eval))).load()
 
+    def test_resplan_rejects_whole_invalid_plan_and_reports_it_then_continues(self):
+        source = self.store / "sources" / "resplan" / "ResPlan.pkl"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(pickle.dumps({"plans": {"6": "valid", "7": "invalid", "8": "valid", "9": "past-limit"}}))
+        valid = types.SimpleNamespace(is_valid=True)
+        invalid = types.SimpleNamespace(is_valid=False)
+        started, drawn = [], []
+
+        class FakeCase:
+            def __init__(self, case_id, *_):
+                self.id, self.notes = case_id, []
+                started.append(case_id)
+
+            def item(self, *args):
+                drawn.append(args)
+
+            def write(self):
+                target = convert.STORE / "cases" / self.id
+                target.mkdir(parents=True)
+                (target / "truth.json").write_text("{}")
+                return self.id
+
+        def geometry(plan):
+            self.assertNotEqual(plan, "past-limit")
+            # The bad door follows a usable wall: no partial case may escape.
+            return [("wall", valid), ("door", invalid)] if plan == "invalid" else [("wall", valid)]
+
+        output, errors = io.StringIO(), io.StringIO()
+        args = ["convert.py", "resplan", "--input", str(source), "--limit", "2"]
+        with patch.object(convert, "STORE", self.store), patch.object(convert, "Case", FakeCase), \
+                patch.object(convert, "geometries", side_effect=geometry), \
+                patch.object(convert, "verify_input", return_value=source), \
+                patch.object(sys, "argv", args), patch.object(sys, "stdout", output), patch.object(sys, "stderr", errors):
+            convert.main()
+        self.assertEqual(started, ["resplan-6", "resplan-8"])
+        self.assertEqual(len(drawn), 2)
+        self.assertFalse((self.store / "cases" / "resplan-7").exists())
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["cases"], started)
+        self.assertEqual(report["count"], 2)
+        self.assertEqual(report["skipped_plans"], [{
+            "plan": "7", "categories": ["door"], "reason": "Invalid geometry needs explicit review",
+        }])
+        audit = json.loads(source.with_suffix(".conversion.json").read_text())
+        self.assertEqual(audit, {key: report[key] for key in ("cases", "skipped_plans")})
+        self.assertIn("ResPlan 7: skipped (door)", errors.getvalue())
+
+    def test_resplan_reports_all_invalid_plans_without_writing_cases(self):
+        source = self.store / "sources" / "resplan" / "ResPlan.pkl"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(pickle.dumps(["invalid"]))
+        args = types.SimpleNamespace(prefix="resplan", source="resplan", limit=2)
+        with patch.object(convert, "STORE", self.store), patch.object(convert, "Case") as case, \
+                patch.object(convert, "geometries", return_value=[("door", types.SimpleNamespace(is_valid=False))]), \
+                patch.object(sys, "stderr", io.StringIO()):
+            report = convert.resplan(args, source)
+        case.assert_not_called()
+        self.assertEqual(report["cases"], [])
+        self.assertEqual(report["skipped_plans"][0]["plan"], "0")
+        self.assertEqual(json.loads(source.with_suffix(".conversion.json").read_text()), report)
+
     def test_hole_area_citations_sum_net_tiles_and_exclude_boundary_lines(self):
         # GEOS can return both polygons and boundary lines from clipped triangles.
         # Supply that boundary result without requiring optional geometry packages.

@@ -325,7 +325,11 @@ impl Session {
         text.style = style;
         self.register_text_app();
         mark_logical(&mut text.common);
-        set_text_field(&mut text.common, field.as_deref());
+        set_text_field(
+            &mut text.common,
+            field.as_deref(),
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         Ok(self.add_styled(vec![EntityType::Text(text)])?[0])
     }
 
@@ -372,7 +376,11 @@ impl Session {
         text.style = style;
         self.register_text_app();
         mark_logical(&mut text.common);
-        set_text_field(&mut text.common, field.as_deref());
+        set_text_field(
+            &mut text.common,
+            field.as_deref(),
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         Ok(EntityType::MText(text))
     }
 
@@ -424,6 +432,7 @@ impl Session {
         } else {
             (value.to_string(), None)
         };
+        let field_app = crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP);
         let entity = self.drawing.doc.get_entity_mut(h).expect("a sheet target");
         match entity {
             EntityType::Text(t) if value.contains(['\n', '\r']) => {
@@ -438,18 +447,18 @@ impl Session {
                 text.attachment_point = AttachmentPoint::TopLeft;
                 text.rectangle_width = 0.0;
                 mark_logical(&mut text.common);
-                set_text_field(&mut text.common, field.as_deref());
+                set_text_field(&mut text.common, field.as_deref(), field_app);
                 *entity = EntityType::MText(text);
             }
             EntityType::Text(t) => {
                 t.value = shown;
                 mark_logical(&mut t.common);
-                set_text_field(&mut t.common, field.as_deref());
+                set_text_field(&mut t.common, field.as_deref(), field_app);
             }
             EntityType::MText(t) => {
                 t.value = escape_mtext(&shown);
                 mark_logical(&mut t.common);
-                set_text_field(&mut t.common, field.as_deref());
+                set_text_field(&mut t.common, field.as_deref(), field_app);
             }
             EntityType::Insert(insert) => {
                 let a = &mut insert.attributes[attribute.expect("checked above")];

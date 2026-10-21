@@ -1049,11 +1049,18 @@ impl Session {
         };
         let across = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
         for (i, (handle, chain)) in near.sources.iter().enumerate() {
-            // Retained room boundaries describe a region; they must never keep an old wall closed.
-            if doc
-                .get_entity(Handle::new(*handle))
-                .is_some_and(crate::room_objects::is_room_boundary)
-            {
+            // Retained geometry and its drawing parts describe an enclosure; neither may
+            // keep a deleted source edge closed during the next derivation.
+            if doc.get_entity(Handle::new(*handle)).is_some_and(|entity| {
+                crate::object_regions::retained_region(entity).is_some()
+                    || crate::room_objects::is_room_boundary(entity)
+                    || crate::xdata::read_json::<crate::objects::ObjectPart>(
+                        entity.common(),
+                        crate::objects::PART_APP,
+                    )
+                    .and_then(|part| doc.get_entity(Handle::new(part.owner)))
+                    .is_some_and(|owner| crate::object_regions::retained_region(owner).is_some())
+            }) {
                 continue;
             }
             let arrayed = chain.iter().any(|&h| {

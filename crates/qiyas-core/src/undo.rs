@@ -209,6 +209,7 @@ pub(crate) struct TablesSnapshot {
 /// grow.
 #[derive(Debug, Clone, PartialEq)]
 struct HeaderBits {
+    named_objects_dict_handle: Handle,
     annotation_scale: String,
     annotation_scale_value: f64,
     dimstyle_name: String,
@@ -235,6 +236,7 @@ impl HeaderBits {
     fn take(doc: &CadDocument) -> HeaderBits {
         let h = &doc.header;
         HeaderBits {
+            named_objects_dict_handle: h.named_objects_dict_handle,
             annotation_scale: h.current_annotation_scale.clone(),
             annotation_scale_value: h.annotation_scale_value,
             dimstyle_name: h.current_dimstyle_name.clone(),
@@ -267,6 +269,7 @@ impl HeaderBits {
 
     fn put(self, doc: &mut CadDocument) {
         let h = &mut doc.header;
+        h.named_objects_dict_handle = self.named_objects_dict_handle;
         h.current_annotation_scale = self.annotation_scale;
         h.annotation_scale_value = self.annotation_scale_value;
         h.current_dimstyle_name = self.dimstyle_name;

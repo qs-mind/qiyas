@@ -1,20 +1,70 @@
-//! The expressions of dimensional constraints and parameters: `d1 = 2*d2 + 1.5`.
-//!
-//! Numbers (Arabic-Indic digits too), `+ - * /`, parentheses, unary minus, names of other
-//! parameters, `pi`, and the functions `sin`, `cos`, `tan` (degrees, as angular constraints are
-//! shown), `sqrt` and `abs`. Our own parser, about as small as the language, so no expression
-//! library (and its licence) comes along.
+//! Expressions for dimensional constraints and data-defined quantities. The language has
+//! arithmetic, powers, comparisons, logic, strings, lazy conditionals and resolver-backed
+//! lookups. It has no drawing or trade knowledge and no access to time, files or randomness.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+/// A value in a quantity expression. Text and booleans are never silently converted to numbers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Number(f64),
+    Text(String),
+    Bool(bool),
+}
+
+impl Value {
+    pub fn as_number(&self) -> Result<f64, ExprError> {
+        match self {
+            Self::Number(n) if n.is_finite() => Ok(*n),
+            Self::Number(_) => Err(ExprError::NotANumber("Value".into())),
+            _ => Err(ExprError::Type("Expected a number".into())),
+        }
+    }
+
+    /// Conditions accept booleans and finite numbers (zero is false); never text.
+    pub fn as_bool(&self) -> Result<bool, ExprError> {
+        match self {
+            Self::Bool(b) => Ok(*b),
+            Self::Number(_) => Ok(self.as_number()? != 0.0),
+            Self::Text(_) => Err(ExprError::Type("Expected a boolean or number".into())),
+        }
+    }
+
+    pub fn as_text(&self) -> Result<&str, ExprError> {
+        match self {
+            Self::Text(s) => Ok(s),
+            _ => Err(ExprError::Type("Expected text".into())),
+        }
+    }
+}
+
+/// The caller supplies properties, geometry facts and exact table lookups. The evaluator
+/// neither picks a nearest row nor supplies an invented value for a missing key or column.
+pub trait Resolver {
+    fn resolve(&self, name: &str) -> Option<Value>;
+
+    fn lookup(&self, _table: &str, _key: &Value, _column: &str) -> Option<Value> {
+        None
+    }
+}
+
+impl<F: Fn(&str) -> Option<Value>> Resolver for F {
+    fn resolve(&self, name: &str) -> Option<Value> {
+        self(name)
+    }
+}
 
 /// A parsed expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
+    Text(String),
+    Bool(bool),
     Name(String),
     Neg(Box<Expr>),
+    Not(Box<Expr>),
     Binary(Op, Box<Expr>, Box<Expr>),
-    Call(Func, Box<Expr>),
+    Call(Func, Vec<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +73,15 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Pow,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +91,13 @@ pub enum Func {
     Tan,
     Sqrt,
     Abs,
+    If,
+    Min,
+    Max,
+    Round,
+    Ceil,
+    Floor,
+    Lookup,
 }
 
 impl Func {
@@ -42,73 +108,121 @@ impl Func {
             "tan" => Func::Tan,
             "sqrt" => Func::Sqrt,
             "abs" => Func::Abs,
+            "if" => Func::If,
+            "min" => Func::Min,
+            "max" => Func::Max,
+            "round" => Func::Round,
+            "ceil" => Func::Ceil,
+            "floor" => Func::Floor,
+            "lookup" => Func::Lookup,
             _ => return None,
         })
     }
 
-    fn apply(self, x: f64) -> f64 {
-        match self {
-            Func::Sin => x.to_radians().sin(),
-            Func::Cos => x.to_radians().cos(),
-            Func::Tan => x.to_radians().tan(),
-            Func::Sqrt => x.sqrt(),
-            Func::Abs => x.abs(),
+    fn check_arity(self, count: usize) -> Result<(), ExprError> {
+        let expected = match self {
+            Self::If | Self::Lookup if count != 3 => Some("three arguments"),
+            Self::Min | Self::Max if count == 0 => Some("at least one argument"),
+            Self::Round if !(1..=2).contains(&count) => Some("one or two arguments"),
+            Self::Sin
+            | Self::Cos
+            | Self::Tan
+            | Self::Sqrt
+            | Self::Abs
+            | Self::Ceil
+            | Self::Floor
+                if count != 1 =>
+            {
+                Some("one argument")
+            }
+            _ => None,
+        };
+        match expected {
+            Some(expected) => Err(ExprError::Syntax(format!("{self:?} needs {expected}"))),
+            None => Ok(()),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ExprError {
-    /// The text is no expression: what is wrong with it.
     #[error("{0}")]
     Syntax(String),
-    /// The expression uses a parameter there is none of.
     #[error("There is no parameter named {0}")]
     Unknown(String),
-    /// These parameters depend on themselves, in this order.
     #[error("These parameters depend on each other in a circle: {}", .0.join(" > "))]
     Circular(Vec<String>),
-    /// The value is no number (a division by 0, the root of a negative number).
     #[error("{0} is not a number (a division by 0?)")]
     NotANumber(String),
-    /// It uses this parameter, which can't be worked out itself.
     #[error("It uses {0}, which can't be worked out")]
     Uses(String),
+    #[error("{0}")]
+    Type(String),
+    #[error("There is no lookup value for {0}")]
+    Lookup(String),
 }
 
-/// True for the names parameters may have: a letter or `_`, then letters, digits or `_`; never
-/// a function's name or `pi`.
+fn reserved(name: &str) -> bool {
+    Func::named(name).is_some()
+        || ["pi", "true", "false", "and", "or", "not"]
+            .iter()
+            .any(|word| name.eq_ignore_ascii_case(word))
+}
+
+/// Parameter names are a letter or `_`, then letters, digits or `_`; reserved words are refused.
 pub fn is_name(text: &str) -> bool {
     let mut chars = text.chars();
     chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && Func::named(text).is_none()
-        && !text.eq_ignore_ascii_case("pi")
+        && !reserved(text)
 }
 
-/// An expression as it is stored: trimmed, with Arabic-Indic and Persian digits and the Arabic
-/// decimal separator in ASCII, so a drawing saved in an older DWG code page keeps it.
+/// Trim and normalize Arabic-Indic/Persian digits and the Arabic decimal separator outside
+/// string literals. A string is data: a quoted table key must keep its exact spelling.
 pub fn normalize(text: &str) -> String {
     ascii_digits(text.trim())
 }
 
-/// Arabic-Indic and Persian digits and the Arabic decimal separator as ASCII.
 fn ascii_digits(text: &str) -> String {
+    let mut quote = None;
+    let mut escaped = false;
     text.chars()
-        .map(|c| match c {
-            '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
-            '\u{06F0}'..='\u{06F9}' => char::from(b'0' + (c as u32 - 0x06F0) as u8),
-            '\u{066B}' => '.',
-            _ => c,
+        .map(|c| {
+            if let Some(q) = quote {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+                return c;
+            }
+            match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    c
+                }
+                '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
+                '\u{06F0}'..='\u{06F9}' => char::from(b'0' + (c as u32 - 0x06F0) as u8),
+                '\u{066B}' => '.',
+                _ => c,
+            }
         })
         .collect()
 }
 
+// Bound nested input before recursing so a malformed knowledge record cannot exhaust the stack.
+const MAX_DEPTH: usize = 128;
+const MAX_NODES: usize = 4096;
+
 struct Parser {
     chars: Vec<char>,
     at: usize,
+    depth: usize,
+    nodes: usize,
 }
 
 impl Parser {
@@ -123,91 +237,268 @@ impl Parser {
         self.chars.get(self.at).copied()
     }
 
-    fn eat(&mut self, c: char) -> bool {
-        if self.peek() == Some(c) {
-            self.at += 1;
+    fn eat(&mut self, token: &str) -> bool {
+        self.skip();
+        if self.chars[self.at..]
+            .iter()
+            .copied()
+            .zip(token.chars())
+            .all(|(a, b)| a == b)
+            && self.chars.len() - self.at >= token.len()
+        {
+            self.at += token.len();
             true
         } else {
             false
         }
     }
 
-    fn expr(&mut self) -> Result<Expr, ExprError> {
-        let mut left = self.term()?;
-        loop {
-            let op = match self.peek() {
-                Some('+') => Op::Add,
-                Some('-') => Op::Sub,
-                _ => return Ok(left),
-            };
-            self.at += 1;
-            left = Expr::Binary(op, Box::new(left), Box::new(self.term()?));
+    fn word(&mut self, word: &str) -> bool {
+        self.skip();
+        let end = self.at + word.len();
+        if self
+            .chars
+            .get(self.at..end)
+            .is_some_and(|chars| chars.iter().collect::<String>().eq_ignore_ascii_case(word))
+            && !self
+                .chars
+                .get(end)
+                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
+        {
+            self.at = end;
+            true
+        } else {
+            false
         }
+    }
+
+    fn nested(
+        &mut self,
+        parse: fn(&mut Self) -> Result<Expr, ExprError>,
+    ) -> Result<Expr, ExprError> {
+        if self.depth >= MAX_DEPTH {
+            return Err(ExprError::Syntax(
+                "The expression is nested too deeply".into(),
+            ));
+        }
+        self.depth += 1;
+        let result = parse(self);
+        self.depth -= 1;
+        result
+    }
+
+    fn node(&mut self) -> Result<(), ExprError> {
+        self.nodes += 1;
+        if self.nodes > MAX_NODES {
+            return Err(ExprError::Syntax("The expression is too large".into()));
+        }
+        Ok(())
+    }
+
+    fn expr(&mut self) -> Result<Expr, ExprError> {
+        self.chain(Self::and, |p| {
+            (p.word("or") || p.eat("||")).then_some(Op::Or)
+        })
+    }
+
+    fn and(&mut self) -> Result<Expr, ExprError> {
+        self.chain(Self::not, |p| {
+            (p.word("and") || p.eat("&&")).then_some(Op::And)
+        })
+    }
+
+    fn not(&mut self) -> Result<Expr, ExprError> {
+        if self.word("not") || self.eat("!") {
+            self.node()?;
+            return Ok(Expr::Not(Box::new(self.nested(Self::not)?)));
+        }
+        self.comparison()
+    }
+
+    fn comparison(&mut self) -> Result<Expr, ExprError> {
+        let left = self.sum()?;
+        let op = [
+            ("<=", Op::Le),
+            (">=", Op::Ge),
+            ("==", Op::Eq),
+            ("!=", Op::Ne),
+            ("<>", Op::Ne),
+            ("<", Op::Lt),
+            (">", Op::Gt),
+            ("=", Op::Eq),
+        ]
+        .into_iter()
+        .find_map(|(token, op)| self.eat(token).then_some(op));
+        if let Some(op) = op {
+            self.node()?;
+            Ok(Expr::Binary(op, Box::new(left), Box::new(self.sum()?)))
+        } else {
+            Ok(left)
+        }
+    }
+
+    fn sum(&mut self) -> Result<Expr, ExprError> {
+        self.chain(Self::term, |p| {
+            if p.eat("+") {
+                Some(Op::Add)
+            } else if p.eat("-") {
+                Some(Op::Sub)
+            } else {
+                None
+            }
+        })
     }
 
     fn term(&mut self) -> Result<Expr, ExprError> {
-        let mut left = self.unary()?;
-        loop {
-            let op = match self.peek() {
-                Some('*') => Op::Mul,
-                Some('/') => Op::Div,
-                _ => return Ok(left),
-            };
-            self.at += 1;
-            left = Expr::Binary(op, Box::new(left), Box::new(self.unary()?));
+        self.chain(Self::unary, |p| {
+            if p.eat("*") {
+                Some(Op::Mul)
+            } else if p.eat("/") {
+                Some(Op::Div)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn chain(
+        &mut self,
+        parse: fn(&mut Self) -> Result<Expr, ExprError>,
+        op: impl Fn(&mut Self) -> Option<Op>,
+    ) -> Result<Expr, ExprError> {
+        let mut left = parse(self)?;
+        while let Some(op) = op(self) {
+            self.node()?;
+            left = Expr::Binary(op, Box::new(left), Box::new(parse(self)?));
         }
+        Ok(left)
     }
 
     fn unary(&mut self) -> Result<Expr, ExprError> {
-        if self.eat('-') {
-            return Ok(Expr::Neg(Box::new(self.unary()?)));
+        if self.eat("-") {
+            self.node()?;
+            return Ok(Expr::Neg(Box::new(self.nested(Self::unary)?)));
         }
-        if self.eat('+') {
-            return self.unary();
+        if self.eat("+") {
+            return self.nested(Self::unary);
         }
-        self.primary()
+        self.power()
+    }
+
+    fn power(&mut self) -> Result<Expr, ExprError> {
+        let left = self.primary()?;
+        if self.eat("^") || self.eat("**") {
+            self.node()?;
+            Ok(Expr::Binary(
+                Op::Pow,
+                Box::new(left),
+                Box::new(self.nested(Self::unary)?),
+            ))
+        } else {
+            Ok(left)
+        }
     }
 
     fn primary(&mut self) -> Result<Expr, ExprError> {
+        self.node()?;
         match self.peek() {
             Some('(') => {
                 self.at += 1;
-                let inner = self.expr()?;
-                if !self.eat(')') {
+                let inner = self.nested(Self::expr)?;
+                if !self.eat(")") {
                     return Err(ExprError::Syntax("A bracket is not closed".into()));
                 }
                 Ok(inner)
             }
+            Some('\'' | '"') => self.string(),
             Some(c) if c.is_ascii_digit() || c == '.' => self.number(),
             Some(c) if c.is_ascii_alphabetic() || c == '_' => {
                 let start = self.at;
-                while self
-                    .chars
-                    .get(self.at)
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
-                {
-                    self.at += 1;
+                loop {
+                    while self
+                        .chars
+                        .get(self.at)
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    {
+                        self.at += 1;
+                    }
+                    if self.chars.get(self.at) == Some(&'.')
+                        && self
+                            .chars
+                            .get(self.at + 1)
+                            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+                    {
+                        self.at += 1;
+                    } else {
+                        break;
+                    }
                 }
                 let name: String = self.chars[start..self.at].iter().collect();
-                if self.peek() == Some('(') {
-                    let Some(f) = Func::named(&name) else {
-                        return Err(ExprError::Syntax(format!("There is no function {name}")));
-                    };
-                    self.at += 1;
-                    let arg = self.expr()?;
-                    if !self.eat(')') {
-                        return Err(ExprError::Syntax("A bracket is not closed".into()));
+                if self.eat("(") {
+                    let func = Func::named(&name)
+                        .ok_or_else(|| ExprError::Syntax(format!("There is no function {name}")))?;
+                    let mut args = Vec::new();
+                    if !self.eat(")") {
+                        loop {
+                            args.push(self.nested(Self::expr)?);
+                            if self.eat(")") {
+                                break;
+                            }
+                            if !self.eat(",") {
+                                return Err(ExprError::Syntax(
+                                    "Expected a comma or closing bracket".into(),
+                                ));
+                            }
+                        }
                     }
-                    return Ok(Expr::Call(f, Box::new(arg)));
+                    func.check_arity(args.len())?;
+                    return Ok(Expr::Call(func, args));
                 }
-                if name.eq_ignore_ascii_case("pi") {
-                    return Ok(Expr::Number(std::f64::consts::PI));
+                match name.to_ascii_lowercase().as_str() {
+                    "pi" => Ok(Expr::Number(std::f64::consts::PI)),
+                    "true" => Ok(Expr::Bool(true)),
+                    "false" => Ok(Expr::Bool(false)),
+                    "and" | "or" | "not" => Err(ExprError::Syntax(format!("Unexpected {name}"))),
+                    _ => Ok(Expr::Name(name)),
                 }
-                Ok(Expr::Name(name))
             }
             Some(c) => Err(ExprError::Syntax(format!("Unexpected \"{c}\""))),
             None => Err(ExprError::Syntax("The expression ends too soon".into())),
         }
+    }
+
+    fn string(&mut self) -> Result<Expr, ExprError> {
+        let quote = self.chars[self.at];
+        self.at += 1;
+        let mut text = String::new();
+        while let Some(c) = self.chars.get(self.at).copied() {
+            self.at += 1;
+            if c == quote {
+                return Ok(Expr::Text(text));
+            }
+            if c == '\\' {
+                let escaped = self
+                    .chars
+                    .get(self.at)
+                    .copied()
+                    .ok_or_else(|| ExprError::Syntax("A string is not closed".into()))?;
+                self.at += 1;
+                text.push(match escaped {
+                    '\\' | '\'' | '"' => escaped,
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    _ => {
+                        return Err(ExprError::Syntax(format!(
+                            "Unknown string escape \\{escaped}"
+                        )))
+                    }
+                });
+            } else {
+                text.push(c);
+            }
+        }
+        Err(ExprError::Syntax("A string is not closed".into()))
     }
 
     fn number(&mut self) -> Result<Expr, ExprError> {
@@ -242,48 +533,166 @@ impl Parser {
 }
 
 impl Expr {
-    /// Parses `text`, all of it.
+    /// Parse the entire expression. Power is right-associative and binds more tightly than
+    /// unary minus; comparisons bind more tightly than `not`, `and`, then `or`.
     pub fn parse(text: &str) -> Result<Expr, ExprError> {
+        if text.len() > 65536 {
+            return Err(ExprError::Syntax("The expression is too large".into()));
+        }
         let mut p = Parser {
             chars: ascii_digits(text).chars().collect(),
             at: 0,
+            depth: 0,
+            nodes: 0,
         };
         let e = p.expr()?;
+        // A long unparenthesized sum also builds a nested tree.
+        let mut pending = vec![(&e, 0)];
+        while let Some((node, depth)) = pending.pop() {
+            if depth > MAX_DEPTH {
+                return Err(ExprError::Syntax(
+                    "The expression is nested too deeply".into(),
+                ));
+            }
+            match node {
+                Self::Neg(e) | Self::Not(e) => pending.push((e, depth + 1)),
+                Self::Binary(_, a, b) => {
+                    pending.push((a, depth + 1));
+                    pending.push((b, depth + 1));
+                }
+                Self::Call(_, args) => pending.extend(args.iter().map(|arg| (arg, depth + 1))),
+                _ => {}
+            }
+        }
         match p.peek() {
             None => Ok(e),
             Some(c) => Err(ExprError::Syntax(format!("Unexpected \"{c}\""))),
         }
     }
 
-    /// The value, with `value` giving each name's.
+    /// The existing numeric interface for dimensional constraints and parameters.
     pub fn eval(&self, value: &dyn Fn(&str) -> Option<f64>) -> Result<f64, ExprError> {
-        let v = self.value(value)?;
-        if v.is_finite() {
-            Ok(v)
-        } else {
+        self.eval_with(&|name: &str| value(name).map(Value::Number))?
+            .as_number()
+    }
+
+    /// Evaluate against caller-owned data. `if`, `and` and `or` only evaluate needed branches.
+    pub fn eval_with(&self, resolver: &dyn Resolver) -> Result<Value, ExprError> {
+        let result = match self {
+            Self::Number(n) => Value::Number(*n),
+            Self::Text(s) => Value::Text(s.clone()),
+            Self::Bool(b) => Value::Bool(*b),
+            Self::Name(n) => resolver
+                .resolve(n)
+                .ok_or_else(|| ExprError::Unknown(n.clone()))?,
+            Self::Neg(e) => Value::Number(-e.eval_with(resolver)?.as_number()?),
+            Self::Not(e) => Value::Bool(!e.eval_with(resolver)?.as_bool()?),
+            Self::Binary(Op::And, a, b) => {
+                Value::Bool(a.eval_with(resolver)?.as_bool()? && b.eval_with(resolver)?.as_bool()?)
+            }
+            Self::Binary(Op::Or, a, b) => {
+                Value::Bool(a.eval_with(resolver)?.as_bool()? || b.eval_with(resolver)?.as_bool()?)
+            }
+            Self::Binary(op, a, b) => {
+                Self::binary(*op, a.eval_with(resolver)?, b.eval_with(resolver)?)?
+            }
+            Self::Call(func, args) => {
+                // Also guard expressions constructed directly through the public enum.
+                func.check_arity(args.len())?;
+                if *func == Func::If {
+                    let branch = if args[0].eval_with(resolver)?.as_bool()? {
+                        1
+                    } else {
+                        2
+                    };
+                    args[branch].eval_with(resolver)?
+                } else if *func == Func::Lookup {
+                    let table = args[0].eval_with(resolver)?;
+                    let key = args[1].eval_with(resolver)?;
+                    let column = args[2].eval_with(resolver)?;
+                    let (table, column) = (table.as_text()?, column.as_text()?);
+                    resolver
+                        .lookup(table, &key, column)
+                        .ok_or_else(|| ExprError::Lookup(format!("{table}[{key:?}].{column}")))?
+                } else {
+                    let numbers = args
+                        .iter()
+                        .map(|e| e.eval_with(resolver)?.as_number())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Value::Number(Self::function(*func, &numbers)?)
+                }
+            }
+        };
+        if matches!(result, Value::Number(n) if !n.is_finite()) {
             Err(ExprError::NotANumber(self.to_string()))
+        } else {
+            Ok(result)
         }
     }
 
-    fn value(&self, value: &dyn Fn(&str) -> Option<f64>) -> Result<f64, ExprError> {
-        Ok(match self {
-            Expr::Number(n) => *n,
-            Expr::Name(n) => value(n).ok_or_else(|| ExprError::Unknown(n.clone()))?,
-            Expr::Neg(e) => -e.value(value)?,
-            Expr::Binary(op, a, b) => {
-                let (a, b) = (a.value(value)?, b.value(value)?);
-                match op {
-                    Op::Add => a + b,
-                    Op::Sub => a - b,
-                    Op::Mul => a * b,
-                    Op::Div => a / b,
+    fn binary(op: Op, a: Value, b: Value) -> Result<Value, ExprError> {
+        if matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge) {
+            let ordering = match (&a, &b) {
+                (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
+                (Value::Text(a), Value::Text(b)) => Some(a.cmp(b)),
+                (Value::Bool(a), Value::Bool(b)) if matches!(op, Op::Eq | Op::Ne) => Some(a.cmp(b)),
+                _ => {
+                    return Err(ExprError::Type(
+                        "A comparison needs values of the same type".into(),
+                    ))
                 }
             }
-            Expr::Call(f, e) => f.apply(e.value(value)?),
+            .ok_or_else(|| ExprError::NotANumber("Comparison".into()))?;
+            return Ok(Value::Bool(match op {
+                Op::Eq => ordering.is_eq(),
+                Op::Ne => !ordering.is_eq(),
+                Op::Lt => ordering.is_lt(),
+                Op::Le => !ordering.is_gt(),
+                Op::Gt => ordering.is_gt(),
+                Op::Ge => !ordering.is_lt(),
+                _ => unreachable!("comparison operators only"),
+            }));
+        }
+        let (a, b) = (a.as_number()?, b.as_number()?);
+        Ok(Value::Number(match op {
+            Op::Add => a + b,
+            Op::Sub => a - b,
+            Op::Mul => a * b,
+            Op::Div => a / b,
+            Op::Pow => a.powf(b),
+            _ => unreachable!("logic and comparison handled separately"),
+        }))
+    }
+
+    fn function(func: Func, args: &[f64]) -> Result<f64, ExprError> {
+        let x = args[0];
+        Ok(match func {
+            Func::Sin => x.to_radians().sin(),
+            Func::Cos => x.to_radians().cos(),
+            Func::Tan => x.to_radians().tan(),
+            Func::Sqrt => x.sqrt(),
+            Func::Abs => x.abs(),
+            Func::Min => args.iter().copied().fold(x, f64::min),
+            Func::Max => args.iter().copied().fold(x, f64::max),
+            Func::Ceil => x.ceil(),
+            Func::Floor => x.floor(),
+            Func::Round => {
+                // Decimal places, with halfway values rounded away from zero, independent of locale.
+                let digits = args.get(1).copied().unwrap_or(0.0);
+                if digits.fract() != 0.0 || !(-308.0..=308.0).contains(&digits) {
+                    return Err(ExprError::Type(
+                        "Round decimal places must be an integer from -308 to 308".into(),
+                    ));
+                }
+                let factor = 10f64.powi(digits as i32);
+                (x * factor).round() / factor
+            }
+            Func::If | Func::Lookup => unreachable!("handled before numeric functions"),
         })
     }
 
-    /// The parameter names it uses, each once, in order of first use.
+    /// All names, including names in unselected branches, each once in order of first use.
+    /// Static dependency checking of dimensional parameters deliberately uses this full list.
     pub fn names(&self) -> Vec<String> {
         fn walk(e: &Expr, out: &mut Vec<String>) {
             match e {
@@ -292,12 +701,17 @@ impl Expr {
                         out.push(n.clone());
                     }
                 }
-                Expr::Neg(e) | Expr::Call(_, e) => walk(e, out),
+                Expr::Neg(e) | Expr::Not(e) => walk(e, out),
+                Expr::Call(_, args) => {
+                    for e in args {
+                        walk(e, out);
+                    }
+                }
                 Expr::Binary(_, a, b) => {
                     walk(a, out);
                     walk(b, out);
                 }
-                Expr::Number(_) => {}
+                Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) => {}
             }
         }
         let mut out = Vec::new();
@@ -311,17 +725,51 @@ impl std::fmt::Display for Expr {
         match self {
             Expr::Number(n) => write!(f, "{n}"),
             Expr::Name(n) => write!(f, "{n}"),
+            Expr::Bool(b) => write!(f, "{b}"),
+            Expr::Text(text) => {
+                write!(f, "\"")?;
+                for c in text.chars() {
+                    match c {
+                        '\\' => write!(f, "\\\\")?,
+                        '"' => write!(f, "\\\"")?,
+                        '\n' => write!(f, "\\n")?,
+                        '\r' => write!(f, "\\r")?,
+                        '\t' => write!(f, "\\t")?,
+                        _ => write!(f, "{c}")?,
+                    }
+                }
+                write!(f, "\"")
+            }
             Expr::Neg(e) => write!(f, "-({e})"),
+            Expr::Not(e) => write!(f, "not ({e})"),
             Expr::Binary(op, a, b) => {
                 let sign = match op {
-                    Op::Add => '+',
-                    Op::Sub => '-',
-                    Op::Mul => '*',
-                    Op::Div => '/',
+                    Op::Add => "+",
+                    Op::Sub => "-",
+                    Op::Mul => "*",
+                    Op::Div => "/",
+                    Op::Pow => "^",
+                    Op::Eq => "==",
+                    Op::Ne => "!=",
+                    Op::Lt => "<",
+                    Op::Le => "<=",
+                    Op::Gt => ">",
+                    Op::Ge => ">=",
+                    Op::And => "and",
+                    Op::Or => "or",
                 };
                 write!(f, "({a} {sign} {b})")
             }
-            Expr::Call(func, e) => write!(f, "{}({e})", format!("{func:?}").to_lowercase()),
+            Expr::Call(func, args) => {
+                write!(f, "{}(", format!("{func:?}").to_lowercase())?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{arg}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }

@@ -1,5 +1,5 @@
 //! The tools that write into the drawing (text, room areas and labels, tables, shapes, blocks),
-//! the measure-by-handle rule and the refusal of take-off rows that are notes. Run through the
+//! data-defined element types, the measure-by-handle rule and refusal of rows that are notes. Run through the
 //! generic surface as the model calls it. Curve-hint tests also cover the internal executor.
 
 use std::f64::consts::PI;
@@ -121,6 +121,400 @@ fn steps(s: &mut Session) -> usize {
 
 fn near(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
+}
+
+// These five trade definitions belong to the test drawing. The engine receives ordinary data
+// through the same command discovery, execution and records interface that Mizan uses.
+fn element_type_examples() -> Vec<Value> {
+    vec![
+        json!({
+            "name":"Blockwork", "category":"Masonry", "geometry":"band",
+            "properties":{
+                "thickness":{"kind":"number","unit":"length","default":0.2,"min":0.01},
+                "storey_height":{"kind":"number","unit":"length","default":3.0,"min":0.01},
+                "grade":{"kind":"choice","default":"A","choices":["A","B"]}
+            },
+            "vertical":{"height":"storey_height"},
+            "plan":{"band_faces":"thickness","hatch":true,"label_template":"{type}: {volume}"},
+            "quantities":{"volume":"length * thickness * height","pieces":"count"}
+        }),
+        json!({
+            "name":"Slab", "category":"Concrete floor", "geometry":"region",
+            "properties":{"thickness":{"kind":"number","unit":"length","default":0.2,"min":0.01}},
+            "plan":{"outline":true,"hatch":true,"label_template":"{type}: {volume}"},
+            "quantities":{"volume":"area * thickness","pieces":"count"}
+        }),
+        json!({
+            "name":"Column", "category":"Structure", "geometry":"point",
+            "properties":{
+                "width":{"kind":"number","unit":"length","default":0.4,"min":0.01},
+                "depth":{"kind":"number","unit":"length","default":0.5,"min":0.01},
+                "rise":{"kind":"number","unit":"length","default":3.0,"min":0.01}
+            },
+            "vertical":{"height":"rise"},
+            "plan":{
+                "symbols":[{"kind":"rectangle","a":["=-width/(2*unit)","=-depth/(2*unit)"],"b":["=width/(2*unit)","=depth/(2*unit)"]}],
+                "label_template":"{type}: {volume}"
+            },
+            "quantities":{"volume":"width * depth * height","pieces":"count"}
+        }),
+        json!({
+            "name":"Duct", "category":"Ventilation", "geometry":"path",
+            "properties":{
+                "breadth":{"kind":"number","unit":"length","default":0.6,"min":0.01},
+                "depth":{"kind":"number","unit":"length","default":0.4,"min":0.01},
+                "insulated":{"kind":"bool","default":true},
+                "reference":{"kind":"text","default":"AHU-١"}
+            },
+            "plan":{"band_faces":"breadth","centreline":true,"label_template":"{type}: {volume}"},
+            "quantities":{
+                "volume":"geometry.length * breadth * depth", "pieces":"count",
+                "lining":"if(insulated, length * 2 * (breadth + depth), 0)"
+            }
+        }),
+        json!({
+            "name":"Kerb", "category":"External works", "geometry":"band",
+            "properties":{
+                "width":{"kind":"number","unit":"length","default":0.15,"min":0.01},
+                "depth":{"kind":"number","unit":"length","default":0.3,"min":0.01}
+            },
+            "plan":{"band_faces":"width","label_template":"{type}: {volume}"},
+            "quantities":{"volume":"length * width * depth","pieces":"count"}
+        }),
+    ]
+}
+
+fn object_records(s: &mut Session) -> Vec<Value> {
+    read(
+        s,
+        "records",
+        json!({"collection":"objects","detail":"full"}),
+    )
+    .unwrap()["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["data"].clone())
+        .collect()
+}
+
+fn object_record(s: &mut Session, name: &str) -> Value {
+    object_records(s)
+        .into_iter()
+        .find(|record| record["type"] == name)
+        .unwrap()
+}
+
+fn element_examples(units: i16) -> (tempfile::TempDir, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("elements.dxf"), units);
+    for definition in element_type_examples() {
+        let before = s.history_steps().0.len();
+        command(
+            &mut s,
+            json!({"type":"define_object_type","definition":definition}),
+        )
+        .unwrap();
+        assert_eq!(
+            s.history_steps().0.len(),
+            before + 1,
+            "one type definition is one undo step"
+        );
+    }
+    let k = 1.0 / s.drawing.units.to_metres();
+    let before = s.history_steps().0.len();
+    command(
+        &mut s,
+        json!({"type":"place_objects","objects":[
+            {"type":"Blockwork","points":[[0,0],[10.0*k,0]]},
+            {"type":"Slab","points":[[0,5.0*k],[4.0*k,5.0*k],[4.0*k,8.0*k],[0,8.0*k]]},
+            {"type":"Column","points":[[15.0*k,0]]},
+            {"type":"Duct","points":[[0,12.0*k],[5.0*k,12.0*k]]},
+            {"type":"Kerb","points":[[0,16.0*k],[8.0*k,16.0*k]]}
+        ]}),
+    )
+    .unwrap();
+    assert_eq!(
+        s.history_steps().0.len(),
+        before + 1,
+        "all five placements share one undo step"
+    );
+    (dir, s)
+}
+
+fn object_table_cells(s: &Session, handle: u64) -> Vec<Vec<String>> {
+    let EntityType::Table(table) = s
+        .drawing
+        .doc
+        .get_entity(opencadcodec::Handle::new(handle))
+        .unwrap()
+    else {
+        panic!("object schedule must be an ordinary CAD table")
+    };
+    (0..table.rows.len())
+        .map(|row| {
+            (0..table.columns.len())
+                .map(|column| table.cell_text(row, column).unwrap_or("").to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+fn assert_element_quantities(s: &mut Session, table: u64) {
+    let records = object_records(s);
+    assert_eq!(records.len(), 5);
+    let cells = object_table_cells(s, table);
+    for (name, expected) in [
+        ("Blockwork", 6.0),
+        ("Slab", 2.4),
+        ("Column", 0.6),
+        ("Duct", 1.2),
+        ("Kerb", 0.36),
+    ] {
+        let record = records.iter().find(|row| row["type"] == name).unwrap();
+        assert!(
+            near(
+                record["quantities"]["volume"].as_f64().unwrap(),
+                expected,
+                1e-8
+            ),
+            "{record}"
+        );
+        assert_eq!(record["quantities"]["pieces"], 1.0);
+        let row = cells
+            .iter()
+            .find(|row| row.first().is_some_and(|text| text == name))
+            .unwrap();
+        assert!(
+            near(row[1].parse::<f64>().unwrap(), expected, 1e-8),
+            "{row:?}"
+        );
+        assert!(s.drawing.doc.entities().any(|entity| matches!(entity, EntityType::Text(text) if text.value.starts_with(&format!("{name}:")) && text.common.extended_data.get_record("QIYAS_OBJECT_PART").is_some())), "{name} must have generated graphics");
+        let driver = record["id"].as_u64().unwrap();
+        assert!(s
+            .drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(driver))
+            .unwrap()
+            .common()
+            .extended_data
+            .get_record("QIYAS_OBJECT")
+            .is_some());
+    }
+    assert_eq!(object_record(s, "Duct")["props"]["reference"], "AHU-١");
+}
+
+#[test]
+fn five_trades_are_defined_drawn_measured_scheduled_and_round_trip_as_data() {
+    for units in [6, 4, 1] {
+        let (dir, mut s) = element_examples(units);
+        for name in [
+            "define_object_type",
+            "redefine_object_type",
+            "delete_object_type",
+            "place_objects",
+            "set_object_props",
+            "object_schedule",
+        ] {
+            let docs = read(&mut s, "commands", json!({"name":name})).unwrap();
+            assert_eq!(docs["name"], name);
+            assert!(!docs["doc"].as_str().unwrap().is_empty(), "{docs}");
+        }
+        let definitions = read(
+            &mut s,
+            "records",
+            json!({"collection":"object_types","detail":"full"}),
+        )
+        .unwrap();
+        assert_eq!(definitions["records"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            call(&mut s, surface::EXECUTE, "undo_own", json!({})).unwrap()["undone"],
+            true
+        );
+        assert!(object_records(&mut s).is_empty());
+        assert_eq!(
+            count_entities(&s),
+            0,
+            "undo removes drivers and generated graphics together"
+        );
+        assert!(s.redo());
+        let k = 1.0 / s.drawing.units.to_metres();
+        let before = s.history_steps().0.len();
+        let out = command(&mut s, json!({"type":"object_schedule","at":[20.0*k,20.0*k],"columns":["type","volume","pieces"],"group_by":["type"]})).unwrap();
+        let table = out["added"][0].as_u64().unwrap();
+        assert_eq!(s.history_steps().0.len(), before + 1);
+        assert_element_quantities(&mut s, table);
+        assert!(s.undo_if(Source::Ai));
+        assert!(s
+            .drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(table))
+            .is_none());
+        assert!(s.redo());
+        for ext in ["dwg", "dxf"] {
+            let path = dir.path().join(format!("saved-{units}.{ext}"));
+            s.save_as_headless(&path).unwrap();
+            let project = path.with_extension("qiyas");
+            if project.exists() {
+                std::fs::remove_file(project).unwrap();
+            }
+            let mut reopened = Session::open(&path).unwrap();
+            assert_element_quantities(&mut reopened, table);
+            assert_eq!(
+                read(
+                    &mut reopened,
+                    "records",
+                    json!({"collection":"object_types"})
+                )
+                .unwrap()["records"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                5
+            );
+            let wall = object_record(&mut reopened, "Blockwork")["id"]
+                .as_u64()
+                .unwrap();
+            command(
+                &mut reopened,
+                json!({"type":"set_object_props","targets":[wall],"props":{"thickness":0.3}}),
+            )
+            .unwrap();
+            assert!(near(
+                object_record(&mut reopened, "Blockwork")["quantities"]["volume"]
+                    .as_f64()
+                    .unwrap(),
+                9.0,
+                1e-8
+            ));
+            assert!(object_table_cells(&reopened, table)
+                .iter()
+                .any(|row| row[0] == "Blockwork" && row[1].parse::<f64>() == Ok(9.0)));
+            assert!(reopened.undo_if(Source::Ai));
+            assert_element_quantities(&mut reopened, table);
+        }
+    }
+}
+
+#[test]
+fn object_driver_edits_properties_and_type_redefinition_refresh_in_the_same_undo_step() {
+    let (_dir, mut s) = element_examples(6);
+    let table = command(&mut s, json!({"type":"object_schedule","at":[20,20],"columns":["type","volume"],"group_by":["type"]})).unwrap()["added"][0].as_u64().unwrap();
+    let wall = object_record(&mut s, "Blockwork")["id"].as_u64().unwrap();
+    let original = object_table_cells(&s, table);
+    let before = s.history_steps().0.len();
+    command(
+        &mut s,
+        json!({"type":"modify","kind":"scale","targets":[{"handle":wall}],"base":[0,0],"factor":2}),
+    )
+    .unwrap();
+    assert_eq!(s.history_steps().0.len(), before + 1);
+    assert_eq!(
+        object_record(&mut s, "Blockwork")["quantities"]["volume"],
+        12.0
+    );
+    assert!(object_table_cells(&s, table)
+        .iter()
+        .any(|row| row[0] == "Blockwork" && row[1].parse::<f64>() == Ok(12.0)));
+    assert!(s.undo_if(Source::Ai));
+    assert_eq!(object_table_cells(&s, table), original);
+    let mut definition = element_type_examples().remove(0);
+    definition["quantities"]["volume"] = json!("length * thickness * height * 2");
+    command(
+        &mut s,
+        json!({"type":"redefine_object_type","definition":definition}),
+    )
+    .unwrap();
+    assert_eq!(s.history_steps().0.len(), before + 1);
+    assert_eq!(
+        object_record(&mut s, "Blockwork")["quantities"]["volume"],
+        12.0
+    );
+    assert!(object_table_cells(&s, table)
+        .iter()
+        .any(|row| row[0] == "Blockwork" && row[1].parse::<f64>() == Ok(12.0)));
+    assert!(s.drawing.doc.entities().any(
+        |entity| matches!(entity,EntityType::Text(text) if text.value == "Blockwork: 12.000")
+    ));
+    assert!(s.undo_if(Source::Ai));
+    assert_eq!(object_table_cells(&s, table), original);
+    assert_eq!(
+        object_record(&mut s, "Blockwork")["quantities"]["volume"],
+        6.0
+    );
+    let part = s
+        .drawing
+        .doc
+        .entities()
+        .find(|e| {
+            qiyas_core::xdata::read_json::<Value>(e.common(), "QIYAS_OBJECT_PART")
+                .is_some_and(|part| part["owner"] == wall)
+        })
+        .unwrap()
+        .common()
+        .handle
+        .value();
+    batch(
+        &mut s,
+        json!({"commands":[
+            {"type":"set_property","target":{"handle":part},"prop":"color","value":"#ff0000"},
+            {"type":"set_property","target":{"handle":part},"prop":"lineweight","value":50}
+        ]}),
+    )
+    .unwrap();
+    command(
+        &mut s,
+        json!({"type":"set_object_props","targets":[wall],"props":{"thickness":0.3}}),
+    )
+    .unwrap();
+    let driver = s
+        .drawing
+        .doc
+        .get_entity(opencadcodec::Handle::new(wall))
+        .unwrap();
+    assert_eq!(
+        driver.common().line_weight,
+        opencadcodec::LineWeight::from_value(50)
+    );
+    assert_eq!(s.entity_info(wall, &[]).unwrap().color, "#ff0000");
+    for entity in s.drawing.doc.entities().filter(|e| {
+        qiyas_core::xdata::read_json::<Value>(e.common(), "QIYAS_OBJECT_PART")
+            .is_some_and(|part| part["owner"] == wall)
+    }) {
+        assert_eq!(entity.common().color, driver.common().color);
+        assert_eq!(entity.common().line_weight, driver.common().line_weight);
+    }
+}
+
+#[test]
+fn invalid_object_data_is_refused_without_partial_drivers_graphics_or_undo_steps() {
+    let (_dir, mut s) = element_examples(6);
+    let wall = object_record(&mut s, "Blockwork")["id"].as_u64().unwrap();
+    let before = serde_json::to_value(&s.drawing.doc).unwrap();
+    let before_steps = s.history_steps().0.len();
+    for input in [
+        json!({"type":"delete_object_type","name":"Blockwork"}),
+        json!({"type":"define_object_type","definition":element_type_examples()[0]}),
+        json!({"type":"set_object_props","targets":[wall],"props":{"thickness":-1}}),
+        json!({"type":"set_object_props","targets":[wall],"props":{"grade":"missing"}}),
+        json!({"type":"place_objects","objects":[{"type":"Column","points":[[20,0]]},{"type":"Blockwork","points":[[0,30],[10,30]],"props":{"thickness":-1}}]}),
+        json!({"type":"place_objects","objects":[{"type":"Slab","points":[[0,0],[1,0],[2,0]]}]}),
+    ] {
+        assert!(command(&mut s, input.clone()).is_err(), "{input}");
+        let after = serde_json::to_value(&s.drawing.doc).unwrap();
+        let changed: Vec<_> = after
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(key, value)| before.get(*key) != Some(*value))
+            .map(|(key, _)| key.as_str())
+            .collect();
+        assert!(
+            after == before,
+            "{input}: changed document keys {changed:?}"
+        );
+        assert_eq!(s.history_steps().0.len(), before_steps, "{input}");
+    }
 }
 
 // ---- Measuring a curve by handle gives its true length ----

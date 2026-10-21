@@ -194,6 +194,15 @@ fn collection_via(collection: Collection) -> Option<&'static str> {
         Collection::Comments => "edit_text",
         Collection::Constraints => "add_constraint",
         Collection::Parameters => "set_parameter",
+        Collection::ObjectTypes | Collection::KnowledgeTypes => "redefine_object_type",
+        Collection::Objects => "set_object_props",
+        Collection::KnowledgeLevels
+        | Collection::KnowledgeTables
+        | Collection::KnowledgeRules
+        | Collection::KnowledgeSheets
+        | Collection::KnowledgeMappings
+        | Collection::KnowledgeViews
+        | Collection::KnowledgeMeasurement => "set_knowledge",
         Collection::Linetypes => "(read-only)",
         Collection::Entities
         | Collection::Viewports

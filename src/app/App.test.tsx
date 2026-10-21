@@ -11,6 +11,12 @@ import App from "./App";
 import type { Batch } from "../viewport/batch";
 import type { ConversationSummary } from "../api";
 
+// These integration tests mount the whole shell and drive several accessible dialogs each.
+// A loaded build machine can spend over five seconds in one test's DOM queries alone.
+// Keep the extra budget in this file; individual async transitions still have a condition.
+vi.setConfig({ testTimeout: 30_000 });
+const until = (condition: () => void) => waitFor(condition, { timeout: 5_000 });
+
 /** Shows a ribbon tab; the ones after Annotate are under "More". */
 function goTab(name: string) {
   const tab = screen.queryByRole("tab", { name });
@@ -27,7 +33,7 @@ const PLAN = "/d/plan.dwg";
  *  toasts, the status bar says what is happening. */
 const toasts = () => [...document.querySelectorAll('[data-sonner-toast]:not([data-removed="true"]) [data-title]')].map((el) => el.textContent);
 /** Sonner shows a toast, and takes a replaced one away, a frame or two later. */
-const expectToasts = (texts: string[]) => waitFor(() => expect(toasts()).toEqual(texts));
+const expectToasts = (texts: string[]) => until(() => expect(toasts()).toEqual(texts));
 
 const core = vi.hoisted(() => ({
   calls: [] as string[],
@@ -284,6 +290,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  events.clear();
   openDialog.mockImplementation(async () => core.chosen);
   saveDialog.mockResolvedValue(null);
   core.calls.length = 0;
@@ -311,32 +318,37 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** Lets the window's async work finish. */
-const settle = async () => {
-  for (let i = 0; i < 10; i++) await act(async () => {});
-};
-
 /** Mounts the window and forgets the calls it made on the way. */
 async function mount() {
-  render(
-    <LanguageProvider>
-      <App />
-    </LanguageProvider>,
-  );
-  await settle();
+  await act(async () => {
+    render(
+      <LanguageProvider>
+        <App />
+      </LanguageProvider>,
+    );
+  });
+  await until(() => expect(events.has("drawing:shown")).toBe(true));
   core.calls.length = 0;
 }
 
 const clickOpen = async () => {
-  fireEvent.click(screen.getAllByRole("button", { name: en.open })[0]);
-  await settle();
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: en.open })[0]));
+  await until(() => {
+    if (core.autosaved.has(core.chosen)) {
+      expect(screen.getByRole("heading", { name: en["recovery.title"] })).toBeTruthy();
+    } else {
+      expect(document.querySelector("footer.status .message")?.textContent).toBe(core.openHold ? en.opening : "plan.dwg");
+    }
+  });
 };
 
 const typeLine = async (text: string) => {
   const input = document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!;
-  fireEvent.change(input, { target: { value: text } });
-  fireEvent.keyDown(input, { key: "Enter" });
-  await settle();
+  await act(async () => {
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
+  await until(() => expect(input.value).toBe(""));
 };
 
 /** A small real render batch: one horizontal segment per top-level handle, no text or fills. */
@@ -394,12 +406,12 @@ function manualFrames() {
       const callbacks = [...pending.values()];
       pending.clear();
       await act(async () => callbacks.forEach((callback) => callback(now)));
-      await settle();
     },
   };
 }
 
 async function reveal(id: string, handles: number[], sheet = "*Model_Space") {
+  const infoReads = core.calls.filter((call) => call === "drawing_info null").length;
   await emit("ai:event", {
     type: "tool_call", id, name: "qiyas_execute", label: "draw",
     input: { op: "draw", args: "{}" }, mutating: true,
@@ -408,7 +420,7 @@ async function reveal(id: string, handles: number[], sheet = "*Model_Space") {
     type: "tool_result", id, is_error: false, summary: "Drawn", handles,
     ui: { action: "reveal", sheet, handles },
   });
-  await settle();
+  await until(() => expect(core.calls.filter((call) => call === "drawing_info null").length).toBeGreaterThan(infoReads));
 }
 
 /** What the drawing's open sends to the core after the core has it: its drafting settings, its
@@ -435,16 +447,17 @@ test("open → an autosave is asked about first → Discard deletes it, then the
 
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["recovery.discard"] }));
-  await settle();
-  // Deleted, then opened without asking again, then shown.
-  expect(core.calls).toEqual([
-    `discard_autosave {"path":"${PLAN}"}`,
-    `open_drawing {"path":"${PLAN}"}`,
-    ...SHOWN,
-  ]);
-  expect(screen.queryByRole("heading", { name: en["recovery.title"] })).toBeNull();
-  // The status bar names the drawing on screen.
-  expect(screen.getByRole("status").textContent).toBe("plan.dwg");
+  await until(() => {
+    // Deleted, then opened without asking again, then shown.
+    expect(core.calls).toEqual([
+      `discard_autosave {"path":"${PLAN}"}`,
+      `open_drawing {"path":"${PLAN}"}`,
+      ...SHOWN,
+    ]);
+    expect(screen.queryByRole("heading", { name: en["recovery.title"] })).toBeNull();
+    // The status bar names the drawing on screen.
+    expect(screen.getByRole("status").textContent).toBe("plan.dwg");
+  });
 });
 
 test("DIVIDE 5 answers the divide prompt once: one divide_along for the command, none for the next pick", async () => {
@@ -457,42 +470,47 @@ test("DIVIDE 5 answers the divide prompt once: one divide_along for the command,
 
   // The entity is clicked: the number typed answers the prompt, and the tool's command runs once.
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
   const divides = () => core.calls.filter((c) => c.startsWith("run_command"));
-  expect(divides()).toEqual([
-    `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":5}}`,
-  ]);
-  // Drawn and saved after it.
-  expect(core.calls.slice(-1)).toEqual(["save_project null"]);
+  await until(() => {
+    expect(divides()).toEqual([
+      `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":5}}`,
+    ]);
+    // Drawn and saved after it.
+    expect(core.calls.slice(-1)).toEqual(["save_project null"]);
+  });
 
   // The next pick asks for its own number.
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
-  expect(divides()).toHaveLength(1);
-  expect(screen.getByRole("form", { name: en.divide })).toBeTruthy();
+  await until(() => {
+    expect(divides()).toHaveLength(1);
+    expect(screen.getByRole("form", { name: en.divide })).toBeTruthy();
+  });
 });
 
 test("Enter on a menu item, grid row, tree row or option is theirs: it does not finish the measure", async () => {
   await mount();
   await clickOpen();
   await typeLine("AA");
-  for (const p of [[0, 0], [10, 0], [10, 10]]) canvas.props!.onClick(p, p, 1, false);
-  await settle();
+  await act(async () => {
+    for (const p of [[0, 0], [10, 0], [10, 10]]) canvas.props!.onClick(p, p, 1, false);
+  });
   core.calls.length = 0;
   for (const role of ["menuitem", "menuitemcheckbox", "row", "treeitem", "option"]) {
     const el = document.createElement("div");
     el.setAttribute("role", role);
     el.tabIndex = 0;
     document.body.appendChild(el);
-    fireEvent.keyDown(el, { key: "Enter", code: "Enter" });
+    await act(async () => fireEvent.keyDown(el, { key: "Enter", code: "Enter" }));
     el.remove();
   }
-  await settle();
-  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+  await until(() => {
+    expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+  });
   // Enter elsewhere still finishes it.
   fireEvent.keyDown(document.body, { key: "Enter", code: "Enter" });
-  await settle();
-  expect(core.calls.filter((c) => c.startsWith("run_command")).length).toBe(1);
+  await until(() => {
+    expect(core.calls.filter((c) => c.startsWith("run_command")).length).toBe(1);
+  });
 });
 
 test("hooks made before apply and onCommand reach them: TEXT's text, a tool palette's command line", async () => {
@@ -503,27 +521,28 @@ test("hooks made before apply and onCommand reach them: TEXT's text, a tool pale
   // TEXT: the in-place editor (useAnnotate) places the text through apply (useCommands).
   await typeLine("TEXT");
   canvas.props!.onClick([20, 20], [200, 200], 1, false);
-  await settle();
+  await until(() => expect(document.querySelector(".text-in-place .text-value")).toBeTruthy());
   const value = document.querySelector<HTMLInputElement>(".text-in-place .text-value")!;
   fireEvent.change(value, { target: { value: "Hi" } });
   fireEvent.submit(value.form!);
-  await settle();
-  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
-    `run_command {"cmd":{"type":"text","at":[20,20],"height":2.5,"rotation":0,"value":"Hi","style":"Standard"}}`,
-  ]);
+  await until(() => {
+    expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
+      `run_command {"cmd":{"type":"text","at":[20,20],"height":2.5,"rotation":0,"value":"Hi","style":"Standard"}}`,
+    ]);
+  });
 
   // A palette button (useBlocks) runs its command line through onCommand (useCommandLine).
   core.calls.length = 0;
   goTab(en.insert);
   fireEvent.click(screen.getByRole("button", { name: en["block.toolPalettes"] }));
-  await settle();
-  fireEvent.click(screen.getByRole("button", { name: "Divide in 3" }));
-  await settle();
+  await until(() => expect(screen.getByRole("button", { name: "Divide in 3" })).toBeTruthy());
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Divide in 3" })));
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
-  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
-    `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":3}}`,
-  ]);
+  await until(() => {
+    expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
+      `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":3}}`,
+    ]);
+  });
 });
 
 const A4 = { name: "ISO A4", w_mm: 210, h_mm: 297 };
@@ -537,22 +556,25 @@ test("PLOT: a window clicked in the drawing (usePlot through the command line) i
   expect(screen.getByRole("heading", { name: en["plot.title"] })).toBeTruthy();
   fireEvent.change(screen.getByRole("combobox", { name: en["plot.area"] }), { target: { value: "window" } });
   fireEvent.click(screen.getByRole("button", { name: en["plot.pickWindow"] }));
-  await settle();
-  // The first corner clicked, the other typed: both reach the plot, not the tool.
-  expect(status()).toBe(en["plot.pickFirst"]);
+  await until(() => {
+    // The first corner clicked, the other typed: both reach the plot, not the tool.
+    expect(status()).toBe(en["plot.pickFirst"]);
+  });
   canvas.props!.onClick([0, 0], [0, 0], 1, false);
-  await settle();
-  expect(status()).toBe(en["plot.pickSecond"]);
+  await until(() => {
+    expect(status()).toBe(en["plot.pickSecond"]);
+  });
   await typeLine("10,5");
   expect(screen.getByText("0, 0 – 10, 5")).toBeTruthy();
 
   core.calls.length = 0;
   vi.mocked(saveDialog).mockResolvedValueOnce("/d/plan.pdf");
   fireEvent.click(screen.getByRole("button", { name: en["plot.toPdf"] }));
-  await settle();
-  expect(vi.mocked(saveDialog)).toHaveBeenLastCalledWith({
-    defaultPath: "/d/plan.pdf",
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  await until(() => {
+    expect(vi.mocked(saveDialog)).toHaveBeenLastCalledWith({
+      defaultPath: "/d/plan.pdf",
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
   });
   const job = {
     sheet: "*Model_Space",
@@ -603,8 +625,9 @@ test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot
   }
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["plot.printAll"] }));
-  await settle();
-  expect(printed().map((p) => [p.job.sheet, p.job.area, p.printer])).toEqual([["*Paper_Space", "layout", "Office"]]);
+  await until(() => {
+    expect(printed().map((p) => [p.job.sheet, p.job.area, p.printer])).toEqual([["*Paper_Space", "layout", "Office"]]);
+  });
   await expectToasts(["Layouts sent: 1, one print job each: Sent to Office"]);
 
   fireEvent.click(screen.getByRole("button", { name: en["plot.styles"] }));
@@ -618,8 +641,9 @@ test("another sheet cancels the tool in use, which is made after the sheets", as
 
   await typeLine("L");
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
-  expect(prompt()).toBe(en["draw.prompt.nextPoint"]);
+  await until(() => {
+    expect(prompt()).toBe(en["draw.prompt.nextPoint"]);
+  });
 
   // useSheets reaches the tool's cancel through the root's measureRef.
   await typeLine("SHEET Layout1");
@@ -635,30 +659,32 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
 
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
-  await settle();
-  expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ defaultPath: "/d/", filters: [{ name: en["script.file"], extensions: ["scr"] }] });
-  // The same drawing on screen after it: its info, take-off and batch read again, the take-off saved.
-  expect(core.calls).toEqual([
-    "drawing_info null",
-    "tabs null",
-    `run_script {"path":"/d/count.scr"}`,
-    "tabs null",
-    "drawing_info null",
-    "takeoff null",
-    "totals null",
-    "boq null",
-    "conflicts null",
-    "batch_version null",
-    "tabs null",
-    "render_batch {}",
-    "save_project null",
-  ]);
+  await until(() => {
+    expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ defaultPath: "/d/", filters: [{ name: en["script.file"], extensions: ["scr"] }] });
+    // The same drawing on screen after it: its info, take-off and batch read again, the take-off saved.
+    expect(core.calls).toEqual([
+      "drawing_info null",
+      "tabs null",
+      `run_script {"path":"/d/count.scr"}`,
+      "tabs null",
+      "drawing_info null",
+      "takeoff null",
+      "totals null",
+      "boq null",
+      "conflicts null",
+      "batch_version null",
+      "tabs null",
+      "render_batch {}",
+      "save_project null",
+    ]);
+  });
   const log = screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") });
   expect(log.textContent).toContain("DOOR count = 3 pcs");
   expect(log.textContent).toContain(en["script.stopped"].replace("{line}", "2"));
   fireEvent.click(screen.getByRole("button", { name: en["script.close"] }));
-  await settle();
-  expect(screen.queryByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeNull();
+  await until(() => {
+    expect(screen.queryByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeNull();
+  });
 
   // Typed, with an OPEN in the script: the drawing it put on screen is shown as a tab switch is.
   core.calls.length = 0;
@@ -675,7 +701,7 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
   ]);
   expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: en["script.close"] }));
-  await settle();
+  await until(() => expect(screen.queryByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeNull());
   core.calls.length = 0;
   await typeLine("SCRIPT");
   expect(core.calls.filter((c) => c.startsWith("run_script"))).toEqual([`run_script {"path":"/d/count.scr"}`]);
@@ -690,7 +716,7 @@ test("while a script runs the ribbon and the command line wait, and Stop asks th
 
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["script.run"] }));
-  await settle();
+  await until(() => expect(screen.getByText(en["script.running"].replace("{line}", "1"))).toBeTruthy());
   const header = document.querySelector("header.top")!;
   expect(header.hasAttribute("inert")).toBe(true);
   expect(screen.getByText(en["script.running"].replace("{line}", "1"))).toBeTruthy();
@@ -704,14 +730,16 @@ test("while a script runs the ribbon and the command line wait, and Stop asks th
   await expectToasts([en["script.busy"]]);
 
   fireEvent.click(screen.getByRole("button", { name: en["script.stop"] }));
-  await settle();
-  expect(core.calls).toContain("stop_script null");
+  await until(() => {
+    expect(core.calls).toContain("stop_script null");
+  });
 
   finish();
-  await settle();
-  expect(header.hasAttribute("inert")).toBe(false);
-  expect(screen.queryByText(en["script.running"].replace("{line}", "1"))).toBeNull();
-  expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "long.scr") })).toBeTruthy();
+  await until(() => {
+    expect(header.hasAttribute("inert")).toBe(false);
+    expect(screen.queryByText(en["script.running"].replace("{line}", "1"))).toBeNull();
+    expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "long.scr") })).toBeTruthy();
+  });
 });
 
 test("the Manage tab and OPTIONS (OP), CUI and ALIASEDIT open their dialogs, with no drawing open", async () => {
@@ -725,17 +753,19 @@ test("the Manage tab and OPTIONS (OP), CUI and ALIASEDIT open their dialogs, wit
     await typeLine(line);
     expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: en["settings.cancel"] }));
-    await settle();
-    expect(screen.queryByRole("heading", { name: title })).toBeNull();
+    await until(() => {
+      expect(screen.queryByRole("heading", { name: title })).toBeNull();
+    });
   }
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["options.button"] }));
-  await settle();
+  await until(() => expect(screen.getByRole("button", { name: en["options.toSettings"] })).toBeTruthy());
   // Options hands the autosave interval to Settings.
   fireEvent.click(screen.getByRole("button", { name: en["options.toSettings"] }));
-  await settle();
-  expect(screen.queryByRole("heading", { name: en["options.title"] })).toBeNull();
-  expect(screen.getByRole("heading", { name: en.settings })).toBeTruthy();
+  await until(() => {
+    expect(screen.queryByRole("heading", { name: en["options.title"] })).toBeNull();
+    expect(screen.getByRole("heading", { name: en.settings })).toBeTruthy();
+  });
 });
 
 test("PURGE (PU) and AUDIT: a dry run first, then one change that the window catches up with", async () => {
@@ -750,22 +780,24 @@ test("PURGE (PU) and AUDIT: a dry run first, then one change that the window cat
   ]);
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["purge.run"] }));
-  await settle();
-  // Taken out, redrawn, the layers read again, autosaved.
-  expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"purge","kinds":["layers"],"dry_run":false}}`);
-  expect(core.calls).toContain("render_batch {}");
-  expect(core.calls).toContain("drawing_info null");
-  expect(core.calls.at(-1)).toBe("save_project null");
-  expect(screen.getByText(en["purge.done"].replace("{n}", "1"))).toBeTruthy();
+  await until(() => {
+    // Taken out, redrawn, the layers read again, autosaved.
+    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"purge","kinds":["layers"],"dry_run":false}}`);
+    expect(core.calls).toContain("render_batch {}");
+    expect(core.calls).toContain("drawing_info null");
+    expect(core.calls.at(-1)).toBe("save_project null");
+    expect(screen.getByText(en["purge.done"].replace("{n}", "1"))).toBeTruthy();
+  });
   fireEvent.click(screen.getByRole("button", { name: en["purge.close"] }));
-  await settle();
+  await until(() => expect(screen.queryByRole("heading", { name: en["purge.title"] })).toBeNull());
 
   core.calls.length = 0;
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
-  await settle();
-  expect(core.calls).toEqual([`run_command {"cmd":{"type":"audit","fix":false}}`]);
-  expect(screen.getByText(en["audit.clean"])).toBeTruthy();
+  await until(() => {
+    expect(core.calls).toEqual([`run_command {"cmd":{"type":"audit","fix":false}}`]);
+    expect(screen.getByText(en["audit.clean"])).toBeTruthy();
+  });
 });
 
 test("the options reach the window: the pick box, the ribbon layout and a shortcut", async () => {
@@ -785,18 +817,20 @@ test("the options reach the window: the pick box, the ribbon layout and a shortc
   await clickOpen();
   core.calls.length = 0;
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
-  expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9}`);
-  // The canvas draws with the background and highlight colours (the crosshair's waits).
-  expect((canvas.props as unknown as { colours: unknown }).colours).toEqual({ background: "#102030", highlight: "#ff8800" });
+  await until(() => {
+    expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9}`);
+    // The canvas draws with the background and highlight colours (the crosshair's waits).
+    expect((canvas.props as unknown as { colours: unknown }).colours).toEqual({ background: "#102030", highlight: "#ff8800" });
+  });
   // A key of the user's is the window's only: F5 never reloads it.
   expect(fireEvent.keyDown(window, { code: "F5", key: "F5" })).toBe(false);
-  await settle();
+  await until(() => expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(en["draw.prompt.firstPoint"]));
   expect(fireEvent.keyDown(window, { code: "KeyO", key: "O", ctrlKey: true, shiftKey: true })).toBe(false);
-  await settle();
-  expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(
-    en["draw.prompt.circleCentre"],
-  );
+  await until(() => {
+    expect(document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!.labels![0].textContent).toBe(
+      en["draw.prompt.circleCentre"],
+    );
+  });
 });
 
 test("PURGE and AUDIT wait while a block is edited in place: the window says so, no dialog, no command", async () => {
@@ -809,8 +843,9 @@ test("PURGE and AUDIT wait while a block is edited in place: the window says so,
   expect(screen.queryByRole("heading", { name: en["purge.title"] })).toBeNull();
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
-  await settle();
-  expect(screen.queryByRole("heading", { name: en["audit.title"] })).toBeNull();
+  await until(() => {
+    expect(screen.queryByRole("heading", { name: en["audit.title"] })).toBeNull();
+  });
   await expectToasts([en["manage.blockEdit"]]);
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
 });
@@ -820,28 +855,31 @@ test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the
   await clickOpen();
   core.calls.length = 0;
   await typeLine("PAR");
-  await settle();
-  expect(core.calls).toContain(`run_command {"cmd":{"type":"list_parameters"}}`);
-  expect(screen.getByRole("heading", { name: en["param.manager"] })).toBeTruthy();
-  // The bar shows once the manager (or a parametric tool) is used.
-  expect(screen.getByRole("toolbar", { name: en["param.bar"] })).toBeTruthy();
+  await until(() => {
+    expect(core.calls).toContain(`run_command {"cmd":{"type":"list_parameters"}}`);
+    expect(screen.getByRole("heading", { name: en["param.manager"] })).toBeTruthy();
+    // The bar shows once the manager (or a parametric tool) is used.
+    expect(screen.getByRole("toolbar", { name: en["param.bar"] })).toBeTruthy();
+  });
 
   core.calls.length = 0;
   const input = screen.getByRole("textbox", { name: en["param.expressionOf"].replace("{name}", "d1") });
   fireEvent.change(input, { target: { value: "6" } });
   fireEvent.keyDown(input, { key: "Enter" });
-  await settle();
-  expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"set_parameter","name":"d1","expression":"6"}}`);
-  expect(core.calls).toContain("render_batch {}");
-  expect(core.calls).toContain("save_project null");
+  await until(() => {
+    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"set_parameter","name":"d1","expression":"6"}}`);
+    expect(core.calls).toContain("render_batch {}");
+    expect(core.calls).toContain("save_project null");
+  });
 
   // The Parametric tab holds the tools; a glyph's click deletes its constraint.
   goTab(en.parametric);
   expect(screen.getByRole("button", { name: en["param.gcHorizontal"] })).toBeTruthy();
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["param.glyph"].replace("{kind}", en["param.kind.horizontal"]) }));
-  await settle();
-  expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1}}`);
+  await until(() => {
+    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1}}`);
+  });
 });
 
 test("the side panels fold away behind their handles, resize, and the choice comes back on the next start", async () => {
@@ -881,20 +919,22 @@ test("Delete erases what is selected, and types in a text field as ever", async 
   await clickOpen();
   // The select tool picks the entity under the click.
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
+  await until(() => expect(screen.getByText("Selection · 1")).toBeTruthy());
   core.calls.length = 0;
 
   // In the command line Delete edits the text: nothing is erased.
   const input = document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!;
-  fireEvent.keyDown(input, { code: "Delete", key: "Delete" });
-  await settle();
-  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+  await act(async () => fireEvent.keyDown(input, { code: "Delete", key: "Delete" }));
+  await until(() => {
+    expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
+  });
 
   fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
-  await settle();
-  expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
-    `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
-  ]);
+  await until(() => {
+    expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
+      `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
+    ]);
+  });
 });
 
 test("the tool's prompt is said once: on the command line, or in the status bar when that is hidden", async () => {
@@ -910,9 +950,10 @@ test("the tool's prompt is said once: on the command line, or in the status bar 
 
   // Ctrl+9 hides the command line: the status bar asks instead.
   fireEvent.keyDown(window, { code: "Digit9", key: "9", ctrlKey: true });
-  await settle();
-  expect(document.querySelector(".command-line")).toBeNull();
-  expect(status()).toBe(prompt);
+  await until(() => {
+    expect(document.querySelector(".command-line")).toBeNull();
+    expect(status()).toBe(prompt);
+  });
 });
 
 test("Delete with nothing selected starts ERASE; Delete again erases what was picked", async () => {
@@ -922,15 +963,17 @@ test("Delete with nothing selected starts ERASE; Delete again erases what was pi
   const runs = () => core.calls.filter((c) => c.startsWith("run_command"));
 
   fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
-  await settle();
-  expect(runs()).toEqual([]);
+  await until(() => {
+    expect(runs()).toEqual([]);
+  });
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
+  await until(() => expect(document.querySelector(".command-line label:not([cmdk-label])")?.textContent).toBe(en["modify.prompt.select"].replace("{n}", "1")));
   fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
-  await settle();
-  expect(runs()).toEqual([
-    `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
-  ]);
+  await until(() => {
+    expect(runs()).toEqual([
+      `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
+    ]);
+  });
 });
 
 test("with the command line on, a hint it does not show stays in the status bar (COUNT: not a block)", async () => {
@@ -938,15 +981,16 @@ test("with the command line on, a hint it does not show stays in the status bar 
   await clickOpen();
   await typeLine("COUNT");
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
-  expect(screen.getByRole("status").textContent).toBe(en["measure.notABlock"]);
+  await until(() => {
+    expect(screen.getByRole("status").textContent).toBe(en["measure.notABlock"]);
+  });
 });
 
 test("Delete in a dialog or a menu erases nothing in the drawing behind", async () => {
   await mount();
   await clickOpen();
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
-  await settle();
+  await until(() => expect(screen.getByText("Selection · 1")).toBeTruthy());
   core.calls.length = 0;
   for (const role of ["dialog", "menu"]) {
     const box = document.createElement("div");
@@ -954,8 +998,7 @@ test("Delete in a dialog or a menu erases nothing in the drawing behind", async 
     const button = document.createElement("button");
     box.append(button);
     document.body.append(box);
-    fireEvent.keyDown(button, { code: "Delete", key: "Delete" });
-    await settle();
+    await act(async () => fireEvent.keyDown(button, { code: "Delete", key: "Delete" }));
     box.remove();
   }
   expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([]);
@@ -972,9 +1015,10 @@ test("opening a drawing and comparing show dots beside the status bar's text, an
   expect(bar().textContent).toBe(en.opening);
   expect(bar().querySelector(".dot-loader.dot-scan")).toBeTruthy();
   opened();
-  await settle();
-  expect(bar().textContent).toBe("plan.dwg");
-  expect(bar().querySelector(".dot-loader")).toBeNull();
+  await until(() => {
+    expect(bar().textContent).toBe("plan.dwg");
+    expect(bar().querySelector(".dot-loader")).toBeNull();
+  });
 
   let compared = () => {};
   core.compareHold = new Promise<void>((done) => (compared = done));
@@ -982,7 +1026,6 @@ test("opening a drawing and comparing show dots beside the status bar's text, an
   expect(bar().textContent).toBe(en["compare.running"]);
   expect(bar().querySelector(".dot-loader.dot-chase")).toBeTruthy();
   compared();
-  await settle();
   // What the comparison found is a notice; the status bar is back to the drawing.
   await expectToasts([en["conflicts.none"]]);
   expect(bar().textContent).toBe("plan.dwg");
@@ -994,7 +1037,7 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
   await mount();
   await clickOpen();
   fireEvent.click(screen.getByRole("tab", { name: en.conflicts }));
-  await settle();
+  await until(() => expect(screen.getByRole("tabpanel", { name: en.conflicts })).toBeTruthy());
   const panel = within(screen.getByRole("tabpanel", { name: en.conflicts }));
   expect(panel.getByText(en["conflicts.notCompared"])).toBeTruthy();
 
@@ -1006,9 +1049,10 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
     type: "tool_result", id: "compare", is_error: false, summary: "No conflicts",
     handles: [], ui: null,
   });
-  await settle();
-  expect(panel.getByText(en["conflicts.none"])).toBeTruthy();
-  expect(panel.queryByText(en["conflicts.notCompared"])).toBeNull();
+  await until(() => {
+    expect(panel.getByText(en["conflicts.none"])).toBeTruthy();
+    expect(panel.queryByText(en["conflicts.notCompared"])).toBeNull();
+  });
 });
 
 test("a reveal is queued and layers sync while the previous drawing stays on screen", async () => {
@@ -1031,11 +1075,12 @@ test("a reveal is queued and layers sync while the previous drawing stays on scr
   await reveal("second", [8]);
   // A zoom asks for new glyphs, but it must keep the new entities out of the base drawing.
   await act(async () => canvas.props!.onZoomHint(2));
-  await settle();
-  expect(shownHandles()).toEqual([1]);
-  expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 75, 0]);
-  expect(core.calls).toContain("takeoff null");
-  expect(core.calls).toContain("drawing_info null");
+  await until(() => {
+    expect(shownHandles()).toEqual([1]);
+    expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 75, 0]);
+    expect(core.calls).toContain("takeoff null");
+    expect(core.calls).toContain("drawing_info null");
+  });
 
   await frames.advance(3000);
   expect(shownHandles()).toEqual([1, 7]);
@@ -1169,10 +1214,11 @@ test("switching drawings cancels the active and queued reveals from the drawing 
   await reveal("second", [8]);
 
   fireEvent.click(screen.getByRole("tab", { name: "other.dwg" }));
-  await settle();
-  expect(core.calls).toContain('activate_tab {"id":2,"keepConversation":false}');
-  expect(shownHandles()).toEqual([9]);
-  expect(canvas.props!.overlay).toBeNull();
+  await until(() => {
+    expect(core.calls).toContain('activate_tab {"id":2,"keepConversation":false}');
+    expect(shownHandles()).toEqual([9]);
+    expect(canvas.props!.overlay).toBeNull();
+  });
   await frames.advance(3000);
   await frames.advance(3000);
   expect(shownHandles()).toEqual([9]);
@@ -1184,9 +1230,8 @@ test("an area marked with the area tool reaches Mizan's composer, made after the
   await clickOpen();
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
-  await settle();
-  fireEvent.click(screen.getByRole("button", { name: en["ai.markArea"] }));
-  await settle();
+  await until(() => expect(screen.getByRole("button", { name: en["ai.markArea"] })).toBeTruthy());
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: en["ai.markArea"] })));
   // The tool hands the box to the wiring through the root's markRegionRef.
   (canvas.props as unknown as { onBox(b: number[][], crossing: boolean, shift: boolean): void }).onBox(
     [
@@ -1196,29 +1241,33 @@ test("an area marked with the area tool reaches Mizan's composer, made after the
     false,
     false,
   );
-  await settle();
-  expect(core.calls).toContain(`pick_polygon {"points":[[0,0],[5000,0],[5000,2000],[0,2000]],"crossing":true}`);
-  expect(screen.getByText("Area · 5.00 × 2.00 m")).toBeTruthy();
-  expect(screen.getByText("1 entities")).toBeTruthy();
+  await until(() => {
+    expect(core.calls).toContain(`pick_polygon {"points":[[0,0],[5000,0],[5000,2000],[0,2000]],"crossing":true}`);
+    expect(screen.getByText("Area · 5.00 × 2.00 m")).toBeTruthy();
+    expect(screen.getByText("1 entities")).toBeTruthy();
+  });
 });
 
 test("Mizan selects for the user, and the window says what the user points at", async () => {
   await mount();
   await clickOpen();
   await emit("ai:select", { handles: [42], zoom: false });
-  await settle();
-  expect(screen.getByText("Selection · 1")).toBeTruthy();
+  await until(() => {
+    expect(screen.getByText("Selection · 1")).toBeTruthy();
+  });
   core.calls.length = 0;
   await emit("ai:pointed", { id: 7 });
-  await settle();
-  expect(core.calls).toEqual([
-    `ai_window_reply {"id":7,"value":{"selection":[{"handle":42,"chain":[]}],"region":null,"view":null},"error":null}`,
-  ]);
+  await until(() => {
+    expect(core.calls).toEqual([
+      `ai_window_reply {"id":7,"value":{"selection":[{"handle":42,"chain":[]}],"region":null,"view":null},"error":null}`,
+    ]);
+  });
   // The canvas is faked: no picture, said as an error.
   core.calls.length = 0;
   await emit("ai:capture", { id: 8, maxSide: 1600 });
-  await settle();
-  expect(core.calls).toEqual([`ai_window_reply {"id":8,"value":null,"error":"No drawing is on screen"}`]);
+  await until(() => {
+    expect(core.calls).toEqual([`ai_window_reply {"id":8,"value":null,"error":"No drawing is on screen"}`]);
+  });
 });
 
 test("an untitled drawing keeps its own Continue offer through its placeholder path", async () => {
@@ -1230,8 +1279,9 @@ test("an untitled drawing keeps its own Continue offer through its placeholder p
   await mount();
   // An existing untitled tab is shown directly; its placeholder is not a file to open.
   await emit("drawing:shown", null);
-  await settle();
+  await until(() => expect(core.calls).toContain("render_batch {}"));
   fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
-  await settle();
-  expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();
+  await until(() => {
+    expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();
+  });
 });
