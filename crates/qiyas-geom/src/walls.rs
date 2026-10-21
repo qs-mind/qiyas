@@ -20,6 +20,10 @@ use cavalier_contours::polyline::{
 pub struct Run {
     pub points: Vec<[f64; 2]>,
     pub closed: bool,
+    /// Overrides the system thickness, in the same units as the points.
+    pub thickness: Option<f64>,
+    /// Overrides the system justification.
+    pub justification: Option<Justification>,
 }
 
 /// The side of the directed run occupied by the wall.
@@ -51,6 +55,71 @@ impl Region {
     pub fn area(&self) -> f64 {
         ring_area(&self.outer).abs() - self.holes.iter().map(|h| ring_area(h).abs()).sum::<f64>()
     }
+}
+
+/// True when two wall regions share positive area, rather than only an edge or point.
+/// Used to follow measured hatches through splits and merges without attaching unrelated
+/// pieces. The boolean calculations use a shared local origin and scale, including holes.
+pub fn regions_overlap(a: &Region, b: &Region, tol: f64) -> bool {
+    if a.outer.len() < 3 || b.outer.len() < 3 || !bounds_overlap(&a.outer, &b.outer) {
+        return false;
+    }
+    let origin = a.outer[0];
+    let scale = [&a.outer, &b.outer]
+        .into_iter()
+        .chain(a.holes.iter())
+        .chain(b.holes.iter())
+        .flat_map(|ring| {
+            ring.iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+        })
+        .map(|(&p, &q)| dist(p, q))
+        .filter(|length| *length > tol)
+        .fold(f64::INFINITY, f64::min);
+    if !scale.is_finite() {
+        return false;
+    }
+    let local = |region: &Region| {
+        let ring = |points: &Vec<[f64; 2]>| {
+            points
+                .iter()
+                .map(|p| [(p[0] - origin[0]) / scale, (p[1] - origin[1]) / scale])
+                .collect::<Vec<_>>()
+        };
+        Region {
+            outer: ring(&region.outer),
+            holes: region.holes.iter().map(ring).collect(),
+        }
+    };
+    let (a, b) = (local(a), local(b));
+    let intersection = |first: &[[f64; 2]], second: &[[f64; 2]]| {
+        let result = to_pline(first).boolean(&to_pline(second), BooleanOp::And);
+        result
+            .pos_plines
+            .iter()
+            .map(|p| p.pline.area().abs())
+            .sum::<f64>()
+            - result
+                .neg_plines
+                .iter()
+                .map(|p| p.pline.area().abs())
+                .sum::<f64>()
+    };
+    // Inclusion-exclusion keeps a region inside a room's hole unrelated to its walls.
+    let mut area = intersection(&a.outer, &b.outer);
+    for hole in &a.holes {
+        area -= intersection(hole, &b.outer);
+    }
+    for hole in &b.holes {
+        area -= intersection(&a.outer, hole);
+    }
+    for first in &a.holes {
+        for second in &b.holes {
+            area += intersection(first, second);
+        }
+    }
+    area > (tol / scale).powi(2)
 }
 
 /// Where an opening went: its middle, the run's direction there, its width and the wall's
@@ -113,6 +182,50 @@ pub fn build_walls_justified(
     tol: f64,
     justification: Justification,
 ) -> Result<Walls, WallError> {
+    let (normalized, origin) = normalize_runs(runs, thickness, tol, justification)?;
+    let openings: Vec<Opening> = openings
+        .iter()
+        .map(|o| Opening {
+            run: o.run,
+            at: o.at / thickness,
+            width: o.width / thickness,
+        })
+        .collect();
+    let mut walls = build_normalized(
+        &normalized,
+        &openings,
+        (tol / thickness).max(1e-8),
+        thickness,
+    )?;
+    for region in &mut walls.regions {
+        for point in region
+            .outer
+            .iter_mut()
+            .chain(region.holes.iter_mut().flatten())
+        {
+            point[0] = point[0] * thickness + origin[0];
+            point[1] = point[1] * thickness + origin[1];
+        }
+    }
+    for opening in &mut walls.openings {
+        opening.centre[0] = opening.centre[0] * thickness + origin[0];
+        opening.centre[1] = opening.centre[1] * thickness + origin[1];
+        opening.width *= thickness;
+        opening.thickness *= thickness;
+    }
+    walls.centreline *= thickness;
+    walls.gross_area *= thickness * thickness;
+    walls.net_area *= thickness * thickness;
+    Ok(walls)
+}
+
+/// Checks dimensions before moving the drawing to a local, thickness-normalised frame.
+fn normalize_runs(
+    runs: &[Run],
+    thickness: f64,
+    tol: f64,
+    justification: Justification,
+) -> Result<(Vec<Run>, [f64; 2]), WallError> {
     if thickness <= 0.0 || !thickness.is_finite() {
         return Err(bad("The wall thickness must be more than 0"));
     }
@@ -123,6 +236,13 @@ pub fn build_walls_justified(
         return Err(bad("Give at least one run of wall"));
     }
     for (i, r) in runs.iter().enumerate() {
+        if r.thickness
+            .is_some_and(|width| !width.is_finite() || width <= 0.0)
+        {
+            return Err(bad(format!(
+                "Run {i} thickness must be finite and more than 0"
+            )));
+        }
         let need = if r.closed { 3 } else { 2 };
         if r.points.len() < need || r.points.iter().flatten().any(|c| !c.is_finite()) {
             return Err(bad(format!("Run {i} needs {need} finite points or more")));
@@ -150,47 +270,18 @@ pub fn build_walls_justified(
             if closed && dist(r.points[0], *r.points.last().expect("2+")) <= tol {
                 points.pop();
             }
-            Run { points, closed }
+            Run {
+                points,
+                closed,
+                thickness: Some(r.thickness.unwrap_or(thickness) / thickness),
+                justification: Some(r.justification.unwrap_or(justification)),
+            }
         })
         .collect();
     if normalized.iter().any(|r| r.closed && r.points.len() < 3) {
         return Err(bad("A closed run needs three distinct points"));
     }
-    let openings: Vec<Opening> = openings
-        .iter()
-        .map(|o| Opening {
-            run: o.run,
-            at: o.at / thickness,
-            width: o.width / thickness,
-        })
-        .collect();
-    let mut walls = build_normalized(
-        &normalized,
-        &openings,
-        (tol / thickness).max(1e-8),
-        justification,
-        thickness,
-    )?;
-    for region in &mut walls.regions {
-        for point in region
-            .outer
-            .iter_mut()
-            .chain(region.holes.iter_mut().flatten())
-        {
-            point[0] = point[0] * thickness + origin[0];
-            point[1] = point[1] * thickness + origin[1];
-        }
-    }
-    for opening in &mut walls.openings {
-        opening.centre[0] = opening.centre[0] * thickness + origin[0];
-        opening.centre[1] = opening.centre[1] * thickness + origin[1];
-        opening.width *= thickness;
-        opening.thickness *= thickness;
-    }
-    walls.centreline *= thickness;
-    walls.gross_area *= thickness * thickness;
-    walls.net_area *= thickness * thickness;
-    Ok(walls)
+    Ok((normalized, origin))
 }
 
 /// `unit`: one normalised unit in drawing units (the thickness), for messages.
@@ -198,22 +289,16 @@ fn build_normalized(
     runs: &[Run],
     openings: &[Opening],
     tol: f64,
-    justification: Justification,
     unit: f64,
 ) -> Result<Walls, WallError> {
-    check_overlaps(runs, tol, justification)?;
-    check_openings(runs, openings, tol, justification, unit)?;
+    check_overlaps(runs, tol)?;
+    check_openings(runs, openings, tol, unit)?;
     let centreline: f64 = runs.iter().map(run_length).sum();
-    let chains = join_runs(runs, tol, justification == Justification::Centre);
-    let (left, right, shift) = match justification {
-        Justification::Centre => (0.5, -0.5, 0.0),
-        Justification::Left => (1.0, 0.0, 0.5),
-        Justification::Right => (0.0, -1.0, -0.5),
-    };
+    let chains = join_runs(runs, tol);
     let mut polygons: Vec<Vec<[f64; 2]>> = Vec::new();
     let mut caps: Vec<EndCap> = Vec::new();
     for chain in &chains {
-        let (pieces, ends) = strip(chain, left, right);
+        let (pieces, ends) = strip(chain);
         polygons.extend(pieces);
         caps.extend(ends);
     }
@@ -250,14 +335,17 @@ fn build_normalized(
     let mut placed = Vec::new();
     for o in openings {
         let (point, dir) = point_along(&runs[o.run], o.at).expect("validated opening");
+        let (left, right) = offsets(&runs[o.run]);
+        let thickness = left - right;
+        let shift = (left + right) / 2.0;
         let centre = [point[0] - dir[1] * shift, point[1] + dir[0] * shift];
-        let cut = rectangle(centre, dir, o.width, 1.2);
+        let cut = rectangle(centre, dir, o.width, thickness * 1.2);
         cut_from(&mut regions, &cut);
         placed.push(Placed {
             centre,
             dir,
             width: o.width,
-            thickness: 1.0,
+            thickness,
         });
     }
     let net_area = regions.iter().map(Region::area).sum();
@@ -277,12 +365,24 @@ struct Segment {
     b: [f64; 2],
     length: f64,
     from: f64,
+    left: f64,
+    right: f64,
+}
+
+fn offsets(run: &Run) -> (f64, f64) {
+    let width = run.thickness.expect("normalised run thickness");
+    match run.justification.expect("normalised run justification") {
+        Justification::Centre => (width / 2.0, -width / 2.0),
+        Justification::Left => (width, 0.0),
+        Justification::Right => (0.0, -width),
+    }
 }
 
 fn segments(runs: &[Run]) -> Vec<Segment> {
     let mut result = Vec::new();
     for (run, r) in runs.iter().enumerate() {
         let mut from = 0.0;
+        let (left, right) = offsets(r);
         let count = r.points.len() - usize::from(!r.closed);
         for index in 0..count {
             let a = r.points[index];
@@ -294,6 +394,8 @@ fn segments(runs: &[Run]) -> Vec<Segment> {
                 b,
                 length,
                 from,
+                left,
+                right,
             });
             from += length;
         }
@@ -309,15 +411,11 @@ fn difference(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
     [a[0] - b[0], a[1] - b[1]]
 }
 
-fn check_overlaps(runs: &[Run], tol: f64, justification: Justification) -> Result<(), WallError> {
-    let shift = match justification {
-        Justification::Centre => 0.0,
-        Justification::Left => 0.5,
-        Justification::Right => -0.5,
-    };
+fn check_overlaps(runs: &[Run], tol: f64) -> Result<(), WallError> {
     let segments: Vec<_> = segments(runs)
         .into_iter()
         .map(|mut segment| {
+            let shift = (segment.left + segment.right) / 2.0;
             let offset = [
                 -(segment.b[1] - segment.a[1]) * shift / segment.length,
                 (segment.b[0] - segment.a[0]) * shift / segment.length,
@@ -339,7 +437,8 @@ fn check_overlaps(runs: &[Run], tol: f64, justification: Justification) -> Resul
             }
             let offset = difference(second.a, first.a);
             // Parallel strips that overlap cannot be independently measured.
-            if cross(dir, offset).abs() >= 1.0 - tol {
+            let half_widths = (first.left - first.right + second.left - second.right) / 2.0;
+            if cross(dir, offset).abs() >= half_widths - tol {
                 continue;
             }
             let along = |p: [f64; 2]| {
@@ -363,16 +462,10 @@ fn check_openings(
     runs: &[Run],
     openings: &[Opening],
     tol: f64,
-    justification: Justification,
     unit: f64,
 ) -> Result<(), WallError> {
     let segments = segments(runs);
-    let clearance = if justification == Justification::Centre {
-        0.5
-    } else {
-        1.0
-    };
-    let fits = |index| where_it_fits(&segments, openings, index, tol, clearance, unit);
+    let fits = |index| fit_message(&segments, openings, index, tol, unit);
     for (index, opening) in openings.iter().enumerate() {
         let run = runs
             .get(opening.run)
@@ -425,8 +518,8 @@ fn check_openings(
                 )));
             }
         }
-        for (at, sine) in junctions(host, &segments, tol) {
-            if (opening.at - at).abs() <= half + clearance / sine + tol {
+        for (at, from, to) in junctions(host, &segments, tol) {
+            if opening.at + half >= from - tol && opening.at - half <= to + tol {
                 return Err(bad(format!(
                     "Opening {index} crosses a wall junction or corner at {} along run {}{}",
                     number(at * unit),
@@ -439,9 +532,10 @@ fn check_openings(
     Ok(())
 }
 
-/// Where other walls cross or meet `host`: the distance along its run and the sine of the
-/// angle between them.
-fn junctions(host: &Segment, segments: &[Segment], tol: f64) -> Vec<(f64, f64)> {
+/// Where other walls cross or meet `host`: the junction distance and its occupied range.
+/// Project both wall strips onto the host, so unequal widths, oblique intersections and
+/// directed justification all reserve enough room for the entire opening rectangle.
+fn junctions(host: &Segment, segments: &[Segment], tol: f64) -> Vec<(f64, f64, f64)> {
     let host_delta = difference(host.b, host.a);
     segments
         .iter()
@@ -461,8 +555,17 @@ fn junctions(host: &Segment, segments: &[Segment], tol: f64) -> Vec<(f64, f64)> 
             {
                 return None;
             }
-            let sine = determinant.abs() / (host.length * other.length);
-            Some((host.from + along_host * host.length, sine))
+            let sine = determinant / (host.length * other.length);
+            let cosine = (host_delta[0] * other_delta[0] + host_delta[1] * other_delta[1])
+                / (host.length * other.length);
+            let at = host.from + along_host * host.length;
+            let distances = [host.right, host.left].into_iter().flat_map(|offset| {
+                [other.right, other.left].map(move |face| at + (cosine * offset - face) / sine)
+            });
+            let (from, to) = distances.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(x), b.max(x))
+            });
+            Some((at, from, to))
         })
         .collect()
 }
@@ -472,14 +575,45 @@ fn junctions(host: &Segment, segments: &[Segment], tol: f64) -> Vec<(f64, f64)> 
 /// (the same rules as `check_openings`), or that it fits nowhere there. A junction's side of a
 /// range is shown rounded inwards (touching its clearance is refused); a run's end and a
 /// neighbouring opening may be touched.
-fn where_it_fits(
+fn fit_message(
     segments: &[Segment],
     openings: &[Opening],
     index: usize,
     tol: f64,
-    clearance: f64,
     unit: f64,
 ) -> String {
+    let opening = &openings[index];
+    let centres = free_centres(segments, openings, index, tol);
+    let shown: Vec<String> = centres
+        .iter()
+        .filter_map(|&(a, a_ok, b, b_ok)| {
+            let (a, b) = (a * unit * 1000.0, b * unit * 1000.0);
+            let a = if a_ok { a.ceil() } else { a.floor() + 1.0 } / 1000.0;
+            let b = if b_ok { b.floor() } else { b.ceil() - 1.0 } / 1000.0;
+            (a <= b).then(|| format!("{} to {}", number(a), number(b)))
+        })
+        .collect();
+    if shown.is_empty() {
+        return format!(
+            "; an opening {} wide fits nowhere on run {}: make it narrower or put it on another run",
+            number(opening.width * unit),
+            opening.run
+        );
+    }
+    format!(
+        "; an opening {} wide fits on run {} with its `at` from {}",
+        number(opening.width * unit),
+        opening.run,
+        shown.join(", or from ")
+    )
+}
+
+fn free_centres(
+    segments: &[Segment],
+    openings: &[Opening],
+    index: usize,
+    tol: f64,
+) -> Vec<(f64, bool, f64, bool)> {
     let opening = &openings[index];
     let half = opening.width / 2.0;
     // (from, to, whether each end may be touched), in normalised units along the run.
@@ -487,13 +621,7 @@ fn where_it_fits(
     for host in segments.iter().filter(|s| s.run == opening.run) {
         let mut blocked: Vec<(f64, f64, bool)> = junctions(host, segments, tol)
             .into_iter()
-            .map(|(at, sine)| {
-                (
-                    at - clearance / sine - tol,
-                    at + clearance / sine + tol,
-                    false,
-                )
-            })
+            .map(|(_, from, to)| (from - tol, to + tol, false))
             .chain(
                 openings
                     .iter()
@@ -526,28 +654,57 @@ fn where_it_fits(
                 .filter(|(a, _, b, _)| b - a >= -tol),
         );
     }
-    let shown: Vec<String> = centres
+    centres
+}
+
+/// Inclusive `at` ranges for a new opening, in drawing units. Existing openings, run ends,
+/// corners and junctions use exactly the same clearances as wall construction. The tiny
+/// inward margin on strict junction boundaries makes both returned ends valid placements.
+pub fn where_it_fits(
+    runs: &[Run],
+    thickness: f64,
+    openings: &[Opening],
+    run: usize,
+    width: f64,
+    tol: f64,
+    justification: Justification,
+) -> Result<Vec<[f64; 2]>, WallError> {
+    let (normalized, _) = normalize_runs(runs, thickness, tol, justification)?;
+    if run >= runs.len() {
+        return Err(bad(format!("No run {run} for an opening")));
+    }
+    if !width.is_finite() || width <= tol {
+        return Err(bad(
+            "The opening width must be finite and greater than the tolerance",
+        ));
+    }
+    let tolerance = (tol / thickness).max(1e-8);
+    let mut proposed: Vec<_> = openings
         .iter()
-        .filter_map(|&(a, a_ok, b, b_ok)| {
-            let (a, b) = (a * unit * 1000.0, b * unit * 1000.0);
-            let a = if a_ok { a.round() } else { a.floor() + 1.0 } / 1000.0;
-            let b = if b_ok { b.round() } else { b.ceil() - 1.0 } / 1000.0;
-            (a <= b).then(|| format!("{} to {}", number(a), number(b)))
+        .map(|opening| Opening {
+            run: opening.run,
+            at: opening.at / thickness,
+            width: opening.width / thickness,
         })
         .collect();
-    if shown.is_empty() {
-        return format!(
-            "; an opening {} wide fits nowhere on run {}: make it narrower or put it on another run",
-            number(opening.width * unit),
-            opening.run
-        );
-    }
-    format!(
-        "; an opening {} wide fits on run {} with its `at` from {}",
-        number(opening.width * unit),
-        opening.run,
-        shown.join(", or from ")
+    proposed.push(Opening {
+        run,
+        at: 0.0,
+        width: width / thickness,
+    });
+    Ok(free_centres(
+        &segments(&normalized),
+        &proposed,
+        proposed.len() - 1,
+        tolerance,
     )
+    .into_iter()
+    .filter_map(|(a, a_ok, b, b_ok)| {
+        let a = if a_ok { a } else { a + tolerance } * thickness;
+        let b = if b_ok { b } else { b - tolerance } * thickness;
+        (a <= b).then_some([a, b])
+    })
+    .collect())
 }
 
 /// A length for a message: at most 3 decimals, no trailing zeros.
@@ -566,15 +723,18 @@ fn number(x: f64) -> String {
 struct Chain {
     points: Vec<[f64; 2]>,
     closed: bool,
+    /// Left and right offsets for each segment, following its direction.
+    offsets: Vec<(f64, f64)>,
 }
 
 /// Runs joined end to end where exactly two ends meet (and no run passes through).
-fn join_runs(runs: &[Run], tol: f64, reversible: bool) -> Vec<Chain> {
+fn join_runs(runs: &[Run], tol: f64) -> Vec<Chain> {
     let chains: Vec<Chain> = runs
         .iter()
         .map(|r| Chain {
             points: r.points.clone(),
             closed: r.closed,
+            offsets: vec![offsets(r); r.points.len() - usize::from(!r.closed)],
         })
         .collect();
     let mut links = vec![[None; 2]; chains.len()];
@@ -602,20 +762,14 @@ fn join_runs(runs: &[Run], tol: f64, reversible: bool) -> Vec<Chain> {
                 .into_iter()
                 .find(|&v| v != (i, end))
                 .expect("two ends");
-            if other != i && (reversible || end != other_end) {
+            if other != i {
                 links[i][usize::from(end)] = Some((other, other_end));
             }
         }
     }
     // Visit open chains from a free end first, then the remaining closed loops.
     let mut starts: Vec<_> = (0..chains.len()).collect();
-    starts.sort_by_key(|&i| {
-        if reversible {
-            links[i].iter().all(Option::is_some)
-        } else {
-            links[i][0].is_some()
-        }
-    });
+    starts.sort_by_key(|&i| links[i].iter().all(Option::is_some));
     let mut seen = vec![false; chains.len()];
     let mut result = Vec::new();
     for start in starts {
@@ -628,16 +782,23 @@ fn join_runs(runs: &[Run], tol: f64, reversible: bool) -> Vec<Chain> {
             continue;
         }
         let mut current = start;
-        let mut entering = reversible && links[start][0].is_some() && links[start][1].is_none();
+        let mut entering = links[start][0].is_some() && links[start][1].is_none();
         let mut points = Vec::new();
+        let mut offsets = Vec::new();
         let mut closed = false;
         loop {
             seen[current] = true;
             let mut next = chains[current].points.clone();
+            let mut next_offsets = chains[current].offsets.clone();
             if entering {
                 next.reverse();
+                next_offsets.reverse();
+                for (left, right) in &mut next_offsets {
+                    (*left, *right) = (-*right, -*left);
+                }
             }
             points.extend(next.into_iter().skip(usize::from(!points.is_empty())));
+            offsets.extend(next_offsets);
             match links[current][usize::from(!entering)] {
                 Some((other, _)) if other == start => {
                     points.pop();
@@ -651,7 +812,11 @@ fn join_runs(runs: &[Run], tol: f64, reversible: bool) -> Vec<Chain> {
                 _ => break,
             }
         }
-        result.push(Chain { points, closed });
+        result.push(Chain {
+            points,
+            closed,
+            offsets,
+        });
     }
     result
 }
@@ -681,37 +846,36 @@ fn passes_through(chains: &[Chain], p: [f64; 2], tol: f64) -> bool {
 type EndCap = ([f64; 2], [f64; 2], [f64; 2]);
 type Strip = (Vec<Vec<[f64; 2]>>, Vec<EndCap>);
 
-fn strip(c: &Chain, left_offset: f64, right_offset: f64) -> Strip {
+fn strip(c: &Chain) -> Strip {
     let pts = &c.points;
     let n = pts.len();
-    // The offset corners at each point: left and right.
+    // Each corner may have two vertices: a collinear change in thickness is a step.
     let mut left = Vec::with_capacity(n);
     let mut right = Vec::with_capacity(n);
     for i in 0..n {
-        let prev = if i > 0 {
-            Some(pts[i - 1])
+        let previous = if i > 0 {
+            Some(i - 1)
         } else if c.closed {
-            Some(pts[n - 1])
+            Some(n - 1)
         } else {
             None
         };
-        let next = if i + 1 < n {
-            Some(pts[i + 1])
-        } else if c.closed {
-            Some(pts[0])
-        } else {
-            None
+        let next = (i + 1 < n || c.closed).then_some(i);
+        let side = |left: bool| {
+            let offset = |segment: usize| {
+                let (l, r) = c.offsets[segment];
+                if left {
+                    l
+                } else {
+                    r
+                }
+            };
+            let before = previous.map(|segment| (pts[segment], offset(segment)));
+            let after = next.map(|segment| (pts[(segment + 1) % n], offset(segment)));
+            offset_corner(before, pts[i], after)
         };
-        let (offset, _) = corner(prev, pts[i], next, 1.0);
-        let delta = [offset[0] - pts[i][0], offset[1] - pts[i][1]];
-        left.push([
-            pts[i][0] + delta[0] * left_offset,
-            pts[i][1] + delta[1] * left_offset,
-        ]);
-        right.push([
-            pts[i][0] + delta[0] * right_offset,
-            pts[i][1] + delta[1] * right_offset,
-        ]);
+        left.push(side(true));
+        right.push(side(false));
     }
     let mut caps = Vec::new();
     if c.closed {
@@ -724,8 +888,13 @@ fn strip(c: &Chain, left_offset: f64, right_offset: f64) -> Strip {
             } else {
                 (from..n).chain(0..=to).collect()
             };
-            let mut ring: Vec<[f64; 2]> = idx.iter().map(|&i| left[i]).collect();
-            ring.extend(idx.iter().rev().map(|&i| right[i]));
+            let mut ring: Vec<[f64; 2]> =
+                idx.iter().flat_map(|&i| left[i].iter().copied()).collect();
+            ring.extend(
+                idx.iter()
+                    .rev()
+                    .flat_map(|&i| right[i].iter().rev().copied()),
+            );
             ring
         };
         let pieces = if n == 3 {
@@ -735,60 +904,66 @@ fn strip(c: &Chain, left_offset: f64, right_offset: f64) -> Strip {
         };
         return (pieces, caps);
     }
-    caps.push((pts[0], left[0], right[0]));
-    caps.push((pts[n - 1], left[n - 1], right[n - 1]));
-    let mut ring: Vec<[f64; 2]> = left.clone();
-    ring.extend(right.iter().rev());
+    caps.push((pts[0], left[0][0], right[0][0]));
+    caps.push((pts[n - 1], left[n - 1][0], right[n - 1][0]));
+    let mut ring: Vec<[f64; 2]> = left.into_iter().flatten().collect();
+    ring.extend(
+        right
+            .into_iter()
+            .rev()
+            .flat_map(|points| points.into_iter().rev()),
+    );
     (vec![ring], caps)
 }
 
-/// The offset corners at `p`, with the mitre limited to four offset widths.
-fn corner(
-    prev: Option<[f64; 2]>,
-    p: [f64; 2],
-    next: Option<[f64; 2]>,
-    h: f64,
-) -> ([f64; 2], [f64; 2]) {
-    let dir = |a: [f64; 2], b: [f64; 2]| {
-        let l = dist(a, b);
-        [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
+/// Intersects the two face lines at a corner. Each segment keeps its own offset, and
+/// mitres remain limited to four offset widths. Collinear unequal widths make a step.
+fn offset_corner(
+    previous: Option<([f64; 2], f64)>,
+    point: [f64; 2],
+    next: Option<([f64; 2], f64)>,
+) -> Vec<[f64; 2]> {
+    let direction = |a: [f64; 2], b: [f64; 2]| {
+        let length = dist(a, b);
+        [(b[0] - a[0]) / length, (b[1] - a[1]) / length]
     };
-    let normal = |d: [f64; 2]| [-d[1], d[0]];
-    match (prev, next) {
-        (None, Some(n)) => {
-            let nn = normal(dir(p, n));
-            (
-                [p[0] + nn[0] * h, p[1] + nn[1] * h],
-                [p[0] - nn[0] * h, p[1] - nn[1] * h],
-            )
-        }
-        (Some(q), None) => {
-            let nn = normal(dir(q, p));
-            (
-                [p[0] + nn[0] * h, p[1] + nn[1] * h],
-                [p[0] - nn[0] * h, p[1] - nn[1] * h],
-            )
-        }
-        (Some(q), Some(n)) => {
-            let (n1, n2) = (normal(dir(q, p)), normal(dir(p, n)));
-            let m = [n1[0] + n2[0], n1[1] + n2[1]];
-            let len = m[0].hypot(m[1]);
-            if len < 1e-9 {
-                // Turning straight back: the segment's own offset.
-                return (
-                    [p[0] + n1[0] * h, p[1] + n1[1] * h],
-                    [p[0] - n1[0] * h, p[1] - n1[1] * h],
-                );
+    let shifted = |direction: [f64; 2], offset: f64| {
+        [
+            point[0] - direction[1] * offset,
+            point[1] + direction[0] * offset,
+        ]
+    };
+    match (previous, next) {
+        (None, Some((next, offset))) => vec![shifted(direction(point, next), offset)],
+        (Some((previous, offset)), None) => vec![shifted(direction(previous, point), offset)],
+        (Some((previous, before)), Some((next, after))) => {
+            let a = direction(previous, point);
+            let b = direction(point, next);
+            let p = shifted(a, before);
+            let q = shifted(b, after);
+            let determinant = cross(a, b);
+            if determinant.abs() < 1e-9 {
+                return if dist(p, q) < 1e-9 || a[0] * b[0] + a[1] * b[1] < 0.0 {
+                    vec![p]
+                } else {
+                    vec![p, q]
+                };
             }
-            let m = [m[0] / len, m[1] / len];
-            let cos = (m[0] * n1[0] + m[1] * n1[1]).max(0.25);
-            let k = h / cos;
-            (
-                [p[0] + m[0] * k, p[1] + m[1] * k],
-                [p[0] - m[0] * k, p[1] - m[1] * k],
-            )
+            let along = cross(difference(q, p), b) / determinant;
+            let intersection = [p[0] + a[0] * along, p[1] + a[1] * along];
+            let delta = difference(intersection, point);
+            let length = delta[0].hypot(delta[1]);
+            let limit = 4.0 * before.abs().max(after.abs());
+            if length > limit {
+                vec![[
+                    point[0] + delta[0] * limit / length,
+                    point[1] + delta[1] * limit / length,
+                ]]
+            } else {
+                vec![intersection]
+            }
         }
-        (None, None) => (p, p),
+        (None, None) => vec![point],
     }
 }
 
@@ -1075,6 +1250,8 @@ mod tests {
         Run {
             points: points.to_vec(),
             closed,
+            thickness: None,
+            justification: None,
         }
     }
 
@@ -1384,6 +1561,241 @@ mod tests {
         assert!((walls.gross_area - 4.36).abs() < 1e-9);
         assert_eq!(walls.regions.len(), 1);
         assert_eq!(walls.regions[0].holes.len(), 2);
+    }
+
+    #[test]
+    fn mixed_t_l_and_x_junctions_have_exact_areas_in_every_unit() {
+        // In metres: T = 10*.25 + (4-.125)*.15 = 3.08125;
+        // L = 4*.25 + 3*.15 = 1.45 (the two mitre quadrants cancel);
+        // X = 10*.25 + 8*.15 - .25*.15 = 3.6625.
+        // Every case has a .9 m opening in the thick run and a .8 m opening
+        // in the thin run: subtract .9*.25 + .8*.15 = .345 m2 once.
+        for units_per_metre in [1000.0, 100.0, 1.0, 1000.0 / 25.4] {
+            for origin_metres in [[0.0, 0.0], [500_000.0, 2_700_000.0]] {
+                for (thick, thin, gross) in [
+                    ([[0.0, 0.0], [10.0, 0.0]], [[5.0, 0.0], [5.0, 4.0]], 3.08125),
+                    ([[0.0, 0.0], [4.0, 0.0]], [[4.0, 0.0], [4.0, 3.0]], 1.45),
+                    ([[0.0, 0.0], [10.0, 0.0]], [[5.0, -4.0], [5.0, 4.0]], 3.6625),
+                ] {
+                    let make_run = |points: [[f64; 2]; 2], width| Run {
+                        points: points
+                            .iter()
+                            .map(|p| {
+                                [
+                                    (p[0] + origin_metres[0]) * units_per_metre,
+                                    (p[1] + origin_metres[1]) * units_per_metre,
+                                ]
+                            })
+                            .collect(),
+                        closed: false,
+                        thickness: Some(width * units_per_metre),
+                        justification: None,
+                    };
+                    let runs = [make_run(thick, 0.25), make_run(thin, 0.15)];
+                    let openings = [
+                        Opening {
+                            run: 0,
+                            at: 2.0 * units_per_metre,
+                            width: 0.9 * units_per_metre,
+                        },
+                        Opening {
+                            run: 1,
+                            at: 2.0 * units_per_metre,
+                            width: 0.8 * units_per_metre,
+                        },
+                    ];
+                    let walls = build_walls(
+                        &runs,
+                        0.25 * units_per_metre,
+                        &openings,
+                        TOL * units_per_metre,
+                    )
+                    .unwrap();
+                    let area_scale = units_per_metre * units_per_metre;
+                    assert!(
+                        (walls.gross_area / area_scale - gross).abs() < 1e-8,
+                        "unit={units_per_metre}, origin={origin_metres:?}: gross {} != {gross}",
+                        walls.gross_area / area_scale
+                    );
+                    assert!(
+                        (walls.net_area / area_scale - (gross - 0.345)).abs() < 1e-8,
+                        "unit={units_per_metre}, origin={origin_metres:?}: net {}",
+                        walls.net_area / area_scale
+                    );
+                    assert!((walls.openings[0].thickness / units_per_metre - 0.25).abs() < 1e-12);
+                    assert!((walls.openings[1].thickness / units_per_metre - 0.15).abs() < 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opening_clearance_uses_the_meeting_walls_width_and_ranges_are_usable() {
+        let mut through = run(&[[0.0, 0.0], [10.0, 0.0]], false);
+        through.thickness = Some(0.25);
+        let mut branch = run(&[[5.0, 0.0], [5.0, 4.0]], false);
+        branch.thickness = Some(0.15);
+        let runs = [through, branch];
+        let opening = |run, at, width| Opening { run, at, width };
+        build_walls(&runs, 0.25, &[opening(0, 4.45, 0.9)], TOL).unwrap();
+        let refused = build_walls(&runs, 0.25, &[opening(0, 4.5, 0.9)], TOL)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("junction or corner at 5"), "{refused}");
+        assert!(refused.contains("4.474"), "{refused}");
+        assert!(build_walls(&runs, 0.25, &[opening(1, 0.5, 0.8)], TOL).is_err());
+        build_walls(&runs, 0.25, &[opening(1, 0.526, 0.8)], TOL).unwrap();
+        let existing = [opening(0, 2.0, 0.9)];
+        for (run, width) in [(0, 0.9), (1, 0.8)] {
+            let ranges = where_it_fits(
+                &runs,
+                0.25,
+                &existing,
+                run,
+                width,
+                TOL,
+                Justification::Centre,
+            )
+            .unwrap();
+            assert!(!ranges.is_empty());
+            for range in ranges {
+                for at in range {
+                    let mut openings = existing.to_vec();
+                    openings.push(opening(run, at, width));
+                    build_walls(&runs, 0.25, &openings, TOL).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_opening_read_ranges_fit_in_every_drawing_unit() {
+        for units_per_metre in [1000.0, 100.0, 1.0, 1000.0 / 25.4] {
+            let mut through = run(&[[0.0, 0.0], [10.0 * units_per_metre, 0.0]], false);
+            through.thickness = Some(0.25 * units_per_metre);
+            let mut branch = run(
+                &[
+                    [5.0 * units_per_metre, 0.0],
+                    [5.0 * units_per_metre, 4.0 * units_per_metre],
+                ],
+                false,
+            );
+            branch.thickness = Some(0.15 * units_per_metre);
+            let runs = [through, branch];
+            let width = 0.9007 * units_per_metre;
+            let existing = [Opening {
+                run: 0,
+                at: 2.0 * units_per_metre,
+                width,
+            }];
+            let thickness = 0.25 * units_per_metre;
+            let tolerance = TOL * units_per_metre;
+            let ranges = where_it_fits(
+                &runs,
+                thickness,
+                &existing,
+                0,
+                width,
+                tolerance,
+                Justification::Centre,
+            )
+            .unwrap();
+            assert_eq!(ranges.len(), 3);
+            for range in ranges {
+                for at in range {
+                    let mut openings = existing.to_vec();
+                    openings.push(Opening { run: 0, at, width });
+                    build_walls(&runs, thickness, &openings, tolerance).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_thin_partition_stops_at_both_faces_of_a_thick_outer_wall() {
+        let mut outer = run(&[[0.0, 0.0], [5.0, 0.0], [5.0, 4.0], [0.0, 4.0]], true);
+        outer.thickness = Some(0.25);
+        let mut partition = run(&[[2.5, 0.0], [2.5, 4.0]], false);
+        partition.thickness = Some(0.15);
+        let walls = build_walls(&[outer, partition], 0.25, &[], TOL).unwrap();
+        // 18*.25 for the ring, plus 3.75*.15 between its two inner faces.
+        assert!((walls.gross_area - 5.0625).abs() < 1e-10);
+        assert_eq!(walls.regions.len(), 1);
+        assert_eq!(walls.regions[0].holes.len(), 2);
+    }
+
+    #[test]
+    fn collinear_runs_change_width_without_tapering() {
+        let mut thick = run(&[[0.0, 0.0], [3.0, 0.0]], false);
+        thick.thickness = Some(0.25);
+        let mut thin = run(&[[3.0, 0.0], [7.0, 0.0]], false);
+        thin.thickness = Some(0.15);
+        let walls = build_walls(&[thick, thin], 0.2, &[], TOL).unwrap();
+        assert!((walls.gross_area - 1.35).abs() < 1e-10);
+        assert_eq!(walls.regions.len(), 1);
+        assert!(walls.regions[0].outer.contains(&[3.0, 0.125]));
+        assert!(walls.regions[0].outer.contains(&[3.0, 0.075]));
+    }
+
+    #[test]
+    fn each_run_can_override_justification_and_reverse_its_direction() {
+        let mut thick = run(&[[0.0, 0.0], [4.0, 0.0]], false);
+        thick.thickness = Some(0.25);
+        thick.justification = Some(Justification::Left);
+        let mut thin = run(&[[4.0, 0.0], [4.0, 3.0]], false);
+        thin.thickness = Some(0.15);
+        thin.justification = Some(Justification::Left);
+        let first = build_walls(&[thick.clone(), thin.clone()], T, &[], TOL).unwrap();
+        thin.points.reverse();
+        thin.justification = Some(Justification::Right);
+        let reversed = build_walls(&[thin, thick], T, &[], TOL).unwrap();
+        // The inside corner removes one .25 by .15 rectangle from length times width.
+        assert!((first.gross_area - (1.45 - 0.25 * 0.15)).abs() < 1e-10);
+        assert!((first.gross_area - reversed.gross_area).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rebuilt_regions_follow_only_overlapping_material_in_every_unit() {
+        for unit in [1000.0, 100.0, 1.0, 1000.0 / 25.4] {
+            let ring = |x: f64, y: f64, w: f64, h: f64| {
+                [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+                    .map(|p| [(p[0] + 500_000.0) * unit, (p[1] + 2_700_000.0) * unit])
+                    .to_vec()
+            };
+            let wall = Region {
+                outer: ring(0.0, 0.0, 10.0, 0.25),
+                holes: Vec::new(),
+            };
+            let left = Region {
+                outer: ring(0.0, 0.0, 4.5, 0.25),
+                holes: Vec::new(),
+            };
+            let right = Region {
+                outer: ring(5.5, 0.0, 4.5, 0.25),
+                holes: Vec::new(),
+            };
+            let touching = Region {
+                outer: ring(0.0, 0.25, 4.5, 0.25),
+                holes: Vec::new(),
+            };
+            let room = Region {
+                outer: ring(-0.125, -0.125, 10.25, 5.25),
+                holes: vec![ring(0.125, 0.125, 9.75, 4.75)],
+            };
+            let inside = Region {
+                outer: ring(1.0, 1.0, 4.0, 0.15),
+                holes: Vec::new(),
+            };
+            for part in [&left, &right] {
+                assert!(regions_overlap(&wall, part, TOL * unit));
+                assert!(regions_overlap(part, &wall, TOL * unit));
+            }
+            assert!(!regions_overlap(&left, &right, TOL * unit));
+            assert!(!regions_overlap(&left, &touching, TOL * unit));
+            assert!(!regions_overlap(&room, &inside, TOL * unit));
+            assert!(regions_overlap(&room, &wall, TOL * unit));
+            assert!(regions_overlap(&room, &room, TOL * unit));
+        }
     }
 
     #[test]

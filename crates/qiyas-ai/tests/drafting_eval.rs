@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[path = "drafting_eval/phases.rs"]
+mod phases;
 #[path = "drafting_eval/replay.rs"]
 mod replay;
 #[path = "support/scripted.rs"]

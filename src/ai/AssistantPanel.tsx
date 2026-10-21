@@ -4,6 +4,7 @@ import type { Pointing } from "../app/useAssistantWiring";
 import { useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
+import { PlanChecklist } from "./PlanChecklist";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
 import { ToolCard } from "./ToolCard";
@@ -141,6 +142,8 @@ export const AssistantPanel = memo(function AssistantPanel({
 
   function show(item: Item, i: number): ReactNode {
     switch (item.kind) {
+      case "plan":
+        return <PlanChecklist key={i} phases={item.phases} />;
       case "user":
         return (
           <div key={i} className="msg user" dir="auto">
@@ -173,6 +176,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           </details>
         );
       case "tool": {
+        if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
         const canUndo = !busy && item === undoable;
         return (

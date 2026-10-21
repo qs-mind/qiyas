@@ -62,12 +62,50 @@ pub enum Command {
         #[serde(default)]
         bubble: Option<f64>,
     },
-    /// Draws joined walls, measurable hatches, centrelines and reusable door/window blocks.
+    /// Draws editable wall systems with measurable hatches, centrelines and door/window blocks.
+    /// Touching systems on the same layers join and rebuild unless join is false. Each run may
+    /// override thickness, height and justification. Use wall_groups to read current handles
+    /// and free opening ranges, then add_wall_openings to cut openings in existing walls.
     /// Plan sizes use drawing units; height, sill and head use metres. Returns metre quantities.
     /// One undo step includes every new layer and block. Curves use polyline approximations.
-    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(extend("x-category" = "draw", "x-words" = ["WALLS"]))]
     #[schemars(example = json!({"type": "walls", "runs": [{"points": [[0, 0], [5000, 0]]}], "thickness": 200, "height": 3, "openings": [{"run": 0, "at": 2000, "width": 900, "kind": "door"}]}))]
     Walls(crate::WallSpec),
+    /// Reads editable wall systems on the current sheet, including each run's centreline
+    /// handle, dimensions and opening insert handles. Width requests free opening-centre
+    /// ranges in drawing units, including accepted endpoints. No drawing or undo change.
+    #[schemars(extend("x-category" = "inquiry", "x-words" = ["WALLGROUPS"]))]
+    #[schemars(example = json!({"type": "wall_groups", "width": 900}))]
+    WallGroups {
+        #[serde(default)]
+        width: Option<f64>,
+    },
+    /// Adds doors or windows to a wall picked by its centreline handle. Distances use drawing
+    /// units; sill and head use metres, with the same defaults and checks as walls.
+    /// Rebuilds the joined wall group in one undo step and returns old-to-new handle mappings.
+    #[schemars(extend("x-category" = "draw", "x-words" = ["ADDWALLOPENINGS"]))]
+    #[schemars(example = json!({"type": "add_wall_openings", "centreline": 1234, "openings": [{"at": 2000, "width": 900, "kind": "door"}]}))]
+    #[schemars(example = json!({"type": "add_wall_openings", "centreline": 1234, "openings": [{"at": 3500, "width": 1200, "kind": "window", "sill": 0.9, "head": 2.1}]}))]
+    AddWallOpenings {
+        centreline: u64,
+        openings: Vec<crate::walls::AddedWallOpening>,
+    },
+    /// Removes door or window inserts and closes their wall openings. Pick insert handles
+    /// belonging to one wall group. Rebuilds the group and follows measurements in one undo step.
+    #[schemars(extend("x-category" = "modify", "x-words" = ["REMOVEWALLOPENINGS"]))]
+    #[schemars(example = json!({"type": "remove_wall_openings", "inserts": [1234]}))]
+    RemoveWallOpenings { inserts: Vec<u64> },
+    /// Moves, resizes or changes a wall opening picked by its insert handle. Omitted fields
+    /// keep their values. Distances use drawing units; sill and head use metres.
+    /// Checks junction clearance and rebuilds the group in one undo step.
+    #[schemars(extend("x-category" = "modify", "x-words" = ["EDITWALLOPENING"]))]
+    #[schemars(example = json!({"type": "edit_wall_opening", "insert": 1234, "at": 2500, "width": 1000}))]
+    EditWallOpening {
+        insert: u64,
+        #[serde(flatten)]
+        edit: crate::walls::WallOpeningEdit,
+    },
+
     /// Length along `points`, in drawing coordinates. Needs 2 points or more.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "measure_distance", "points": [[0, 0], [5, 0], [5, 3]]}))]
@@ -1227,6 +1265,7 @@ impl Command {
             | Command::UcsObject { .. }
             | Command::ListConstraints
             | Command::ListParameters
+            | Command::WallGroups { .. }
             | Command::Records { .. }
             | Command::RecordSchema { .. }
             | Command::Rooms { .. }
@@ -1273,6 +1312,9 @@ impl Command {
             | Command::CreateBlock { .. }
             | Command::DefineBlock { .. }
             | Command::Walls(_)
+            | Command::AddWallOpenings { .. }
+            | Command::RemoveWallOpenings { .. }
+            | Command::EditWallOpening { .. }
             | Command::CenterMark { .. }
             | Command::CenterLine { .. }
             | Command::SymmetryAxis { .. }
@@ -1396,6 +1438,9 @@ impl Command {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    WallGroups {
+        groups: Vec<crate::walls::WallGroupInfo>,
+    },
     /// Wall entities and lengths, areas and volume in metre units.
     Walls {
         #[serde(flatten)]
@@ -1574,6 +1619,29 @@ impl Session {
             Command::Walls(spec) => {
                 return Ok(Outcome::Walls {
                     result: self.walls(spec)?,
+                })
+            }
+            Command::WallGroups { width } => {
+                return Ok(Outcome::WallGroups {
+                    groups: self.wall_groups(width)?,
+                })
+            }
+            Command::AddWallOpenings {
+                centreline,
+                openings,
+            } => {
+                return Ok(Outcome::Walls {
+                    result: self.add_wall_openings(centreline, openings)?,
+                })
+            }
+            Command::RemoveWallOpenings { inserts } => {
+                return Ok(Outcome::Walls {
+                    result: self.remove_wall_openings(&inserts)?,
+                })
+            }
+            Command::EditWallOpening { insert, edit } => {
+                return Ok(Outcome::Walls {
+                    result: self.edit_wall_opening(insert, edit)?,
                 })
             }
             Command::DefineBlock {
@@ -2620,6 +2688,7 @@ impl Session {
     /// deleted entity follow (`Outcome::TakeoffFollowed` says how, `Changed` when none did).
     fn delete_entities(&mut self, targets: &[Target]) -> Result<Outcome, CoreError> {
         let handles = self.sheet_targets(targets)?;
+        self.refuse_wall_insert_erase(&handles)?;
         for &h in &handles {
             let doc = &mut self.drawing.doc;
             match doc.get_entity(h) {

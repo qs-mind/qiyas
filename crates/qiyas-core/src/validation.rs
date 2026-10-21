@@ -829,6 +829,11 @@ pub(crate) fn resolve_defaults(
         }
         if let Some(openings) = input["openings"].as_array() {
             for (i, opening) in openings.iter().enumerate() {
+                let run_height = opening["run"]
+                    .as_u64()
+                    .and_then(|run| input["runs"].get(run as usize))
+                    .and_then(|run| run["height"].as_f64())
+                    .unwrap_or(height);
                 for (field, value) in [
                     (
                         "sill",
@@ -838,7 +843,7 @@ pub(crate) fn resolve_defaults(
                             0.0
                         },
                     ),
-                    ("head", height.min(2.1)),
+                    ("head", run_height.min(2.1)),
                 ] {
                     if opening.get(field).is_none_or(Value::is_null) {
                         set(&format!("openings/{i}/{field}"), json!(value), Some("m"));

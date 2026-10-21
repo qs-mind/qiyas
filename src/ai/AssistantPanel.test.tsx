@@ -2,6 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AssistantPanel } from "./AssistantPanel";
+import { LanguageProvider } from "../i18n";
+import ar from "../i18n/ar.json";
 
 const aiLog = vi.fn();
 vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog() }));
@@ -49,6 +51,51 @@ test("empty state offers three examples; one fills the box", () => {
     "Count the doors on this sheet",
   );
   expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("the phase checklist appears above the running answer and has no Undo action", () => {
+  setup({ items: [
+    { kind: "user", text: "Draw the plan" },
+    { kind: "plan", phases: [
+      { id: "sizes", title: "Check sizes", status: "done" },
+      { id: "walls", title: "Draw walls", status: "active" },
+      { id: "labels", title: "Room labels", status: "pending" },
+      { id: "sheet", title: "Sheet", status: "skipped" },
+    ] },
+    { ...card, id: "plan", label: "plan", mutating: false, summary: "Done" },
+    { kind: "assistant", text: "Drawing the walls.", finished: false },
+  ] }, true);
+  const plan = screen.getByRole("region", { name: "Plan" });
+  expect(plan.querySelectorAll("li")).toHaveLength(4);
+  expect(plan.querySelector('[aria-current="step"]')?.textContent).toContain("Draw walls");
+  for (const status of ["Done", "Active", "Pending", "Skipped"]) expect(screen.getByText(status)).toBeTruthy();
+  const answer = screen.getByText("Drawing the walls.");
+  expect(plan.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByText("Undo")).toBeNull();
+  expect(document.querySelector(".tool-card")).toBeNull();
+});
+
+test("the checklist translates all states into Arabic and follows the page direction", () => {
+  localStorage.setItem("qiyas.lang", "ar");
+  try {
+    const assistant = {
+      transcript: { items: [{ kind: "plan" as const, phases: [
+        { id: "a", title: "A", status: "pending" as const },
+        { id: "b", title: "B", status: "active" as const },
+        { id: "c", title: "C", status: "done" as const },
+        { id: "d", title: "D", status: "skipped" as const },
+      ] }] },
+      busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn(),
+    };
+    render(<LanguageProvider><AssistantPanel assistant={assistant} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} /></LanguageProvider>);
+    expect(screen.getByRole("region", { name: ar["ai.plan"] })).toBeTruthy();
+    for (const key of ["ai.plan.pending", "ai.plan.active", "ai.plan.done", "ai.plan.skipped"] as const) expect(screen.getByText(ar[key])).toBeTruthy();
+    expect(document.documentElement.dir).toBe("rtl");
+  } finally {
+    localStorage.removeItem("qiyas.lang");
+    document.documentElement.dir = "ltr";
+    document.documentElement.lang = "en";
+  }
 });
 
 test("a missing provider model explains how to choose another", () => {

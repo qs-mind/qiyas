@@ -76,6 +76,8 @@ pub(crate) fn has_fields(text: &str) -> bool {
 /// True when `text` holds a field reading an entity (area, length): one to follow edits.
 fn has_object_fields(text: &str) -> bool {
     text.contains("%<\\AcObjProp")
+        || text.contains("%<\\AcVar QiyasArea")
+        || text.contains("%<\\AcVar QiyasLength")
 }
 
 /// What one field code reads.
@@ -84,6 +86,7 @@ enum Code {
     FileName,
     Area(u64),
     Length(u64),
+    Sum { handles: Vec<u64>, area: bool },
     Count(String),
     Unknown,
 }
@@ -128,6 +131,18 @@ fn parse_code(code: &str) -> Code {
         return match word.to_ascii_lowercase().as_str() {
             "date" => Code::Date,
             "filename" => Code::FileName,
+            "qiyasarea" | "qiyaslength" => rest
+                .split('"')
+                .nth(1)
+                .and_then(|list| {
+                    list.split(',')
+                        .map(|h| u64::from_str_radix(h, 16).ok())
+                        .collect::<Option<Vec<_>>>()
+                })
+                .map_or(Code::Unknown, |handles| Code::Sum {
+                    handles,
+                    area: word.eq_ignore_ascii_case("qiyasarea"),
+                }),
             "qiyascount" => rest
                 .split('"')
                 .nth(1)
@@ -311,6 +326,23 @@ impl Session {
                 .map(|n| n.to_string_lossy().into_owned()),
             Code::Area(h) => measure(h, true),
             Code::Length(h) => measure(h, false),
+            Code::Sum { handles, area } => handles
+                .iter()
+                .map(|h| {
+                    let e = doc.get_entity(Handle::new(*h))?;
+                    let extent = self.extent(doc, e, &Xform::identity());
+                    let value = if area { extent.area? } else { extent.length? };
+                    Some(
+                        in_metres(
+                            if area { Kind::Area } else { Kind::Length },
+                            value,
+                            self.drawing.units,
+                        )
+                        .1,
+                    )
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(|values| format!("{:.3}", values.iter().sum::<f64>())),
             Code::Count(block) => {
                 let name = normalize_name(&block);
                 let sheet = doc.block_records.iter().find(|b| b.handle == sheet);
@@ -410,6 +442,95 @@ impl Session {
     /// in the same step.
     pub(crate) fn follow_fields(&mut self) -> Result<(), CoreError> {
         self.update_fields(true).map(|_| ())
+    }
+
+    /// Follows replaced wall entities, retaining sums when one measured hatch splits.
+    pub(crate) fn remap_wall_fields(
+        &mut self,
+        mapping: &std::collections::BTreeMap<u64, Vec<u64>>,
+    ) -> Result<(), CoreError> {
+        if mapping.is_empty() {
+            return Ok(());
+        }
+        fn remap(text: &str, mapping: &std::collections::BTreeMap<u64, Vec<u64>>) -> String {
+            let mut out = String::new();
+            let mut at = 0;
+            for (a, b) in code_spans(text) {
+                out.push_str(&text[at..a]);
+                let original = &text[a..b];
+                let selection = match parse_code(original) {
+                    Code::Area(h) => Some((vec![h], true)),
+                    Code::Length(h) => Some((vec![h], false)),
+                    Code::Sum { handles, area } => Some((handles, area)),
+                    _ => None,
+                };
+                if let Some((handles, area)) =
+                    selection.filter(|(hs, _)| hs.iter().any(|h| mapping.contains_key(h)))
+                {
+                    let mut replaced = std::collections::BTreeSet::new();
+                    for handle in handles {
+                        replaced.extend(
+                            mapping
+                                .get(&handle)
+                                .cloned()
+                                .unwrap_or_else(|| vec![handle]),
+                        );
+                    }
+                    if replaced.len() == 1 {
+                        out.push_str(&object_code(
+                            *replaced.first().unwrap(),
+                            if area { "Area" } else { "Length" },
+                        ));
+                    } else if !replaced.is_empty() {
+                        let ids = replaced
+                            .iter()
+                            .map(|h| format!("{h:X}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        out.push_str(&format!(
+                            r#"%<\AcVar {} "{ids}">%"#,
+                            if area { "QiyasArea" } else { "QiyasLength" }
+                        ));
+                    } else {
+                        out.push_str(original);
+                    }
+                } else {
+                    out.push_str(original);
+                }
+                at = b;
+            }
+            out.push_str(&text[at..]);
+            out
+        }
+        let holders: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter(|e| e.common().extended_data.get_record(FIELD_APP).is_some())
+            .map(|e| e.common().handle)
+            .collect();
+        for handle in holders {
+            let entity = self
+                .drawing
+                .doc
+                .get_entity_mut(handle)
+                .expect("listed field holder");
+            match entity {
+                EntityType::Table(table) => {
+                    let fields = cell_fields(table)
+                        .into_iter()
+                        .map(|(r, c, text)| (r, c, remap(&text, mapping)))
+                        .collect::<Vec<_>>();
+                    set_cell_fields(table, &fields);
+                }
+                _ => {
+                    if let Some(text) = text_field(entity.common()) {
+                        set_text_field(entity.common_mut(), Some(&remap(&text, mapping)));
+                    }
+                }
+            }
+        }
+        self.follow_fields()
     }
 
     /// True when following fields may draw a table's block again: a table holds a field reading

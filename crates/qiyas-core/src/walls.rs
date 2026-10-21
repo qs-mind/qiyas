@@ -1,6 +1,6 @@
 //! Joined wall outlines, measurable hatches and reusable door and window blocks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{AppId, EntityType, Handle};
@@ -19,6 +19,14 @@ pub struct WallRun {
     pub points: crate::PointRun<true>,
     #[serde(default)]
     pub closed: bool,
+    /// Overrides the system thickness, in drawing units.
+    #[serde(default)]
+    pub thickness: Option<f64>,
+    /// Overrides the system height, in metres.
+    #[serde(default)]
+    pub height: Option<f64>,
+    #[serde(default)]
+    pub justification: Option<WallJustification>,
 }
 
 /// The side of the directed run occupied by the wall.
@@ -96,6 +104,13 @@ pub struct WallSpec {
     pub height: f64,
     #[serde(default)]
     pub layers: WallLayers,
+    /// Join touching systems on the same layers. False keeps this system separate.
+    #[serde(default = "default_join")]
+    pub join: bool,
+}
+
+fn default_join() -> bool {
+    true
 }
 
 fn default_wall_height() -> f64 {
@@ -105,6 +120,7 @@ fn default_wall_height() -> f64 {
 /// The created sheet entities and physical quantities, in metres, square metres and cubic metres.
 #[derive(Debug, Clone, Serialize)]
 pub struct WallResult {
+    pub group: u64,
     pub handles: Vec<u64>,
     pub outlines: Vec<u64>,
     pub hatches: Vec<u64>,
@@ -115,6 +131,8 @@ pub struct WallResult {
     pub net_area: f64,
     /// Gross area times height less the opening voids; sill walls and lintels remain.
     pub volume: f64,
+    /// Every replaced handle and its replacements; an empty list means removed.
+    pub handle_map: BTreeMap<u64, Vec<u64>>,
 }
 
 fn invalid(why: impl Into<String>) -> CoreError {
@@ -133,32 +151,46 @@ fn size_name(mm: f64) -> String {
 
 impl Session {
     /// `Command::Walls`: one recorded change including the layers, blocks and xdata application.
-    pub(crate) fn walls(&mut self, mut spec: WallSpec) -> Result<WallResult, CoreError> {
+    fn draw_wall_system(&mut self, mut spec: WallSpec) -> Result<WallResult, CoreError> {
         spec.normalize_runs(self.drawing.units);
         if !spec.height.is_finite() || spec.height <= 0.0 {
             return Err(invalid(
                 "The wall height must be a positive number in metres",
             ));
         }
+        for run in &spec.runs {
+            let height = run.height.unwrap_or(spec.height);
+            if !height.is_finite() || height <= 0.0 {
+                return Err(invalid(
+                    "The wall height must be a positive number in metres",
+                ));
+            }
+        }
         let vertical: Vec<_> = spec
             .openings
             .iter()
             .map(|opening| {
+                let height = spec
+                    .runs
+                    .get(opening.run)
+                    .ok_or_else(|| invalid("The opening run does not exist"))?
+                    .height
+                    .unwrap_or(spec.height);
                 let (sill, head) = match opening.kind {
                     OpeningKind::Door => (
                         opening.sill.unwrap_or(0.0),
-                        opening.head.unwrap_or(spec.height.min(2.1)),
+                        opening.head.unwrap_or(height.min(2.1)),
                     ),
                     OpeningKind::Window => (
                         opening.sill.unwrap_or(0.9),
-                        opening.head.unwrap_or(spec.height.min(2.1)),
+                        opening.head.unwrap_or(height.min(2.1)),
                     ),
                 };
                 if !sill.is_finite()
                     || !head.is_finite()
                     || sill < 0.0
                     || head <= sill
-                    || head > spec.height
+                    || head > height
                 {
                     return Err(invalid(
                         "An opening needs 0 <= sill < head <= wall height, in metres",
@@ -173,6 +205,8 @@ impl Session {
             .map(|r| walls::Run {
                 points: r.points.to_vec(),
                 closed: r.closed,
+                thickness: r.thickness,
+                justification: r.justification.map(geom_justification),
             })
             .collect();
         let openings: Vec<_> = spec
@@ -204,9 +238,44 @@ impl Session {
             .openings
             .iter()
             .zip(vertical)
-            .map(|(o, height)| o.width * spec.thickness * factor * factor * height)
+            .map(|(o, height)| {
+                o.width
+                    * spec.runs[o.run].thickness.unwrap_or(spec.thickness)
+                    * factor
+                    * factor
+                    * height
+            })
             .sum();
+        // Integrate the union by height so overlaps of unequal-height runs count once.
+        let mut levels: Vec<_> = spec
+            .runs
+            .iter()
+            .map(|r| r.height.unwrap_or(spec.height))
+            .collect();
+        levels.sort_by(f64::total_cmp);
+        levels.dedup();
+        let (mut gross_volume, mut previous) = (0.0, 0.0);
+        for level in levels {
+            let active: Vec<_> = runs
+                .iter()
+                .zip(&spec.runs)
+                .filter(|(_, r)| r.height.unwrap_or(spec.height) >= level)
+                .map(|(r, _)| r.clone())
+                .collect();
+            let area = walls::build_walls_justified(
+                &active,
+                spec.thickness,
+                &[],
+                self.measure_tol(),
+                justification,
+            )
+            .map_err(|e| invalid(e.to_string()))?
+            .gross_area;
+            gross_volume += area * factor * factor * (level - previous);
+            previous = level;
+        }
         let mut result = WallResult {
+            group: 0,
             handles: Vec::new(),
             outlines: Vec::new(),
             hatches: Vec::new(),
@@ -215,7 +284,8 @@ impl Session {
             centreline_length: built.centreline * factor,
             gross_area,
             net_area,
-            volume: gross_area * spec.height - voids,
+            volume: gross_volume - voids,
+            handle_map: BTreeMap::new(),
         };
         let layers = [
             spec.layers.outline.as_deref().unwrap_or("A-WALL"),
@@ -280,8 +350,8 @@ impl Session {
                     bulges: Vec::new(),
                 })?;
                 let mut record = ExtendedDataRecord::new(WALL_APP);
-                record.add_value(XDataValue::Real(spec.thickness));
-                record.add_value(XDataValue::Real(spec.height));
+                record.add_value(XDataValue::Real(run.thickness.unwrap_or(spec.thickness)));
+                record.add_value(XDataValue::Real(run.height.unwrap_or(spec.height)));
                 entities[0].common_mut().extended_data.upsert_record(record);
                 result.centrelines.extend(self.add_styled(entities)?);
             }
@@ -303,6 +373,26 @@ impl Session {
         result.handles.extend(&result.hatches);
         result.handles.extend(&result.centrelines);
         result.handles.extend(&result.inserts);
+        let group = result.centrelines[0];
+        result.group = group;
+        for (role, handles) in [
+            ("outline", &result.outlines),
+            ("hatch", &result.hatches),
+            ("run", &result.centrelines),
+            ("opening", &result.inserts),
+        ] {
+            for (index, &handle) in handles.iter().enumerate() {
+                self.stamp_wall(
+                    handle,
+                    &WallTag {
+                        group,
+                        role: role.into(),
+                        index,
+                        spec: spec.clone(),
+                    },
+                )?;
+            }
+        }
         Ok(result)
     }
 
@@ -398,5 +488,728 @@ impl Session {
             }
         }
         Ok(handle)
+    }
+}
+
+/// An opening added to a picked centreline. Distances use drawing units; vertical sizes metres.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddedWallOpening {
+    pub at: f64,
+    pub width: f64,
+    pub kind: OpeningKind,
+    #[serde(default)]
+    pub swing: DoorSwing,
+    #[serde(default)]
+    pub sill: Option<f64>,
+    #[serde(default)]
+    pub head: Option<f64>,
+}
+
+/// Changes to one opening, picked by its insert. Omitted properties stay as they are.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct WallOpeningEdit {
+    #[serde(default)]
+    pub at: Option<f64>,
+    #[serde(default)]
+    pub width: Option<f64>,
+    #[serde(default)]
+    pub kind: Option<OpeningKind>,
+    #[serde(default)]
+    pub swing: Option<DoorSwing>,
+    #[serde(default)]
+    pub sill: Option<f64>,
+    #[serde(default)]
+    pub head: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WallGroupInfo {
+    pub group: u64,
+    pub handles: Vec<u64>,
+    pub layers: WallLayers,
+    pub runs: Vec<WallRunInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WallRunInfo {
+    pub centreline: u64,
+    pub points: Vec<[f64; 2]>,
+    pub closed: bool,
+    /// Length and thickness use drawing units; height uses metres.
+    pub length: f64,
+    pub thickness: f64,
+    pub height: f64,
+    pub justification: WallJustification,
+    pub openings: Vec<WallOpeningInfo>,
+    /// Accepted centre-distance intervals for the requested width, in drawing units.
+    pub free_ranges: Option<Vec<[f64; 2]>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WallOpeningInfo {
+    pub insert: u64,
+    #[serde(flatten)]
+    pub opening: WallOpening,
+}
+
+/// Every member holds the definition: neither a sidecar nor an application session is needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WallTag {
+    group: u64,
+    role: String,
+    index: usize,
+    spec: WallSpec,
+}
+
+#[derive(Clone)]
+struct WallGroup {
+    id: u64,
+    spec: WallSpec,
+    members: Vec<(u64, String, usize)>,
+}
+
+fn geom_justification(value: WallJustification) -> Justification {
+    match value {
+        WallJustification::Centre => Justification::Centre,
+        WallJustification::Left => Justification::Left,
+        WallJustification::Right => Justification::Right,
+    }
+}
+
+fn geom_runs(spec: &WallSpec) -> Vec<walls::Run> {
+    spec.runs
+        .iter()
+        .map(|r| walls::Run {
+            points: r.points.to_vec(),
+            closed: r.closed,
+            thickness: r.thickness,
+            justification: r.justification.map(geom_justification),
+        })
+        .collect()
+}
+
+fn geom_openings(spec: &WallSpec) -> Vec<walls::Opening> {
+    spec.openings
+        .iter()
+        .map(|o| walls::Opening {
+            run: o.run,
+            at: o.at,
+            width: o.width,
+        })
+        .collect()
+}
+
+fn wall_tag(entity: &EntityType) -> Option<WallTag> {
+    let record = entity.common().extended_data.get_record(WALL_APP)?;
+    let text: String = record
+        .values
+        .iter()
+        .filter_map(|v| match v {
+            XDataValue::String(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    serde_json::from_str(&text).ok()
+}
+
+fn layer_names(layers: &WallLayers) -> [String; 5] {
+    [
+        layers.outline.as_deref().unwrap_or("A-WALL"),
+        layers.hatch.as_deref().unwrap_or("A-WALL-PATT"),
+        layers.centreline.as_deref().unwrap_or("A-WALL-CNTR"),
+        layers.doors.as_deref().unwrap_or("A-DOOR"),
+        layers.windows.as_deref().unwrap_or("A-GLAZ"),
+    ]
+    .map(|s| s.trim().to_uppercase())
+}
+
+fn explicit_runs(spec: &mut WallSpec) {
+    for run in &mut spec.runs {
+        run.thickness = Some(run.thickness.unwrap_or(spec.thickness));
+        run.height = Some(run.height.unwrap_or(spec.height));
+        run.justification = Some(run.justification.unwrap_or(spec.justification));
+    }
+    for opening in &mut spec.openings {
+        if let Some(run) = spec.runs.get(opening.run) {
+            opening.sill = Some(opening.sill.unwrap_or(match opening.kind {
+                OpeningKind::Door => 0.0,
+                OpeningKind::Window => 0.9,
+            }));
+            opening.head = Some(
+                opening
+                    .head
+                    .unwrap_or(run.height.unwrap_or(spec.height).min(2.1)),
+            );
+        }
+    }
+}
+
+fn run_segments(run: &WallRun) -> Vec<([f64; 2], [f64; 2])> {
+    let mut segments: Vec<_> = run.points.windows(2).map(|p| (p[0], p[1])).collect();
+    if run.closed && run.points.len() > 1 {
+        segments.push((*run.points.last().unwrap(), run.points[0]));
+    }
+    segments
+}
+
+fn systems_touch(a: &WallSpec, b: &WallSpec, tolerance: f64) -> bool {
+    fn cross(a: [f64; 2], b: [f64; 2]) -> f64 {
+        a[0] * b[1] - a[1] * b[0]
+    }
+    fn minus(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+        [a[0] - b[0], a[1] - b[1]]
+    }
+    fn near(p: [f64; 2], a: [f64; 2], b: [f64; 2], tolerance: f64) -> bool {
+        let d = minus(b, a);
+        let length2 = d[0] * d[0] + d[1] * d[1];
+        if length2 == 0.0 {
+            return false;
+        }
+        let q = minus(p, a);
+        let t = ((q[0] * d[0] + q[1] * d[1]) / length2).clamp(0.0, 1.0);
+        (q[0] - t * d[0]).hypot(q[1] - t * d[1]) <= tolerance
+    }
+    a.runs.iter().flat_map(run_segments).any(|(p, q)| {
+        b.runs.iter().flat_map(run_segments).any(|(r, s)| {
+            let size = p
+                .iter()
+                .chain(&q)
+                .chain(&r)
+                .chain(&s)
+                .fold(0.0_f64, |a, v| a.max(v.abs()));
+            let tolerance = qiyas_geom::tol_near(size, tolerance);
+            if near(p, r, s, tolerance)
+                || near(q, r, s, tolerance)
+                || near(r, p, q, tolerance)
+                || near(s, p, q, tolerance)
+            {
+                return true;
+            }
+            let d = minus(q, p);
+            let e = minus(s, r);
+            let denominator = cross(d, e);
+            if denominator.abs() <= f64::EPSILON * d[0].hypot(d[1]) * e[0].hypot(e[1]) {
+                return false;
+            }
+            let t = cross(minus(r, p), e) / denominator;
+            let u = cross(minus(r, p), d) / denominator;
+            (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)
+        })
+    })
+}
+
+impl Session {
+    fn stamp_wall(&mut self, handle: u64, tag: &WallTag) -> Result<(), CoreError> {
+        let entity = self
+            .drawing
+            .doc
+            .get_entity_mut(Handle::new(handle))
+            .ok_or_else(|| invalid("A wall member is missing"))?;
+        let mut record = ExtendedDataRecord::new(WALL_APP);
+        if tag.role == "run" {
+            let run = &tag.spec.runs[tag.index];
+            record.add_value(XDataValue::Real(
+                run.thickness.unwrap_or(tag.spec.thickness),
+            ));
+            record.add_value(XDataValue::Real(run.height.unwrap_or(tag.spec.height)));
+        }
+        for chunk in
+            crate::field::chunks(&serde_json::to_string(tag).map_err(|e| invalid(e.to_string()))?)
+        {
+            record.add_value(chunk);
+        }
+        entity.common_mut().extended_data.upsert_record(record);
+        Ok(())
+    }
+
+    fn stored_wall_groups(&self) -> Result<Vec<WallGroup>, CoreError> {
+        let mut groups: BTreeMap<u64, WallGroup> = BTreeMap::new();
+        for entity in self.drawing.doc.entities_in_block(&self.sheet) {
+            if let Some(tag) = wall_tag(entity) {
+                groups
+                    .entry(tag.group)
+                    .or_insert_with(|| WallGroup {
+                        id: tag.group,
+                        spec: tag.spec.clone(),
+                        members: Vec::new(),
+                    })
+                    .members
+                    .push((entity.common().handle.value(), tag.role, tag.index));
+            }
+        }
+        for group in groups.values_mut() {
+            let mut present = BTreeSet::new();
+            for &(handle, ref role, index) in &group.members {
+                if role != "run" {
+                    continue;
+                }
+                if !present.insert(index) {
+                    return Err(invalid("A copied wall system has duplicate run identities; copy the complete wall group"));
+                }
+                let Some(run) = group.spec.runs.get_mut(index) else {
+                    return Err(invalid("The stored wall run is invalid"));
+                };
+                if let Some(EntityType::LwPolyline(poly)) =
+                    self.drawing.doc.get_entity(Handle::new(handle))
+                {
+                    run.points = poly
+                        .vertices
+                        .iter()
+                        .map(|v| [v.location.x, v.location.y])
+                        .collect();
+                    run.closed = poly.is_closed;
+                }
+            }
+            if present.len() != group.spec.runs.len() {
+                return Err(invalid("A wall centreline was erased; undo the erase before rebuilding its wall system"));
+            }
+        }
+        Ok(groups.into_values().collect())
+    }
+
+    /// Reads the editable systems on the current sheet, optionally with opening placement ranges.
+    pub fn wall_groups(&self, width: Option<f64>) -> Result<Vec<WallGroupInfo>, CoreError> {
+        self.stored_wall_groups()?
+            .into_iter()
+            .map(|group| {
+                let spec = &group.spec;
+                let runs = spec
+                    .runs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, run)| {
+                        let centreline = group
+                            .members
+                            .iter()
+                            .find(|(_, role, i)| role == "run" && *i == index)
+                            .map(|(h, _, _)| *h)
+                            .unwrap_or(0);
+                        let openings = spec
+                            .openings
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, o)| o.run == index)
+                            .map(|(i, o)| WallOpeningInfo {
+                                insert: group
+                                    .members
+                                    .iter()
+                                    .find(|(_, role, n)| role == "opening" && *n == i)
+                                    .map(|(h, _, _)| *h)
+                                    .unwrap_or(0),
+                                opening: o.clone(),
+                            })
+                            .collect();
+                        let free_ranges = width
+                            .map(|width| {
+                                walls::where_it_fits(
+                                    &geom_runs(spec),
+                                    spec.thickness,
+                                    &geom_openings(spec),
+                                    index,
+                                    width,
+                                    self.measure_tol(),
+                                    geom_justification(spec.justification),
+                                )
+                                .map_err(|e| invalid(e.to_string()))
+                            })
+                            .transpose()?;
+                        Ok(WallRunInfo {
+                            centreline,
+                            points: run.points.to_vec(),
+                            closed: run.closed,
+                            length: run_segments(run)
+                                .iter()
+                                .map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1]))
+                                .sum(),
+                            thickness: run.thickness.unwrap_or(spec.thickness),
+                            height: run.height.unwrap_or(spec.height),
+                            justification: run.justification.unwrap_or(spec.justification),
+                            openings,
+                            free_ranges,
+                        })
+                    })
+                    .collect::<Result<_, CoreError>>()?;
+                Ok(WallGroupInfo {
+                    group: group.id,
+                    handles: group.members.iter().map(|(h, _, _)| *h).collect(),
+                    layers: spec.layers.clone(),
+                    runs,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn walls(&mut self, mut spec: WallSpec) -> Result<WallResult, CoreError> {
+        spec.normalize_runs(self.drawing.units);
+        explicit_runs(&mut spec);
+        let mut joined = Vec::new();
+        if spec.join {
+            let mut candidates = self.stored_wall_groups()?;
+            while let Some(index) = candidates.iter().position(|g| {
+                g.spec.join
+                    && layer_names(&g.spec.layers) == layer_names(&spec.layers)
+                    && systems_touch(&spec, &g.spec, self.measure_tol())
+            }) {
+                let group = candidates.remove(index);
+                let mut old = group.spec.clone();
+                explicit_runs(&mut old);
+                // Existing runs retain their order, making handle-to-run selection predictable.
+                let offset = old.runs.len();
+                for opening in &mut spec.openings {
+                    opening.run += offset;
+                }
+                old.runs.extend(spec.runs);
+                old.openings.extend(spec.openings);
+                spec.runs = old.runs;
+                spec.openings = old.openings;
+                joined.push(group);
+            }
+        }
+        self.rebuild_walls(spec, &joined)
+    }
+
+    fn rebuild_walls(
+        &mut self,
+        spec: WallSpec,
+        old: &[WallGroup],
+    ) -> Result<WallResult, CoreError> {
+        let targets: Vec<_> = old
+            .iter()
+            .flat_map(|g| g.members.iter())
+            .map(|(h, _, _)| crate::Target {
+                handle: *h,
+                chain: Vec::new(),
+            })
+            .collect();
+        if !targets.is_empty() {
+            self.sheet_targets(&targets)?;
+        }
+        let regions = walls::build_walls_justified(
+            &geom_runs(&spec),
+            spec.thickness,
+            &geom_openings(&spec),
+            self.measure_tol(),
+            geom_justification(spec.justification),
+        )
+        .map_err(|e| invalid(e.to_string()))?
+        .regions;
+        let mut result = self.draw_wall_system(spec.clone())?;
+        for group in old {
+            let old_regions = walls::build_walls_justified(
+                &geom_runs(&group.spec),
+                group.spec.thickness,
+                &geom_openings(&group.spec),
+                self.measure_tol(),
+                geom_justification(group.spec.justification),
+            )
+            .map_err(|e| invalid(e.to_string()))?
+            .regions;
+            for &(handle, ref role, index) in &group.members {
+                let replacements = match role.as_str() {
+                    "run" => group
+                        .spec
+                        .runs
+                        .get(index)
+                        .and_then(|run| {
+                            spec.runs
+                                .iter()
+                                .position(|r| r.points == run.points && r.closed == run.closed)
+                        })
+                        .map(|i| vec![result.centrelines[i]])
+                        .unwrap_or_default(),
+                    "opening" => group
+                        .spec
+                        .openings
+                        .get(index)
+                        .and_then(|opening| {
+                            let old_run = group.spec.runs.get(opening.run)?;
+                            spec.openings.iter().position(|o| {
+                                spec.runs[o.run].points == old_run.points
+                                    && o.at == opening.at
+                                    && o.width == opening.width
+                            })
+                        })
+                        .or_else(|| {
+                            (old.len() == 1 && group.spec.openings.len() == spec.openings.len())
+                                .then_some(index)
+                        })
+                        .map(|i| vec![result.inserts[i]])
+                        .unwrap_or_default(),
+                    "hatch" => old_regions
+                        .get(index)
+                        .map(|before| {
+                            regions
+                                .iter()
+                                .zip(&result.hatches)
+                                .filter(|(after, _)| {
+                                    walls::regions_overlap(before, after, self.measure_tol())
+                                })
+                                .map(|(_, &handle)| handle)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    "outline" => result.outlines.clone(),
+                    _ => Vec::new(),
+                };
+                result.handle_map.insert(handle, replacements);
+            }
+        }
+        let removed: Vec<_> = result.handle_map.keys().copied().map(Handle::new).collect();
+        let pieces: Vec<_> = result
+            .handle_map
+            .iter()
+            .map(|(&h, into)| (Handle::new(h), into.clone()))
+            .collect();
+        for &handle in &removed {
+            self.drawing.doc.remove_entity_arc(handle);
+        }
+        self.follow_edit(&[], &removed, &pieces, &[]);
+        self.remap_wall_fields(&result.handle_map)?;
+        Ok(result)
+    }
+
+    fn wall_group_for(&self, handle: u64, role: &str) -> Result<(WallGroup, usize), CoreError> {
+        self.sheet_targets(&[crate::Target {
+            handle,
+            chain: Vec::new(),
+        }])?;
+        for group in self.stored_wall_groups()? {
+            if let Some((_, _, index)) = group
+                .members
+                .iter()
+                .find(|(h, r, _)| *h == handle && r == role)
+            {
+                let index = *index;
+                return Ok((group, index));
+            }
+        }
+        Err(invalid(format!(
+            "Handle {handle:X} is not a wall {role}; use wall_groups to read the system"
+        )))
+    }
+
+    pub(crate) fn add_wall_openings(
+        &mut self,
+        centreline: u64,
+        openings: Vec<AddedWallOpening>,
+    ) -> Result<WallResult, CoreError> {
+        if openings.is_empty() {
+            return Err(invalid("Add at least one wall opening"));
+        }
+        let (group, run) = self.wall_group_for(centreline, "run")?;
+        let mut spec = group.spec.clone();
+        spec.openings
+            .extend(openings.into_iter().map(|o| WallOpening {
+                run,
+                at: o.at,
+                width: o.width,
+                kind: o.kind,
+                swing: o.swing,
+                sill: o.sill,
+                head: o.head,
+            }));
+        explicit_runs(&mut spec);
+        self.rebuild_walls(spec, &[group])
+    }
+
+    pub(crate) fn remove_wall_openings(
+        &mut self,
+        inserts: &[u64],
+    ) -> Result<WallResult, CoreError> {
+        if inserts.is_empty() {
+            return Err(invalid("Pick at least one opening insert"));
+        }
+        let (group, _) = self.wall_group_for(inserts[0], "opening")?;
+        let mut indices = BTreeSet::new();
+        for &handle in inserts {
+            let (other, index) = self.wall_group_for(handle, "opening")?;
+            if other.id != group.id {
+                return Err(invalid("Remove openings from one wall group per command"));
+            }
+            indices.insert(index);
+        }
+        let mut spec = group.spec.clone();
+        spec.openings = spec
+            .openings
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !indices.contains(i))
+            .map(|(_, o)| o)
+            .collect();
+        self.rebuild_walls(spec, &[group])
+    }
+
+    pub(crate) fn edit_wall_opening(
+        &mut self,
+        insert: u64,
+        edit: WallOpeningEdit,
+    ) -> Result<WallResult, CoreError> {
+        let (group, index) = self.wall_group_for(insert, "opening")?;
+        let mut spec = group.spec.clone();
+        let opening = &mut spec.openings[index];
+        if let Some(v) = edit.at {
+            opening.at = v;
+        }
+        if let Some(v) = edit.width {
+            opening.width = v;
+        }
+        if let Some(v) = edit.kind {
+            opening.kind = v;
+        }
+        if let Some(v) = edit.swing {
+            opening.swing = v;
+        }
+        if let Some(v) = edit.sill {
+            opening.sill = Some(v);
+        }
+        if let Some(v) = edit.head {
+            opening.head = Some(v);
+        }
+        let mut result = self.rebuild_walls(spec, &[group])?;
+        result
+            .handle_map
+            .insert(insert, vec![result.inserts[index]]);
+        Ok(result)
+    }
+
+    pub(crate) fn refuse_wall_insert_erase(&self, handles: &[Handle]) -> Result<(), CoreError> {
+        for &handle in handles {
+            if self
+                .drawing
+                .doc
+                .get_entity(handle)
+                .and_then(wall_tag)
+                .is_some_and(|tag| tag.role == "opening")
+            {
+                return Err(invalid(format!("Opening insert {:X} belongs to a wall system; use remove_wall_openings to close the wall in the same undo step", handle.value())));
+            }
+        }
+        Ok(())
+    }
+
+    /// Copies have independent identities and definitions derived from their actual centrelines.
+    pub(crate) fn copied_wall_groups(
+        &mut self,
+        handles: &[u64],
+        mirrored: bool,
+    ) -> Result<(), CoreError> {
+        let mut groups: BTreeMap<u64, Vec<(u64, WallTag)>> = BTreeMap::new();
+        for &handle in handles {
+            if let Some(tag) = self
+                .drawing
+                .doc
+                .get_entity(Handle::new(handle))
+                .and_then(wall_tag)
+            {
+                groups.entry(tag.group).or_default().push((handle, tag));
+            }
+        }
+        for members in groups.values_mut() {
+            let mut spec = members[0].1.spec.clone();
+            let mut run_count = 0;
+            let mut scale = 1.0;
+            for (handle, tag) in members.iter() {
+                if tag.role == "run" {
+                    run_count += 1;
+                    if let Some(EntityType::LwPolyline(poly)) =
+                        self.drawing.doc.get_entity(Handle::new(*handle))
+                    {
+                        let old = &spec.runs[tag.index].points;
+                        if old.len() >= 2 && poly.vertices.len() >= 2 {
+                            let a = poly.vertices[0].location;
+                            let b = poly.vertices[1].location;
+                            scale = (b.x - a.x).hypot(b.y - a.y)
+                                / (old[1][0] - old[0][0]).hypot(old[1][1] - old[0][1]);
+                        }
+                        spec.runs[tag.index].points = poly
+                            .vertices
+                            .iter()
+                            .map(|v| [v.location.x, v.location.y])
+                            .collect();
+                    }
+                }
+            }
+            if run_count != spec.runs.len()
+                || members
+                    .iter()
+                    .filter(|(_, tag)| tag.role == "opening")
+                    .count()
+                    != spec.openings.len()
+            {
+                return Err(invalid(
+                    "Copy the complete wall group, including every centreline and opening insert",
+                ));
+            }
+            let built = walls::build_walls_justified(
+                &geom_runs(&members[0].1.spec),
+                members[0].1.spec.thickness,
+                &geom_openings(&members[0].1.spec),
+                self.measure_tol(),
+                geom_justification(members[0].1.spec.justification),
+            )
+            .map_err(|e| invalid(e.to_string()))?;
+            let outlines: usize = built.regions.iter().map(|r| 1 + r.holes.len()).sum();
+            if members
+                .iter()
+                .filter(|(_, tag)| tag.role == "hatch")
+                .count()
+                != built.regions.len()
+                || members
+                    .iter()
+                    .filter(|(_, tag)| tag.role == "outline")
+                    .count()
+                    != outlines
+            {
+                return Err(invalid(
+                    "Copy the complete wall group, including its outlines and hatches",
+                ));
+            }
+            spec.thickness *= scale;
+            // A reflection changes the opening side. Reverse the directed centreline so
+            // its left/right convention continues to describe the mirrored symbols.
+            if mirrored {
+                for (handle, tag) in members.iter().filter(|(_, tag)| tag.role == "run") {
+                    if let Some(EntityType::LwPolyline(poly)) =
+                        self.drawing.doc.get_entity_mut(Handle::new(*handle))
+                    {
+                        if poly.is_closed {
+                            poly.vertices[1..].reverse();
+                        } else {
+                            poly.vertices.reverse();
+                        }
+                        spec.runs[tag.index].points = poly
+                            .vertices
+                            .iter()
+                            .map(|v| [v.location.x, v.location.y])
+                            .collect();
+                    }
+                }
+            }
+            for run in &mut spec.runs {
+                run.thickness = run.thickness.map(|value| value * scale);
+            }
+            for opening in &mut spec.openings {
+                opening.at *= scale;
+                opening.width *= scale;
+                if mirrored {
+                    let length: f64 = run_segments(&spec.runs[opening.run])
+                        .iter()
+                        .map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1]))
+                        .sum();
+                    opening.at = length - opening.at;
+                    opening.swing = match opening.swing {
+                        DoorSwing::Left => DoorSwing::Right,
+                        DoorSwing::Right => DoorSwing::Left,
+                    };
+                }
+            }
+            let group = members.iter().map(|(h, _)| *h).min().unwrap();
+            for (handle, tag) in members {
+                tag.group = group;
+                tag.spec = spec.clone();
+                self.stamp_wall(*handle, tag)?;
+            }
+        }
+        Ok(())
     }
 }

@@ -99,7 +99,8 @@ fn scale_example(value: &mut Value, factor: f64, command: &str) {
                         | "min"
                         | "max"
                         | "bubble"
-                ) || field == "height" && command != "walls"
+                ) || field == "height"
+                    && !matches!(command, "walls" | "add_wall_openings" | "edit_wall_opening")
                     || field == "scale" && matches!(command, "import_pdf" | "attach_pdf_underlay")
                     || matches!(field.as_str(), "x" | "y" | "z") && child.is_number()
                     || matches!(field.as_str(), "start" | "end") && child.is_array();
@@ -107,7 +108,10 @@ fn scale_example(value: &mut Value, factor: f64, command: &str) {
                     && !(command == "center_line" && matches!(field.as_str(), "a" | "b"))
                     && !(field == "at"
                         && child.is_number()
-                        && !matches!(command, "walls" | "grid"));
+                        && !matches!(
+                            command,
+                            "walls" | "grid" | "add_wall_openings" | "edit_wall_opening"
+                        ));
                 if geometric && !child.is_object() {
                     numbers(child, factor);
                 } else {
@@ -225,6 +229,28 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     let mut handles = Vec::new();
     if let Some(prepared) = record_fixtures::prepare(session, name, example) {
         handles = prepared;
+    } else if matches!(
+        name,
+        "add_wall_openings" | "remove_wall_openings" | "edit_wall_opening"
+    ) {
+        let command = json!({"type":"walls", "thickness":0.2, "runs":[{"points":[[0,0],[6,0]]}], "openings":if name == "add_wall_openings" { json!([]) } else { json!([{"run":0,"at":2,"width":0.9,"kind":"door"}]) }});
+        let mut command = command;
+        scale_example(
+            &mut command,
+            1.0 / session.drawing.units.to_metres(),
+            "walls",
+        );
+        let qiyas_core::Outcome::Walls { result } = session
+            .run(serde_json::from_value(command).unwrap())
+            .unwrap()
+        else {
+            panic!("wall fixture");
+        };
+        handles = if name == "add_wall_openings" {
+            result.centrelines
+        } else {
+            result.inserts
+        };
     } else if name == "edit_text" {
         handles = added_by(
             session,
@@ -540,6 +566,8 @@ fn registry_drawing_examples_pass_the_general_check_in_every_unit() {
                 let origin_unit = if matches!(
                     base,
                     "walls"
+                        | "add_wall_openings"
+                        | "edit_wall_opening"
                         | "grid"
                         | "symmetry_axis"
                         | "mview"

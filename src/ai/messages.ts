@@ -1,5 +1,5 @@
 /** The assistant's transcript, built from the agent's events by a pure reducer. */
-import type { AgentEvent, AiUi } from "../api";
+import type { AgentEvent, AiUi, PlanPhase } from "../api";
 
 export type ToolStatus = "running" | "done" | "error";
 
@@ -33,6 +33,7 @@ export type Item =
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
+  | { kind: "plan"; phases: PlanPhase[] }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
   | { kind: "stopped"; reason: string };
@@ -77,6 +78,17 @@ export function reduce(state: Transcript, action: Action): Transcript {
     }
     case "unsend":
       return last?.kind === "user" ? { items: items.slice(0, -1) } : state;
+    case "plan": {
+      // Keep this turn's checklist above its answer; earlier turns keep their own plans.
+      let start = items.length;
+      while (start > 0 && items[start - 1].kind !== "user") start--;
+      const previous = items.findIndex((item, i) => i >= start && item.kind === "plan");
+      const plan: Item = { kind: "plan", phases: action.phases };
+      if (previous >= 0) {
+        return { items: items.map((item, i) => i === previous ? plan : item) };
+      }
+      return { items: [...items.slice(0, start), plan, ...items.slice(start)] };
+    }
     case "text":
       if (last?.kind === "assistant" && !last.finished) {
         return { items: [...items.slice(0, -1), { ...last, text: last.text + action.text }] };

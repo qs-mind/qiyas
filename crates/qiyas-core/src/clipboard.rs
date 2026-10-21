@@ -222,6 +222,7 @@ impl Session {
             }
             shift_in(&mut self.drawing.doc, Handle::new(h), at);
         }
+        self.copied_wall_groups(&added, false)?;
         Ok(added)
     }
 

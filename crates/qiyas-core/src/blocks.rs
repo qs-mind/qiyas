@@ -386,6 +386,17 @@ impl<'a> Importer<'a> {
         let (layer, linetype) = (c.layer.clone(), c.linetype.clone());
         self.layer(&layer);
         self.linetype(&linetype);
+        // Wall definitions are ordinary xdata; their application must travel with a copy.
+        if e.common()
+            .extended_data
+            .get_record(crate::walls::WALL_APP)
+            .is_some()
+            && !self.dst.app_ids.contains(crate::walls::WALL_APP)
+        {
+            let mut app = opencadcodec::AppId::new(crate::walls::WALL_APP);
+            app.handle = self.dst.allocate_handle();
+            self.dst.app_ids.add(app).map_err(invalid)?;
+        }
         drop_source_handles(e.common_mut());
         match &mut e {
             EntityType::RasterImage(_) | EntityType::Underlay(_) => {

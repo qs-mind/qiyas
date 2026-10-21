@@ -464,36 +464,57 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Walls
 
-- `qiyas-core/src/walls.rs`: `Command::Walls(WallSpec)` creates joined wall outlines,
-  one solid hatch per wall region, centrelines and reusable door/window references in one undo
-  step, including layers, block definitions and the xdata application. The registry exposes it
-  to Mizan and the generic tools without a separate AI tool.
-- `WallSpec { runs: [{points, closed}], thickness, justification, openings, height, layers }`:
-  plan points, thickness, opening `at` (distance to its centre along the run) and `width` use
-  drawing units; `height`, `sill` and `head` use metres above floor. Justification is `centre`
-  by default, or `left` / `right` of the directed run. Curves are supplied as polylines
-  approximating arcs, not bulges. Openings must fit a straight segment clear of corners and
-  junctions; overlapping openings and parallel overlapping walls are refused. A refused
-  opening's error names the junction and the ranges of `at` where an opening that wide fits on
-  its run (each suggested end is accepted), or says it fits nowhere there. An opening
-  cannot wrap across a closed run's start. A door defaults to a left swing, sill 0 and head
-  `min(2.1, height)`; a window defaults to sill 0.9 m and the same head convention. Wall height
-  defaults to 3 m. Explicit contradictions, including sill at or above head, are refused.
-- Optional `layers` names are `outline`, `hatch`, `centreline`, `doors`, `windows`: defaults
-  `A-WALL`, `A-WALL-PATT`, `A-WALL-CNTR`, `A-DOOR`, `A-GLAZ`. Measure the hatches for wall
-  plan area. Centrelines carry `QIYAS_WALL` xdata containing thickness in drawing units and
-  height in metres. Blocks use millimetre sizes in their names (`QIYAS_DOOR_0900`,
-  `QIYAS_WIN_1200_200`), with their geometry converted to the drawing's units; equal sizes
-  reuse a definition across calls, placed along the wall and mirrored for a right swing.
-- `qiyas-geom/src/walls.rs` uses `cavalier_contours` 0.7.0 booleans: runs join at their ends
-  with mitres (limited to four offset widths), T and X junctions unite, closed rooms remain
-  holes, and opening rectangles cut through both faces. Computation uses a local origin and
-  thickness as its unit to keep survey coordinates and small drawing units stable.
-  The outcome is `{type: "walls", handles, outlines, hatches, centrelines, inserts,
-  centreline_length, gross_area, net_area, volume}`: length in metres, areas in square metres,
-  volume in cubic metres; `handles` lists the sheet entities. Volume is gross plan
-  area times height less each opening's width × thickness × (head − sill), so lintels and
-  walls below windows remain. The release `walls_speed` test guards 500 walls under two seconds.
+- `qiyas-core/src/walls.rs`: `Command::Walls(WallSpec)` creates an editable wall system:
+  joined outlines, one solid hatch per region, centrelines and reusable door/window inserts.
+  The entire command, including joined existing systems, layers, blocks and xdata, is one undo
+  step. Every caller uses the same core rules, including Mizan, MCP, scripts and the command line.
+- `WallSpec { runs: [{points, closed, thickness?, height?, justification?}], thickness,
+  justification, openings, height, layers, join }`: each run inherits omitted thickness,
+  height and justification from the spec. Plan points, thickness, opening `at` (distance to
+  its centre along the run) and width use drawing units. Height, sill and head use metres
+  above floor. Justification is `centre`, `left` or `right` of the directed run. Height
+  defaults to 3 m. Curves use straight polyline approximations.
+- `join` defaults to true. A new run meeting or crossing existing centrelines within the
+  drawing's tolerance joins their groups when their wall layers match. The original runs and
+  openings and the new runs are rebuilt as one system; outer walls and later partitions have
+  the same geometry and quantities as one command containing all runs. `join: false` creates
+  a separate system. Layers are `outline`, `hatch`, `centreline`, `doors`, `windows`, defaulting
+  to `A-WALL`, `A-WALL-PATT`, `A-WALL-CNTR`, `A-DOOR`, `A-GLAZ`.
+- Wall members carry `QIYAS_WALL` xdata containing the group's definition, its
+  member roles, runs and openings. The drawing is authoritative: DWG/DXF saves, copies and
+  undo retain the editable definition. The centreline's first two real values remain its
+  thickness in drawing units and height in metres. Measure hatches for net wall plan area.
+- `add_wall_openings {centreline, openings: [{at, width, kind, swing?, sill?, head?}]}` adds
+  doors/windows to the run named by its centreline handle. `remove_wall_openings {inserts}`
+  closes the cuts named by opening insert handles. `edit_wall_opening {insert, at?, width?,
+  kind?, swing?, sill?, head?}` moves or resizes an opening or changes its properties. Each
+  rebuilds the group in one undo step. `delete_entities` refuses wall opening inserts and
+  names `remove_wall_openings`, so erasing a symbol cannot leave an unexplained hole.
+- `wall_groups {width?}` is a read command, reachable with `qiyas_read run`. It reports each
+  group on the sheet, its layers, and runs with centreline handle, length, thickness, height,
+  justification and opening insert handles/properties. With `width`, each run includes
+  `free_ranges` of opening-centre `at` values. Both ends are accepted by the same geometry
+  checks used by the mutating commands. Read it again after a rebuild to get current handles.
+- Openings must fit a straight segment clear of corners, junctions and other openings.
+  Refusals name the junction and offer the fitting ranges (or say none fit). A door defaults
+  to left swing, sill 0 and head `min(2.1, run height)`; a window defaults to sill 0.9 m and
+  the same head convention. Explicit contradictions are refused. Openings cannot wrap across
+  a closed run's start. Symbols reuse block definitions named by millimetre size, with their
+  geometry converted to drawing units.
+- Rebuild outcomes retain `type: "walls"`, handles by role, centreline length (m), gross/net
+  area (m²), volume (m³), and `handle_map` from old handles to their replacements. Take-off
+  measurements and fields follow replaced hatches/centrelines; constraints on reshaped
+  entities are dropped. Undo restores definitions, geometry and these dependent measurements.
+  For unequal heights, volume integrates the wall union over each height interval and subtracts
+  opening voids. Hatch replacement maps follow positive area overlap, so unrelated regions do
+  not gain each other's measurements.
+- `qiyas-geom/src/walls.rs` normalises around a local origin and thickness before booleans,
+  preserving survey-coordinate accuracy. Each strip uses its run's width and justification.
+  Mixed widths join at L, T and X junctions, with overlaps counted once; a partition butts
+  into an outer wall's face. The public `where_it_fits` uses the widths of every meeting wall.
+  Tests cover hand-calculated mixed 250/150 mm areas in mm, cm, m and inches, staged versus
+  one-command construction, editing and persistence. The release `walls_speed` test guards
+  500 walls under two seconds.
 
 ## Modify
 
@@ -1255,6 +1276,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   flags circles and full arcs without a centre mark or centre line through their centre.
   Automatic `missing_axis` detection is omitted: arbitrary outlines do not reliably identify
   their intended axis. Use an explicit symmetry expectation instead.
+- `duplicate` and `overlap` compare only entities on the same layer (case-insensitive layer
+  names), as AutoCAD OVERKILL does by default: layer is a property that must match. Coincident
+  geometry on different layers is intentional, such as grid axes on wall centrelines, a hatch
+  boundary on its outline layer, or a viewport frame on a title line.
 - `layer_zero` is a warning for entities drawn on a sheet (Model or a layout); inside a block
   definition layer 0 is right (contents take the reference's layer) and is not flagged. The
   own-output guard draws on a layer of its own. `tiny_segment` measures
@@ -1345,7 +1370,7 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
   and examples; `search`: matching commands), validate, records, record_schema, query, measure (numbers
   only), run (read-only commands), check, history, drawings, selection and rooms. Execute
-  operations: run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
+  operations: plan (conversation progress), run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
   view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
   compare, export_takeoff and export_conflicts. Capture's source is screen or picture.
 - `qiyas_execute {op: "type", args: {"line": "PLINE 0,0 10,0 C"}}` uses the same registry
@@ -1354,6 +1379,20 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   following earlier points in that line. Each call supplies a whole command: incomplete
   input returns the next prompt without running anything; resend the complete line with its
   answers. `commands` includes words and aliases, and capabilities describe this operation.
+- `qiyas_execute {op: "plan", args: {phases: [{id, title, status}]}}` reports a complete
+  checklist snapshot. Status is `pending`, `active`, `done` or `skipped`; it changes no drawing
+  and creates no undo step. It works without an open drawing, is described by capabilities
+  and `commands {name: "plan"}`, and MCP accepts and returns the same operation. The agent
+  emits a `plan` event; the panel shows the latest snapshot above that turn's answer and keeps
+  it in conversation history. Titles are the model's words; status labels are English/Arabic,
+  styled with brand tokens and no motion dependency.
+- Mizan plans in words before drafting: parts or rooms and their sizes, checked against the
+  user's numbers. Then it works one phase at a time, one batch per phase. Applicable phases
+  include grid, outer walls, inner walls, openings, rooms, dimensions/table and sheet; other
+  drafting follows the same loop. After each phase it captures, checks and fixes by handle
+  before continuing. It never draws trial geometry and undoes it to discover behaviour:
+  validation and wall reads supply that information. Openings are added to existing walls.
+  Both prompt languages enforce this rule within the 900-word budget.
 - A batch is one undo step, all or nothing, and can read earlier results through
   `{"$step": 0, "pointer": "/added/0"}`. `Session::batch_with` sets the batch's layer and colour,
   making a missing layer, then puts the previous current state back. Errors name the field,
@@ -1379,7 +1418,7 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   commands per message, counted from registry metadata in run and every batch step. A tool
   card carries its command label (`draw.line`), batch or operation; the window translates
   `command.<label>` when present, otherwise makes the label readable. Execute calls are
-  mutating except select and view.
+  mutating except plan, select and view.
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
   `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and

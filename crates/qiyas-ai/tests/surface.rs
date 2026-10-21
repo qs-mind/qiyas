@@ -746,6 +746,9 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
         let expected = match entry.needs[0] {
             surface::Need::Nothing => {
                 let args = match entry.op {
+                    "plan" => {
+                        json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"}]})
+                    }
                     "record_schema" => json!({"name":"line"}),
                     "validate" => {
                         json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}})
@@ -779,6 +782,88 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
             assert!(declared.contains(&(tool, op)));
         }
     }
+}
+
+#[test]
+fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
+    let (_dir, mut session) = sample();
+    let before = count(&session);
+    let revision = session.history_revision();
+    let phases = json!([
+        {"id":"sizes","title":"Check sizes","status":"done"},
+        {"id":"geometry","title":"Draw geometry","status":"active"},
+        {"id":"labels","title":"Labels","status":"pending"},
+        {"id":"sheet","title":"Sheet","status":"skipped"}
+    ]);
+    let input = json!({"op":"plan","args":{"phases":phases}});
+    assert!(!surface::mutating(EXECUTE, &input));
+    surface::check_need(EXECUTE, "plan", false, false, false).unwrap();
+    let out = call(&mut session, EXECUTE, input).unwrap();
+    assert_eq!(out, json!({"plan":{"phases":phases}}));
+    assert_eq!(count(&session), before);
+    assert_eq!(session.history_revision(), revision);
+    assert!(!session.can_undo());
+    let info = call(
+        &mut session,
+        READ,
+        json!({"op":"commands","args":{"name":"plan"}}),
+    )
+    .unwrap();
+    assert_eq!(info["op"], "plan");
+    assert_eq!(info["undo"], false);
+    let caps = call(&mut session, READ, json!({"op":"capabilities"})).unwrap();
+    assert_eq!(caps["plan"], info);
+    let index = call(&mut session, READ, json!({"op":"commands"})).unwrap();
+    assert_eq!(index["operations"][0], info);
+    for bad in [
+        json!({"phases":[]}),
+        json!({"phases":[{"id":"a","title":"A","status":"invalid"}]}),
+        json!({"phases":[{"id":"a","title":"A","status":"active"},{"id":"b","title":"B","status":"active"}]}),
+        json!({"phases":[{"id":"a","title":"A","status":"done"},{"id":"a","title":"B","status":"pending"}]}),
+    ] {
+        assert!(surface::run_without_drawing(EXECUTE, "plan", &bad, None)
+            .unwrap()
+            .is_err());
+    }
+}
+
+#[tokio::test]
+async fn plan_events_follow_valid_snapshots_and_the_history_keeps_them_without_a_drawing() {
+    let pending = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"pending"}]});
+    let active = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"}]});
+    let done = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"done"}]});
+    let (agent, events, _) = scripted(
+        Arc::new(Mutex::new(None)),
+        vec![
+            (EXECUTE, json!({"op":"plan","args":pending})),
+            (EXECUTE, json!({"op":"plan","args":{"phases":[]}})),
+            (EXECUTE, json!({"op":"plan","args":active.to_string()})),
+            (EXECUTE, json!({"op":"plan","args":done})),
+        ],
+    )
+    .await;
+    let plans: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Plan { phases } => Some(json!({"phases":phases})),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(plans, [pending.clone(), active.clone(), done.clone()]);
+    assert!(events
+        .iter()
+        .all(|event| !matches!(event, AgentEvent::ToolCall { mutating: true, .. })));
+    let history = results(&agent);
+    assert_eq!(
+        history.iter().map(|(error, _)| *error).collect::<Vec<_>>(),
+        [false, true, false, false]
+    );
+    let saved: Vec<_> = history
+        .into_iter()
+        .filter(|(error, _)| !error)
+        .map(|(_, result)| result["plan"].clone())
+        .collect();
+    assert_eq!(saved, [pending, active, done]);
 }
 
 #[test]

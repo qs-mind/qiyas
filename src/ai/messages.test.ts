@@ -37,6 +37,34 @@ test("items keep the order they arrive in", () => {
   expect(t.items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
 });
 
+test("plan updates stay above the answer and earlier turns keep their checklist", () => {
+  const pending = { id: "walls", title: "Draw walls", status: "pending" as const };
+  const active = { ...pending, status: "active" as const };
+  const done = { ...pending, status: "done" as const };
+  const first = run([
+    { type: "user", text: "Draw the plan" },
+    { type: "text", text: "First I will check the sizes." },
+    { type: "plan", phases: [pending] },
+    { type: "plan", phases: [active] },
+    { type: "text", text: " Then draw." },
+    { type: "plan", phases: [done] },
+    { type: "done", usage: {} },
+  ]);
+  expect(first.items).toEqual([
+    { kind: "user", text: "Draw the plan" },
+    { kind: "plan", phases: [done] },
+    { kind: "assistant", text: "First I will check the sizes. Then draw.", finished: true },
+  ]);
+  const second = run([
+    { type: "user", text: "Now add labels" },
+    { type: "plan", phases: [{ id: "labels", title: "Room labels", status: "active" }] },
+  ], first);
+  expect(second.items.filter((item) => item.kind === "plan")).toHaveLength(2);
+  expect(second.items[1]).toEqual(first.items[1]);
+  expect(undoableCard(second)).toBeNull();
+  expect(run([{ type: "clear" }], second)).toEqual(EMPTY);
+});
+
 test("text deltas join into one streamed message that finishes at the next item", () => {
   const t = run([{ type: "text", text: "Hel" }, { type: "text", text: "lo " }, { type: "text", text: "there" }]);
   expect(t.items).toEqual([{ kind: "assistant", text: "Hello there", finished: false }]);

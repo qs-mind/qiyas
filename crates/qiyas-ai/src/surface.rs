@@ -11,6 +11,7 @@
 //! - `qiyas_execute {op, args}`: any command (`run`), several as one undo step with each able to
 //!   use what an earlier one made (`batch`), records set and entities made, undoing its own step,
 //!   typed command lines (`type`), selecting and viewing, the drawing files and the BOQ files.
+//!   `plan` reports task phases without changing the drawing or adding an undo step.
 //! - `qiyas_capture {source, args}`: a picture of the screen or of any part of a sheet.
 //!
 //! `args` is a JSON object written as a string, so each tool's schema stays strict and closed for
@@ -48,7 +49,8 @@ pub const READ_OPS: [&str; 14] = [
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 17] = [
+pub const EXECUTE_OPS: [&str; 18] = [
+    "plan",
     "run",
     "type",
     "batch",
@@ -111,6 +113,7 @@ operations![
     (READ, "rooms", [Drawing]),
     (READ, "drawings", [Host], "list_drawings"),
     (READ, "selection", [Window, Drawing], "get_selection"),
+    (EXECUTE, "plan", [Nothing]),
     (EXECUTE, "run", [Drawing]),
     (EXECUTE, "type", [Drawing]),
     (EXECUTE, "batch", [Drawing]),
@@ -199,7 +202,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Change the drawing, take-off or view. ops: type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -255,9 +258,90 @@ pub fn label(name: &str, input: &Value) -> Option<String> {
     Some(op.to_string())
 }
 
-/// Execute operations change things, except selecting and viewing.
+/// Execute operations change things, except planning, selecting and viewing.
 pub fn mutating(name: &str, input: &Value) -> bool {
-    name == EXECUTE && !matches!(input["op"].as_str(), Some("select" | "view"))
+    name == EXECUTE && !matches!(input["op"].as_str(), Some("plan" | "select" | "view"))
+}
+
+/// A full snapshot of the phases in the current task. It belongs to the conversation,
+/// not the drawing, and never creates an undo step.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Plan {
+    pub phases: Vec<PlanPhase>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanPhase {
+    pub id: String,
+    pub title: String,
+    pub status: PlanStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStatus {
+    Pending,
+    Active,
+    Done,
+    Skipped,
+}
+
+pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
+    let plan: Plan = read_args(args, "plan")?;
+    if plan.phases.is_empty() || plan.phases.len() > 24 {
+        return Err(bad("plan needs 1 to 24 phases"));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut active = 0;
+    for phase in &plan.phases {
+        if phase.id.trim().is_empty() || phase.id.chars().count() > 64 || !ids.insert(&phase.id) {
+            return Err(bad(
+                "plan phase ids must be unique, nonempty and at most 64 characters",
+            ));
+        }
+        if phase.title.trim().is_empty() || phase.title.chars().count() > 160 {
+            return Err(bad("plan phase titles must have 1 to 160 characters"));
+        }
+        active += usize::from(phase.status == PlanStatus::Active);
+    }
+    if active > 1 {
+        return Err(bad(
+            "plan has more than one active phase: work one phase at a time",
+        ));
+    }
+    Ok(plan)
+}
+
+fn plan_info() -> Value {
+    json!({
+        "name": "plan",
+        "tool": EXECUTE,
+        "op": "plan",
+        "doc": "State the task's phases in the user's language before drawing. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
+        "changes": false,
+        "undo": false,
+        "schema": {
+            "type": "object", "additionalProperties": false, "required": ["phases"],
+            "properties": {"phases": {
+                "type": "array", "minItems": 1, "maxItems": 24,
+                "items": {"type": "object", "additionalProperties": false,
+                    "required": ["id", "title", "status"],
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 160},
+                        "status": {"type": "string", "enum": ["pending", "active", "done", "skipped"]}
+                    }
+                }
+            }}
+        },
+        "examples": [{"phases": [
+            {"id": "plan", "title": "Check sizes", "status": "active"},
+            {"id": "geometry", "title": "Draw geometry", "status": "pending"},
+            {"id": "annotations", "title": "Dimensions and table", "status": "pending"}
+        ]}]
+    })
 }
 
 /// Counts destructive core commands before a call runs, including commands inside a batch.
@@ -394,13 +478,16 @@ fn read_args<T: serde::de::DeserializeOwned>(args: &Value, what: &str) -> Result
     serde_json::from_value(args.clone()).map_err(|e| bad(format!("{what}: {e}")))
 }
 
-/// Registry operations work before a drawing has been opened.
+/// Registry reads and conversation plans work before a drawing has been opened.
 pub fn run_without_drawing(
     tool: &str,
     op: &str,
     args: &Value,
     units: Option<qiyas_core::Units>,
 ) -> Option<Result<ToolOutput, ToolError>> {
+    if tool == EXECUTE && op == "plan" {
+        return Some(read_plan(args).map(|plan| ToolOutput::Json(json!({"plan": plan}))));
+    }
     if tool != READ {
         return None;
     }
@@ -688,6 +775,7 @@ fn capabilities() -> Value {
         "error_codes": crate::errors::CODES,
         "validate": {"args": "{command} or {commands}", "commands_schema": batch_commands_schema(), "changes": false, "step_references": "Only earlier step indexes are allowed; pointed results are checked when running"},
         "execute_ops": EXECUTE_OPS,
+        "plan": plan_info(),
         "typed_commands": {
             "args": { "line": "PLINE 0,0 10,0 C" },
             "words": "qiyas_read commands returns each command's words and aliases",
@@ -708,6 +796,9 @@ fn capabilities() -> Value {
 fn commands(args: &Value) -> Result<Value, ToolError> {
     let reg = registry();
     if let Some(name) = args.get("name").and_then(Value::as_str) {
+        if name.eq_ignore_ascii_case("plan") {
+            return Ok(plan_info());
+        }
         let info = reg
             .get(name)
             .or_else(|| reg.by_word(name))
@@ -740,7 +831,11 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
             .collect()
     };
     if let Some(query) = args.get("search").and_then(Value::as_str) {
-        return Ok(json!({ "commands": list(reg.search(query, SEARCH_LIMIT)) }));
+        let mut answer = json!({ "commands": list(reg.search(query, SEARCH_LIMIT)) });
+        if "plan phases pending active done skipped".contains(&query.to_lowercase()) {
+            answer["operations"] = json!([plan_info()]);
+        }
+        return Ok(answer);
     }
     if let Some(category) = args.get("category").and_then(Value::as_str) {
         let cs = reg
@@ -752,6 +847,7 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     }
     Ok(json!({
         "index": reg.index_text(),
+        "operations": [plan_info()],
         "next": "qiyas_read commands {\"name\": \"…\"} gives a command's schema and examples",
     }))
 }

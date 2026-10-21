@@ -394,6 +394,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plan_round_trips_without_a_drawing_or_a_mutation() {
+        let server = Qiyas::new(
+            Arc::new(Mutex::new(None)),
+            None,
+            Arc::new(|| panic!("a plan must not notify a drawing change")),
+            Arc::new(|_| panic!("a plan must not change the view")),
+        );
+        let phases = serde_json::json!([
+            {"id":"sizes","title":"Check sizes","status":"done"},
+            {"id":"geometry","title":"Draw geometry","status":"active"}
+        ]);
+        let input = serde_json::json!({"op":"plan","args":{"phases":phases},"request_id":"plan-1"});
+        assert!(!surface::mutating(surface::EXECUTE, &input));
+        let (out, cached) = server.run_cached(surface::EXECUTE, &input);
+        assert!(!cached);
+        let ToolOutput::Json(out) = out.unwrap() else {
+            panic!("JSON")
+        };
+        assert_eq!(out, serde_json::json!({"plan":{"phases":phases}}));
+        assert!(server.run_cached(surface::EXECUTE, &input).1);
+    }
+
+    #[test]
     fn the_server_offers_exactly_the_agents_three_tools() {
         let server = Qiyas::new(
             Arc::new(Mutex::new(None)),

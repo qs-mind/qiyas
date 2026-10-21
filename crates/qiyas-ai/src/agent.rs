@@ -20,7 +20,7 @@ use crate::provider::{
 };
 use crate::surface::{self, Route};
 use crate::window::run_window;
-use crate::{catalogue, ToolOutput};
+use crate::{catalogue, ToolError, ToolOutput};
 
 /// Most tool calls in one user turn.
 pub const MAX_TOOL_CALLS: usize = 40;
@@ -80,13 +80,17 @@ pub enum AgentEvent {
     Thinking {
         text: String,
     },
+    /// The current task's checklist, also kept in the tool result in history.
+    Plan {
+        phases: Vec<surface::PlanPhase>,
+    },
     ToolCall {
         id: String,
         name: String,
         input: Value,
         /// The command or operation shown on the tool card.
         label: Option<String>,
-        /// An execute operation other than selecting or viewing.
+        /// An execute operation other than planning, selecting or viewing.
         mutating: bool,
     },
     ToolResult {
@@ -598,6 +602,18 @@ impl Agent {
                 &format!("TOOL {name} ({} ms)", started.elapsed().as_millis()),
                 || tool_entry(id, input, &block),
             );
+            if name == surface::EXECUTE && input["op"] == "plan" && !is_error(&block) {
+                if let Ok(plan) = surface::args_of(input)
+                    .map_err(ToolError::BadInput)
+                    .and_then(|args| surface::read_plan(&args))
+                {
+                    let _ = events
+                        .send(AgentEvent::Plan {
+                            phases: plan.phases,
+                        })
+                        .await;
+                }
+            }
             results.push(block);
             let _ = events.send(event).await;
         }

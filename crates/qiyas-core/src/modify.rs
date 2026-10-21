@@ -603,6 +603,7 @@ impl Session {
         let owner = self.sheet_owner();
         let mut added = Vec::with_capacity(handles.len() * copies.len());
         for p in &copies {
+            let start = added.len();
             for &h in handles {
                 let mut copy = self.entity(h).clone();
                 let dimension_block = place_keeping_blocks(&mut copy, p);
@@ -629,6 +630,7 @@ impl Session {
                 }
                 added.push(self.add_fresh(copy, owner)?);
             }
+            self.copied_wall_groups(&added[start..], p.mirror_line.is_some())?;
         }
         Ok(Outcome::Added { handles: added })
     }
@@ -1081,6 +1083,10 @@ impl Session {
     pub(crate) fn document_extras(&self, cmd: &Command) -> (bool, bool) {
         let edited;
         let (targets, copying, erasing) = match cmd {
+            Command::Walls(_)
+            | Command::AddWallOpenings { .. }
+            | Command::RemoveWallOpenings { .. }
+            | Command::EditWallOpening { .. } => return (true, true),
             Command::DeleteEntities { targets } => (targets.as_slice(), false, true),
             Command::Modify(spec) => (
                 spec.targets(),

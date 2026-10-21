@@ -104,6 +104,54 @@ fn line_work_faults_are_found_in_every_unit() {
 }
 
 #[test]
+fn duplicates_and_overlaps_require_matching_layers_in_every_unit() {
+    for units in [6, 5, 4, 1] {
+        let (mut s, k) = blank(units);
+        let scope = CheckScope {
+            rules: vec!["duplicate".into(), "overlap".into()],
+            ..Default::default()
+        };
+        for name in ["A-WALL-CNTR", "GRID"] {
+            s.run(Command::NewLayer { name: name.into() }).unwrap();
+        }
+        let mut current = s.current.clone();
+        current.layer = "A-WALL-CNTR".into();
+        s.run(Command::SetCurrent { current }).unwrap();
+        let wall = line(&mut s, k, [0.0, 0.0], [5.0, 0.0]);
+        let other_wall = line(&mut s, k, [0.0, 2.0], [5.0, 2.0]);
+
+        let mut current = s.current.clone();
+        current.layer = "GRID".into();
+        s.run(Command::SetCurrent { current }).unwrap();
+        // Both an exact repeat and a shared stretch are intentional on another layer.
+        line(&mut s, k, [5.0, 0.0], [0.0, 0.0]);
+        line(&mut s, k, [1.0, 2.0], [4.0, 2.0]);
+        let report = s.check_drawing(&scope);
+        assert!(report.findings.is_empty(), "{units}: {:?}", report.findings);
+
+        let mut current = s.current.clone();
+        current.layer = "A-WALL-CNTR".into();
+        s.run(Command::SetCurrent { current }).unwrap();
+        let duplicate = line(&mut s, k, [5.0, 0.0], [0.0, 0.0]);
+        let overlap = line(&mut s, k, [1.0, 2.0], [4.0, 2.0]);
+        let report = s.check_drawing(&scope);
+        assert_eq!(report.findings.len(), 2, "{units}: {:?}", report.findings);
+        for (rule, handles) in [
+            ("duplicate", [wall, duplicate]),
+            ("overlap", [other_wall, overlap]),
+        ] {
+            assert!(
+                report.findings.iter().any(|f| f.rule == rule
+                    && f.handles.len() == handles.len()
+                    && handles.iter().all(|h| f.handles.contains(h))),
+                "{units}: {:?}",
+                report.findings
+            );
+        }
+    }
+}
+
+#[test]
 fn parallel_lines_and_curve_tangencies_are_clean_but_real_gaps_and_overlaps_remain() {
     for units in [6, 5, 4, 1] {
         let (mut s, k) = blank(units);

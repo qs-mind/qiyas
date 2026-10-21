@@ -323,6 +323,23 @@ mod tests {
     }
 
     #[test]
+    fn drafting_is_planned_and_checked_one_phase_at_a_time() {
+        for rule in [
+            "Plan first in words",
+            "checked against the user's numbers, before drawing",
+            "qiyas_execute plan",
+            "pending, active, done or skipped",
+            "After each phase look with qiyas_capture and read the check",
+            "Never draw trial geometry and undo it",
+            "qiyas_read validate",
+            "qiyas_read run wall_groups",
+            "Add openings to existing walls by centreline handle with add_wall_openings",
+        ] {
+            assert!(EN.contains(rule), "{rule}");
+        }
+    }
+
+    #[test]
     fn the_prompt_says_how_to_look_and_what_the_user_points_at() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
@@ -376,7 +393,7 @@ mod tests {
             "Notes and analysis go in your answer or into the drawing as text, never as rows",
             "Room areas from rooms and label_spaces are unapproved candidates",
             "Use text, tables and inserted blocks for annotations, schedules and legends",
-            "Put related changes in one batch: one undo step, all or nothing",
+            "One batch per phase, not everything: one undo step, all or nothing",
             "placement, text height, overwrite or add",
         ] {
             assert!(en.contains(rule), "{rule}");

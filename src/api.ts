@@ -1698,10 +1698,17 @@ export type AiUi = {
   id?: string;
 };
 
+export type PlanPhase = {
+  id: string;
+  title: string;
+  status: "pending" | "active" | "done" | "skipped";
+};
+
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
 export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
+  | { type: "plan"; phases: PlanPhase[] }
   | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean }
   | {
       type: "tool_result";

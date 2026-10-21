@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use opencadcodec::{Color, EntityType};
+use opencadcodec::{tables::normalize_name, Color, EntityType};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::Xform;
 use schemars::JsonSchema;
@@ -129,6 +129,7 @@ pub struct CheckReport {
 /// A drawn entity's line work.
 struct Drawn {
     handle: u64,
+    layer: String,
     paths: Vec<qiyas_geom::Path>,
     /// Whether its ends are ends (a line, an open polyline or arc), not a closed outline.
     open: bool,
@@ -367,6 +368,7 @@ impl Session {
             }
             drawn.push(Drawn {
                 handle: e.common().handle.value(),
+                layer: normalize_name(&e.common().layer),
                 paths,
                 open,
                 straight,
@@ -739,7 +741,9 @@ impl Session {
         }
     }
 
-    /// Exact repeats (same outline) and collinear overlaps between different entities.
+    /// Exact repeats and collinear overlaps require the same layer, a matching property in
+    /// AutoCAD OVERKILL by default. Coincidence across layers is intentional: grid axes on wall
+    /// centrelines, hatch boundaries on outline layers, or viewport frames on title lines.
     fn check_repeats(
         &self,
         drawn: &[Drawn],
@@ -774,10 +778,11 @@ impl Session {
         let mut seen = HashMap::new();
         let mut repeated: HashMap<u64, u64> = HashMap::new();
         for d in drawn {
-            let k = key(d);
-            if k.is_empty() {
+            let paths = key(d);
+            if paths.is_empty() {
                 continue;
             }
+            let k = (&d.layer, paths);
             if let Some(&first) = seen.get(&k) {
                 repeated.insert(d.handle, first);
                 repeated.insert(first, first);
@@ -813,7 +818,7 @@ impl Session {
                     continue;
                 }
                 let t = grid.segs[j];
-                if t.owner == s.owner {
+                if t.owner == s.owner || drawn[s.owner].layer != drawn[t.owner].layer {
                     continue;
                 }
                 let (h1, h2) = (drawn[s.owner].handle, drawn[t.owner].handle);

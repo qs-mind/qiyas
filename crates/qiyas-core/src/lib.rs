@@ -122,7 +122,7 @@ pub use verify::{Expectation, VerificationResult, VerifyKind};
 pub use viewports::PaperView;
 pub use views::NamedView;
 pub use walls::{
-    DoorSwing, OpeningKind, WallJustification, WallLayers, WallOpening, WallResult, WallRun,
-    WallSpec, WALL_APP,
+    AddedWallOpening, DoorSwing, OpeningKind, WallGroupInfo, WallJustification, WallLayers,
+    WallOpening, WallOpeningEdit, WallResult, WallRun, WallSpec, WALL_APP,
 };
 pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};

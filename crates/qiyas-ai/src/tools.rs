@@ -14,6 +14,6 @@ pub struct ToolSpec {
     /// JSON Schema of the input: an object, `additionalProperties: false`, with `required`.
     pub input_schema: Value,
     /// Whether the tool can change the drawing or take-off. The surface refines this per call:
-    /// execute operations mutate except selecting and viewing.
+    /// execute operations mutate except planning, selecting and viewing.
     pub mutating: bool,
 }
