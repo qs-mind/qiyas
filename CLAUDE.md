@@ -1548,6 +1548,13 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
   room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
   for each live run.
+- Long conversations are compacted, never ended: past `COMPACT_AT` (300) messages, earlier user
+  turns go, then the current turn's oldest call-and-result pairs, down to `COMPACT_TO` (160),
+  always keeping the newest `KEEP_RECENT` (60) messages whole (`Agent::compact`). A note first
+  in the history keeps the user's earlier requests word for word and one line per step dropped
+  (the newest 80), and tells Mizan to read the drawing for what was done; a later compaction
+  merges into it. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
+  make room. It replaced a hard stop at 400 that ended a design-package run mid-task.
 - An answer cut off by its length limit before it wrote text or a call (its room went on
   thinking: Gemini through Runware once thought 94 s and wrote nothing) is asked again with
   twice `max_tokens`, up to `MAX_TOKENS_CAP` (64,000), the empty answer dropped; past the cap

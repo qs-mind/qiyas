@@ -30,8 +30,15 @@ pub const MAX_DRAWING_CALLS: usize = 120;
 /// everything before it; only old pictures give way, see `trim_pictures`), so instead of
 /// trimming, a longer one asks for a new conversation.
 pub const MAX_MESSAGES: usize = 400;
-/// Why the agent stops at `MAX_MESSAGES`.
+/// Why the agent stops at `MAX_MESSAGES`: only when compaction could not make room.
 pub const TOO_LONG: &str = "conversation is long, start a new one";
+/// Past this many messages the conversation is compacted (`compact`) down to `COMPACT_TO`.
+pub const COMPACT_AT: usize = 300;
+pub const COMPACT_TO: usize = 160;
+/// The newest messages compaction always keeps whole (30 steps).
+pub const KEEP_RECENT: usize = 60;
+/// Marks the note compaction puts at the start of the history.
+const COMPACTED: &str = "[earlier work, compacted to make room]";
 /// Most base64 bytes of pictures Mizan draws in one conversation (the user's own count too).
 pub const IMAGE_BUDGET: usize = 40 * 1024 * 1024;
 /// The history keeps at most this many pictures, or this many base64 bytes of them; past
@@ -278,6 +285,7 @@ impl Agent {
             }
             entry
         });
+        self.compact();
         if self.history.len() >= MAX_MESSAGES {
             return self.stop(&events, TOO_LONG).await;
         }
@@ -339,6 +347,7 @@ impl Agent {
             if cancel.is_cancelled() {
                 return self.stop(&events, "cancelled").await;
             }
+            self.compact();
             if self.history.len() > MAX_MESSAGES {
                 return self.stop(&events, TOO_LONG).await;
             }
@@ -861,6 +870,67 @@ impl Agent {
         });
     }
 
+    /// Makes room in a long conversation instead of ending it. Past `COMPACT_AT` messages,
+    /// earlier user turns are dropped, then the oldest steps of the current turn (a call and
+    /// its results, as a pair, so every result still follows its call and roles alternate),
+    /// always keeping the newest `KEEP_RECENT` messages whole. What went is kept as a note at
+    /// the start: the user's earlier requests word for word, and one line per step dropped.
+    /// The drawing itself holds what those steps did; the note says to read it.
+    fn compact(&mut self) {
+        if self.history.len() <= COMPACT_AT {
+            return;
+        }
+        let before = self.history.len();
+        let (mut requests, mut steps) = take_note(&mut self.history);
+        // Earlier turns: everything before the current turn's own message.
+        let starts: Vec<usize> = (0..self.history.len())
+            .filter(|&i| starts_turn(&self.history[i]))
+            .collect();
+        if let Some(&last) = starts.last() {
+            for &i in &starts {
+                if i < last {
+                    if let Some(words) = user_words(&self.history[i]) {
+                        requests.push(words);
+                    }
+                }
+            }
+            for message in &self.history[..last] {
+                steps.extend(step_lines(message));
+            }
+            self.history.drain(..last);
+            // Results answering calls that went with the earlier turn go too.
+            self.history[0]
+                .content
+                .retain(|b| !matches!(b, ContentBlock::ToolResult { .. }));
+        }
+        // The current turn's oldest steps, pair by pair.
+        while self.history.len() > COMPACT_TO {
+            let Some(j) = (1..self.history.len().saturating_sub(KEEP_RECENT + 1)).find(|&j| {
+                self.history[j].role == Role::Assistant
+                    && self.history[j + 1].role == Role::User
+                    && !starts_turn(&self.history[j + 1])
+            }) else {
+                break;
+            };
+            steps.extend(step_lines(&self.history[j]));
+            self.history.drain(j..j + 2);
+        }
+        if self.history.len() == before {
+            return;
+        }
+        let note = compaction_note(&requests, &steps);
+        self.history[0]
+            .content
+            .insert(0, ContentBlock::Text { text: note });
+        let after = self.history.len();
+        self.log("COMPACTED", || {
+            format!(
+                "{before} messages became {after}; {} steps noted",
+                steps.len()
+            )
+        });
+    }
+
     /// Adds user content. A user message already last (after a cancel, an error or a refusal,
     /// or tool results at the step limit) is the latest turn, not yet answered; the new content
     /// goes after what it holds, so tool results stay first and roles keep alternating.
@@ -931,6 +1001,111 @@ fn says_nothing(content: &[ContentBlock]) -> bool {
         ContentBlock::ToolUse { .. } => false,
         _ => true,
     })
+}
+
+/// Whether a message is the start of a user turn: the user's own words or pictures, not only
+/// results of calls.
+fn starts_turn(message: &Message) -> bool {
+    message.role == Role::User
+        && message
+            .content
+            .iter()
+            .any(|b| !matches!(b, ContentBlock::ToolResult { .. }))
+}
+
+/// The user's own words in a turn's message (its last text that is not the `[state]` block or
+/// a picture's caption), clipped.
+fn user_words(message: &Message) -> Option<String> {
+    message.content.iter().rev().find_map(|b| match b {
+        ContentBlock::Text { text } if !text.starts_with('[') && !text.trim().is_empty() => {
+            Some(clip_to(text, 2_000))
+        }
+        _ => None,
+    })
+}
+
+/// `text` cut to at most `max` characters, with an ellipsis when cut.
+fn clip_to(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_string(),
+    }
+}
+
+/// One line per call in an assistant message: the tool, its operation and the command type.
+fn step_lines(message: &Message) -> Vec<String> {
+    if message.role != Role::Assistant {
+        return Vec::new();
+    }
+    message
+        .tool_uses()
+        .map(|(_, name, input)| {
+            let args = match &input["args"] {
+                Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+                other => other.clone(),
+            };
+            let what = args["command"]["type"]
+                .as_str()
+                .or_else(|| args["commands"].as_array().map(|_| "several commands"))
+                .or_else(|| args["name"].as_str())
+                .unwrap_or("");
+            let op = input["op"]
+                .as_str()
+                .or(input["source"].as_str())
+                .unwrap_or("");
+            format!("{name} {op} {what}").trim_end().to_string()
+        })
+        .collect()
+}
+
+/// Takes an earlier compaction's note off the first message: its requests and steps.
+fn take_note(history: &mut [Message]) -> (Vec<String>, Vec<String>) {
+    let Some(first) = history.first_mut() else {
+        return (Vec::new(), Vec::new());
+    };
+    let Some(ContentBlock::Text { text }) = first.content.first() else {
+        return (Vec::new(), Vec::new());
+    };
+    if !text.starts_with(COMPACTED) {
+        return (Vec::new(), Vec::new());
+    }
+    let (mut requests, mut steps) = (Vec::new(), Vec::new());
+    let mut in_steps = false;
+    for line in text.lines().skip(1) {
+        if line == "Steps already done:" {
+            in_steps = true;
+        } else if let Some(r) = line.strip_prefix("Request: ") {
+            requests.push(r.replace("\\n", "\n"));
+        } else if let Some(step) = line.strip_prefix("- ") {
+            if in_steps {
+                steps.push(step.to_string());
+            }
+        }
+    }
+    first.content.remove(0);
+    (requests, steps)
+}
+
+/// The note in place of what compaction dropped. At most 80 step lines: older ones are
+/// counted.
+fn compaction_note(requests: &[String], steps: &[String]) -> String {
+    let mut note = format!(
+        "{COMPACTED}\nThe start of this conversation was removed to make room. The drawing \
+         holds everything done so far: read it (qiyas_read state, records, wall_groups, check) \
+         instead of relying on memory, and carry on with the user's latest request.\n"
+    );
+    for r in requests {
+        note.push_str(&format!("Request: {}\n", r.replace('\n', "\\n")));
+    }
+    note.push_str("Steps already done:\n");
+    let skip = steps.len().saturating_sub(80);
+    if skip > 0 {
+        note.push_str(&format!("- ({skip} earlier steps)\n"));
+    }
+    for step in &steps[skip..] {
+        note.push_str(&format!("- {step}\n"));
+    }
+    note
 }
 
 fn has_calls(content: &[ContentBlock]) -> bool {
@@ -1094,47 +1269,145 @@ mod tests {
         }
     }
 
+    /// One step: an assistant call and its result.
+    fn step(history: &mut Vec<Message>, i: usize) {
+        let id = format!("call_{i}");
+        history.push(Message::assistant(vec![ContentBlock::ToolUse {
+            id: id.clone(),
+            name: "qiyas_execute".into(),
+            input: serde_json::json!({"op": "run", "args": format!(r#"{{"command":{{"type":"walls","n":{i}}}}}"#)}),
+        }]));
+        history.push(Message::user(vec![ContentBlock::ToolResult {
+            tool_use_id: id,
+            content: vec![ResultPart::Text(format!("ok {i}"))],
+            is_error: false,
+        }]));
+    }
+
+    /// Roles alternate from a user message, and every result follows its call.
+    fn assert_well_formed(history: &[Message]) {
+        assert_eq!(history[0].role, Role::User);
+        for (i, w) in history.windows(2).enumerate() {
+            assert_ne!(w[0].role, w[1].role, "roles alternate at {i}");
+        }
+        for (i, m) in history.iter().enumerate() {
+            for b in &m.content {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                    assert!(
+                        i > 0
+                            && history[i - 1]
+                                .tool_uses()
+                                .any(|(id, _, _)| id == tool_use_id),
+                        "result {tool_use_id} follows its call"
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
-    async fn the_401st_message_is_refused_and_history_is_left_alone() {
+    async fn a_long_conversation_is_compacted_and_goes_on() {
         let sent = Arc::new(AtomicUsize::new(0));
         let mut agent = Agent::new(
             Box::new(Counting(sent.clone())),
             Arc::new(Mutex::new(None)),
             AgentSettings::default(),
         );
-        // 398 messages: one more turn (user + answer) fits exactly.
-        for i in 0..199 {
-            agent.history.push(text(Role::User, &format!("q{i}")));
-            agent.history.push(text(Role::Assistant, &format!("a{i}")));
+        // The founder's villa: one request, 150 steps and an answer (302 messages).
+        agent.history.push(Message::user(vec![
+            ContentBlock::Text {
+                text: "[state] units: metres".into(),
+            },
+            ContentBlock::Text {
+                text: "A villa on a 20 by 25 m plot, about 220 m².".into(),
+            },
+        ]));
+        for i in 0..150 {
+            step(&mut agent.history, i);
         }
-        let (tx, mut rx) = mpsc::channel(100);
         agent
-            .run_turn("fits".into(), tx.clone(), CancellationToken::new())
+            .history
+            .push(text(Role::Assistant, "The plan is done."));
+        let (tx, _rx) = mpsc::channel(100);
+        agent
+            .run_turn(
+                "Now complete the design package".into(),
+                tx,
+                CancellationToken::new(),
+            )
             .await
             .unwrap();
-        assert_eq!(agent.history.len(), MAX_MESSAGES);
-        assert_eq!(sent.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(AgentEvent::Text { .. }) | Ok(AgentEvent::Done { .. })
-        ));
-
-        let before = agent.history.clone();
-        agent
-            .run_turn("too many".into(), tx, CancellationToken::new())
-            .await
-            .unwrap();
-        assert_eq!(sent.load(Ordering::SeqCst), 1, "no request is sent");
-        assert_eq!(agent.history, before, "the history is not touched");
-        let mut last = None;
-        while let Ok(e) = rx.try_recv() {
-            last = Some(e);
-        }
         assert_eq!(
-            last,
-            Some(AgentEvent::Stopped {
-                reason: "conversation is long, start a new one".into()
-            })
+            sent.load(Ordering::SeqCst),
+            1,
+            "the request is sent, not refused"
         );
+        assert!(
+            agent.history.len() <= COMPACT_TO + 2,
+            "{}",
+            agent.history.len()
+        );
+        assert_well_formed(&agent.history);
+        let ContentBlock::Text { text: note } = &agent.history[0].content[0] else {
+            panic!("a note first");
+        };
+        assert!(note.starts_with(COMPACTED), "{note}");
+        assert!(note.contains("- qiyas_execute run walls"), "{note}");
+        let has = |words: &str| {
+            agent.history.iter().any(|m| {
+                m.content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Text { text } if text == words))
+            })
+        };
+        assert!(
+            has("A villa on a 20 by 25 m plot, about 220 m²."),
+            "the brief is kept whole"
+        );
+        assert!(
+            has("Now complete the design package"),
+            "the new request is kept whole"
+        );
+    }
+
+    #[test]
+    fn one_long_turn_loses_its_oldest_steps_and_keeps_the_newest_whole() {
+        let mut agent = Agent::new(
+            Box::new(Counting(Arc::new(AtomicUsize::new(0)))),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        agent
+            .history
+            .push(text(Role::User, "Draw the whole package"));
+        for i in 0..200 {
+            step(&mut agent.history, i);
+        }
+        let newest = agent.history[agent.history.len() - KEEP_RECENT..].to_vec();
+        agent.compact();
+        assert!(
+            agent.history.len() <= COMPACT_TO + 1,
+            "{}",
+            agent.history.len()
+        );
+        assert_eq!(
+            &agent.history[agent.history.len() - KEEP_RECENT..],
+            &newest[..]
+        );
+        assert_well_formed(&agent.history);
+        // Compacting again keeps the earlier note's steps and adds the new ones.
+        for i in 200..400 {
+            step(&mut agent.history, i);
+        }
+        agent.compact();
+        assert_well_formed(&agent.history);
+        let ContentBlock::Text { text: note } = &agent.history[0].content[0] else {
+            panic!("a note first");
+        };
+        assert_eq!(note.matches(COMPACTED).count(), 1, "one note, merged");
+        assert!(note.contains("earlier steps)"), "{note}");
+        assert!(agent.history.iter().any(|m| m.content.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text == "Draw the whole package")
+        )));
     }
 }
