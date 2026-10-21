@@ -7,7 +7,7 @@ use reqwest::header::HeaderValue;
 use serde_json::{json, Value};
 
 use crate::provider::{
-    http_client, read_events, send, AiError, BoxFuture, ContentBlock, Message, Provider,
+    http_client, read_events, send_with_retry, AiError, BoxFuture, ContentBlock, Message, Provider,
     ResultPart, Role, Sink, StopReason, StreamEvent, TurnRequest, TurnResult, Usage,
 };
 use crate::ToolSpec;
@@ -24,6 +24,7 @@ pub struct Anthropic {
     api_key: String,
     url: String,
     client: reqwest::Client,
+    strict_budget: bool,
 }
 
 impl Anthropic {
@@ -37,7 +38,14 @@ impl Anthropic {
             api_key,
             url,
             client: http_client(),
+            strict_budget: false,
         }
+    }
+
+    /// Budgeted evaluations must not switch to an unpriced server-side fallback model.
+    pub fn with_strict_budget(mut self) -> Self {
+        self.strict_budget = true;
+        self
     }
 }
 
@@ -48,7 +56,10 @@ impl Provider for Anthropic {
         sink: Sink<'a>,
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
-            let body = request_body(&req);
+            let mut body = request_body(&req);
+            if self.strict_budget {
+                body.as_object_mut().unwrap().remove("fallbacks");
+            }
             // Marked sensitive so the HTTP stack never prints it; a key that is not a valid
             // header value can only be refused.
             let mut key = HeaderValue::from_str(&self.api_key).map_err(|_| AiError::Auth)?;
@@ -56,17 +67,23 @@ impl Provider for Anthropic {
             sink(StreamEvent::RequestSent(crate::provider::sent_fields(
                 &body,
             )));
-            let response = send(
+            let response = send_with_retry(
                 || {
-                    self.client
+                    let request = self
+                        .client
                         .post(&self.url)
                         .header("x-api-key", key.clone())
                         .header("anthropic-version", VERSION)
-                        .header("anthropic-beta", BETA)
-                        .json(&body)
+                        .json(&body);
+                    if self.strict_budget {
+                        request
+                    } else {
+                        request.header("anthropic-beta", BETA)
+                    }
                 },
                 &self.api_key,
                 &body,
+                !self.strict_budget,
             )
             .await
             .map_err(|e| e.for_model("Anthropic", &req.model))?;

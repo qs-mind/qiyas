@@ -81,11 +81,61 @@ take-off as ground truth):
 ### Now
 - **Phase 13:** fix the one failing plot test (viewport frames now on non-plotting `A-VIEW`:
   the test gets its own layer), run the full check, commit.
-- **Phase 14:** saved conversations. The Phase 14 brief is ready. Add the **approval modes** setting
+- **Phase 14:** saved conversations. The brief is ready. Add the **approval modes** setting
   (per job default, per phase, autonomous), enforced in the agent around the `plan`
   operation; a failed check always pauses.
 
-### Phase 15: Foundation and element types (E0, E2)
+### Phase 15: The QS benchmark (built first, so every later phase is scored)
+
+Built from the research (`.local/research/reports/QS benchmark sources and methods.md`).
+
+**Store:** `.local/benchmark/` in the repo, git-ignored (development data; never in `~/.qiyas`).
+- `sources/`: raw downloads, each with its licence and a provenance log entry.
+- `cases/<id>/`: the drawing (DWG, DXF or PDF), `truth.json` (each item's quantity, unit,
+  kind and source objects) and its variants.
+- `holdout/`: sealed; dev tests never read it.
+
+**Sources (open licences only):**
+- buildingSMART Medical-Dental Clinic and Duplex Apartment IFC (CC BY 4.0): plans per storey
+  exported to DXF, with truth computed from the model geometry.
+- ResPlan and Swiss Dwellings (CC BY 4.0): a few hundred plans rendered to DXF in metres,
+  with truth from their geometry.
+- **Qiyas's own generator:** varied projects drawn through Qiyas commands, writing exact truth
+  as they draw: an office fit-out, a warehouse, an apartment floor, MEP runs, external works
+  and a non-building part. Deterministic seeds.
+- Restricted tender packs (UNDP, US road departments, Kenya) are logged as candidates, never
+  downloaded until Kareem has permission.
+
+**Variants:**
+- **Messy copies:** exploded blocks, wrong and merged layers, overlaps and gaps, text drawn as
+  lines, odd units, missing schedules.
+- PDF exports, vector and scanned.
+- **Seeded errors:** missing, wrong-quantity and wrong-unit BOQ items; schedule/plan
+  mismatches; a revision B with known changes.
+
+**Harness:** `qiyas-cli bench`.
+- Scores a submitted take-off or BOQ against the truth:
+  - counts exact;
+  - geometry within 0.5%;
+  - rule-based quantities within 2–5%;
+  - judgement items within 10%;
+  - ±25% also reported, for comparison with TakeoffBench.
+- Also measures coverage and traceability (it re-measures the cited handles), precision and
+  recall on seeded errors, false alarms on clean cases, time and repeatability.
+- Produces a report, plus a baseline run of today's Qiyas.
+- Live Mizan runs on the benchmark, each with Kareem's OK.
+
+**Tooling:** benchmark converters may use a Python venv under `.local/benchmark/.venv`
+(ifcopenshell, shapely, ezdxf). They are never shipped and never committed. Repo code
+(generator and harness) uses only licence-approved Rust crates.
+
+**Done when:**
+- The store holds at least 50 dev cases across five or more project types, plus a sealed
+  holdout.
+- `qiyas-cli bench run` produces a scored report for today's Qiyas.
+- The report says what the next phases must improve.
+
+### Phase 16: Foundation and element types (E0, E2)
 
 **Builds:**
 - The knowledge store in the DWG (named-object dictionary `QIYAS_KNOWLEDGE`, XRecords holding
@@ -101,7 +151,7 @@ take-off as ground truth):
 **Done when:** Mizan defines element types for five unrelated trades in tests (blockwork
 wall, slab, column, duct, kerb). Each is placed and measured, with no new code.
 
-### Phase 16: Read any drawing (E1, E7 basics)
+### Phase 17: Read any drawing (E1, E7 basics)
 
 **Builds:**
 - Recognition rules as data: matching on layer, block, attribute, hatch, closed region, text
@@ -121,7 +171,7 @@ wall, slab, column, duct, kerb). Each is placed and measured, with no new code.
 MEP layout, a PDF-only set), recognition finds at least 95% of the elements a senior QS
 counts, and the rest are listed in review.
 
-### Phase 17: Measure like a senior QS (E3, E4, E5)
+### Phase 18: Measure like a senior QS (E3, E4, E5)
 
 **Builds:**
 - Measurement rules written from the standard the user supplies. No standard is built in.
@@ -134,7 +184,7 @@ counts, and the rest are listed in review.
 **Done when:** for each portfolio project, the generated BOQ matches the senior QS's within
 ±2% on 95% of items, and every line traces back to the drawing.
 
-### Phase 18: Find every discrepancy (E6, E7)
+### Phase 19: Find every discrepancy (E6, E7)
 
 **Builds:**
 - Comparison of the client's BOQ against the drawings, using the existing qiyas-takeoff
@@ -146,7 +196,7 @@ counts, and the rest are listed in review.
 **Done when:** on seeded projects with planted errors (missing items, wrong quantities,
 plan/schedule mismatches), at least 90% are found, with few false alarms.
 
-### Phase 19: Revisions and variations (E8)
+### Phase 20: Revisions and variations (E8)
 
 **Builds:**
 - Comparing revision A with revision B: matched, added, removed and changed elements and
@@ -157,7 +207,7 @@ plan/schedule mismatches), at least 90% are found, with few false alarms.
 **Done when:** a revised drawing set gives a correct variation statement in minutes,
 verified against a hand-measured variation.
 
-### Phase 20: Project scale (E9)
+### Phase 21: Project scale (E9)
 
 **Builds:**
 - A project spanning many drawings (sheet set `.qss`): the BOQ aggregated across drawings and
@@ -170,13 +220,13 @@ verified against a hand-measured variation.
 data (the combined BOQ, cross-drawing checks) live? The proposal is the sheet set file
 `.qss`.
 
-### Phase 21: Deliverables (E10)
+### Phase 22: Deliverables (E10)
 
 Report layouts as data: dimension sheets, the BOQ in the client's own Excel format (mapped
 from their template), the query list and the variation statement. Excel and PDF, bilingual,
 with Thmanyah for Arabic where licensed.
 
-### Phase 22: Trust and the benchmark (E11)
+### Phase 23: Trust and the benchmark (E11)
 
 **Builds:**
 - "How did you get this number?" on any quantity: the dimension lines, the elements and the
@@ -203,6 +253,9 @@ authoring. Kept on the roadmap, behind the QS work.
   phase. CLAUDE.md updated each phase.
 
 ## Kareem's answers (21 Oct)
+
+`~/.qiyas` is the **production** data home (users running Qiyas). Development data never goes there: research and benchmark data live in the repo's git-ignored `.local/` (`.local/research`, `.local/benchmark`), and debug builds use `.local/qiyas-home` as their Qiyas home.
+
 
 1. **No real projects.** Claude runs deep research for public, legally usable benchmark
    material:
@@ -236,10 +289,10 @@ authoring. Kept on the roadmap, behind the QS work.
 
 ## Changes to the phases from these answers
 - **Now:** add the Method of measurement setting (with the approval modes) to Phase 14's
-  Settings work. Its rule engine arrives in Phase 17.
-- **Phase 17:** measurement rules come from the method chosen in Settings (or the project's
+  Settings work. Its rule engine arrives in Phase 18.
+- **Phase 18:** measurement rules come from the method chosen in Settings (or the project's
   override). A test proves that switching methods changes the deduction and unit rules and
   re-derives the quantities.
-- **Phase 20:** projects in `~/.qiyas/projects/*.qss`, listed in a Projects panel. Overnight
+- **Phase 21:** projects in `~/.qiyas/projects/*.qss`, listed in a Projects panel. Overnight
   batch runs work per project.
-- **Phase 22:** the benchmark is the researched public set plus seeded-error copies of it.
+- **Phase 15:** the benchmark is built first from the researched open sources plus Qiyas's own generator.

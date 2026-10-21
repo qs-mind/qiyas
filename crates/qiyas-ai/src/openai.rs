@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 
 use crate::provider::{
-    http_client, read_events, send, AiError, BoxFuture, ContentBlock, Message, Provider,
+    http_client, read_events, send_with_retry, AiError, BoxFuture, ContentBlock, Message, Provider,
     ResultPart, Role, Sink, StopReason, StreamEvent, TurnRequest, TurnResult, Usage,
 };
 
@@ -24,6 +24,7 @@ pub struct OpenAiCompatible {
     /// The optional request fields this service refused once (`OPTIONAL_FIELDS`): left out of
     /// every request after.
     refused: Mutex<HashSet<&'static str>>,
+    strict_budget: bool,
 }
 
 /// The request fields some services refuse with a 400: `reasoning_effort` (a model that doesn't
@@ -45,7 +46,14 @@ impl OpenAiCompatible {
             client: http_client(),
             extras: Mutex::new(HashMap::new()),
             refused: Mutex::new(HashSet::new()),
+            strict_budget: false,
         }
+    }
+
+    /// Keep output caps and streamed usage compulsory, with no unreserved HTTP retries.
+    pub fn with_strict_budget(mut self) -> Self {
+        self.strict_budget = true;
+        self
     }
 }
 
@@ -90,7 +98,7 @@ impl Provider for OpenAiCompatible {
                 sink(StreamEvent::RequestSent(crate::provider::sent_fields(
                     &body,
                 )));
-                let sent = send(
+                let sent = send_with_retry(
                     || {
                         let r = self.client.post(&url).json(&body);
                         match &self.api_key {
@@ -100,8 +108,13 @@ impl Provider for OpenAiCompatible {
                     },
                     secret,
                     &body,
+                    !self.strict_budget,
                 )
                 .await;
+                if self.strict_budget {
+                    break sent
+                        .map_err(|e| e.for_model(&service_name(&self.base_url), &req.model))?;
+                }
                 match sent {
                     Err(AiError::Api {
                         status: 400,

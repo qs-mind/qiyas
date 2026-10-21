@@ -1,0 +1,6 @@
+# Optional development converters only; install into .local/benchmark/.venv.
+ifcopenshell>=0.8,<0.9
+shapely>=2,<3
+ezdxf>=1.4,<2
+# ResPlan's pickle may carry room-connectivity graphs alongside its geometry.
+networkx>=3,<4

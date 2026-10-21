@@ -517,6 +517,37 @@ impl Session {
         Session::open_with(path, &project_path(path), &project::file_name(path))
     }
 
+    /// Opens a self-contained benchmark drawing without reading project sidecars or external
+    /// resources. Linked drawings and pictures must be resolved before entering the benchmark.
+    pub fn open_standalone(path: &Path) -> Result<Session, CoreError> {
+        let drawing = Drawing::open(path)?;
+        if drawing
+            .doc
+            .block_records
+            .iter()
+            .any(|b| is_xref_block(&drawing.doc, &b.name))
+            || drawing.doc.objects.values().any(|o| {
+                matches!(
+                    o,
+                    opencadcodec::objects::ObjectType::ImageDefinition(_)
+                        | opencadcodec::objects::ObjectType::UnderlayDefinition(_)
+                )
+            })
+            || drawing
+                .doc
+                .entities()
+                .any(|e| matches!(e, EntityType::RasterImage(_) | EntityType::Underlay(_)))
+        {
+            return Err(CoreError::InvalidCommand(
+                "Standalone drawings cannot reference external drawings, images or underlays"
+                    .into(),
+            ));
+        }
+        let mut session = Self::from_drawing(drawing, None);
+        session.size_stock_dim_styles();
+        Ok(session)
+    }
+
     /// `open`, with the project file at `project_file`, saved for the drawing named `name`.
     pub(crate) fn open_with(
         path: &Path,

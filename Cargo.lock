@@ -3959,14 +3959,23 @@ name = "qiyas-cli"
 version = "0.0.1"
 dependencies = [
  "calamine",
+ "chrono",
  "clap",
+ "keyring",
+ "keyring-core",
  "opencadcodec",
+ "qiyas-ai",
  "qiyas-boq",
  "qiyas-core",
+ "qiyas-plot",
  "qiyas-takeoff",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
+ "tiny-skia",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

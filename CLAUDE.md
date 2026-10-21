@@ -1812,8 +1812,20 @@ and Mizan's turn epoch together.
   lines with a mark each, where it stopped and the time; then the window shows a drawing an OPEN
   put on screen as a tab switch does, or reads the one on screen again (info, hidden layers,
   take-off, batch), and saves the take-off.
-- `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window, and never the settings, the
-  keychain, MCP or the AI (it depends on qiyas-core, qiyas-boq and qiyas-takeoff only).
+- `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window. Ordinary drawing commands
+  and `bench` are offline and never read provider settings or credentials. Only `eval`, with
+  explicit approval for each run, reads saved provider settings and the OS keychain itself.
+  - `bench generate`: 60 deterministic dev cases in six project types, each with 12 variants,
+    in git-ignored `.local/benchmark`; six separate holdout cases are sealed and listed by hash.
+  - `bench run`: automatic counts, closed areas and candidate rooms, three repetitions,
+    with scored JSON/Markdown reports. `bench score --case ID --submission FILE` accepts
+    JSON take-off/BOQ or Excel. Dev commands never enumerate or open the holdout.
+  - `eval --case ID --approve-live-run [--provider-from-settings]`: real headless Mizan,
+    OS keychain credentials, local budget reservations and token/cost accounting. Requires
+    explicit model pricing in `.local/autopilot/budget.json`; the daily default is $5.
+    Never run live evaluation without Kareem's OK for that run. Tests use a scripted provider.
+  - Schema, scoring definitions, source conversion and limitations:
+    `docs/2026-10-21-qiyas-qs-benchmark.md`.
   - `convert <in> <out> [--version 2000|2004|2007|2010|2013|2018]`: DWG or DXF by the output's
     extension, in the input's version unless given: the drawing as read and nothing else (no
     project file, no take-off embedded, the source's project never rewritten); `.bak` when the

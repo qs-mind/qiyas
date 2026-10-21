@@ -339,6 +339,16 @@ pub(crate) async fn send(
     secret: &str,
     body: &Value,
 ) -> Result<reqwest::Response, AiError> {
+    send_with_retry(make, secret, body, true).await
+}
+
+/// Budgeted evaluations reserve one request, so they must disable the automatic retry.
+pub(crate) async fn send_with_retry(
+    make: impl Fn() -> reqwest::RequestBuilder,
+    secret: &str,
+    body: &Value,
+    allow_retry: bool,
+) -> Result<reqwest::Response, AiError> {
     let mut retried = false;
     loop {
         let response = make()
@@ -356,7 +366,7 @@ pub(crate) async fn send(
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.trim().parse::<f64>().ok())
                 .map(|s| s.max(0.0).ceil() as u64);
-            if retried {
+            if retried || !allow_retry {
                 return Err(AiError::RateLimited { retry_after });
             }
             retried = true;
