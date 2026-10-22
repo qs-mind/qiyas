@@ -418,7 +418,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   The existing geometry kernel refuses overlapping parallel runs in a union group; failed
   placements roll back atomically.
 - `derived.rs`: one ordered derivation list inside `record_document_change` (objects, views,
-  schedules, BOQ rows, fields). The views/BOQ slots are reserved for later phases. Object
+  schedules, BOQ rows, fields). Phase 18 fills the BOQ slot; views remain reserved. Object
   schedules are CAD field tables that follow edits and grouping in the same undo step.
 - Expressions now include powers, comparisons, logic, typed strings/booleans, lazy `if`,
   `min/max/round/ceil/floor` and resolver lookups; the numeric constraint API is preserved.
@@ -463,6 +463,32 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   All 120 PDF variants produce scored submissions, but each currently covers selected
   measurements. Independent 95% QS recall and live vision validation remain outstanding.
 - Workflow, schema, limits and verification: `docs/2026-10-22-qiyas-phase17.md`.
+
+## Measurement methods and generated BOQ (Phase 18)
+
+- `measurement.rs` / `measurement/evaluate.rs`: user-supplied, cited rules for types/trades,
+  timesing and factors, hosted opening/void thresholds, boundary exceptions, unit bands,
+  per-object rounding and coverage notes. No standard or trade thresholds ship with Qiyas.
+  `measurement.set_method` snapshots Settings/project scopes in drawing knowledge; project
+  takes precedence. `measurement.set_mappings` supplies bilingual description/code templates,
+  sections, trades and units. `measurement.report` reads quantities, BOQ and dimension sheets.
+- The derivation hook refreshes the generated result with every drawing edit in its undo step.
+  Lines retain expressions, operands, inclusion decisions, method/clause/source and handle/sheet/
+  assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
+  withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
+- Settings validates local method files and applies changes transactionally to open tabs. Opening
+  a tab applies the selected method. The drawing-level project override is available through
+  commands; project-wide `.qss` propagation remains Phase 21 work. The BOQ panel exposes the
+  generated items and dimension source links; the take-off export adds bilingual BOQ, dimension
+  and review worksheets. Comparison adapts generated quantities without replacing the imported BOQ.
+- `recognition.pdf_text` calibrates vectors from a label regex and a ticked scale bar. General
+  label/legend rules live as data; ambiguous calibration and scans stay in review.
+- `bench run --mode prepared|autonomy`: prepared case recipes versus shared rules only. Autonomy
+  never opens case recipes. Both reports show item coverage, precision, F1 and extras per case
+  and overall, plus PDF totals, in `baseline-<mode>.json/.md`. Rules/runs stay in `.local/`.
+- Algorithm performance guards use `tests/support/performance.rs`, a fixed integer sort workload.
+  The million-segment guard also checks that its ratio budget would reject a 4x slowdown.
+- Schema, verification, benchmark comparison and limits: `docs/2026-10-22-qiyas-phase18.md`.
 
 ## Drawing
 
@@ -584,7 +610,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   into an outer wall's face. The public `where_it_fits` uses the widths of every meeting wall.
   Tests cover hand-calculated mixed 250/150 mm areas in mm, cm, m and inches, staged versus
   one-command construction, editing and persistence. The release `walls_speed` test guards
-  500 walls under two seconds.
+  500 walls relative to a fixed CPU reference workload.
 
 ## Modify
 
@@ -746,7 +772,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   split into groups joined by shared unknowns, on a copy moved to its middle and scaled to one
   unit across (site grids); what no constraint holds stays put, exactly; a conflict fails with
   the sketch untouched. `cargo test -p qiyas-param --release --test solver_speed`
-  (in `scripts/check.sh`): 200 connected constraints in about 4 ms, guard 50 ms. `expr.rs`: own
+  (in `scripts/check.sh`): 200 connected constraints, guarded relative to a fixed CPU reference. `expr.rs`: own
   parser for `d1 = 2*d2 + 1.5` (numbers with Arabic digits, `+ - * /`, brackets, names, `pi`,
   sin/cos/tan in degrees, sqrt, abs); `evaluate_all` refuses unknown names and circles,
   `evaluate_each` works each out on its own (a broken one spoils only its users), `normalize`
@@ -1533,9 +1559,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
   `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
   on first use. Settings lists local `methods/*.json`; no measurement rules ship with Qiyas.
-  Version 1 validates only `{name, title, based_on, source_note, rules: []}` (an explicit
-  `version: 1` is accepted; an omitted version means 1). Rule contents are opaque until
-  Phase 17. Mizan's live state reports the name and whether a nonempty rule set was loaded;
+  Version 1 validates `{name, title, based_on, source_note, rules: []}` and the cited rule
+  contents through the Phase 18 engine (an omitted version means 1). Mizan's live state reports the name and whether a nonempty rule set was loaded;
   without rules, quantities are geometric and answers say so.
 
 Mizan's `reveal` results draw the changed entities in order in the highlight overlay over the

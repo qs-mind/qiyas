@@ -115,7 +115,10 @@ pub(crate) fn find_path(state: &AppState, path: &Path) -> Option<u32> {
 
 /// Puts `session` on screen in a new tab after the others; the drawing on screen before is
 /// parked. Returns the new tab's id.
-pub(crate) fn add(state: &AppState, session: Session) -> u32 {
+pub(crate) fn add(state: &AppState, mut session: Session) -> Result<u32, String> {
+    let name = lock(&state.settings).measurement_method.clone();
+    let method = crate::methods::load_at(&crate::methods::qiyas_dir()?, name.as_deref())?;
+    crate::methods::apply(&mut session, method.as_ref()).map_err(|e| e.to_string())?;
     let mut list = lock(&state.tabs);
     let mut active = lock(&state.session);
     let mut parked = lock(&state.parked);
@@ -132,7 +135,7 @@ pub(crate) fn add(state: &AppState, session: Session) -> u32 {
     *active = Some(session);
     list.order.push(id);
     list.active = Some(id);
-    id
+    Ok(id)
 }
 
 /// Swaps the parked session of tab `id` onto the screen, parking the one there. The assistant

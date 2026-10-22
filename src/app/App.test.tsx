@@ -105,6 +105,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "compare":
         if (core.compareHold) await core.compareHold;
         return [];
+      case "measurement_report":
+        return { items: [], warnings: [] };
       case "boq":
         return core.hasBoq ? { source: "/d/bill.xlsx", imported: "", items: [], skipped_rows: 0 } : null;
       case "drawing_info":
@@ -431,6 +433,7 @@ const SHOWN = [
   "totals null",
   "boq null",
   "conflicts null",
+  "measurement_report null",
   "batch_version null",
   "tabs null",
   "render_batch {}",
@@ -672,6 +675,7 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
       "totals null",
       "boq null",
       "conflicts null",
+      "measurement_report null",
       "batch_version null",
       "tabs null",
       "render_batch {}",

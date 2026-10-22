@@ -177,7 +177,7 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
             .path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        tabs::add(&state, session);
+        tabs::add(&state, session)?;
         self.shown(format!("New drawing {title} on screen, unsaved"))
     }
 

@@ -47,6 +47,8 @@ impl Metrics {
         let ratio = |n, d| (d != 0).then(|| n as f64 / d as f64);
         serde_json::json!({
             "coverage":ratio(self.matched,self.truth_items),
+            "item_precision":ratio(self.matched,self.matched+self.extras),
+            "item_f1":ratio(2*self.matched,self.truth_items+self.matched+self.extras),
             "pass_rate_all":ratio(self.passed,self.truth_items),
             "pass_rate_matched":ratio(self.passed,self.matched),
             "p_at_1_percent":ratio(self.within_1_percent,self.matched),

@@ -13,6 +13,7 @@ qiyas-boq = { path = "../qiyas-boq" }
 qiyas-takeoff = { path = "../qiyas-takeoff" }
 qiyas-ai = { path = "../qiyas-ai" }
 qiyas-plot = { path = "../qiyas-plot" }
+qiyas-pdf = { path = "../qiyas-pdf" }
 tiny-skia.workspace = true
 opencadcodec.workspace = true
 # Arguments (MIT OR Apache-2.0); no colour or suggestions, so fewer crates come along.

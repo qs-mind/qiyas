@@ -140,3 +140,5 @@ pub use walls::{
 pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};
 
 pub mod recognition;
+
+pub mod measurement;

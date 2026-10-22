@@ -1,4 +1,4 @@
-//! Release only: 200 constraints in one connected sketch solve in under 50 ms. Run by
+//! Release only: 200 constraints in one connected sketch, relative to a fixed CPU reference. Run by
 //! `scripts/check.sh` (`cargo test -p qiyas-param --release --test solver_speed`).
 #![cfg(not(debug_assertions))]
 
@@ -60,16 +60,14 @@ fn staircase() -> Sketch {
 }
 
 #[test]
-fn two_hundred_constraints_solve_in_under_50_ms() {
+fn two_hundred_constraints_solve_within_reference_ratio() {
+    let reference = performance::reference();
     let mut s = staircase();
     let t = Instant::now();
     let solved = solve(&mut s, &[]).unwrap();
     let first = t.elapsed();
-    assert!(
-        first.as_secs_f64() < 0.05,
-        "200 constraints took {first:?} ({} iterations)",
-        solved.iterations
-    );
+    performance::assert_relative(first, reference, 0.125, "200 constraints");
+    assert!(solved.iterations > 0);
     // Line 10's length changes; the staircase follows.
     if let Constraint::Distance { value, .. } = &mut s.constraints[70] {
         *value = 3.0;
@@ -77,6 +75,9 @@ fn two_hundred_constraints_solve_in_under_50_ms() {
     let t = Instant::now();
     solve(&mut s, &[]).unwrap();
     let again = t.elapsed();
-    assert!(again.as_secs_f64() < 0.05, "the re-solve took {again:?}");
+    performance::assert_relative(again, reference, 0.125, "200 constraints re-solve");
     println!("first solve {first:?}, re-solve {again:?}");
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

@@ -168,6 +168,7 @@ fn review_focus_4_the_rectangle_stays_a_rectangle_when_its_width_changes() {
     assert_eq!(params[0].expression, "4");
     assert!((params[0].value.unwrap() - 4.0).abs() < TOL);
 
+    let reference = performance::reference();
     let t0 = Instant::now();
     s.run(Command::SetParameter {
         name: "d1".into(),
@@ -180,9 +181,7 @@ fn review_focus_4_the_rectangle_stays_a_rectangle_when_its_width_changes() {
         &vertices(&s, rect),
         [[0.0, 0.0], [6.0, 0.0], [6.0, 3.0], [0.0, 3.0]],
     );
-    // The solver's own 50 ms guard is the release test `solver_speed`; through the command bus
-    // in a debug build, under parallel tests, a looser bound.
-    assert!(took.as_millis() < 250, "the width change took {took:?}");
+    performance::assert_relative(took, reference, 0.625, "command width change");
     // The Dimension follows, shows its parameter in brackets (the lock mark), and reads 6.
     let dim = params[0].dimension;
     match s.drawing.doc.get_entity(Handle::new(dim)) {
@@ -808,3 +807,6 @@ fn a_one_metre_rectangle_far_from_the_origin_solves_as_one_at_the_origin() {
         [[x, y], [x + 0.25, y], [x + 0.25, y + 1.0], [x, y + 1.0]],
     );
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

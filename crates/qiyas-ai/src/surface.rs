@@ -694,6 +694,22 @@ pub fn run_session_with_method(
         (READ, "state") => {
             let mut value = state(session);
             value["measurement_method"] = json!(method);
+            if qiyas_core::knowledge::get(
+                &session.drawing.doc,
+                qiyas_core::knowledge::Kind::Measurement,
+                "selection",
+            )?
+            .is_some()
+            {
+                let selection = session.measurement_selection()?;
+                let effective = selection.effective();
+                value["measurement_method"] = json!({"name":effective.map(|m| &m.name),"rules_loaded":effective.is_some_and(|m| !m.rules.is_empty())});
+                value["measurement_scope"] = json!(if selection.project.is_some() {
+                    "project"
+                } else {
+                    "settings"
+                });
+            }
             json(value)
         }
         (READ, "capabilities") => json(capabilities()),
@@ -1674,8 +1690,16 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
     let path = crate::execute::resolve_in_drawing_folder(session, name)?;
     if op == "export_takeoff" {
         let totals = session.takeoff.totals();
-        qiyas_boq::export_takeoff(&path, &session.takeoff.items, &totals, &stem)
-            .map_err(|e| ToolError::Failed(e.to_string()))?;
+        qiyas_boq::export_takeoff_with_report(
+            &path,
+            &session.takeoff.items,
+            &totals,
+            &stem,
+            &session
+                .measurement_report()
+                .map_err(|e| ToolError::Failed(e.to_string()))?,
+        )
+        .map_err(|e| ToolError::Failed(e.to_string()))?;
     } else {
         qiyas_boq::report::export_conflicts(&path, &session.conflicts)
             .map_err(|e| ToolError::Failed(e.to_string()))?;

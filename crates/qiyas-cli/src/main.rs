@@ -251,11 +251,12 @@ impl Host for Excel {
             Some(name) => format!("{} take-off", name.to_string_lossy()),
             None => "Take-off".to_string(),
         };
-        qiyas_boq::export_takeoff(
+        qiyas_boq::export_takeoff_with_report(
             path,
             &session.takeoff.items,
             &session.takeoff.totals(),
             &title,
+            &session.measurement_report().map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())
     }

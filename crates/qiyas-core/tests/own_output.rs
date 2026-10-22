@@ -248,6 +248,11 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
         handles = prepared;
     } else if name.starts_with("recognition.") {
         let unit = 1.0 / session.drawing.units.to_metres();
+        if name == "recognition.pdf_text" {
+            example["path"] = json!(qiyas_pdf::fixtures::write_text_scale(
+                session.drawing.path.parent().unwrap(),
+            ));
+        }
         if matches!(name, "recognition.pdf" | "recognition.vision") {
             let path = qiyas_pdf::fixtures::write_rotated(session.drawing.path.parent().unwrap());
             if name == "recognition.pdf" {

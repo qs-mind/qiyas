@@ -48,6 +48,14 @@ pub fn compare_session(
     }
     // The engine sees sheet names, as the user does; the session keeps the schedules as read.
     let mut takeoff = session.takeoff.clone();
+    let generated = session
+        .measurement_report()?
+        .comparison_measurements(session.drawing.units);
+    // A generated mapping owns its code; manual links to that code must not count twice.
+    takeoff
+        .items
+        .retain(|m| !generated.iter().any(|g| m.boq_code == g.boq_code));
+    takeoff.items.extend(generated);
     for m in &mut takeoff.items {
         m.sheet = name_of(&m.sheet);
     }

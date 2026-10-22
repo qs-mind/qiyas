@@ -1,6 +1,8 @@
 //! Recognition interprets evidence using drawing-owned rules. No trade selects an algorithm.
+mod pdf_text;
 mod schedule;
 mod vision;
+pub use pdf_text::{calibrate_pdf_text, PdfTextReading, PdfTextRules, TextCalibration};
 
 use std::collections::BTreeMap;
 
@@ -140,7 +142,7 @@ pub struct Rule {
     pub reject: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Evidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<u64>,
@@ -231,6 +233,15 @@ pub enum RecognitionCommand {
         calibration: Calibration,
         #[serde(default)]
         insert_at: [f64; 2],
+    },
+    /// Import a vector PDF calibrated from its own text and ticked scale bar.
+    /// The regex, physical unit and search radius are supplied as general recognition data.
+    #[schemars(extend("x-needs" = "pdf"))]
+    #[schemars(example = json!({"kind":"pdf_text","path":"drawing.pdf","page":1,"rule":{"label_regex":"Reference (?P<distance>[0-9.]+) m","metres_per_label_unit":1,"search_heights":8}}))]
+    PdfText {
+        path: String,
+        page: u32,
+        rule: TextCalibration,
     },
     /// Snap vision hints from a calibrated PDF page to existing geometry or raster ink.
     /// Points use displayed page points, bottom-left origin. Unsnapped hints require review.
@@ -916,6 +927,15 @@ impl Session {
                 )?;
                 let handles = self.apply_prepared(prepared, insert_at)?;
                 Ok(json!({"handles":handles,"drawing_units_per_point":scale}))
+            }
+            RecognitionCommand::PdfText { path, page, rule } => {
+                let calibration = calibrate_pdf_text(std::path::Path::new(&path), page, &rule)?;
+                self.run_recognition(RecognitionCommand::Pdf {
+                    path,
+                    page,
+                    calibration,
+                    insert_at: [0.0, 0.0],
+                })
             }
             RecognitionCommand::Vision { spec } => self.recognise_vision(*spec),
         }

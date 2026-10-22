@@ -1,5 +1,6 @@
 //! Local development benchmark. Enumeration is rooted in `cases`, never `holdout`.
 mod baseline;
+mod general;
 pub mod generate;
 mod model;
 mod recognition;
@@ -18,6 +19,26 @@ use sha2::{Digest, Sha256};
 pub use model::Truth;
 use score::{CaseScore, Metrics};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum RunMode {
+    Prepared,
+    Autonomy,
+}
+impl RunMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::Autonomy => "autonomy",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Prepared => "Engine with prepared rules",
+            Self::Autonomy => "General rules only",
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct BenchArgs {
     #[arg(long, global = true, default_value = ".local/benchmark")]
@@ -34,8 +55,11 @@ pub enum BenchCommand {
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u16).range(1..=100))]
         seeds: u16,
     },
-    /// Run case-local recognition recipes, with geometric baseline fallback, on development cases.
+    /// Score prepared case recipes or general rules only, without model calls.
     Run {
+        /// Autonomy never opens case-local recognition recipes.
+        #[arg(long, value_enum, default_value = "prepared")]
+        mode: RunMode,
         #[arg(long)]
         case: Option<String>,
         #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u16).range(1..=100))]
@@ -69,6 +93,7 @@ pub fn run(args: &BenchArgs) -> Result<Value, String> {
     match &args.command {
         BenchCommand::Generate { seeds } => generate::generate(&args.root, usize::from(*seeds)),
         BenchCommand::Run {
+            mode,
             case,
             repeats,
             clean_only,
@@ -77,6 +102,7 @@ pub fn run(args: &BenchArgs) -> Result<Value, String> {
             case.as_deref(),
             usize::from(*repeats),
             *clean_only,
+            *mode,
         ),
         BenchCommand::Recognize { case, plan, output } => {
             let (truth, directory) = load_case(&args.root, case)?;
@@ -278,10 +304,12 @@ fn baseline_run(
     selected: Option<&str>,
     repeats: usize,
     clean_only: bool,
+    mode: RunMode,
 ) -> Result<Value, String> {
     let started = Instant::now();
-    let previous_rates = if root.join("baseline.json").exists() {
-        let path = safe_file(root, Path::new("baseline.json"))?;
+    let latest = format!("baseline-{}.json", mode.name());
+    let previous_rates = if root.join(&latest).exists() {
+        let path = safe_file(root, Path::new(&latest))?;
         let previous: Value =
             serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
@@ -294,7 +322,8 @@ fn baseline_run(
         .map(Ok)
         .unwrap_or_else(|| dev_ids(root, clean_only))?;
     let run_dir = root.join("runs").join(format!(
-        "baseline-{}-{}",
+        "baseline-{}-{}-{}",
+        mode.name(),
         chrono::Utc::now().format("%Y%m%dT%H%M%S%f"),
         std::process::id()
     ));
@@ -308,6 +337,7 @@ fn baseline_run(
     let mut metrics = Metrics::default();
     let mut types = BTreeMap::<String, Metrics>::new();
     let mut repeatability = Vec::new();
+    let mut pdf_metrics = Metrics::default();
     for id in ids {
         let (truth, directory) = load_case(root, &id)?;
         let drawing = directory.join(&truth.drawing);
@@ -316,11 +346,20 @@ fn baseline_run(
         for repeat in 0..repeats {
             let attempt = Instant::now();
             let plan = directory.join("recognition.json");
-            let attempt_result = if plan.exists() {
+            let attempt_result = if mode == RunMode::Prepared && plan.exists() {
                 let plan = safe_file(&directory, Path::new("recognition.json"))?;
-                recognition::measure(&drawing, &plan)
+                recognition::measure(&drawing, &plan).map(|s| {
+                    if drawing
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                    {
+                        general::extend_pdf(root, &drawing, s)
+                    } else {
+                        s
+                    }
+                })
             } else {
-                baseline::measure(&drawing)
+                general::measure(root, &drawing)
             };
             let submission = attempt_result.unwrap_or_else(|e| model::Submission {
                 warnings: vec![format!("automatic recognition unavailable: {e}")],
@@ -339,6 +378,12 @@ fn baseline_run(
                 let session = Session::open_standalone(&drawing).ok();
                 let report = score::score(&truth, &submission, session.as_ref());
                 metrics.merge(&report.metrics);
+                if drawing
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                {
+                    pdf_metrics.merge(&report.metrics);
+                }
                 types
                     .entry(truth.project_type.clone())
                     .or_default()
@@ -376,19 +421,20 @@ fn baseline_run(
     let next=vec![
         "Extend drawing-evidence recognition recipes to the remaining development cases, including model provenance and unresolved property evidence.",
         "Validate Phase 17 on independently reviewed consultant drawings; controlled PDF hints do not establish live vision recall.",
-        "Phase 18: apply declared measurement rules with reproducible geometry and clause references; improve coverage without duplicating room and region rows.",
+        "Phase 18 validation: compare user-supplied methods and generated dimension sheets with independently reviewed QS BOQs; synthetic recipe coverage is not senior-QS agreement.",
         "Phase 19: detect seeded missing, quantity, unit and schedule discrepancies; baseline automatic measurement makes no discrepancy claims.",
         "Phase 20: compare revision A/B and report the known quantity deltas.",
         "Add independently sourced CC BY cases after verified downloads and QS spot checks. Synthetic-only scores do not establish performance on consultant drawings.",
     ];
-    let result = json!({"schema_version":1,"baseline":"Qiyas recognition recipes with geometric baseline fallback","previous_rates":previous_rates,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
+    let result = json!({"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
     write_json(&run_dir.join("report.json"), &result)?;
     let md = markdown(&result);
     std::fs::write(run_dir.join("report.md"), &md).map_err(|e| e.to_string())?;
-    write_json(&root.join("baseline.json"), &result)?;
-    std::fs::write(root.join("baseline.md"), md).map_err(|e| e.to_string())?;
+    write_json(&root.join(&latest), &result)?;
+    std::fs::write(root.join(format!("baseline-{}.md", mode.name())), md)
+        .map_err(|e| e.to_string())?;
     Ok(
-        json!({"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates}),
+        json!({"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates}),
     )
 }
 
@@ -398,7 +444,17 @@ pub fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), Stri
 }
 
 fn markdown(report: &Value) -> String {
-    let mut text=format!("# Qiyas QS baseline\n\n{} dev drawings, {} repetitions. Drawing-owned recognition recipes plus the geometric baseline; no model calls.\n\n| Measure | Result |\n|---|---:|\n",report["cases"],report["repeats"]);
+    let mut text=format!("# Qiyas QS baseline\n\n{} dev drawings, {} repetitions. {}; no model calls.\n\n| Scope | Coverage | Item precision | Item F1 | Extra items |\n|---|---:|---:|---:|---:|\n",report["cases"],report["repeats"],report["baseline"].as_str().unwrap_or(""));
+    for (scope, data) in [("Overall", report), ("PDF", &report["pdf"])] {
+        text.push_str(&format!(
+            "| {scope} | {} | {} | {} | {} |\n",
+            data["rates"]["coverage"],
+            data["rates"]["item_precision"],
+            data["rates"]["item_f1"],
+            data["metrics"]["extras"],
+        ));
+    }
+    text.push_str("\n| Measure | Result |\n|---|---:|\n");
     if let Some(rates) = report["rates"].as_object() {
         for (name, value) in rates {
             text.push_str(&format!(
@@ -411,7 +467,26 @@ fn markdown(report: &Value) -> String {
             ));
         }
     }
-    text.push_str("\nRates use 0..1. Accuracy bands use matched items; pass_rate_all and traceability_all include missing items. No errors predicted gives undefined precision, not perfect precision. See report.json for item-level misses/extras, citation failures, errors and timings.\n\n## What later phases must improve\n\n");
+    text.push_str("\n| Case | Coverage | Item precision | Item F1 | Extra items |\n|---|---:|---:|---:|---:|\n");
+    if let Some(cases) = report["reports"].as_array() {
+        for case in cases {
+            text.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                case["id"].as_str().unwrap_or(""),
+                case["rates"]["coverage"],
+                case["rates"]["item_precision"],
+                case["rates"]["item_f1"],
+                case["metrics"]["extras"]
+            ));
+        }
+    }
+    text.push_str(&format!(
+        "\nPDF coverage: {}; item precision: {}; item F1: {}.\n",
+        report["pdf"]["rates"]["coverage"],
+        report["pdf"]["rates"]["item_precision"],
+        report["pdf"]["rates"]["item_f1"]
+    ));
+    text.push_str("\nRates use 0..1. Item precision = matched / (matched + extras); item F1 = 2 matched / (truth + matched + extras). Coverage is item recall; quantity accuracy is scored separately. Accuracy bands use matched items; pass_rate_all and traceability_all include missing items. No errors predicted gives undefined precision, not perfect precision. See report.json for item-level misses/extras, citation failures, errors and timings.\n\n## What later phases must improve\n\n");
     if let Some(next) = report["next_phases"].as_array() {
         for line in next {
             text.push_str(&format!("- {}\n", line.as_str().unwrap_or("")));

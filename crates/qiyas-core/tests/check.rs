@@ -945,14 +945,11 @@ fn checking_thousands_of_lines_stays_quick() {
         line.common.owner_handle = owner;
         s.drawing.doc.add_entity(EntityType::Line(line)).unwrap();
     }
+    let reference = performance::reference();
     let started = std::time::Instant::now();
     let r = check(&s);
     assert_eq!(r.entities, 5_000);
-    assert!(
-        started.elapsed().as_secs_f64() < 10.0,
-        "{:?}",
-        started.elapsed()
-    );
+    performance::assert_relative(started.elapsed(), reference, 25.0, "check 5000 lines");
 }
 
 #[test]
@@ -1090,3 +1087,6 @@ fn labelled_circles_and_grid_bubbles_are_annotations_but_plain_holes_need_marks(
         assert!(!report.findings[0].handles.contains(&tagged));
     }
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

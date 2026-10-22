@@ -1245,6 +1245,7 @@ fn point_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::performance;
 
     fn run(points: &[[f64; 2]], closed: bool) -> Run {
         Run {
@@ -1818,13 +1819,14 @@ mod tests {
             }
         }
         assert_eq!(runs.len(), 500);
+        let reference = (!cfg!(debug_assertions)).then(performance::reference);
         let start = std::time::Instant::now();
         let walls = build_walls(&runs, T, &[], TOL).unwrap();
         let elapsed = start.elapsed();
         assert_eq!(walls.regions.len(), 100);
         assert!((walls.net_area - 436.0).abs() < 1e-7);
-        if !cfg!(debug_assertions) {
-            assert!(elapsed.as_secs_f64() < 2.0, "500 walls took {elapsed:?}");
+        if let Some(reference) = reference {
+            performance::assert_relative(elapsed, reference, 5.0, "500 walls");
         }
     }
 }

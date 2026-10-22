@@ -3625,3 +3625,9 @@ span.grid-sort {
 .recognition-panel label { display: block; margin-block: 6px; }
 .recognition-panel label input:not([type="checkbox"]) { display: block; width: 100%; }
 .recognition-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.generated-boq { padding: 10px; overflow: auto; max-height: 55vh; border-bottom: 1px solid var(--border); }
+.generated-boq h3 { margin: 0 0 8px; }
+.generated-boq details { margin-block: 6px; }
+.generated-boq li { margin-block: 8px; overflow-wrap: anywhere; }
+.generated-boq button { margin: 3px; }

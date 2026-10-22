@@ -7,10 +7,11 @@ export const DEFAULT_TOLERANCE = 5;
 
 /** Linked rows whose unit is not the item's: their sum in their own unit. */
 export type OtherUnit = { unit: string; sum: number };
+export type QuantityLink = Pick<Measurement, "id" | "boq_code" | "unit" | "shown">;
 
 export type Measured = {
   /** The take-off rows linked to the item, whatever their unit. */
-  links: Measurement[];
+  links: QuantityLink[];
   /** Sum of `shown` over the linked rows in the item's unit; null when there is none. */
   sum: number | null;
   /** Linked rows in another unit, per unit: a unit mismatch. */
@@ -23,7 +24,7 @@ const unitKey = (unit: string) => unit.toLowerCase().replace(/\s+/g, "");
 /** The take-off rows linked to `item` (by code) and their sum. A row counts towards the sum only
  *  when its unit is the item's (m with m, m2 with m2, m3 with m3, pcs with pcs, or the same own
  *  unit); the others are summed per unit as a mismatch. An item without a code has no links. */
-export function measuredFor(item: BoqItem, takeoff: Measurement[]): Measured {
+export function measuredFor(item: BoqItem, takeoff: QuantityLink[]): Measured {
   const links = item.code === "" ? [] : takeoff.filter((m) => m.boq_code === item.code);
   let sum: number | null = null;
   const other = new Map<string, number>();

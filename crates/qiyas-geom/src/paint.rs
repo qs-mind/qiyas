@@ -259,6 +259,7 @@ pub(crate) fn mline_paths(doc: &CadDocument, m: &MLine) -> (Vec<Vec<[f64; 2]>>, 
 
 #[cfg(test)]
 mod tests {
+    use crate::performance;
     use opencadcodec::Vector2;
 
     use super::*;
@@ -279,10 +280,11 @@ mod tests {
             offset: Vector2::new(0.0, 0.0051),
             dash_lengths: vec![0.01, -0.01],
         };
+        let reference = performance::reference();
         let t = std::time::Instant::now();
         let spans = pattern_spans(&[line], &[ring]);
-        let secs = t.elapsed().as_secs_f64();
+        let elapsed = t.elapsed();
         assert_eq!(spans.len(), MAX_PATTERN_SPANS);
-        assert!(secs < 0.25, "{secs:.2} s");
+        performance::assert_relative(elapsed, reference, 0.625, "capped hatch spans");
     }
 }

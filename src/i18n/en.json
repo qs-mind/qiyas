@@ -1,4 +1,10 @@
 {
+  "boq.generated": "Generated BOQ and dimension sheets",
+  "boq.included": "Included",
+  "boq.excluded": "Excluded by rule",
+  "boq.noGrid": "Grid unassigned",
+  "boq.measurementReview": "Measurement review",
+
   "appName": "Qiyas",
   "new": "New…",
   "newDrawing.title": "New drawing",

@@ -336,7 +336,7 @@ type SideProps = {
 export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments, recognition }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
-  const { items, itemTotals, selectedId, bill, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
+  const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
   const {
     selectRow,
     removeRow,
@@ -398,6 +398,8 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
       <Tabs.Panel value="boq" keepMounted tabIndex={-1} className="side-panel">
         <BoqPanel
           boq={bill}
+          generated={generated}
+          onShowGenerated={takeoff.showGenerated}
           takeoff={items}
           selectedCode={boqCode}
           onSelect={selectBoq}

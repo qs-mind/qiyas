@@ -182,6 +182,7 @@ export function useAssistantWiring({
       else offs.push(unlisten);
     };
     listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then(keep);
+    listen("measurement:changed", () => onMcpChange.current()).then(keep);
     listen<number>(PDF_PROGRESS, (e) => setRenderProgress(e.payload)).then(keep);
     listen<AiUi>(SESSION_CHANGED, (e) => onMcpUi.current(e.payload)).then(keep);
     return () => {

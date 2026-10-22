@@ -1824,7 +1824,8 @@ impl Session {
                 | "set_object_props"
                 | "object_schedule"
                 | "set_knowledge"
-        ) || label.starts_with("recognition.");
+        ) || label.starts_with("recognition.")
+            || label.starts_with("measurement.");
         let failed_structure = failed_structure.then(|| self.drawing.doc.snapshot_structure());
         let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));

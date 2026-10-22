@@ -52,12 +52,11 @@ pub async fn open_drawing<R: Runtime>(
     }
     // Read the file before taking the lock, so a slow open doesn't block other commands.
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let info = session.info();
     // Stop a running turn first, so it can't run another tool on the new drawing.
     new_conversation(&app, &state);
-    tabs::add(&state, session);
+    tabs::add(&state, session)?;
     remember_recent(&state, &path);
-    Ok(info)
+    with_session(&state, |s| Ok(s.info()))
 }
 
 /// The header's INSUNITS for a new drawing's units: "m", "cm" or "mm".
@@ -80,10 +79,9 @@ pub async fn new_drawing<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
     let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(&units)?);
-    let info = session.info();
     new_conversation(&app, &state);
-    tabs::add(&state, session);
-    Ok(info)
+    tabs::add(&state, session)?;
+    with_session(&state, |s| Ok(s.info()))
 }
 
 /// Puts `path` first in the recent list and writes the settings; a failed write is only logged.
@@ -467,14 +465,20 @@ pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result
 #[tauri::command]
 pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<(), String> {
     // Copy the take-off out, so writing the file doesn't hold the lock.
-    let (items, totals, title) = with_session(&state, |s| {
+    let (items, totals, title, report) = with_session(&state, |s| {
         let title = match s.drawing.path.file_name() {
             Some(name) => format!("{} take-off", name.to_string_lossy()),
             None => "Take-off".to_string(),
         };
-        Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
+        Ok((
+            s.takeoff.items.clone(),
+            s.takeoff.totals(),
+            title,
+            s.measurement_report()?,
+        ))
     })?;
-    qiyas_boq::export_takeoff(Path::new(&path), &items, &totals, &title).map_err(|e| e.to_string())
+    qiyas_boq::export_takeoff_with_report(Path::new(&path), &items, &totals, &title, &report)
+        .map_err(|e| e.to_string())
 }
 
 /// Writes a table of extracted data (`Command::ExtractData`) to an Excel workbook at `path`, one
@@ -504,6 +508,14 @@ pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq,
 #[tauri::command]
 pub async fn boq(state: State<'_, AppState>) -> Result<Option<Boq>, String> {
     with_session(&state, |s| Ok(s.boq.clone()))
+}
+
+/// The live generated BOQ and traceable dimension sheets, separate from the imported BOQ.
+#[tauri::command]
+pub async fn measurement_report(
+    state: State<'_, AppState>,
+) -> Result<qiyas_core::measurement::MeasurementReport, String> {
+    with_session(&state, |s| s.measurement_report())
 }
 
 /// Compares the BOQ and the take-off with the schedules and block counts of every sheet and keeps
@@ -573,8 +585,25 @@ pub async fn set_settings<R: Runtime>(
         settings.recents = cached.recents.clone();
         settings.tool_palette = cached.tool_palette.clone();
         settings.last_update_check = cached.last_update_check;
-        settings::save(&state.config_dir, &settings)
-            .map_err(|e| format!("The settings could not be saved: {e}"))?;
+        if cached.measurement_method != settings.measurement_method {
+            let method = crate::methods::load_at(
+                &crate::methods::qiyas_dir()?,
+                settings.measurement_method.as_deref(),
+            )?;
+            let mut active = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut parked = state.parked.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut sessions: Vec<_> = active
+                .iter_mut()
+                .chain(parked.iter_mut().map(|p| &mut p.session))
+                .collect();
+            crate::methods::apply_all(&mut sessions, method.as_ref(), || {
+                settings::save(&state.config_dir, &settings).map_err(qiyas_core::CoreError::from)
+            })
+            .map_err(|e| e.to_string())?;
+        } else {
+            settings::save(&state.config_dir, &settings)
+                .map_err(|e| format!("The settings could not be saved: {e}"))?;
+        }
         let changed = ai::answerer_changed(&cached, &settings);
         let mcp_changed = mcp::needs_restart(&cached, &settings);
         *cached = settings;
@@ -586,6 +615,7 @@ pub async fn set_settings<R: Runtime>(
     if mcp_changed {
         mcp::restart(&app);
     }
+    let _ = app.emit("measurement:changed", ());
     Ok(())
 }
 

@@ -37,11 +37,24 @@ fn geometric() -> String {
     "geometric".into()
 }
 
+pub fn measure_general(drawing: &Path, recipe_path: &Path) -> Result<Submission, String> {
+    measure_with_scope(drawing, recipe_path, true)
+}
 pub fn measure(drawing: &Path, recipe_path: &Path) -> Result<Submission, String> {
+    measure_with_scope(drawing, recipe_path, false)
+}
+fn measure_with_scope(
+    drawing: &Path,
+    recipe_path: &Path,
+    general: bool,
+) -> Result<Submission, String> {
     let started = Instant::now();
     let recipe: Recipe =
         serde_json::from_slice(&std::fs::read(recipe_path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
+    if general {
+        validate_general(&recipe)?;
+    }
     let pdf = drawing
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
@@ -180,4 +193,61 @@ pub fn measure(drawing: &Path, recipe_path: &Path) -> Result<Submission, String>
     }
     submission.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     Ok(submission)
+}
+
+// Shared recipes may use selectors and extracted evidence, never object handles, literal
+// placements, case IDs, known quantities or source files from an individual case.
+fn validate_general(recipe: &Recipe) -> Result<(), String> {
+    fn inspect(value: &Value) -> Result<(), String> {
+        match value {
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    if matches!(
+                        key.as_str(),
+                        "handle"
+                            | "handles"
+                            | "points"
+                            | "path"
+                            | "ids"
+                            | "within"
+                            | "at"
+                            | "calibration"
+                    ) && !value.is_null()
+                        && value.as_array().is_none_or(|a| !a.is_empty())
+                    {
+                        return Err(format!("General rules cannot contain case-specific {key}"));
+                    }
+                    if key == "kind" && value == "constant" {
+                        return Err("General rules must extract property evidence, not supply case constants".into());
+                    }
+                    inspect(value)?;
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    inspect(value)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    for command in &recipe.commands {
+        if !matches!(
+            command["type"].as_str(),
+            Some("define_object_type" | "redefine_object_type" | "recognition")
+        ) {
+            return Err("General recipes only define types and recognition".into());
+        }
+        if command["type"] == "recognition"
+            && !matches!(command["kind"].as_str(), Some("define" | "apply"))
+        {
+            return Err("General recipes only define or apply recognition rules".into());
+        }
+        inspect(command)?;
+    }
+    if recipe.measurements.iter().any(|m| !m.id.is_empty()) {
+        return Err("General rules cannot prescribe truth item IDs".into());
+    }
+    Ok(())
 }

@@ -1585,6 +1585,7 @@ fn exploding_a_huge_array_is_refused_before_anything_is_built() {
     let h = doc.add_entity(EntityType::Insert(array)).unwrap().value();
     let path = write_drawing(&doc, &dir.path().join("array.dxf"));
     let mut s = Session::open(&path).unwrap();
+    let reference = performance::reference();
     let t = std::time::Instant::now();
     let refused = s.run(Command::Modify(ModifySpec::Explode {
         targets: targets(&[h]),
@@ -1593,9 +1594,11 @@ fn exploding_a_huge_array_is_refused_before_anything_is_built() {
         matches!(&refused, Err(CoreError::InvalidCommand(why)) if why.contains("100000")),
         "{refused:?}"
     );
-    assert!(
-        t.elapsed().as_secs_f64() < 0.5,
-        "refused before building the parts"
+    performance::assert_relative(
+        t.elapsed(),
+        reference,
+        1.25,
+        "refuse huge array before building",
     );
 }
 
@@ -1696,3 +1699,6 @@ fn picks_say_what_kind_of_entity_they_are() {
         Some("Line")
     );
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

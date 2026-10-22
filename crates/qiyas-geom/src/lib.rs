@@ -27,3 +27,7 @@ pub use path::{tol_near, Path, SAME_POINT};
 pub use shapes::{snap_shapes, SnapShape};
 pub use table::{fit_rows, merge_owners, table_block, table_cell_at, table_entities, table_xform};
 pub use transform::Xform;
+
+#[cfg(test)]
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

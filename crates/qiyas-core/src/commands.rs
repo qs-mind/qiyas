@@ -26,6 +26,11 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Apply cited measurement methods and BOQ mappings, or read traceable dimension sheets.
+    /// The engine contains no standard. Methods and mappings are supplied as data.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type":"measurement","kind":"report"}))]
+    Measurement(Box<crate::measurement::MeasurementCommand>),
     /// Read drawing evidence through data-defined rules; define, test, apply and review typed
     /// recognition. Physical extraction properties use metres, coordinates use drawing units.
     #[schemars(extend("x-category" = "objects"))]
@@ -1358,7 +1363,7 @@ impl Command {
             Some(kind)
                 if matches!(
                     name,
-                    "draw" | "modify" | "edit" | "dimension" | "recognition"
+                    "draw" | "modify" | "edit" | "dimension" | "recognition" | "measurement"
                 ) =>
             {
                 format!("{name}.{kind}")
@@ -1371,6 +1376,7 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::Measurement(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::Recognition(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::SetLayerHidden { .. }
             | Command::IsolateLayer { .. }
@@ -1575,6 +1581,9 @@ impl Command {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    Measurement {
+        result: serde_json::Value,
+    },
     Recognition {
         result: serde_json::Value,
     },
@@ -1763,6 +1772,11 @@ impl Session {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
             }
+            Command::Measurement(command) => {
+                return Ok(Outcome::Measurement {
+                    result: self.run_measurement(*command)?,
+                });
+            }
             Command::Recognition(command) => {
                 return Ok(Outcome::Recognition {
                     result: self.run_recognition(*command)?,
@@ -1801,10 +1815,12 @@ impl Session {
             Command::SetKnowledge { kind, name, data } => {
                 if matches!(
                     kind,
-                    crate::knowledge::Kind::Types | crate::knowledge::Kind::Recognition
+                    crate::knowledge::Kind::Types
+                        | crate::knowledge::Kind::Recognition
+                        | crate::knowledge::Kind::Measurement
                 ) {
                     return Err(CoreError::InvalidCommand(
-                        "Use define_object_type/redefine_object_type or recognition.define".into(),
+                        "Use define_object_type/redefine_object_type or recognition.define or measurement commands".into(),
                     ));
                 }
                 crate::knowledge::put(&mut self.drawing.doc, kind, &name, &data)?;

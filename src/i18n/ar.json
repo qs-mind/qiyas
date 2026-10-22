@@ -1,4 +1,10 @@
 {
+  "boq.generated": "جدول الكميات المُشتق وأوراق القياس",
+  "boq.included": "مُحتسب",
+  "boq.excluded": "مستبعد حسب القاعدة",
+  "boq.noGrid": "المحور غير محدد",
+  "boq.measurementReview": "مراجعة القياس",
+
   "appName": "قياس",
   "new": "جديد…",
   "newDrawing.title": "رسم جديد",

@@ -24,15 +24,21 @@ fn schedules(s: &mut Session) -> Result<(), CoreError> {
     s.migrate_object_schedules()?;
     s.refresh_object_schedules()
 }
-fn boq_rows(_: &mut Session) -> Result<(), CoreError> {
-    Ok(())
+fn boq_rows(s: &mut Session) -> Result<(), CoreError> {
+    s.refresh_measurement()
 }
 fn fields(s: &mut Session) -> Result<(), CoreError> {
     s.follow_fields()
 }
 impl Session {
     pub(crate) fn derived_extras(&self) -> (bool, bool) {
-        let exists = self.has_rooms()
+        let exists = crate::knowledge::get(
+            &self.drawing.doc,
+            crate::knowledge::Kind::Measurement,
+            "selection",
+        )
+        .is_ok_and(|entry| entry.is_some())
+            || self.has_rooms()
             || self.has_object_regions()
             || self.has_opening_schedules()
             || self

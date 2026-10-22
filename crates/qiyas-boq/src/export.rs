@@ -56,6 +56,17 @@ pub fn export_takeoff(
     totals: &[Total],
     title: &str,
 ) -> Result<(), BoqError> {
+    export_takeoff_with_report(path, items, totals, title, &Default::default())
+}
+
+/// The ordinary take-off plus the live generated BOQ and its fully resolved dimension lines.
+pub fn export_takeoff_with_report(
+    path: &Path,
+    items: &[Measurement],
+    totals: &[Total],
+    title: &str,
+    report: &qiyas_core::measurement::MeasurementReport,
+) -> Result<(), BoqError> {
     let mut book = Workbook::new();
     book.set_properties(&DocProperties::new().set_title(title));
     let bold = Format::new().set_bold();
@@ -89,6 +100,7 @@ pub fn export_takeoff(
     }
     write_totals(sheet, 0, totals, &bold)?;
 
+    crate::dimensions::write(&mut book, report)?;
     book.save(path)?;
     Ok(())
 }

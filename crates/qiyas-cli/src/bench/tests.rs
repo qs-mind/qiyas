@@ -406,3 +406,114 @@ fn pdf_recognition_produces_scored_submission_with_page_evidence() {
         );
     }
 }
+
+#[test]
+fn item_precision_and_f1_penalize_extra_submissions_per_case_and_overall() {
+    let truth = truth(vec![
+        item("a", "area", 10.0, "geometry"),
+        item("b", "length", 5.0, "geometry"),
+    ]);
+    let mut extra = item("extra", "count", 1.0, "count");
+    extra.source_objects = vec!["FFF".into()];
+    let report = score::score(
+        &truth,
+        &Submission {
+            items: vec![truth.items[0].clone(), extra],
+            ..Default::default()
+        },
+        None,
+    );
+    assert_eq!(report.metrics.extras, 1);
+    assert_eq!(report.rates["coverage"], json!(0.5));
+    assert_eq!(report.rates["item_precision"], json!(0.5));
+    assert_eq!(report.rates["item_f1"], json!(0.5));
+    let empty = score::score(&truth, &Submission::default(), None);
+    assert!(empty.rates["item_precision"].is_null());
+    assert_eq!(empty.rates["item_f1"], json!(0.0));
+    let mut overall = report.metrics.clone();
+    overall.merge(&empty.metrics);
+    assert_eq!(overall.rates()["coverage"], json!(0.25));
+    assert_eq!(overall.rates()["item_precision"], json!(0.5));
+    assert_eq!(overall.rates()["item_f1"], json!(1.0 / 3.0));
+}
+
+#[test]
+fn autonomy_never_opens_case_recipe_and_shared_rules_reject_case_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = dir.path().join("drawing.dxf");
+    let mut s = Session::new_blank(&drawing, 6);
+    s.run_input(
+        &json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[3,4]}),
+        Source::User,
+    )
+    .unwrap();
+    s.save_as(&drawing).unwrap();
+    // Deliberately unreadable: accessing a case recipe would fail this run.
+    std::fs::write(dir.path().join("recognition.json"), "not JSON").unwrap();
+    let baseline = general::measure(dir.path(), &drawing).unwrap();
+    assert!(baseline
+        .items
+        .iter()
+        .any(|i| (i.quantity - 12.0).abs() < 1e-9));
+    std::fs::create_dir(dir.path().join("general")).unwrap();
+    write_json(&dir.path().join("general/recognition.json"),&json!({"commands":[{"type":"recognition","kind":"define","rule":{"name":"case","match":{"handles":[123]}}}],"measurements":[]})).unwrap();
+    assert!(general::measure(dir.path(), &drawing)
+        .unwrap_err()
+        .contains("case-specific handles"));
+}
+
+#[test]
+fn general_pdf_measures_multiple_labels_using_its_own_scale_text_without_case_recipe() {
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("source.dxf"), 6);
+    for command in [
+        json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[3,4]}),
+        json!({"type":"draw","kind":"rectangle","a":[5,0],"b":[7,4]}),
+        json!({"type":"text","at":[0.1,0.1],"height":0.15,"value":"1 Alpha"}),
+        json!({"type":"text","at":[5.1,0.1],"height":0.15,"value":"2 Beta"}),
+        json!({"type":"draw","kind":"line","a":[0,-2],"b":[2,-2]}),
+        json!({"type":"draw","kind":"line","a":[0,-2.1],"b":[0,-1.9]}),
+        json!({"type":"draw","kind":"line","a":[2,-2.1],"b":[2,-1.9]}),
+        json!({"type":"text","at":[0,-2.4],"height":0.15,"value":"Reference 2 m"}),
+    ] {
+        s.run_input(&command, Source::User).unwrap();
+    }
+    let drawing = dir.path().join("drawing.pdf");
+    qiyas_plot::plot_pdf_to(
+        &s,
+        &qiyas_plot::PlotJob {
+            sheet: s.sheet.clone(),
+            area: qiyas_plot::Area::Extents,
+            paper: qiyas_plot::Paper {
+                name: "Test".into(),
+                w_mm: 297.0,
+                h_mm: 210.0,
+            },
+            orientation: qiyas_plot::Orientation::Landscape,
+            scale: qiyas_plot::Scale::Fit,
+            centre: true,
+            style: None,
+            lineweights: false,
+            output: None,
+        },
+        &drawing,
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("general")).unwrap();
+    write_json(&dir.path().join("general/pdf.json"),&json!({"calibration":{"label_regex":"Reference (?P<distance>[0-9.]+) m","metres_per_label_unit":1,"search_heights":8},"area_label_regex":"^[0-9]+\\s+(?P<description>.+)$"})).unwrap();
+    let result = general::measure(dir.path(), &drawing).unwrap();
+    assert_eq!(result.items.len(), 2, "{:?}", result);
+    for (name, area) in [("Alpha", 12.0), ("Beta", 8.0)] {
+        let measured = result.items.iter().find(|i| i.description == name).unwrap();
+        assert!(
+            (measured.quantity - area).abs() / area < 0.005,
+            "{measured:?}"
+        );
+        assert!(measured.source_objects[0].contains("#page=1;label="));
+    }
+    assert!(!dir.path().join("recognition.json").exists());
+    assert!(!dir.path().join("truth.json").exists());
+}

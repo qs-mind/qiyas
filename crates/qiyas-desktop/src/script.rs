@@ -296,14 +296,20 @@ fn run_step<R: Runtime>(
         }
         Action::Export(path) => {
             // As the Export button: the take-off copied out, so writing doesn't hold the lock.
-            let (items, totals, title) = with_session(state, |s| {
+            let (items, totals, title, report) = with_session(state, |s| {
                 let title = match s.drawing.path.file_name() {
                     Some(name) => format!("{} take-off", name.to_string_lossy()),
                     None => "Take-off".to_string(),
                 };
-                Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
+                Ok((
+                    s.takeoff.items.clone(),
+                    s.takeoff.totals(),
+                    title,
+                    s.measurement_report()?,
+                ))
             })?;
-            qiyas_boq::export_takeoff(path, &items, &totals, &title).map_err(|e| e.to_string())?;
+            qiyas_boq::export_takeoff_with_report(path, &items, &totals, &title, &report)
+                .map_err(|e| e.to_string())?;
             (format!("exported {}", path.display()), false)
         }
         Action::ImportBoq(path) => {
@@ -386,7 +392,7 @@ pub(crate) fn open<R: Runtime>(
     if !keep_conversation {
         new_conversation(app, state);
     }
-    tabs::add(state, session);
+    tabs::add(state, session)?;
     remember_recent(state, &shown);
     Ok(match problems {
         0 => format!("opened {shown}"),

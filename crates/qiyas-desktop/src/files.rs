@@ -373,10 +373,9 @@ pub async fn recover_autosave<R: Runtime>(
     if Path::new(&path).starts_with(state.config_dir.join("untitled")) {
         session.mark_untitled();
     }
-    let info = session.info();
     new_conversation(&app, &state);
-    tabs::add(&state, session);
-    Ok(info)
+    tabs::add(&state, session)?;
+    with_session(&state, |s| Ok(s.info()))
 }
 
 /// Deletes the autosave of the drawing `path` (see `discard`).
@@ -418,14 +417,16 @@ pub async fn recover_drawing<R: Runtime>(
         return Err("This drawing is open: close its tab first to recover it from the file".into());
     }
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let recovered = Recovered {
-        info: session.info(),
-        report: session.read_report(),
-    };
+    let report = session.read_report();
     new_conversation(&app, &state);
-    tabs::add(&state, session);
+    tabs::add(&state, session)?;
     remember_recent(&state, &path);
-    Ok(recovered)
+    with_session(&state, |s| {
+        Ok(Recovered {
+            info: s.info(),
+            report,
+        })
+    })
 }
 
 /// A sheet set and its drawings as the window lists them.
@@ -584,8 +585,8 @@ mod tests {
         let state = AppState::new(dir.join("config"));
         let a = write_drawing(&sample_doc(), &dir.join("a.dwg"));
         let b = write_drawing(&sample_doc(), &dir.join("b.dwg"));
-        tabs::add(&state, Session::open(&a).unwrap());
-        tabs::add(&state, Session::open(&b).unwrap());
+        tabs::add(&state, Session::open(&a).unwrap()).unwrap();
+        tabs::add(&state, Session::open(&b).unwrap()).unwrap();
         (state, a, b)
     }
 

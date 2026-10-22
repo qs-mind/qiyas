@@ -1859,3 +1859,34 @@ export const clipboardReadImage = () => invoke<ArrayBuffer>("clipboard_read_imag
 
 export type PdfAttachment = { name: string; path: string; pages: number };
 export const aiAttachPdf = (name: string, bytes: number[]) => invoke<PdfAttachment>("ai_attach_pdf", { name, bytes });
+
+export type MeasurementCitation = { source: string; clause: string };
+export type DimensionLine = {
+  label: string;
+  operation: "add" | "deduct";
+  timesing: number;
+  factors: number[];
+  expression: string;
+  value: number;
+  unit: string;
+  method: string;
+  included: boolean;
+  decision: string | null;
+  citations: MeasurementCitation[];
+  sources: { handle: number; sheet: string; grid: string | null }[];
+};
+export type GeneratedBoqItem = {
+  code: string;
+  description_en: string;
+  description_ar: string;
+  section: string;
+  trade: string;
+  unit: string;
+  quantity: number;
+  lines: DimensionLine[];
+};
+export type MeasurementReport = {
+  items: GeneratedBoqItem[];
+  warnings: string[];
+};
+export const measurementReport = () => invoke<MeasurementReport>("measurement_report");

@@ -80,6 +80,45 @@ pub fn write_wall(dir: &Path) -> PathBuf {
     )
 }
 
+/// A reference length between long datum lines, with a readable label for text calibration.
+pub fn write_text_scale(dir: &Path) -> PathBuf {
+    let mut ops = Vec::new();
+    for (a, b) in [
+        ([20.0, 40.0], [120.0, 40.0]),
+        ([20.0, 10.0], [20.0, 70.0]),
+        ([120.0, 10.0], [120.0, 70.0]),
+    ] {
+        ops.push(Op::DrawLine {
+            line: Line {
+                points: vec![point(a[0], a[1]), point(b[0], b[1])],
+                is_closed: false,
+            },
+        });
+    }
+    ops.extend([
+        Op::StartTextSection,
+        Op::SetTextCursor {
+            pos: Point {
+                x: Pt(35.0),
+                y: Pt(80.0),
+            },
+        },
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            size: Pt(12.0),
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text("Reference 2 m".into())],
+        },
+        Op::EndTextSection,
+    ]);
+    save(
+        &mut PdfDocument::new("text calibration"),
+        vec![page(ops)],
+        &dir.join("text-scale.pdf"),
+    )
+}
+
 /// `count` pages, each with one short line whose length is its page number in points (so pages
 /// tell apart), in `dir`.
 pub fn write_many(dir: &Path, count: u32) -> PathBuf {
