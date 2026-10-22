@@ -159,11 +159,16 @@ impl DrawingHost for Host {
             self.started.elapsed().as_millis(),
         )?;
         let count = crate::bench::submission::from_session(session)?.items.len();
+        let answer = self.answer.lock().map_err(|e| e.to_string())?.clone();
+        let self_check = session
+            .takeoff_check_with_report(0, &[], &answer)
+            .map_err(|e| e.to_string())?;
+        crate::bench::write_json(&self.root.join("self-check.json"), &self_check)?;
         let report = json!({"status":if count == 0 {"failed: done with 0 submitted items"} else {"done"},
-            "answer":*self.answer.lock().map_err(|e|e.to_string())?,"preparation":self.note,
+            "answer":answer,"preparation":self.note,
             "tool_calls":*self.calls.lock().map_err(|e|e.to_string())?,
             "facts":{"submitted_items":count,"measurement":session.measurement_report().map_err(|e|e.to_string())?,
-                "self_check":session.takeoff_check(0,&[]).map_err(|e|e.to_string())?}});
+                "self_check":self_check}});
         crate::bench::write_json(&self.root.join("end-report.json"), &report)?;
         Ok(json!({"saved":drawing,"submission":submission,"end_report":report}))
     }

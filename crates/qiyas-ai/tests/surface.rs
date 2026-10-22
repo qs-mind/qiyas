@@ -2115,3 +2115,78 @@ fn takeoff_check_reports_count_and_global_allowance_errors_until_repaired() {
     let checked = call(&mut session, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
     assert_eq!(checked["measurement_errors"], 0);
 }
+
+#[test]
+fn digest_named_handles_and_scope_checks_share_drawing_evidence() {
+    let mut s = Session::new_blank(std::path::Path::new("unused.dxf"), 6);
+    let mut handles = Vec::new();
+    for y in [0, 10] {
+        let added = call(
+            &mut s,
+            EXECUTE,
+            json!({"op":"run","args":{"command":{
+                "type":"draw","kind":"line","a":[0,y],"b":[7.75,y]
+            }}}),
+        )
+        .unwrap();
+        handles.push(added["added"][0].as_u64().unwrap());
+    }
+    let (named, other) = (handles[0], handles[1]);
+    let note_text = format!("Element {named}; factor 2.4; absent 999999");
+    let added = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"text","at":[0,20],"height":0.1,"value":note_text
+        }}}),
+    )
+    .unwrap();
+    let note = added["added"][0].as_u64().unwrap();
+    let digest = call(&mut s, READ, json!({"op":"digest","args":{}})).unwrap();
+    let entry = digest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["section"] == "text_clusters" && e["handle"] == note)
+        .unwrap();
+    assert_eq!(entry["named_handles"], json!([named]));
+    assert!(!entry["closest"].as_array().unwrap().is_empty());
+    let citation = json!({"source":"drawing","clause":format!("note {note}")});
+    call(&mut s, EXECUTE, json!({"op":"batch","args":{"commands":[
+        {"type":"define_object_type","definition":{"name":"Observed","geometry":"path","category":"Test"}},
+        {"type":"recognition","kind":"define","rule":{"name":"observed","object_type":"Observed","match":{"handles":[other]},"confidence":1.0}},
+        {"type":"recognition","kind":"apply"},
+        {"type":"measurement","kind":"set_method","scope":"project","method":{
+            "name":"test","title":"Test","based_on":"drawing","source_note":"test",
+            "rules":[{"id":"scaled","element_type":"Observed","kind":"area","unit":"m2",
+                "terms":[{"label":"Scaled","operation":"add","factors":["geometry.length","2.4"],"citation":citation}],"citation":citation}]}}
+    ]}})).unwrap();
+    let checked = call(&mut s, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
+    assert_eq!(checked["measurement_errors"], 2);
+    assert_eq!(checked["passed"], false);
+    assert!(checked.to_string().contains("named_handle_omitted"));
+    assert!(checked.to_string().contains("note_factor_scope"));
+    let checked = call(
+        &mut s,
+        READ,
+        json!({"op":"takeoff_check","args":{
+            "end_report":format!("Exclude {named}: duplicate (note {note})")
+        }}),
+    )
+    .unwrap();
+    assert_eq!(checked["measurement_errors"], 1);
+    assert!(checked.to_string().contains("note_factor_scope"));
+    // Measure the named source too; the rule's elements now intersect its note's scope.
+    call(&mut s, EXECUTE, json!({"op":"batch","args":{"commands":[
+        {"type":"recognition","kind":"define","rule":{"name":"observed","object_type":"Observed","match":{"handles":[named,other]},"confidence":1.0}},
+        {"type":"recognition","kind":"apply"}
+    ]}})).unwrap();
+    let checked = call(&mut s, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
+    assert_eq!(checked["measurement_errors"], 0);
+    assert!(s
+        .measurement_report()
+        .unwrap()
+        .quantities
+        .iter()
+        .any(|q| q.object == named && (q.quantity - 18.6).abs() < 1e-9));
+}

@@ -1,5 +1,6 @@
 //! Compact drawing evidence and take-off checks. Interpretation remains drawing-owned data.
 mod measurement_checks;
+mod note_scope;
 use std::collections::{BTreeMap, BTreeSet};
 
 use opencadcodec::{EntityType, Handle};
@@ -48,6 +49,12 @@ impl Session {
     /// All sheets, including hidden layers; no trade names or language-specific label lists.
     pub fn drawing_digest(&self, offset: usize) -> Result<Value, CoreError> {
         let info = self.info();
+        let handles = self
+            .drawing
+            .doc
+            .entities()
+            .map(|e| e.common().handle.value())
+            .collect();
         let types = self.object_types()?;
         let rules = self.recognition_rules()?;
         let report = self.measurement_report()?;
@@ -192,9 +199,14 @@ impl Session {
                         json!({"handle":r.handle,"layer":r.layer,"distance_m":distance*self.drawing.units.to_metres(),"xref":r.xref})).collect();
                     // Preserve complete note text across entries instead of hiding its scope
                     // behind a 96-character preview. Proximity is evidence, not applicability.
+                    let named = if text.xref.is_none() {
+                        note_scope::named_handles(&text.text, &handles)
+                    } else {
+                        BTreeSet::new()
+                    };
                     let chars: Vec<_> = text.text.chars().collect();
                     for (part, chunk) in chars.chunks(600).enumerate() {
-                        text_entries.push(json!({"section":"text_clusters","cluster":cluster,"group_size":group_size,"kind":if grid {"possible_legend_or_schedule"} else if enclosed {"possible_room_label"} else {"text"},"sheet":sheet.block,"handle":text.handle,"at":text.at,"text":chunk.iter().collect::<String>(),"part":part,"closest":closest,"xref":text.xref}));
+                        text_entries.push(json!({"section":"text_clusters","cluster":cluster,"group_size":group_size,"kind":if grid {"possible_legend_or_schedule"} else if enclosed {"possible_room_label"} else {"text"},"sheet":sheet.block,"handle":text.handle,"at":text.at,"text":chunk.iter().collect::<String>(),"part":part,"closest":closest,"named_handles":named,"xref":text.xref}));
                     }
                 }
             }
@@ -249,6 +261,16 @@ impl Session {
         &self,
         offset: usize,
         expectations: &[crate::verify::Expectation],
+    ) -> Result<Value, CoreError> {
+        self.takeoff_check_with_report(offset, expectations, "")
+    }
+
+    /// Check a draft or final report's explicit, note-citing exclusions as well as quantities.
+    pub fn takeoff_check_with_report(
+        &self,
+        offset: usize,
+        expectations: &[crate::verify::Expectation],
+        end_report: &str,
     ) -> Result<Value, CoreError> {
         let objects = self.objects(&ObjectFilter::default())?;
         let evidence = self.recognition_evidence()?;
@@ -364,9 +386,19 @@ impl Session {
             .sheets
             .iter()
             .flat_map(|sheet| self.read_text(Some(&sheet.block), None))
+            .filter(|note| note.xref.is_none())
             .map(|note| (note.handle, note.text))
             .collect();
-        let errors = measurement_checks::findings(&report, &notes);
+        let mut errors = measurement_checks::findings(&report, &notes);
+        let handles = self
+            .drawing
+            .doc
+            .entities()
+            .map(|e| e.common().handle.value())
+            .collect();
+        errors.extend(note_scope::findings(
+            &report, &notes, &handles, &evidence, end_report,
+        ));
         let error_count = errors.len();
         detail.extend(errors);
         let mut basis_warnings = Vec::new();

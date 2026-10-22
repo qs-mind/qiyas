@@ -1013,13 +1013,14 @@ async fn run_agent(
         Ok(()) => status,
         Err(e) => format!("failed: {e}"),
     };
+    let end_report_text = text.clone();
     let facts = tokio::task::spawn_blocking(move || {
         let guard = session.lock().map_err(|e| e.to_string())?;
         let s = guard.as_ref().ok_or("No drawing")?;
         let submission = crate::bench::submission::from_session(s)?;
         Ok::<_, String>(json!({"submitted_items":submission.items.len(),
             "measurement":s.measurement_report().map_err(|e|e.to_string())?,
-            "self_check":s.takeoff_check(0,&[]).map_err(|e|e.to_string())?}))
+            "self_check":s.takeoff_check_with_report(0,&[],&end_report_text).map_err(|e|e.to_string())?}))
     })
     .await;
     let facts = match facts {

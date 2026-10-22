@@ -616,13 +616,18 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   discrepancy prediction shares this component validation and compares at client granularity,
   so dimension rows and their BOQ total cannot create duplicate quantity or missing-item alarms.
 - Digest note text is paged without losing its tail, with the three closest geometry handles,
-  layers and bounding-box distances on the same sheet. Proximity is not applicability.
+  layers and bounding-box distances on the same sheet. `named_handles` lists explicit numeric
+  references that resolve to drawing entities (decimal or `0x` hexadecimal). Proximity is not applicability.
   Schedule columns include wide tables and detected text grids. Self-check flags dimensional
   conflicts between a cited note's explicit numeric unit and a rule's geometry/factors,
   including percentage scope when the note states a unit. Fractional count quantities and a
   cited percentage applied across every rule are self-check errors, including base-plus-percentage
   recipes. The kit/workflow require fixing these before completion; factors apply only to the
-  items named in their note. Other unitless scope still needs judgement.
+  items named in their note. Named handles rejected or omitted from every rule are errors, as
+  are cited factors applied to disjoint handles. `takeoff_check.end_report` accepts a draft final
+  answer with `Exclude <handle>: <reason> (note <handle>)` lines; finish checks the retained answer
+  with the same rules. Only a matching note-citing exclusion excuses omission. Overlapping note
+  scopes and other unitless scope still need judgement.
 - `bench rescore-agent --report <combined report.json> --output <new directory>` rebuilds
   submissions from saved measurement reports and accepted recognition in the saved drawing.
   Only the outer scorer then opens truth. Originals and contamination exclusions are retained;

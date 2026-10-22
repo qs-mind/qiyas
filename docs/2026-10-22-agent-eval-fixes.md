@@ -411,3 +411,96 @@ Detailed comparison: `.local/agent-fifth-fixes/quick-pdf-diagnostics.json`.
 Final whitespace check passed. The requested full core/CLI check and the AI localhost test
 remain the verification limitations stated above. The saved scan still has ambiguous recipes,
 small calibration errors and unmatched descriptions; no fresh agent run was permitted or made.
+
+## Sixth free run: explicit note handles (23 October 2026)
+
+The six-case source is
+`.local/benchmark/runs/eval-agent-set-20261022T220804177100606-1297250/report.json`:
+28/50 matches, 26 passing quantities and 35 extras (56% coverage, 44.44% precision,
+92.86% matched accuracy). A newer set was being written independently during this work;
+its source is `eval-agent-set-20261022T222211526997653-1319503/report.json`.
+Its combined report appeared with one case and subsequently grew, so any replay of it is
+identified by the number of cases in the saved snapshot.
+No agent evaluation was started for this fix.
+
+Digest notes now expose `named_handles`, alongside their existing closest geometry. Parsing
+uses complete decimal or explicitly prefixed hexadecimal numbers that resolve to actual
+entities in the drawing; it deduplicates references and excludes decimal-factor fragments,
+embedded identifiers, overflow and absent handles. External-reference text does not resolve
+against local handles. Complete note text is parsed before it is split across digest pages.
+No domain vocabulary, label interpretation or benchmark truth is used.
+
+`takeoff_check` reports error-severity `named_handle_omitted` when a named source was rejected
+or has no measurement-rule use. Accepted recognition and dimension-source evidence count as
+use, including a referenced schedule supplying measured elements. `note_factor_scope` reports
+“factor from note N applied to elements the note does not name” when a cited numeric factor
+is used on disjoint sources. Factors are checked in separate operands, expressions, timesing,
+percentage additions/deductions and unit bands. These errors contribute to `measurement_errors`
+and make `passed` false. The disjointness test intentionally cannot decide which of several
+handles within one note owns a particular factor; overlapping scope still needs interpretation.
+
+Workflow and kit say named handles are in scope and must be measured with their note's factors.
+A deliberate exclusion needs a separate final-answer line:
+`Exclude <handle>: <reason> (note <handle>)`. The optional `takeoff_check.end_report` string
+checks those lines in a draft answer. Headless finish and the live evaluator check the retained
+final answer too. A matching exclusion excuses only that handle's omission for that note;
+it never suppresses a disjoint-factor error. A generic unlabelled rejection, empty reason,
+wrong handle or wrong note does not excuse it. These checks do not alter measurements or
+saved submissions.
+
+Regressions cover parsing, omitted and rejected handles, explicit exclusion reasons, incorrect
+citations, disjoint versus intersecting rule sources, unscaled rules and accepted source evidence.
+The shared tool test exercises digest output, error counts, failed checks, a draft exclusion
+and measuring the named 7.75-unit source with its 2.4 factor to produce 18.6.
+
+Verification logs and original-artifact hashes are in `.local/agent-sixth-fixes/`.
+
+### Sixth-run checks and saved replay
+
+All Cargo commands ran one at a time, with `CARGO_BUILD_JOBS=4` for compilation. Formatting
+and workspace Clippy each ran once and passed. The first core/CLI invocation was interrupted
+by the system memory kill during compilation, with no test result. Following the user's
+instruction to resume, only that unfinished command was retried. A temporary `RUSTC_WRAPPER`
+using `flock` serialized compiler processes while retaining the requested Cargo job setting;
+the AI check used the same lock. No source or test assertion was changed during recovery.
+
+| Check | Actual result |
+|---|---|
+| `cargo fmt --all` | Passed. |
+| `CARGO_BUILD_JOBS=4 cargo clippy --offline --workspace --all-targets -- -D warnings` | Passed, exit 0. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-core -p qiyas-cli` | Original attempt interrupted by the system; resumed with compiler serialization, exit 0: 839 passed, zero failed. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-ai --lib --test surface` | Exit 101: 73 library tests passed; `models::tests::an_unreachable_service_falls_back_to_the_builtin_list` failed because the sandbox denied localhost binding (`PermissionDenied`). Cargo stopped before surface. |
+| Newly built surface executable, run directly | Exit 0: all 54 passed, including the new scope regression and kit-size guard. |
+| `bench rescore-agent`, sixth run | Exit 0; all metrics unchanged: 56% coverage, 44.44% precision, 92.86% matched accuracy; 28 matches, 26 passing quantities, 35 extras. |
+| `bench rescore-agent`, newest report snapshot | Exit 0; five completed cases at snapshot time, all metrics unchanged: 63.41% coverage and precision, 100% matched accuracy; 26 matches, 26 passing quantities, 15 extras. This is a partial independently running set, not a new evaluation launched here. |
+| `git diff --check` | Passed. |
+
+The sixth replay is `.local/benchmark/runs/rescore-sixth-fixes/report.json`. The newer replay
+is `.local/benchmark/runs/rescore-sixth-fixes-newest/report.json`, using the exact combined
+report snapshot at `.local/agent-sixth-fixes/newest-source-report.json`. Original saved case
+artifacts and the sixth combined report retain their hashes. All replayed submitted quantities,
+citations, source handles, bases, rule IDs and dimension lines equal their original submissions.
+Full audit results are in `.local/agent-sixth-fixes/audit.json`.
+
+The localhost-binding test still needs execution outside this sandbox. Overlapping handles
+within a single note still require interpretation; the implemented factor check is the requested
+disjointness check. No real agent evaluation, new crate, key/settings access, staging, commit
+or push was performed. No benchmark truth was inspected by an agent; only the offline scorer
+opens truth after constructing submissions.
+
+Files touched:
+
+- `CLAUDE.md`
+- `docs/2026-10-22-agent-eval-fixes.md`
+- `crates/qiyas-core/src/digest.rs`
+- `crates/qiyas-core/src/digest/note_scope.rs`
+- `crates/qiyas-core/src/digest/measurement_checks.rs`
+- `crates/qiyas-core/src/takeoff_kit.rs`
+- `crates/qiyas-ai/src/surface.rs`
+- `crates/qiyas-ai/src/surface_args.rs`
+- `crates/qiyas-ai/src/takeoff_workflow.txt`
+- `crates/qiyas-ai/tests/surface.rs`
+- `crates/qiyas-cli/src/eval.rs`
+- `crates/qiyas-cli/src/headless.rs`
+
+Logs, snapshots, audit data and replay outputs above remain local-only.

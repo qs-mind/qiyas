@@ -46,6 +46,7 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
         (READ, "digest" | "takeoff_check" | "takeoff_kit") => {
             let mut props = json!({"offset":{"type":"integer","minimum":0}});
             if op == "takeoff_check" {
+                props["end_report"] = json!({"type":"string","description":"Draft final answer; exclusions use: Exclude <handle>: <reason> (note <handle>)"});
                 props["expectations"] =
                     command_args("verify")["properties"]["expectations"].clone();
             }

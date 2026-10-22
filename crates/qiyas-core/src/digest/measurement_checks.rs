@@ -24,7 +24,7 @@ fn multiplied_by(expr: &Expr, factor: f64) -> bool {
     }
 }
 
-fn terms_scaled(terms: &[Term], factor: f64) -> bool {
+pub(super) fn terms_scaled(terms: &[Term], factor: f64) -> bool {
     if terms.is_empty() {
         return false;
     }
