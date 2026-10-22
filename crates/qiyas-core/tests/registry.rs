@@ -10,6 +10,51 @@ use qiyas_core::registry::{effect_of, registry, Effect};
 use qiyas_core::{Command, Session};
 use serde_json::Value;
 
+#[test]
+fn takeoff_kit_is_stable_bounded_and_generated_from_registry_metadata() {
+    let kit = qiyas_core::takeoff_kit::kit();
+    assert_eq!(kit, qiyas_core::takeoff_kit::kit());
+    let bytes = serde_json::to_vec(&kit).unwrap().len();
+    assert!(
+        bytes < qiyas_core::takeoff_kit::MAX_BYTES - 256,
+        "kit is {bytes} bytes"
+    );
+    for info in registry()
+        .commands()
+        .iter()
+        .filter(|c| c.takeoff_kit.is_some())
+    {
+        assert_eq!(
+            kit["commands"][&info.name],
+            qiyas_core::takeoff_kit::example_contract(info)
+        );
+        let example = &kit["commands"][&info.name]["example"];
+        assert!(info.examples.contains(example));
+        let report = qiyas_core::validation::validate_command(example, None);
+        assert!(report.valid, "{}: {}", info.name, report.message());
+    }
+    assert_eq!(kit["batch"]["commands"].as_array().unwrap().len(), 6);
+    let mut session = sample();
+    let mut batch = kit["batch"].clone();
+    batch["type"] = serde_json::json!("batch");
+    session.run_input(&batch, qiyas_core::Source::Ai).unwrap();
+}
+
+#[test]
+fn missing_fields_return_complete_registry_repairs_for_nested_stubs() {
+    for input in [
+        serde_json::json!({"type":"define_object_type"}),
+        serde_json::json!({"type":"recognition","kind":"define"}),
+        serde_json::json!({"type":"measurement","kind":"set_mappings","mappings":[{}]}),
+    ] {
+        let report = qiyas_core::validation::validate_command(&input, None);
+        assert!(!report.valid);
+        let repair = &report.repairs[0];
+        assert!(repair["required"].as_object().unwrap().len() > 1);
+        assert!(qiyas_core::validation::validate_command(&repair["example"], None).valid);
+    }
+}
+
 const CATEGORIES: [&str; 20] = [
     "attach",
     "blocks",

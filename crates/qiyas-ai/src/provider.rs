@@ -364,13 +364,12 @@ pub(crate) async fn send_with_retry(
         if response.status().is_success() {
             return Ok(response);
         }
-        if status == 429 || status == 529 {
+        if matches!(status, 429 | 503 | 529) {
             let retry_after = response
                 .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<f64>().ok())
-                .map(|s| s.max(0.0).ceil() as u64);
+                .and_then(|v| retry_after_seconds(v, chrono::Utc::now()));
             if retried || !allow_retry {
                 return Err(AiError::RateLimited { retry_after });
             }
@@ -396,6 +395,34 @@ pub(crate) async fn send_with_retry(
             request,
         });
     }
+}
+
+fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+    if let Ok(seconds) = value.trim().parse::<f64>() {
+        return seconds.is_finite().then(|| seconds.max(0.0).ceil() as u64);
+    }
+    chrono::DateTime::parse_from_rfc2822(value.trim())
+        .ok()
+        .map(|date| {
+            (date.signed_duration_since(now).num_milliseconds().max(0) as u64).div_ceil(1000)
+        })
+}
+
+#[test]
+fn retry_after_accepts_seconds_and_http_dates_without_shortening_the_delay() {
+    let now = chrono::DateTime::parse_from_rfc2822("Thu, 22 Oct 2026 12:00:00 GMT")
+        .unwrap()
+        .to_utc();
+    assert_eq!(retry_after_seconds("1.2", now), Some(2));
+    assert_eq!(
+        retry_after_seconds("Thu, 22 Oct 2026 12:01:30 GMT", now),
+        Some(90)
+    );
+    assert_eq!(
+        retry_after_seconds("Thu, 22 Oct 2026 11:59:59 GMT", now),
+        Some(0)
+    );
+    assert_eq!(retry_after_seconds("invalid", now), None);
 }
 
 /// Only request controls, never messages, URLs or credentials.

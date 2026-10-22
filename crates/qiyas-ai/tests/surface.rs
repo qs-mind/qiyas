@@ -24,6 +24,83 @@ fn sample() -> (tempfile::TempDir, Session) {
     (dir, session)
 }
 
+#[test]
+fn takeoff_kit_binds_drawing_names_runs_and_fits_one_read() {
+    let (_dir, mut s) = sample();
+    let digest = call(&mut s, READ, json!({"op":"digest","args":{}})).unwrap();
+    assert_eq!(digest["takeoff_kit"]["op"], "takeoff_kit");
+    let kit = call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    assert_eq!(
+        kit,
+        call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap()
+    );
+    let bytes = serde_json::to_vec(&kit).unwrap().len();
+    let artifacts =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/mizan-discovery");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    std::fs::write(
+        artifacts.join("takeoff-kit.json"),
+        serde_json::to_vec(&kit).unwrap(),
+    )
+    .unwrap();
+    for info in qiyas_core::registry::registry()
+        .commands()
+        .iter()
+        .filter(|c| c.takeoff_kit.is_some())
+    {
+        assert_eq!(
+            kit["commands"][&info.name]["enums"],
+            qiyas_core::takeoff_kit::fields(&info.schema)["enums"]
+        );
+    }
+    assert!(bytes <= qiyas_core::takeoff_kit::MAX_BYTES, "{bytes}");
+    assert_eq!(
+        kit["batch"]["commands"][1]["rule"]["match"]["block"],
+        digest["example_names"]["block"]
+    );
+    assert_eq!(
+        kit["batch"]["commands"][1]["rule"]["match"]["layer"],
+        digest["example_names"]["layer"]
+    );
+    call(&mut s, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    assert!(!s.measurement_report().unwrap().items.is_empty());
+}
+
+#[test]
+fn validate_and_run_return_full_repairs_for_empty_commands_and_batch_steps() {
+    let (_dir, mut s) = sample();
+    for command in [
+        json!({"type":"define_object_type"}),
+        json!({"type":"recognition","kind":"define"}),
+        json!({"type":"measurement","kind":"set_mappings","mappings":[{}]}),
+    ] {
+        let validated = call(
+            &mut s,
+            READ,
+            json!({"op":"validate","args":{"command":command}}),
+        )
+        .unwrap();
+        let error = call(
+            &mut s,
+            EXECUTE,
+            json!({"op":"run","args":{"command":command}}),
+        )
+        .unwrap_err()
+        .json();
+        assert_eq!(error["repairs"], validated["repairs"]);
+        assert!(validated["repairs"][0]["required"].is_object());
+        assert!(validated["repairs"][0]["example"].is_object());
+        let error = call(
+            &mut s,
+            EXECUTE,
+            json!({"op":"batch","args":{"commands":[command]}}),
+        )
+        .unwrap_err()
+        .json();
+        assert_eq!(error["repairs"][0]["pointer"], "/commands/0");
+    }
+}
+
 fn call(s: &mut Session, tool: &str, input: Value) -> Result<Value, ToolError> {
     let surface::Route::Session { tool, op, args } =
         surface::route(tool, &input).map_err(ToolError::BadInput)?
@@ -517,7 +594,16 @@ fn every_name_in_the_prompt_index_exists_in_the_registry() {
         assert_eq!(prompt, system_prompt(language, &DrawingFacts::none()));
     }
     for line in index.lines() {
-        let (_, names) = line.split_once(": ").unwrap();
+        let (category, names) = line.split_once(": ").unwrap();
+        if category.ends_with("(qiyas_read)") {
+            for name in names.split(", ") {
+                assert!(
+                    surface::READ_OPS.contains(&name),
+                    "unknown read operation {name}"
+                );
+            }
+            continue;
+        }
         let mut parent = "";
         let mut kinds = false;
         for word in names.split_whitespace() {

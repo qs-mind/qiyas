@@ -268,10 +268,14 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
                 | "recognition.review"
                 | "recognition.vision"
         ) {
-            added_by(
-                session,
-                json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}),
-            );
+            let definitions = &registry().get("define_object_type").unwrap().examples;
+            let definition = definitions
+                .iter()
+                .find(|definition| {
+                    definition["definition"]["name"] == example["rule"]["object_type"]
+                })
+                .unwrap_or(&definitions[0]);
+            added_by(session, definition.clone());
         }
         if name == "recognition.vision" {
             // PDF coordinates are page points in every drawing unit.

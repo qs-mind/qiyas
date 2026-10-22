@@ -63,6 +63,7 @@ mod snap;
 mod table;
 mod tables;
 mod takeoff;
+pub mod takeoff_kit;
 mod text;
 mod transaction;
 mod ucs;

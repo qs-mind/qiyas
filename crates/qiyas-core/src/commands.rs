@@ -30,6 +30,7 @@ pub enum Command {
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
     #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
     #[schemars(example = json!({"type":"check"}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":80,"example":0}))]
     Check {
         #[serde(default)]
         tolerance: Option<f64>,
@@ -37,6 +38,7 @@ pub enum Command {
     /// Define a cited check as drawing knowledge. Selectors, table columns and tolerances are data.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type":"define_check","name":"relation","rule":{"citation":{"source":"User brief","clause":"Relation"},"question_en":"Confirm the relation?","question_ar":"يرجى تأكيد العلاقة؟","test":{"kind":"relation","left":{},"right":{},"join":"host","minimum":1}}}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":70,"example":0}))]
     DefineCheck {
         name: String,
         rule: Box<crate::discrepancy::CheckRule>,
@@ -57,6 +59,8 @@ pub enum Command {
     /// One undo step includes the knowledge dictionary.
     #[schemars(extend("x-category" = "objects", "x-words" = ["DEFINEOBJECTTYPE"], "x-takeoff-step" = "2 define types"))]
     #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]
+    #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Observed","category":"drawing","geometry":"point","quantities":{"measured":"geometry.count"}}}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":10,"example":1,"batch":10}))]
     DefineObjectType {
         definition: Box<crate::objects::ObjectType>,
     },

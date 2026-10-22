@@ -32,8 +32,9 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 17] = [
+pub const READ_OPS: [&str; 18] = [
     "digest",
+    "takeoff_kit",
     "takeoff_check",
     "document",
     "state",
@@ -105,6 +106,7 @@ operations![
     (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
     (READ, "digest", [Drawing]),
+    (READ, "takeoff_kit", [Drawing]),
     (READ, "takeoff_check", [Drawing]),
     (READ, "capabilities", [Nothing]),
     (READ, "commands", [Nothing]),
@@ -195,7 +197,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: digest ({offset?}: compact drawing evidence, method and suggested picture; start take-off here); takeoff_check ({offset?, expectations?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -717,6 +719,27 @@ pub fn run_session_with_method(
         (READ, "digest") => {
             json(session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?)
         }
+        (READ, "takeoff_kit") => {
+            let mut kit = qiyas_core::takeoff_kit::kit();
+            let digest = session.drawing_digest(0)?;
+            fn bind(value: &mut Value, names: &Value) {
+                match value {
+                    Value::String(s) if s == "$layer" || s == "$block" => {
+                        if let Some(name) = names[s.trim_start_matches('$')].as_str() {
+                            *s = name.into();
+                        }
+                    }
+                    Value::Object(fields) => fields.values_mut().for_each(|v| bind(v, names)),
+                    Value::Array(values) => values.iter_mut().for_each(|v| bind(v, names)),
+                    _ => {}
+                }
+            }
+            bind(&mut kit["batch"], &digest["example_names"]);
+            let (schema, args) = crate::surface_args::contract(READ, "takeoff_check");
+            kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
+            kit["end_report"] = json!({"action":"final answer","example":{"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved and low-confidence scope":"takeoff_check"}});
+            json(kit)
+        }
         (READ, "takeoff_check") => {
             let expectations: Vec<qiyas_core::verify::Expectation> = serde_json::from_value(
                 args.get("expectations")
@@ -1188,7 +1211,7 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
                 "No command {kind}; close ones: {}",
                 close_commands(&kind).join(", ")
             ),
-            details: json!({"errors": report.errors, "warnings": report.warnings, "did_you_mean": close_commands(&kind)}),
+            details: json!({"errors": report.errors, "warnings": report.warnings, "repairs": report.repairs, "did_you_mean": close_commands(&kind)}),
         });
     };
     if info.internal {
@@ -1226,7 +1249,7 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
                 info.schema,
                 info.examples.first().cloned().unwrap_or_default()
             ),
-            details: json!({"errors": report.errors, "warnings": report.warnings, "schema": info.schema, "example": info.examples.first()}),
+            details: json!({"errors": report.errors, "warnings": report.warnings, "repairs": report.repairs, "schema": info.schema, "example": info.examples.first()}),
         });
     }
     if info.name == "batch" {
@@ -1558,7 +1581,7 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
                 .collect::<Vec<_>>()
                 .join("; "),
             details: json!({
-                "errors": report.errors, "warnings": report.warnings,
+                "errors": report.errors, "warnings": report.warnings, "repairs": report.repairs,
                 "schema": registry().get("batch").map(|info| &info.schema),
                 "example": registry().get("batch").and_then(|info| info.examples.first()),
                 "commands": commands.iter().enumerate().filter_map(|(index, command)| {

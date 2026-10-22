@@ -279,6 +279,7 @@ fn settle(dir: &Path, id: &str, usage: Usage, actual: Option<f64>) -> Result<(),
 #[derive(Default, Serialize)]
 struct RunUsage {
     requests: u32,
+    provider_retries: u32,
     usage: Usage,
     estimated_usd: f64,
     unknown_usage_requests: u32,
@@ -347,13 +348,32 @@ impl Provider for Metered {
                 id
             };
             step(&self.steps, &json!({"event":"request","id":id,"reserved_usd":upper,"model":req.model,"max_tokens":req.max_tokens,"system":req.system,"messages":trim_log(serde_json::to_value(&req.messages).map_err(|e|AiError::Stream(e.to_string()))?)})).map_err(AiError::Stream)?;
-            let answer = self.inner.stream_turn(req, sink).await;
+            let mut attempt = 1;
+            let answer = loop {
+                let answer = self.inner.stream_turn(req.clone(), &mut *sink).await;
+                if let Err(AiError::RateLimited { retry_after }) = &answer {
+                    if attempt < 3 {
+                        let seconds = retry_after.unwrap_or(1 << (attempt - 1));
+                        step(&self.steps, &json!({"event":"provider_retry","id":id,"attempt":attempt,"wait_seconds":seconds})).map_err(AiError::Stream)?;
+                        self.totals
+                            .lock()
+                            .map_err(|_| AiError::Stream("Usage lock failed".into()))?
+                            .provider_retries += 1;
+                        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                }
+                break answer;
+            };
+            let rejected = matches!(answer, Err(AiError::RateLimited { .. }));
             let usage = answer.as_ref().map(|r| r.usage).unwrap_or_default();
-            let known = usage.input_tokens
-                + usage.output_tokens
-                + usage.cache_creation_input_tokens
-                + usage.cache_read_input_tokens
-                > 0;
+            let known = rejected
+                || usage.input_tokens
+                    + usage.output_tokens
+                    + usage.cache_creation_input_tokens
+                    + usage.cache_read_input_tokens
+                    > 0;
             let actual = known.then(|| self.prices.cost(usage));
             settle(&self.dir, &id, usage, actual).map_err(AiError::Stream)?;
             step(&self.steps, &json!({"event":"response","id":id,"usage":usage,"estimated_usd":actual.unwrap_or(upper),"reserved_usd":upper,"result":answer.as_ref().ok().map(|r|trim_log(json!(r.content))),"error":answer.as_ref().err().map(ToString::to_string)})).map_err(AiError::Stream)?;
@@ -364,6 +384,9 @@ impl Provider for Metered {
                     .map_err(|_| AiError::Stream("Usage lock failed".into()))?;
                 totals.usage.add(usage);
                 totals.estimated_usd += actual.unwrap_or(upper) - upper;
+                if rejected {
+                    totals.requests -= 1;
+                }
                 if !known {
                     totals.unknown_usage_requests += 1;
                 }
@@ -927,7 +950,7 @@ async fn run_agent(
         }
         (status, text)
     });
-    let prompt = format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest, batch types and recognition rules, recognise, apply the selected method, map elements to the generated BOQ, then takeoff_check with verify expectations and fix by handle. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}");
+    let prompt = format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest and takeoff_kit, one picture if needed, then ONE batch adapted from the kit to define types/rules, apply recognition, set method/mappings and report the generated BOQ. Never validate stubs or fetch individual schemas already in the kit. Aim for a first generated BOQ within 8 requests. Run takeoff_check with verify expectations, fix returned errors by handle, then end. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}");
     let result = agent
         .run_turn(prompt, sender, CancellationToken::new())
         .await;

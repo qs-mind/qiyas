@@ -197,7 +197,14 @@ impl Session {
             }
         }
         entries.extend(text_entries);
-        let overview = json!({"units":info.units,"metres_per_unit":self.drawing.units.to_metres(),"annotation_scale":info.annotation_scale,"scale_note":"Annotation scale is not PDF calibration. Verify source dimensions before measuring imported pages.","text_clusters":text_kinds,"counts":{"sheets":info.sheets.len(),"layers":layers.len(),"blocks":blocks.len(),"element_types":types.len(),"recognition_rules":rules.len(),"elements":objects.len(),"manual_takeoff":self.takeoff.items.len(),"generated_boq":report.items.len()},"closed_regions":{"count":regions,"summed_area_m2":area*self.drawing.units.to_metres().powi(2),"note":"May overlap; candidates only"},"measurement_method":{"name":selection.effective().map(|m|short(&m.name)),"scope":if selection.project.is_some(){"project"}else{"settings"},"rules_loaded":selection.effective().is_some_and(|m|!m.rules.is_empty())},"picture":{"tool":"qiyas_capture","source":"picture","args":{"sheet":self.sheet,"width":1200,"marks":true}},"detail":"records by handle; commands {names:[...]} for schemas; next_offset pages remaining evidence"});
+        // Use an actual insert's paired names, without assigning it a trade or meaning.
+        let example_names = self
+            .matching(&EntityFilter::default(), &self.xref_docs())
+            .into_iter()
+            .map(|c| self.entity_row(&self.xref_docs(), c))
+            .find(|row| row.xref.is_none() && row.block_name.is_some())
+            .map(|row| json!({"layer":row.layer,"block":row.block_name}));
+        let overview = json!({"takeoff_kit":{"op":"takeoff_kit","args":{}},"example_names":example_names,"units":info.units,"metres_per_unit":self.drawing.units.to_metres(),"annotation_scale":info.annotation_scale,"scale_note":"Annotation scale is not PDF calibration. Verify source dimensions before measuring imported pages.","text_clusters":text_kinds,"counts":{"sheets":info.sheets.len(),"layers":layers.len(),"blocks":blocks.len(),"element_types":types.len(),"recognition_rules":rules.len(),"elements":objects.len(),"manual_takeoff":self.takeoff.items.len(),"generated_boq":report.items.len()},"closed_regions":{"count":regions,"summed_area_m2":area*self.drawing.units.to_metres().powi(2),"note":"May overlap; candidates only"},"measurement_method":{"name":selection.effective().map(|m|short(&m.name)),"scope":if selection.project.is_some(){"project"}else{"settings"},"rules_loaded":selection.effective().is_some_and(|m|!m.rules.is_empty())},"picture":{"tool":"qiyas_capture","source":"picture","args":{"sheet":self.sheet,"width":1200,"marks":true}},"detail":"takeoff_kit for complete examples and batch; records by handle for missing evidence; next_offset pages remaining evidence"});
         Ok(page(overview, entries, offset))
     }
 

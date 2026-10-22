@@ -36,6 +36,113 @@ fn results(req: &TurnRequest) -> Vec<Value> {
 }
 struct Workflow {
     calls: Arc<AtomicUsize>,
+    first_boq: Arc<AtomicUsize>,
+    kit: bool,
+}
+
+struct BusyProvider {
+    calls: Arc<AtomicUsize>,
+    failures: usize,
+    retry_after: Option<u64>,
+}
+impl Provider for BusyProvider {
+    fn stream_turn<'a>(
+        &'a self,
+        _req: TurnRequest,
+        _sink: Sink<'a>,
+    ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+        Box::pin(async move {
+            if self.calls.fetch_add(1, Ordering::SeqCst) < self.failures {
+                Err(AiError::RateLimited {
+                    retry_after: self.retry_after,
+                })
+            } else {
+                Ok(TurnResult {
+                    content: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage {
+                        input_tokens: 100,
+                        output_tokens: 20,
+                        ..Default::default()
+                    },
+                })
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn provider_busy_retries_back_off_honor_retry_after_and_charge_only_success() {
+    for (failures, retry_after, minimum_seconds) in [(2, None, 3), (2, Some(1), 2), (9, Some(0), 0)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let totals = Arc::new(Mutex::new(RunUsage::default()));
+        let provider = Metered {
+            inner: Box::new(BusyProvider {
+                calls: calls.clone(),
+                failures,
+                retry_after,
+            }),
+            dir: dir.path().into(),
+            run: "retry".into(),
+            prices: Prices {
+                endpoint: None,
+                input_per_million: 0.75,
+                output_per_million: 3.75,
+                cache_read_per_million: 0.75,
+                cache_write_per_million: 0.75,
+            },
+            daily: 1.0,
+            max_cost: 1.0,
+            max_tokens: 200,
+            max_requests: 1,
+            totals: totals.clone(),
+            steps: Some(dir.path().join("steps.jsonl")),
+        };
+        let started = std::time::Instant::now();
+        let result = provider
+            .stream_turn(
+                TurnRequest {
+                    system: "offline".into(),
+                    messages: vec![],
+                    tools: vec![],
+                    model: "scripted".into(),
+                    effort: "low".into(),
+                    max_tokens: 200,
+                },
+                &mut |_| {},
+            )
+            .await;
+        assert!(started.elapsed().as_secs() >= minimum_seconds);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        let usage = totals.lock().unwrap();
+        assert_eq!(usage.provider_retries, 2);
+        assert_eq!(usage.unknown_usage_requests, 0);
+        assert_eq!(usage.requests, if failures == 2 { 1 } else { 0 });
+        assert_eq!(result.is_ok(), failures == 2);
+        assert_eq!(ledger(dir.path()).unwrap().len(), 1);
+        assert!((ledger(dir.path()).unwrap()[0].charged_usd - usage.estimated_usd).abs() < 1e-9);
+        if failures > 2 {
+            assert_eq!(usage.estimated_usd, 0.0);
+        }
+        let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
+        assert_eq!(steps.matches("provider_retry").count(), 2);
+    }
+}
+fn has_boq(value: &Value) -> bool {
+    if value["items"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|v| v["code"].is_string() && v["quantity"].is_number())
+    }) {
+        return true;
+    }
+    match value {
+        Value::Object(fields) => fields.values().any(has_boq),
+        Value::Array(values) => values.iter().any(has_boq),
+        _ => false,
+    }
 }
 impl Provider for Workflow {
     fn stream_turn<'a>(
@@ -46,12 +153,68 @@ impl Provider for Workflow {
         Box::pin(async move {
             let index = self.calls.fetch_add(1, Ordering::SeqCst);
             let seen = results(&req);
+            if self.first_boq.load(Ordering::SeqCst) == 0 && seen.iter().any(has_boq) {
+                self.first_boq.store(index, Ordering::SeqCst);
+            }
             assert!(req
                 .messages
                 .iter()
                 .flat_map(|m| &m.content)
                 .all(|b| !format!("{b:?}").contains("truth.json")));
-            let (tool,op,args)=match index {
+            let kit_step = if self.kit {
+                Some(match index {
+                0 => ("qiyas_read", "digest", json!({})),
+                1 => {
+                    assert_eq!(seen.last().unwrap()["takeoff_kit"]["op"],"takeoff_kit");
+                    ("qiyas_read", "takeoff_kit", json!({}))
+                },
+                2 => ("qiyas_capture", "picture", json!({"width":640})),
+                3 => {
+                    let kit = seen.iter().find(|v|v["batch"]["commands"].is_array()).expect("kit response");
+                    let digest = seen.iter().find(|v|v["counts"].is_object()).unwrap();
+                    assert!(digest["closed_regions"]["count"].as_u64().unwrap()>0);
+                    let mut batch = kit["batch"].clone();
+                    let commands = batch["commands"].as_array_mut().unwrap();
+                    for command in commands.iter_mut() {
+                        match (command["type"].as_str(),command["kind"].as_str()) {
+                            (Some("define_object_type"),_) => {
+                                command["definition"]["geometry"] = json!("region");
+                                command["definition"]["quantities"] = json!({"surface":"geometry.area"});
+                            },
+                            (_,Some("define")) => command["rule"]["match"] = json!({"entity_type":"LwPolyline","closed_region":true}),
+                            (_,Some("set_method")) => {
+                                let rule = &mut command["method"]["rules"][0];
+                                rule["id"] = json!("surface");
+                                rule["unit"] = json!("m2");
+                                rule["citation"]["clause"] = json!("closed source boundary");
+                                rule["terms"][0]["citation"] = rule["citation"].clone();
+                                rule["terms"][0]["label"] = json!("Measured surface");
+                                rule["terms"][0]["factors"] = json!(["geometry.area"]);
+                            },
+                            (_,Some("set_mappings")) => {
+                                command["mappings"][0]["rule"] = json!("surface");
+                                command["mappings"][0]["unit"] = json!("m2");
+                                command["mappings"][0]["code"] = json!("surface-{id}");
+                                command["mappings"][0]["description_en"] = json!("Measured surface");
+                                command["mappings"][0]["description_ar"] = json!("Measured surface");
+                                command["mappings"][0]["citation"]["clause"] = json!("closed source boundary");
+                            },
+                            _ => {}
+                        }
+                    }
+                    commands.push(kit["commands"]["check"]["example"].clone());
+                    ("qiyas_execute", "batch", batch)
+                },
+                4 => ("qiyas_read", "takeoff_check", json!({})),
+                _ => return Ok(TurnResult{content:vec![ContentBlock::Text{text:"Geometric BOQ generated. Remaining symbols and paths are unresolved; evidence coverage is incomplete.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
+            })
+            } else {
+                None
+            };
+            let (tool, op, args) = if let Some(step) = kit_step {
+                step
+            } else {
+                match index {
                 0=>("qiyas_read","digest",json!({})),
                 1=>{assert_eq!(seen.last().unwrap()["counts"]["element_types"],0);("qiyas_read","commands",json!({"names":["define_object_type","recognition.define","recognition.apply","measurement.set_method","measurement.set_mappings"]}))},
                 2=>{
@@ -77,12 +240,17 @@ impl Provider for Workflow {
                 },
                 9=>("qiyas_execute","run",json!({"command":{"type":"check"}})),
                 _=>return Ok(TurnResult{content:vec![ContentBlock::Text{text:"BOQ generated from recognised boundaries using the geometric method. Unmeasured symbols, paths, annotations and low-confidence interpretations are listed in the end report; review is optional.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
+            }
             };
             Ok(TurnResult {
                 content: vec![ContentBlock::ToolUse {
                     id: format!("workflow-{index}"),
                     name: tool.into(),
-                    input: json!({"op":op,"args":args}),
+                    input: if tool == "qiyas_capture" {
+                        json!({"source":op,"args":args})
+                    } else {
+                        json!({"op":op,"args":args})
+                    },
                 }],
                 stop_reason: StopReason::ToolUse,
                 usage: Usage {
@@ -98,82 +266,101 @@ impl Provider for Workflow {
 #[tokio::test]
 async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_cases() {
     for (typ, seed) in [("office", 15127), ("apartment", 17139)] {
-        let dir = tempfile::tempdir().unwrap();
-        let drawing = dir.path().join("drawing.dxf");
-        let (session, truth) = crate::bench::generate::offline_case(&drawing, typ, seed).unwrap();
-        assert!(session.object_types().unwrap().is_empty());
-        assert!(session.recognition_rules().unwrap().is_empty());
-        assert!(session.takeoff.items.is_empty());
-        let session = Arc::new(Mutex::new(Some(session)));
-        let calls = Arc::new(AtomicUsize::new(0));
-        let totals = Arc::new(Mutex::new(RunUsage::default()));
-        let metered = Metered {
-            inner: Box::new(Workflow {
-                calls: calls.clone(),
-            }),
-            dir: dir.path().into(),
-            run: typ.into(),
-            prices: Prices {
-                endpoint: None,
-                input_per_million: 0.1,
-                output_per_million: 0.2,
-                cache_read_per_million: 0.1,
-                cache_write_per_million: 0.1,
-            },
-            daily: 5.0,
-            max_cost: 1.0,
-            max_tokens: 4096,
-            max_requests: 11,
-            totals: totals.clone(),
-            steps: Some(dir.path().join("steps.jsonl")),
-        };
-        let status = run_agent(
-            Box::new(metered),
-            session.clone(),
-            AgentSettings::default(),
-            "",
-            Some(dir.path()),
-        )
-        .await;
-        assert_eq!(status, "done");
-        assert_eq!(calls.load(Ordering::SeqCst), 11);
-        let guard = session.lock().unwrap();
-        let session = guard.as_ref().unwrap();
-        assert!(qiyas_core::knowledge::get(
-            &session.drawing.doc,
-            qiyas_core::knowledge::Kind::Queries,
-            "result"
-        )
-        .unwrap()
-        .is_some());
-        let submission = crate::bench::submission::from_session(session).unwrap();
-        let truth: crate::bench::Truth = serde_json::from_value(truth).unwrap();
-        let score = crate::bench::score::score(&truth, &submission, Some(session));
-        eprintln!("scripted {typ}: {}", score.rates);
-        assert!(score.metrics.matched > 0, "{score:?}");
-        assert_eq!(score.metrics.extras, 0);
-        assert_eq!(score.metrics.matched, score.metrics.passed);
-        assert!(
-            session.takeoff.items.is_empty(),
-            "No raw candidates submitted"
-        );
-        let log = fs::read_to_string(dir.path().join("agent.log")).unwrap();
-        for operation in [
-            "digest",
-            "commands",
-            "recognition",
-            "set_method",
-            "set_mappings",
-            "takeoff_check",
-            "check",
-        ] {
-            assert!(log.contains(operation), "{operation}");
+        for kit in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let drawing = dir.path().join("drawing.dxf");
+            let (session, truth) =
+                crate::bench::generate::offline_case(&drawing, typ, seed).unwrap();
+            assert!(session.object_types().unwrap().is_empty());
+            assert!(session.recognition_rules().unwrap().is_empty());
+            assert!(session.takeoff.items.is_empty());
+            let session = Arc::new(Mutex::new(Some(session)));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let first_boq = Arc::new(AtomicUsize::new(0));
+            let totals = Arc::new(Mutex::new(RunUsage::default()));
+            let metered = Metered {
+                inner: Box::new(Workflow {
+                    calls: calls.clone(),
+                    first_boq: first_boq.clone(),
+                    kit,
+                }),
+                dir: dir.path().into(),
+                run: typ.into(),
+                prices: Prices {
+                    endpoint: None,
+                    input_per_million: 0.1,
+                    output_per_million: 0.2,
+                    cache_read_per_million: 0.1,
+                    cache_write_per_million: 0.1,
+                },
+                daily: 5.0,
+                max_cost: 1.0,
+                max_tokens: 4096,
+                max_requests: if kit { 8 } else { 11 },
+                totals: totals.clone(),
+                steps: Some(dir.path().join("steps.jsonl")),
+            };
+            let status = run_agent(
+                Box::new(metered),
+                session.clone(),
+                AgentSettings::default(),
+                "",
+                Some(dir.path()),
+            )
+            .await;
+            assert_eq!(status, "done");
+            assert_eq!(calls.load(Ordering::SeqCst), if kit { 6 } else { 11 });
+            assert_eq!(first_boq.load(Ordering::SeqCst), if kit { 4 } else { 8 });
+            let guard = session.lock().unwrap();
+            let session = guard.as_ref().unwrap();
+            assert!(qiyas_core::knowledge::get(
+                &session.drawing.doc,
+                qiyas_core::knowledge::Kind::Queries,
+                "result"
+            )
+            .unwrap()
+            .is_some());
+            let submission = crate::bench::submission::from_session(session).unwrap();
+            let truth: crate::bench::Truth = serde_json::from_value(truth).unwrap();
+            let score = crate::bench::score::score(&truth, &submission, Some(session));
+            eprintln!("scripted {typ}: {}", score.rates);
+            assert!(score.metrics.matched > 0, "{score:?}");
+            assert_eq!(score.metrics.extras, 0);
+            assert_eq!(score.metrics.matched, score.metrics.passed);
+            assert!(
+                session.takeoff.items.is_empty(),
+                "No raw candidates submitted"
+            );
+            let log = fs::read_to_string(dir.path().join("agent.log")).unwrap();
+            for operation in [
+                "digest",
+                if kit { "takeoff_kit" } else { "commands" },
+                "recognition",
+                "set_method",
+                "set_mappings",
+                "takeoff_check",
+                "check",
+            ] {
+                assert!(log.contains(operation), "{operation}");
+            }
+            let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
+            assert_eq!(steps.lines().count(), if kit { 13 } else { 23 });
+            assert!(steps.contains("end_report"));
+            assert!(steps.contains("reserved_usd") && steps.contains("estimated_usd"));
+            assert!(totals.lock().unwrap().estimated_usd > 0.0);
+            let evidence = json!({"case":typ,"kit":kit,"requests":calls.load(Ordering::SeqCst),"first_boq":first_boq.load(Ordering::SeqCst),"score":score.rates});
+            let artifacts =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/mizan-discovery");
+            fs::create_dir_all(&artifacts).unwrap();
+            write_json(
+                &artifacts.join(format!(
+                    "{typ}-{}.json",
+                    if kit { "after" } else { "before" }
+                )),
+                &evidence,
+            )
+            .unwrap();
         }
-        let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
-        assert_eq!(steps.lines().count(), 23);
-        assert!(steps.contains("end_report"));
-        assert!(steps.contains("reserved_usd") && steps.contains("estimated_usd"));
-        assert!(totals.lock().unwrap().estimated_usd > 0.0);
     }
 }
 

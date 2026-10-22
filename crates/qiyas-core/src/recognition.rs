@@ -186,6 +186,8 @@ pub enum RecognitionCommand {
     /// measured_count:"geometry.count". Nearby text extraction requires max_distance_m.
     #[schemars(example = json!({"kind":"define","rule":{"name":"runs","object_type":"Run","match":{"entity_type":"Line"},"confidence":0.95}}))]
     #[schemars(extend("x-takeoff-step" = "2 define recognition"))]
+    #[schemars(example = json!({"kind":"define","rule":{"name":"observed","object_type":"Observed","match":{"layer":"$layer","block":"$block"},"confidence":0.95}}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":20,"example":1,"batch":20}))]
     Define { rule: Box<Rule> },
     /// List drawing-owned recognition rules without changing the drawing.
     #[schemars(example = json!({"kind":"list"}))]
@@ -200,6 +202,7 @@ pub enum RecognitionCommand {
     /// All instances and review entries belong to one undo step. Repeated apply is idempotent.
     #[schemars(example = json!({"kind":"apply"}))]
     #[schemars(extend("x-takeoff-step" = "3 recognise"))]
+    #[schemars(extend("x-takeoff-kit" = {"order":40,"example":0,"batch":30}))]
     Apply {
         #[serde(default)]
         rules: Vec<String>,
@@ -234,6 +237,7 @@ pub enum RecognitionCommand {
     /// Use these returned names in later rules and method selectors in the same batch.
     #[schemars(example = json!({"kind":"schedule","spec":{"source":{"kind":"table","handle":1234},"template":{"name":"Item","category":"example","geometry":"point","quantities":{"measured_count":"count"}},"type_column":0,"match_column":0,"match_on":"block","confidence":0.95}}))]
     #[schemars(extend("x-takeoff-step" = "2 interpret schedules"))]
+    #[schemars(extend("x-takeoff-kit" = {"order":30,"example":0}))]
     Schedule { spec: Box<ScheduleSpec> },
     /// Import vectors with a scale computed from two page points and a known distance in metres.
     /// Every imported entity retains its PDF path and page. One undo step.

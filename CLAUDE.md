@@ -578,6 +578,23 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   tokens and cost $0.231; request 21 fell from 58,841 to 17,086 tokens. Both cap replays retained
   and scored nonempty BOQs. These are scripted accounting comparisons, not live model scores.
 
+### Discovery waste corrections (22 October 2026)
+
+- Start take-off with `digest`, then `takeoff_kit`. The registry index names this first.
+  Command/kind `x-takeoff-kit` metadata selects complete registry examples and orders a
+  connected type → recognition → apply → method → mappings → report batch. The drawing
+  digest supplies paired source layer/block names without classifying their meaning.
+- The kit has a 6,144-byte guard and deterministic contracts. Copy and adapt its batch;
+  never validate empty command stubs or discover these commands one schema at a time.
+  Missing-field validation and run errors include required fields and a filled registry
+  example, including nested batch steps. Self-check and the final uncertainty report remain
+  required; selected methods must be preserved.
+- Budgeted eval retries rejected busy/rate-limit requests at most three provider attempts,
+  with exponential backoff and Retry-After seconds or HTTP dates. Transient rejections do not
+  consume the request allowance or accrue unknown usage; transport/stream failures retain
+  conservative accounting. No paid eval belongs to this implementation check.
+- Offline before/after evidence and check results: `docs/2026-10-22-mizan-discovery.md`.
+
 ## Discrepancies and queries (Phase 19)
 
 - The registry command `check` compares the imported client BOQ with mapped element quantities

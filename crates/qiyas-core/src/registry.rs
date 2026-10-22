@@ -54,6 +54,8 @@ pub struct CommandInfo {
     pub category: String,
     /// Optional workflow stage declared on the command or kind schema.
     pub takeoff_step: Option<String>,
+    /// Compact take-off contract order, example index and optional batch order.
+    pub takeoff_kit: Option<Value>,
     /// The doc comment's first sentence.
     pub summary: String,
     /// The whole doc comment.
@@ -181,6 +183,7 @@ impl Registry {
                 words: words_of(&variant),
                 prompts: prompts_of(&variant),
                 takeoff_step: variant["x-takeoff-step"].as_str().map(str::to_owned),
+                takeoff_kit: variant.get("x-takeoff-kit").cloned(),
                 effect: effect(&meta, &examples),
                 undo: undo_of(&examples),
                 category: meta.category.clone(),
@@ -230,6 +233,7 @@ impl Registry {
                     words: words_of(&kind),
                     prompts: prompts_of(&kind),
                     takeoff_step: kind["x-takeoff-step"].as_str().map(str::to_owned),
+                    takeoff_kit: kind.get("x-takeoff-kit").cloned(),
                     effect: effect(&meta, &examples),
                     undo: undo_of(&examples),
                     category: meta.category.clone(),
@@ -375,7 +379,7 @@ impl Registry {
             .map(|(step, names)| format!("Take-off workflow / {step}: {}", names.join(", ")))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("{categories}\n{workflow}")
+        format!("Take-off workflow / 1 read (qiyas_read): digest, takeoff_kit\n{workflow}\n{categories}")
     }
 }
 

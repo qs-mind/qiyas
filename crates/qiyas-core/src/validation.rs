@@ -27,6 +27,9 @@ pub struct ValidationReport {
     pub warnings: Vec<InputIssue>,
     pub defaults_used: Vec<DefaultUsed>,
     pub not_checked: Vec<String>,
+    /// Complete registry contracts for commands with missing fields, including nested stubs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub repairs: Vec<Value>,
 }
 
 impl Default for ValidationReport {
@@ -43,6 +46,7 @@ impl Default for ValidationReport {
                 "file access and host availability".into(),
                 "values returned by earlier steps".into(),
             ],
+            repairs: Vec::new(),
         }
     }
 }
@@ -76,6 +80,7 @@ impl ValidationReport {
         self.warnings.extend(other.warnings);
         self.defaults_used.extend(other.defaults_used);
         self.not_checked.extend(other.not_checked);
+        self.repairs.extend(other.repairs);
     }
 
     pub fn message(&self) -> String {
@@ -404,6 +409,16 @@ fn validate_at(
         canonical["kind"] = json!(kind);
     }
     walk(&info.schema, &canonical, path, step, &mut report);
+    if report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "missing_field")
+    {
+        let mut repair = crate::takeoff_kit::contract(info);
+        repair["command"] = json!(info.name);
+        repair["pointer"] = json!(path);
+        report.repairs.push(repair);
+    }
     if matches!(
         info.name.as_str(),
         "title_block" | "mview" | "set_layout_paper"
