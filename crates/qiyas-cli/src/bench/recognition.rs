@@ -276,3 +276,12 @@ fn validate_general(recipe: &Recipe) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Shared diagnostic commands have the same no-path, no-handle boundary as shared recognition.
+pub(super) fn validate_general_commands(commands: &[Value]) -> Result<(), String> {
+    validate_general(&Recipe {
+        commands: commands.to_vec(),
+        measurements: vec![],
+        include_baseline: false,
+    })
+}

@@ -1558,5 +1558,15 @@
   "recognition.save": "حفظ وقبول",
   "ai.pdfTooLarge": "أرفق ملف PDF لا يزيد حجمه عن ٢٠ ميجابايت.",
   "ai.pdfPages": "صفحات",
-  "ai.removeDocument": "إزالة PDF"
+  "ai.removeDocument": "إزالة PDF",
+  "conflicts.question": "السؤال المقترح",
+  "conflicts.severity": "الأهمية",
+  "conflicts.grid": "الدليل / المحور",
+  "conflicts.unassigned": "غير محدد",
+  "querySeverity.information": "معلومة",
+  "querySeverity.warning": "تنبيه",
+  "querySeverity.error": "خطأ",
+  "conflictKind.duplicate_item": "بند مكرر",
+  "conflictKind.relation_mismatch": "علاقة العناصر",
+  "conflictKind.document_mismatch": "المستند مقابل الرسم"
 }

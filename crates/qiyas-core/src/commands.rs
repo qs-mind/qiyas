@@ -26,6 +26,22 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
+    /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
+    #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
+    #[schemars(example = json!({"type":"check"}))]
+    Check {
+        #[serde(default)]
+        tolerance: Option<f64>,
+    },
+    /// Define a cited check as drawing knowledge. Selectors, table columns and tolerances are data.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type":"define_check","name":"relation","rule":{"citation":{"source":"User brief","clause":"Relation"},"question_en":"Confirm the relation?","question_ar":"يرجى تأكيد العلاقة؟","test":{"kind":"relation","left":{},"right":{},"join":"host","minimum":1}}}))]
+    DefineCheck {
+        name: String,
+        rule: Box<crate::discrepancy::CheckRule>,
+    },
+
     /// Apply cited measurement methods and BOQ mappings, or read traceable dimension sheets.
     /// The engine contains no standard. Methods and mappings are supplied as data.
     #[schemars(extend("x-category" = "takeoff"))]
@@ -1377,6 +1393,7 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::Check { .. } | Command::DefineCheck { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Measurement(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::Recognition(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::SetLayerHidden { .. }
@@ -1773,6 +1790,17 @@ impl Session {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
             }
+            Command::Check { .. } => unreachable!("check is a transaction"),
+            Command::DefineCheck { name, rule } => {
+                rule.validate()?;
+                crate::knowledge::put(
+                    &mut self.drawing.doc,
+                    crate::knowledge::Kind::Checks,
+                    &name,
+                    &serde_json::to_value(rule).map_err(|e| invalid(&e.to_string()))?,
+                )?;
+                return Ok(Outcome::Changed);
+            }
             Command::Measurement(command) => {
                 return Ok(Outcome::Measurement {
                     result: self.run_measurement(*command)?,
@@ -1823,6 +1851,11 @@ impl Session {
                     return Err(CoreError::InvalidCommand(
                         "Use define_object_type/redefine_object_type or recognition.define or measurement commands".into(),
                     ));
+                }
+                if kind == crate::knowledge::Kind::Checks {
+                    let rule: crate::discrepancy::CheckRule = serde_json::from_value(data.clone())
+                        .map_err(|e| invalid(&e.to_string()))?;
+                    rule.validate()?;
                 }
                 crate::knowledge::put(&mut self.drawing.doc, kind, &name, &data)?;
                 return Ok(Outcome::Changed);

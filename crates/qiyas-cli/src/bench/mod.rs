@@ -1,5 +1,6 @@
 //! Local development benchmark. Enumeration is rooted in `cases`, never `holdout`.
 mod baseline;
+mod checks;
 mod general;
 pub mod generate;
 pub(crate) mod model;
@@ -404,11 +405,16 @@ fn baseline_run(
             } else {
                 general::measure(root, &drawing)
             };
-            let submission = attempt_result.unwrap_or_else(|e| model::Submission {
+            let mut submission = attempt_result.unwrap_or_else(|e| model::Submission {
                 warnings: vec![format!("automatic recognition unavailable: {e}")],
                 elapsed_ms: attempt.elapsed().as_secs_f64() * 1000.0,
                 ..Default::default()
             });
+            if let Err(error) = checks::predict(root, &drawing, &mut submission) {
+                submission
+                    .warnings
+                    .push(format!("Checks unavailable: {error}"));
+            }
             hashes.push(fingerprint(&submission)?);
             times.push(submission.elapsed_ms);
             let artifact = run_dir.join(id.replace('/', "__"));

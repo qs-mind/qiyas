@@ -19,6 +19,7 @@ mod conflict;
 pub mod conventions;
 mod derived;
 mod dimension;
+pub mod discrepancy;
 mod draw;
 mod drawing;
 mod embed;

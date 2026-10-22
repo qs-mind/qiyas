@@ -3,14 +3,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use qiyas_core::{
+use crate::{
     BlockCount, Boq, BoqItem, Conflict, ConflictKind, ConflictStatus, Kind, Measurement, Schedule,
     Takeoff,
 };
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::matching::{
+use super::matching::{
     floor_tokens, group_key, is_schedule_sheet, leading_number, names_mark, overlaps, tokens,
     unit_key, words, STANDARD_UNITS,
 };
@@ -54,6 +54,29 @@ pub fn compare(inputs: &CompareInputs, default_tol: f64, previous: &[Conflict]) 
             &mut found,
         );
         missing_from_boq(boq, &quantities, &mut found);
+        let mut codes = BTreeMap::<String, Vec<&BoqItem>>::new();
+        for item in &boq.items {
+            if !item.code.trim().is_empty() {
+                codes
+                    .entry(item.code.trim().to_string())
+                    .or_default()
+                    .push(item);
+            }
+        }
+        for (code, items) in codes.into_iter().filter(|(_, items)| items.len() > 1) {
+            let mut f = Found::new(
+                ConflictKind::DuplicateItem,
+                format!("BOQ code {code} occurs on {} rows", items.len()),
+                format!("رمز البند {code} مكرر في {} صفوف", items.len()),
+            );
+            f.boq_code = Some(code);
+            f.subject = items
+                .iter()
+                .map(|i| i.row.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            found.push(f);
+        }
     }
     for schedule in inputs.schedules {
         schedule_vs_plan(schedule, inputs.blocks, &mut found);
@@ -158,6 +181,7 @@ impl Found {
             note: String::new(),
             created: now.to_string(),
             hash_key,
+            query: None,
         }
     }
 }
@@ -373,12 +397,25 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
     let items: Vec<BTreeSet<String>> = boq.items.iter().map(|i| tokens(&i.description)).collect();
     let mut groups: BTreeMap<String, Vec<&Measurement>> = BTreeMap::new();
     for m in quantities {
-        if is_linked(m) || m.auto_description {
+        if (is_linked(m)
+            && boq
+                .items
+                .iter()
+                .any(|i| Some(i.code.trim()) == m.boq_code.as_deref().map(str::trim)))
+            || m.auto_description
+        {
             continue;
         }
         let words = tokens(&m.description);
-        if !items.iter().any(|i| overlaps(&words, i)) {
-            groups.entry(group_key(&m.description)).or_default().push(m);
+        if is_linked(m) || !items.iter().any(|i| overlaps(&words, i)) {
+            groups
+                .entry(
+                    m.boq_code
+                        .clone()
+                        .unwrap_or_else(|| group_key(&m.description)),
+                )
+                .or_default()
+                .push(m);
         }
     }
     for (key, ms) in groups {
@@ -422,6 +459,7 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
             f.unit = u.to_string();
             f.found = Some(*s);
         }
+        f.boq_code = ms[0].boq_code.clone();
         f.subject = key;
         out.push(f);
     }

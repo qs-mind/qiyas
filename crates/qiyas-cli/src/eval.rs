@@ -513,12 +513,13 @@ fn save_outputs(
         .save_as_headless(drawing)
         .map_err(|e| e.to_string())?;
     let report = session.measurement_report().map_err(|e| e.to_string())?;
-    qiyas_boq::export_takeoff_with_report(
+    qiyas_boq::export_takeoff_with_queries(
         &output.join("takeoff.xlsx"),
         &[],
         &[],
         "Mizan benchmark evaluation",
         &report,
+        &session.conflicts,
     )
     .map_err(|e| e.to_string())?;
     let submission_path = output.join("takeoff.json");

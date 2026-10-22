@@ -674,6 +674,18 @@ impl Session {
         } else if project.is_some() {
             takeoff.items = read_embedded(&drawing.doc);
         }
+        match crate::knowledge::get(&drawing.doc, crate::knowledge::Kind::Queries, "result") {
+            Ok(Some(entry)) => match serde_json::from_value(entry.data) {
+                Ok(queries) => conflicts = queries,
+                Err(e) => drawing
+                    .problems
+                    .push(format!("Queries could not be read: {e}")),
+            },
+            Err(e) => drawing
+                .problems
+                .push(format!("Queries could not be read: {e}")),
+            _ => {}
+        }
         let xrefs = XrefSet::load(&drawing, &xref_overrides, MAX_XREF_DEPTH);
         let empty_model = model_is_empty(&drawing);
         let ucs = ucs
@@ -1656,6 +1668,11 @@ impl Session {
         source: Source,
     ) -> Result<Outcome, CoreError> {
         cmd.normalize_runs(self.drawing.units);
+        if let Command::Check { tolerance } = cmd {
+            self.check_block_edit(&Command::Check { tolerance })?;
+            return self.run_discrepancy_check(tolerance, source);
+        }
+
         if let Command::Batch {
             commands,
             layer,
@@ -1680,6 +1697,35 @@ impl Session {
             return self.transaction(source, "label_spaces", |s| {
                 s.label_spaces(&query, layer, height, decimals, language, source)
             });
+        }
+        if let Command::ResolveConflict { id, status, note } = &cmd {
+            if self
+                .conflicts
+                .iter()
+                .any(|c| c.id == *id && c.query.is_some())
+            {
+                let mut conflicts = self.conflicts.clone();
+                let c = conflicts.iter_mut().find(|c| c.id == *id).expect("found");
+                c.status = *status;
+                c.note = note.clone();
+                return self.transaction(source, "resolve_conflict", |s| {
+                    s.run_as(
+                        Command::SetKnowledge {
+                            kind: crate::knowledge::Kind::Queries,
+                            name: "result".into(),
+                            data: serde_json::json!(conflicts),
+                        },
+                        source,
+                    )?;
+                    s.run_as(
+                        Command::SetConflicts {
+                            conflicts,
+                            schedules: s.schedules.clone(),
+                        },
+                        source,
+                    )
+                });
+            }
         }
         let label = cmd.label();
         if self.tx_depth > 0 {

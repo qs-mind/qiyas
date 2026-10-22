@@ -75,6 +75,7 @@ impl Provider for Workflow {
                     let count:u64=digest["entries"].as_array().unwrap().iter().filter(|v|v["section"]=="layers").filter_map(|v|v["kinds"]["LwPolyline"].as_u64()).sum();
                     ("qiyas_read","takeoff_check",json!({"expectations":[{"kind":"count","entity_type":"LwPolyline","value":count}]}))
                 },
+                9=>("qiyas_execute","run",json!({"command":{"type":"check"}})),
                 _=>return Ok(TurnResult{content:vec![ContentBlock::Text{text:"BOQ generated from recognised boundaries using the geometric method. Unmeasured symbols, paths, annotations and low-confidence interpretations are listed in the end report; review is optional.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
             };
             Ok(TurnResult {
@@ -122,7 +123,7 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
             daily: 5.0,
             max_cost: 1.0,
             max_tokens: 4096,
-            max_requests: 10,
+            max_requests: 11,
             totals: totals.clone(),
             steps: Some(dir.path().join("steps.jsonl")),
         };
@@ -135,9 +136,16 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
         )
         .await;
         assert_eq!(status, "done");
-        assert_eq!(calls.load(Ordering::SeqCst), 10);
+        assert_eq!(calls.load(Ordering::SeqCst), 11);
         let guard = session.lock().unwrap();
         let session = guard.as_ref().unwrap();
+        assert!(qiyas_core::knowledge::get(
+            &session.drawing.doc,
+            qiyas_core::knowledge::Kind::Queries,
+            "result"
+        )
+        .unwrap()
+        .is_some());
         let submission = crate::bench::submission::from_session(session).unwrap();
         let truth: crate::bench::Truth = serde_json::from_value(truth).unwrap();
         let score = crate::bench::score::score(&truth, &submission, Some(session));
@@ -157,11 +165,12 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
             "set_method",
             "set_mappings",
             "takeoff_check",
+            "check",
         ] {
             assert!(log.contains(operation), "{operation}");
         }
         let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
-        assert_eq!(steps.lines().count(), 20);
+        assert_eq!(steps.lines().count(), 22);
         assert!(steps.contains("reserved_usd") && steps.contains("estimated_usd"));
         assert!(totals.lock().unwrap().estimated_usd > 0.0);
     }

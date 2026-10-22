@@ -119,7 +119,7 @@ export function useTakeoffState(switchGen: RefObject<number>) {
 export type TakeoffState = ReturnType<typeof useTakeoffState>;
 
 type Deps = Pick<Shell, "run" | "setNotice" | "setSideTab" | "viewport"> &
-  Pick<Sheets, "sheet" | "batch" | "chooseSheet"> &
+  Pick<Sheets, "sheet" | "batch" | "chooseSheet" | "redraw"> &
   Pick<Commands, "apply"> & {
     t: T;
     info: DrawingInfo | null;
@@ -140,6 +140,7 @@ export function useTakeoff({
   sheet,
   batch,
   chooseSheet,
+  redraw,
   takeoffState,
   apply,
 }: Deps) {
@@ -194,6 +195,7 @@ export function useTakeoff({
         setComparing(false);
       }
       changed = true;
+      await redraw();
       setConflicts(found);
       setCompared(true);
       setSideTab("conflicts");
@@ -288,6 +290,12 @@ export function useTakeoff({
    *  sheet when none is on this one); else its BOQ item in the BOQ tab; else its first sheet. */
   const showConflict = useCallback(
     (c: Conflict) => {
+      if (c.query?.clouds.length) {
+        const target = c.query.references[0]?.sheet ?? c.sheets[0];
+        const block = info?.sheets.find((s) => s.block === target || s.name === target)?.block;
+        showGenerated(c.query.clouds, block ?? target ?? sheet);
+        return;
+      }
       const derived = generated?.items.find((item) => c.measurements.includes(`generated:${item.code}`));
       if (derived && showGeneratedItem(derived.code)) {
         setSelectedId(null);

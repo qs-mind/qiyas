@@ -406,9 +406,12 @@ fn items_sharing_a_code_keep_separate_conflicts() {
     second.row = 5;
     let bill = boq(vec![item("A.1", "Slab", "m2", 120.0), second]);
     let conflicts = run(&bill, &takeoff, &[]);
-    assert_eq!(conflicts.len(), 2, "{conflicts:#?}");
+    assert_eq!(conflicts.len(), 3, "{conflicts:#?}");
     assert_ne!(conflicts[0].id, conflicts[1].id);
     assert!(conflicts[1].hash_key.ends_with("|row 5"));
+    assert_eq!(conflicts[0].kind, ConflictKind::QuantityMismatch);
+    assert_eq!(conflicts[1].kind, ConflictKind::QuantityMismatch);
+    assert_eq!(conflicts[2].kind, ConflictKind::DuplicateItem);
 }
 
 #[test]

@@ -6,12 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 qiyas-core = { path = "../qiyas-core" }
 calamine.workspace = true
 rust_xlsxwriter.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }

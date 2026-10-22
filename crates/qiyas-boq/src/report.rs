@@ -77,12 +77,16 @@ pub fn export_conflicts(path: &Path, conflicts: &[Conflict]) -> Result<(), BoqEr
         sheet.write_number(row, 1, count as f64)?;
     }
 
+    crate::queries::write(&mut book, conflicts)?;
     book.save(path)?;
     Ok(())
 }
 
 fn kind_name(kind: ConflictKind) -> &'static str {
     match kind {
+        ConflictKind::DuplicateItem => "Duplicate item",
+        ConflictKind::RelationMismatch => "Element relation",
+        ConflictKind::DocumentMismatch => "Document vs drawing",
         ConflictKind::QuantityMismatch => "Quantity mismatch",
         ConflictKind::MissingFromBoq => "Missing from BOQ",
         ConflictKind::NotInDrawings => "Not in drawings",

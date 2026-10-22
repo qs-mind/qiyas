@@ -73,7 +73,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
 
   let empty: ReactNode = null;
   if (conflicts.length === 0) {
-    if (!hasBoq) {
+    if (!hasBoq && !compared) {
       empty = (
         <p className="empty">
           {t("conflicts.noBoq")}{" "}
@@ -97,6 +97,23 @@ export const ConflictsPanel = memo(function ConflictsPanel({
 
   const columns = useMemo<GridColumn<Conflict>[]>(
     () => [
+      {
+        id: "query",
+        header: t("conflicts.question"),
+        size: 200,
+        grow: true,
+        wrap: true,
+        cell: (c) => c.query ? <span dir="auto">{lang === "ar" ? c.query.question_ar : c.query.question_en}</span> : "—",
+        title: (c) => c.query?.citations.map((r) => `${r.source}: ${r.clause}`).join("; "),
+      },
+      {
+        id: "severity", header: t("conflicts.severity"), size: 80,
+        cell: (c) => c.query ? t(`querySeverity.${c.query.severity}`) : "—",
+      },
+      {
+        id: "grid", header: t("conflicts.grid"), size: 100,
+        cell: (c) => c.query?.references.map((r) => `${r.sheet} / ${r.grid ?? t("conflicts.unassigned")} (${r.handle.toString(16).toUpperCase()})`).join(", ") ?? "—",
+      },
       {
         id: "reason",
         header: t("conflicts.reason"),

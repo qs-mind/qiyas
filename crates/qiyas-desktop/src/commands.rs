@@ -465,7 +465,7 @@ pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result
 #[tauri::command]
 pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<(), String> {
     // Copy the take-off out, so writing the file doesn't hold the lock.
-    let (items, totals, title, report) = with_session(&state, |s| {
+    let (items, totals, title, report, queries) = with_session(&state, |s| {
         let title = match s.drawing.path.file_name() {
             Some(name) => format!("{} take-off", name.to_string_lossy()),
             None => "Take-off".to_string(),
@@ -475,10 +475,18 @@ pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<
             s.takeoff.totals(),
             title,
             s.measurement_report()?,
+            s.conflicts.clone(),
         ))
     })?;
-    qiyas_boq::export_takeoff_with_report(Path::new(&path), &items, &totals, &title, &report)
-        .map_err(|e| e.to_string())
+    qiyas_boq::export_takeoff_with_queries(
+        Path::new(&path),
+        &items,
+        &totals,
+        &title,
+        &report,
+        &queries,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Writes a table of extracted data (`Command::ExtractData`) to an Excel workbook at `path`, one

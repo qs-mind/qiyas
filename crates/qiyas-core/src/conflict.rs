@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 pub enum ConflictKind {
     /// The linked measurements add up to more or less than the BOQ quantity, beyond tolerance.
     QuantityMismatch,
+    DuplicateItem,
+    RelationMismatch,
+    DocumentMismatch,
     /// Measured work that no BOQ item describes.
     MissingFromBoq,
     /// A BOQ item with nothing linked and nothing measured that matches its description.
@@ -23,8 +26,11 @@ pub enum ConflictKind {
 }
 
 impl ConflictKind {
-    pub const ALL: [ConflictKind; 6] = [
+    pub const ALL: [ConflictKind; 9] = [
         ConflictKind::QuantityMismatch,
+        ConflictKind::DuplicateItem,
+        ConflictKind::RelationMismatch,
+        ConflictKind::DocumentMismatch,
         ConflictKind::MissingFromBoq,
         ConflictKind::NotInDrawings,
         ConflictKind::ScheduleVsPlan,
@@ -35,6 +41,9 @@ impl ConflictKind {
     /// As stored, e.g. "quantity_mismatch".
     pub fn name(self) -> &'static str {
         match self {
+            ConflictKind::DuplicateItem => "duplicate_item",
+            ConflictKind::RelationMismatch => "relation_mismatch",
+            ConflictKind::DocumentMismatch => "document_mismatch",
             ConflictKind::QuantityMismatch => "quantity_mismatch",
             ConflictKind::MissingFromBoq => "missing_from_boq",
             ConflictKind::NotInDrawings => "not_in_drawings",
@@ -95,4 +104,6 @@ pub struct Conflict {
     /// What `id` is hashed from, for debugging.
     #[serde(default)]
     pub hash_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<crate::discrepancy::Query>,
 }

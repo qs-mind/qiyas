@@ -322,7 +322,25 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         .collect::<Vec<_>>();
     metrics.extras = extra_items.len();
     let expected: BTreeSet<&Finding> = truth.seeded_errors.iter().collect();
-    let found: BTreeSet<&Finding> = submission.findings.iter().collect();
+    // A prediction may identify a missing item by its drawing evidence rather than a client code.
+    // Resolve unique evidence identities here only; prediction never receives this mapping.
+    let resolved: Vec<Finding> = submission
+        .findings
+        .iter()
+        .map(|f| {
+            let mut f = f.clone();
+            let matches: Vec<_> = truth
+                .items
+                .iter()
+                .filter(|i| super::checks::evidence_id(i) == f.item_id)
+                .collect();
+            if matches.len() == 1 {
+                f.item_id = matches[0].id.clone();
+            }
+            f
+        })
+        .collect();
+    let found: BTreeSet<&Finding> = resolved.iter().collect();
     metrics.true_positives = found.intersection(&expected).count();
     // Repeated alerts do not earn extra true positives and do count as false alarms.
     metrics.false_positives = submission.findings.len() - metrics.true_positives;

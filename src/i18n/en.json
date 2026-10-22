@@ -1558,5 +1558,15 @@
   "recognition.save": "Save and accept",
   "ai.pdfTooLarge": "Attach a PDF of at most 20 MiB.",
   "ai.pdfPages": "pages",
-  "ai.removeDocument": "Remove PDF"
+  "ai.removeDocument": "Remove PDF",
+  "conflicts.question": "Suggested question",
+  "conflicts.severity": "Severity",
+  "conflicts.grid": "Evidence / grid",
+  "conflicts.unassigned": "Unassigned",
+  "querySeverity.information": "Information",
+  "querySeverity.warning": "Warning",
+  "querySeverity.error": "Error",
+  "conflictKind.duplicate_item": "Duplicate item",
+  "conflictKind.relation_mismatch": "Element relation",
+  "conflictKind.document_mismatch": "Document vs drawing"
 }

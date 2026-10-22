@@ -67,6 +67,18 @@ pub fn export_takeoff_with_report(
     title: &str,
     report: &qiyas_core::measurement::MeasurementReport,
 ) -> Result<(), BoqError> {
+    export_takeoff_with_queries(path, items, totals, title, report, &[])
+}
+
+/// Export measured quantities and the complete bilingual query list, without rates.
+pub fn export_takeoff_with_queries(
+    path: &Path,
+    items: &[Measurement],
+    totals: &[Total],
+    title: &str,
+    report: &qiyas_core::measurement::MeasurementReport,
+    queries: &[qiyas_core::Conflict],
+) -> Result<(), BoqError> {
     let mut book = Workbook::new();
     book.set_properties(&DocProperties::new().set_title(title));
     let bold = Format::new().set_bold();
@@ -101,6 +113,7 @@ pub fn export_takeoff_with_report(
     write_totals(sheet, 0, totals, &bold)?;
 
     crate::dimensions::write(&mut book, report)?;
+    crate::queries::write(&mut book, queries)?;
     book.save(path)?;
     Ok(())
 }

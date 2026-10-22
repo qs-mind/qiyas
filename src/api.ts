@@ -710,7 +710,10 @@ export type ConflictKind =
   | "not_in_drawings"
   | "schedule_vs_plan"
   | "drawing_vs_drawing"
-  | "unit_doubt";
+  | "unit_doubt"
+  | "duplicate_item"
+  | "relation_mismatch"
+  | "document_mismatch";
 
 export type ConflictStatus = "open" | "resolved" | "ignored";
 
@@ -740,6 +743,15 @@ export type Conflict = {
   created: string;
   /** What `id` is hashed from, for debugging. */
   hash_key: string;
+  query?: {
+    severity: "information" | "warning" | "error";
+    question_en: string;
+    question_ar: string;
+    references: { handle: number; sheet: string; grid: string | null }[];
+    citations: { source: string; clause: string }[];
+    clouds: number[];
+    rule: string | null;
+  } | null;
 };
 
 type P = [number, number];

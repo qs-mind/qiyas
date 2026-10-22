@@ -99,6 +99,9 @@ pub struct Rounding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
+    /// Cited by this rule: allowed quantity discrepancy in percent and/or physical units.
+    #[serde(default)]
+    pub tolerance: Option<crate::discrepancy::Tolerance>,
     pub id: String,
     /// Exact type and/or category selection. No trade names are built into the engine.
     #[serde(default)]
@@ -222,6 +225,8 @@ pub struct MeasuredQuantity {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeneratedItem {
+    #[serde(default)]
+    pub tolerances: Vec<crate::discrepancy::Tolerance>,
     pub code: String,
     pub description_en: String,
     pub description_ar: String,
@@ -298,6 +303,9 @@ impl RuleSet {
         text(&self.title)?;
         let mut ids = BTreeSet::new();
         for r in &self.rules {
+            if let Some(t) = &r.tolerance {
+                t.validate()?;
+            }
             text(&r.id)?;
             text(&r.unit)?;
             citation(&r.citation)?;

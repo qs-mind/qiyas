@@ -288,6 +288,7 @@ export default function App() {
     sheet,
     batch,
     chooseSheet,
+    redraw,
     takeoffState,
     apply,
   });

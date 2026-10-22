@@ -542,6 +542,46 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   requests each. These results do not replace a live MIZAN ALONE score.
 - No dependencies added. Validation and measured results: `docs/2026-10-22-mizan-autonomous-takeoff.md`.
 
+## Discrepancies and queries (Phase 19)
+
+- The registry command `check` compares the imported client BOQ with mapped element quantities
+  and manual take-off, evaluates drawing knowledge kind `checks`, and raises queries and Comment
+  clouds as one transaction. `qiyas-takeoff::compare` and `compare_session` retain their public
+  API; the shared comparison implementation now lives in `qiyas-core/src/discrepancy/` so the
+  generic command registry, Mizan, desktop and CLI use the same engine.
+- `define_check {name,rule}` and `set_knowledge {kind:"checks",name,data}` validate cited rules.
+  Rules carry severity and English/Arabic questions. General operations are schedule row joins
+  against element counts or summed/per-instance numeric properties, host/property joins, quantity relations between
+  sets, and membership in a drawing or supplied document table. Column mappings, element
+  selectors, tolerances, units and conversion factors are data. Extracted document tables live
+  under knowledge `tables` as `{rows,citation}`; missing evidence is an error, never a zero/pass.
+- BOQ comparison finds mapped codes absent from the client list, unmeasured client scope,
+  wrong quantities/units (including measurement unit bands) and duplicate codes. A method rule
+  may supply `tolerance:{percent,absolute}`; generated items retain their applicable tolerances
+  and citations. Existing manual comparison defaults remain for older drawings.
+- Findings carry `query` metadata: severity, source citations, bilingual question, evidence
+  handles/sheets/grids, rule identity and cloud handles. Stable finding ids retain statuses and
+  notes on repeated checks. The drawing's `queries/result` XRecord stores the list; standalone
+  DWG/DXF reopen restores it without a sidecar. Resolution and comparison are each one undo
+  step. Rechecking replaces owned clouds without accumulating duplicates. Findings describe
+  the last check; run `check` again after repairs.
+- The conflicts panel shows query questions, severity and evidence; Compare redraws the clouds.
+  Take-off exports from all hosts add `Queries`, with readable bilingual columns and lossless
+  records. `qiyas_boq::queries::import_queries` reads them back. No rates are exported here.
+- Mizan's registry workflow gains `check` after BOQ generation; it authors cited rules, runs
+  comparison and reports uncertainties without requiring a human step. Scripted workflow tests
+  exercise this command through the production generic tool surface.
+- Benchmark prediction now reads client inputs and shared check interpretations from `.local/`,
+  submits findings, and leaves evidence-to-truth identity matching to the scorer. Shared data
+  declares which interpretations establish complete scope for missing-item checks. Neither
+  prediction nor Mizan reads truth. Engine prepared/autonomy modes remain diagnostics; no live
+  provider evaluation was authorized or run. Results and limits: `docs/2026-10-22-qiyas-phase19.md`.
+- Verified quick results (120 identical cases, one run per mode): seeded-error recall 0/36 →
+  36/36 (100%) in both modes; finding precision 80%, nine false alarms over 111 clean cases
+  (0.081/case), all on overlap variants. BOQ coverage/item precision remain 30.17%/69.73%
+  prepared and 19.50%/98.76% autonomy. DWG/DXF and Excel query round trips passed. Two socket
+  tests still require a reviewer outside the sandbox; all other requested checks passed.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,

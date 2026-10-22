@@ -1716,7 +1716,7 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
     let path = crate::execute::resolve_in_drawing_folder(session, name)?;
     if op == "export_takeoff" {
         let totals = session.takeoff.totals();
-        qiyas_boq::export_takeoff_with_report(
+        qiyas_boq::export_takeoff_with_queries(
             &path,
             &session.takeoff.items,
             &totals,
@@ -1724,6 +1724,7 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
             &session
                 .measurement_report()
                 .map_err(|e| ToolError::Failed(e.to_string()))?,
+            &session.conflicts,
         )
         .map_err(|e| ToolError::Failed(e.to_string()))?;
     } else {

@@ -197,3 +197,21 @@ test("the columns sort inside each kind", () => {
   ]);
   expect(groups()).toEqual(["Quantity mismatch 2", "Schedule vs plan 1", "Unit doubt 1"]);
 });
+
+test("queries show severity, question and cited drawing evidence without an imported BOQ", () => {
+  const query = conflict("rfi", "document_mismatch", "Type absent from document", {
+    sheets: ["Model"],
+    query: {
+      severity: "error", question_en: "Confirm the missing type?", question_ar: "يرجى تأكيد النوع؟",
+      references: [{ handle: 42, sheet: "Model", grid: "A/1" }],
+      citations: [{ source: "spec.pdf", clause: "Table 2" }], clouds: [123], rule: "spec",
+    },
+  });
+  const props = renderPanel({ conflicts: [query], hasBoq: false });
+  expect(screen.getByText("Confirm the missing type?")).toBeTruthy();
+  expect(screen.getByText("Error")).toBeTruthy();
+  expect(screen.getByText("Model / A/1 (2A)")).toBeTruthy();
+  expect(screen.getByTitle("spec.pdf: Table 2")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show" }));
+  expect(props.onShow).toHaveBeenCalledWith(query);
+});

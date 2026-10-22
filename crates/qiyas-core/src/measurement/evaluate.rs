@@ -401,6 +401,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 .values
                 .insert("unit".into(), EValue::Text(unit.clone()));
             let item = GeneratedItem {
+                tolerances: rule.tolerance.clone().into_iter().collect(),
                 code: template(&mapping.code, &mapped_context)?,
                 description_en: template(&mapping.description_en, &mapped_context)?,
                 description_ar: template(&mapping.description_ar, &mapped_context)?,
@@ -426,6 +427,11 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     || existing.trade != item.trade
                 {
                     return Err(invalid(format!("BOQ code {} groups incompatible descriptions or units; include the varying property in its template", item.code)));
+                }
+                for t in item.tolerances {
+                    if !existing.tolerances.contains(&t) {
+                        existing.tolerances.push(t);
+                    }
                 }
                 existing.lines.extend(item.lines);
                 existing.quantity = total(&context, &existing.lines)?;

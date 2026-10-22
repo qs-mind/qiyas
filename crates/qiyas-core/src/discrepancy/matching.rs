@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use qiyas_core::BlockCount;
+use crate::BlockCount;
 
 /// Words that say nothing about the work, units and sizes among them. Compared after `fold` and
 /// after digits are removed ("50mm" is "mm").

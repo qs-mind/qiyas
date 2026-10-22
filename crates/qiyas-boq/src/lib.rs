@@ -8,3 +8,6 @@ pub mod report;
 
 pub use export::{export_table, export_takeoff, export_takeoff_with_report, BoqError};
 pub use import::import_boq;
+
+pub mod queries;
+pub use export::export_takeoff_with_queries;
