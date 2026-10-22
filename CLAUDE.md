@@ -635,6 +635,33 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   prepared and 19.50%/98.76% autonomy. DWG/DXF and Excel query round trips passed. Two socket
   tests still require a reviewer outside the sandbox; all other requested checks passed.
 
+## Revisions and variations (Phase 20)
+
+- `revisions.rs` compares the current B with A using stable handles, geometry, layers,
+  blocks and attributes, including changed block definitions and renumbered exports.
+  `compare_revisions {other_path,tolerance?}` reads per-sheet changes and bounds.
+  Tolerance is in drawing units; different-unit inputs must be converted first.
+- `carry_knowledge {from_path,tolerance?}` carries types, recognition, measurement methods,
+  mappings and checks, re-extracts B on all sheets and retains A's measured baseline in
+  drawing knowledge. Revision identities survive handle changes; local object ids stay
+  driver handles. BOQ `{id}` templates use the stable identity.
+- `variation_report {layer?}` stores quantity-only A/B/delta rows with element/handle traces
+  and replaces its Comment clouds in one undo step. Its cloud layer is data, retained in
+  knowledge `revisions/cloud_layer` (default VARIATION). Carry is also one undo step.
+  Take-off exports include bilingual Variation and lossless chunked records; the drawing
+  retains the report and clouds through DWG/DXF. No rates or domain rules were added.
+- The three commands have command-line words and generic-tool access. The take-off kit
+  contains revision examples within its existing byte budget; the workflow index describes
+  open B → carry A → re-take-off → variation/clouds → export.
+- `qiyas-cli variation A B --export x.xlsx [--drawing-output B-clouded.dxf]` runs the same
+  offline flow. Quick benchmark runs also score existing revision-B variants, with
+  per-item recall/precision, delta accuracy and per-case time. Prediction never reads truth.
+  Engine diagnostics remain distinct from live MIZAN ALONE performance.
+  `bench revisions --set quick --mode prepared|autonomy` runs only the revision cohort.
+  Final quick revision scores: 9/9 items in both modes, 100% recall/precision/delta
+  accuracy, 0.419–0.640 seconds per case including workbook/drawing persistence.
+- Implementation details, validation and measured results: `docs/2026-10-22-qiyas-phase20.md`.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,

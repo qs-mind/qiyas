@@ -1881,3 +1881,46 @@ fn digest_is_bounded_paged_and_read_only_and_workflow_schemas_are_batched() {
         index.contains("Take-off workflow") && index.contains("3 recognise: recognition.apply")
     );
 }
+
+#[test]
+fn revision_kit_runs_through_generic_tools_and_typed_commands() {
+    let (dir, mut a) = sample();
+    let kit = call(&mut a, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    call(&mut a, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    let path = dir.path().join("A.dxf");
+    a.save_as(&path).unwrap();
+    let mut b = Session::open_standalone(&path).unwrap();
+    let mut carry = kit["revision"][1].clone();
+    carry["from_path"] = json!(path);
+    let n = b.history_steps().0.len();
+    call(
+        &mut b,
+        EXECUTE,
+        json!({"op":"run","args":{"command":carry}}),
+    )
+    .unwrap();
+    assert_eq!(b.history_steps().0.len(), n + 1);
+    let comparison = call(
+        &mut b,
+        READ,
+        json!({"op":"run","args":{"command":{"type":"compare_revisions","other_path":path}}}),
+    )
+    .unwrap();
+    assert!(comparison["outcome"]["result"]["sheets"].is_array());
+    call(
+        &mut b,
+        EXECUTE,
+        json!({"op":"type","args":{"line":"VARIATIONREPORT"}}),
+    )
+    .unwrap();
+    assert!(b
+        .variation()
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .all(|i| i.delta == 0.));
+    assert!(qiyas_core::registry::registry()
+        .index_text()
+        .contains("revision / open B"));
+}

@@ -136,5 +136,9 @@ pub fn kit() -> Value {
         })
         .collect();
     batch.sort_by_key(|(order, _)| *order);
-    json!({"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
+    let revision: Vec<_> = ["compare_revisions", "carry_knowledge", "variation_report"]
+        .iter()
+        .map(|name| example(registry().get(name).expect("revision command")))
+        .collect();
+    json!({"revision":revision,"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
 }

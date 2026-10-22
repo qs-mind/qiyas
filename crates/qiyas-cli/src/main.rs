@@ -48,6 +48,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Carry A's knowledge onto B, remeasure, cloud changes and export variation quantities.
+    Variation {
+        a: PathBuf,
+        b: PathBuf,
+        #[arg(long)]
+        export: PathBuf,
+        /// Save B with its knowledge and clouds to a new drawing.
+        #[arg(long)]
+        drawing_output: Option<PathBuf>,
+    },
     /// Generate, run and score the local development QS benchmark.
     Bench(bench::BenchArgs),
     /// Run Mizan headlessly on one dev case, with explicit approval and a daily budget.
@@ -218,6 +228,37 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
             drawing,
             allow_repaired_save,
         } => run(out, script, drawing.as_deref(), *allow_repaired_save),
+        Cmd::Variation {
+            a,
+            b,
+            export,
+            drawing_output,
+        } => {
+            let mut session = Session::open_standalone(b).map_err(|e| e.to_string())?;
+            let a = a.canonicalize().map_err(|e| e.to_string())?;
+            session
+                .run(Command::CarryKnowledge {
+                    from_path: a.to_string_lossy().into(),
+                    tolerance: None,
+                })
+                .map_err(|e| e.to_string())?;
+            session
+                .run(Command::VariationReport { layer: None })
+                .map_err(|e| e.to_string())?;
+            Excel {
+                allow_repaired_save: false,
+            }
+            .export_takeoff(&session, export)?;
+            if let Some(path) = drawing_output {
+                session.save_as_headless(path).map_err(|e| e.to_string())?;
+            }
+            if out.json {
+                out.json(&session.variation().map_err(|e| e.to_string())?);
+            } else if !out.quiet {
+                println!("Variation written to {}", export.display());
+            }
+            Ok(None)
+        }
         Cmd::Takeoff {
             drawing,
             counts,

@@ -5,6 +5,7 @@ mod general;
 pub mod generate;
 pub(crate) mod model;
 mod recognition;
+mod revisions;
 pub(crate) mod score;
 pub(crate) mod sets;
 pub(crate) mod submission;
@@ -51,6 +52,13 @@ pub struct BenchArgs {
 
 #[derive(Subcommand)]
 pub enum BenchCommand {
+    /// Score only existing revision variants, with the same quick cohort and no model calls.
+    Revisions {
+        #[arg(long, value_enum, default_value = "prepared")]
+        mode: RunMode,
+        #[arg(long)]
+        set: Option<String>,
+    },
     /// Generate deterministic development drawings and an unread holdout seal.
     Generate {
         /// Seeds per project type (six project types).
@@ -96,6 +104,9 @@ pub enum BenchCommand {
 pub fn run(args: &BenchArgs) -> Result<Value, String> {
     refuse_holdout_path(&args.root)?;
     match &args.command {
+        BenchCommand::Revisions { mode, set } => {
+            revisions::selected(&args.root, set.as_deref(), *mode)
+        }
         BenchCommand::Generate { seeds } => generate::generate(&args.root, usize::from(*seeds)),
         BenchCommand::Run {
             mode,
@@ -382,6 +393,7 @@ fn baseline_run(
     let mut types = BTreeMap::<String, Metrics>::new();
     let mut repeatability = Vec::new();
     let mut pdf_metrics = Metrics::default();
+    let revision_ids = ids.clone();
     for id in ids {
         let (truth, directory) = load_case(root, &id)?;
         let drawing = directory.join(&truth.drawing);
@@ -475,14 +487,15 @@ fn baseline_run(
         "Phase 20: compare revision A/B and report the known quantity deltas.",
         "Add independently sourced CC BY cases after verified downloads and QS spot checks. Synthetic-only scores do not establish performance on consultant drawings.",
     ];
-    let result = json!({"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
+    let revisions = revisions::run(root, &revision_ids, mode, &run_dir)?;
+    let result = json!({"revisions":revisions,"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
     write_json(&run_dir.join("report.json"), &result)?;
     let md = markdown(&result);
     std::fs::write(run_dir.join("report.md"), &md).map_err(|e| e.to_string())?;
     write_json(&root.join(&latest), &result)?;
     std::fs::write(root.join(latest.replace(".json", ".md")), md).map_err(|e| e.to_string())?;
     Ok(
-        json!({"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates,"comparison_before":result["comparison_before"]}),
+        json!({"revisions":result["revisions"],"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates,"comparison_before":result["comparison_before"]}),
     )
 }
 
@@ -534,6 +547,20 @@ fn markdown(report: &Value) -> String {
         report["pdf"]["rates"]["item_precision"],
         report["pdf"]["rates"]["item_f1"]
     ));
+    if let Some(cases) = report["revisions"]["cases"].as_array() {
+        text.push_str(&format!("\nRevision recall: {}; precision: {}; delta accuracy: {}.\n\n| Case | Found / expected | Accurate | Time (ms) | Error |\n|---|---:|---:|---:|---|\n", report["revisions"]["recall"],report["revisions"]["precision"],report["revisions"]["delta_accuracy"]));
+        for case in cases {
+            text.push_str(&format!(
+                "| {} | {} / {} | {} | {} | {} |\n",
+                case["id"],
+                case["found"],
+                case["expected"],
+                case["accurate"],
+                case["elapsed_ms"],
+                case["error"]
+            ));
+        }
+    }
     text.push_str("\nRates use 0..1. Item precision = matched / (matched + extras); item F1 = 2 matched / (truth + matched + extras). Coverage is item recall; quantity accuracy is scored separately. Accuracy bands use matched items; pass_rate_all and traceability_all include missing items. No errors predicted gives undefined precision, not perfect precision. See report.json for item-level misses/extras, citation failures, errors and timings.\n\n## What later phases must improve\n\n");
     if let Some(next) = report["next_phases"].as_array() {
         for line in next {

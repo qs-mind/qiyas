@@ -245,6 +245,8 @@ pub struct GeneratedItem {
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variation: Option<crate::revisions::VariationReport>,
     pub selection: MethodSelection,
     pub quantities: Vec<MeasuredQuantity>,
     pub items: Vec<GeneratedItem>,
@@ -351,7 +353,9 @@ impl Session {
         read(self, "selection")
     }
     pub fn measurement_report(&self) -> Result<MeasurementReport, CoreError> {
-        read(self, "result")
+        let mut report: MeasurementReport = read(self, "result")?;
+        report.variation = self.variation()?;
+        Ok(report)
     }
     pub(crate) fn run_measurement(
         &mut self,

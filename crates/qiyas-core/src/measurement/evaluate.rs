@@ -66,10 +66,8 @@ impl Context<'_> {
             self.values
                 .insert(format!("{prefix}{k}"), EValue::Number(*v));
         }
-        self.values.insert(
-            format!("{prefix}id"),
-            EValue::Text(format!("{:X}", object.instance.id)),
-        );
+        self.values
+            .insert(format!("{prefix}id"), EValue::Text(object.identity.clone()));
         for (k, v) in [
             ("type", object.instance.type_name.as_str()),
             ("trade", object.category.as_str()),

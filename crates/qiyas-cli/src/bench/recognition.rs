@@ -285,3 +285,98 @@ pub(super) fn validate_general_commands(commands: &[Value]) -> Result<(), String
         include_baseline: false,
     })
 }
+
+/// Build an ordinary measured A from the supplied interpretation. The revision predictor
+/// receives only drawing paths and this recipe, never the benchmark's expected deltas.
+pub(super) fn revision_base(
+    drawing: &Path,
+    recipe_path: &Path,
+    general: bool,
+    supplement: Option<&Path>,
+) -> Result<Session, String> {
+    let mut recipe: Recipe =
+        serde_json::from_slice(&std::fs::read(recipe_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    if general {
+        validate_general(&recipe)?;
+    }
+    let primary_count = recipe.measurements.len();
+    if let Some(path) = supplement {
+        let mut extra: Recipe =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        validate_general(&extra)?;
+        // Prepared interpretation owns its matched scope. Shared rules fill remaining
+        // sources, with the same precedence when carry reapplies every stored rule on B.
+        let defines = |c: &&Value| c["type"] == "recognition" && c["kind"] == "define";
+        let primary_min = recipe
+            .commands
+            .iter()
+            .filter(defines)
+            .map(|c| c["rule"]["priority"].as_i64().unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+        let extra_max = extra
+            .commands
+            .iter()
+            .filter(defines)
+            .map(|c| c["rule"]["priority"].as_i64().unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+        let shift = primary_min - extra_max - 1;
+        for command in extra
+            .commands
+            .iter_mut()
+            .filter(|c| c["type"] == "recognition" && c["kind"] == "define")
+        {
+            let priority = command["rule"]["priority"].as_i64().unwrap_or(0) + shift;
+            let priority = i32::try_from(priority)
+                .map_err(|_| "Supplemental recognition priorities exceed their supported range")?;
+            command["rule"]["priority"] = serde_json::json!(priority);
+        }
+        recipe.commands.extend(extra.commands);
+        recipe.measurements.extend(extra.measurements);
+    }
+    let mut s = Session::open_standalone(drawing).map_err(|e| e.to_string())?;
+    for command in recipe.commands {
+        s.run_input(&command, Source::User)
+            .map_err(|e| e.to_string())?;
+    }
+    let mut rules = vec![];
+    let mut mappings = vec![];
+    for (index, m) in recipe.measurements.iter().enumerate() {
+        let source = if index < primary_count {
+            recipe_path
+        } else {
+            supplement.expect("supplemental mapping")
+        };
+        let citation = serde_json::json!({"source":source.to_string_lossy(),"clause":"Supplied recognition quantity mapping"});
+        let id = format!("quantity-{index}");
+        rules.push(serde_json::json!({"id":id,"element_type":m.object_type,"unit":m.unit,"terms":[{"label":m.quantity,"operation":"add","factors":[m.quantity],"citation":citation}],"citation":citation}));
+        let base = if m.id.is_empty() {
+            format!("mapping-{index}")
+        } else {
+            m.id.clone()
+        };
+        let code = if let Some(property) = &m.group_by {
+            format!("{base}-{{{property}}}")
+        } else if m.aggregate {
+            base
+        } else {
+            format!("{base}-{{id}}")
+        };
+        let description = if m.description.is_empty() {
+            m.object_type.clone()
+        } else {
+            m.description.clone()
+        };
+        mappings.push(serde_json::json!({"rule":id,"code":code,"description_en":description,"description_ar":description,"section":"","trade":"","unit":m.unit,"citation":citation}));
+    }
+    s.run_input(&serde_json::json!({"type":"measurement","kind":"set_method","scope":"project","method":{"name":"supplied","title":"Supplied geometric mapping","based_on":"Drawing interpretation","source_note":"Engine diagnostic","rules":rules}}),Source::User).map_err(|e|e.to_string())?;
+    s.run_input(
+        &serde_json::json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+        Source::User,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(s)
+}

@@ -146,3 +146,5 @@ pub mod recognition;
 pub mod measurement;
 
 pub mod digest;
+
+pub mod revisions;

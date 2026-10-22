@@ -246,6 +246,19 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     let mut handles = Vec::new();
     if let Some(prepared) = record_fixtures::prepare(session, name, example) {
         handles = prepared;
+    } else if matches!(name, "carry_knowledge" | "variation_report") {
+        let path = session
+            .drawing
+            .path
+            .parent()
+            .unwrap()
+            .join("revision-a.dxf");
+        session.save_as(&path).unwrap();
+        if name == "carry_knowledge" {
+            example["from_path"] = json!(path);
+        } else {
+            added_by(session, json!({"type":"carry_knowledge","from_path":path}));
+        }
     } else if name.starts_with("recognition.") {
         let unit = 1.0 / session.drawing.units.to_metres();
         if name == "recognition.pdf_text" {

@@ -207,6 +207,8 @@ pub struct ObjectSchedule {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ObjectRecord {
+    /// Stable across carried drawing revisions; id remains the local driver handle.
+    pub identity: String,
     #[serde(flatten)]
     pub instance: ObjectInstance,
     pub category: String,
@@ -1039,6 +1041,7 @@ impl Session {
                 BTreeMap::new()
             };
             out.push(ObjectRecord {
+                identity: self.revision_identity(object.id),
                 instance: object,
                 category: definition.category,
                 sheet,

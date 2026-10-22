@@ -26,6 +26,32 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Compare the current revision B with A at other_path. Reports matches, additions,
+    /// removals and changes per sheet with bounds. Tolerance is in drawing units.
+    #[schemars(extend("x-category" = "takeoff", "x-words" = ["COMPAREREVISIONS"]))]
+    #[schemars(example = json!({"type":"compare_revisions","other_path":"A.dxf"}))]
+    CompareRevisions {
+        other_path: String,
+        #[serde(default)]
+        tolerance: Option<f64>,
+    },
+    /// Carry drawing knowledge from A to the current B and reapply recognition on all sheets.
+    /// Keeps revision identities and A's measured baseline. One undo step.
+    #[schemars(extend("x-category" = "takeoff", "x-words" = ["CARRYKNOWLEDGE"], "x-takeoff-step" = "revision / open B, carry A and re-take-off"))]
+    #[schemars(example = json!({"type":"carry_knowledge","from_path":"A.dxf"}))]
+    CarryKnowledge {
+        from_path: String,
+        #[serde(default)]
+        tolerance: Option<f64>,
+    },
+    /// Compute quantity deltas against the carried baseline, trace each delta to elements,
+    /// and replace variation Comment clouds in one undo step. The layer name is stored as data.
+    #[schemars(extend("x-category" = "takeoff", "x-words" = ["VARIATIONREPORT"], "x-takeoff-step" = "revision / produce variation and clouds, export take-off"))]
+    #[schemars(example = json!({"type":"variation_report"}))]
+    VariationReport {
+        #[serde(default)]
+        layer: Option<String>,
+    },
     /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
     #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
@@ -1397,6 +1423,8 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::CompareRevisions { .. } => None,
+            Command::CarryKnowledge { .. } | Command::VariationReport { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Check { .. } | Command::DefineCheck { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Measurement(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::Recognition(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
@@ -1793,6 +1821,27 @@ impl Session {
                 return Ok(Outcome::Added {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
+            }
+            Command::CompareRevisions {
+                other_path,
+                tolerance,
+            } => {
+                return Ok(Outcome::Measurement {
+                    result: json!(self.compare_revisions(&other_path, tolerance)?),
+                })
+            }
+            Command::CarryKnowledge {
+                from_path,
+                tolerance,
+            } => {
+                return Ok(Outcome::Measurement {
+                    result: self.carry_knowledge(&from_path, tolerance)?,
+                })
+            }
+            Command::VariationReport { layer } => {
+                return Ok(Outcome::Measurement {
+                    result: json!(self.variation_report(layer)?),
+                })
             }
             Command::Check { .. } => unreachable!("check is a transaction"),
             Command::DefineCheck { name, rule } => {

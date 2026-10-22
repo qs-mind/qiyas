@@ -114,6 +114,7 @@ pub fn export_takeoff_with_queries(
 
     crate::dimensions::write(&mut book, report)?;
     crate::queries::write(&mut book, queries)?;
+    crate::variation::write(&mut book, report.variation.as_ref())?;
     book.save(path)?;
     Ok(())
 }
