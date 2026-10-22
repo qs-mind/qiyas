@@ -635,6 +635,121 @@ fn save(project: &Project, directory: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Rebuild existing scans from their original seeds. No other case or holdout is touched.
+pub fn regenerate_scans(root: &Path) -> Result<Value> {
+    let mut refreshed = Vec::new();
+    for directory in super::directories(&root.join("cases"))? {
+        let scan = root
+            .join("cases")
+            .join(directory)
+            .join("variants/scanned-pdf");
+        if !scan.is_dir() {
+            continue;
+        }
+        super::reject_symlink(&scan)?;
+        let truth_path = scan.join("truth.json");
+        super::reject_symlink(&truth_path)?;
+        let original = fs::read_to_string(&truth_path).map_err(error)?;
+        let truth: Value = serde_json::from_str(&original).map_err(error)?;
+        if truth["source"] != "qiyas-generator-v1" {
+            continue;
+        }
+        let seed = truth["seed"].as_u64().ok_or("Missing scan seed")?;
+        let typ = truth["project_type"]
+            .as_str()
+            .ok_or("Missing scan family")?;
+        let project = build(&scan.join("drawing.dxf"), typ, seed, false)?;
+        let drawing = scan.join("drawing.pdf");
+        safe_output(&drawing)?;
+        let metadata = pdf::write(&project.session, &drawing, true)?;
+        let recipe_path = scan.join("recognition.json");
+        if recipe_path.exists() {
+            super::reject_symlink(&recipe_path)?;
+            let mut recipe: Value =
+                serde_json::from_slice(&fs::read(&recipe_path).map_err(error)?).map_err(error)?;
+            reframe_scan_recipe(&mut recipe, &truth["pdf"], &metadata)?;
+            write_json(&recipe_path, &recipe)?;
+        }
+        let updated = replace_scan_metadata(&original, &metadata)?;
+        safe_output(&truth_path)?;
+        fs::write(&truth_path, updated).map_err(error)?;
+        refreshed.push(truth["id"].clone());
+    }
+    Ok(json!({"regenerated_scans":refreshed.len(),"cases":refreshed,"seeds":"unchanged"}))
+}
+
+fn replace_scan_metadata(original: &str, metadata: &Value) -> Result<String> {
+    // Generator truth uses this top-level indentation. Keep every other byte, including
+    // floating-point quantity literals that a JSON parse/write may otherwise round.
+    let marker = "\n  \"pdf\": ";
+    let begin = original
+        .find(marker)
+        .ok_or("Missing generated PDF metadata")?
+        + marker.len();
+    let mut stream = serde_json::Deserializer::from_str(&original[begin..]).into_iter::<Value>();
+    stream
+        .next()
+        .ok_or("Missing PDF metadata value")?
+        .map_err(error)?;
+    let end = begin + stream.byte_offset();
+    let replacement = serde_json::to_string_pretty(metadata)
+        .map_err(error)?
+        .replace('\n', "\n  ");
+    Ok(format!(
+        "{}{}{}",
+        &original[..begin],
+        replacement,
+        &original[end..]
+    ))
+}
+
+fn reframe_scan_recipe(recipe: &mut Value, old: &Value, new: &Value) -> Result<()> {
+    let bounds = |v: &Value| {
+        serde_json::from_value::<[[f64; 2]; 2]>(v["drawing_bounds"].clone()).map_err(error)
+    };
+    let old_bounds = bounds(old)?;
+    let new_bounds = bounds(new)?;
+    let size = |v: &Value| -> Result<[f64; 2]> {
+        Ok([
+            v["width_px"].as_f64().ok_or("Missing scan width")?,
+            v["height_px"].as_f64().ok_or("Missing scan height")?,
+        ])
+    };
+    let old_size = size(old)?;
+    let new_size = size(new)?;
+    let transform = |point: &mut Value| -> Result<()> {
+        let mut p: [f64; 2] = serde_json::from_value(point.clone()).map_err(error)?;
+        for axis in 0..2 {
+            let world = old_bounds[0][axis]
+                + p[axis] / old_size[axis] * (old_bounds[1][axis] - old_bounds[0][axis]);
+            p[axis] = (world - new_bounds[0][axis]) / (new_bounds[1][axis] - new_bounds[0][axis])
+                * new_size[axis];
+        }
+        *point = json!(p);
+        Ok(())
+    };
+    if let Some(commands) = recipe["commands"].as_array_mut() {
+        for command in commands {
+            if command["type"] != "recognition" || command["kind"] != "vision" {
+                continue;
+            }
+            let spec = &mut command["spec"];
+            transform(&mut spec["calibration"]["a"])?;
+            transform(&mut spec["calibration"]["b"])?;
+            if let Some(hints) = spec["hints"].as_array_mut() {
+                for hint in hints {
+                    if let Some(points) = hint["points"].as_array_mut() {
+                        for point in points {
+                            transform(point)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Builds six project families, each seed's variants, and a separate hash-only holdout seal.
 /// An existing holdout is never opened, listed, regenerated, or used by the developer suite.
 pub fn generate(root: &Path, seeds: usize) -> Result<Value> {
@@ -728,6 +843,48 @@ mod tests {
     use super::*;
     use qiyas_core::Command;
     #[cfg(unix)]
+    #[test]
+    fn scan_refresh_preserves_seed_truth_and_other_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let case = dir.path().join("cases/office-55");
+        let scan = case.join("variants/scanned-pdf");
+        fs::create_dir_all(&scan).unwrap();
+        let mut project = build(&case.join("drawing.dxf"), "office", 55, false).unwrap();
+        project.truth["id"] = json!("office-55/variants/scanned-pdf");
+        variant(&mut project, "scanned-pdf", &scan).unwrap();
+        save(&project, &scan).unwrap();
+        fs::write(case.join("drawing.dxf"), b"untouched clean drawing").unwrap();
+        let vector = case.join("variants/vector-pdf");
+        fs::create_dir_all(&vector).unwrap();
+        fs::write(vector.join("drawing.pdf"), b"untouched vector").unwrap();
+        let before = fs::read(scan.join("truth.json")).unwrap();
+        let result = regenerate_scans(dir.path()).unwrap();
+        assert_eq!(result["regenerated_scans"], 1);
+        assert_eq!(fs::read(scan.join("truth.json")).unwrap(), before);
+        assert_eq!(
+            fs::read(case.join("drawing.dxf")).unwrap(),
+            b"untouched clean drawing"
+        );
+        assert_eq!(
+            fs::read(vector.join("drawing.pdf")).unwrap(),
+            b"untouched vector"
+        );
+        assert!(!dir.path().join("holdout").exists());
+        let mut recipe = json!({"commands":[{"type":"recognition","kind":"vision","spec":{
+            "calibration":{"a":[0,0],"b":[100,0]},"hints":[{"points":[[50,40]]}]}}]});
+        let old = json!({"drawing_bounds":[[0,0],[10,10]],"width_px":100,"height_px":100});
+        let new = json!({"drawing_bounds":[[-1,-1],[11,11]],"width_px":120,"height_px":120});
+        reframe_scan_recipe(&mut recipe, &old, &new).unwrap();
+        assert_eq!(
+            recipe["commands"][0]["spec"]["calibration"]["a"],
+            json!([10.0, 10.0])
+        );
+        assert_eq!(
+            recipe["commands"][0]["spec"]["hints"][0]["points"][0],
+            json!([60.0, 50.0])
+        );
+    }
+
     #[test]
     fn generator_refuses_symlink_outputs() {
         let directory = tempfile::tempdir().unwrap();

@@ -22,6 +22,7 @@ mod dimension;
 pub mod discrepancy;
 mod draw;
 mod drawing;
+pub mod element_metadata;
 mod embed;
 mod error;
 mod field;

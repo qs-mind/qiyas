@@ -339,6 +339,9 @@ fn calibrated_pdf_import_and_vision_keep_source_and_use_one_undo_step() {
         (s.objects(&Default::default()).unwrap()[0].quantities["measured_length"] - 1.0).abs()
             < 0.02
     );
+    let metadata = s.drawing.element_metadata(h).unwrap();
+    assert!((metadata.position[0] - 0.7).abs() < 0.02);
+    assert!((metadata.position[1] - 0.2).abs() < 0.02);
     assert!(s.undo());
     assert!(s.objects(&Default::default()).unwrap().is_empty());
 }

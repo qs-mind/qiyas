@@ -516,8 +516,13 @@ fn general_pdf_measures_multiple_labels_using_its_own_scale_text_without_case_re
     write_json(&dir.path().join("general/pdf.json"),&json!({"calibration":{"label_regex":"Reference (?P<distance>[0-9.]+) m","metres_per_label_unit":1,"search_heights":8},"area_label_regex":"^[0-9]+\\s+(?P<description>.+)$"})).unwrap();
     let result = general::measure(dir.path(), &drawing).unwrap();
     assert_eq!(result.items.len(), 2, "{:?}", result);
-    for (name, area) in [("Alpha", 12.0), ("Beta", 8.0)] {
-        let measured = result.items.iter().find(|i| i.description == name).unwrap();
+    // The PDF extractor retains a trailing space on the first source label.
+    for (name, area) in [("1 Alpha ", 12.0), ("2 Beta", 8.0)] {
+        let measured = result
+            .items
+            .iter()
+            .find(|i| i.description == name)
+            .unwrap_or_else(|| panic!("Missing {name}: {result:?}"));
         assert!(
             (measured.quantity - area).abs() / area < 0.005,
             "{measured:?}"
@@ -525,6 +530,22 @@ fn general_pdf_measures_multiple_labels_using_its_own_scale_text_without_case_re
         assert!(measured.source_objects[0].contains("#page=1;label="));
         assert_eq!(measured.confidence, Some(qiyas_core::trust::unscored()));
     }
+    let alpha = result
+        .items
+        .iter()
+        .find(|i| i.description == "1 Alpha ")
+        .unwrap()
+        .position
+        .unwrap();
+    let beta = result
+        .items
+        .iter()
+        .find(|i| i.description == "2 Beta")
+        .unwrap()
+        .position
+        .unwrap();
+    assert!((beta[0] - alpha[0] - 4.5).abs() < 0.005);
+    assert!((beta[1] - alpha[1]).abs() < 0.005);
     assert!(!dir.path().join("recognition.json").exists());
     assert!(!dir.path().join("truth.json").exists());
 }
@@ -594,6 +615,7 @@ fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
     s.run_input(&json!({"type":"batch","commands":[
         {"type":"draw","kind":"rectangle","a":[0,0],"b":[3,2]},
         {"type":"draw","kind":"rectangle","a":[5,0],"b":[7,2]},
+        {"type":"text","at":[1,1],"height":0.1,"value":"Living room"},
         {"type":"define_object_type","definition":{"name":"Observed","geometry":"region","category":"test"}},
         {"type":"recognition","kind":"define","rule":{"name":"observed","object_type":"Observed","match":{"entity_type":"LwPolyline","closed_region":true},"confidence":0.99}},
         {"type":"recognition","kind":"apply"},
@@ -618,6 +640,15 @@ fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
                     && i.source_objects == [format!("{:X}", q.object)]
             })
             .unwrap();
+        assert!(matches!(item.position, Some([1.5, 1.0]) | Some([6.0, 1.0])));
+        assert_eq!(
+            item.description,
+            if item.position == Some([1.5, 1.0]) {
+                "Living room"
+            } else {
+                &q.lines[0].label
+            }
+        );
         assert_eq!(item.quantity, q.quantity);
         assert_eq!(item.dimension_lines, q.lines);
         assert_eq!(item.citation.as_ref(), Some(&q.citation));
@@ -635,6 +666,7 @@ fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
     }
     let total = submitted.items.iter().find(|i| i.id == "TOTAL").unwrap();
     assert_eq!(total.quantity, 10.0);
+    assert_eq!(total.position, Some([3.75, 1.0]));
     assert_eq!(total.aggregate_of.len(), 2);
     let gold: Vec<_> = submitted
         .items
@@ -657,7 +689,8 @@ fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
     assert_eq!(broken.metrics.extras, intact.metrics.extras + 1);
     let mut report = measured.clone();
     report.selection.project.as_mut().unwrap().rules[2].basis = None;
-    let legacy = submission::from_report(&report, &s.recognition_evidence().unwrap()).unwrap();
+    let legacy =
+        submission::from_report(&report, &s.recognition_evidence().unwrap(), &s.drawing).unwrap();
     assert!(legacy
         .items
         .iter()
@@ -666,7 +699,7 @@ fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
     assert!(!legacy.warnings.is_empty());
     let mut evidence = s.recognition_evidence().unwrap();
     evidence[0].state = qiyas_core::recognition::ReviewState::Rejected;
-    let partial = submission::from_report(&report, &evidence).unwrap();
+    let partial = submission::from_report(&report, &evidence, &s.drawing).unwrap();
     assert!(!partial.items.iter().any(|i| i.id == "TOTAL"));
     assert_eq!(partial.items.len(), 3);
 }

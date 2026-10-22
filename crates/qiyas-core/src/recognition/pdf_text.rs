@@ -11,16 +11,16 @@ pub struct TextCalibration {
     pub search_heights: f64,
 }
 
-struct TextRun {
-    text: String,
-    at: [f64; 2],
+pub(crate) struct TextRun {
+    pub(crate) text: String,
+    pub(crate) at: [f64; 2],
     height: f64,
     handles: Vec<u64>,
 }
 
 /// PDF plotters often emit one text object per glyph. Join nearby fragments on the same
 /// baseline before reading labels. Font-relative gaps keep separate table columns apart.
-fn text_runs<'a>(entities: impl Iterator<Item = &'a EntityType>) -> Vec<TextRun> {
+pub(crate) fn text_runs<'a>(entities: impl Iterator<Item = &'a EntityType>) -> Vec<TextRun> {
     let mut rows: Vec<Vec<&opencadcodec::Text>> = Vec::new();
     for entity in entities {
         let EntityType::Text(text) = entity else {
@@ -40,6 +40,9 @@ fn text_runs<'a>(entities: impl Iterator<Item = &'a EntityType>) -> Vec<TextRun>
         } else {
             rows.push(vec![text]);
         }
+    }
+    if rows.is_empty() {
+        return Vec::new();
     }
     let mut fonts = qiyas_render::TextEngine::bundled_only();
     let chain = fonts.chain("");

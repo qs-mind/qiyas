@@ -2,6 +2,7 @@
 mod pdf_text;
 mod schedule;
 mod vision;
+pub(crate) use pdf_text::text_runs;
 pub use pdf_text::{calibrate_pdf_text, PdfTextReading, PdfTextRules, TextCalibration};
 
 use std::collections::BTreeMap;

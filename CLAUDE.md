@@ -608,8 +608,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   area × numeric height; other transformations retain `rule:<own rule ID>` with a warning.
   This is a conservative migration, never a guess at a benchmark note name. Saved quantities
   are never changed; simple volume recipes retain their cited height factor for traceability.
-- The scorer still requires equal kind and basis for handle matching. Complete aggregate
-  totals are reported separately, not counted again as extras. Component IDs, source union,
+- The reviewer’s scorer uses exact-basis, same-category and same-kind/unit handle tiers,
+  never quantity to choose a match; ambiguity stays unmatched. A submitted geometric claim
+  must independently reproduce. Complete aggregate totals are reported separately, not counted again as extras. Component IDs, source union,
   units, basis, total quantity and dimension-line multiset must agree. A matched aggregate
   consumes its components; partial/repeated/malformed totals get no exemption. Benchmark
   discrepancy prediction shares this component validation and compares at client granularity,
@@ -623,6 +624,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   submissions from saved measurement reports and accepted recognition in the saved drawing.
   Only the outer scorer then opens truth. Originals and contamination exclusions are retained;
   missing measurement artefacts remain empty. This command never starts an agent or provider.
+- Submissions and saved replay use drawing-owned element metadata: centroid/insertion point
+  in drawing coordinates (PDF drivers already contain calibration), and verbatim element labels
+  with rule text as fallback. Multiple enclosed texts are ambiguous. BOQ totals use the unweighted
+  centre of their distinct source elements; PDF evidence never claims original CAD handles.
+- `bench regenerate-scans` refreshes only existing generated scanned-PDF variants using their
+  saved seeds, adds a 4% margin and reframes prepared vision recipes. Other variants and saved
+  agent artefacts remain untouched. No model calls are involved.
 - Keep Codex's `-c mcp_servers.qiyas.default_tools_approval_mode="approve"` and its argument
   test: read-only agent execution otherwise refuses the configured MCP tools.
 - Verification and saved-run comparison: `docs/2026-10-22-agent-eval-fixes.md`.

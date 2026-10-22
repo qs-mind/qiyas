@@ -151,12 +151,14 @@ pub fn from_session(session: &qiyas_core::Session) -> Result<Submission, String>
     from_report(
         &session.measurement_report().map_err(|e| e.to_string())?,
         &session.recognition_evidence().map_err(|e| e.to_string())?,
+        &session.drawing,
     )
 }
 
 pub fn from_report(
     report: &qiyas_core::measurement::MeasurementReport,
     evidence: &[qiyas_core::recognition::Candidate],
+    drawing: &qiyas_core::Drawing,
 ) -> Result<Submission, String> {
     let mut submission = Submission {
         warnings: report.warnings.clone(),
@@ -186,18 +188,23 @@ pub fn from_report(
             ));
         }
         let height_m = geometric_height(q, &kind);
+        let metadata = drawing
+            .element_metadata(q.object)
+            .ok_or_else(|| format!("No element position for {:X}", q.object))?;
         submission.items.push(Item {
             id: format!("dimension:{:X}:{}:{}", q.object, q.rule, q.unit),
-            description: q
-                .lines
-                .first()
-                .map(|l| l.label.clone())
-                .unwrap_or_else(|| q.rule.clone()),
+            description: metadata.label.unwrap_or_else(|| {
+                q.lines
+                    .first()
+                    .map(|l| l.label.clone())
+                    .unwrap_or_else(|| q.rule.clone())
+            }),
+            position: Some(metadata.position),
             kind,
             unit: q.unit.clone(),
             quantity: q.quantity,
             confidence: Some(q.confidence),
-            source_objects: vec![format!("{:X}", candidate.handle)],
+            source_objects: source_objects(candidate),
             basis,
             height_m,
             rule: Some(q.rule.clone()),
@@ -246,6 +253,7 @@ pub fn from_report(
         submission.items.push(Item {
             id: item.code.clone(),
             description: item.description_en.clone(),
+            position: group_position(&components),
             kind: if homogeneous {
                 first.kind.clone()
             } else {
@@ -346,4 +354,42 @@ pub fn aggregate_components(items: &[Item], index: usize) -> Option<Vec<usize>> 
         return None;
     }
     Some(components)
+}
+
+/// Page evidence must not masquerade as handles in the original CAD drawing.
+pub(super) fn source_objects(candidate: &qiyas_core::recognition::Candidate) -> Vec<String> {
+    let pages: BTreeSet<_> = candidate
+        .evidence
+        .iter()
+        .filter_map(|e| {
+            Some(format!(
+                "pdf:{}#page={};object={:X}",
+                e.path.as_ref()?,
+                e.page?,
+                candidate.handle
+            ))
+        })
+        .collect();
+    if pages.is_empty() {
+        vec![format!("{:X}", candidate.handle)]
+    } else {
+        pages.into_iter().collect()
+    }
+}
+
+/// Totals use the unweighted centre of their distinct source elements, never quantities.
+pub(super) fn group_position(items: &[Item]) -> Option<[f64; 2]> {
+    let mut sources = BTreeSet::new();
+    let mut points = Vec::new();
+    for item in items {
+        if sources.insert(&item.source_objects) {
+            points.push(item.position?);
+        }
+    }
+    (!points.is_empty()).then(|| {
+        [
+            points.iter().map(|p| p[0]).sum::<f64>() / points.len() as f64,
+            points.iter().map(|p| p[1]).sum::<f64>() / points.len() as f64,
+        ]
+    })
 }

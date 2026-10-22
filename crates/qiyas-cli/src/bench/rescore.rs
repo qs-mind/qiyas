@@ -76,7 +76,7 @@ pub fn agent(root: &Path, report_path: &Path, output: &Path) -> Result<Value, St
                 })
                 .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
                 .collect::<Result<_, _>>()?;
-            super::submission::from_report(&report, &evidence)?
+            super::submission::from_report(&report, &evidence, &drawing)?
         } else {
             Submission {
                 warnings: vec!["No saved measurement artefact; empty submission retained".into()],

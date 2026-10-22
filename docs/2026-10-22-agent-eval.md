@@ -149,3 +149,25 @@ The reviewer must run the AI localhost test and these bridge tests outside this 
 `a_dead_url_answers_not_running`, `lists_and_calls_through_the_bridge`, `a_wrong_token_says_so`.
 No tests were removed, weakened or ignored. No real subscription-agent evaluation was run,
 and there were no paid API calls, settings/key access, git staging, commits or pushes.
+
+## Third-run metadata and scan corrections
+
+The common submission writer retains each measured element’s drawing-coordinate centroid or
+insertion point and its own label text, falling back to the measurement rule text. Explicit
+owned labels and name properties take precedence; a single enclosed text is usable, while
+multiple enclosed texts remain ambiguous. Labels are not expanded with synonyms or rewritten
+to benchmark names. PDF geometry has already passed through its calibration and insertion
+transform; exports do not rescale it again. PDF source citations identify pages, not original
+CAD handles. Grouped totals retain their BOQ description and an unweighted source centre.
+
+Saved-run replay reads the same metadata directly from the saved drawing, without resolving
+underlays or opening sidecars. It preserves the measured quantities and dimension lines.
+Matching remains the reviewer’s tiered scorer; quantities never select a correspondence.
+A calibrated page origin is not necessarily the original CAD origin, so recording positions
+does not guarantee a match against older truth positions.
+
+`./target/debug/qiyas-cli bench regenerate-scans` refreshes only existing generator scans from
+their saved seeds. A margin of 4% of the longest drawing dimension protects boundary strokes;
+the longest raster side is 1000 pixels. Prepared vision recipe points and calibration anchors
+are transformed from the old page frame to the new one. Clean/vector cases, truth quantities,
+seeds and saved agent workspaces are preserved. The command never starts agents.

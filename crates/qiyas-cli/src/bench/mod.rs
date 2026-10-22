@@ -78,6 +78,8 @@ pub enum BenchCommand {
         #[arg(long)]
         set: Option<String>,
     },
+    /// Refresh only existing generated scans, preserving seeds and all other variants.
+    RegenerateScans,
     /// Generate deterministic development drawings and an unread holdout seal.
     Generate {
         /// Seeds per project type (six project types).
@@ -134,6 +136,7 @@ pub fn run(args: &BenchArgs) -> Result<Value, String> {
         BenchCommand::Revisions { mode, set } => {
             revisions::selected(&args.root, set.as_deref(), *mode)
         }
+        BenchCommand::RegenerateScans => generate::regenerate_scans(&args.root),
         BenchCommand::Generate { seeds } => generate::generate(&args.root, usize::from(*seeds)),
         BenchCommand::Run {
             mode,

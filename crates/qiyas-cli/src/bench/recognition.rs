@@ -143,36 +143,22 @@ fn measure_with_scope(
             if candidate.is_none_or(|c| c.state != ReviewState::Accepted) {
                 continue;
             }
-            let mut citations = vec![format!(
-                "{:X}",
-                candidate.map_or(object.instance.id, |c| c.handle)
-            )];
-            if pdf {
-                citations = candidate
-                    .into_iter()
-                    .flat_map(|c| &c.evidence)
-                    .filter_map(|e| {
-                        Some(format!(
-                            "pdf:{}#page={};object={:X}",
-                            e.path.as_ref()?,
-                            e.page?,
-                            object.instance.id
-                        ))
-                    })
-                    .collect();
-            }
+            let candidate = candidate.expect("accepted candidate");
+            let metadata = session
+                .drawing
+                .element_metadata(object.instance.id)
+                .ok_or_else(|| format!("No element position for {:X}", object.instance.id))?;
             let mut item = Item {
-                confidence: Some(
-                    candidate
-                        .map_or(qiyas_core::trust::unscored(), |c| c.confidence)
-                        .min(measurement.confidence),
-                ),
+                confidence: Some(candidate.confidence.min(measurement.confidence)),
                 id: measurement.id.clone(),
-                description: measurement.description.clone(),
+                description: metadata
+                    .label
+                    .unwrap_or_else(|| measurement.description.clone()),
+                position: Some(metadata.position),
                 kind: measurement.kind.clone(),
                 unit: measurement.unit.clone(),
                 quantity,
-                source_objects: citations,
+                source_objects: super::submission::source_objects(candidate),
                 basis: measurement.basis.clone(),
                 height_m: measurement
                     .height_property
@@ -222,6 +208,7 @@ fn measure_with_scope(
 fn append_group(submission: &mut Submission, items: Vec<Item>, id: &str) {
     let mut total = items[0].clone();
     total.id = id.into();
+    total.position = super::submission::group_position(&items);
     total.quantity = items.iter().map(|i| i.quantity).sum();
     total.confidence = items
         .iter()

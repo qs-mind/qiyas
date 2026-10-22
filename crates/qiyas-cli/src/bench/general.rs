@@ -87,10 +87,15 @@ fn pdf(root: &Path, drawing: &Path) -> Result<Submission, String> {
                 .get(&area.description)
                 .cloned()
                 .unwrap_or(area.description);
+            let metadata = session
+                .drawing
+                .element_metadata(object.instance.id)
+                .ok_or_else(|| format!("No element position for {:X}", object.instance.id))?;
             submission.items.push(Item {
                 // This legacy PDF mapping has no authored measurement confidence.
                 confidence: Some(candidate.confidence.min(qiyas_core::trust::unscored())),
-                description,
+                description: metadata.label.unwrap_or(description),
+                position: Some(metadata.position),
                 kind: "area".into(),
                 unit: "m2".into(),
                 quantity,

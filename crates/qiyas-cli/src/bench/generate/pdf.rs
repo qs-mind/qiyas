@@ -35,10 +35,16 @@ pub(super) fn write(session: &Session, path: &Path, scan: bool) -> Result<Value>
             json!({"kind":"vector","exporter":"qiyas-plot","paper":"A3 landscape","scale":"fit","pages":1}),
         );
     }
-    let bounds = session.batch().bounds;
-    let px_per_unit = 1000.0 / (bounds[1][0] - bounds[0][0]).max(1e-9);
+    let content_bounds = session.batch().bounds;
+    let bounds = scan_bounds(content_bounds);
+    // Fit both axes inside the rasterizer's 1600 px limit without distorting tall plans.
+    let width = (1000.0 * (bounds[1][0] - bounds[0][0])
+        / (bounds[1][1] - bounds[0][1]).max(bounds[1][0] - bounds[0][0]))
+    .floor()
+    .max(1.0) as u32;
+    let px_per_unit = f64::from(width) / (bounds[1][0] - bounds[0][0]);
     let (batch, pages) = session.picture_batch(px_per_unit);
-    let png = qiyas_ai::render_png_with_text(&batch, &pages, &[], bounds, 1000);
+    let png = qiyas_ai::render_png_with_text(&batch, &pages, &[], bounds, width);
     let pixmap = tiny_skia::Pixmap::decode_png(&png).map_err(error)?;
     let grey: Vec<u8> = pixmap
         .data()
@@ -81,8 +87,16 @@ pub(super) fn write(session: &Session, path: &Path, scan: bool) -> Result<Value>
     );
     fs::write(path, pdf).map_err(error)?;
     Ok(
-        json!({"kind":"scan","exporter":"Qiyas rasterizer","width_px":w,"height_px":h,"pages":1,"drawing_bounds":bounds,"text_layer":false}),
+        json!({"kind":"scan","exporter":"Qiyas rasterizer","width_px":w,"height_px":h,"pages":1,"drawing_bounds":bounds,"content_bounds":content_bounds,"margin_fraction":0.04,"text_layer":false}),
     )
+}
+
+fn scan_bounds([lo, hi]: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    let margin = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1e-6) * 0.04;
+    [
+        [lo[0] - margin, lo[1] - margin],
+        [hi[0] + margin, hi[1] + margin],
+    ]
 }
 
 fn pdf_stream(dict: &str, bytes: &[u8]) -> Vec<u8> {
@@ -153,6 +167,61 @@ mod tests {
         }
         assert_eq!(decoded, pixels);
         assert_eq!(i, encoded.len());
+    }
+    #[test]
+    fn scan_frames_every_family_with_white_margins() {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, family) in super::super::TYPES.iter().enumerate() {
+            let project = super::super::build(
+                &dir.path().join("drawing.dxf"),
+                family,
+                15000 + index as u64 * 1000,
+                false,
+            )
+            .unwrap();
+            let path = dir.path().join("scan.pdf");
+            let metadata = write(&project.session, &path, true).unwrap();
+            let bounds: [[f64; 2]; 2] =
+                serde_json::from_value(metadata["drawing_bounds"].clone()).unwrap();
+            let content = project.session.batch().bounds;
+            for axis in 0..2 {
+                assert!(bounds[0][axis] < content[0][axis]);
+                assert!(bounds[1][axis] > content[1][axis]);
+            }
+            let bytes = fs::read(path).unwrap();
+            let image_at = bytes.windows(8).position(|b| b == b"5 0 obj\n").unwrap();
+            let stream = &bytes[image_at..];
+            let begin = stream.windows(7).position(|b| b == b"stream\n").unwrap() + 7;
+            let mut pixels = Vec::new();
+            let mut at = begin;
+            loop {
+                let packet = stream[at];
+                at += 1;
+                match packet {
+                    128 => break,
+                    0..=127 => {
+                        let n = usize::from(packet) + 1;
+                        pixels.extend_from_slice(&stream[at..at + n]);
+                        at += n;
+                    }
+                    _ => {
+                        pixels.extend(std::iter::repeat_n(stream[at], 257 - usize::from(packet)));
+                        at += 1;
+                    }
+                }
+            }
+            let w = metadata["width_px"].as_u64().unwrap() as usize;
+            let h = metadata["height_px"].as_u64().unwrap() as usize;
+            assert_eq!(pixels.len(), w * h);
+            assert!(pixels.iter().any(|p| *p < 128));
+            for y in 0..h {
+                for x in 0..w {
+                    if x < 4 || y < 4 || x >= w - 4 || y >= h - 4 {
+                        assert_eq!(pixels[y * w + x], 255, "{family}: clipped ink at {x},{y}");
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn scan_has_only_an_image_and_vector_uses_the_plotter() {

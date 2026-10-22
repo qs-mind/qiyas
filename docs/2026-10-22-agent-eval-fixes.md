@@ -141,3 +141,123 @@ after the later corrections, as requested. The full quick discrepancy rates afte
 comparison correction still need reviewer verification; the once-only benchmark was not repeated. No real agent evaluation was run; judging
 whether the clearer evidence changes model decisions remains the reviewer's task.
 
+
+## Third completed run: scan framing and element metadata
+
+The described run is `eval-agent-set-20261022T192248424770994-956050`. The reviewer’s
+`3b8ae84` scoring implementation is untouched. Exact-basis, basis-category and any-basis
+handle tiers never inspect quantities to select correspondence; ambiguous candidates remain
+unmatched. Quantity accuracy and geometric reproducibility remain separate checks.
+
+The scan renderer previously put outer strokes directly on page edges. It now adds 4% of
+the longest drawing dimension on every side and fits the raster without exceeding its height
+limit. `bench regenerate-scans` refreshed all 60 existing generated scans with their original
+seeds and transformed prepared vision points/calibration anchors into the new page frame.
+Only scanned `drawing.pdf`, `recognition.json` and the `pdf` field in `truth.json` changed.
+Every byte of truth outside that field, including quantity literals and seeds, is preserved.
+All other case files are unchanged. All 60 raster borders have four white pixels on every
+edge; the apartment image was also inspected visually. Images are retained at
+`.local/agent-third-fixes/scan-before.png` and `scan-after.png`.
+
+The shared submission writer and benchmark recipe writer now obtain positions and labels
+from the drawing itself. Closed geometry uses its centroid; paths use their length-weighted
+centre; point/insert drivers use insertion. Coordinates remain in drawing units, including
+PDF calibration and insertion already applied to the driver. Explicit owned labels, element
+label/name/description properties, or one unambiguous enclosed text supply the verbatim
+per-object description. Multiple enclosed texts fall back to rule text. No synonyms, truth
+labels or quantity-based correspondence were introduced. Totals keep their BOQ descriptions
+and use an unweighted centre of distinct sources. PDF citations cannot masquerade as CAD
+handles. Replay reads the same metadata without loading external underlays or sidecars.
+
+### Saved replay results
+
+Times below identify the UTC timestamps in the saved directory names. Precision is item
+precision; H = `handles`, C = `handles_category`, A = `handles_any`, D =
+`description_position`. Counts not shown are zero.
+
+| Saved run | Coverage before → after | Precision before → after | Matching tiers before → after |
+|---|---:|---:|---|
+| 16:59, approval-blocked | 0% → 0% | undefined → undefined | none → none |
+| 17:03, first successful | 24% → 52% | 41.38% → 37.68% | H12 → H24, C1, D1 |
+| 19:22, described run | 48% → 60% | 40% → 50% | H24 → H24, C3, A3 |
+| 20:31, concurrently completed | 44% → 44% | 38.60% → 38.60% | H18, C1, A3 → unchanged |
+
+Replays are in `.local/benchmark/runs/rescore-third-fixes-final-<original timestamp and PID>/report.json`;
+exact paths and metrics are in `.local/agent-third-fixes/replay-summary.json`.
+The older first-successful comparison also includes the earlier dimension-itemisation work;
+it is not an isolated measure of this patch. Its 26 matches include 25 passing quantities.
+The described run has 30/50 matches, all 30 exact and passing, 30 extras, and 24 independently
+traceable items. Its six additional matches come solely from the reviewer’s fallback handle
+tiers. All 246 replayed dimension quantities are numerically identical to their saved reports;
+citations and dimension lines also agree. Every reconstructed item, including totals, has a
+position. No agent or prediction code opened truth.
+
+The 20:31 report was still being written by another process during this work and completed
+before replay. It was not launched here. Hash checks show the three earlier completed reports
+and their case artifacts remain unchanged. The newer combined report changed during its own
+run; it was only read here.
+
+### Checks and limits
+
+All Cargo commands ran one at a time with `CARGO_BUILD_JOBS=4` for builds/tests. The four
+requested full commands are each run once; no helper agents or background builds were used.
+
+| Check | Actual result |
+|---|---|
+| `cargo fmt --all` | Passed. Later corrective edits were formatted with direct rustfmt. |
+| `CARGO_BUILD_JOBS=4 cargo clippy --offline --workspace --all-targets -- -D warnings` | Failed on four compile errors from two API names in the new metadata helper (`entity`/`get_entity`, `insertion_point`/`insert_point`). Fixed; subsequent test builds compile them. Clippy was not repeated. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-core -p qiyas-cli` | CLI units: 47 passed, one failed because rewriting truth JSON rounded existing numeric literals. Fixed the writer to preserve all bytes outside PDF metadata; the original assertion was retained and its targeted rerun passed. Cargo stopped before integrations/core. |
+| Completion of unrun tests | All 24 CLI integrations passed, including three offline agent/MCP tests. All 79 already-built core test binaries ran sequentially: 755 passed, zero failures or ignored tests. This includes the new metadata tests and calibrated PDF regression. |
+| `./target/debug/qiyas-cli bench run --set quick --mode autonomy` | Completed once, exit 0: 120 cases in 165.95 seconds, 19.50% coverage, 98.76% precision, 716 matches and 9 extras. Report: `.local/benchmark/runs/baseline-autonomy-20261022T205653465114932-3/`. This run predates the final shared vector-PDF adapter correction described below. |
+| Additional verification | All 60 scan border checks passed; scan truth bytes outside PDF metadata and unrelated-case hashes are unchanged. Final direct rustfmt and whitespace checks passed. |
+
+Detailed logs are in `.local/agent-third-fixes/`. The first full test build took substantial
+memory; one separate log-reading shell command was killed with exit 137, but Cargo completed
+and reported the regression normally. No test was weakened, removed or ignored.
+
+Recording positions cannot reconstruct missing scanned-room interpretations, invent labels,
+or align an old PDF page origin with a CAD origin. Existing scan submissions therefore remain
+unmatched; regeneration improves future input, not saved decisions. Clippy still needs a clean
+reviewer run because the requested once-only invocation failed before linting completed.
+No real agent evaluation, paid call, API-key/settings access, new crate, staging, commit or push
+was performed.
+
+### Files touched
+
+- `CLAUDE.md`
+- `docs/2026-10-22-agent-eval.md`
+- `docs/2026-10-22-agent-eval-fixes.md`
+- `crates/qiyas-core/src/lib.rs`
+- `crates/qiyas-core/src/element_metadata.rs`
+- `crates/qiyas-core/tests/element_metadata.rs`
+- `crates/qiyas-core/tests/recognition.rs`
+- `crates/qiyas-cli/src/bench/generate.rs`
+- `crates/qiyas-cli/src/bench/generate/pdf.rs`
+- `crates/qiyas-cli/src/bench/mod.rs`
+- `crates/qiyas-cli/src/bench/recognition.rs`
+- `crates/qiyas-cli/src/bench/rescore.rs`
+- `crates/qiyas-cli/src/bench/submission.rs`
+- `crates/qiyas-cli/src/bench/tests.rs`
+- Local-only scanned variant PDFs, recipes and PDF metadata, plus replay/check artifacts above.
+
+A final audit found that the shared vector-PDF adapter constructs its own submission rows.
+It now uses the same element metadata, including positions. Imported PDF glyph fragments are
+joined with the existing calibrated PDF reader’s baseline/gap rules before selecting one
+unambiguous enclosed label; ordinary drawing notes stay separate. The PDF regression now
+requires the complete `1 Alpha ` / `2 Beta` labels (including the first label’s extracted trailing space) and the calibrated 4.5 m centroid separation,
+while retaining its original quantity and page-evidence assertions. This is a stronger identity
+check, not a relaxed matching rule. The first focused run failed because the test expected the first label without its
+extracted trailing space; a diagnostic rerun confirmed the exact text. The fixture now requires
+that complete source string, with every numeric and evidence assertion retained. All 20 final
+submission/scoring unit regressions passed. Final CLI build: passed with `CARGO_BUILD_JOBS=4 cargo build --offline -p qiyas-cli`. All four saved reports were replayed again with that final binary; the table above is unchanged.
+
+The single quick run completed before this adapter correction and was not repeated. Its
+scores therefore do not establish final vector-PDF matching performance. Actual coordinates
+and verbatim labels can expose inconsistencies with older truth positions/descriptions;
+no benchmark-specific alignment or label rewriting is performed.
+
+Additional files touched by this last adapter correction:
+
+- `crates/qiyas-cli/src/bench/general.rs`
+- `crates/qiyas-core/src/recognition.rs`
+- `crates/qiyas-core/src/recognition/pdf_text.rs`
