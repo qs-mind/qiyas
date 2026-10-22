@@ -154,7 +154,12 @@ fn measure_with_scope(
                 description: metadata
                     .label
                     .unwrap_or_else(|| measurement.description.clone()),
-                position: Some(metadata.position),
+                position: Some(
+                    metadata
+                        .position
+                        .map(|v| v * session.drawing.units.to_metres()),
+                ),
+                diagonal_m: Some(metadata.diagonal * session.drawing.units.to_metres()),
                 kind: measurement.kind.clone(),
                 unit: measurement.unit.clone(),
                 quantity,

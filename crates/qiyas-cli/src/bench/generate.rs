@@ -2,6 +2,7 @@
 //! The arithmetic here is independent of Qiyas's measurement implementation.
 
 mod pdf;
+pub(super) mod positions;
 
 use std::fs;
 use std::path::Path;
@@ -423,11 +424,12 @@ fn build(path: &Path, typ: &str, seed: u64, inches: bool) -> Result<Project> {
         &mut session,
         json!({"type":"text","at":to_drawing([0.0,bar_y-0.3*annotation_factor]),"height":0.16*scale*annotation_factor,"value":format!("Scale bar: {bar_length} m")}),
     )?;
-    let truth = json!({"schema_version":1,"id":"","project_type":typ,"seed":seed,"drawing":"drawing.dxf",
+    let mut truth = json!({"schema_version":1,"id":"","project_type":typ,"seed":seed,"drawing":"drawing.dxf",
         "source":"qiyas-generator-v1","licence":"Apache-2.0","items":items,"seeded_errors":[],
         "rules":{"lining-height":{"operation":"length_times_factor","factor":surface_factor,"clause":format!("project preamble: {surface_description}; centreline length times {surface_factor} m")},
         "working-allowance":{"operation":"area_times_height","height_m":depth*1.1,"clause":"project preamble: material depth plus 10% provisional allowance"}},
         "generator":{"version":1,"commands":"Session::run_input","units":if inches {"inches"} else {"metres"}},"mutations":[]});
+    positions::update(&mut truth, &session)?;
     Ok(Project {
         session,
         truth,
@@ -591,6 +593,7 @@ fn variant(project: &mut Project, name: &str, directory: &Path) -> Result<()> {
                 json!([format!("page:1:item:{}", item["id"].as_str().unwrap())]);
         }
     }
+    positions::update(&mut project.truth, &project.session)?;
     Ok(())
 }
 

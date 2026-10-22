@@ -36,6 +36,9 @@ pub struct Item {
     pub tolerance_percent: Option<f64>,
     #[serde(default)]
     pub position: Option<[f64; 2]>,
+    /// Geometry-derived extent for PDF positional matching, in metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagonal_m: Option<f64>,
     #[serde(default)]
     pub height_m: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,6 +163,7 @@ pub fn validate_item(item: &Item) -> Result<(), String> {
         || item
             .position
             .is_some_and(|p| p.iter().any(|v| !v.is_finite()))
+        || item.diagonal_m.is_some_and(|v| !v.is_finite() || v < 0.0)
         || item.height_m.is_some_and(|v| !v.is_finite() || v <= 0.0)
     {
         return Err(format!(

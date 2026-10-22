@@ -1,4 +1,5 @@
 //! Compact drawing evidence and take-off checks. Interpretation remains drawing-owned data.
+mod measurement_checks;
 use std::collections::{BTreeMap, BTreeSet};
 
 use opencadcodec::{EntityType, Handle};
@@ -358,6 +359,16 @@ impl Session {
         for warning in &report.warnings {
             detail.push(json!({"section":"measurement_warnings","message":short(warning)}));
         }
+        let notes: Vec<_> = self
+            .info()
+            .sheets
+            .iter()
+            .flat_map(|sheet| self.read_text(Some(&sheet.block), None))
+            .map(|note| (note.handle, note.text))
+            .collect();
+        let errors = measurement_checks::findings(&report, &notes);
+        let error_count = errors.len();
+        detail.extend(errors);
         let mut basis_warnings = Vec::new();
         if let Some(method) = report.selection.effective() {
             let notes: Vec<_> = self
@@ -415,7 +426,7 @@ impl Session {
             detail.push(json!({"section":"expectations","result":result}));
         }
         detail.extend(entries);
-        let overview = json!({"quantity_basis_warnings":basis_warning_count,"passed":basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
+        let overview = json!({"measurement_errors":error_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
         Ok(page(overview, detail, offset))
     }
 }

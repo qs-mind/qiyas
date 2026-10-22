@@ -199,7 +199,8 @@ pub fn from_report(
                     .map(|l| l.label.clone())
                     .unwrap_or_else(|| q.rule.clone())
             }),
-            position: Some(metadata.position),
+            position: Some(metadata.position.map(|v| v * drawing.units.to_metres())),
+            diagonal_m: Some(metadata.diagonal * drawing.units.to_metres()),
             kind,
             unit: q.unit.clone(),
             quantity: q.quantity,

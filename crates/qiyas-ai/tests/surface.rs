@@ -2060,3 +2060,58 @@ fn explain_is_one_read_with_recognition_rules_and_no_mutation() {
         )
     );
 }
+
+#[test]
+fn takeoff_check_reports_count_and_global_allowance_errors_until_repaired() {
+    let (_dir, mut session) = sample();
+    let mut kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    assert!(kit["measurement_rules"]
+        .as_str()
+        .unwrap()
+        .contains("Counts are whole numbers"));
+    let commands = kit["batch"]["commands"].as_array_mut().unwrap();
+    let method = commands
+        .iter_mut()
+        .find(|c| c["kind"] == "set_method")
+        .unwrap();
+    let rules = method["method"]["rules"].as_array_mut().unwrap();
+    let mut rule = rules[0].clone();
+    rule["kind"] = json!("count");
+    rule["unit"] = json!("pcs");
+    rule["terms"] = json!([{"label":"Count","operation":"add","factors":["geometry.count","1.1"],
+        "citation":{"source":"drawing","clause":"provisional allowance 10%"}}]);
+    rules[0] = rule.clone();
+    rule["id"] = json!("second");
+    rules.push(rule);
+    call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":kit["batch"]}),
+    )
+    .unwrap();
+    let checked = call(&mut session, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
+    assert!(checked["measurement_errors"].as_u64().unwrap() >= 3);
+    assert_eq!(checked["passed"], false);
+    let detail = checked.to_string();
+    assert!(detail.contains("fractional_count"));
+    assert!(detail.contains("allowance applied globally; confirm its scope from the note"));
+    let mut method = session
+        .measurement_report()
+        .unwrap()
+        .selection
+        .project
+        .unwrap();
+    for rule in &mut method.rules {
+        rule.terms[0].factors.pop();
+    }
+    call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"measurement","kind":"set_method","scope":"project","method":method
+        }}}),
+    )
+    .unwrap();
+    let checked = call(&mut session, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
+    assert_eq!(checked["measurement_errors"], 0);
+}

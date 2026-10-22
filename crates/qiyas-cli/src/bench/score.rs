@@ -128,10 +128,16 @@ pub struct CaseScore {
 }
 
 fn description(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    let mut words: Vec<_> = text.split_whitespace().collect();
+    // A leading item number ("1", "2.", "(3)") is a drawing label's numbering, not its name.
+    let numbering = |w: &str| {
+        let core = w.trim_matches(|c: char| "().:-".contains(c));
+        !core.is_empty() && core.chars().all(|c| c.is_ascii_digit())
+    };
+    if words.len() > 1 && numbering(words[0]) {
+        words.remove(0);
+    }
+    words.join(" ").to_lowercase()
 }
 
 fn match_item(
@@ -139,6 +145,7 @@ fn match_item(
     truth: &[Item],
     submitted: &[Item],
     used: &BTreeSet<usize>,
+    pdf: bool,
 ) -> Option<(usize, &'static str)> {
     // Matching never consults the proposed quantity. An ambiguous match is left unmatched.
     // Handle matching is tiered on basis: the exact basis first, then the same basis category
@@ -176,7 +183,20 @@ fn match_item(
                                 && description(&s.description) == description(&gold.description)
                                 && s.kind == gold.kind
                                 && match (s.position, gold.position) {
-                                    (Some(a), Some(b)) => (a[0] - b[0]).hypot(a[1] - b[1]) <= 0.05,
+                                    (Some(a), Some(b)) => {
+                                        (a[0] - b[0]).hypot(a[1] - b[1])
+                                            <= if pdf {
+                                                0.25_f64.max(
+                                                    0.02 * gold
+                                                        .diagonal_m
+                                                        .or(s.diagonal_m)
+                                                        .filter(|d| d.is_finite() && *d >= 0.0)
+                                                        .unwrap_or(0.0),
+                                                )
+                                            } else {
+                                                0.05
+                                            }
+                                    }
                                     (None, _) => {
                                         truth
                                             .iter()
@@ -289,6 +309,9 @@ fn remeasure(
 }
 
 pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) -> CaseScore {
+    let pdf = std::path::Path::new(&truth.drawing)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
     let mut metrics = Metrics {
         truth_items: truth.items.len(),
         ..Default::default()
@@ -317,15 +340,16 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         // neither a total nor any of its components can earn a second match.
         let mut excluded = used.clone();
         excluded.extend(aggregates.keys());
-        let matched = match_item(gold, &truth.items, &submission.items, &excluded).or_else(|| {
-            let mut excluded = used.clone();
-            excluded.extend((0..submission.items.len()).filter(|i| {
-                aggregates
-                    .get(i)
-                    .is_none_or(|parts| parts.iter().any(|p| used.contains(p)))
-            }));
-            match_item(gold, &truth.items, &submission.items, &excluded)
-        });
+        let matched =
+            match_item(gold, &truth.items, &submission.items, &excluded, pdf).or_else(|| {
+                let mut excluded = used.clone();
+                excluded.extend((0..submission.items.len()).filter(|i| {
+                    aggregates
+                        .get(i)
+                        .is_none_or(|parts| parts.iter().any(|p| used.contains(p)))
+                }));
+                match_item(gold, &truth.items, &submission.items, &excluded, pdf)
+            });
         if let Some((i, mode)) = matched {
             used.insert(i);
             if let Some(parts) = aggregates.get(&i) {

@@ -833,3 +833,67 @@ fn confidence_calibration_counts_wrong_and_extra_items_without_inventing_empty_r
     assert_eq!(merged.calibration_rates()["high"]["submitted"], 4);
     assert_eq!(merged.calibration_rates()["high"]["pass_rate"], 0.5);
 }
+
+#[test]
+fn pdf_position_matching_uses_geometry_extent_never_quantity_and_keeps_ambiguity() {
+    let mut gold = item("shape", "area", 20.0, "geometry");
+    gold.position = Some([1.0, 2.0]);
+    let mut proposed = gold.clone();
+    proposed.id = "observed".into();
+    proposed.source_objects.clear();
+    proposed.position = Some([1.2, 2.0]);
+    proposed.quantity = 999.0;
+    proposed.diagonal_m = Some(5.0);
+    let mut truth = truth(vec![gold]);
+    let mut submission = Submission {
+        items: vec![proposed.clone()],
+        ..Default::default()
+    };
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    truth.drawing = "drawing.pdf".into();
+    let result = score::score(&truth, &submission, None);
+    assert_eq!(result.metrics.matched, 1);
+    assert_eq!(result.metrics.passed, 0);
+    assert_eq!(
+        result.items[0].matched_by.as_deref(),
+        Some("description_position")
+    );
+    submission.items[0].position = Some([1.4, 2.0]);
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    submission.items[0].diagonal_m = Some(25.0);
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 1);
+    submission.items.push(proposed);
+    submission.items[1].quantity = 20.0;
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+}
+
+#[test]
+fn description_matching_ignores_a_leading_item_number_only() {
+    let mut gold = item("g", "area", 8.45, "geometry");
+    gold.description = "Duct fabrication".into();
+    gold.position = Some([1.0, 2.0]);
+    gold.source_objects = Vec::new();
+    let mut numbered = item("s", "area", 8.45, "geometry");
+    numbered.description = "1 Duct fabrication".into();
+    numbered.position = Some([1.0, 2.0]);
+    numbered.source_objects = Vec::new();
+    let sub = Submission {
+        items: vec![numbered.clone()],
+        ..Default::default()
+    };
+    assert_eq!(
+        score::score(&truth(vec![gold.clone()]), &sub, None)
+            .metrics
+            .matched,
+        1
+    );
+    numbered.description = "Duct fabrication 1".into();
+    let sub = Submission {
+        items: vec![numbered],
+        ..Default::default()
+    };
+    assert_eq!(
+        score::score(&truth(vec![gold]), &sub, None).metrics.matched,
+        0
+    );
+}

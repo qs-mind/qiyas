@@ -261,3 +261,153 @@ Additional files touched by this last adapter correction:
 - `crates/qiyas-cli/src/bench/general.rs`
 - `crates/qiyas-core/src/recognition.rs`
 - `crates/qiyas-core/src/recognition/pdf_text.rs`
+
+
+## Fifth free run: allowance scope and positional correspondence (23 October 2026)
+
+Source: `.local/benchmark/runs/eval-agent-set-20261022T211039320437030-1177463/report.json`.
+This is the fifth saved free AGENT ALONE run (Codex gpt-6.1-sol, medium, live-dev).
+The original result is 29/50 matches, 24 passing quantities, 53 extras: 58% coverage,
+35.37% precision and 82.76% matched accuracy. No contaminated cases are present.
+
+`takeoff_check` now reports `measurement_errors` with error severity and stable codes:
+`fractional_count` for a non-whole count, and `global_allowance` when the same cited
+percentage scales every rule in a multi-rule method. The latter handles direct multiplication,
+constant arithmetic and a separate proportional addition/deduction, including dimensional
+base factors. Its message is “allowance applied globally; confirm its scope from the note”.
+Checks use cited drawing notes or verbatim note text in citations, including raster evidence;
+they do not classify domain terms. Errors make `passed` false. Kit and workflow require fixing
+them before completion and state that factors apply only to the items their notes name.
+No saved measurement quantity is repaired by replay.
+
+Truth generation and position-only maintenance share the submission geometry helper: area
+centroid, half-length point for open paths, insertion point for blocks, and the mean of distinct
+sources for grouped rows. Portable positions are in metres. PDF truth uses its calibrated page
+origin, including the scan margin or vector plot offset. `bench regenerate-positions` changes
+only `items[].position` arrays in generated development truth, preserving every other byte,
+including floating-point quantity literals. Changes are logged with before/after SHA-256 hashes
+in `.local/benchmark/sources/qiyas-generator/position-provenance.jsonl`. Holdout is excluded.
+
+PDF description/position matching accepts max(0.25 m, 2% of the geometry-derived element
+diagonal); CAD stays at 0.05 m. Matching still does not use quantities. Multiple candidate
+recipes with the same label, kind and location remain ambiguous even if one has the right
+quantity. Regressions demonstrate a scan item can match and a wrong quantity cannot break an
+ambiguity. No labels are rewritten or synonyms introduced.
+
+Verification logs, original truth snapshots, original run hashes and replay results are kept in
+`.local/agent-fifth-fixes/`. No real agent evaluation, paid call, helper agent, new crate,
+settings/key access, staging, commit or push is part of this work.
+
+### Fifth-run verification
+
+Every requested Cargo command was invoked once, sequentially. Builds/tests used
+`CARGO_BUILD_JOBS=4`; no background builds or helper agents were started.
+
+| Check | Actual result |
+|---|---|
+| `cargo fmt --all` | Passed. |
+| `CARGO_BUILD_JOBS=4 cargo clippy --offline --workspace --all-targets -- -D warnings` | Passed on the final source. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-core -p qiyas-cli` | Exit 101 during compilation: `rustc` received SIGKILL while linking the `agent_eval` integration test. No full-suite pass is claimed; the command was not repeated. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-ai --lib --test surface` | Library: 73 passed, one failed because the sandbox denied localhost binding in `models::tests::an_unreachable_service_falls_back_to_the_builtin_list`. Cargo stopped before surface. |
+| Direct execution of the newly built surface test binary | All 53 passed, including both new self-check errors, error severity/failed check, successful repair, and kit size. |
+| Targeted core recovery: `cargo test --offline -p qiyas-core --lib --test element_metadata --test registry` | All 61 passed: 46 library, two metadata, 13 registry. |
+| Targeted CLI recovery: `cargo test --offline -p qiyas-cli --bin qiyas-cli` | All 51 passed, including scan matching, positional tolerance, ambiguity, quantity-independent correspondence and position-only/idempotent regeneration. |
+
+The full core/CLI integration suite remains unverified because its requested invocation was
+killed during compilation. The localhost-binding test requires execution outside this sandbox.
+The narrower recovery commands do not replace those full checks.
+
+### Files for the fifth-run fix
+
+- `CLAUDE.md`
+- `crates/qiyas-ai/src/takeoff_workflow.txt`
+- `crates/qiyas-ai/tests/surface.rs`
+- `crates/qiyas-cli/src/bench/general.rs`
+- `crates/qiyas-cli/src/bench/generate.rs`
+- `crates/qiyas-cli/src/bench/generate/positions.rs`
+- `crates/qiyas-cli/src/bench/mod.rs`
+- `crates/qiyas-cli/src/bench/model.rs`
+- `crates/qiyas-cli/src/bench/recognition.rs`
+- `crates/qiyas-cli/src/bench/score.rs`
+- `crates/qiyas-cli/src/bench/submission.rs`
+- `crates/qiyas-cli/src/bench/tests.rs`
+- `crates/qiyas-core/src/digest.rs`
+- `crates/qiyas-core/src/digest/measurement_checks.rs`
+- `crates/qiyas-core/src/element_metadata.rs`
+- `crates/qiyas-core/src/takeoff_kit.rs`
+- `crates/qiyas-core/tests/element_metadata.rs`
+- `docs/2026-10-22-agent-eval-fixes.md`
+
+Generated truth, provenance, audit logs and replay artifacts remain local-only.
+
+
+### Fifth-run saved rescore and position audit
+
+`CARGO_BUILD_JOBS=4 cargo build --offline -p qiyas-cli` passed. The final binary ran
+`bench regenerate-positions` and then:
+
+```sh
+./target/debug/qiyas-cli bench rescore-agent \
+  --report .local/benchmark/runs/eval-agent-set-20261022T211039320437030-1177463/report.json \
+  --output .local/benchmark/runs/rescore-fifth-fixes
+```
+
+All 780 generated truth files (60 clean cases and 720 variants) had positions refreshed.
+An independent audit compared all 1,099 development truth files against their original bytes:
+every byte outside position arrays is identical. The other 319 truth files are unchanged.
+The provenance log records each changed file's before/after hash. Original combined report
+and per-case artifacts are unchanged. All 105 replayed dimension quantities, citations and
+complete dimension lines equal their saved measurement reports. No agent was run.
+
+| Case | Coverage before → after | Precision before → after | Passing quantities after |
+|---|---:|---:|---:|
+| apartment-17000 | 77.78% → 77.78% | 31.82% → 31.82% | 7/9 |
+| office-15000 | 87.50% → 87.50% | 46.67% → 46.67% | 7/8 |
+| warehouse-16000 | 75.00% → 75.00% | 42.86% → 42.86% | 6/8 |
+| mep-18000 | 62.50% → 62.50% | 83.33% → 83.33% | 0/8 |
+| external-19000 | 50.00% → 50.00% | 100.00% → 100.00% | 4/8 |
+| apartment-17000/variants/scanned-pdf | 0% → 0% | 0% → 0% | 0/9 |
+| **Overall** | **58% → 58%** | **35.37% → 35.37%** | **24/50** |
+
+Matched accuracy remains 24/29 = 82.76%; matches remain 29, extras 53, and traceable items 20.
+There is no contamination. Coverage measures correspondence, so the five matched items in
+the allowance-affected case remain quantity failures; replay intentionally cannot fix them.
+
+The scan remains 0/9 with 21 extras. Its first region is now only 0.218 m from the regenerated
+centroid and falls inside the new 0.25 m tolerance. However, its allowance, surface and area
+recipes all have the same description/kind/position, so all three remain ambiguous. The other
+three region offsets are 0.272, 0.254 and 0.268 m, beyond their 0.25 m tolerance, and each also
+has three competing area recipes. The five remaining truth rows have no same-description/kind
+candidate. Diagnostics are in `.local/agent-fifth-fixes/scan-correspondence.json`. No nearest
+candidate, quantity-based choice, label rewriting or extra tolerance was added to improve the
+score. Regression tests prove unambiguous scanned items can now match; the saved scan still
+contains interpretation/calibration errors. This replay is not evidence of improved agent
+behavior under the new self-check workflow.
+
+Audit summary: `.local/agent-fifth-fixes/audit.json`.
+Replay report: `.local/benchmark/runs/rescore-fifth-fixes/report.json`.
+
+
+### Final quick autonomy check
+
+`./target/debug/qiyas-cli bench run --set quick --mode autonomy` ran once, last, and
+completed with exit 0 in 164.64 seconds (120 cases, one repetition).
+Report: `.local/benchmark/runs/baseline-autonomy-20261022T214614335136632-3/`.
+
+Coverage is 18.71% (687/3,672), precision 94.76% (687/725), with 38 extras. All 687
+matches pass quantity tolerance and are traceable. The comparison checks found all 36 seeded
+errors, with nine false positives; those discrepancy metrics equal the previous saved result.
+
+The previous quick result had 716 matches, nine extras, 19.50% coverage and 98.76% precision.
+All 29 lost correspondences are vector-PDF items: the previous saved submissions used labels
+such as `Living room`, while the existing verbatim-label adapter now emits `1 Living room `.
+All 29 current PDF labels differ from truth by their numeric label prefix (plus whitespace).
+Their geometry positions are consistent with regenerated truth: maximum separation is
+0.00224 m, far below the new tolerance. This exposes the adapter change documented at the
+end of the third-run section, whose earlier quick check predated that change. No descriptions
+were altered in this task: truth maintenance was explicitly restricted to positions.
+Detailed comparison: `.local/agent-fifth-fixes/quick-pdf-diagnostics.json`.
+
+Final whitespace check passed. The requested full core/CLI check and the AI localhost test
+remain the verification limitations stated above. The saved scan still has ambiguous recipes,
+small calibration errors and unmatched descriptions; no fresh agent run was permitted or made.

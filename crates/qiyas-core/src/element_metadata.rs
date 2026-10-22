@@ -8,6 +8,8 @@ pub struct ElementMetadata {
     /// World drawing coordinates. PDF drivers already include calibration and insertion.
     pub position: [f64; 2],
     pub label: Option<String>,
+    /// Bounding-box diagonal in drawing units, derived only from source geometry.
+    pub diagonal: f64,
 }
 
 impl Drawing {
@@ -98,7 +100,20 @@ impl Drawing {
                         .collect(),
                 )
             });
-        Some(ElementMetadata { position, label })
+        let mut lo = position;
+        let mut hi = position;
+        for point in paths.iter().flat_map(|p| &p.points) {
+            for axis in 0..2 {
+                lo[axis] = lo[axis].min(point[axis]);
+                hi[axis] = hi[axis].max(point[axis]);
+            }
+        }
+        let diagonal = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+        Some(ElementMetadata {
+            position,
+            label,
+            diagonal,
+        })
     }
 }
 
@@ -184,21 +199,17 @@ fn centre(paths: &[Path]) -> Option<[f64; 2]> {
     if area > 0.0 {
         return Some(moment.map(|v| v / area));
     }
-    let mut length = 0.0;
-    moment = [0.0; 2];
-    for path in paths {
-        for pair in path.points.windows(2) {
-            let [a, b] = [pair[0], pair[1]];
-            let weight = (b[0] - a[0]).hypot(b[1] - a[1]);
-            for axis in 0..2 {
-                moment[axis] += (a[axis] + b[axis]) * 0.5 * weight;
-            }
-            length += weight;
+    let segments: Vec<_> = paths.iter().flat_map(|p| p.points.windows(2)).collect();
+    let distance = |p: &&[[f64; 2]]| (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1]);
+    let mut remaining = segments.iter().map(distance).sum::<f64>() * 0.5;
+    for pair in segments {
+        let length = distance(&pair);
+        if length > 0.0 && remaining <= length {
+            return Some(std::array::from_fn(|axis| {
+                pair[0][axis] + (pair[1][axis] - pair[0][axis]) * remaining / length
+            }));
         }
+        remaining -= length;
     }
-    if length > 0.0 {
-        Some(moment.map(|v| v / length))
-    } else {
-        paths.iter().find_map(|p| p.points.first().copied())
-    }
+    paths.iter().find_map(|p| p.points.first().copied())
 }

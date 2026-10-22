@@ -63,7 +63,7 @@ fn metadata_uses_insert_origin_and_owned_label_not_symbol_bounds() {
     );
     assert_eq!(
         s.drawing.element_metadata(path).unwrap().position,
-        [3.75, 0.25]
+        [4.0, 0.0]
     );
     s.run_input(
         &json!({"type":"define_object_type","definition":{"name":"Named","category":"test",

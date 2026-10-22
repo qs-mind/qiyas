@@ -619,15 +619,26 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   layers and bounding-box distances on the same sheet. Proximity is not applicability.
   Schedule columns include wide tables and detected text grids. Self-check flags dimensional
   conflicts between a cited note's explicit numeric unit and a rule's geometry/factors,
-  including percentage scope when the note states a unit. Unitless scope still needs judgement.
+  including percentage scope when the note states a unit. Fractional count quantities and a
+  cited percentage applied across every rule are self-check errors, including base-plus-percentage
+  recipes. The kit/workflow require fixing these before completion; factors apply only to the
+  items named in their note. Other unitless scope still needs judgement.
 - `bench rescore-agent --report <combined report.json> --output <new directory>` rebuilds
   submissions from saved measurement reports and accepted recognition in the saved drawing.
   Only the outer scorer then opens truth. Originals and contamination exclusions are retained;
   missing measurement artefacts remain empty. This command never starts an agent or provider.
 - Submissions and saved replay use drawing-owned element metadata: centroid/insertion point
-  in drawing coordinates (PDF drivers already contain calibration), and verbatim element labels
+  converted to metres (PDF drivers already contain calibration), and verbatim element labels
   with rule text as fallback. Multiple enclosed texts are ambiguous. BOQ totals use the unweighted
   centre of their distinct source elements; PDF evidence never claims original CAD handles.
+- Open paths use their half-length point; regions use area centroids and blocks use insertion
+  points. `bench regenerate-positions` updates only generated development truth position arrays,
+  including variants, from source geometry. PDF truth uses calibrated page coordinates. Original
+  quantity literals and all other truth bytes stay intact; hashes are appended to
+  `sources/qiyas-generator/position-provenance.jsonl`. Holdout contents are never opened.
+- PDF `description_position` matching uses max(0.25 m, 2% of the element's geometry-derived
+  diagonal); CAD retains 0.05 m. Quantity values never select matches and ambiguity remains
+  unmatched. Position metadata and diagonals come from drawing geometry, not quantities.
 - `bench regenerate-scans` refreshes only existing generated scanned-PDF variants using their
   saved seeds, adds a 4% margin and reframes prepared vision recipes. Other variants and saved
   agent artefacts remain untouched. No model calls are involved.

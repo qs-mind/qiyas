@@ -95,7 +95,12 @@ fn pdf(root: &Path, drawing: &Path) -> Result<Submission, String> {
                 // This legacy PDF mapping has no authored measurement confidence.
                 confidence: Some(candidate.confidence.min(qiyas_core::trust::unscored())),
                 description: metadata.label.unwrap_or(description),
-                position: Some(metadata.position),
+                position: Some(
+                    metadata
+                        .position
+                        .map(|v| v * session.drawing.units.to_metres()),
+                ),
+                diagonal_m: Some(metadata.diagonal * session.drawing.units.to_metres()),
                 kind: "area".into(),
                 unit: "m2".into(),
                 quantity,
