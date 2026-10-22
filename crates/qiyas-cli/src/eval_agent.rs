@@ -130,13 +130,22 @@ fn run_case(
         &drawing,
     )
     .map_err(|e| e.to_string())?;
-    // This is the only case input copied. No sidecars, visible-input recipes or truth.
+    // The drawing is the only case input copied, plus the project preamble a QS receives with a
+    // tender: each rule's specification wording, never its numbers' results, quantities or truth.
+    let preamble = preamble_text(&truth);
+    if let Some(text) = &preamble {
+        fs::write(output.join("preamble.md"), text).map_err(|e| e.to_string())?;
+    }
     let server_args = json!(["mcp", "--drawing", drawing, "--workdir", output]);
     crate::bench::write_json(
         config,
         &json!({"mcpServers":{"qiyas":{"command":cli,"args":server_args}}}),
     )?;
-    let request = crate::eval::task_request("Use the Qiyas MCP tools. Call qiyas_execute finish with your end report in args.answer before ending. Do not inspect files outside this run folder or use repository code, benchmark data, truth or recipes. The MCP server prepares PDF page 1 when applicable; its digest exposes visible source documents.");
+    let mut instructions = "Use the Qiyas MCP tools. Call qiyas_execute finish with your end report in args.answer before ending. Do not inspect files outside this run folder or use repository code, benchmark data, truth or recipes. The MCP server prepares PDF page 1 when applicable; its digest exposes visible source documents.".to_string();
+    if preamble.is_some() {
+        instructions.push_str(" The project preamble (specification excerpt issued with this drawing) is preamble.md in this run folder: read it and apply its measurement rules to the elements it names.");
+    }
+    let request = crate::eval::task_request(&instructions);
     let mut command = if let Some(template) = &args.agent_cmd {
         let expanded = expand(
             template,
@@ -491,5 +500,73 @@ mod tests {
         assert!(args
             .iter()
             .any(|s| s == "model_reasoning_effort=\"medium\""));
+    }
+}
+
+/// The project preamble a QS receives with a tender: the specification wording of each rule
+/// the case declares ("material depth plus 10% provisional allowance"). Only the clause text is
+/// written; heights, factors held as data, quantities and item ids stay with the scorer.
+fn preamble_text(truth: &crate::bench::model::Truth) -> Option<String> {
+    let mut clauses: Vec<String> = truth
+        .rules
+        .values()
+        .map(|rule| {
+            let clause = rule.clause.trim();
+            clause
+                .strip_prefix("project preamble:")
+                .unwrap_or(clause)
+                .trim()
+                .to_string()
+        })
+        .filter(|c| !c.is_empty())
+        .collect();
+    clauses.sort();
+    clauses.dedup();
+    if clauses.is_empty() {
+        return None;
+    }
+    let mut text = String::from("# Project preamble (specification excerpt)\n\n");
+    for clause in clauses {
+        text.push_str(&format!("- {clause}\n"));
+    }
+    Some(text)
+}
+
+#[cfg(test)]
+mod preamble_tests {
+    use super::preamble_text;
+    use crate::bench::model::{Rule, Truth};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn preamble_carries_clause_wording_only() {
+        let mut rules = BTreeMap::new();
+        rules.insert(
+            "working-allowance".to_string(),
+            Rule {
+                operation: "area_times_height".into(),
+                clause: "project preamble: material depth plus 10% provisional allowance".into(),
+                height_m: Some(0.2475),
+                factor: None,
+                deduction: None,
+            },
+        );
+        let truth = Truth {
+            schema_version: 1,
+            id: "t".into(),
+            project_type: "t".into(),
+            drawing: "drawing.dxf".into(),
+            items: Vec::new(),
+            rules,
+            seeded_errors: Vec::new(),
+        };
+        let text = preamble_text(&truth).unwrap();
+        assert!(text.contains("- material depth plus 10% provisional allowance"));
+        assert!(!text.contains("0.2475") && !text.contains("area_times_height"));
+        let empty = Truth {
+            rules: BTreeMap::new(),
+            ..truth
+        };
+        assert!(preamble_text(&empty).is_none());
     }
 }
