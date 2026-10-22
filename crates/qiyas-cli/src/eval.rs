@@ -282,6 +282,7 @@ struct RunUsage {
     usage: Usage,
     estimated_usd: f64,
     unknown_usage_requests: u32,
+    last_reservation_usd: f64,
 }
 
 struct Metered {
@@ -298,6 +299,18 @@ struct Metered {
 }
 
 impl Provider for Metered {
+    fn budget_notice(&self) -> Option<String> {
+        let totals = self.totals.lock().ok()?;
+        let remaining = (self.max_cost - totals.estimated_usd).max(0.0);
+        let finish = totals.requests.saturating_mul(5) >= self.max_requests.saturating_mul(4)
+            || totals.estimated_usd >= self.max_cost * 0.8
+            || (totals.last_reservation_usd > 0.0 && remaining < 2.0 * totals.last_reservation_usd);
+        Some(format!("[evaluation budget] {} of {} requests used; ${:.4} of ${:.4} used; ${remaining:.4} remains. {}",
+            totals.requests,self.max_requests,totals.estimated_usd,self.max_cost,
+            if finish { "[finish now] Finish BOQ mappings for accepted recognised elements, read measurement.report and write the end report now. Stop exploring; retain incomplete scope and explain missing evidence." }
+            else { "Generate mappings alongside recognition so partial work is always submitted. Reserve the final 20% for BOQ and end report." }))
+    }
+
     fn stream_turn<'a>(
         &'a self,
         mut req: TurnRequest,
@@ -330,20 +343,9 @@ impl Provider for Metered {
                 .map_err(AiError::Stream)?;
                 totals.requests += 1;
                 totals.estimated_usd += upper;
+                totals.last_reservation_usd = upper;
                 id
             };
-            let budget_note = {
-                let totals = self
-                    .totals
-                    .lock()
-                    .map_err(|_| AiError::Stream("Usage lock failed".into()))?;
-                format!("[evaluation budget] Request {} of {}. Reserved for this request ${upper:.4}; ${:.4} remains after this reservation. Finish checks and uncertainty summary when near either limit.",totals.requests,self.max_requests,(self.max_cost-totals.estimated_usd).max(0.0))
-            };
-            if let Some(message) = req.messages.last_mut() {
-                message
-                    .content
-                    .push(qiyas_ai::ContentBlock::Text { text: budget_note });
-            }
             step(&self.steps, &json!({"event":"request","id":id,"reserved_usd":upper,"model":req.model,"max_tokens":req.max_tokens,"system":req.system,"messages":trim_log(serde_json::to_value(&req.messages).map_err(|e|AiError::Stream(e.to_string()))?)})).map_err(AiError::Stream)?;
             let answer = self.inner.stream_turn(req, sink).await;
             let usage = answer.as_ref().map(|r| r.usage).unwrap_or_default();
@@ -688,7 +690,7 @@ fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase, String> {
             Ok(count) => format!("{count} vector/text entities were imported at the same paper scale."),
             Err(_) => "Vector import was unavailable; the PDF underlay is available for visual inspection.".into(),
         };
-        let note = format!("This is a PDF case. Only page 1 is prepared; do not claim coverage of other pages. The underlay and any imported entities are UNCALIBRATED: their current metres describe paper size (1 PDF point = 0.0254/72 metres), not real project lengths. {vectors} Inspect the page with qiyas_capture, calibrate from visible dimensions or a legible scale bar before measuring, and apply the same calibration to any imported vectors. If no reliable scale is visible, report that quantities cannot be established. Do not infer scale from filenames or benchmark metadata.");
+        let note = format!("This is a PDF case. Source path: {}. Only page 1 is prepared; do not claim coverage of other pages. The underlay and any imported entities are UNCALIBRATED: their current metres describe paper size (1 PDF point = 0.0254/72 metres), not real project lengths. {vectors} Inspect with qiyas_capture source picture, then source document {{path,page:1}} for page-point coordinates. Calibrate from visible dimensions or a legible scale bar. For scans, use recognition.vision with raster ink hints and review their pending metadata before mapping. Apply the same calibration to any imported vectors. If capture or reliable calibration fails, report the actual error or missing evidence in the end report. Do not infer scale from filenames or benchmark metadata.",pdf.display());
         Ok(PreparedCase {
             session,
             drawing,
@@ -903,7 +905,7 @@ async fn run_agent(
     preparation: &str,
     output: Option<&Path>,
 ) -> String {
-    let mut agent = Agent::new(provider, session, settings);
+    let mut agent = Agent::new(provider, session.clone(), settings);
     if let Some(output) = output {
         agent = agent.with_log(qiyas_ai::log::AgentLog::evaluation(
             output.join("agent.log"),
@@ -912,8 +914,10 @@ async fn run_agent(
     let (sender, mut receiver) = mpsc::channel(64);
     let events = tokio::spawn(async move {
         let mut status = "incomplete".to_string();
+        let mut text = String::new();
         while let Some(event) = receiver.recv().await {
             match event {
+                AgentEvent::Text { text: part } => text.push_str(&part),
                 AgentEvent::Done { .. } => status = "done".into(),
                 AgentEvent::Stopped { reason } => status = format!("stopped: {reason}"),
                 AgentEvent::AwaitingApproval { .. } => status = "awaiting_approval".into(),
@@ -921,19 +925,60 @@ async fn run_agent(
                 _ => {}
             }
         }
-        status
+        (status, text)
     });
     let prompt = format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest, batch types and recognition rules, recognise, apply the selected method, map elements to the generated BOQ, then takeoff_check with verify expectations and fix by handle. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}");
     let result = agent
         .run_turn(prompt, sender, CancellationToken::new())
         .await;
-    let status = events
+    let (status, mut text) = events
         .await
-        .unwrap_or_else(|_| "event collection failed".into());
-    match result {
+        .unwrap_or_else(|_| ("event collection failed".into(), String::new()));
+    // Some offline providers return text without streaming deltas; keep their actual answer.
+    if text.is_empty() {
+        if let Some(message) = agent.snapshot().history.last() {
+            for block in &message.content {
+                if let qiyas_ai::ContentBlock::Text { text: part } = block {
+                    text.push_str(part);
+                }
+            }
+        }
+    }
+    let mut status = match result {
         Ok(()) => status,
         Err(e) => format!("failed: {e}"),
+    };
+    let facts = tokio::task::spawn_blocking(move || {
+        let guard = session.lock().map_err(|e| e.to_string())?;
+        let s = guard.as_ref().ok_or("No drawing")?;
+        let submission = crate::bench::submission::from_session(s)?;
+        Ok::<_, String>(json!({"submitted_items":submission.items.len(),
+            "measurement":s.measurement_report().map_err(|e|e.to_string())?,
+            "self_check":s.takeoff_check(0,&[]).map_err(|e|e.to_string())?}))
+    })
+    .await;
+    let facts = match facts {
+        Ok(Ok(facts)) => facts,
+        other => json!({"error":format!("Could not read final take-off: {other:?}")}),
+    };
+    if status == "done" && facts["submitted_items"] == 0 {
+        status = "failed: done with 0 submitted items; investigate capture, calibration, recognition and mappings".into();
     }
+    let end_report = json!({"status":status,"answer":text,"preparation":preparation,"facts":facts});
+    if let Some(output) = output {
+        qiyas_ai::AgentLog::evaluation(output.join("agent.log"))
+            .write("END REPORT", &end_report.to_string());
+        if let Err(error) = write_json(&output.join("end-report.json"), &end_report) {
+            return format!("{status}; end report failed: {error}");
+        }
+        if let Err(error) = step(
+            &Some(output.join("steps.jsonl")),
+            &json!({"event":"end_report","report":end_report}),
+        ) {
+            return format!("{status}; end report log failed: {error}");
+        }
+    }
+    status
 }
 
 fn append_costs(
@@ -1020,10 +1065,10 @@ mod tests {
     use qiyas_ai::{ContentBlock, StopReason};
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    struct Scripted {
-        calls: Arc<AtomicU32>,
-        usage: Usage,
-        command: Option<Value>,
+    pub(super) struct Scripted {
+        pub(super) calls: Arc<AtomicU32>,
+        pub(super) usage: Usage,
+        pub(super) command: Option<Value>,
     }
 
     impl Provider for Scripted {

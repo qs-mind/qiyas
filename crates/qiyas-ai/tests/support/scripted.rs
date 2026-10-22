@@ -1,9 +1,9 @@
 //! Offline provider shared by surface and drafting evaluations.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use qiyas_ai::{AiError, ContentBlock, Provider, StopReason, TurnRequest, TurnResult};
+use qiyas_ai::{AiError, ContentBlock, Message, Provider, StopReason, TurnRequest, TurnResult};
 use serde_json::Value;
 
 pub enum ScriptCall {
@@ -22,6 +22,22 @@ impl From<(&'static str, Value)> for ScriptCall {
 pub struct Script {
     pub calls: Mutex<VecDeque<ScriptCall>>,
     pub requests: Arc<Mutex<Vec<TurnRequest>>>,
+}
+
+/// Retain each result when first observed for assertions, independently of model context trimming.
+pub fn observed_messages(requests: &[TurnRequest]) -> Vec<Message> {
+    let mut seen = BTreeSet::new();
+    requests
+        .iter()
+        .flat_map(|request| &request.messages)
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult { tool_use_id, .. } if seen.insert(tool_use_id.clone()) => {
+                Some(Message::user(vec![block.clone()]))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 impl Script {

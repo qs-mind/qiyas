@@ -564,8 +564,20 @@ async fn scripted(
 }
 
 fn results(agent: &Agent) -> Vec<(bool, Value)> {
-    agent
-        .history()
+    message_results(agent.history())
+}
+
+fn observed_results(agent: &Agent, requests: &[TurnRequest]) -> Vec<(bool, Value)> {
+    // A capped run has no next request for its last result; include the final local history.
+    let mut requests = requests.to_vec();
+    let mut final_request = requests.last().unwrap().clone();
+    final_request.messages = agent.history().to_vec();
+    requests.push(final_request);
+    message_results(&scripted::observed_messages(&requests))
+}
+
+fn message_results(messages: &[qiyas_ai::Message]) -> Vec<(bool, Value)> {
+    messages
         .iter()
         .flat_map(|message| &message.content)
         .filter_map(|block| match block {
@@ -597,7 +609,7 @@ async fn reads_stop_at_40_calls_and_results_warn_with_ten_left() {
         assert_eq!(offered.name, expected.name);
         assert_eq!(offered.input_schema, expected.input_schema);
     }
-    let results = results(&agent);
+    let results = observed_results(&agent, &requests);
     assert_eq!(results.len(), 40);
     for (i, (error, value)) in results.iter().enumerate() {
         assert!(!error, "{value}");
@@ -627,7 +639,7 @@ async fn a_drawing_change_raises_the_turn_budget_to_120() {
     calls.extend(vec![(READ, json!({"op": "state", "args": "{}"})); 130]);
     let (agent, events, requests) = scripted(Arc::new(Mutex::new(Some(s))), calls).await;
     assert_eq!(requests.lock().unwrap().len(), 120);
-    let results = results(&agent);
+    let results = observed_results(&agent, &requests.lock().unwrap());
     assert_eq!(results.len(), 120);
     for (i, (error, value)) in results.iter().enumerate() {
         assert!(!error, "{value}");
@@ -836,11 +848,11 @@ fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
 }
 
 #[tokio::test]
-async fn plan_events_follow_valid_snapshots_and_the_history_keeps_them_without_a_drawing() {
+async fn plan_events_follow_valid_snapshots_and_the_provider_observes_them_without_a_drawing() {
     let pending = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"pending"}]});
     let active = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"}]});
     let done = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"done"}]});
-    let (agent, events, _) = scripted(
+    let (agent, events, requests) = scripted(
         Arc::new(Mutex::new(None)),
         vec![
             (EXECUTE, json!({"op":"plan","args":pending})),
@@ -861,7 +873,7 @@ async fn plan_events_follow_valid_snapshots_and_the_history_keeps_them_without_a
     assert!(events
         .iter()
         .all(|event| !matches!(event, AgentEvent::ToolCall { mutating: true, .. })));
-    let history = results(&agent);
+    let history = observed_results(&agent, &requests.lock().unwrap());
     assert_eq!(
         history.iter().map(|(error, _)| *error).collect::<Vec<_>>(),
         [false, true, false, false]
@@ -1664,6 +1676,86 @@ fn pdf_document_text_and_picture_preserve_the_open_drawing() {
     assert_eq!(count(&session), before);
     assert_eq!(session.batch_version(), revision);
     assert_eq!(session.history_steps().0.len(), history);
+}
+
+#[test]
+fn pdf_only_sheet_captures_and_exposes_the_source_for_vision() {
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let dir = tempfile::tempdir_in(&cwd).unwrap();
+    let pdf = qiyas_pdf::fixtures::write_wall(dir.path());
+    let mut session = Session::new_blank(&dir.path().join("scan.dxf"), 6);
+    session
+        .attach_pdf(
+            &pdf,
+            1,
+            [0., 0.],
+            0.0254 / 72.,
+            qiyas_core::AttachMode::Underlay,
+        )
+        .unwrap();
+    let before = session.history_steps();
+    let digest = session.drawing_digest(0).unwrap();
+    let document = digest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["section"] == "documents")
+        .unwrap();
+    assert_eq!(document["path"], json!(pdf));
+    let ToolOutput::Image { png, caption } =
+        surface::run_session(&mut session, CAPTURE, "picture", &json!({}), Source::Ai).unwrap()
+    else {
+        panic!("picture")
+    };
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(caption.contains(pdf.file_name().unwrap().to_str().unwrap()));
+    let ToolOutput::Image { caption, .. } = surface::run_session(
+        &mut session,
+        CAPTURE,
+        "document",
+        &json!({"path":pdf.file_name().unwrap().to_str().unwrap(),"page":1}),
+        Source::Ai,
+    )
+    .unwrap() else {
+        panic!("document")
+    };
+    assert!(caption.contains("bottom-left origin"));
+    assert_eq!(session.history_steps(), before);
+
+    // A relative drawing and relative underlay must still advertise an absolute capture path.
+    session.drawing.path = session
+        .drawing
+        .path
+        .strip_prefix(&cwd)
+        .unwrap()
+        .to_path_buf();
+    for object in session.drawing.doc.objects.values_mut() {
+        if let opencadcodec::objects::ObjectType::UnderlayDefinition(def) = object {
+            def.file_path = pdf.file_name().unwrap().to_str().unwrap().into();
+        }
+    }
+    let digest = session.drawing_digest(0).unwrap();
+    let document = digest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["section"] == "documents")
+        .unwrap();
+    assert_eq!(document["path"], json!(pdf));
+    assert!(matches!(
+        surface::run_session(
+            &mut session,
+            CAPTURE,
+            "document",
+            &document["capture"]["args"],
+            Source::Ai
+        )
+        .unwrap(),
+        ToolOutput::Image { .. }
+    ));
 }
 
 #[test]

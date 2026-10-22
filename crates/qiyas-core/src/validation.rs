@@ -140,9 +140,71 @@ impl Session {
     pub fn validate_input(&self, input: &Value) -> ValidationReport {
         let mut report = validate_command(input, Some(self.drawing.units));
         report.append(self.validate_record_inputs(input));
+        if report.valid {
+            self.validate_batch_knowledge(input, &mut report);
+        }
         self.resolve_input_defaults(input, "", &mut report.defaults_used);
         report.deduplicate();
         report
+    }
+
+    /// Stage knowledge in command order. The live drawing and its undo history are untouched;
+    /// every kind shares the same document, including types created by schedule interpretation.
+    fn validate_batch_knowledge(&self, input: &Value, report: &mut ValidationReport) {
+        let Some(commands) = input.get("commands").and_then(Value::as_array) else {
+            return;
+        };
+        let is_definition = |value: &Value| {
+            matches!(
+                value["type"].as_str(),
+                Some(
+                    "define_object_type"
+                        | "redefine_object_type"
+                        | "delete_object_type"
+                        | "set_knowledge"
+                        | "define_check"
+                )
+            ) || (value["type"] == "recognition"
+                && matches!(value["kind"].as_str(), Some("define" | "schedule")))
+                || (value["type"] == "measurement"
+                    && matches!(value["kind"].as_str(), Some("set_method" | "set_mappings")))
+        };
+        if !commands.iter().any(is_definition) {
+            return;
+        }
+        let mut staged =
+            Session::new_blank(&self.drawing.path, self.drawing.doc.header.insertion_units);
+        staged.drawing.doc = self.drawing.doc.clone();
+        staged.sheet = self.sheet.clone();
+        let mut source_changed = false;
+        for (index, value) in commands.iter().enumerate() {
+            if !is_definition(value) {
+                // Geometry-dependent validation still belongs to execution, where preceding
+                // drawing edits and resolved step references are available.
+                source_changed |= crate::registry::parse_command(value.clone()).map_or(true, |c| {
+                    crate::registry::effect_of(&c) != crate::registry::Effect::Read
+                });
+                continue;
+            }
+            let command = crate::registry::parse_command(value.clone());
+            if command.is_err()
+                || (source_changed && value["type"] == "recognition" && value["kind"] == "schedule")
+            {
+                // Do not reject later references against stale source cells or unresolved
+                // step values. The transaction validates them against the actual earlier steps.
+                report.not_checked.push("knowledge depending on earlier drawing edits or step results; checked in execution order".into());
+                break;
+            };
+            if let Err(error) = staged.execute(command.expect("parsed above"), crate::Source::User)
+            {
+                report.error(
+                    "invalid_value",
+                    &format!("/commands/{index}"),
+                    error.to_string(),
+                );
+                break;
+            }
+        }
     }
 
     fn resolve_input_defaults(&self, input: &Value, prefix: &str, defaults: &mut Vec<DefaultUsed>) {

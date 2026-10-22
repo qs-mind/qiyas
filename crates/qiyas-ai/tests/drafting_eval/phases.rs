@@ -131,12 +131,7 @@ fn partition_door(request: &TurnRequest) -> (&'static str, Value) {
 }
 
 fn verify(request: &TurnRequest) -> (&'static str, Value) {
-    let results = history(request);
-    let walls = &results
-        .iter()
-        .rev()
-        .find(|v| v["command"] == "add_wall_openings")
-        .unwrap()["outcome"];
+    let walls = remembered_outcome(request, "add_wall_openings");
     let outer = &walls["centrelines"][0];
     let pair = json!([{"handle":outer}, {"handle":outer}]);
     (
@@ -350,8 +345,8 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
             .map(|i| json!(phase_values(i)))
             .collect::<Vec<_>>()
     );
-    let pictures = agent
-        .history()
+    let observed = scripted::observed_messages(&requests.lock().unwrap());
+    let pictures = observed
         .iter()
         .flat_map(|m| &m.content)
         .filter_map(|block| {
@@ -366,7 +361,9 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         .count();
     assert_eq!(pictures, 5, "look after every drawing phase");
     let requests = requests.lock().unwrap();
-    let results = history(requests.last().unwrap());
+    let mut observed_request = requests.last().unwrap().clone();
+    observed_request.messages = observed;
+    let results = history(&observed_request);
     checks_and_verification(&results, 5);
     for report in results.iter().filter(|v| v.get("findings").is_some()) {
         assert_eq!(report["warnings"], 0, "{report:#}");
@@ -375,7 +372,7 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
     assert_eq!(
         snapshots.len(),
         plans.len(),
-        "plan snapshots stay in the conversation"
+        "all plan snapshots were observed before history trimming"
     );
     let rooms = results.iter().find(|v| v.get("rooms").is_some()).unwrap();
     assert_eq!(rooms["rooms"].as_array().unwrap().len(), 4);

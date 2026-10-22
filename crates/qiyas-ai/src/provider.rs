@@ -20,6 +20,11 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
+    /// Current request/cost limits, supplied by a metered host without changing the system.
+    fn budget_notice(&self) -> Option<String> {
+        None
+    }
+
     /// Conversation-local memory only; credentials and URLs never belong here.
     fn save_state(&self) -> Value {
         Value::Null

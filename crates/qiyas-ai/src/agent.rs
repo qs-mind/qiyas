@@ -164,8 +164,7 @@ pub struct Agent {
     settings: AgentSettings,
     /// Built at the first turn and kept, byte for byte, until `clear()`.
     system: Option<String>,
-    /// Append-only: earlier messages are never dropped; only their old pictures give way to a
-    /// line of text (`trim_pictures`).
+    /// Recent results remain whole; older evidence becomes summaries with source identities.
     history: Vec<Message>,
     /// Base64 bytes of the pictures in `history`, and the most it may hold.
     image_bytes: usize,
@@ -586,12 +585,21 @@ impl Agent {
                 return self.stop(&events, "cancelled").await;
             }
             self.compact();
+            crate::history::trim(&mut self.history);
             if self.history.len() > MAX_MESSAGES {
                 return self.stop(&events, TOO_LONG).await;
             }
+            let mut messages = self.history.clone();
+            let notice = self.provider.budget_notice().or_else(|| {
+                (counts.calls * 5 >= counts.limit() * 4).then(||
+                    "[finish now] 80% of tool budget used. Finish BOQ mappings from accepted recognised elements, read measurement.report, and write the end report with remaining uncertainties. Stop exploring.".into())
+            });
+            if let (Some(last), Some(text)) = (messages.last_mut(), notice) {
+                last.content.push(ContentBlock::Text { text });
+            }
             let req = TurnRequest {
                 system: system.clone(),
-                messages: self.history.clone(),
+                messages,
                 tools: tools.clone(),
                 model: self.settings.model.clone(),
                 effort: self.settings.effort.clone(),
@@ -616,6 +624,7 @@ impl Agent {
                         }
                         _ => e.to_string(),
                     });
+                    self.report_interrupted(&events, &e.to_string()).await;
                     return Err(e);
                 }
             };
@@ -734,6 +743,9 @@ impl Agent {
             reason
         };
         self.log("STOPPED", || reason.to_string());
+        if reason.contains("steps") || reason.contains("budget") || reason.contains("limit") {
+            self.report_interrupted(events, reason).await;
+        }
         self.emit(
             events,
             AgentEvent::Stopped {
@@ -742,6 +754,28 @@ impl Agent {
         )
         .await;
         Ok(())
+    }
+
+    /// A hard cap may leave no paid request for a final answer. Report the persisted state
+    /// locally; never fabricate measurements or discard an already generated BOQ.
+    async fn report_interrupted(&self, events: &mpsc::Sender<AgentEvent>, reason: &str) {
+        let session = self.session.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            let s = guard.as_ref()?;
+            let report = s.measurement_report().ok()?;
+            let recognised = s.recognition_evidence().ok()?.iter()
+                .filter(|c| c.state == qiyas_core::recognition::ReviewState::Accepted).count();
+            Some(format!("{} generated BOQ items retained from {recognised} accepted recognised elements. {} Unmapped or uncertain scope remains incomplete; no quantities were invented.",
+                report.items.len(), report.warnings.join("; ")))
+        }).await.ok().flatten().unwrap_or_else(|| "The take-off is incomplete; no further provider request was made.".into());
+        self.emit(
+            events,
+            AgentEvent::Text {
+                text: format!("\nEnd report: {reason}. {report}"),
+            },
+        )
+        .await;
     }
 
     /// Streams one turn, forwarding text and thinking as they arrive. `None` when cancelled:

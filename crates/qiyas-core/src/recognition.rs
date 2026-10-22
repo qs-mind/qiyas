@@ -180,6 +180,10 @@ pub struct Candidate {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecognitionCommand {
     /// Define or replace a validated recognition rule in QIYAS_KNOWLEDGE/recognition.
+    /// Define object_type first in the same batch, including types used by rejection rules.
+    /// For a path use {name:"Run",category:"observed",geometry:"path"} with no plan recipe.
+    /// Quantity aliases must not refer to themselves: measured_length:"geometry.length",
+    /// measured_count:"geometry.count". Nearby text extraction requires max_distance_m.
     #[schemars(example = json!({"kind":"define","rule":{"name":"runs","object_type":"Run","match":{"entity_type":"Line"},"confidence":0.95}}))]
     #[schemars(extend("x-takeoff-step" = "2 define recognition"))]
     Define { rule: Box<Rule> },
@@ -226,6 +230,8 @@ pub enum RecognitionCommand {
     #[schemars(example = json!({"kind":"read_schedule","source":{"kind":"table","handle":1234}}))]
     ReadSchedule { source: GridSource },
     /// Convert source cells into types and recognition rules using the supplied column mapping.
+    /// Each created type/rule is named template.name:cell (for example Item:D1).
+    /// Use these returned names in later rules and method selectors in the same batch.
     #[schemars(example = json!({"kind":"schedule","spec":{"source":{"kind":"table","handle":1234},"template":{"name":"Item","category":"example","geometry":"point","quantities":{"measured_count":"count"}},"type_column":0,"match_column":0,"match_on":"block","confidence":0.95}}))]
     #[schemars(extend("x-takeoff-step" = "2 interpret schedules"))]
     Schedule { spec: Box<ScheduleSpec> },

@@ -103,6 +103,21 @@ fn entities_read_as_records_filtered_paged_and_projected() {
         assert_eq!(r["fields"]["/common/layer"], "A-WALL");
         assert!(r.get("data").is_none());
     }
+    let filtered = s
+        .records(&RecordQuery {
+            conditions: vec![Where {
+                path: "/common/layer".into(),
+                op: WhereOp::Eq,
+                value: json!("a-wall"),
+            }],
+            ..query(Collection::Entities)
+        })
+        .unwrap();
+    assert_eq!(filtered.total, walls.total);
+    assert!(
+        filtered.records.iter().all(|r| r.get("data").is_none()),
+        "Filtering must not turn default summaries into full records"
+    );
 
     let page = s
         .records(&RecordQuery {

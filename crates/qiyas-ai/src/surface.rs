@@ -678,6 +678,25 @@ pub fn run_session_with_method(
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
     }
+    if op == "document" && matches!(tool, READ | CAPTURE) {
+        let mut args = args.clone();
+        if let Some(path) = args["path"].as_str() {
+            let path = std::path::Path::new(path);
+            if path.is_relative() {
+                args["path"] = json!(session
+                    .drawing
+                    .path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join(path));
+            }
+        }
+        return if tool == READ {
+            crate::document::read(&args).map(ToolOutput::Json)
+        } else {
+            crate::document::capture(&args)
+        };
+    }
     if let Some(result) = run_without_drawing(tool, op, args, Some(session.drawing.units)) {
         return result;
     }
@@ -1545,7 +1564,7 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
                 "commands": commands.iter().enumerate().filter_map(|(index, command)| {
                     let info = command_info(command)?;
                     let prefix = format!("/commands/{index}/");
-                    report.errors.iter().any(|issue| issue.pointer.starts_with(&prefix)).then(|| json!({
+                    report.errors.iter().any(|issue| issue.pointer.starts_with(&prefix) || issue.pointer == prefix.trim_end_matches('/')).then(|| json!({
                         "index": index, "schema": info.schema, "example": info.examples.first(),
                         "serde_error": qiyas_core::registry::parse_command(command.clone()).err(),
                     }))

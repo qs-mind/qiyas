@@ -225,7 +225,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   styles, blocks, layouts, viewports, groups, views, header, layer states, xrefs, take-off, BOQ,
   conflicts, schedules, comments, constraints, parameters; filters handles, names, type, layer,
   sheet, bounds and `where` (eq, ne, lt, le, gt, ge, contains, exists on a JSON pointer into
-  `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) under 40 KB
+  `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) under 12 KB
   (`MAX_BYTES`, `truncated`); arrays past 100 items say how many they left out.
 - `qiyas-core/src/record_edit.rs`: `Command::SetRecords { collection, updates: [{key, path,
   value, expected}] }`: serialise, set the JSON pointer, read back with `serde_path_to_error` (the
@@ -497,7 +497,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   engine benchmarks are separate diagnostics, never claims about autonomous model performance.
 - `qiyas_read digest {offset?}`: all-sheet units/scale, sheets, layer/kind counts, block inserts
   and attribute tags, spatial text/table evidence, closed-area statistics, hatches, knowledge and
-  take-off counts, selected method and a suggested picture. Pages are at most 8,192 JSON bytes;
+  take-off counts, selected method and a suggested picture. Pages are at most 6,144 JSON bytes;
   `next_offset` continues them. Text previews are bounded; records retain the full source.
   Text clusters are geometric hints, not semantic assertions about a legend or a room.
 - `commands {names:[...]}` fetches several schemas in one call. The registry index generates its
@@ -541,6 +541,42 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   scripted office/apartment runs reached 37.5%/44.44% coverage and 100% item precision in ten
   requests each. These results do not replace a live MIZAN ALONE score.
 - No dependencies added. Validation and measured results: `docs/2026-10-22-mizan-autonomous-takeoff.md`.
+
+### First live-run corrections (22 October 2026)
+
+- MIZAN ALONE remains the priority. No paid eval is part of implementation. The first six-case
+  run exposed expensive repeated history, invalid authored definitions and a PDF-only capture
+  failure; its 22% coverage is the live baseline, not a target achieved by engine diagnostics.
+- `qiyas-ai/src/history.rs` keeps the newest three tool results whole and summarizes older
+  results once, retaining handles, ids, names, decisions and error codes. The first digest and
+  system prompt remain unchanged for caching; tool ids, arguments and signatures stay paired.
+  The older message-count compactor remains the final guard for long conversations.
+- Records default to summaries without null/empty fields, with 12 KB pages; digest previews and capture captions
+  are compact. PDF digest entries expose real source paths/pages and document capture arguments.
+  Picture framing includes PDF/raster bounds, even without vector geometry. Relative document
+  paths resolve beside the active drawing. Scans use calibrated `recognition.vision` hints and
+  retained review metadata, or an explicit failure/missing-evidence explanation.
+- Batch knowledge validation stages definitions in order on a private document, shared across
+  types, schedule-derived types/rules, methods, mappings, checks and every `set_knowledge` kind.
+  Execution still runs sequentially in one undo transaction. A genuinely missing type remains
+  an error, including in rejection rules. Use `geometry.count`/`geometry.length` for quantity
+  expressions, or distinct aliases; `count: "count"` is circular.
+- Prompts execute batches directly and repair returned errors. Registry method/mapping examples
+  contain complete recipes and citations. Recognition and mapping should be published together,
+  then extended, so partial work remains measurable if a cap interrupts the run.
+- The provider exposes current budget notices to the agent. At 80% of requests or cost used,
+  or when fewer than two conservative reservations fit, it tells Mizan to stop exploring,
+  finish mappings and write the end report. Hard stops report retained quantities locally.
+- Eval always writes `end-report.json` and logs it in both logs, retaining the actual answer,
+  measurement report, submission count and self-check. `done` with zero submitted items becomes
+  a failed investigation with capture/calibration/recognition/mapping diagnostics. The existing
+  save-and-score path also runs after request/cost caps; tests exercise both caps with nonempty
+  generated submissions. Prediction and providers never receive benchmark truth.
+- Offline replay evidence and exact validation outcomes are recorded in
+  `docs/2026-10-22-mizan-live-fixes.md`; `.local/mizan-live-fixes/` holds raw check logs and
+  per-request token estimates. The 21-request finishing replay peaked at 18,188 estimated input
+  tokens and cost $0.231; request 21 fell from 58,841 to 17,086 tokens. Both cap replays retained
+  and scored nonempty BOQs. These are scripted accounting comparisons, not live model scores.
 
 ## Discrepancies and queries (Phase 19)
 

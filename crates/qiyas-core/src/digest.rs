@@ -8,11 +8,11 @@ use crate::objects::ObjectFilter;
 use crate::recognition::ReviewState;
 use crate::{CoreError, EntityFilter, Session};
 
-pub const MAX_BYTES: usize = 8192;
+pub const MAX_BYTES: usize = 6144;
 
 fn short(s: &str) -> String {
-    let mut text: String = s.chars().take(160).collect();
-    if s.chars().count() > 160 {
+    let mut text: String = s.chars().take(96).collect();
+    if s.chars().count() > 96 {
         text.push('…');
     }
     text
@@ -92,6 +92,27 @@ impl Session {
                     .is_none()
                     .then(|| self.drawing.doc.get_entity(Handle::new(row.handle)))
                     .flatten();
+                if let Some(EntityType::Underlay(underlay)) = entity {
+                    if let Some(opencadcodec::objects::ObjectType::UnderlayDefinition(def)) =
+                        self.drawing.doc.objects.get(&underlay.definition_handle)
+                    {
+                        let path = std::path::Path::new(&def.file_path);
+                        let path = if path.is_absolute() {
+                            path.to_path_buf()
+                        } else {
+                            self.drawing
+                                .path
+                                .parent()
+                                .unwrap_or(std::path::Path::new("."))
+                                .join(path)
+                        };
+                        let path = std::path::absolute(path)?;
+                        entries.push(json!({"section":"documents","handle":row.handle,"path":path,
+                            "page":def.page_name.trim().parse::<u32>().unwrap_or(1),
+                            "capture":{"source":"document","args":{"path":path,"page":def.page_name.trim().parse::<u32>().unwrap_or(1)}},
+                            "note":"Scans need capture, visible calibration and recognition.vision; review raster hints."}));
+                    }
+                }
                 if let Some(name) = &row.block_name {
                     let (count, tags) = blocks.entry(name.clone()).or_default();
                     *count += 1;

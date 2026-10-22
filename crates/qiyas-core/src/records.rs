@@ -24,7 +24,7 @@ use crate::{CoreError, EntityFilter, Session};
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 200;
 /// A page's JSON stays under this many bytes: records past it go to the next page.
-pub const MAX_BYTES: usize = 40_000;
+pub const MAX_BYTES: usize = 12_000;
 /// Items of an array shown inside one record.
 const MAX_ITEMS: usize = 100;
 
@@ -191,7 +191,7 @@ impl Session {
         let mut bytes = 0;
         let mut truncated = false;
         for record in matching.into_iter().skip(q.offset).take(limit) {
-            let record = shape(record, &q.fields, detail);
+            let record = shape(record, &q.fields, q.detail);
             let size = record.to_string().len();
             if bytes + size > MAX_BYTES && !records.is_empty() {
                 truncated = true;
@@ -515,6 +515,7 @@ fn shape(mut record: Value, fields: &[String], detail: Detail) -> Value {
     if detail == Detail::Summary {
         if let Some(obj) = record.as_object_mut() {
             obj.remove("data");
+            obj.retain(|_, value| !value.is_null() && !value.as_array().is_some_and(Vec::is_empty));
         }
     }
     cut_arrays(&mut record);

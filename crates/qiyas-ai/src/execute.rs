@@ -1170,10 +1170,31 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
             } else {
                 session.sheet_batch(&sheet)
             };
-            if drawn.segments.is_empty() && drawn.fills.is_empty() {
+            let (pictures, problems) = session.plot_pictures(&sheet, 1.0, MAX_RASTER_PX);
+            let geometry = !drawn.segments.is_empty() || !drawn.fills.is_empty();
+            if !geometry && pictures.is_empty() {
+                if !problems.is_empty() {
+                    return Err(bad(&format!(
+                        "Pictures unavailable: {}",
+                        problems.join("; ")
+                    )));
+                }
                 return Err(bad("Nothing is drawn on that sheet"));
             }
-            with_margin(drawn.bounds)
+            let mut bounds = if geometry {
+                drawn.bounds
+            } else {
+                [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]]
+            };
+            for (_, placement, _) in pictures {
+                for point in placement.corners {
+                    for axis in 0..2 {
+                        bounds[0][axis] = bounds[0][axis].min(point[axis]);
+                        bounds[1][axis] = bounds[1][axis].max(point[axis]);
+                    }
+                }
+            }
+            with_margin(bounds)
         }
     };
     let bounds = fit(bounds, width);
@@ -1250,9 +1271,7 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
         view,
     );
     let mut caption = format!(
-        "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in {}, {} x {} px, {}. \
-         Drawn as the screen draws it, on white: lines, fills and text in their colours (white \
-         drawn black), the take-off in violet.",
+        "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in {}, {} x {} px, {}.",
         sheet_label(session, &sheet),
         bounds[0][0],
         bounds[0][1],
@@ -1264,10 +1283,7 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
         pixel_size(session, &sheet, px),
     );
     if !shown.is_empty() {
-        caption.push_str(&format!(
-            " Pictures under the lines (images, PDF underlays): {}.",
-            shown.join(", ")
-        ));
+        caption.push_str(&format!(" Pictures: {}.", shown.join(", ")));
     }
     if !look.highlight.is_empty() {
         caption.push_str(" Highlighted entities are thick violet.");
@@ -1301,7 +1317,7 @@ pub(crate) fn text_note(text: Option<TextSize>) -> String {
              read from about 8 px, so zoom in with bounds to read smaller text.",
             t.smallest, t.typical
         ),
-        None => " No text in view.".to_string(),
+        None => " No CAD text in view; pictures may contain text.".to_string(),
     }
 }
 

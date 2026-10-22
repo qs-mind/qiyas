@@ -93,8 +93,57 @@ fn targets(handles: &Value) -> Vec<Value> {
         .collect()
 }
 
+// Decisions use only the current provider request, including retained handles in old summaries.
+fn remembered_outcome(request: &TurnRequest, command: &str) -> Value {
+    for block in request.messages.iter().flat_map(|m| &m.content).rev() {
+        if let ContentBlock::ToolResult { content, .. } = block {
+            for part in content {
+                let ResultPart::Text(text) = part else {
+                    continue;
+                };
+                if let Some(summary) = text.strip_prefix("[tool result summary] ") {
+                    let value: Value = serde_json::from_str(summary).unwrap();
+                    let refs = &value["references"];
+                    if refs["command"]
+                        .as_array()
+                        .is_some_and(|names| names.contains(&json!(format!("\"{command}\""))))
+                    {
+                        return Value::Object(
+                            refs.as_object()
+                                .unwrap()
+                                .iter()
+                                .map(|(key, values)| {
+                                    (
+                                        key.clone(),
+                                        Value::Array(
+                                            values
+                                                .as_array()
+                                                .unwrap()
+                                                .iter()
+                                                .map(|v| {
+                                                    serde_json::from_str(v.as_str().unwrap())
+                                                        .unwrap()
+                                                })
+                                                .collect(),
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                        );
+                    }
+                } else if let Ok(value) = serde_json::from_str::<Value>(text) {
+                    if value["command"] == command {
+                        return value["outcome"].clone();
+                    }
+                }
+            }
+        }
+    }
+    panic!("missing retained handles for {command}");
+}
+
 fn villa_verify(request: &TurnRequest) -> (&'static str, Value) {
-    let walls = command_result(&json_results(&request.messages), "walls")["outcome"].clone();
+    let walls = remembered_outcome(request, "walls");
     let outer = walls["centrelines"][0].clone();
     let pair = json!([{"handle": outer}, {"handle": outer}]);
     let mut expectations = vec![
@@ -164,9 +213,9 @@ async fn evaluate(prompt: &str, steps: Vec<ScriptCall>) -> Evaluation {
     assert!(completed);
     assert_eq!(calls, count, "the entire script must execute");
     assert_eq!(requests.lock().unwrap().len(), count + 1);
-    let results = json_results(agent.history());
-    let pictures = agent
-        .history()
+    let observed = scripted::observed_messages(&requests.lock().unwrap());
+    let results = json_results(&observed);
+    let pictures = observed
         .iter()
         .flat_map(|message| &message.content)
         .filter_map(|block| match block {

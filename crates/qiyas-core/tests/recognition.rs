@@ -13,6 +13,95 @@ fn define(s: &mut Session) {
         json!({"type":"define_object_type","definition":{"name":"Run","category":"test","geometry":"path","properties":{"width":{"kind":"number","unit":"length","default":0.0,"min":0.0},"height":{"kind":"number","unit":"length","default":0.0}},"quantities":{"measured_length":"length","surface":"length * height","volume":"length * width * height"}}}),
     );
 }
+
+#[test]
+fn batch_knowledge_is_ordered_across_types_schedules_rules_methods_mappings_and_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("batch.dxf"), 6);
+    let line = add(
+        &mut s,
+        json!({"type":"draw","kind":"line","a":[0,0],"b":[5,0]}),
+    );
+    let table = add(
+        &mut s,
+        json!({"type":"table","at":[10,10],"rows":1,"cols":2,"data":[["Scheduled","Unused-layer"]]}),
+    );
+    let citation = json!({"source":"drawing","clause":"source geometry"});
+    let commands = json!([
+        {"type":"define_object_type","definition":{"name":"Annotation","category":"observed","geometry":"path"}},
+        {"type":"recognition","kind":"define","rule":{"name":"paths","object_type":"Annotation","match":{"handles":[line]},"confidence":1.0}},
+        {"type":"recognition","kind":"schedule","spec":{"source":{"kind":"table","handle":table},"template":{"name":"Template","category":"observed","geometry":"point","quantities":{"measured_count":"geometry.count"}},"type_column":0,"match_column":1,"match_on":"layer","confidence":1.0}},
+        {"type":"recognition","kind":"define","rule":{"name":"scheduled-again","object_type":"Template:Scheduled","match":{"layer":"Another-layer"},"confidence":1.0}},
+        {"type":"recognition","kind":"apply"},
+        {"type":"measurement","kind":"set_method","scope":"project","method":{"name":"geometry","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"length","element_type":"Annotation","unit":"m","terms":[{"label":"length","operation":"add","factors":["geometry.length"],"citation":citation}],"citation":citation}]}},
+        {"type":"measurement","kind":"set_mappings","mappings":[{"rule":"length","code":"L","description_en":"Length","description_ar":"Length","section":"Observed","trade":"","unit":"m","citation":citation}]},
+        {"type":"set_knowledge","kind":"tables","name":"document","data":{"citation":citation,"rows":[["Annotation"]]}},
+        {"type":"define_check","name":"membership","rule":{"citation":citation,"question_en":"Confirm type?","question_ar":"Confirm type?","test":{"kind":"document","table":{"kind":"document","name":"document"},"key_column":0,"elements":{},"property":"type"}}}
+    ]);
+    let input = json!({"type":"batch","commands":commands});
+    let before = s.drawing.doc.clone();
+    let history = s.history_steps();
+    let validation = s.validate_input(&input);
+    assert!(validation.valid, "{validation:?}");
+    assert_eq!(s.drawing.doc, before);
+    assert_eq!(s.history_steps(), history);
+    run(&mut s, input.clone());
+    assert_eq!(s.history_steps().0.len(), history.0.len() + 1);
+    assert_eq!(s.recognition_rules().unwrap().len(), 3);
+    assert_eq!(s.measurement_report().unwrap().items[0].quantity, 5.0);
+    assert!(s.evaluate_check_rules().unwrap().is_empty());
+    assert!(s.undo());
+    assert!(s.object_types().unwrap().is_empty());
+    assert!(s.recognition_rules().unwrap().is_empty());
+    assert!(s.measurement_report().unwrap().items.is_empty());
+    assert!(
+        qiyas_core::knowledge::list(&s.drawing.doc, qiyas_core::knowledge::Kind::Checks)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(s.redo());
+    assert_eq!(s.measurement_report().unwrap().items[0].quantity, 5.0);
+
+    let mut empty = Session::new_blank(&dir.path().join("invalid.dxf"), 6);
+    let reversed = json!({"type":"batch","commands":[commands[1],commands[0]]});
+    let validation = empty.validate_input(&reversed);
+    assert!(!validation.valid);
+    assert_eq!(validation.errors[0].pointer, "/commands/0");
+    assert!(validation.errors[0].message.contains("Annotation"));
+    assert!(empty.run_input(&reversed, Source::Ai).is_err());
+    assert!(empty.object_types().unwrap().is_empty());
+    assert!(empty.history_steps().0.is_empty());
+
+    let mut schedule = commands[2].clone();
+    schedule["spec"]["template"]["name"] = json!("Updated");
+    let mut following = commands[3].clone();
+    following["rule"]["name"] = json!("updated-rule");
+    following["rule"]["object_type"] = json!("Updated:Changed");
+    let changed_source = json!({"type":"batch","commands":[
+        {"type":"edit_cell","target":{"handle":table},"row":0,"col":0,"text":"Changed"},
+        schedule, following
+    ]});
+    let report = s.validate_input(&changed_source);
+    assert!(report.valid, "{report:?}");
+    assert!(report
+        .not_checked
+        .iter()
+        .any(|n| n.contains("knowledge depending")));
+    let before = s.history_steps().0.len();
+    run(&mut s, changed_source);
+    assert_eq!(s.history_steps().0.len(), before + 1);
+    assert!(s
+        .object_types()
+        .unwrap()
+        .iter()
+        .any(|t| t.name == "Updated:Changed"));
+    assert!(s.undo());
+    assert!(!s
+        .object_types()
+        .unwrap()
+        .iter()
+        .any(|t| t.name == "Updated:Changed"));
+}
 fn rule(s: &mut Session, h: u64, confidence: f64) {
     run(
         s,
