@@ -6,7 +6,8 @@ import { LanguageProvider } from "../i18n";
 import ar from "../i18n/ar.json";
 
 const aiLog = vi.fn();
-vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog() }));
+const aiAttachPdf = vi.fn();
+vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog(), aiAttachPdf: (...args: unknown[]) => aiAttachPdf(...args) }));
 import { EMPTY, type ToolCardItem, type Transcript } from "./messages";
 
 afterEach(cleanup);
@@ -418,7 +419,7 @@ test("at most four pictures go with one message", async () => {
   fireEvent.paste(box, { clipboardData: { files } });
   await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(4));
   expect(screen.getByRole("alert").textContent).toBe("At most 4 pictures in one message");
-  expect((screen.getByRole("button", { name: "Attach pictures" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Attach pictures or PDFs" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("a user's message shows what went with it", () => {
@@ -467,4 +468,20 @@ test("a pending resume cannot send, approve, undo, or start another chat", () =>
   expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+});
+
+
+test("PDF attachments are retained with page provenance and sent without a drawing mutation", async () => {
+  aiAttachPdf.mockResolvedValue({ name: "schedule.pdf", path: "/local/attachments/schedule.pdf", pages: 3 });
+  const { assistant } = setup();
+  const file = new File(["%PDF-test"], "schedule.pdf", { type: "application/pdf" });
+  Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("%PDF-test").buffer });
+  const input = document.querySelector('input[type="file"]')!;
+  expect(input.getAttribute("accept")).toContain("application/pdf");
+  fireEvent.change(input, { target: { files: [file] } });
+  await screen.findByText("schedule.pdf · 3 pages");
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith('[PDF attachment: "schedule.pdf"; 3 pages; path: "/local/attachments/schedule.pdf"]'));
+  expect(assistant.send.mock.calls[0][0]).toContain("/local/attachments/schedule.pdf");
+  await waitFor(() => expect(screen.queryByText("schedule.pdf · 3 pages")).toBeNull());
 });

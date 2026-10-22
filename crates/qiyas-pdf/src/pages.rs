@@ -90,3 +90,33 @@ pub(crate) fn display_matrix(page: &PdfPage) -> Result<[f64; 6]> {
         m[5] - m[1] * l - m[3] * b,
     ])
 }
+
+/// Plain page text, read on the pdfium worker. Scanned pages return an empty string, never
+/// invented OCR. Pages retain their one-based source numbers and are read in requested order.
+pub fn page_text(path: &Path, pages: &[u32]) -> Result<Vec<(u32, String)>> {
+    let path = path.to_path_buf();
+    let pages = pages.to_vec();
+    if pages.is_empty() || pages.len() > 100 {
+        return Err(crate::PdfError::Page("Request 1..100 page numbers".into()));
+    }
+    run(move |pdfium| {
+        let doc = open(pdfium, &path)?;
+        let mut result = Vec::new();
+        let mut bytes = 0;
+        for number in pages {
+            let page = doc
+                .pages()
+                .get(page_index(&doc, number)?)
+                .map_err(page_error)?;
+            let text = page.text().map_err(page_error)?.all();
+            bytes += text.len();
+            if bytes > 2 * 1024 * 1024 {
+                return Err(crate::PdfError::Page(
+                    "Text exceeds 2 MiB; request fewer pages".into(),
+                ));
+            }
+            result.push((number, text));
+        }
+        Ok(result)
+    })
+}

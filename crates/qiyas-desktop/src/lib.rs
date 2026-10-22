@@ -4,6 +4,7 @@ mod blocks;
 mod cmdline;
 mod commands;
 mod conversations;
+mod documents;
 mod drawing_host;
 mod files;
 mod launch;
@@ -124,6 +125,7 @@ pub fn run() {
             updater::cancel_update,
             launch::take_open_requests,
             commands::ai_send,
+            documents::ai_attach_pdf,
             commands::ai_models,
             ai_window::ai_window_reply,
             commands::ai_cancel,

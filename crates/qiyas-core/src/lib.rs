@@ -138,3 +138,5 @@ pub use walls::{
     WallOpening, WallOpeningEdit, WallResult, WallRun, WallSpec, WALL_APP,
 };
 pub use xref::{candidates as xref_candidates, Xref, XrefInfo, XrefSet};
+
+pub mod recognition;

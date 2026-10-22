@@ -718,6 +718,8 @@ async fn destructive_commands_in_run_and_batch_share_one_cap() {
 
 #[test]
 fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
+    let documents = tempfile::tempdir().unwrap();
+    let pdf = qiyas_pdf::fixtures::write_wall(documents.path());
     let mut declared = BTreeSet::new();
     for entry in surface::OPERATIONS {
         assert!(
@@ -746,6 +748,8 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
         let expected = match entry.needs[0] {
             surface::Need::Nothing => {
                 let args = match entry.op {
+                    "document" if entry.tool == CAPTURE => json!({"path":pdf,"page":1}),
+                    "document" => json!({"path":pdf,"pages":[1]}),
                     "plan" => {
                         json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"}]})
                     }
@@ -756,9 +760,13 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
                     _ => json!({}),
                 };
                 assert!(need.is_ok(), "{}", entry.op);
-                surface::run_without_drawing(entry.tool, entry.op, &args, None)
-                    .unwrap()
-                    .unwrap();
+                let result =
+                    surface::run_without_drawing(entry.tool, entry.op, &args, None).unwrap();
+                if entry.op == "document" && !qiyas_pdf::available() {
+                    assert!(result.unwrap_err().to_string().contains("PDF support"));
+                } else {
+                    result.unwrap();
+                }
                 continue;
             }
             surface::Need::Drawing => "no_drawing",
@@ -776,7 +784,7 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
     for (tool, ops) in [
         (READ, surface::READ_OPS.as_slice()),
         (EXECUTE, surface::EXECUTE_OPS.as_slice()),
-        (CAPTURE, &["screen", "picture"]),
+        (CAPTURE, &["screen", "picture", "document"]),
     ] {
         for op in ops {
             assert!(declared.contains(&(tool, op)));
@@ -1615,4 +1623,41 @@ fn registry_read_shortcuts_retain_unknown_argument_warnings() {
             "{op}: {result}"
         );
     }
+}
+
+#[test]
+fn pdf_document_text_and_picture_preserve_the_open_drawing() {
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let (dir, mut session) = sample();
+    let pdf = qiyas_pdf::fixtures::write_wall(dir.path());
+    let before = count(&session);
+    let revision = session.batch_version();
+    let history = session.history_steps().0.len();
+    let text = call(
+        &mut session,
+        READ,
+        json!({"op":"document","args":{"path":pdf,"pages":[1]}}),
+    )
+    .unwrap();
+    assert_eq!(text["pages"][0]["page"], 1);
+    assert!(text["pages"][0]["text"].as_str().unwrap().contains("WALL"));
+    assert_eq!(text["pages"][0]["needs_vision"], false);
+    let picture = surface::run_session(
+        &mut session,
+        CAPTURE,
+        "document",
+        &json!({"path":pdf,"page":1}),
+        Source::Ai,
+    )
+    .unwrap();
+    let ToolOutput::Image { png, caption } = picture else {
+        panic!("document picture")
+    };
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(caption.contains("bottom-left origin"));
+    assert_eq!(count(&session), before);
+    assert_eq!(session.batch_version(), revision);
+    assert_eq!(session.history_steps().0.len(), history);
 }

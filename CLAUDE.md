@@ -435,6 +435,35 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   manual room overrides remain detectable until the source quantity changes.
 - Details and verification: `docs/2026-10-21-qiyas-phase16.md`. No new dependencies.
 
+## Drawing recognition and documents (Phase 17)
+
+- `qiyas-core/src/recognition.rs` and `recognition/`: the `recognition` command family
+  defines/lists/tests/applies drawing-owned rules in knowledge kind `recognition`. Selectors
+  cover globs/regex, layers, blocks, attributes, hatches, closed regions, text and colour.
+  Extraction reads attributes, note/section captures, parallel-line distances and geometry.
+  Accepted candidates become ordinary Phase 16 instances. Missing evidence, rule conflicts
+  and low confidence stay in persistent review metadata (`QIYAS_RECOGNITION`). Each mutation
+  is one undo step. Corrections can save scoped or explicitly generalised rules as data.
+- Drawing tables, text grids and attribute blocks become type/rule definitions through an
+  explicit column mapping. Calibrated PDF imports retain `QIYAS_SOURCE` path/page evidence;
+  vision hints snap to CAD geometry or raster ink, with raster interpretations requiring review.
+  Recognition uses types with empty plan recipes to retain the source graphics. It currently
+  operates on the drawing's own top-level entities; xref content remains read-only.
+- The window's Review tab accepts, fixes or rejects candidates in English and Arabic.
+  `qiyas_read document {path,pages?}` reads plain PDF text through the pdfium worker without
+  changing a drawing. `qiyas_capture` source `document` renders a PDF page with a coordinate
+  caption. The composer accepts PDFs up to 20 MiB under the Qiyas data home's `attachments/`;
+  debug attachments and all development recipes/reports stay in `.local/`.
+- `qiyas-cli bench recognize --case ID --plan FILE --output FILE` computes submissions from
+  recognition recipes. `bench run` uses case-local `recognition.json` where available. Rules
+  and quantity mappings are data; prediction code never reads gold quantities. Scoring rules
+  are unchanged, and PDF citations do not claim to reproduce original CAD handles.
+- The Phase 17 dev run improved the original 956-case cohort from 65.03% to 70.97%
+  coverage with 100% matched accuracy within 1%; the current 1,099-case set reaches 71.59%.
+  All 120 PDF variants produce scored submissions, but each currently covers selected
+  measurements. Independent 95% QS recall and live vision validation remain outstanding.
+- Workflow, schema, limits and verification: `docs/2026-10-22-qiyas-phase17.md`.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,

@@ -1693,6 +1693,17 @@ impl Session {
             }
         }
         self.check_block_edit(&cmd)?;
+        // A repeated recognition apply is a read when every source already has a decision.
+        // Avoid a derivation pass, which can refresh existing object metadata and create history.
+        if let Command::Recognition(command) = &cmd {
+            if let crate::recognition::RecognitionCommand::Apply { rules } = command.as_ref() {
+                if self.test_recognition(rules)?.is_empty() {
+                    return Ok(Outcome::Recognition {
+                        result: serde_json::json!({"candidates": []}),
+                    });
+                }
+            }
+        }
         if matches!(cmd, Command::SaveLayerState { .. }) {
             self.prepare_layer_states();
         }
@@ -1813,8 +1824,8 @@ impl Session {
                 | "set_object_props"
                 | "object_schedule"
                 | "set_knowledge"
-        )
-        .then(|| self.drawing.doc.snapshot_structure());
+        ) || label.starts_with("recognition.");
+        let failed_structure = failed_structure.then(|| self.drawing.doc.snapshot_structure());
         let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());

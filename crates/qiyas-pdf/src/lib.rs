@@ -33,7 +33,7 @@ use std::thread;
 
 use pdfium_render::prelude::{PdfDocument, PdfPageIndex, Pdfium, PdfiumError};
 
-pub use pages::{page_count, page_size, thumbnails};
+pub use pages::{page_count, page_size, page_text, thumbnails};
 pub use raster::{render_page, MAX_SIDE};
 pub use vectors::{extract_vectors, FILL_LAYER_PREFIX, LAYER_PREFIX, TEXT_LAYER};
 

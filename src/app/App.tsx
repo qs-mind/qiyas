@@ -435,6 +435,7 @@ export default function App() {
           ai={ai}
           conversationHistory={conversationHistory}
           comments={comments}
+          recognition={{ revision: batch, run: runDrawingCommand }}
         />
       </div>
       {commandLineOn && (

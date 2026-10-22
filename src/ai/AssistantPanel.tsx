@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { aiLog, type AiLog } from "../api";
+import { aiAttachPdf, aiLog, type AiLog, type PdfAttachment } from "../api";
 import type { Pointing } from "../app/useAssistantWiring";
 import { useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
@@ -43,12 +43,14 @@ export const AssistantPanel = memo(function AssistantPanel({
 }: Props) {
   const t = useT();
   const { transcript, busy, error } = assistant;
-  const unavailable = busy || !!history?.pending;
+  const [attaching, setAttaching] = useState(false);
+  const unavailable = busy || !!history?.pending || attaching;
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   /** The pictures to send with the next message. */
   const [pictures, setPictures] = useState<Picture[]>([]);
+  const [documents, setDocuments] = useState<PdfAttachment[]>([]);
   const [pictureError, setPictureError] = useState<string | null>(null);
 
   // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
@@ -59,6 +61,21 @@ export const AssistantPanel = memo(function AssistantPanel({
 
   /** Adds the pictures among `files`, up to `MAX_PICTURES` in all. */
   async function addPictures(files: File[]) {
+    if (unavailable) return;
+    const pdfs = files.filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+    if (pdfs.length) {
+      setAttaching(true);
+      setPictureError(null);
+      try {
+        if (documents.length + pdfs.length > MAX_PICTURES) throw new Error(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
+        for (const file of pdfs) {
+          if (file.size > 20 * 1024 * 1024) throw new Error(t("ai.pdfTooLarge"));
+          const attachment = await aiAttachPdf(file.name, Array.from(new Uint8Array(await file.arrayBuffer())));
+          setDocuments((now) => [...now, attachment]);
+        }
+      } catch (error) { setPictureError(String(error)); }
+      finally { setAttaching(false); }
+    }
     const wanted = files.filter(isPicture);
     if (wanted.length === 0) return;
     setPictureError(null);
@@ -92,7 +109,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   const thread = useStickToBottom([transcript, busy]);
 
   async function submit() {
-    const text = draft.trim();
+    const text = [draft.trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
     if ((!text && pictures.length === 0) || unavailable) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
@@ -107,6 +124,7 @@ export const AssistantPanel = memo(function AssistantPanel({
     if (sent) {
       setDraft("");
       setPictures([]);
+      setDocuments([]);
       setPictureError(null);
     }
   }
@@ -413,7 +431,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={(e) => {
-            const files = [...(e.clipboardData?.files ?? [])].filter(isPicture);
+            const files = [...(e.clipboardData?.files ?? [])].filter((file) => isPicture(file) || file.type === "application/pdf");
             if (files.length === 0) return;
             e.preventDefault();
             addPictures(files);
@@ -426,10 +444,17 @@ export const AssistantPanel = memo(function AssistantPanel({
             }
           }}
         />
+        {documents.map((document) => (
+          <div className="pointing-chip" key={document.path}>
+            <span>{document.name} · {document.pages} {t("ai.pdfPages")}</span>
+            <button type="button" aria-label={t("ai.removeDocument")} disabled={unavailable}
+              onClick={() => setDocuments((now) => now.filter((item) => item.path !== document.path))}>×</button>
+          </div>
+        ))}
         <input
           ref={filePicker}
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
+          accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
           multiple
           hidden
           onChange={(e) => {
@@ -471,7 +496,7 @@ export const AssistantPanel = memo(function AssistantPanel({
               {t("ai.stop")}
             </button>
           ) : (
-            <button type="submit" className="primary" disabled={unavailable || (!draft.trim() && pictures.length === 0)}>
+            <button type="submit" className="primary" disabled={unavailable || (!draft.trim() && pictures.length === 0 && documents.length === 0)}>
               {t("ai.send")}
             </button>
           )}

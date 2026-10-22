@@ -35,14 +35,21 @@ fn metadata<T: DeserializeOwned>(common: &EntityCommon, app: &str) -> Result<Opt
 
 impl Session {
     pub(crate) fn validate_object_metadata(&self) -> Result<(), CoreError> {
-        if ![OBJECT_APP, PART_APP, SCHEDULE_APP, REGION_APP]
-            .iter()
-            .any(|app| self.drawing.doc.app_ids.contains(app))
+        if ![
+            OBJECT_APP,
+            PART_APP,
+            SCHEDULE_APP,
+            REGION_APP,
+            crate::recognition::APP,
+        ]
+        .iter()
+        .any(|app| self.drawing.doc.app_ids.contains(app))
         {
             return Ok(());
         }
         for entity in self.drawing.doc.entities() {
             let common = entity.common();
+            metadata::<crate::recognition::Candidate>(common, crate::recognition::APP)?;
             metadata::<ObjectInstance>(common, OBJECT_APP)?;
             metadata::<ObjectPart>(common, PART_APP)?;
             metadata::<ObjectSchedule>(common, SCHEDULE_APP)?;

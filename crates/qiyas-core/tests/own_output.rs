@@ -31,6 +31,9 @@ const UNITS: [i16; 4] = [4, 5, 6, 1];
 /// Examples use metres, except the millimetre examples of the drafting conventions. Scale
 /// geometric coordinates and lengths, keeping angles, counts, physical metres and paper mm.
 fn scale_example(value: &mut Value, factor: f64, command: &str) {
+    if command == "recognition" {
+        return;
+    }
     fn numbers(value: &mut Value, factor: f64) {
         match value {
             Value::Number(n) => *value = json!(n.as_f64().unwrap() * factor),
@@ -243,6 +246,53 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     let mut handles = Vec::new();
     if let Some(prepared) = record_fixtures::prepare(session, name, example) {
         handles = prepared;
+    } else if name.starts_with("recognition.") {
+        let unit = 1.0 / session.drawing.units.to_metres();
+        if matches!(name, "recognition.pdf" | "recognition.vision") {
+            let path = qiyas_pdf::fixtures::write_rotated(session.drawing.path.parent().unwrap());
+            if name == "recognition.pdf" {
+                example["path"] = json!(path);
+            } else {
+                example["spec"]["path"] = json!(path);
+            }
+        }
+        if matches!(
+            name,
+            "recognition.define"
+                | "recognition.apply"
+                | "recognition.review"
+                | "recognition.vision"
+        ) {
+            added_by(
+                session,
+                json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}),
+            );
+        }
+        if name == "recognition.vision" {
+            // PDF coordinates are page points in every drawing unit.
+            example["spec"]["calibration"] = json!({"a":[0,0],"b":[100,0],"distance_m":1});
+            example["spec"]["hints"] =
+                json!([{"object_type":"Run","points":[[20,20],[70,20]],"confidence":0.8}]);
+        }
+        if matches!(name, "recognition.review" | "recognition.apply") {
+            handles = added_by(
+                session,
+                json!({"type":"draw","kind":"line","a":[0,0],"b":[5.0*unit,0]}),
+            );
+            added_by(
+                session,
+                json!({"type":"recognition","kind":"define","rule":{"name":"runs","object_type":"Run","match":{"entity_type":"Line"},"confidence":0.5}}),
+            );
+            if name == "recognition.review" {
+                added_by(session, json!({"type":"recognition","kind":"apply"}));
+            }
+        }
+        if name == "recognition.schedule" {
+            handles = added_by(
+                session,
+                json!({"type":"table","at":[0,10.0*unit],"rows":1,"cols":1,"col_width":2.0*unit,"row_height":unit,"data":[["S1"]]}),
+            );
+        }
     } else if matches!(
         name,
         "redefine_object_type" | "delete_object_type" | "place_objects" | "set_object_props"

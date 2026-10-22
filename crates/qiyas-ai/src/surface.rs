@@ -32,7 +32,8 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 14] = [
+pub const READ_OPS: [&str; 15] = [
+    "document",
     "state",
     "capabilities",
     "validate",
@@ -99,6 +100,7 @@ macro_rules! operations {
     (@runner) => {None};
 }
 operations![
+    (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
     (READ, "capabilities", [Nothing]),
     (READ, "commands", [Nothing]),
@@ -133,6 +135,7 @@ operations![
     (EXECUTE, "close_drawing", [Host], "close_drawing"),
     (CAPTURE, "screen", [Window, Drawing], "view_screen"),
     (CAPTURE, "picture", [Drawing]),
+    (CAPTURE, "document", [Nothing]),
 ];
 
 pub fn operation(tool: &str, op: &str) -> Option<&'static Operation> {
@@ -188,7 +191,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} one command's schema and examples, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} one command's schema and examples, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -216,11 +219,11 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: CAPTURE,
-            description: "Look: source screen is what the user sees now; source picture draws a sheet or part of it ({sheet, bounds, width, highlight, marks}). With marks, entities get numbered labels whose handles the caption lists: act on those handles, never on ones guessed from a picture. Zoom in with bounds until the text reads.",
+            description: "Look: source document renders a PDF page ({path, page, width?}) without changing the drawing; coordinates in its caption are page points for recognition.vision. Source screen is what the user sees now; source picture draws a sheet or part of it ({sheet, bounds, width, highlight, marks}). With marks, entities get numbered labels whose handles the caption lists: act on those handles, never on ones guessed from a picture. Zoom in with bounds until the text reads.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "source": { "type": "string", "enum": ["screen", "picture"] },
+                    "source": { "type": "string", "enum": ["screen", "picture", "document"] },
                     "args": args,
                 },
                 "required": ["source", "args"],
@@ -550,10 +553,14 @@ pub fn run_without_drawing(
     if tool == EXECUTE && op == "plan" {
         return Some(read_plan(args).map(|plan| ToolOutput::Json(json!({"plan": plan}))));
     }
+    if tool == CAPTURE && op == "document" {
+        return Some(crate::document::capture(args));
+    }
     if tool != READ {
         return None;
     }
     let value = match op {
+        "document" => crate::document::read(args),
         "capabilities" => Ok(capabilities()),
         "commands" => commands(args),
         "record_schema" => args["name"]
@@ -682,6 +689,8 @@ pub fn run_session_with_method(
         Ok(ToolOutput::Json(v))
     };
     match (tool, op) {
+        (READ, "document") => json(crate::document::read(args)?),
+        (CAPTURE, "document") => crate::document::capture(args),
         (READ, "state") => {
             let mut value = state(session);
             value["measurement_method"] = json!(method);

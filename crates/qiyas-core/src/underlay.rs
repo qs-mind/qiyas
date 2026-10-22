@@ -615,7 +615,30 @@ impl Session {
             content,
         } = prepared;
         match content {
-            Content::Entities(entities) => self.import_entities(entities, insert_at),
+            Content::Entities(entities) => {
+                let handles = self.import_entities(entities, insert_at)?;
+                let app = self.object_app(crate::recognition::SOURCE_APP)?;
+                for handle in &handles {
+                    let source = crate::recognition::Evidence {
+                        handle: None,
+                        path: Some(path.display().to_string()),
+                        page: Some(page),
+                        detail: format!("PDF vector; {scale} drawing units per point"),
+                    };
+                    let e = self
+                        .drawing
+                        .doc
+                        .get_entity_mut(Handle::new(*handle))
+                        .expect("imported entity");
+                    crate::xdata::write_json(
+                        e.common_mut(),
+                        crate::recognition::SOURCE_APP,
+                        app,
+                        &source,
+                    )?;
+                }
+                Ok(handles)
+            }
             Content::Size(size) => self
                 .attach_underlay(&path, page, size, insert_at, scale)
                 .map(|h| vec![h]),

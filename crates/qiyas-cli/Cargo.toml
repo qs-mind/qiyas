@@ -30,4 +30,5 @@ tokio-util = "0.7"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
+qiyas-pdf = { path = "../qiyas-pdf", features = ["fixtures"] }
 tempfile.workspace = true

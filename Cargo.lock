@@ -3926,6 +3926,7 @@ dependencies = [
  "opencadcodec",
  "qiyas-boq",
  "qiyas-core",
+ "qiyas-pdf",
  "qiyas-render",
  "qiyas-takeoff",
  "reqwest",
@@ -3967,6 +3968,7 @@ dependencies = [
  "qiyas-ai",
  "qiyas-boq",
  "qiyas-core",
+ "qiyas-pdf",
  "qiyas-plot",
  "qiyas-takeoff",
  "serde",
@@ -3991,6 +3993,7 @@ dependencies = [
  "qiyas-param",
  "qiyas-pdf",
  "qiyas-render",
+ "regex",
  "schemars 1.2.2",
  "serde",
  "serde-reflection",
@@ -4026,6 +4029,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]

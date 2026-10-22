@@ -3618,3 +3618,10 @@ span.grid-sort {
   font-size: 12px;
   color: var(--muted);
 }
+
+.recognition-panel { padding: 12px; overflow: auto; }
+.recognition-panel article { border-block-end: 1px solid var(--border); padding-block: 12px; }
+.recognition-panel p { margin-block: 6px; overflow-wrap: anywhere; }
+.recognition-panel label { display: block; margin-block: 6px; }
+.recognition-panel label input:not([type="checkbox"]) { display: block; width: 100%; }
+.recognition-actions { display: flex; gap: 6px; flex-wrap: wrap; }

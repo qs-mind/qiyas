@@ -287,7 +287,7 @@
   "ai.chip.entities": "{n} entities",
   "ai.chip.remove": "Remove",
   "ai.markArea": "Mark an area for Mizan",
-  "ai.attach": "Attach pictures",
+  "ai.attach": "Attach pictures or PDFs",
   "ai.picture": "Picture",
   "ai.removePicture": "Remove picture",
   "ai.tooManyPictures": "At most {n} pictures in one message",
@@ -1536,5 +1536,18 @@
   "takeoff.basis.unapproved_net": "Net candidate — unapproved",
   "takeoff.basis.approved_net": "Approved net",
   "takeoff.insertScope": "Top-level insert records; incomplete visible count",
-  "takeoff.unknownScope": "Count scope unspecified"
+  "takeoff.unknownScope": "Count scope unspecified",
+  "recognition.review": "Review",
+  "recognition.empty": "No elements awaiting review.",
+  "recognition.accept": "Accept",
+  "recognition.reject": "Reject",
+  "recognition.fix": "Fix properties",
+  "recognition.type": "Element type",
+  "recognition.saveRule": "Save correction as a rule",
+  "recognition.refresh": "Refresh",
+  "recognition.confidence": "Confidence",
+  "recognition.save": "Save and accept",
+  "ai.pdfTooLarge": "Attach a PDF of at most 20 MiB.",
+  "ai.pdfPages": "pages",
+  "ai.removeDocument": "Remove PDF"
 }

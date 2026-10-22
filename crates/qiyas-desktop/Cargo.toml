@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
+uuid.workspace = true
 qiyas-ai = { path = "../qiyas-ai" }
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }

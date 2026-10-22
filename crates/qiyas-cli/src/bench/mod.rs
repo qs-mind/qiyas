@@ -2,6 +2,7 @@
 mod baseline;
 pub mod generate;
 mod model;
+mod recognition;
 mod score;
 mod submission;
 
@@ -33,7 +34,7 @@ pub enum BenchCommand {
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u16).range(1..=100))]
         seeds: u16,
     },
-    /// Run today's automatic counts, closed areas and room finding on development cases.
+    /// Run case-local recognition recipes, with geometric baseline fallback, on development cases.
     Run {
         #[arg(long)]
         case: Option<String>,
@@ -42,6 +43,15 @@ pub enum BenchCommand {
         /// Score only the clean cases; by default all registered variants are scored too.
         #[arg(long)]
         clean_only: bool,
+    },
+    /// Run a data-only recognition recipe and write computed quantities for scoring.
+    Recognize {
+        #[arg(long)]
+        case: String,
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
     /// Score a JSON take-off/BOQ, Qiyas Excel take-off or BOQ workbook.
     Score {
@@ -68,6 +78,22 @@ pub fn run(args: &BenchArgs) -> Result<Value, String> {
             usize::from(*repeats),
             *clean_only,
         ),
+        BenchCommand::Recognize { case, plan, output } => {
+            let (truth, directory) = load_case(&args.root, case)?;
+            reject_symlink(plan)?;
+            refuse_holdout_path(output)?;
+            if output.exists() {
+                reject_symlink(output)?;
+            }
+            if let Some(parent) = output.parent() {
+                reject_symlink(parent)?;
+            }
+            let submission = recognition::measure(&directory.join(truth.drawing), plan)?;
+            write_json(output, &submission)?;
+            Ok(
+                json!({"written":output,"items":submission.items.len(),"warnings":submission.warnings}),
+            )
+        }
         BenchCommand::Score { case, submission } => score_submission(&args.root, case, submission),
         BenchCommand::List => {
             Ok(json!({"dev_cases":dev_ids(&args.root,false)?,"holdout":seal(&args.root)?}))
@@ -254,6 +280,15 @@ fn baseline_run(
     clean_only: bool,
 ) -> Result<Value, String> {
     let started = Instant::now();
+    let previous_rates = if root.join("baseline.json").exists() {
+        let path = safe_file(root, Path::new("baseline.json"))?;
+        let previous: Value =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        previous["rates"].clone()
+    } else {
+        Value::Null
+    };
     let ids = selected
         .map(|s| vec![s.to_string()])
         .map(Ok)
@@ -280,8 +315,15 @@ fn baseline_run(
         let mut times = Vec::new();
         for repeat in 0..repeats {
             let attempt = Instant::now();
-            let submission = baseline::measure(&drawing).unwrap_or_else(|e| model::Submission {
-                warnings: vec![format!("automatic baseline unavailable: {e}")],
+            let plan = directory.join("recognition.json");
+            let attempt_result = if plan.exists() {
+                let plan = safe_file(&directory, Path::new("recognition.json"))?;
+                recognition::measure(&drawing, &plan)
+            } else {
+                baseline::measure(&drawing)
+            };
+            let submission = attempt_result.unwrap_or_else(|e| model::Submission {
+                warnings: vec![format!("automatic recognition unavailable: {e}")],
                 elapsed_ms: attempt.elapsed().as_secs_f64() * 1000.0,
                 ..Default::default()
             });
@@ -332,21 +374,21 @@ fn baseline_run(
         Some((errors[(errors.len() - 1) / 2] + errors[errors.len() / 2]) / 2.0)
     };
     let next=vec![
-        "Phase 16: derive length, volume and declared rule quantities from typed elements; the current automatic baseline only counts blocks and measures areas/rooms.",
-        "Phase 17: recognize exploded symbols, broken boundaries, mixed layers and PDF/scanned plans; resolve semantic item descriptions and source citations.",
+        "Extend drawing-evidence recognition recipes to the remaining development cases, including model provenance and unresolved property evidence.",
+        "Validate Phase 17 on independently reviewed consultant drawings; controlled PDF hints do not establish live vision recall.",
         "Phase 18: apply declared measurement rules with reproducible geometry and clause references; improve coverage without duplicating room and region rows.",
         "Phase 19: detect seeded missing, quantity, unit and schedule discrepancies; baseline automatic measurement makes no discrepancy claims.",
         "Phase 20: compare revision A/B and report the known quantity deltas.",
         "Add independently sourced CC BY cases after verified downloads and QS spot checks. Synthetic-only scores do not establish performance on consultant drawings.",
     ];
-    let result = json!({"schema_version":1,"baseline":"Qiyas automatic block counts, closed regions and candidate rooms","cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
+    let result = json!({"schema_version":1,"baseline":"Qiyas recognition recipes with geometric baseline fallback","previous_rates":previous_rates,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
     write_json(&run_dir.join("report.json"), &result)?;
     let md = markdown(&result);
     std::fs::write(run_dir.join("report.md"), &md).map_err(|e| e.to_string())?;
     write_json(&root.join("baseline.json"), &result)?;
     std::fs::write(root.join("baseline.md"), md).map_err(|e| e.to_string())?;
     Ok(
-        json!({"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir}),
+        json!({"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates}),
     )
 }
 
@@ -356,7 +398,7 @@ pub fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), Stri
 }
 
 fn markdown(report: &Value) -> String {
-    let mut text=format!("# Qiyas QS baseline\n\n{} dev drawings, {} repetitions. Counts, closed regions and candidate rooms; no model calls.\n\n| Measure | Result |\n|---|---:|\n",report["cases"],report["repeats"]);
+    let mut text=format!("# Qiyas QS baseline\n\n{} dev drawings, {} repetitions. Drawing-owned recognition recipes plus the geometric baseline; no model calls.\n\n| Measure | Result |\n|---|---:|\n",report["cases"],report["repeats"]);
     if let Some(rates) = report["rates"].as_object() {
         for (name, value) in rates {
             text.push_str(&format!(

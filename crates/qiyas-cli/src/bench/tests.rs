@@ -321,3 +321,88 @@ fn rejects_unsupported_schema_and_unbounded_rule_tolerances() {
     truth.items[0].tolerance_percent = Some(25.0);
     assert!(truth.validate().is_err());
 }
+
+#[test]
+fn recognition_recipes_compute_quantities_without_a_truth_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = dir.path().join("drawing.dxf");
+    let mut session = Session::new_blank(&drawing, 4);
+    let Outcome::Added { handles } = session
+        .run(
+            serde_json::from_value(json!({"type":"draw","kind":"line","a":[0,0],"b":[3000,4000]}))
+                .unwrap(),
+        )
+        .unwrap()
+    else {
+        panic!("line")
+    };
+    session.save_as(&drawing).unwrap();
+    let plan = dir.path().join("recognition.json");
+    write_json(&plan,&json!({"commands":[
+        {"type":"define_object_type","definition":{"name":"Route","category":"example","geometry":"path","quantities":{"measured":"length"}}},
+        {"type":"recognition","kind":"define","rule":{"name":"route","object_type":"Route","match":{"entity_type":"Line"},"confidence":0.99}},
+        {"type":"recognition","kind":"apply"}
+    ],"measurements":[{"object_type":"Route","quantity":"measured","kind":"length","unit":"m"}]})).unwrap();
+    let submission = recognition::measure(&drawing, &plan).unwrap();
+    assert_eq!(submission.items.len(), 1);
+    assert_eq!(submission.items[0].quantity, 5.0);
+    assert_eq!(
+        submission.items[0].source_objects,
+        [format!("{:X}", handles[0])]
+    );
+    assert!(!dir.path().join("truth.json").exists());
+    assert!(Session::open_standalone(&drawing)
+        .unwrap()
+        .object_types()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn pdf_recognition_produces_scored_submission_with_page_evidence() {
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let drawing = qiyas_pdf::fixtures::write_wall(dir.path());
+    let plan = dir.path().join("recognition.json");
+    write_json(&plan,&json!({"commands":[
+        {"type":"recognition","kind":"pdf","path":drawing.file_name().unwrap().to_string_lossy(),"page":1,"calibration":{"a":[0,0],"b":[100,0],"distance_m":1}},
+        {"type":"define_object_type","definition":{"name":"Outline","category":"example","geometry":"region","quantities":{"measured_area":"area"}}},
+        {"type":"recognition","kind":"define","rule":{"name":"outline","object_type":"Outline","match":{"closed_region":true,"layer":"PDF-FF0000"},"confidence":0.99}},
+        {"type":"recognition","kind":"apply"}
+    ],"measurements":[{"object_type":"Outline","quantity":"measured_area","kind":"area","unit":"m2","id":"area-1"}]})).unwrap();
+    let submission = recognition::measure(&drawing, &plan).unwrap();
+    assert_eq!(submission.items.len(), 1);
+    assert!((submission.items[0].quantity - 0.5).abs() < 1e-6);
+    assert!(submission.items[0].source_objects[0].contains("#page=1"));
+    let report = score::score(
+        &truth(vec![item("area-1", "area", 0.5, "geometry")]),
+        &submission,
+        None,
+    );
+    assert_eq!(report.metrics.passed, 1);
+    assert_eq!(
+        report.metrics.traceable, 0,
+        "PDF evidence does not pretend to be the source CAD handle"
+    );
+    // The default benchmark root is relative. The shared surface must not resolve it twice.
+    let cwd = std::env::current_dir().unwrap();
+    if let Some(common) = cwd.ancestors().find(|base| drawing.starts_with(base)) {
+        let mut relative = PathBuf::new();
+        for _ in cwd.strip_prefix(common).unwrap().components() {
+            relative.push("..");
+        }
+        relative.push(drawing.strip_prefix(common).unwrap());
+        let from_relative = recognition::measure(&relative, &plan).unwrap();
+        assert_eq!(from_relative.items.len(), 1);
+        assert_eq!(
+            from_relative.items[0].quantity,
+            submission.items[0].quantity
+        );
+        assert_eq!(
+            from_relative.items[0].source_objects,
+            submission.items[0].source_objects
+        );
+    }
+}

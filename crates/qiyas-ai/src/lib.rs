@@ -46,3 +46,5 @@ pub use tools::ToolSpec;
 pub use window::{is_window_tool, run_window};
 
 mod surface_args;
+
+mod document;

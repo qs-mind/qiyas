@@ -582,6 +582,15 @@ impl Session {
     }
     pub(crate) fn delete_object_type(&mut self, name: &str) -> Result<(), CoreError> {
         if self
+            .recognition_rules()?
+            .iter()
+            .any(|rule| rule.object_type.eq_ignore_ascii_case(name))
+        {
+            return Err(invalid(
+                "Cannot delete a type referenced by a recognition rule",
+            ));
+        }
+        if self
             .drawing
             .doc
             .entities()

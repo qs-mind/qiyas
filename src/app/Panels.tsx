@@ -1,6 +1,7 @@
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and the side panel (take-off, BOQ, conflicts, Mizan) on the right. */
+import { RecognitionPanel } from "../shell/RecognitionPanel";
 import { MizanMark } from "../ai/MizanMark";
 import { Tabs } from "@base-ui/react/tabs";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
@@ -327,11 +328,12 @@ type SideProps = {
   ai: AssistantWiring;
   conversationHistory: ConversationHistoryState;
   comments: Comments;
+  recognition: { revision: unknown; run: Layers["runDrawingCommand"] };
 };
 
 /** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts, comments and
  *  Mizan panels (all mounted, one shown). */
-export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments }: SideProps) {
+export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments, recognition }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -366,6 +368,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
         ) : undefined,
     },
     { id: "comments", label: t("comments") },
+    { id: "review", label: t("recognition.review") },
     { id: "assistant", label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
   ];
 
@@ -421,6 +424,10 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onRefresh={comments.refresh}
           onShow={comments.show}
         />
+      </Tabs.Panel>
+      <Tabs.Panel value="review" keepMounted tabIndex={-1} className="side-panel">
+        <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null}
+          revision={recognition.revision} run={recognition.run} />
       </Tabs.Panel>
       <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
         <AssistantPanel

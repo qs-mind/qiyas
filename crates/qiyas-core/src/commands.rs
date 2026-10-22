@@ -26,6 +26,11 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Read drawing evidence through data-defined rules; define, test, apply and review typed
+    /// recognition. Physical extraction properties use metres, coordinates use drawing units.
+    #[schemars(extend("x-category" = "objects"))]
+    #[schemars(example = json!({"type":"recognition","kind":"list"}))]
+    Recognition(Box<crate::recognition::RecognitionCommand>),
     /// Stores an element type as drawing knowledge. Properties and quantities are data;
     /// no trade is built in. Numeric property units are metres, m², m³, degrees or counts.
     /// One undo step includes the knowledge dictionary.
@@ -1350,7 +1355,12 @@ impl Command {
         let wire = serde_json::to_value(self).unwrap_or_default();
         let name = wire["type"].as_str().unwrap_or("command");
         match wire["kind"].as_str() {
-            Some(kind) if matches!(name, "draw" | "modify" | "edit" | "dimension") => {
+            Some(kind)
+                if matches!(
+                    name,
+                    "draw" | "modify" | "edit" | "dimension" | "recognition"
+                ) =>
+            {
                 format!("{name}.{kind}")
             }
             _ => name.to_string(),
@@ -1361,6 +1371,7 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::Recognition(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::SetLayerHidden { .. }
             | Command::IsolateLayer { .. }
             | Command::UnisolateLayers
@@ -1564,6 +1575,9 @@ impl Command {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    Recognition {
+        result: serde_json::Value,
+    },
     WallGroups {
         groups: Vec<crate::walls::WallGroupInfo>,
     },
@@ -1749,6 +1763,11 @@ impl Session {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
             }
+            Command::Recognition(command) => {
+                return Ok(Outcome::Recognition {
+                    result: self.run_recognition(*command)?,
+                })
+            }
             Command::DefineObjectType { definition } => {
                 self.define_object_type(*definition, false)?;
                 return Ok(Outcome::Changed);
@@ -1780,9 +1799,12 @@ impl Session {
                 });
             }
             Command::SetKnowledge { kind, name, data } => {
-                if kind == crate::knowledge::Kind::Types {
+                if matches!(
+                    kind,
+                    crate::knowledge::Kind::Types | crate::knowledge::Kind::Recognition
+                ) {
                     return Err(CoreError::InvalidCommand(
-                        "Use define_object_type or redefine_object_type".into(),
+                        "Use define_object_type/redefine_object_type or recognition.define".into(),
                     ));
                 }
                 crate::knowledge::put(&mut self.drawing.doc, kind, &name, &data)?;

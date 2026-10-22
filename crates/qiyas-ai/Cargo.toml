@@ -11,6 +11,7 @@ await_holding_lock = "deny"
 [dependencies]
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
+qiyas-pdf = { path = "../qiyas-pdf" }
 qiyas-render = { path = "../qiyas-render" }
 qiyas-takeoff = { path = "../qiyas-takeoff" }
 serde.workspace = true
@@ -32,6 +33,7 @@ rmcp = { version = "3.5", default-features = false, features = ["server", "trans
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 
 [dev-dependencies]
+qiyas-pdf = { path = "../qiyas-pdf", features = ["fixtures"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 opencadcodec.workspace = true
 rust_xlsxwriter.workspace = true

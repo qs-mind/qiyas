@@ -859,7 +859,17 @@ export type Current = {
 };
 
 /** The command bus (`qiyas_core::Command`). Points are in drawing coordinates. */
+export type RecognitionCandidate = {
+  handle: number; rule: string; confidence: number; state: "pending" | "accepted" | "rejected";
+  placement: { type: string; props: Record<string, string | number | boolean> };
+  evidence: { handle?: number; path?: string; page?: number; detail: string }[];
+  issues: string[]; unresolved: string[]; object: number | null;
+};
 export type Command =
+  | { type: "recognition"; kind: "queue"; state?: "pending" | "accepted" | "rejected" }
+  | { type: "recognition"; kind: "review"; handle: number; decision: "accepted" | "rejected";
+      props?: Record<string, string | number | boolean>; object_type?: string; save_as?: string }
+
   | { type: "measure_distance"; points: [number, number][] }
   | { type: "measure_area"; points: [number, number][] }
   /** `chain`: the block references the entity sits inside, outermost first; empty on the sheet. */
@@ -1203,6 +1213,7 @@ export type TextScope = "sheet" | "drawing";
 export type TextMatch = { handle: number; sheet: string };
 
 export type Outcome =
+  | { type: "recognition"; result: { candidates?: RecognitionCandidate[]; candidate?: RecognitionCandidate } }
   | { type: "measured"; measurement: Measurement }
   | { type: "removed"; id: string }
   | { type: "changed" }
@@ -1845,3 +1856,6 @@ export const aiSetLanguage = (lang: "en" | "ar") => invoke<void>("ai_set_languag
 export const clipboardReadText = () => invoke<string | null>("clipboard_read_text");
 /** The clipboard's picture: width, height (u32 little-endian), RGBA; empty when none. */
 export const clipboardReadImage = () => invoke<ArrayBuffer>("clipboard_read_image");
+
+export type PdfAttachment = { name: string; path: string; pages: number };
+export const aiAttachPdf = (name: string, bytes: number[]) => invoke<PdfAttachment>("ai_attach_pdf", { name, bytes });

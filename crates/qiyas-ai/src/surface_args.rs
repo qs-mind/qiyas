@@ -39,6 +39,20 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "document") => (
+            object(
+                json!({"path":string,"pages":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"integer","minimum":1}}}),
+                &["path"],
+            ),
+            json!({"path":"drawing.pdf","pages":[1]}),
+        ),
+        (CAPTURE, "document") => (
+            object(
+                json!({"path":string,"page":{"type":"integer","minimum":1},"width":{"type":"integer","minimum":64,"maximum":1600}}),
+                &["path", "page"],
+            ),
+            json!({"path":"drawing.pdf","page":1}),
+        ),
         (READ, "records") => (
             command_args("records")["properties"]["query"].clone(),
             json!({"collection":"entities","detail":"summary"}),
