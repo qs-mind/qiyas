@@ -126,7 +126,7 @@ test("switching providers keeps each profile and never transfers a typed key", a
 test("approval and measurement settings keep the selected values on save", async () => {
   setup();
   const autonomy = await screen.findByLabelText("Plan approval");
-  expect((autonomy as HTMLSelectElement).value).toBe("per_job");
+  expect((autonomy as HTMLSelectElement).value).toBe("autonomous");
   await screen.findByRole("option", { name: "Local test rules" });
   expect((screen.getByLabelText("Method of measurement") as HTMLSelectElement).value).toBe("");
   fireEvent.change(autonomy, { target: { value: "per_phase" } });

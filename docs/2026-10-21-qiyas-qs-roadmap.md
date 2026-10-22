@@ -9,8 +9,8 @@
 > - Every assumption is flagged.
 > - Every discrepancy is raised as a query.
 >
-> A senior QS signs it after a review, not a re-measure. When revision B arrives, Qiyas
-> returns the variation quantities in minutes.
+> Mizan completes the job alone and reports uncertainty. Human review is optional.
+> When revision B arrives, Qiyas returns the variation quantities in minutes.
 
 Qiyas does **quantities only**, never rates. It works on **anyone's drawings**: messy
 consultant DWGs, PDFs and scans, not just drawings Qiyas made. The villa was one example.
@@ -82,8 +82,8 @@ take-off as ground truth):
 - **Phase 13:** fix the one failing plot test (viewport frames now on non-plotting `A-VIEW`:
   the test gets its own layer), run the full check, commit.
 - **Phase 14:** saved conversations. The brief is ready. Add the **approval modes** setting
-  (per job default, per phase, autonomous), enforced in the agent around the `plan`
-  operation; a failed check always pauses.
+  (autonomous default, per job, per phase), enforced in the agent around the `plan`
+  operation; autonomous jobs report unresolved checks without a required human step.
 
 ### Phase 15: The QS benchmark (built first, so every later phase is scored)
 
@@ -183,6 +183,19 @@ counts, and the rest are listed in review.
 
 **Done when:** for each portfolio project, the generated BOQ matches the senior QS's within
 ±2% on 95% of items, and every line traces back to the drawing.
+
+### Mizan autonomous take-off (founder ruling, 22 October; before Phases 19–23)
+
+Qiyas is fully AI-driven: the engineer writes the request and Mizan reads, interprets, measures,
+self-checks and produces the BOQ alone, reporting uncertainties at the end. Review is optional.
+Autonomous is the default; per-job and per-phase approvals remain explicit user choices. This
+supersedes the earlier default and mandatory review/pause language. The headline score is
+**MIZAN ALONE**, using live `qiyas-cli eval`, never prepared engine rules.
+
+Build the bounded digest, batch schema discovery, data-defined workflow, mapped-element-only
+submissions, step/cost logs, fixed six-case live-dev set with a total budget, conversation-only
+scripted tests and a stratified quick benchmark. See
+`2026-10-22-mizan-autonomous-takeoff.md` for implementation and validation.
 
 ### Phase 19: Find every discrepancy (E6, E7)
 

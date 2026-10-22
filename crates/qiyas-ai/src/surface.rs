@@ -32,7 +32,9 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 15] = [
+pub const READ_OPS: [&str; 17] = [
+    "digest",
+    "takeoff_check",
     "document",
     "state",
     "capabilities",
@@ -102,6 +104,8 @@ macro_rules! operations {
 operations![
     (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
+    (READ, "digest", [Drawing]),
+    (READ, "takeoff_check", [Drawing]),
     (READ, "capabilities", [Nothing]),
     (READ, "commands", [Nothing]),
     (READ, "record_schema", [Nothing]),
@@ -191,7 +195,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} one command's schema and examples, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: digest ({offset?}: compact drawing evidence, method and suggested picture; start take-off here); takeoff_check ({offset?, expectations?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -691,6 +695,21 @@ pub fn run_session_with_method(
     match (tool, op) {
         (READ, "document") => json(crate::document::read(args)?),
         (CAPTURE, "document") => crate::document::capture(args),
+        (READ, "digest") => {
+            json(session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?)
+        }
+        (READ, "takeoff_check") => {
+            let expectations: Vec<qiyas_core::verify::Expectation> = serde_json::from_value(
+                args.get("expectations")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            )
+            .map_err(|e| bad(format!("expectations: {e}")))?;
+            json(
+                session
+                    .takeoff_check(args["offset"].as_u64().unwrap_or(0) as usize, &expectations)?,
+            )
+        }
         (READ, "state") => {
             let mut value = state(session);
             value["measurement_method"] = json!(method);
@@ -923,6 +942,13 @@ fn capabilities() -> Value {
 /// `commands`: the index, one command, a category or a search.
 fn commands(args: &Value) -> Result<Value, ToolError> {
     let reg = registry();
+    if let Some(names) = args["names"].as_array() {
+        let results = names
+            .iter()
+            .map(|name| commands(&json!({"name":name})))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(json!({"commands":results}));
+    }
     if let Some(name) = args.get("name").and_then(Value::as_str) {
         if name.eq_ignore_ascii_case("plan") {
             return Ok(plan_info());

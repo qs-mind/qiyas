@@ -47,6 +47,6 @@ test("a late response cannot fill the queue of a different drawing", async () =>
   const view = render(<RecognitionPanel active drawing="first.dxf" revision={1} run={vi.fn()} />);
   view.rerender(<RecognitionPanel active drawing="second.dxf" revision={2} run={vi.fn()} />);
   finish({ type: "recognition", result: { candidates: [row] } });
-  await waitFor(() => expect(screen.getByText("No elements awaiting review.")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("No unresolved recognition items. Review is optional.")).toBeTruthy());
   expect(screen.queryByText("Run")).toBeNull();
 });

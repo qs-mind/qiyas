@@ -2,10 +2,11 @@
 mod baseline;
 mod general;
 pub mod generate;
-mod model;
+pub(crate) mod model;
 mod recognition;
-mod score;
-mod submission;
+pub(crate) mod score;
+pub(crate) mod sets;
+pub(crate) mod submission;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -62,6 +63,9 @@ pub enum BenchCommand {
         mode: RunMode,
         #[arg(long)]
         case: Option<String>,
+        /// Frozen stratified development subset (quick: at most 120 cases, one repetition).
+        #[arg(long, conflicts_with_all = ["case", "clean_only"])]
+        set: Option<String>,
         #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u16).range(1..=100))]
         repeats: u16,
         /// Score only the clean cases; by default all registered variants are scored too.
@@ -97,9 +101,11 @@ pub fn run(args: &BenchArgs) -> Result<Value, String> {
             case,
             repeats,
             clean_only,
+            set,
         } => baseline_run(
             &args.root,
             case.as_deref(),
+            set.as_deref(),
             usize::from(*repeats),
             *clean_only,
             *mode,
@@ -302,12 +308,18 @@ fn fingerprint(submission: &model::Submission) -> Result<String, String> {
 fn baseline_run(
     root: &Path,
     selected: Option<&str>,
+    set: Option<&str>,
     repeats: usize,
     clean_only: bool,
     mode: RunMode,
 ) -> Result<Value, String> {
     let started = Instant::now();
-    let latest = format!("baseline-{}.json", mode.name());
+    let repeats = if set == Some("quick") { 1 } else { repeats };
+    let latest = format!(
+        "baseline-{}{}.json",
+        mode.name(),
+        set.map(|s| format!("-{s}")).unwrap_or_default()
+    );
     let previous_rates = if root.join(&latest).exists() {
         let path = safe_file(root, Path::new(&latest))?;
         let previous: Value =
@@ -317,10 +329,41 @@ fn baseline_run(
     } else {
         Value::Null
     };
-    let ids = selected
-        .map(|s| vec![s.to_string()])
-        .map(Ok)
-        .unwrap_or_else(|| dev_ids(root, clean_only))?;
+    let ids = if let Some(set) = set {
+        sets::select(root, set)?
+    } else {
+        selected
+            .map(|s| vec![s.to_string()])
+            .map(Ok)
+            .unwrap_or_else(|| dev_ids(root, clean_only))?
+    };
+    // Compare the same cohort with the retained pre-change full report; never run it again.
+    let before_file = root.join(format!("baseline-{}.json", mode.name()));
+    let mut before = Metrics::default();
+    let mut before_cases = 0;
+    if set.is_some() && before_file.exists() {
+        let prior: Value = serde_json::from_slice(
+            &std::fs::read(safe_file(
+                root,
+                Path::new(before_file.file_name().unwrap()),
+            )?)
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        if let Some(reports) = prior["reports"].as_array() {
+            for report in reports.iter().filter(|r| {
+                r["id"]
+                    .as_str()
+                    .is_some_and(|id| ids.iter().any(|s| s == id))
+            }) {
+                before.merge(
+                    &serde_json::from_value(report["metrics"].clone())
+                        .map_err(|e| e.to_string())?,
+                );
+                before_cases += 1;
+            }
+        }
+    }
     let run_dir = root.join("runs").join(format!(
         "baseline-{}-{}-{}",
         mode.name(),
@@ -355,7 +398,7 @@ fn baseline_run(
                     {
                         general::extend_pdf(root, &drawing, s)
                     } else {
-                        s
+                        general::extend(root, &drawing, s)
                     }
                 })
             } else {
@@ -426,15 +469,14 @@ fn baseline_run(
         "Phase 20: compare revision A/B and report the known quantity deltas.",
         "Add independently sourced CC BY cases after verified downloads and QS spot checks. Synthetic-only scores do not establish performance on consultant drawings.",
     ];
-    let result = json!({"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
+    let result = json!({"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
     write_json(&run_dir.join("report.json"), &result)?;
     let md = markdown(&result);
     std::fs::write(run_dir.join("report.md"), &md).map_err(|e| e.to_string())?;
     write_json(&root.join(&latest), &result)?;
-    std::fs::write(root.join(format!("baseline-{}.md", mode.name())), md)
-        .map_err(|e| e.to_string())?;
+    std::fs::write(root.join(latest.replace(".json", ".md")), md).map_err(|e| e.to_string())?;
     Ok(
-        json!({"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates}),
+        json!({"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates,"comparison_before":result["comparison_before"]}),
     )
 }
 

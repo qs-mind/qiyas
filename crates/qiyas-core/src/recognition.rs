@@ -85,6 +85,8 @@ pub struct Selector {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Extraction {
+    /// The source insert name, for data-defined grouping and descriptions.
+    BlockName,
     /// An explicitly cited value, for example a schedule or specification property.
     Constant { value: Value, source: String },
     Attribute {
@@ -179,6 +181,7 @@ pub struct Candidate {
 pub enum RecognitionCommand {
     /// Define or replace a validated recognition rule in QIYAS_KNOWLEDGE/recognition.
     #[schemars(example = json!({"kind":"define","rule":{"name":"runs","object_type":"Run","match":{"entity_type":"Line"},"confidence":0.95}}))]
+    #[schemars(extend("x-takeoff-step" = "2 define recognition"))]
     Define { rule: Box<Rule> },
     /// List drawing-owned recognition rules without changing the drawing.
     #[schemars(example = json!({"kind":"list"}))]
@@ -192,6 +195,7 @@ pub enum RecognitionCommand {
     /// Recognise the current sheet. Accept confident matches and retain the rest for review.
     /// All instances and review entries belong to one undo step. Repeated apply is idempotent.
     #[schemars(example = json!({"kind":"apply"}))]
+    #[schemars(extend("x-takeoff-step" = "3 recognise"))]
     Apply {
         #[serde(default)]
         rules: Vec<String>,
@@ -205,6 +209,7 @@ pub enum RecognitionCommand {
     /// Accept, fix properties/type, or reject a pending candidate. A named correction saves a
     /// rule scoped to this source; an explicit rule can express a reviewed generalisation.
     #[schemars(example = json!({"kind":"review","handle":1234,"decision":"accepted"}))]
+    #[schemars(extend("x-takeoff-step" = "7 fix by handle"))]
     Review {
         handle: u64,
         decision: ReviewState,
@@ -222,6 +227,7 @@ pub enum RecognitionCommand {
     ReadSchedule { source: GridSource },
     /// Convert source cells into types and recognition rules using the supplied column mapping.
     #[schemars(example = json!({"kind":"schedule","spec":{"source":{"kind":"table","handle":1234},"template":{"name":"Item","category":"example","geometry":"point","quantities":{"measured_count":"count"}},"type_column":0,"match_column":0,"match_on":"block","confidence":0.95}}))]
+    #[schemars(extend("x-takeoff-step" = "2 interpret schedules"))]
     Schedule { spec: Box<ScheduleSpec> },
     /// Import vectors with a scale computed from two page points and a known distance in metres.
     /// Every imported entity retains its PDF path and page. One undo step.
@@ -600,6 +606,7 @@ impl Session {
             .expect("queried entity");
         let factor = self.drawing.units.to_metres();
         match extraction {
+            Extraction::BlockName => Ok((json!(row.block_name.as_ref().ok_or_else(||invalid("Block name requires an insert"))?), vec![source_of(e)])),
             Extraction::Constant { value, source } => Ok((
                 value.clone(),
                 vec![Evidence {
@@ -758,6 +765,18 @@ impl Session {
         candidate.state = ReviewState::Accepted;
         candidate.issues.clear();
         Ok(())
+    }
+    /// Recognition evidence on every sheet, used by generated BOQ and submission checks.
+    pub fn recognition_evidence(&self) -> Result<Vec<Candidate>, CoreError> {
+        self.drawing
+            .doc
+            .entities()
+            .filter_map(|e| crate::xdata::read_text(e.common(), APP))
+            .map(|text| {
+                serde_json::from_str(&text)
+                    .map_err(|e| invalid(format!("Invalid recognition metadata: {e}")))
+            })
+            .collect()
     }
     pub fn recognition_queue(
         &self,

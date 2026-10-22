@@ -165,15 +165,18 @@ pub enum MeasurementCommand {
     /// Apply a validated method snapshot. Null clears this scope; project takes precedence.
     /// Quantities, dimension sheets and BOQ re-derive in the same undo step.
     #[schemars(example = json!({"kind":"set_method","scope":"project","method":null}))]
+    #[schemars(extend("x-takeoff-step" = "4 apply selected method"))]
     SetMethod {
         scope: MethodScope,
         method: Option<Box<RuleSet>>,
     },
     /// Replace BOQ mappings. Descriptions and grouping are data; quantities are always derived.
     #[schemars(example = json!({"kind":"set_mappings","mappings":[]}))]
+    #[schemars(extend("x-takeoff-step" = "5 map recognised elements to BOQ"))]
     SetMappings { mappings: Vec<Mapping> },
     /// Read the applied methods, quantities, generated BOQ and dimension sheets.
     #[schemars(example = json!({"kind":"report"}))]
+    #[schemars(extend("x-takeoff-step" = "6 check generated BOQ"))]
     Report,
 }
 impl MeasurementCommand {

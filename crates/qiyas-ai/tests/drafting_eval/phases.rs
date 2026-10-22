@@ -255,7 +255,10 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
     let mut agent = Agent::new(
         Box::new(Script::steps(steps, requests.clone())),
         shared.clone(),
-        AgentSettings::default(),
+        AgentSettings {
+            autonomy: qiyas_ai::Autonomy::PerJob,
+            ..Default::default()
+        },
     );
     let (tx, mut rx) = mpsc::channel(1_000);
     agent

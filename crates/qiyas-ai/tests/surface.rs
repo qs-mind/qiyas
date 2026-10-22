@@ -942,7 +942,7 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
 }
 
 #[tokio::test]
-async fn every_mode_pauses_for_unfixed_new_errors_but_allows_repairs_and_existing_errors() {
+async fn selected_modes_pause_and_autonomous_reports_unfixed_errors_without_blocking() {
     use qiyas_ai::Autonomy;
     let line = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}});
     for mode in [Autonomy::PerJob, Autonomy::PerPhase, Autonomy::Autonomous] {
@@ -964,9 +964,13 @@ async fn every_mode_pauses_for_unfixed_new_errors_but_allows_repairs_and_existin
             let events = events_for(&mut agent, "Draw").await;
             assert_eq!(
                 matches!(events.last(), Some(AgentEvent::AwaitingApproval { .. })),
-                !repair,
+                !repair && mode != Autonomy::Autonomous,
                 "{mode:?}, repair={repair}: {events:?}"
             );
+            if mode == Autonomy::Autonomous && !repair {
+                assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+                assert!(events.iter().any(|e|matches!(e,AgentEvent::Text{text} if text.contains("Unresolved drawing checks"))));
+            }
         }
         let (_dir, mut session) = sample();
         call(&mut session, EXECUTE, line.clone()).unwrap();
@@ -1020,7 +1024,7 @@ async fn unfinished_phase_error_attribution_survives_restart_until_repaired() {
     let (_dir, session) = sample();
     let shared = Arc::new(Mutex::new(Some(session)));
     let settings = AgentSettings {
-        autonomy: qiyas_ai::Autonomy::Autonomous,
+        autonomy: qiyas_ai::Autonomy::PerJob,
         ..Default::default()
     };
     let line = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}});
@@ -1660,4 +1664,42 @@ fn pdf_document_text_and_picture_preserve_the_open_drawing() {
     assert_eq!(count(&session), before);
     assert_eq!(session.batch_version(), revision);
     assert_eq!(session.history_steps().0.len(), history);
+}
+
+#[test]
+fn digest_is_bounded_paged_and_read_only_and_workflow_schemas_are_batched() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("digest.dxf"), 6);
+    let commands:Vec<_>=(0..80).map(|i|json!({"type":"text","at":[i,0],"height":0.1,"value":format!("Label {i}: {}","測".repeat(180))})).collect();
+    session
+        .run_input(&json!({"type":"batch","commands":commands}), Source::User)
+        .unwrap();
+    let steps = session.history_steps();
+    let mut offset = 0;
+    let mut seen = 0;
+    loop {
+        let page = call(
+            &mut session,
+            READ,
+            json!({"op":"digest","args":{"offset":offset}}),
+        )
+        .unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() <= qiyas_core::digest::MAX_BYTES);
+        assert!(page["picture"].is_object());
+        seen += page["entries"].as_array().unwrap().len();
+        let Some(next) = page["next_offset"].as_u64() else {
+            assert_eq!(seen, page["total_entries"].as_u64().unwrap() as usize);
+            break;
+        };
+        assert!(next > offset);
+        offset = next;
+    }
+    assert!(offset > 0, "Evidence must be paged, not silently dropped");
+    assert_eq!(json!(steps), json!(session.history_steps()));
+    let schemas=call(&mut session,READ,json!({"op":"commands","args":{"names":["define_object_type","recognition.apply","measurement.set_mappings"]}})).unwrap();
+    assert_eq!(schemas["commands"].as_array().unwrap().len(), 3);
+    let index = qiyas_core::registry::registry().index_text();
+    assert!(
+        index.contains("Take-off workflow") && index.contains("3 recognise: recognition.apply")
+    );
 }

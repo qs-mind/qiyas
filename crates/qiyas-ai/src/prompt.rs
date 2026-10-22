@@ -168,6 +168,7 @@ pub fn system_prompt(lang: Lang, facts: &DrawingFacts) -> String {
     let t = |en: &'static str, arabic: &'static str| if ar { arabic } else { en };
     let mut s = String::from(if ar { AR } else { EN });
 
+    s.push_str(include_str!("takeoff_workflow.txt"));
     s.push_str("\n\n## Commands by category\n");
     s.push_str(&qiyas_core::registry::registry().index_text());
 

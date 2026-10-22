@@ -39,7 +39,7 @@ pub enum Command {
     /// Stores an element type as drawing knowledge. Properties and quantities are data;
     /// no trade is built in. Numeric property units are metres, m², m³, degrees or counts.
     /// One undo step includes the knowledge dictionary.
-    #[schemars(extend("x-category" = "objects", "x-words" = ["DEFINEOBJECTTYPE"]))]
+    #[schemars(extend("x-category" = "objects", "x-words" = ["DEFINEOBJECTTYPE"], "x-takeoff-step" = "2 define types"))]
     #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]
     DefineObjectType {
         definition: Box<crate::objects::ObjectType>,
@@ -1286,6 +1286,7 @@ pub enum Command {
     /// 0.1 degree. Each result gives pass/fail, the measured value and the tolerance.
     #[schemars(extend("x-category" = "inquiry"))]
     #[schemars(example = json!({"type": "verify", "expectations": [{"kind": "length", "targets": [{"handle": 1234}], "value": 10}]}))]
+    #[schemars(extend("x-takeoff-step" = "6 verify expectations"))]
     Verify {
         expectations: Vec<crate::verify::Expectation>,
     },

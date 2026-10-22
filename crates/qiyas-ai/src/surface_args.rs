@@ -39,6 +39,14 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "digest" | "takeoff_check") => {
+            let mut props = json!({"offset":{"type":"integer","minimum":0}});
+            if op == "takeoff_check" {
+                props["expectations"] =
+                    command_args("verify")["properties"]["expectations"].clone();
+            }
+            (object(props, &[]), json!({}))
+        }
         (READ, "document") => (
             object(
                 json!({"path":string,"pages":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"integer","minimum":1}}}),
@@ -67,7 +75,7 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (READ, "commands") => (
             object(
-                json!({"name":nullable(&string),"search":nullable(&string),"category":nullable(&string)}),
+                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":16,"items":string},"search":nullable(&string),"category":nullable(&string)}),
                 &[],
             ),
             json!({"name":"draw.line"}),

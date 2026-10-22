@@ -451,11 +451,21 @@ fn autonomy_never_opens_case_recipe_and_shared_rules_reject_case_handles() {
     // Deliberately unreadable: accessing a case recipe would fail this run.
     std::fs::write(dir.path().join("recognition.json"), "not JSON").unwrap();
     let baseline = general::measure(dir.path(), &drawing).unwrap();
-    assert!(baseline
+    assert!(
+        baseline.items.is_empty(),
+        "Unmapped geometry stays a candidate"
+    );
+    std::fs::create_dir(dir.path().join("general")).unwrap();
+    write_json(&dir.path().join("general/recognition.json"),&json!({"commands":[
+        {"type":"define_object_type","definition":{"name":"Surface","category":"evidence","geometry":"region","quantities":{"measured":"area"}}},
+        {"type":"recognition","kind":"define","rule":{"name":"surfaces","object_type":"Surface","match":{"entity_type":"LwPolyline","closed_region":true},"confidence":0.99}},
+        {"type":"recognition","kind":"apply"}
+    ],"measurements":[{"object_type":"Surface","quantity":"measured","kind":"area","unit":"m2"}]})).unwrap();
+    let mapped = general::measure(dir.path(), &drawing).unwrap();
+    assert!(mapped
         .items
         .iter()
         .any(|i| (i.quantity - 12.0).abs() < 1e-9));
-    std::fs::create_dir(dir.path().join("general")).unwrap();
     write_json(&dir.path().join("general/recognition.json"),&json!({"commands":[{"type":"recognition","kind":"define","rule":{"name":"case","match":{"handles":[123]}}}],"measurements":[]})).unwrap();
     assert!(general::measure(dir.path(), &drawing)
         .unwrap_err()
@@ -516,4 +526,62 @@ fn general_pdf_measures_multiple_labels_using_its_own_scale_text_without_case_re
     }
     assert!(!dir.path().join("recognition.json").exists());
     assert!(!dir.path().join("truth.json").exists());
+}
+
+#[test]
+fn quick_and_live_sets_are_frozen_deterministic_and_keep_holdout_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    for family in [
+        "apartment",
+        "office",
+        "warehouse",
+        "mep",
+        "external",
+        "part",
+    ] {
+        for i in 0..24 {
+            let id = format!("{family}-{i:03}");
+            let path = dir.path().join("cases").join(&id);
+            std::fs::create_dir_all(&path).unwrap();
+            let drawing = if i == 23 {
+                "drawing.pdf"
+            } else {
+                "drawing.dxf"
+            };
+            std::fs::write(path.join(drawing), []).unwrap();
+            write_json(&path.join("truth.json"),&json!({"schema_version":1,"id":id,"project_type":family,"drawing":drawing,"items":[{"id":"shape","description":"Shape","kind":"area","unit":"m2","quantity":1,"source_objects":["1"],"tolerance_class":"geometry"}]})).unwrap();
+        }
+    }
+    let quick = sets::select(dir.path(), "quick").unwrap();
+    assert_eq!(quick.len(), 120);
+    assert_eq!(quick, sets::select(dir.path(), "quick").unwrap());
+    for family in [
+        "apartment",
+        "office",
+        "warehouse",
+        "mep",
+        "external",
+        "part",
+    ] {
+        assert!(quick.iter().any(|id| id.starts_with(family)));
+    }
+    let live = sets::select(dir.path(), "live-dev").unwrap();
+    assert_eq!(live.len(), 6);
+    assert_eq!(live, sets::select(dir.path(), "live-dev").unwrap());
+    assert_eq!(live[0], "apartment-000");
+    assert_eq!(live[5], "apartment-023");
+    assert!(!dir.path().join("holdout").exists());
+}
+
+#[test]
+fn manual_geometry_without_recognition_mapping_is_never_submitted() {
+    let mut session = Session::new_blank(Path::new("unused.dxf"), 6);
+    session
+        .run_input(
+            &json!({"type":"measure_area","points":[[0,0],[3,0],[3,2],[0,2]]}),
+            qiyas_core::Source::Ai,
+        )
+        .unwrap();
+    assert_eq!(session.takeoff.items.len(), 1);
+    assert!(submission::from_session(&session).unwrap().items.is_empty());
 }

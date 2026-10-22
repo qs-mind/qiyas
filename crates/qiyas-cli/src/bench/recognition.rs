@@ -31,6 +31,8 @@ struct Measure {
     #[serde(default)]
     aggregate: bool,
     #[serde(default)]
+    group_by: Option<String>,
+    #[serde(default)]
     height_property: Option<String>,
 }
 fn geometric() -> String {
@@ -63,11 +65,12 @@ fn measure_with_scope(
     } else {
         Session::open_standalone(drawing).map_err(|e| e.to_string())?
     };
-    let mut submission = if recipe.include_baseline && !pdf {
-        super::baseline::measure(drawing)?
-    } else {
-        Submission::default()
-    };
+    let mut submission = Submission::default();
+    if recipe.include_baseline {
+        submission.warnings.push(
+            "Legacy include_baseline ignored: candidates need explicit element mappings".into(),
+        );
+    }
     let mut commands = Vec::new();
     for mut input in recipe.commands {
         let command = input["type"].as_str().ok_or("Recipe command needs type")?;
@@ -117,10 +120,12 @@ fn measure_with_scope(
             .filter(|o| o.instance.type_name == measurement.object_type && o.valid)
             .collect();
         let mut items = Vec::new();
+        let mut groups = std::collections::BTreeMap::<String, Vec<Item>>::new();
         for object in found {
             let quantity = *object
                 .quantities
                 .get(&measurement.quantity)
+                .or_else(|| object.facts.get(&measurement.quantity))
                 .ok_or_else(|| {
                     format!(
                         "No quantity {} on {}",
@@ -130,7 +135,7 @@ fn measure_with_scope(
             let candidate = evidence
                 .iter()
                 .find(|c| c.object == Some(object.instance.id));
-            if candidate.is_some_and(|c| c.state != ReviewState::Accepted) {
+            if candidate.is_none_or(|c| c.state != ReviewState::Accepted) {
                 continue;
             }
             let mut citations = vec![format!(
@@ -167,7 +172,27 @@ fn measure_with_scope(
                 ..Default::default()
             };
             super::model::validate_item(&item)?;
-            items.push(item);
+            if let Some(property) = &measurement.group_by {
+                let group = object
+                    .instance
+                    .props
+                    .get(property)
+                    .ok_or_else(|| format!("Missing grouping property {property}"))?
+                    .to_string();
+                groups.entry(group).or_default().push(item);
+            } else {
+                items.push(item);
+            }
+        }
+        for (_, mut group) in groups {
+            let mut total = group.remove(0);
+            for item in group {
+                total.quantity += item.quantity;
+                total.source_objects.extend(item.source_objects);
+            }
+            total.source_objects.sort();
+            total.source_objects.dedup();
+            submission.items.push(total);
         }
         if measurement.aggregate && !items.is_empty() {
             let mut total = items.remove(0);

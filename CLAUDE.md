@@ -490,6 +490,58 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   The million-segment guard also checks that its ratio budget would reject a 4x slowdown.
 - Schema, verification, benchmark comparison and limits: `docs/2026-10-22-qiyas-phase18.md`.
 
+## Mizan autonomous take-off (22 October 2026; before Phases 19–23)
+
+- Founder ruling: Mizan works from a request to the completed take-off alone. Human review is
+  optional. The headline is **MIZAN ALONE** through live `qiyas-cli eval`; prepared and shared-rule
+  engine benchmarks are separate diagnostics, never claims about autonomous model performance.
+- `qiyas_read digest {offset?}`: all-sheet units/scale, sheets, layer/kind counts, block inserts
+  and attribute tags, spatial text/table evidence, closed-area statistics, hatches, knowledge and
+  take-off counts, selected method and a suggested picture. Pages are at most 8,192 JSON bytes;
+  `next_offset` continues them. Text previews are bounded; records retain the full source.
+  Text clusters are geometric hints, not semantic assertions about a legend or a room.
+- `commands {names:[...]}` fetches several schemas in one call. The registry index generates its
+  take-off workflow from command/kind `x-takeoff-step` schema metadata. The three tools remain.
+- `takeoff_workflow.txt` guides digest/picture, batched type/rule authoring, recognition, Settings
+  method (project override wins), mappings, self-check and repairs by handle. No case names,
+  trade lists, standards text, thresholds or rates are supplied. Missing methods may be authored
+  as explicitly cited geometric data; selected standards must not be silently replaced.
+- `qiyas_read takeoff_check {offset?,expectations?}` reports per-layer and per-block explanation,
+  closed-region coverage, unexplained handles, unmapped tables, unmatched schedule rules,
+  uncertainties and verify results. It reads only. These are evidence shares, not truth coverage.
+  Unexplained annotations can keep the check incomplete; Mizan must disclose that at the budget
+  limit. Multi-sheet recognition evidence is used by measurement derivation and submissions.
+- Autonomous is the default; saved per-job/per-phase choices still apply. Autonomous runs report
+  introduced drawing errors at completion without an approval pause. The Review panel is a
+  take-off report with optional corrections, including accepted low-confidence interpretations.
+- Eval submits only mapped generated BOQ items with accepted recognised source elements. Raw
+  manual rows/candidates are excluded. Engine recipes likewise require accepted elements;
+  legacy `include_baseline` no longer appends raw geometry. Shared development mappings live in
+  `.local/benchmark/general/`, never in the product or live/scripted Mizan input. PDF label areas
+  become typed recognised enclosures before their explicit mapping is submitted.
+- `eval --cases ID ID ...` or `--set live-dev --total-budget-usd N` writes one combined report.
+  Each case retains `agent.log` (every step, no rotation), `steps.jsonl` (requests, trimmed tool
+  results, usage, reservations and cost), BOQ/dimensions, drawing and self-check. Reservations
+  cover the next request only: UTF-8 input bytes plus protocol/image allowance and output cap;
+  actual usage settles the ledger. Unknown usage retains the reservation and stops the case.
+  Unused case allocations carry forward; the total and daily caps both apply. Selected Settings
+  method files are applied to the isolated evaluation drawing. No case recipes are supplied.
+- Frozen sets live in `.local/benchmark/sets/`. `live-dev` selects the first lexical clean case
+  in apartment, office, warehouse, MEP and external, plus the first lexical PDF case. `quick`
+  round-robins project-type × variant strata, SHA-256 case-ID order within each, up to 120 cases.
+  `bench run --set quick --mode prepared|autonomy` forces one repetition. Existing full reports
+  provide the before scores for the exact quick cohort. The full 1,099 × 3 remains for milestones.
+- `eval_workflow_tests.rs` runs the real agent with a conversation-only scripted provider on two
+  newly generated drawings, writes its own rules and mappings, resolves pending candidates by
+  handle, and scores positive coverage. The provider has no Session/filesystem/truth access.
+  This tests orchestration; live model quality still requires the reviewer's paid evaluation.
+- Verified quick cohort (120 cases, one repetition): prepared coverage unchanged at 30.17%,
+  precision 19.02% → 69.73%; shared-rule autonomy coverage unchanged at 19.50%, precision
+  14.43% → 98.76%. Before scores use exactly these cases from the retained full reports. The
+  scripted office/apartment runs reached 37.5%/44.44% coverage and 100% item precision in ten
+  requests each. These results do not replace a live MIZAN ALONE score.
+- No dependencies added. Validation and measured results: `docs/2026-10-22-mizan-autonomous-takeoff.md`.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,
@@ -1551,10 +1603,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   model discards old thinking, raw provider blocks and provider memory. The first resumed turn
   tells Mizan to read the drawing before acting. Old tool cards cannot undo earlier sessions.
   Pictures and thumbnails become `[picture removed]` on disk; keys are never included.
-- Settings include `autonomy` (`per_job`, the default; `per_phase`; `autonomous`) and
+- Settings include `autonomy` (`autonomous`, the default; `per_job`; `per_phase`) and
   `measurement_method` (a local rule set name, or null for geometric quantities). Multi-phase
   plans wait for approval per the selected mode; Approve sends `Approved, continue.`, while
-  Change focuses the composer. Unfixed errors introduced by Mizan also stop a phase.
+  Change focuses the composer. In autonomous mode, unfixed errors are reported without an approval pause.
 - `qiyas-desktop/src/methods.rs::qiyas_dir()` is the Qiyas data home: release builds use
   `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
   `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
@@ -1914,7 +1966,7 @@ and Mizan's turn epoch together.
     in git-ignored `.local/benchmark`; six separate holdout cases are sealed and listed by hash.
     ResPlan conversion skips and reports invalid whole plans before writing any case, continuing
     to later plans; `<source stem>.conversion.json` and stdout retain rejection reasons.
-  - `bench run`: automatic counts, closed areas and candidate rooms, three repetitions,
+  - `bench run`: recognised element mappings, three repetitions (quick set: one),
     with scored JSON/Markdown reports. `bench score --case ID --submission FILE` accepts
     JSON take-off/BOQ or Excel. Dev commands never enumerate or open the holdout.
   - `eval --case ID --approve-live-run [--provider-from-settings]`: real headless Mizan,

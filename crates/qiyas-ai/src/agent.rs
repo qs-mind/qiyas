@@ -75,9 +75,9 @@ pub struct AgentSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Autonomy {
-    #[default]
     PerJob,
     PerPhase,
+    #[default]
     Autonomous,
 }
 
@@ -96,7 +96,7 @@ impl Default for AgentSettings {
             effort: "high".into(),
             max_tokens: 16_000,
             language: Lang::En,
-            autonomy: Autonomy::PerJob,
+            autonomy: Autonomy::Autonomous,
             measurement_method: MeasurementMethod::default(),
         }
     }
@@ -695,11 +695,23 @@ impl Agent {
                                 Ok(errors) => errors,
                                 Err(why) => return self.stop(&events, &why).await,
                             };
-                            if !errors.is_empty() {
+                            if !errors.is_empty() && self.settings.autonomy != Autonomy::Autonomous
+                            {
                                 let plan = Self::error_approval_plan(self.approval_plan(), &errors);
                                 self.emit(&events, AgentEvent::AwaitingApproval { plan })
                                     .await;
                             } else {
+                                if !errors.is_empty() {
+                                    let text = format!(
+                                        "\nUnresolved drawing checks: {}. Review is optional.",
+                                        errors.iter().cloned().collect::<Vec<_>>().join("; ")
+                                    );
+                                    if let Some(last) = self.history.last_mut() {
+                                        last.content
+                                            .push(ContentBlock::Text { text: text.clone() });
+                                    }
+                                    self.emit(&events, AgentEvent::Text { text }).await;
+                                }
                                 self.emit(&events, AgentEvent::Done { usage }).await;
                             }
                             Ok(())
@@ -926,7 +938,7 @@ impl Agent {
                     counts.plan_seen = true;
                     if stopped.is_some() {
                         counts.awaiting = None;
-                    } else if !errors.is_empty() {
+                    } else if !errors.is_empty() && self.settings.autonomy != Autonomy::Autonomous {
                         counts.awaiting = Some(Self::error_approval_plan(plan.clone(), &errors));
                     } else if self.settings.autonomy != Autonomy::Autonomous
                         && ((first && plan.phases.len() >= 2 && !counts.approved)
@@ -1288,7 +1300,7 @@ impl Agent {
                 serde_json::to_value(settings.autonomy)
                     .unwrap_or_default()
                     .as_str()
-                    .unwrap_or("per_job")
+                    .unwrap_or("autonomous")
             ));
             let mut picture = None;
             if let Some(session) = guard.as_ref() {

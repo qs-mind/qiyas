@@ -41,7 +41,47 @@ fn pdf(root: &Path, drawing: &Path) -> Result<Submission, String> {
             .read_pdf_text_areas(&rules)
             .map_err(|e| e.to_string())?;
         submission.warnings.extend(read.warnings);
-        for area in read.areas {
+        // The configured label reader supplies recognition evidence. Materialise a typed
+        // element before its explicit area mapping is eligible for submission.
+        session.run_input(&json!({"type":"define_object_type","definition":{"name":"LabelledEnclosure","category":"PDF evidence","geometry":"region","quantities":{"surface":"area"}}}),Source::User).map_err(|e|e.to_string())?;
+        for (index, area) in read.areas.into_iter().enumerate() {
+            let Some(handle) = area
+                .boundary_handle
+                .or_else(|| area.label_handles.first().copied())
+            else {
+                continue;
+            };
+            let rule = format!("labelled-enclosure-{index}");
+            session.run_input(&json!({"type":"recognition","kind":"define","rule":{"name":rule,"object_type":"LabelledEnclosure","match":{"handles":[handle]},"confidence":0.95,"sources":[{"handle":handle,"path":drawing,"page":page,"detail":"Enclosure identified by configured label pattern"}]}}),Source::User).map_err(|e|e.to_string())?;
+            session
+                .run_input(
+                    &json!({"type":"recognition","kind":"apply","rules":[rule]}),
+                    Source::User,
+                )
+                .map_err(|e| e.to_string())?;
+            let evidence = session.recognition_queue(None).map_err(|e| e.to_string())?;
+            let Some(candidate) = evidence.iter().find(|c| {
+                c.handle == handle && c.state == qiyas_core::recognition::ReviewState::Accepted
+            }) else {
+                submission.warnings.push(format!(
+                    "{}: unresolved enclosure remains a candidate",
+                    area.description
+                ));
+                continue;
+            };
+            let objects = session
+                .objects(&Default::default())
+                .map_err(|e| e.to_string())?;
+            let Some(object) = objects
+                .iter()
+                .find(|o| Some(o.instance.id) == candidate.object && o.valid)
+            else {
+                continue;
+            };
+            let quantity = *object
+                .quantities
+                .get("surface")
+                .ok_or("Missing mapped enclosure area")?;
             let description = read
                 .legends
                 .get(&area.description)
@@ -51,7 +91,7 @@ fn pdf(root: &Path, drawing: &Path) -> Result<Submission, String> {
                 description,
                 kind: "area".into(),
                 unit: "m2".into(),
-                quantity: area.quantity_m2,
+                quantity,
                 source_objects: vec![format!(
                     "pdf:{}#page={page};label={};boundary={};seed={},{}",
                     drawing.display(),
@@ -97,6 +137,30 @@ pub fn extend_pdf(root: &Path, drawing: &Path, mut prepared: Submission) -> Subm
             prepared.elapsed_ms += general.elapsed_ms;
         }
         Err(error) => prepared.warnings.push(format!("General PDF path: {error}")),
+    }
+    prepared
+}
+
+/// Supplement prepared methods with shared evidence mappings, never raw baseline candidates.
+pub fn extend(root: &Path, drawing: &Path, mut prepared: Submission) -> Submission {
+    if root.join("general/recognition.json").exists() {
+        match measure(root, drawing) {
+            Ok(general) => {
+                for item in general.items {
+                    if !prepared.items.iter().any(|p| {
+                        p.kind == item.kind
+                            && p.unit == item.unit
+                            && p.basis == item.basis
+                            && p.source_objects == item.source_objects
+                    }) {
+                        prepared.items.push(item);
+                    }
+                }
+                prepared.warnings.extend(general.warnings);
+                prepared.elapsed_ms += general.elapsed_ms;
+            }
+            Err(error) => prepared.warnings.push(error),
+        }
     }
     prepared
 }

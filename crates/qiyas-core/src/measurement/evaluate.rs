@@ -66,6 +66,10 @@ impl Context<'_> {
             self.values
                 .insert(format!("{prefix}{k}"), EValue::Number(*v));
         }
+        self.values.insert(
+            format!("{prefix}id"),
+            EValue::Text(format!("{:X}", object.instance.id)),
+        );
         for (k, v) in [
             ("type", object.instance.type_name.as_str()),
             ("trade", object.category.as_str()),
@@ -208,7 +212,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
     method.validate()?;
     let mappings: Vec<Mapping> = read(s, "mappings")?;
     let objects = s.objects(&ObjectFilter::default())?;
-    let evidence = s.recognition_queue(None)?;
+    let evidence = s.recognition_evidence()?;
     let mut items = BTreeMap::<String, GeneratedItem>::new();
     for object in &objects {
         if !object.valid

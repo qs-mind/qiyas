@@ -25,7 +25,7 @@ fn defaults_when_missing() {
     assert_eq!(s.profile().model, "claude-opus-5-5");
     assert_eq!(s.profile().base_url, None);
     assert_eq!(s.effort, "high");
-    assert_eq!(s.autonomy, qiyas_ai::Autonomy::PerJob);
+    assert_eq!(s.autonomy, qiyas_ai::Autonomy::Autonomous);
     assert_eq!(s.measurement_method, None);
     assert!(!s.mcp_enabled);
     assert_eq!(s.mcp_port, 48123);

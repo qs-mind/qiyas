@@ -24,7 +24,15 @@ use tokio_util::sync::CancellationToken;
 pub struct EvalArgs {
     /// A development case id; holdout cases are never opened by this command.
     #[arg(long)]
-    pub case: String,
+    pub case: Option<String>,
+    /// Several development case IDs; one combined report and total cost ceiling.
+    #[arg(long, num_args = 1.., value_delimiter = ',', conflicts_with_all = ["case", "set"])]
+    pub cases: Vec<String>,
+    #[arg(long, conflicts_with = "case")]
+    pub set: Option<String>,
+    /// Total dollar ceiling across the selected cases (unused allocations carry forward).
+    #[arg(long)]
+    pub total_budget_usd: Option<f64>,
     #[arg(long, default_value = ".local/benchmark")]
     pub root: PathBuf,
     /// Use the saved app provider, model and effort (also the default).
@@ -36,7 +44,7 @@ pub struct EvalArgs {
     /// Output tokens per provider request, including reasoning tokens.
     #[arg(long, default_value_t = 4096, value_parser = clap::value_parser!(u32).range(1..=64000))]
     pub max_tokens: u32,
-    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=100))]
+    #[arg(long, default_value_t = 40, value_parser = clap::value_parser!(u32).range(1..=100))]
     pub max_requests: u32,
     /// An optional additional ceiling for this run's estimated dollar cost.
     #[arg(long)]
@@ -76,11 +84,37 @@ impl Prices {
     }
 
     fn upper_bound(&self, request: &TurnRequest) -> Result<f64, String> {
-        // UTF-8 bytes overestimate ordinary text tokens. Eight bytes of allowance per input
-        // byte also cover protocol framing and image tokenisation conservatively. Each image
-        // adds a further 200,000-token reserve, even if its compressed payload is very small.
-        let messages = serde_json::to_vec(&request.messages).map_err(|e| e.to_string())?;
-        let mut bytes = request.system.len() + messages.len() + 4096;
+        // Reserve only this request. One token per UTF-8 byte plus protocol framing is a
+        // conservative text estimate; the former eightfold multiplier exhausted small caps.
+        // Images reserve their decoded pixel budget, not base64 bytes counted as text tokens.
+        fn input_size(value: &Value) -> (usize, usize) {
+            match value {
+                Value::Object(fields) => {
+                    if matches!(
+                        fields.get("type").and_then(Value::as_str),
+                        Some("image" | "png")
+                    ) {
+                        return (0, 16_384);
+                    }
+                    fields
+                        .iter()
+                        .map(|(key, v)| {
+                            let (text, images) = input_size(v);
+                            (key.len() + text + 8, images)
+                        })
+                        .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
+                }
+                Value::Array(values) => values
+                    .iter()
+                    .map(input_size)
+                    .fold((0, 0), |(a, b), (c, d)| (a + c, b + d)),
+                Value::String(s) => (s.len() + 4, 0),
+                _ => (16, 0),
+            }
+        }
+        let (bytes, image_tokens) =
+            input_size(&serde_json::to_value(&request.messages).map_err(|e| e.to_string())?);
+        let mut bytes = bytes + request.system.len() + 2048;
         for tool in &request.tools {
             bytes += tool.name.len()
                 + tool.description.len()
@@ -88,22 +122,7 @@ impl Prices {
                     .map_err(|e| e.to_string())?
                     .len();
         }
-        let mut images = 0;
-        for message in &request.messages {
-            for block in &message.content {
-                match block {
-                    qiyas_ai::ContentBlock::Image { .. } => images += 1,
-                    qiyas_ai::ContentBlock::ToolResult { content, .. } => {
-                        images += content
-                            .iter()
-                            .filter(|part| matches!(part, qiyas_ai::ResultPart::Png(_)))
-                            .count();
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let input_tokens = (bytes as f64 * 8.0) + images as f64 * 200_000.0;
+        let input_tokens = (bytes + image_tokens) as f64;
         let input_rate = self
             .input_per_million
             .max(self.cache_write_per_million)
@@ -275,6 +294,7 @@ struct Metered {
     max_tokens: u32,
     max_requests: u32,
     totals: Arc<Mutex<RunUsage>>,
+    steps: Option<PathBuf>,
 }
 
 impl Provider for Metered {
@@ -312,6 +332,19 @@ impl Provider for Metered {
                 totals.estimated_usd += upper;
                 id
             };
+            let budget_note = {
+                let totals = self
+                    .totals
+                    .lock()
+                    .map_err(|_| AiError::Stream("Usage lock failed".into()))?;
+                format!("[evaluation budget] Request {} of {}. Reserved for this request ${upper:.4}; ${:.4} remains after this reservation. Finish checks and uncertainty summary when near either limit.",totals.requests,self.max_requests,(self.max_cost-totals.estimated_usd).max(0.0))
+            };
+            if let Some(message) = req.messages.last_mut() {
+                message
+                    .content
+                    .push(qiyas_ai::ContentBlock::Text { text: budget_note });
+            }
+            step(&self.steps, &json!({"event":"request","id":id,"reserved_usd":upper,"model":req.model,"max_tokens":req.max_tokens,"system":req.system,"messages":trim_log(serde_json::to_value(&req.messages).map_err(|e|AiError::Stream(e.to_string()))?)})).map_err(AiError::Stream)?;
             let answer = self.inner.stream_turn(req, sink).await;
             let usage = answer.as_ref().map(|r| r.usage).unwrap_or_default();
             let known = usage.input_tokens
@@ -321,6 +354,7 @@ impl Provider for Metered {
                 > 0;
             let actual = known.then(|| self.prices.cost(usage));
             settle(&self.dir, &id, usage, actual).map_err(AiError::Stream)?;
+            step(&self.steps, &json!({"event":"response","id":id,"usage":usage,"estimated_usd":actual.unwrap_or(upper),"reserved_usd":upper,"result":answer.as_ref().ok().map(|r|trim_log(json!(r.content))),"error":answer.as_ref().err().map(ToString::to_string)})).map_err(AiError::Stream)?;
             {
                 let mut totals = self
                     .totals
@@ -353,6 +387,7 @@ struct SavedProvider {
     base_url: Option<String>,
     effort: String,
     language: String,
+    method: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -477,25 +512,26 @@ fn save_outputs(
     session
         .save_as_headless(drawing)
         .map_err(|e| e.to_string())?;
-    qiyas_boq::export_takeoff(
+    let report = session.measurement_report().map_err(|e| e.to_string())?;
+    qiyas_boq::export_takeoff_with_report(
         &output.join("takeoff.xlsx"),
-        &session.takeoff.items,
-        &session.takeoff.totals(),
+        &[],
+        &[],
         "Mizan benchmark evaluation",
+        &report,
     )
     .map_err(|e| e.to_string())?;
     let submission_path = output.join("takeoff.json");
-    let mut items = serde_json::to_value(&session.takeoff.items).map_err(|e| e.to_string())?;
-    for (item, measurement) in items
-        .as_array_mut()
-        .ok_or("Invalid take-off serialization")?
-        .iter_mut()
-        .zip(&session.takeoff.items)
-    {
-        if let Some(height) = measurement.height {
-            item["height_m"] = json!(height * session.drawing.units.to_metres());
-        }
-    }
+    let submission = crate::bench::submission::from_session(session)?;
+    let items = submission.items;
+    write_json(
+        &output.join("measurement.json"),
+        &session.measurement_report().map_err(|e| e.to_string())?,
+    )?;
+    write_json(
+        &output.join("self-check.json"),
+        &session.takeoff_check(0, &[]).map_err(|e| e.to_string())?,
+    )?;
     write_json(
         &submission_path,
         &json!({ "items": items, "elapsed_ms": elapsed_ms, "findings": findings(session, truth), "drawing": drawing }),
@@ -539,6 +575,7 @@ impl SavedProvider {
             base_url,
             effort: value["effort"].as_str().unwrap_or("high").into(),
             language: value["language"].as_str().unwrap_or("en").into(),
+            method: value["measurement_method"].as_str().map(str::to_owned),
         })
     }
 
@@ -550,7 +587,10 @@ impl SavedProvider {
             max_tokens,
             language: qiyas_ai::prompt::Lang::from_code(&self.language),
             autonomy: Autonomy::Autonomous,
-            ..AgentSettings::default()
+            measurement_method: qiyas_ai::MeasurementMethod {
+                name: self.method.clone(),
+                rules_loaded: self.method.is_some(),
+            },
         }
     }
 
@@ -669,13 +709,115 @@ fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase, String> {
 
 pub fn run(args: &EvalArgs) -> Result<Value, String> {
     if !args.approve_live_run {
-        return Err("Live evaluation needs Kareem's OK for this case; after approval use --approve-live-run (no settings or keychain were read)".into());
+        return Err("Live evaluation needs Kareem's OK for this run; after approval use --approve-live-run (no settings or keychain were read)".into());
     }
-    if args.max_cost_usd.is_some_and(|n| !n.is_finite() || n < 0.0) {
-        return Err("--max-cost-usd must be finite and non-negative".into());
+    for budget in [args.max_cost_usd, args.total_budget_usd]
+        .into_iter()
+        .flatten()
+    {
+        if !budget.is_finite() || budget < 0.0 {
+            return Err("Cost budgets must be finite and non-negative".into());
+        }
     }
     crate::bench::refuse_holdout_path(&args.root)?;
-    let (truth, case_dir) = crate::bench::load_case(&args.root, &args.case)?;
+    let cases = if let Some(set) = &args.set {
+        if set != "live-dev" {
+            return Err("eval --set supports live-dev".into());
+        }
+        crate::bench::sets::select(&args.root, set)?
+    } else if let Some(case) = &args.case {
+        vec![case.clone()]
+    } else {
+        args.cases.clone()
+    };
+    if cases.is_empty() {
+        return Err("Choose --case, --cases or --set live-dev".into());
+    }
+    let unique: BTreeSet<_> = cases.iter().collect();
+    if unique.len() != cases.len() {
+        return Err("Duplicate eval cases".into());
+    }
+    for case in &cases {
+        crate::bench::load_case(&args.root, case)?;
+    }
+    if cases.len() == 1 && args.set.is_none() && args.cases.is_empty() {
+        return run_case(args, &cases[0], args.total_budget_usd.or(args.max_cost_usd));
+    }
+    let total_budget = args.total_budget_usd.or(args.max_cost_usd).ok_or(
+        "Multiple cases require --total-budget-usd (or --max-cost-usd as the total ceiling)",
+    )?;
+    let root = args.root.canonicalize().map_err(|e| e.to_string())?;
+    let output = root.join("runs").join(format!(
+        "eval-set-{}-{}",
+        Utc::now().format("%Y%m%dT%H%M%S%f"),
+        std::process::id()
+    ));
+    validate_path(&output)?;
+    fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    let mut reports = Vec::new();
+    let mut spent = 0.0;
+    for (i, case) in cases.iter().enumerate() {
+        let allocation = ((total_budget - spent).max(0.0) / (cases.len() - i) as f64).min(
+            if args.total_budget_usd.is_some() {
+                args.max_cost_usd.unwrap_or(f64::INFINITY)
+            } else {
+                f64::INFINITY
+            },
+        );
+        let mut report = if allocation <= 0.0 {
+            json!({"case":case,"status":"total budget exhausted"})
+        } else {
+            match run_case(args, case, Some(allocation)) {
+                Ok(report) => report,
+                Err(error) => json!({"case":case,"status":format!("failed: {error}")}),
+            }
+        };
+        spent += report["usage"]["estimated_usd"].as_f64().unwrap_or(0.0);
+        let failed = report["usage"].is_null()
+            && report["status"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("failed:"));
+        if report["score"].is_null() {
+            let (truth, _) = crate::bench::load_case(&root, case)?;
+            report["score"] = json!(crate::bench::score::score(
+                &truth,
+                &crate::bench::model::Submission::default(),
+                None
+            ));
+        }
+        reports.push(report);
+        if failed {
+            for skipped in cases.iter().skip(i + 1) {
+                let (truth, _) = crate::bench::load_case(&root, skipped)?;
+                reports.push(json!({"case":skipped,"status":"not run after preceding failure","usage":{"estimated_usd":0.0},"score":crate::bench::score::score(&truth,&crate::bench::model::Submission::default(),None)}));
+            }
+        }
+        write_json(
+            &output.join("report.json"),
+            &combined_report(&reports, total_budget, spent, &output),
+        )?;
+        if failed {
+            break;
+        }
+    }
+    Ok(combined_report(&reports, total_budget, spent, &output))
+}
+
+fn combined_report(reports: &[Value], budget: f64, spent: f64, output: &Path) -> Value {
+    let mut metrics = crate::bench::score::Metrics::default();
+    for r in reports {
+        if let Ok(m) = serde_json::from_value(r["score"]["metrics"].clone()) {
+            metrics.merge(&m);
+        }
+    }
+    let cost_complete = reports.iter().all(|r| {
+        r["usage"]["estimated_usd"].is_number() || r["status"] == "total budget exhausted"
+    });
+    json!({"headline":"MIZAN ALONE","cases":reports.len(),"reports":reports,"total_budget_usd":budget,"estimated_usd":cost_complete.then_some(spent),"known_estimated_usd":spent,"cost_complete":cost_complete,"metrics":metrics,"rates":metrics.rates(),"report_directory":output})
+}
+
+fn run_case(args: &EvalArgs, case: &str, max_cost: Option<f64>) -> Result<Value, String> {
+    let (truth, case_dir) = crate::bench::load_case(&args.root, case)?;
     let root = args.root.canonicalize().map_err(|e| e.to_string())?;
     let run_id = format!(
         "eval-{}-{}",
@@ -692,7 +834,6 @@ pub fn run(args: &EvalArgs) -> Result<Value, String> {
         note,
     } = prepare_case(&case_dir.join(&truth.drawing), &output)?;
     visible_inputs(&case_dir, &output, &mut session)?;
-    let session = Arc::new(Mutex::new(Some(session)));
     let local = root
         .parent()
         .ok_or("Benchmark root needs a parent directory")?;
@@ -701,6 +842,8 @@ pub fn run(args: &EvalArgs) -> Result<Value, String> {
     let autopilot = crate::bench::safe_file(local, Path::new("autopilot"))?;
     let budget = Budget::load(&autopilot)?;
     let saved = saved_provider()?;
+    apply_selected_method(&saved, &mut session)?;
+    let session = Arc::new(Mutex::new(Some(session)));
     let identity = format!("{}:{}", saved.name, saved.model);
     let prices = budget.prices.get(&identity).cloned().ok_or_else(|| format!("No prices for {identity}; set its input/output/cache-read/cache-write rates per million tokens in {} before a billable run", autopilot.join("budget.json").display()))?;
     if saved.name == "openai_compatible"
@@ -717,10 +860,11 @@ pub fn run(args: &EvalArgs) -> Result<Value, String> {
         run: run_id.clone(),
         prices,
         daily: budget.daily_usd,
-        max_cost: args.max_cost_usd.unwrap_or(budget.daily_usd),
+        max_cost: max_cost.unwrap_or(budget.daily_usd),
         max_tokens: args.max_tokens,
         max_requests: args.max_requests,
         totals: totals.clone(),
+        steps: Some(output.join("steps.jsonl")),
     };
     let started = Instant::now();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -732,6 +876,7 @@ pub fn run(args: &EvalArgs) -> Result<Value, String> {
         session.clone(),
         saved.settings(args.max_tokens),
         &note,
+        Some(&output),
     ));
     let elapsed_ms = started.elapsed().as_millis();
     let submission_path = {
@@ -740,20 +885,13 @@ pub fn run(args: &EvalArgs) -> Result<Value, String> {
         save_outputs(session, &output, &drawing, elapsed_ms, &truth)?
     };
     let summary = totals.lock().map_err(|_| "Usage lock failed")?;
-    append_costs(
-        &autopilot, &run_id, &args.case, &identity, &summary, &status,
-    )?;
+    append_costs(&autopilot, &run_id, case, &identity, &summary, &status)?;
     write_json(&output.join("usage.json"), &*summary)?;
+    let usage = json!(*summary);
     drop(summary);
-    let score = crate::bench::score_submission(&root, &args.case, &submission_path)?;
-    let report = json!({ "run": run_id, "case": args.case, "status": status, "provider": identity, "elapsed_ms": elapsed_ms, "drawing": drawing, "takeoff": submission_path, "score": score, "preparation": note, "traceability_basis": "Original case geometry when available; the resulting drawing is also retained for review", "autonomy": "autonomous, explicitly approved for this evaluation", "max_tokens_per_request": args.max_tokens, "max_requests": args.max_requests });
+    let score = crate::bench::score_submission(&root, case, &submission_path)?;
+    let report = json!({ "run": run_id, "case": case, "headline":"MIZAN ALONE", "usage":usage,"step_log":output.join("steps.jsonl"),"agent_log":output.join("agent.log"), "status": status, "provider": identity, "elapsed_ms": elapsed_ms, "drawing": drawing, "takeoff": submission_path, "score": score, "preparation": note, "traceability_basis": "Original case geometry when available; the resulting drawing is also retained for review", "autonomy": "autonomous, explicitly approved for this evaluation", "max_tokens_per_request": args.max_tokens, "max_requests": args.max_requests });
     write_json(&output.join("report.json"), &report)?;
-    if status != "done" {
-        return Err(format!(
-            "Live evaluation {status}; partial output was scored in {}",
-            output.join("report.json").display()
-        ));
-    }
     Ok(report)
 }
 
@@ -762,8 +900,14 @@ async fn run_agent(
     session: Arc<Mutex<Option<Session>>>,
     settings: AgentSettings,
     preparation: &str,
+    output: Option<&Path>,
 ) -> String {
     let mut agent = Agent::new(provider, session, settings);
+    if let Some(output) = output {
+        agent = agent.with_log(qiyas_ai::log::AgentLog::evaluation(
+            output.join("agent.log"),
+        ));
+    }
     let (sender, mut receiver) = mpsc::channel(64);
     let events = tokio::spawn(async move {
         let mut status = "incomplete".to_string();
@@ -778,7 +922,7 @@ async fn run_agent(
         }
         status
     });
-    let prompt = format!("Complete a quantity take-off of this drawing. Inspect its layers, blocks, rooms and geometry. Add measurements with meaningful descriptions, physical units and source entity handles for every measurable item you can justify. If a BOQ is loaded, link measurements to its item codes, compare it against the drawing and preserve the resulting conflicts. Check drawing and schedule consistency and preserve those conflicts too. Report any limitations. This benchmark run is approved; work autonomously within the drawing. The harness saves and exports your result after you finish.\n\n{preparation}");
+    let prompt = format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest, batch types and recognition rules, recognise, apply the selected method, map elements to the generated BOQ, then takeoff_check with verify expectations and fix by handle. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}");
     let result = agent
         .run_turn(prompt, sender, CancellationToken::new())
         .await;
@@ -916,6 +1060,15 @@ mod tests {
         }
     }
 
+    fn mapped_rectangle(handle: u64) -> Value {
+        let mut commands = super::workflow_tests::definition_commands();
+        commands[1]["rule"]["match"] = json!({"handles":[handle]});
+        commands[1]["rule"]["confidence"] = json!(0.99);
+        commands.push(json!({"type":"recognition","kind":"apply"}));
+        commands.extend(super::workflow_tests::mapping_commands());
+        json!({"type":"batch","commands":commands})
+    }
+
     fn prices() -> Prices {
         Prices {
             endpoint: None,
@@ -929,7 +1082,10 @@ mod tests {
     #[test]
     fn no_approval_stops_before_settings_keychain_or_files() {
         let args = EvalArgs {
-            case: "anything".into(),
+            case: Some("anything".into()),
+            cases: Vec::new(),
+            set: None,
+            total_budget_usd: None,
             root: PathBuf::from("does-not-exist"),
             provider_from_settings: true,
             approve_live_run: false,
@@ -943,7 +1099,10 @@ mod tests {
     #[test]
     fn approved_eval_still_refuses_a_holdout_root_before_io() {
         let args = EvalArgs {
-            case: "anything".into(),
+            case: Some("anything".into()),
+            cases: Vec::new(),
+            set: None,
+            total_budget_usd: None,
             root: PathBuf::from("does-not-exist/holdout"),
             provider_from_settings: true,
             approve_live_run: true,
@@ -1017,7 +1176,7 @@ mod tests {
                     reasoning_tokens: 5,
                     ..Usage::default()
                 },
-                command: Some(json!({"type":"measure_entity","handle":handle})),
+                command: Some(mapped_rectangle(handle)),
             }),
             dir: dir.path().into(),
             run: "test".into(),
@@ -1027,6 +1186,7 @@ mod tests {
             max_tokens: 4096,
             max_requests: 2,
             totals: totals.clone(),
+            steps: Some(output.join("steps.jsonl")),
         };
         let session = Arc::new(Mutex::new(Some(
             Session::open_standalone(&drawing).unwrap(),
@@ -1039,14 +1199,15 @@ mod tests {
                 ..AgentSettings::default()
             },
             "",
+            Some(&output),
         )
         .await;
         assert_eq!(status, "done");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         let mut session = session.lock().unwrap();
-        let measurement = &session.as_ref().unwrap().takeoff.items[0];
-        assert_eq!(measurement.shown, 6.0);
-        assert_eq!(measurement.source, "ai");
+        let measurement = session.as_ref().unwrap().measurement_report().unwrap();
+        assert_eq!(measurement.items[0].quantity, 6.0);
+        assert!(session.as_ref().unwrap().takeoff.items.is_empty());
         let (truth, _) = crate::bench::load_case(dir.path(), "test").unwrap();
         let submission =
             save_outputs(session.as_mut().unwrap(), &output, &drawing, 1, &truth).unwrap();
@@ -1082,12 +1243,20 @@ mod tests {
             max_tokens: 4096,
             max_requests: 1,
             totals: Arc::new(Mutex::new(RunUsage::default())),
+            steps: None,
         };
         let session = Arc::new(Mutex::new(Some(Session::new_blank(
             &dir.path().join("drawing.dxf"),
             6,
         ))));
-        let status = run_agent(Box::new(provider), session, AgentSettings::default(), "").await;
+        let status = run_agent(
+            Box::new(provider),
+            session,
+            AgentSettings::default(),
+            "",
+            None,
+        )
+        .await;
         assert!(status.contains("Daily budget refused"));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
@@ -1189,3 +1358,77 @@ mod tests {
         );
     }
 }
+
+fn trim_log(value: Value) -> Value {
+    match value {
+        Value::Object(mut fields) => {
+            if matches!(
+                fields.get("type").and_then(Value::as_str),
+                Some("image" | "png")
+            ) {
+                return json!({"type":"image","data":"[picture omitted]"});
+            }
+            for (key, value) in &mut fields {
+                *value = if key == "text" || key == "value" {
+                    value
+                        .as_str()
+                        .map(|s| json!(qiyas_ai::log::clip(s)))
+                        .unwrap_or_else(|| trim_log(value.take()))
+                } else {
+                    trim_log(value.take())
+                };
+            }
+            Value::Object(fields)
+        }
+        Value::Array(values) => Value::Array(values.into_iter().map(trim_log).collect()),
+        other => other,
+    }
+}
+fn step(path: &Option<PathBuf>, value: &Value) -> Result<(), String> {
+    if let Some(path) = path {
+        validate_path(path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        writeln!(
+            file,
+            "{}",
+            json!({"at":Utc::now().to_rfc3339(),"step":value})
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+fn apply_selected_method(saved: &SavedProvider, session: &mut Session) -> Result<(), String> {
+    let Some(name) = &saved.method else {
+        return Ok(());
+    };
+    if Path::new(name).components().count() != 1 || name.contains(['/', '\\']) || name == ".." {
+        return Err("Invalid selected method name".into());
+    }
+    let home = std::env::var_os("QIYAS_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(debug_assertions) {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.local/qiyas-home")
+            } else {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".qiyas")
+            }
+        });
+    let method: qiyas_core::measurement::RuleSet =
+        read_json(&home.join("methods").join(format!("{name}.json")))?;
+    method.validate().map_err(|e| e.to_string())?;
+    session
+        .run_input(
+            &json!({"type":"measurement","kind":"set_method","scope":"settings","method":method}),
+            qiyas_core::Source::Ai,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "eval_workflow_tests.rs"]
+mod workflow_tests;

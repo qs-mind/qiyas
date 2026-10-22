@@ -200,7 +200,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <label>
               <span>{t("settings.autonomy")}</span>
               <select
-                value={draft.autonomy ?? "per_job"}
+                value={draft.autonomy ?? "autonomous"}
                 onChange={(e) => change({ autonomy: e.target.value as Settings["autonomy"] })}
               >
                 <option value="per_job">{t("settings.perJob")}</option>

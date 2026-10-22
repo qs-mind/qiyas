@@ -52,6 +52,8 @@ pub struct CommandInfo {
     /// The wire name (`"type"`), with the kind after a dot for a kind: `draw.line`.
     pub name: String,
     pub category: String,
+    /// Optional workflow stage declared on the command or kind schema.
+    pub takeoff_step: Option<String>,
     /// The doc comment's first sentence.
     pub summary: String,
     /// The whole doc comment.
@@ -178,6 +180,7 @@ impl Registry {
                 doc,
                 words: words_of(&variant),
                 prompts: prompts_of(&variant),
+                takeoff_step: variant["x-takeoff-step"].as_str().map(str::to_owned),
                 effect: effect(&meta, &examples),
                 undo: undo_of(&examples),
                 category: meta.category.clone(),
@@ -226,6 +229,7 @@ impl Registry {
                     doc,
                     words: words_of(&kind),
                     prompts: prompts_of(&kind),
+                    takeoff_step: kind["x-takeoff-step"].as_str().map(str::to_owned),
                     effect: effect(&meta, &examples),
                     undo: undo_of(&examples),
                     category: meta.category.clone(),
@@ -355,11 +359,23 @@ impl Registry {
             };
             by_category.entry(&c.category).or_default().push(entry);
         }
-        by_category
+        let categories = by_category
             .into_iter()
             .map(|(category, names)| format!("{category}: {}", names.join(", ")))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        let mut workflow = BTreeMap::<&str, Vec<&str>>::new();
+        for c in self.commands.iter().filter(|c| !c.internal) {
+            if let Some(step) = c.takeoff_step.as_deref() {
+                workflow.entry(step).or_default().push(&c.name);
+            }
+        }
+        let workflow = workflow
+            .into_iter()
+            .map(|(step, names)| format!("Take-off workflow / {step}: {}", names.join(", ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{categories}\n{workflow}")
     }
 }
 

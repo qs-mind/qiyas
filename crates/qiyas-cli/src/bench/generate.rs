@@ -718,6 +718,12 @@ pub fn generate(root: &Path, seeds: usize) -> Result<Value> {
 }
 
 #[cfg(test)]
+pub(crate) fn offline_case(path: &Path, typ: &str, seed: u64) -> Result<(Session, Value)> {
+    let project = build(path, typ, seed, false)?;
+    Ok((project.session, project.truth))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use qiyas_core::Command;

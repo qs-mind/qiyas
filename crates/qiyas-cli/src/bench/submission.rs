@@ -1,28 +1,9 @@
 use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
-use qiyas_core::Measurement;
 use serde_json::Value;
 
 use super::model::{kind_from_unit, validate_item, Item, Submission};
-
-pub fn from_measurement(m: &Measurement, metres_per_unit: f64) -> Item {
-    Item {
-        id: m.boq_code.clone().unwrap_or_else(|| m.id.clone()),
-        description: m.description.clone(),
-        kind: serde_json::to_value(m.kind)
-            .expect("kind")
-            .as_str()
-            .unwrap_or("")
-            .into(),
-        unit: m.unit.clone(),
-        quantity: m.shown,
-        source_objects: m.handles.iter().map(|h| format!("{h:X}")).collect(),
-        basis: "geometric".into(),
-        height_m: m.height.map(|h| h * metres_per_unit),
-        ..Default::default()
-    }
-}
 
 pub fn read(path: &Path) -> Result<Submission, String> {
     let mut submission = if path
@@ -161,4 +142,50 @@ fn excel(path: &Path) -> Result<Submission, String> {
         items,
         ..Default::default()
     })
+}
+
+/// Submit only generated BOQ mappings whose dimension lines cite accepted recognised elements.
+/// Raw manual measurements and geometry candidates are intentionally absent.
+pub fn from_session(session: &qiyas_core::Session) -> Result<Submission, String> {
+    let report = session.measurement_report().map_err(|e| e.to_string())?;
+    let evidence = session.recognition_evidence().map_err(|e| e.to_string())?;
+    let mut submission = Submission {
+        warnings: report.warnings.clone(),
+        ..Default::default()
+    };
+    for item in &report.items {
+        let mut sources = std::collections::BTreeSet::new();
+        let mut valid = !item.lines.is_empty();
+        for line in item.lines.iter().filter(|l| l.included) {
+            for source in &line.sources {
+                let candidate = evidence.iter().find(|c| {
+                    c.object == Some(source.handle)
+                        && c.state == qiyas_core::recognition::ReviewState::Accepted
+                });
+                let Some(candidate) = candidate else {
+                    valid = false;
+                    continue;
+                };
+                sources.insert(format!("{:X}", candidate.handle));
+            }
+        }
+        if !valid || sources.is_empty() {
+            submission.warnings.push(format!(
+                "{} has no accepted recognised source; not submitted",
+                item.code
+            ));
+            continue;
+        }
+        submission.items.push(Item {
+            id: item.code.clone(),
+            description: item.description_en.clone(),
+            kind: kind_from_unit(&item.unit)?,
+            unit: item.unit.clone(),
+            quantity: item.quantity,
+            source_objects: sources.into_iter().collect(),
+            basis: "geometric".into(),
+            ..Default::default()
+        });
+    }
+    Ok(submission)
 }
