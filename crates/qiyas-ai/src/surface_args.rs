@@ -108,6 +108,10 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
             example.as_object_mut().unwrap().remove("type");
             (command_args(op), example)
         }
+        (EXECUTE, "finish") => (
+            object(json!({"answer":string}), &[]),
+            json!({"answer":"Generated BOQ; unresolved scope is in the self-check."}),
+        ),
         (EXECUTE, "plan") => {
             let info = surface::plan_info();
             (info["schema"].clone(), info["examples"][0].clone())

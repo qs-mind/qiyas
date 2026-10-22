@@ -3971,6 +3971,7 @@ dependencies = [
  "qiyas-pdf",
  "qiyas-plot",
  "qiyas-takeoff",
+ "rmcp",
  "serde",
  "serde_json",
  "sha2 0.10.9",

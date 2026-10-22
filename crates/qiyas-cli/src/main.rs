@@ -13,6 +13,8 @@
 
 mod bench;
 mod eval;
+mod eval_agent;
+mod headless;
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -67,6 +69,10 @@ enum Cmd {
     Bench(bench::BenchArgs),
     /// Run Mizan headlessly on one dev case, with explicit approval and a daily budget.
     Eval(eval::EvalArgs),
+    /// Serve the three Qiyas MCP tools over stdio without a window or credentials.
+    Mcp(headless::McpArgs),
+    /// Evaluate a subscription agent through headless MCP, without paid API calls.
+    EvalAgent(eval_agent::EvalAgentArgs),
     /// Converts a drawing between DWG and DXF, by the output's extension: the drawing alone, as
     /// read (no project file, no take-off embedded).
     Convert {
@@ -220,6 +226,13 @@ impl Out {
 
 fn dispatch(cmd: &Cmd, out: &Out) -> Done {
     match cmd {
+        Cmd::Mcp(args) => headless::run(args),
+        Cmd::EvalAgent(args) => {
+            let result = eval_agent::run(args)?;
+            out.text(serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
+            out.json(&result);
+            Ok(None)
+        }
         Cmd::Bench(args) => {
             let result = bench::run(args)?;
             out.text(serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);

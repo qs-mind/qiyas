@@ -2009,6 +2009,20 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 
 ## MCP
 
+- Headless: `qiyas-cli mcp --drawing PATH [--workdir DIR]` serves the same three tools
+  over rmcp stdio, without the desktop, settings or keychain. The workdir defaults to the
+  drawing's folder; an outside drawing is copied into it. Only that drawing is opened,
+  without project sidecars or external drawing resources. PDF page 1 uses eval's uncalibrated
+  preparation. `qiyas_capture source picture` works; screen and selection return `needs_window`.
+- MCP `instructions` is exactly `registry().index_text()`, including the generated take-off
+  workflow used by Mizan. `qiyas_execute finish {answer?}` saves the drawing and headless
+  submission; stdin EOF also saves partial work. Outputs are `takeoff.json`, `measurement.json`,
+  `takeoff.xlsx` (generated BOQ and dimensions), `self-check.json`, `conflicts.json`, and
+  `end-report.json`. Each command/batch keeps its existing single undo boundary, source `mcp`.
+- Headless file paths stay in the workdir; traversal, symlinks, truth, recipes and settings
+  are refused. One server owns one drawing; start another process to open a different drawing.
+  This host does not supply desktop tabs or a project workspace.
+
 Outside AI apps can drive Qiyas through its MCP server. `tools/list` offers exactly the same
 three tools as Mizan: `qiyas_read`, `qiyas_execute` and `qiyas_capture`, using `surface::tools`.
 `mcp::tools` adds the optional `request_id` to execute: the same id and arguments return the
@@ -2043,6 +2057,19 @@ and Mizan's turn epoch together.
   and tests don't need the sidecar built first.
 
 ## Scripts and the command line tool
+
+- Subscription evaluation: `qiyas-cli eval-agent (--case ID | --cases a,b | --set live-dev)
+  --agent codex [--agent-cmd TEMPLATE] [--model M] [--effort E] [--timeout-min N]`.
+  Defaults: `gpt-6.1-sol`, medium effort, 20 minutes per case. It never loads Qiyas provider
+  settings, keys or a budget ledger. The external client uses its existing subscription login.
+  Each case starts with only a drawing copy in a fresh `.local/benchmark/runs/` directory.
+  The harness keeps agent events, MCP calls and eval-compatible scoring reports, headed
+  `AGENT ALONE (<agent>)`, with cost `subscription`. Logged access to truth, recipes, the
+  benchmark store or repository outside the run contaminates the case and excludes its score.
+  This is an event-log audit, not a complete filesystem isolation guarantee. Custom clients
+  must emit command/file-read events and use subscription authentication.
+  See `docs/2026-10-22-agent-eval.md` for the template contract and reviewer command. Do not
+  run real agent evaluations during implementation checks.
 
 - Command scripts (`qiyas-core/src/script.rs`, `.scr`): one command per line, its points on the
   same line or the lines after it; a line starting with `;` is a comment; blank lines are

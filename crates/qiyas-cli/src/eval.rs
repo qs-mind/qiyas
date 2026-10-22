@@ -536,6 +536,40 @@ fn save_outputs(
     elapsed_ms: u128,
     truth: &crate::bench::Truth,
 ) -> Result<PathBuf, String> {
+    let path = save_artifacts(session, output, drawing, elapsed_ms)?;
+    let mut submission: Value = read_json(&path)?;
+    submission["findings"] = json!(findings(session, truth));
+    write_json(&path, &submission)?;
+    Ok(path)
+}
+
+/// Shared output writer; neither it nor the headless MCP host knows benchmark truth.
+pub(crate) fn save_artifacts(
+    session: &mut Session,
+    output: &Path,
+    drawing: &Path,
+    elapsed_ms: u128,
+) -> Result<PathBuf, String> {
+    for path in [
+        drawing.to_path_buf(),
+        drawing.with_extension("qiyas"),
+        PathBuf::from(format!("{}.bak", drawing.display())),
+        PathBuf::from(format!("{}.tmp", drawing.display())),
+        PathBuf::from(format!("{}.qlock", drawing.display())),
+        PathBuf::from(format!("{}.tmp", drawing.with_extension("qiyas").display())),
+    ] {
+        validate_path(&path)?;
+    }
+    for name in [
+        "takeoff.xlsx",
+        "takeoff.json",
+        "measurement.json",
+        "self-check.json",
+        "conflicts.json",
+        "end-report.json",
+    ] {
+        validate_path(&output.join(name))?;
+    }
     session
         .save_as_headless(drawing)
         .map_err(|e| e.to_string())?;
@@ -562,7 +596,7 @@ fn save_outputs(
     )?;
     write_json(
         &submission_path,
-        &json!({ "items": items, "elapsed_ms": elapsed_ms, "findings": findings(session, truth), "drawing": drawing }),
+        &json!({ "items": items, "elapsed_ms": elapsed_ms, "findings": [], "drawing": drawing }),
     )?;
     write_json(&output.join("conflicts.json"), &session.conflicts)?;
     Ok(submission_path)
@@ -682,14 +716,14 @@ fn saved_provider() -> Result<SavedProvider, String> {
     SavedProvider::from_value(&value)
 }
 
-struct PreparedCase {
-    session: Session,
-    drawing: PathBuf,
-    note: String,
+pub(crate) struct PreparedCase {
+    pub session: Session,
+    pub drawing: PathBuf,
+    pub note: String,
 }
 
 /// Preparation sees the drawing alone. Ground truth never supplies PDF calibration or units.
-fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase, String> {
+pub(crate) fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase, String> {
     validate_path(source)?;
     validate_path(output)?;
     let extension = source
@@ -698,7 +732,11 @@ fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase, String> {
         .ok_or("Case drawing has no extension")?;
     if extension.eq_ignore_ascii_case("pdf") {
         let pdf = output.join("source.pdf");
-        fs::copy(source, &pdf).map_err(|e| e.to_string())?;
+        validate_path(&pdf)?;
+        validate_path(&output.join("drawing.dxf"))?;
+        if source != pdf {
+            fs::copy(source, &pdf).map_err(|e| e.to_string())?;
+        }
         let drawing = output.join("drawing.dxf");
         let mut session = Session::new_blank(&drawing, 6);
         let scale = 0.0254 / 72.0;
@@ -723,7 +761,9 @@ fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase, String> {
         })
     } else if extension.eq_ignore_ascii_case("dwg") || extension.eq_ignore_ascii_case("dxf") {
         let drawing = output.join(format!("drawing.{}", extension.to_ascii_lowercase()));
-        fs::copy(source, &drawing).map_err(|e| e.to_string())?;
+        if source != drawing {
+            fs::copy(source, &drawing).map_err(|e| e.to_string())?;
+        }
         let session = Session::open_standalone(&drawing).map_err(|e| e.to_string())?;
         Ok(PreparedCase {
             session,
@@ -952,7 +992,7 @@ async fn run_agent(
         }
         (status, text)
     });
-    let prompt = format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest and takeoff_kit, one picture if needed, then ONE batch adapted from the kit to define types/rules, apply recognition, set method/mappings and report the generated BOQ. Never validate stubs or fetch individual schemas already in the kit. Aim for a first generated BOQ within 8 requests. Run takeoff_check with verify expectations, fix returned errors by handle, then end. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}");
+    let prompt = task_request(preparation);
     let result = agent
         .run_turn(prompt, sender, CancellationToken::new())
         .await;
@@ -1066,7 +1106,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
 }
 
 /// Check missing output paths before creation as well as existing files before opening them.
-fn validate_path(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_path(path: &Path) -> Result<(), String> {
     crate::bench::refuse_holdout_path(path)?;
     for ancestor in path.ancestors() {
         if ancestor.as_os_str().is_empty() {
@@ -1503,3 +1543,8 @@ fn apply_selected_method(saved: &SavedProvider, session: &mut Session) -> Result
 #[cfg(test)]
 #[path = "eval_workflow_tests.rs"]
 mod workflow_tests;
+
+/// The same plain request is used by Mizan and external agents.
+pub(crate) fn task_request(preparation: &str) -> String {
+    format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest and takeoff_kit, one picture if needed, then ONE batch adapted from the kit to define types/rules, apply recognition, set method/mappings and report the generated BOQ. Never validate stubs or fetch individual schemas already in the kit. Aim for a first generated BOQ within 8 requests. Run takeoff_check with verify expectations, fix returned errors by handle, then end. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}")
+}

@@ -140,7 +140,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 
 /// The MCP handler: the catalogue's tools on the shared session.
 #[derive(Clone)]
-struct Qiyas {
+pub struct Qiyas {
     session: Arc<Mutex<Option<Session>>>,
     host: Option<Arc<dyn DrawingHost>>,
     on_mutated: OnMutated,
@@ -171,7 +171,7 @@ pub fn tools() -> Vec<crate::ToolSpec> {
 }
 
 impl Qiyas {
-    fn new(
+    pub fn new(
         session: Arc<Mutex<Option<Session>>>,
         host: Option<Arc<dyn DrawingHost>>,
         on_mutated: OnMutated,
@@ -261,6 +261,9 @@ impl Qiyas {
     /// host, without the session's lock (the host locks the app's tabs first).
     fn run(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
+        if let Some(host) = self.host.as_deref() {
+            host.before_tool(name, input).map_err(ToolError::Failed)?;
+        }
         let op = input[if name == surface::CAPTURE {
             "source"
         } else {
@@ -327,14 +330,7 @@ impl ServerHandler for Qiyas {
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "Qiyas is a measurement CAD for quantity surveyors. These tools read the drawing \
-                 open in Qiyas and add measurements to its take-off; the user sees each change \
-                 in the app and can undo it. qiyas_read discovers commands and records, \
-                 qiyas_execute runs commands and file operations, and qiyas_capture looks. \
-                 File operations choose the drawing the others work on; opening a file the user \
-                 has not opened before, Save As and closing unsaved work are asked in the app.",
-            )
+            .with_instructions(qiyas_core::registry::registry().index_text())
     }
 
     async fn list_tools(

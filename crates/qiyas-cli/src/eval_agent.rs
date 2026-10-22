@@ -1,0 +1,489 @@
+//! Subscription clients drive a drawing-only workspace. Only this outer harness scores truth.
+use std::collections::BTreeSet;
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use chrono::Utc;
+use clap::{ArgGroup, Args};
+use serde_json::{json, Value};
+
+#[derive(Args)]
+#[command(group(ArgGroup::new("selection").args(["case", "cases", "set"]).required(true)))]
+pub struct EvalAgentArgs {
+    #[arg(long)]
+    pub case: Option<String>,
+    #[arg(long, value_delimiter = ',', num_args = 1..)]
+    pub cases: Vec<String>,
+    #[arg(long, value_parser = ["live-dev"])]
+    pub set: Option<String>,
+    #[arg(long, default_value = "codex")]
+    pub agent: String,
+    /// Shell template; placeholders are shell-quoted arguments, not raw shell fragments.
+    #[arg(long)]
+    pub agent_cmd: Option<String>,
+    #[arg(long, default_value = "gpt-6.1-sol")]
+    pub model: String,
+    #[arg(long, default_value = "medium")]
+    pub effort: String,
+    #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=1440))]
+    pub timeout_min: u32,
+    #[arg(long, default_value = ".local/benchmark")]
+    pub root: PathBuf,
+}
+
+fn folder(root: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let path = root.join("runs").join(format!(
+        "{prefix}-{}-{}",
+        Utc::now().format("%Y%m%dT%H%M%S%f"),
+        std::process::id()
+    ));
+    crate::eval::validate_path(&path)?;
+    fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    fs::create_dir(&path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
+    if args.agent != "codex" && args.agent_cmd.is_none() {
+        return Err("Provide --agent-cmd for clients other than codex".into());
+    }
+    crate::eval::validate_path(&args.root)?;
+    let root = args.root.canonicalize().map_err(|e| e.to_string())?;
+    let cases = if let Some(set) = &args.set {
+        crate::bench::sets::select(&root, set)?
+    } else if let Some(case) = &args.case {
+        vec![case.clone()]
+    } else {
+        args.cases.clone()
+    };
+    if cases.is_empty() || cases.iter().collect::<BTreeSet<_>>().len() != cases.len() {
+        return Err("Choose distinct development cases".into());
+    }
+    for case in &cases {
+        crate::bench::load_case(&root, case)?;
+    }
+    let combined = folder(&root, "eval-agent-set")?;
+    let cli = std::env::current_exe().map_err(|e| e.to_string())?;
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let mut reports = Vec::new();
+    let mut metrics = crate::bench::score::Metrics::default();
+    for (index, case) in cases.iter().enumerate() {
+        let report = run_case(
+            args,
+            &root,
+            case,
+            &cli,
+            &repo,
+            &combined.join(format!("mcp-{index}.json")),
+        )?;
+        if report["status"] != "contaminated" {
+            let m = serde_json::from_value(report["score"]["metrics"].clone())
+                .map_err(|e| e.to_string())?;
+            metrics.merge(&m);
+        }
+        reports.push(report);
+        let report = combined_report(args, &reports, &metrics, &combined);
+        crate::bench::write_json(&combined.join("report.json"), &report)?;
+    }
+    if args.case.is_some() {
+        Ok(reports.remove(0))
+    } else {
+        Ok(combined_report(args, &reports, &metrics, &combined))
+    }
+}
+
+fn combined_report(
+    args: &EvalAgentArgs,
+    reports: &[Value],
+    metrics: &crate::bench::score::Metrics,
+    output: &Path,
+) -> Value {
+    json!({"headline":format!("AGENT ALONE ({})",args.agent),"cases":reports.len(),
+        "scored_cases":reports.iter().filter(|r|r["status"] != "contaminated").count(),
+        "reports":reports,"metrics":metrics,"rates":metrics.rates(),"cost":"subscription",
+        "elapsed_ms":reports.iter().filter_map(|r|r["elapsed_ms"].as_u64()).sum::<u64>(),
+        "tool_calls":reports.iter().filter_map(|r|r["tool_calls"].as_u64()).sum::<u64>(),"report_directory":output})
+}
+
+fn run_case(
+    args: &EvalAgentArgs,
+    root: &Path,
+    case: &str,
+    cli: &Path,
+    repo: &Path,
+    config: &Path,
+) -> Result<Value, String> {
+    let (truth, directory) = crate::bench::load_case(root, case)?;
+    let output = folder(root, "eval-agent")?;
+    let extension = Path::new(&truth.drawing)
+        .extension()
+        .and_then(|s| s.to_str())
+        .ok_or("Drawing has no extension")?;
+    let drawing = output.join(format!("drawing.{extension}"));
+    fs::copy(
+        crate::bench::safe_file(&directory, Path::new(&truth.drawing))?,
+        &drawing,
+    )
+    .map_err(|e| e.to_string())?;
+    // This is the only case input copied. No sidecars, visible-input recipes or truth.
+    let server_args = json!(["mcp", "--drawing", drawing, "--workdir", output]);
+    crate::bench::write_json(
+        config,
+        &json!({"mcpServers":{"qiyas":{"command":cli,"args":server_args}}}),
+    )?;
+    let request = crate::eval::task_request("Use the Qiyas MCP tools. Call qiyas_execute finish with your end report in args.answer before ending. Do not inspect files outside this run folder or use repository code, benchmark data, truth or recipes. The MCP server prepares PDF page 1 when applicable; its digest exposes visible source documents.");
+    let mut command = if let Some(template) = &args.agent_cmd {
+        let expanded = expand(
+            template,
+            &[
+                ("cli", cli.to_string_lossy().as_ref()),
+                ("drawing", drawing.to_string_lossy().as_ref()),
+                ("workdir", output.to_string_lossy().as_ref()),
+                ("request", &request),
+                ("model", &args.model),
+                ("effort", &args.effort),
+                ("mcp_config", config.to_string_lossy().as_ref()),
+            ],
+        )?;
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(expanded);
+        command
+    } else {
+        codex_command(cli, &drawing, &output, &request, &args.model, &args.effort)
+    };
+    command.current_dir(&output).stdin(Stdio::null());
+    // Remove common API credential variables without inspecting their contents. Codex is also
+    // forced to subscription login, so missing subscription auth fails instead of billing an API.
+    for name in [
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_BASE_URL",
+    ] {
+        command.env_remove(name);
+    }
+    command
+        .stdout(File::create(output.join("agent-events.jsonl")).map_err(|e| e.to_string())?)
+        .stderr(File::create(output.join("agent-stderr.log")).map_err(|e| e.to_string())?);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let started = Instant::now();
+    let mut process_id = None;
+    let status = match command.spawn() {
+        Err(error) => format!("failed to start: {error}"),
+        Ok(mut child) => {
+            process_id = Some(child.id());
+            loop {
+                match child.try_wait().map_err(|e| e.to_string())? {
+                    Some(status) => {
+                        break if status.success() {
+                            "done".into()
+                        } else {
+                            format!("agent failed: {status}")
+                        }
+                    }
+                    None if started.elapsed()
+                        >= Duration::from_secs(u64::from(args.timeout_min) * 60) =>
+                    {
+                        #[cfg(unix)]
+                        {
+                            let _ = Command::new("kill")
+                                .args(["-KILL", "--", &format!("-{}", child.id())])
+                                .status();
+                        }
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break "timeout".into();
+                    }
+                    None => std::thread::sleep(Duration::from_millis(50)),
+                }
+            }
+        }
+    };
+    // A well-behaved client closes its server stdin on exit. Give that final save a bounded wait.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !output.join("mcp-exit.json").exists() && Instant::now() < deadline && status == "done" {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Freeze the run before scoring even if a custom client left descendants alive.
+    #[cfg(unix)]
+    if let Some(id) = process_id {
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{id}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    let _ = process_id;
+    let elapsed_ms = started.elapsed().as_millis();
+    let log = fs::read_to_string(output.join("agent-events.jsonl")).map_err(|e| e.to_string())?;
+    let mut contamination = contaminated(&log, &output, root, repo);
+    let mcp_log = fs::read_to_string(output.join("mcp-events.jsonl")).unwrap_or_default();
+    contamination.extend(contaminated(&mcp_log, &output, root, repo));
+    let submission = output.join("takeoff.json");
+    let mut status = status;
+    let score = if !contamination.is_empty() {
+        status = "contaminated".into();
+        Value::Null
+    } else if submission.exists() {
+        match crate::bench::score_submission(root, case, &submission) {
+            Ok(score) => score,
+            Err(error) => {
+                status = format!("failed to score submission: {error}");
+                json!(crate::bench::score::score(
+                    &truth,
+                    &crate::bench::model::Submission::default(),
+                    None
+                ))
+            }
+        }
+    } else {
+        status = format!("{status}; no submission");
+        json!(crate::bench::score::score(
+            &truth,
+            &crate::bench::model::Submission::default(),
+            None
+        ))
+    };
+    if status == "done"
+        && score["metrics"]["matched"].as_u64().unwrap_or(0)
+            + score["metrics"]["extras"].as_u64().unwrap_or(0)
+            == 0
+    {
+        status = "failed: done with 0 submitted items".into();
+    }
+    let report = json!({"run":output.file_name().unwrap().to_string_lossy(),"case":case,
+        "headline":format!("AGENT ALONE ({})",args.agent),"agent":args.agent,"model":args.model,"effort":args.effort,
+        "status":status,"elapsed_ms":elapsed_ms,"tool_calls":mcp_log.lines().count(),"cost":"subscription",
+        "usage":{"cost":"subscription"},"agent_log":output.join("agent-events.jsonl"),"step_log":output.join("mcp-events.jsonl"),
+        "drawing":drawing,"takeoff":submission,"score":score,"contamination":contamination,"report_directory":output});
+    crate::bench::write_json(&output.join("report.json"), &report)?;
+    Ok(report)
+}
+
+fn codex_command(
+    cli: &Path,
+    drawing: &Path,
+    output: &Path,
+    request: &str,
+    model: &str,
+    effort: &str,
+) -> Command {
+    let mut command = Command::new("codex");
+    command
+        .args([
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--ignore-user-config",
+            "--ignore-rules",
+        ])
+        .arg("-C")
+        .arg(output)
+        .arg("-c")
+        .arg(format!("mcp_servers.qiyas.command={}", json!(cli)))
+        .arg("-c")
+        .arg(format!(
+            "mcp_servers.qiyas.args={}",
+            json!(["mcp", "--drawing", drawing, "--workdir", output])
+        ))
+        .arg("-c")
+        .arg("forced_login_method=\"chatgpt\"")
+        .arg("-c")
+        .arg("project_doc_max_bytes=0")
+        .arg("-m")
+        .arg(model)
+        .arg("-c")
+        .arg(format!("model_reasoning_effort={}", json!(effort)))
+        .arg(request);
+    command
+}
+
+/// Substitute once, quoting each whole argument. Quotes, dollars and backticks stay literal.
+fn expand(template: &str, values: &[(&str, &str)]) -> Result<String, String> {
+    let mut output = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        output.push_str(&rest[..start]);
+        let tail = &rest[start + 1..];
+        let end = tail
+            .find('}')
+            .ok_or("Unclosed agent template placeholder")?;
+        let name = &tail[..end];
+        let value = values
+            .iter()
+            .find(|(key, _)| *key == name)
+            .ok_or_else(|| format!("Unknown agent template placeholder {{{name}}}"))?
+            .1;
+        output.push('\'');
+        output.push_str(&value.replace('\'', "'\\''"));
+        output.push('\'');
+        rest = &tail[end + 1..];
+    }
+    output.push_str(rest);
+    Ok(output)
+}
+
+/// Audit commands and file tool arguments, not prose or the agent's final answer. This is an
+/// evidence guard, not an OS filesystem sandbox: clients must emit their complete action log.
+fn contaminated(log: &str, run: &Path, root: &Path, repo: &Path) -> Vec<String> {
+    fn scan(value: &Value, active: bool, texts: &mut Vec<String>) {
+        match value {
+            Value::Object(fields) => {
+                let kind = fields
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let tool = fields
+                    .get("tool")
+                    .or_else(|| fields.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let active = active
+                    || kind.contains("command")
+                    || kind.contains("file")
+                    || kind == "tool_use"
+                    || tool.contains("read")
+                    || tool.contains("exec")
+                    || tool.contains("shell")
+                    || tool.contains("capture");
+                for (key, v) in fields {
+                    if matches!(
+                        key.as_str(),
+                        "output" | "aggregated_output" | "result" | "text"
+                    ) {
+                        continue;
+                    }
+                    scan(
+                        v,
+                        active || matches!(key.as_str(), "command" | "file_path" | "path" | "cwd"),
+                        texts,
+                    );
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    scan(value, active, texts);
+                }
+            }
+            Value::String(text) if active => texts.push(text.clone()),
+            _ => {}
+        }
+    }
+    let mut hits = BTreeSet::new();
+    for line in log.lines() {
+        let mut texts = Vec::new();
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            scan(&value, false, &mut texts);
+        } else {
+            texts.push(line.into());
+        }
+        for text in texts {
+            // A run directory sits under both benchmark and repo; only that exact subtree is allowed.
+            let text = mask_run(&text, run);
+            let lower = text.to_ascii_lowercase();
+            if [
+                "truth.json",
+                "recipe",
+                "../",
+                ".git",
+                "claude.md",
+                "agents.md",
+                ".local/benchmark",
+            ]
+            .iter()
+            .any(|needle| lower.contains(needle))
+                || text.contains(root.to_string_lossy().as_ref())
+                || text.contains(repo.to_string_lossy().as_ref())
+            {
+                hits.insert(text);
+            }
+        }
+    }
+    hits.into_iter().collect()
+}
+
+fn mask_run(text: &str, run: &Path) -> String {
+    let path = run.to_string_lossy();
+    let mut output = String::new();
+    let mut start = 0;
+    for (at, _) in text.match_indices(path.as_ref()) {
+        let end = at + path.len();
+        let boundary = text[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| c == '/' || c.is_whitespace() || matches!(c, '\'' | '"' | ';' | ')'));
+        if boundary {
+            output.push_str(&text[start..at]);
+            output.push_str("<run>");
+            start = end;
+        }
+    }
+    output.push_str(&text[start..]);
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn contamination_looks_at_actions_and_exempts_only_the_run_subtree() {
+        let run = Path::new("/repo/.local/benchmark/runs/run");
+        let root = Path::new("/repo/.local/benchmark");
+        let repo = Path::new("/repo");
+        for event in [
+            json!({"item":{"type":"command_execution","command":"cat ../truth.json"}}),
+            json!({"type":"tool_use","name":"Read","input":{"file_path":"/repo/CLAUDE.md"}}),
+            json!({"command":"cat /repo/.local/benchmark/cases/a/drawing.dxf"}),
+            json!({"command":"cat recipes/a.json"}),
+            json!({"command":"cat /repo/.local/benchmark/runs/run-other/drawing.dxf"}),
+        ] {
+            assert!(!contaminated(&event.to_string(), run, root, repo).is_empty());
+        }
+        for event in [
+            json!({"item":{"type":"agent_message","text":"Do not read truth.json"}}),
+            json!({"command":"cat /repo/.local/benchmark/runs/run/takeoff.json"}),
+            json!({"cwd":"/repo/.local/benchmark/runs/run","command":"pwd"}),
+            json!({"command":"cd /repo/.local/benchmark/runs/run && pwd"}),
+        ] {
+            assert!(contaminated(&event.to_string(), run, root, repo).is_empty());
+        }
+    }
+    #[test]
+    fn template_values_are_literal_and_not_expanded_twice() {
+        let value = "it's $(false) `false` {model}";
+        let command = expand("printf %s {request}", &[("request", value)]).unwrap();
+        let out = Command::new("sh").args(["-c", &command]).output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), value);
+    }
+    #[test]
+    fn codex_uses_subscription_and_requested_budget_model() {
+        let cmd = codex_command(
+            Path::new("/cli"),
+            Path::new("/run/drawing.dxf"),
+            Path::new("/run"),
+            "request",
+            "gpt-6.1-sol",
+            "medium",
+        );
+        let args: Vec<_> = cmd.get_args().map(|s| s.to_string_lossy()).collect();
+        assert!(args.iter().any(|s| s == "gpt-6.1-sol"));
+        assert!(args.iter().any(|s| s == "forced_login_method=\"chatgpt\""));
+        assert!(args
+            .iter()
+            .any(|s| s == "model_reasoning_effort=\"medium\""));
+    }
+}

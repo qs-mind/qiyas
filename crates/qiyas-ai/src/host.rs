@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 use crate::context::TurnContext;
 
 /// The tools run by the host, not on the session.
-pub const HOST_TOOLS: [&str; 7] = [
+pub const HOST_TOOLS: [&str; 8] = [
+    "finish",
     "project",
     "list_drawings",
     "new_drawing",
@@ -37,6 +38,15 @@ pub fn changes_drawing(name: &str) -> bool {
 /// The app's side of the file tools. Each answer is JSON for the model; an `Err` is said to it
 /// as the tool's error.
 pub trait DrawingHost: Send + Sync {
+    /// Check and record a tool call before any file access or mutation.
+    fn before_tool(&self, _name: &str, _input: &Value) -> Result<(), String> {
+        Ok(())
+    }
+    /// Save the work and, for evaluation hosts, write the submission and end report.
+    fn finish(&self, _answer: &str) -> Result<Value, String> {
+        self.save()
+    }
+
     /// Registry project commands run in a project workspace, including before a drawing opens.
     fn project(&self, _input: &Value, _source: qiyas_core::Source) -> Result<Value, String> {
         Err("This host does not supply a project workspace".into())
@@ -112,6 +122,7 @@ pub fn run_host(
     user_text: Option<&str>,
 ) -> Result<Value, String> {
     match name {
+        "finish" => host.finish(input["answer"].as_str().unwrap_or_default()),
         "project" => host.project(
             input,
             if user_text.is_some() {
