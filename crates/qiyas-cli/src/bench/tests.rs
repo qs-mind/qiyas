@@ -721,10 +721,49 @@ fn aggregate_accounting_requires_complete_unique_components_and_never_reuses_mat
     wrong_basis.items[0].id = "unrelated".into();
     wrong_basis.items[0].description = "Unrelated".into();
     wrong_basis.items[0].basis = "rule:different".into();
+    // Basis names are benchmark-internal, so the last handle tier matches on kind, unit and
+    // objects alone; the quantity still decides whether the match is correct.
+    let scored = score::score(&truth(vec![a.clone()]), &wrong_basis, None);
+    assert_eq!(scored.metrics.matched, 1);
+    assert_eq!(scored.items[0].matched_by.as_deref(), Some("handles_any"));
+    let mut wrong_unit = wrong_basis.clone();
+    wrong_unit.items[0].unit = "m".into();
     assert_eq!(
-        score::score(&truth(vec![a]), &wrong_basis, None)
+        score::score(&truth(vec![a]), &wrong_unit, None)
             .metrics
             .matched,
+        0
+    );
+}
+
+#[test]
+fn handle_matching_prefers_exact_then_category_basis_and_refuses_ambiguity() {
+    let mut gold = item("g", "area", 18.6, "rule");
+    gold.source_objects = vec!["3D".into()];
+    gold.basis = "rule:lining-height".into();
+    let mut same_category = item("s", "area", 18.6, "rule");
+    same_category.description = "Surface at factor".into();
+    same_category.source_objects = vec!["3D".into()];
+    same_category.basis = "rule:office note 93".into();
+    let one = Submission {
+        items: vec![same_category.clone()],
+        ..Default::default()
+    };
+    let scored = score::score(&truth(vec![gold.clone()]), &one, None);
+    assert_eq!(
+        scored.items[0].matched_by.as_deref(),
+        Some("handles_category")
+    );
+    assert!(scored.items[0].passed);
+    // Two candidates in the same tier are ambiguous and stay unmatched.
+    let mut twin = same_category.clone();
+    twin.id = "t".into();
+    let two = Submission {
+        items: vec![same_category, twin],
+        ..Default::default()
+    };
+    assert_eq!(
+        score::score(&truth(vec![gold]), &two, None).metrics.matched,
         0
     );
 }

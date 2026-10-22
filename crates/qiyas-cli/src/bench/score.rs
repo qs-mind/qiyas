@@ -141,7 +141,17 @@ fn match_item(
     used: &BTreeSet<usize>,
 ) -> Option<(usize, &'static str)> {
     // Matching never consults the proposed quantity. An ambiguous match is left unmatched.
-    for mode in ["id", "handles", "description_position"] {
+    // Handle matching is tiered on basis: the exact basis first, then the same basis category
+    // (the part before ':', such as `rule`), then the same kind, unit and objects whatever the
+    // basis. Truth basis names are benchmark-internal, so an agent cannot be expected to spell
+    // them. Each tier accepts only a unique candidate; quantities are never consulted.
+    for mode in [
+        "id",
+        "handles",
+        "handles_category",
+        "handles_any",
+        "description_position",
+    ] {
         let candidates: Vec<_> = submitted
             .iter()
             .enumerate()
@@ -149,11 +159,17 @@ fn match_item(
                 !used.contains(i)
                     && match mode {
                         "id" => !s.id.is_empty() && s.id == gold.id,
-                        "handles" => {
+                        "handles" | "handles_category" | "handles_any" => {
                             s.kind == gold.kind
-                                && s.basis == gold.basis
                                 && !s.source_objects.is_empty()
                                 && objects(s) == objects(gold)
+                                && match mode {
+                                    "handles" => s.basis == gold.basis,
+                                    "handles_category" => {
+                                        basis_category(&s.basis) == basis_category(&gold.basis)
+                                    }
+                                    _ => s.unit == gold.unit,
+                                }
                         }
                         _ => {
                             !s.description.is_empty()
@@ -323,16 +339,15 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
             let compatible = unit(&s.unit) == unit(&gold.unit) && s.kind == gold.kind;
             row.absolute_percent_error =
                 compatible.then(|| ape(s.quantity, gold.quantity)).flatten();
+            let mut within = false;
             if let Some(error) = row.absolute_percent_error {
-                row.passed = error <= tolerance(gold) && s.basis == gold.basis;
+                within = error <= tolerance(gold);
                 metrics.within_1_percent += usize::from(error <= 1.0);
                 metrics.within_2_percent += usize::from(error <= 2.0);
                 metrics.within_5_percent += usize::from(error <= 5.0);
                 metrics.within_10_percent += usize::from(error <= 10.0);
                 metrics.within_25_percent += usize::from(error <= 25.0);
             }
-            metrics.passed += usize::from(row.passed);
-            metrics.calibrate(s.confidence, row.passed);
             let measured = session
                 .ok_or_else(|| "drawing unavailable to remeasure".to_string())
                 .and_then(|session| remeasure(session, gold, s, truth));
@@ -351,6 +366,16 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
                 }
                 Err(e) => row.trace_reason = e,
             }
+            // Correctness is the quantity within tolerance on the same kind and unit. Basis names
+            // are benchmark-internal, so they only order the matching tiers, with one exception:
+            // a quantity claimed as plain geometry must reproduce from its geometry when the truth
+            // derives it from a rule.
+            let false_geometry = basis_category(&s.basis) == "geometric"
+                && basis_category(&gold.basis) != "geometric"
+                && !row.traceable;
+            row.passed = within && !false_geometry;
+            metrics.passed += usize::from(row.passed);
+            metrics.calibrate(s.confidence, row.passed);
             metrics.traceable += usize::from(row.traceable);
         }
         items.push(row);
@@ -435,4 +460,9 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         elapsed_ms: submission.elapsed_ms,
         warnings: submission.warnings.clone(),
     }
+}
+
+/// The part of a basis before ':' (`rule:lining-height` -> `rule`).
+fn basis_category(basis: &str) -> &str {
+    basis.split(':').next().unwrap_or("").trim()
 }
