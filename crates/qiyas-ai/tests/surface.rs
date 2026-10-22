@@ -816,6 +816,20 @@ async fn destructive_commands_in_run_and_batch_share_one_cap() {
 
 #[test]
 fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
+    let (_drawing, mut session) = sample();
+    let kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":kit["batch"]}),
+    )
+    .unwrap();
+    let item = session.measurement_report().unwrap().items[0].clone();
+    let project = tempfile::Builder::new()
+        .suffix(".qss")
+        .tempfile_in(qiyas_core::data_home::qiyas_dir().unwrap().join("projects"))
+        .unwrap();
+    std::fs::write(project.path(), serde_json::to_vec(&json!({"name":"Trust fixture","drawings":[],"project":{"boq":[{"item":item,"contributions":[]}]}})).unwrap()).unwrap();
     let documents = tempfile::tempdir().unwrap();
     let pdf = qiyas_pdf::fixtures::write_wall(documents.path());
     let mut declared = BTreeSet::new();
@@ -846,6 +860,7 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
         let expected = match entry.needs[0] {
             surface::Need::Nothing => {
                 let args = match entry.op {
+                    "explain" => json!({"item":item.code,"project":project.path()}),
                     "document" if entry.tool == CAPTURE => json!({"path":pdf,"page":1}),
                     "document" => json!({"path":pdf,"pages":[1]}),
                     "plan" => {
@@ -2011,4 +2026,37 @@ fn takeoff_self_check_preserves_unicode_note_unit_dimensions() {
         let checked = call(&mut s, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
         assert_eq!(checked["quantity_basis_warnings"], warnings);
     }
+}
+
+#[test]
+fn explain_is_one_read_with_recognition_rules_and_no_mutation() {
+    let (_dir, mut s) = sample();
+    let mut kit = call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    kit["batch"]["commands"][1]["rule"]["confidence"] = json!(0.3);
+    kit["batch"]["commands"][1]["rule"]["review_below"] = json!(0.0);
+    call(&mut s, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    let item = s.measurement_report().unwrap().items[0].code.clone();
+    let before = (
+        s.document_revision(),
+        s.history_steps().0.len(),
+        s.sheet.clone(),
+    );
+    let result = call(
+        &mut s,
+        READ,
+        json!({"op":"explain","args":{"item":format!("generated:{item}")}}),
+    )
+    .unwrap();
+    assert!(!result["recognition_rules"].as_array().unwrap().is_empty());
+    assert!(!result["measurement_rules"].as_array().unwrap().is_empty());
+    assert!(!result["evidence"].as_array().unwrap().is_empty());
+    assert_eq!(result["confidence"], 0.3);
+    assert_eq!(
+        before,
+        (
+            s.document_revision(),
+            s.history_steps().0.len(),
+            s.sheet.clone()
+        )
+    );
 }

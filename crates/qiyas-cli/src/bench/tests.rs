@@ -523,6 +523,7 @@ fn general_pdf_measures_multiple_labels_using_its_own_scale_text_without_case_re
             "{measured:?}"
         );
         assert!(measured.source_objects[0].contains("#page=1;label="));
+        assert_eq!(measured.confidence, Some(qiyas_core::trust::unscored()));
     }
     assert!(!dir.path().join("recognition.json").exists());
     assert!(!dir.path().join("truth.json").exists());
@@ -726,4 +727,37 @@ fn aggregate_accounting_requires_complete_unique_components_and_never_reuses_mat
             .matched,
         0
     );
+}
+
+#[test]
+fn confidence_calibration_counts_wrong_and_extra_items_without_inventing_empty_rates() {
+    let gold = truth(vec![
+        item("A", "count", 2., "count"),
+        item("B", "count", 3., "count"),
+    ]);
+    let mut predicted = gold.items.clone();
+    predicted[0].confidence = Some(0.95);
+    predicted[1].confidence = Some(0.6);
+    predicted[1].quantity = 10.;
+    let mut extra = item("extra", "length", 5., "geometry");
+    extra.confidence = Some(0.95);
+    predicted.push(extra);
+    let scored = score::score(
+        &gold,
+        &Submission {
+            items: predicted,
+            ..Default::default()
+        },
+        None,
+    );
+    assert_eq!(scored.calibration["high"]["submitted"], 2);
+    assert_eq!(scored.calibration["high"]["pass_rate"], 0.5);
+    assert_eq!(scored.calibration["medium"]["pass_rate"], 0.);
+    assert!(scored.calibration["low"]["pass_rate"].is_null());
+    assert_eq!(scored.items[0].confidence, Some(0.95));
+    let mut merged = score::Metrics::default();
+    merged.merge(&scored.metrics);
+    merged.merge(&scored.metrics);
+    assert_eq!(merged.calibration_rates()["high"]["submitted"], 4);
+    assert_eq!(merged.calibration_rates()["high"]["pass_rate"], 0.5);
 }

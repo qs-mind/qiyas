@@ -100,6 +100,8 @@ pub struct Session {
     pub drawing: Drawing,
     /// Block name of the sheet on screen, e.g. `*Model_Space`.
     pub sheet: String,
+    /// Desktop automation keeps its working sheet independently of the user view.
+    pub automation_sheet: Option<String>,
     pub visibility: Visibility,
     pub takeoff: Takeoff,
     /// The imported BOQ; `None` until one is imported.
@@ -694,6 +696,7 @@ impl Session {
         let mut session = Session {
             drawing,
             sheet,
+            automation_sheet: None,
             visibility: Visibility::default(),
             takeoff,
             boq,
@@ -987,6 +990,26 @@ impl Session {
     }
 
     /// Shows the sheet whose block is `block` (case-insensitive).
+    /// Called while the session lock is held; the window sheet is restored on success or error.
+    pub fn with_automation_sheet<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let Some(working) = self.automation_sheet.clone() else {
+            return f(self);
+        };
+        let visible = self.sheet.clone();
+        if self.set_sheet(&working).is_err() {
+            let _ = self.set_sheet("*Model_Space");
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.automation_sheet = Some(self.sheet.clone());
+        if self.set_sheet(&visible).is_err() {
+            let _ = self.set_sheet("*Model_Space");
+        }
+        match result {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
     pub fn set_sheet(&mut self, block: &str) -> Result<(), CoreError> {
         let sheet = self
             .drawing

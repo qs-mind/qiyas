@@ -375,7 +375,21 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 });
             }
             let quantity = total(&context, &lines)?;
+            let confidence =
+                lines
+                    .iter()
+                    .flat_map(|l| &l.sources)
+                    .fold(rule.confidence, |value, source| {
+                        let recognition = evidence
+                            .iter()
+                            .filter(|c| c.object == Some(source.handle))
+                            .map(|c| c.confidence)
+                            .reduce(f64::min)
+                            .unwrap_or(crate::trust::unscored());
+                        value.min(recognition)
+                    });
             report.quantities.push(MeasuredQuantity {
+                confidence,
                 object: object.instance.id,
                 rule: rule.id.clone(),
                 method: method.name.clone(),
@@ -399,6 +413,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 .values
                 .insert("unit".into(), EValue::Text(unit.clone()));
             let item = GeneratedItem {
+                confidence,
                 tolerances: rule.tolerance.clone().into_iter().collect(),
                 code: template(&mapping.code, &mapped_context)?,
                 description_en: template(&mapping.description_en, &mapped_context)?,
@@ -431,6 +446,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                         existing.tolerances.push(t);
                     }
                 }
+                existing.confidence = existing.confidence.min(item.confidence);
                 existing.lines.extend(item.lines);
                 existing.quantity = total(&context, &existing.lines)?;
                 for c in item.mapping_citations {
@@ -461,6 +477,18 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
         }
     }
     report.items = items.into_values().collect();
+    report.items.sort_by(|a, b| {
+        a.confidence
+            .total_cmp(&b.confidence)
+            .then(a.code.cmp(&b.code))
+    });
+    report.quantities.sort_by(|a, b| {
+        a.confidence
+            .total_cmp(&b.confidence)
+            .then(a.object.cmp(&b.object))
+    });
+    report.confidence_summary =
+        crate::trust::ConfidenceSummary::of(report.items.iter().map(|i| i.confidence));
     report.warnings.sort();
     report.warnings.dedup();
     Ok(report)

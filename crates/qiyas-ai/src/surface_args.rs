@@ -39,6 +39,10 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "explain") => (
+            object(json!({"item":string,"project":string}), &["item"]),
+            json!({"item":"generated:A"}),
+        ),
         (READ, "digest" | "takeoff_check" | "takeoff_kit") => {
             let mut props = json!({"offset":{"type":"integer","minimum":0}});
             if op == "takeoff_check" {

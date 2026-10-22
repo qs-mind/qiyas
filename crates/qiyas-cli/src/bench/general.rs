@@ -88,6 +88,8 @@ fn pdf(root: &Path, drawing: &Path) -> Result<Submission, String> {
                 .cloned()
                 .unwrap_or(area.description);
             submission.items.push(Item {
+                // This legacy PDF mapping has no authored measurement confidence.
+                confidence: Some(candidate.confidence.min(qiyas_core::trust::unscored())),
                 description,
                 kind: "area".into(),
                 unit: "m2".into(),

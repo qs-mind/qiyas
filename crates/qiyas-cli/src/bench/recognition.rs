@@ -18,6 +18,8 @@ struct Recipe {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Measure {
+    #[serde(default = "qiyas_core::trust::unscored")]
+    confidence: f64,
     object_type: String,
     quantity: String,
     kind: String,
@@ -115,6 +117,9 @@ fn measure_with_scope(
         .map_err(|e| e.to_string())?;
     let evidence = session.recognition_queue(None).map_err(|e| e.to_string())?;
     for (measurement_index, measurement) in recipe.measurements.into_iter().enumerate() {
+        if !measurement.confidence.is_finite() || !(0.0..=1.0).contains(&measurement.confidence) {
+            return Err("Measurement confidence must be in 0..1".into());
+        }
         let found: Vec<_> = objects
             .iter()
             .filter(|o| o.instance.type_name == measurement.object_type && o.valid)
@@ -157,6 +162,11 @@ fn measure_with_scope(
                     .collect();
             }
             let mut item = Item {
+                confidence: Some(
+                    candidate
+                        .map_or(qiyas_core::trust::unscored(), |c| c.confidence)
+                        .min(measurement.confidence),
+                ),
                 id: measurement.id.clone(),
                 description: measurement.description.clone(),
                 kind: measurement.kind.clone(),
@@ -213,6 +223,10 @@ fn append_group(submission: &mut Submission, items: Vec<Item>, id: &str) {
     let mut total = items[0].clone();
     total.id = id.into();
     total.quantity = items.iter().map(|i| i.quantity).sum();
+    total.confidence = items
+        .iter()
+        .map(|i| i.confidence.unwrap_or(qiyas_core::trust::unscored()))
+        .reduce(f64::min);
     total.source_objects = items
         .iter()
         .flat_map(|i| i.source_objects.clone())

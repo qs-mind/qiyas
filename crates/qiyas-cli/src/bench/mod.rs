@@ -516,7 +516,7 @@ fn baseline_run(
     ];
     let revisions = revisions::run(root, &revision_ids, mode, &run_dir)?;
     let projects = projects::run(root, mode, &run_dir.join("projects"), set == Some("quick"))?;
-    let result = json!({"projects":projects,"revisions":revisions,"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
+    let result = json!({"projects":projects,"revisions":revisions,"calibration":metrics.calibration_rates(),"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
     write_json(&run_dir.join("report.json"), &result)?;
     let md = markdown(&result);
     std::fs::write(run_dir.join("report.md"), &md).map_err(|e| e.to_string())?;
@@ -541,6 +541,19 @@ fn markdown(report: &Value) -> String {
             data["rates"]["item_precision"],
             data["rates"]["item_f1"],
             data["metrics"]["extras"],
+        ));
+    }
+    text.push_str("\nConfidence calibration (low < 0.6; medium < 0.9; high >= 0.9). Extras fail; validated aggregate duplicates are excluded. Empty bands have no observed pass rate.\n\n| Band | Submitted | Passed | Pass rate |\n|---|---:|---:|---:|\n");
+    for name in ["low", "medium", "high", "unscored"] {
+        let band = &report["calibration"][name];
+        text.push_str(&format!(
+            "| {name} | {} | {} | {} |\n",
+            band["submitted"],
+            band["passed"],
+            band["pass_rate"]
+                .as_f64()
+                .map(|v| format!("{:.2}%", v * 100.))
+                .unwrap_or_else(|| "N/A".into())
         ));
     }
     text.push_str("\n| Measure | Result |\n|---|---:|\n");

@@ -104,6 +104,18 @@ fn projects_aggregate_trace_override_register_checks_and_undo() {
     assert_eq!(p.boq[0].item.unit, "m");
     assert!((p.boq[0].item.quantity - 33.).abs() < 1e-8);
     assert_eq!(p.boq[0].contributions.len(), 3);
+    let explanation =
+        qiyas_core::trust::explain_project(qss.to_str().unwrap(), "project:0").unwrap();
+    assert_eq!(explanation["drawings"].as_array().unwrap().len(), 3);
+    assert_eq!(explanation["confidence"], 0.5);
+    assert_eq!(p.confidence_summary.low, 1);
+    assert!(p.boq[0]
+        .contributions
+        .iter()
+        .all(|c| !c.explanation["measurement_rules"]
+            .as_array()
+            .unwrap()
+            .is_empty()));
     assert!(p.boq[0]
         .contributions
         .iter()

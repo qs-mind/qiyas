@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AiUi } from "../api";
 import * as api from "../api";
@@ -24,7 +24,9 @@ function setup() {
   const setHidden = vi.fn();
   const cancel = vi.fn();
   const setAiHighlight = vi.fn();
+  const chooseSheet = vi.fn(async () => { order.push("choose"); });
   const cancelReveal = vi.fn();
+  const queueReveal = vi.fn();
   const deps = {
     t: (key: string) => key,
     lang: "en",
@@ -34,7 +36,8 @@ function setup() {
     viewport: { current: { fitTo } },
     batch: null,
     sheet: "*Model_Space",
-    queueReveal: vi.fn(),
+    queueReveal,
+    chooseSheet,
     cancelReveal,
     setSheetBlock,
     setHidden,
@@ -43,45 +46,51 @@ function setup() {
     measure: { cancel, picks: [], highlighted: null, kinds: new Map() },
     tool: "select",
   } as unknown as Parameters<typeof useAssistantWiring>[0];
-  renderHook(() => useAssistantWiring(deps));
-  return { order, fitTo, redraw, setSheetBlock, setHidden, cancel, setAiHighlight, cancelReveal };
+  const hook = renderHook(() => useAssistantWiring(deps));
+  return { order, fitTo, redraw, setSheetBlock, setHidden, cancel, setAiHighlight, cancelReveal, queueReveal, chooseSheet, hook };
 }
 
-test("a view result changes the sheet before zooming to its bounds", async () => {
+test("Mizan view events preserve the user's sheet and zoom", async () => {
   const view = setup();
-  const bounds: [[number, number], [number, number]] = [[1, 2], [3, 4]];
-  await act(async () => callbacks.onUi!({
-    action: "zoom", sheet: "*Paper_Space", bounds, handles: [7],
-  }));
-  await waitFor(() => expect(view.fitTo).toHaveBeenCalledWith(bounds));
-  expect(view.order).toEqual(["sheet", "redraw", "zoom"]);
-  expect(view.setSheetBlock).toHaveBeenCalledWith("*Paper_Space");
-  expect(view.cancel).toHaveBeenCalledTimes(1);
-  expect(view.cancelReveal).toHaveBeenCalledWith(false);
-  expect(view.redraw).toHaveBeenCalledWith(false);
-  expect(view.setAiHighlight).toHaveBeenCalledWith([7]);
+  await act(async () => callbacks.onUi!({ action: "zoom", sheet: "*Paper_Space", bounds: [[1, 2], [3, 4]], handles: [7] }));
+  expect(view.fitTo).not.toHaveBeenCalled();
+  expect(view.setSheetBlock).not.toHaveBeenCalled();
+  expect(view.cancel).not.toHaveBeenCalled();
+  expect(view.redraw).toHaveBeenCalledWith();
 });
 
-test("sheet and redraw results keep hidden layer names; a sheet without bounds fits", async () => {
+test("sheet and redraw events refresh without fitting the user's view", async () => {
   const view = setup();
-  await act(async () => callbacks.onUi!({
-    action: "show_sheet", sheet: "*Paper_Space", hidden: ["a-wall"],
-  }));
-  expect(view.redraw).toHaveBeenCalledWith(true);
-  expect(view.fitTo).not.toHaveBeenCalled();
+  await act(async () => callbacks.onUi!({ action: "show_sheet", sheet: "*Paper_Space", hidden: ["a-wall"] }));
   expect(view.setHidden).toHaveBeenCalledWith(new Set(["A-WALL"]));
   await act(async () => callbacks.onUi!({ action: "redraw", hidden: [] }));
   expect(view.setHidden).toHaveBeenLastCalledWith(new Set());
   expect(view.redraw).toHaveBeenCalledTimes(2);
+  expect(view.fitTo).not.toHaveBeenCalled();
+  expect(view.setSheetBlock).not.toHaveBeenCalled();
 });
 
-
-test("assistant sheet events and reveals never send a sheet selection back to the core", async () => {
+test("reveal runs only on the working sheet, without issuing sheet IPC", async () => {
   const select = vi.spyOn(api, "setSheet").mockResolvedValue();
   const view = setup();
-  await act(async () => callbacks.onUi!({ action: "show_sheet", sheet: "*Paper_Space" }));
-  await act(async () => callbacks.onUi!({ action: "reveal", sheet: "*Model_Space", handles: [1] }));
+  await act(async () => callbacks.onUi!({ action: "reveal", sheet: "*Paper_Space", handles: [1] }));
+  expect(view.queueReveal).not.toHaveBeenCalled();
+  expect(view.cancelReveal).toHaveBeenCalledWith(false);
+  await act(async () => callbacks.onUi!({ action: "reveal", sheet: "*Model_Space", handles: [2] }));
+  expect(view.queueReveal).toHaveBeenCalledWith([2]);
   expect(select).not.toHaveBeenCalled();
-  expect(view.setSheetBlock).toHaveBeenCalledWith("*Paper_Space");
+  expect(view.setSheetBlock).not.toHaveBeenCalled();
   select.mockRestore();
+});
+
+test("an explicit Show action selects the evidence sheet before fitting it", async () => {
+  const view = setup();
+  const bounds: [[number, number], [number, number]] = [[1, 2], [3, 4]];
+  await act(async () => view.hook.result.current.showCard({
+    kind: "tool", id: "1", name: "draw", input: {}, status: "done", summary: "", handles: [7],
+    ui: { action: "zoom", sheet: "*Paper_Space", bounds }, mutating: true, undone: false, stale: false,
+  }));
+  expect(view.chooseSheet).toHaveBeenCalledWith("*Paper_Space");
+  expect(view.setAiHighlight).toHaveBeenCalledWith([7]);
+  expect(view.order).toEqual(["choose", "zoom"]);
 });

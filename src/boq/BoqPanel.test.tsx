@@ -71,7 +71,9 @@ test("measured sum and an over-tolerance difference", () => {
     "+20.0 %",
     "2",
     "5 %",
+    "?",
   ]);
+  expect(within(cells[8]).getByRole("button", { name: "How did you get this number? boq-row:0" })).toBeTruthy();
   expect(cells[5].className).toContain("diff-over");
   expect(bodyRows()[1].getAttribute("aria-current")).toBe("true");
 

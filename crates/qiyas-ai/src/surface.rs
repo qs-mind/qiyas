@@ -32,7 +32,8 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 18] = [
+pub const READ_OPS: [&str; 19] = [
+    "explain",
     "digest",
     "takeoff_kit",
     "takeoff_check",
@@ -106,6 +107,7 @@ macro_rules! operations {
 operations![
     (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
+    (READ, "explain", [Nothing]),
     (READ, "digest", [Drawing]),
     (READ, "takeoff_kit", [Nothing]),
     (READ, "takeoff_check", [Drawing]),
@@ -199,7 +201,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -578,6 +580,11 @@ pub fn run_without_drawing(
         return None;
     }
     let value = match op {
+        "explain" if args["project"].is_string() => qiyas_core::trust::explain_project(
+            args["project"].as_str().unwrap(),
+            args["item"].as_str().unwrap_or_default(),
+        )
+        .map_err(Into::into),
         "document" => crate::document::read(args),
         "takeoff_kit" if units.is_none() => {
             let mut kit = qiyas_core::takeoff_kit::kit();
@@ -693,6 +700,19 @@ pub fn run_session_with_method(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
+    session.with_automation_sheet(|session| {
+        run_working_session(session, tool, op, args, source, method)
+    })
+}
+
+fn run_working_session(
+    session: &mut Session,
+    tool: &str,
+    op: &str,
+    args: &Value,
+    source: Source,
+    method: &crate::MeasurementMethod,
+) -> Result<ToolOutput, ToolError> {
     let argument_warnings = crate::surface_args::validate(tool, op, args)?;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
@@ -731,6 +751,16 @@ pub fn run_session_with_method(
         Ok(ToolOutput::Json(v))
     };
     match (tool, op) {
+        (READ, "explain") => {
+            let item = args["item"]
+                .as_str()
+                .ok_or_else(|| bad("item is required"))?;
+            json(if let Some(path) = args["project"].as_str() {
+                qiyas_core::trust::explain_project(path, item)?
+            } else {
+                session.explain(item)?
+            })
+        }
         (READ, "document") => json(crate::document::read(args)?),
         (CAPTURE, "document") => crate::document::capture(args),
         (READ, "digest") => {

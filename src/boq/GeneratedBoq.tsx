@@ -1,3 +1,4 @@
+import { Explain } from "./Explain";
 import type { MeasurementReport } from "../api";
 import { useLanguage, useT } from "../i18n";
 
@@ -8,8 +9,11 @@ export function GeneratedBoq({ report, onShow }: { report: MeasurementReport | n
   if (!report || (!report.items.length && !report.warnings.length)) return null;
   return <section className="generated-boq" aria-label={t("boq.generated")}>
     <h3>{t("boq.generated")}</h3>
+    {report.confidence_summary && <p>{lang === "ar" ? "الثقة: منخفضة / متوسطة / عالية" : "Confidence: low / medium / high"}: {report.confidence_summary.low} / {report.confidence_summary.medium} / {report.confidence_summary.high}</p>}
     {report.items.map((item) => <details key={item.code}>
       <summary dir="auto">{item.code} · {lang === "ar" ? item.description_ar : item.description_en} · {item.quantity} {item.unit}</summary>
+      <Explain item={`generated:${item.code}`} />
+      <p>{lang === "ar" ? "الثقة" : "Confidence"}: {((item.confidence ?? 0.5) * 100).toFixed(0)}%</p>
       <p>{item.section} · {item.trade}</p>
       <ol>{item.lines.map((line, index) => <li key={index}>
         <span>{line.label} · {line.included ? t("boq.included") : t("boq.excluded")}</span>

@@ -1888,6 +1888,7 @@ export type DimensionLine = {
   sources: { handle: number; sheet: string; grid: string | null }[];
 };
 export type GeneratedBoqItem = {
+  confidence?: number;
   code: string;
   description_en: string;
   description_ar: string;
@@ -1898,6 +1899,7 @@ export type GeneratedBoqItem = {
   lines: DimensionLine[];
 };
 export type MeasurementReport = {
+  confidence_summary?: { low: number; medium: number; high: number };
   items: GeneratedBoqItem[];
   warnings: string[];
 };
@@ -1911,7 +1913,7 @@ export type ProjectReply = {
     entries?: { path: string; full: string; missing: boolean }[];
     set?: { name: string; project: {
       method: { title: string } | null;
-      boq: unknown[]; queries: unknown[]; warnings: string[]; checked: boolean;
+      boq: { item: GeneratedBoqItem }[]; queries: unknown[]; warnings: string[]; checked: boolean;
       register: { drawing: string; sheet: string; flags: string[] }[];
       drawings: { drawing: string; status: string; items: number; warnings: string[]; error: string | null }[];
     } };
@@ -1920,3 +1922,15 @@ export type ProjectReply = {
 };
 export const projectCommand = (command: Record<string, unknown>) => invoke<ProjectReply>("project_command", { command: { ...command, type: "project" } });
 export const projectHistory = (redo: boolean) => invoke<boolean>("project_history", { redo });
+
+export type Explanation = {
+  item: string; quantity: number; unit: string; confidence: number;
+  confidence_band: "low" | "medium" | "high";
+  dimension_lines: DimensionLine[];
+  drawings: string[];
+  evidence: { handle: number; sheet: string; drawing: string }[];
+  elements?: unknown[]; recognition?: unknown[]; recognition_rules?: unknown[]; measurement_rules?: unknown[];
+  contributions?: { explanation: Explanation }[];
+  notes?: string[];
+};
+export const explainItem = (item: string, project?: string) => invoke<Explanation>("explain_item", { item, project });

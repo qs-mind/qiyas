@@ -94,6 +94,9 @@ pub const INSERT_COUNT_LIMITATIONS: &str = "Not a complete visible count or proj
 /// for counts, the item's own unit for items); `shown` is the same quantity in `unit`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Measurement {
+    /// Unscored manual measurements retain 0.5; generated adapters copy derived confidence.
+    #[serde(default = "crate::trust::unscored")]
+    pub confidence: f64,
     /// UUID v4.
     pub id: String,
     pub kind: Kind,
@@ -160,6 +163,7 @@ impl Measurement {
     ) -> Measurement {
         let (unit, shown) = in_metres(kind, value, units);
         Measurement {
+            confidence: crate::trust::unscored(),
             id: uuid::Uuid::new_v4().to_string(),
             kind,
             value,

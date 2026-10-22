@@ -22,6 +22,7 @@ fn invalid(message: impl Into<String>) -> CoreError {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectData {
+    pub confidence_summary: crate::trust::ConfidenceSummary,
     pub reports: BTreeMap<String, crate::deliverables::Layout>,
     pub variations: BTreeMap<String, crate::revisions::VariationReport>,
     pub method: Option<RuleSet>,
@@ -36,6 +37,10 @@ pub struct ProjectData {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Contribution {
+    #[serde(default = "crate::trust::unscored")]
+    pub confidence: f64,
+    #[serde(default)]
+    pub explanation: Value,
     pub drawing: String,
     pub code: String,
     pub quantity: f64,
@@ -182,6 +187,7 @@ pub fn list() -> Result<Value, CoreError> {
 fn invalidate(project: &mut ProjectData) {
     project.variations.clear();
     project.boq.clear();
+    project.confidence_summary = Default::default();
     project.queries.clear();
     project.register.clear();
     project.drawings.clear();
@@ -378,6 +384,7 @@ pub fn aggregate(reports: &[(String, crate::measurement::MeasurementReport)]) ->
                         contributions: vec![],
                     }
                 });
+            entry.item.confidence = entry.item.confidence.min(item.confidence);
             entry.item.quantity += item.quantity;
             for citation in &item.mapping_citations {
                 if !entry.item.mapping_citations.contains(citation) {
@@ -390,6 +397,8 @@ pub fn aggregate(reports: &[(String, crate::measurement::MeasurementReport)]) ->
                 }
             }
             entry.contributions.push(Contribution {
+                confidence: item.confidence,
+                explanation: Value::Null,
                 drawing: drawing.clone(),
                 code: item.code.clone(),
                 quantity: item.quantity,
@@ -569,6 +578,25 @@ pub fn evaluate(path: &Path, set: &mut SheetSet) -> Result<(), CoreError> {
         }
     }
     result.boq = aggregate(&reports);
+    for row in &mut result.boq {
+        for contribution in &mut row.contributions {
+            if let Some((_, session)) = sessions
+                .iter()
+                .find(|(path, _)| path == &contribution.drawing)
+            {
+                contribution.explanation =
+                    session.explain(&format!("generated:{}", contribution.code))?;
+            }
+        }
+    }
+    result.boq.sort_by(|a, b| {
+        a.item
+            .confidence
+            .total_cmp(&b.item.confidence)
+            .then(a.item.code.cmp(&b.item.code))
+    });
+    result.confidence_summary =
+        crate::trust::ConfidenceSummary::of(result.boq.iter().map(|r| r.item.confidence));
     if result.drawings.iter().any(|d| d.error.is_some()) {
         result
             .warnings

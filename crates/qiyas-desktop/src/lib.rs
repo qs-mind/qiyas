@@ -139,6 +139,7 @@ pub fn run() {
             commands::ai_delete_conversations,
             methods::measurement_methods,
             commands::measurement_report,
+            commands::explain_item,
             commands::ai_status,
             commands::ai_log,
             commands::ai_set_language,

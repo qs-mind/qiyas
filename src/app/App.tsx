@@ -3,8 +3,9 @@
  *  the selection) and hands their results to the top bar, the dialogs and the panels. Hooks
  *  that call back into one made later (`apply`, `onCommand`, the tool's `cancel`) reach it
  *  through a ref filled right after it exists. */
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type AiRegion, type DrawingInfo } from "../api";
+import { EXPLAIN_EVIDENCE, type Evidence } from "../boq/Explain";
 import { useLanguage, useT } from "../i18n";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import { CommandLine } from "../shell/CommandLine";
@@ -224,6 +225,7 @@ export default function App() {
     viewport,
     batch,
     sheet,
+    chooseSheet,
     queueReveal: sheets.queueReveal,
     cancelReveal: sheets.cancelReveal,
     setSheetBlock,
@@ -317,6 +319,23 @@ export default function App() {
     parametric,
   });
   onCommandRef.current = onCommand;
+  useEffect(() => {
+    const show = (event: Event) => {
+      const evidence = (event as CustomEvent<Evidence[]>).detail;
+      if (!evidence.length) return;
+      void run(async () => {
+        const first = evidence[0];
+        if (first.drawing !== info?.path) await drawings.openPath(first.drawing);
+        // A cancelled open must never highlight unrelated handles in the previous drawing.
+        const current = await import("../api").then(api => api.drawingInfo());
+        if (current.path !== first.drawing) return;
+        await chooseSheet(first.sheet);
+        setAiHighlight(evidence.map(e => e.handle));
+      });
+    };
+    window.addEventListener(EXPLAIN_EVIDENCE, show);
+    return () => window.removeEventListener(EXPLAIN_EVIDENCE, show);
+  }, [info?.path, drawings.openPath, chooseSheet, run, setAiHighlight]);
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
   const { highlight, overlay } = useOverlay({
     tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight, revealOverlay: sheets.revealOverlay,

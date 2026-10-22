@@ -36,7 +36,7 @@ import type { Sheets } from "./useSheets";
 import type { TakeoffState } from "./useTakeoff";
 
 type Deps = Pick<Shell, "run" | "setSettingsOpen" | "viewport" | "setSideTab"> &
-  Pick<Sheets, "batch" | "sheet" | "queueReveal" | "cancelReveal" | "setSheetBlock" | "setHidden" | "setRenderProgress" | "redraw"> &
+  Pick<Sheets, "batch" | "sheet" | "chooseSheet" | "queueReveal" | "cancelReveal" | "setSheetBlock" | "setHidden" | "setRenderProgress" | "redraw"> &
   Pick<TakeoffState, "refreshTakeoffAndBoq" | "setCompared" | "setAiHighlight"> &
   Pick<Layers, "syncInfo"> & {
     t: T;
@@ -83,6 +83,7 @@ export function useAssistantWiring({
   viewport,
   batch,
   sheet,
+  chooseSheet,
   queueReveal,
   cancelReveal,
   setSheetBlock,
@@ -103,7 +104,7 @@ export function useAssistantWiring({
     if (info?.sheet) setSheetBlock(info.sheet);
   }, [info?.sheet]);
 
-  /** Follows the core's sheet, layers and zoom; never calls the sheet-changing IPC. */
+  /** Refresh shared drawing data without moving the user's sheet or camera. */
   function applyAiUi(ui: AiUi) {
     if (ui.action === "reveal") {
       if (ui.sheet?.toLowerCase() === sheet.toLowerCase() &&
@@ -115,25 +116,13 @@ export function useAssistantWiring({
       }
       return;
     }
-    run(async () => {
-      if (ui.hidden) {
-        // The model may write a layer's name in another case; the panel uses the drawing's.
-        const names = new Set(ui.hidden.map((n) => n.toUpperCase()));
-        setHidden(new Set(info?.layers.map((l) => l.name).filter((n) => names.has(n.toUpperCase()))));
-      }
-      if (ui.sheet && (ui.action === "show_sheet" || ui.action === "zoom")) {
-        cancelReveal(false);
-        setSheetBlock(ui.sheet);
-        measure.cancel();
-        await redraw(!ui.bounds);
-      } else if (ui.action === "redraw") {
-        await redraw();
-      }
-      if (ui.bounds) {
-        setAiHighlight(ui.handles ?? []);
-        viewport.current?.fitTo(ui.bounds);
-      }
-    });
+    if (ui.hidden) {
+      const names = new Set(ui.hidden.map(name => name.toUpperCase()));
+      setHidden(new Set(info?.layers.map(layer => layer.name).filter(name => names.has(name.toUpperCase()))));
+    }
+    if (ui.action === "redraw" || ui.action === "show_sheet" || ui.action === "zoom") {
+      void run(() => redraw());
+    }
   }
 
   const assistant = useAssistant({
@@ -162,8 +151,7 @@ export function useAssistantWiring({
     });
     await autosave();
   };
-  // An outside AI app showed another sheet, hid or showed layers, or asked for a zoom: follow it,
-  // so the sheet tabs, the layers panel and the canvas show what the session now shows.
+  // External tools refresh shared drawing data; the session retains the user's visible sheet.
   const onMcpUi = useRef<(ui: AiUi) => void>(() => {});
   onMcpUi.current = (ui) => {
     run(async () => {
@@ -193,11 +181,15 @@ export function useAssistantWiring({
 
   const showCard = useCallback(
     (card: ToolCardItem) => {
-      setAiHighlight(card.handles);
-      const bounds = card.ui?.bounds ?? handlesBounds(card.handles, batch);
-      if (bounds) viewport.current?.fitTo(bounds);
+      void run(async () => {
+        const otherSheet = card.ui?.sheet && card.ui.sheet.toLowerCase() !== sheet.toLowerCase();
+        if (otherSheet) await chooseSheet(card.ui!.sheet!);
+        setAiHighlight(card.handles);
+        const bounds = card.ui?.bounds ?? (otherSheet ? null : handlesBounds(card.handles, batch));
+        if (bounds) viewport.current?.fitTo(bounds);
+      });
     },
-    [batch],
+    [batch, sheet, chooseSheet, run, setAiHighlight, viewport],
   );
 
   const { markUndone, markUndoStale } = assistant;

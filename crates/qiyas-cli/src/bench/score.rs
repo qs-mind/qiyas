@@ -1,4 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CalibrationBand {
+    pub submitted: usize,
+    pub passed: usize,
+}
 
 use qiyas_core::Session;
 use serde::{Deserialize, Serialize};
@@ -7,6 +13,8 @@ use super::model::{objects, unit, Finding, Item, Submission, Truth};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metrics {
+    #[serde(default)]
+    pub calibration: BTreeMap<String, CalibrationBand>,
     pub truth_items: usize,
     pub matched: usize,
     pub passed: usize,
@@ -25,7 +33,29 @@ pub struct Metrics {
 }
 
 impl Metrics {
+    pub fn calibrate(&mut self, confidence: Option<f64>, passed: bool) {
+        let band = confidence
+            .map(qiyas_core::trust::band)
+            .unwrap_or("unscored");
+        let entry = self.calibration.entry(band.into()).or_default();
+        entry.submitted += 1;
+        entry.passed += usize::from(passed);
+    }
+    pub fn calibration_rates(&self) -> serde_json::Value {
+        let mut result = serde_json::Map::new();
+        for name in ["low", "medium", "high", "unscored"] {
+            let empty = CalibrationBand::default();
+            let b = self.calibration.get(name).unwrap_or(&empty);
+            result.insert(name.into(), serde_json::json!({"submitted":b.submitted,"passed":b.passed,"pass_rate":(b.submitted > 0).then(|| b.passed as f64 / b.submitted as f64)}));
+        }
+        result.into()
+    }
     pub fn merge(&mut self, other: &Self) {
+        for (name, band) in &other.calibration {
+            let entry = self.calibration.entry(name.clone()).or_default();
+            entry.submitted += band.submitted;
+            entry.passed += band.passed;
+        }
         self.truth_items += other.truth_items;
         self.matched += other.matched;
         self.passed += other.passed;
@@ -68,6 +98,8 @@ impl Metrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemScore {
+    #[serde(default)]
+    pub confidence: Option<f64>,
     pub id: String,
     pub tolerance_class: String,
     pub expected: f64,
@@ -81,6 +113,8 @@ pub struct ItemScore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaseScore {
+    #[serde(default)]
+    pub calibration: serde_json::Value,
     pub id: String,
     pub project_type: String,
     pub metrics: Metrics,
@@ -252,6 +286,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
     let mut items = Vec::new();
     for gold in &truth.items {
         let mut row = ItemScore {
+            confidence: None,
             id: gold.id.clone(),
             tolerance_class: gold.tolerance_class.clone(),
             expected: gold.quantity,
@@ -283,6 +318,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
             let s = &submission.items[i];
             metrics.matched += 1;
             row.submitted = Some(s.quantity);
+            row.confidence = s.confidence;
             row.matched_by = Some(mode.into());
             let compatible = unit(&s.unit) == unit(&gold.unit) && s.kind == gold.kind;
             row.absolute_percent_error =
@@ -296,6 +332,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
                 metrics.within_25_percent += usize::from(error <= 25.0);
             }
             metrics.passed += usize::from(row.passed);
+            metrics.calibrate(s.confidence, row.passed);
             let measured = session
                 .ok_or_else(|| "drawing unavailable to remeasure".to_string())
                 .and_then(|session| remeasure(session, gold, s, truth));
@@ -332,6 +369,15 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         })
         .collect::<Vec<_>>();
     metrics.extras = extra_items.len();
+    for (i, item) in submission
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !used.contains(i) && !aggregates.contains_key(i))
+    {
+        let _ = i;
+        metrics.calibrate(item.confidence, false);
+    }
     let expected: BTreeSet<&Finding> = truth.seeded_errors.iter().collect();
     // A prediction may identify a missing item by its drawing evidence rather than a client code.
     // Resolve unique evidence identities here only; prediction never receives this mapping.
@@ -374,6 +420,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         (class.into(),serde_json::json!({"true_positives":tp,"false_positives":fp,"false_negatives":fn_count}))
     }).collect();
     CaseScore {
+        calibration: metrics.calibration_rates(),
         id: truth.id.clone(),
         project_type: truth.project_type.clone(),
         rates: metrics.rates(),

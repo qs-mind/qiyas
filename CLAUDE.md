@@ -756,6 +756,33 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (or comma-separated kinds), `--formats excel,pdf`, `--language` and `--layout`.
 - Details, mapping example and validation: `docs/2026-10-22-qiyas-phase22.md`.
 
+## Trust (Phase 23)
+
+- `qiyas_read explain {item, project?}` and the window's “How did you get this number?” action
+  share `Session::explain`. Item selectors: `generated:<code>`, `boq:<code>`, `takeoff:<id>`,
+  `dimension:<decimal object handle>:<rule id>`. Imported rows with duplicate or blank codes use
+  `boq-row:<zero-based row index>`. For projects supply `project` (the `.qss` path)
+  and the item code or `project:<zero-based row index>` for duplicate codes. Reads never mutate.
+- Explanations include dimension arithmetic, elements, handles/sheets, recognition candidates and
+  rules with source evidence, measurement rules/citations and confidence. Imported client figures
+  and manual rows explicitly disclose missing authored rules. English/Arabic window actions show
+  the evidence, with drawing and sheet selection for project contributions. Project runs snapshot
+  explanations alongside quantities, so later drawing edits cannot silently change their provenance.
+- Measurement rules may supply `confidence` in [0,1]. Generated quantities use the minimum of
+  rule confidence and every contributing element's recognition confidence, including deduction
+  decisions. Grouped BOQ and project lines take the minimum of their components. Unscored rules,
+  authored elements without recognition and legacy/manual quantities use 0.5, never assumed 100%.
+  This is conservative evidence confidence, not a statistically proven probability.
+- Shared bands: low <0.6, medium [0.6,0.9), high >=0.9. Reports list lowest confidence first and
+  include counts by band. Normal and interrupted Mizan completions emit the confidence report;
+  project reports retain summaries. Confidence never adds a review or approval gate.
+- Benchmark submissions retain confidence before truth is opened. Each case and the overall
+  JSON/Markdown report compare confidence with correctness using the existing strict tolerances.
+  Extras fail; valid aggregate duplicates do not count twice; missing predictions have no confidence.
+  Empty bands report N/A. Prepared/shared-rule diagnostics remain distinct from live MIZAN ALONE.
+- No new dependencies, trade rules, rates or paid model runs. Phase report:
+  `docs/2026-10-22-qiyas-phase23.md`.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,
@@ -1780,21 +1807,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Item 10: capture captions distinguish model drawing units from layout paper millimetres,
   including pixels' physical size. State reports `sheet_units`, physical `paper`, and layout
   annotation height in paper units while retaining model `metres_per_unit` for model geometry.
-- Item 12: while the assistant owns a turn, desktop `set_sheet` and `run_command` containing
-  SetSheet (including nested batches and desktop scripts), plus history Undo/Redo that can
-  remove a selected layout, reject window writes under the assistant lock. Assistant
-  calls still select sheets directly. `useAssistantWiring` mirrors session information locally;
-  its show/reveal actions never issue sheet IPC. `useSheets.chooseSheet` reads back the core's
-  selected sheet after an accepted selection. Rendering other sheets stays read-only.
-  MCP uses the same host authority for SetSheet (including nested batches and typed commands),
-  view sheet changes, undo and host drawing replacements. The authority stays locked until the
-  operation ends; unrelated edits and reads remain available. User tab switches still cancel
-  the previous conversation, taking the turn lock before tabs/session to prevent lock inversion.
-  The live log already reports Model in set_records' 17:42:33 result with action `reveal`, so the
-  sheet changed before that command (a change during it would produce `show_sheet`), before the
-  17:42:39 mview refusal. The log has no window IPC and cannot identify the triggering event.
-  The exposed path was `useSheets.chooseSheet` into unguarded desktop `set_sheet`, not an
-  observed write in `with_sheet` (which takes `&self`) or the current show_sheet handler.
+- Item 12 (superseded by Phase 23): window sheet selections, including commands and scripts,
+  remain available during a turn. Desktop sessions retain an automation working sheet. Generic
+  AI/MCP session tools enter it under the session lock and restore the window sheet on success,
+  error or panic. Typed commands, batches, reads and picture captures share this boundary.
+  Sheet removal falls back to Model. Automatic UI events never change the user's sheet or zoom;
+  reveals animate only on the sheet currently visible. User history Undo/Redo and external MCP
+  drawing replacements retain turn protection; switching drawing tabs still cancels the old turn.
 
 ## AI assistant and settings
 

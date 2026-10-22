@@ -34,6 +34,9 @@ pub(crate) fn with_session<R>(
     // A panic in an earlier command leaves the session as it was; keep using it.
     let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
     let session = guard.as_mut().ok_or("No drawing is open")?;
+    session
+        .automation_sheet
+        .get_or_insert_with(|| session.sheet.clone());
     f(session).map_err(|e| e.to_string())
 }
 
@@ -163,7 +166,6 @@ pub async fn drawing_info(state: State<'_, AppState>) -> Result<DrawingInfo, Str
 
 #[tauri::command]
 pub async fn set_sheet(block: String, state: State<'_, AppState>) -> Result<(), String> {
-    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| s.set_sheet(&block))
 }
 
@@ -173,15 +175,6 @@ pub(crate) fn window_sheet_guard(state: &AppState) -> Result<MutexGuard<'_, AiRu
         return Err("Mizan owns the sheet during its turn; wait until the turn finishes".into());
     }
     Ok(turn)
-}
-
-/// A queued window action cannot take the sheet away from the assistant's active turn.
-pub(crate) fn command_changes_sheet(command: &Command) -> bool {
-    match command {
-        Command::SetSheet { .. } => true,
-        Command::Batch { commands, .. } => commands.iter().any(command_changes_sheet),
-        _ => false,
-    }
 }
 
 #[tauri::command]
@@ -401,12 +394,7 @@ pub async fn run_command(
     if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
         cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
     }
-    let mut outcome = if command_changes_sheet(&parsed) {
-        let _turn = window_sheet_guard(&state)?;
-        with_session(&state, |s| s.run_input(&cmd, Source::User))?
-    } else {
-        with_session(&state, |s| s.run_input(&cmd, Source::User))?
-    };
+    let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
     qiyas_boq::deliverables::complete(&outcome.outcome)?;
     if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
         files::set_clipboard_text(&state, text)?;
@@ -517,6 +505,18 @@ pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq,
 #[tauri::command]
 pub async fn boq(state: State<'_, AppState>) -> Result<Option<Boq>, String> {
     with_session(&state, |s| Ok(s.boq.clone()))
+}
+
+#[tauri::command]
+pub async fn explain_item(
+    item: String,
+    project: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if let Some(path) = project {
+        return qiyas_core::trust::explain_project(&path, &item).map_err(|e| e.to_string());
+    }
+    with_session(&state, |s| s.explain(&item))
 }
 
 /// The live generated BOQ and traceable dimension sheets, separate from the imported BOQ.
@@ -800,6 +800,13 @@ pub async fn ai_send<R: Runtime>(
         armed: true,
         kept: None,
     };
+    // Start this job on the sheet the user was viewing; later browsing is independent.
+    {
+        let mut session = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(session) = session.as_mut() {
+            session.automation_sheet = Some(session.sheet.clone());
+        }
+    }
     let language = ai_run(&state).language();
     let settings = state
         .settings
@@ -1221,72 +1228,79 @@ mod tests {
     }
 
     #[test]
-    fn window_sheet_changes_cannot_interrupt_an_assistant_turn() {
-        ai_test(
-            "window_sheet_changes_cannot_interrupt_an_assistant_turn",
-            || {
-                let ipc = Ipc::open();
-                let state = ipc._app.state::<AppState>();
-                let layout = with_session(&state, |session| {
-                    Ok(session
-                        .info()
-                        .sheets
-                        .into_iter()
-                        .find(|sheet| !sheet.is_model)
-                        .unwrap()
-                        .block)
-                })
+    fn window_browsing_preserves_the_assistants_sheet() {
+        ai_test("window_browsing", || {
+            let ipc = Ipc::open();
+            let state = ipc._app.state::<AppState>();
+            let layout = with_session(&state, |s| {
+                Ok(s.info()
+                    .sheets
+                    .into_iter()
+                    .find(|s| !s.is_model)
+                    .unwrap()
+                    .block)
+            })
+            .unwrap();
+            let (agent, generation) = ai_run(&state).reserve().unwrap();
+            with_session(&state, |s| {
+                s.automation_sheet = Some(layout.clone());
+                Ok(())
+            })
+            .unwrap();
+            for (name, input) in [
+                ("set_sheet", json!({"block":"*Model_Space"})),
+                (
+                    "run_command",
+                    json!({"cmd":{"type":"set_sheet","block":"*Model_Space"}}),
+                ),
+                (
+                    "run_command",
+                    json!({"cmd":{"type":"batch","commands":[{"type":"set_sheet","block":"*Model_Space"}]}}),
+                ),
+            ] {
+                ipc.call(name, input).unwrap();
+            }
+            for name in ["undo", "redo", "ai_undo"] {
+                assert!(ipc.call(name, json!({})).is_err());
+            }
+            with_session(&state, |s| {
+                let before = s.history_steps().0.len();
+                let result = qiyas_ai::surface::run_session(
+                    s,
+                    "qiyas_execute",
+                    "run",
+                    &json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[10,0]}}),
+                    Source::Ai,
+                )
                 .unwrap();
-                let (agent, generation) = ai_run(&state).reserve().unwrap();
-                // The assistant uses the session directly, while stale window messages arrive by IPC.
-                with_session(&state, |session| {
-                    session.run_as(
-                        Command::SetSheet {
-                            block: layout.clone(),
-                        },
-                        Source::Ai,
-                    )
-                })
-                .unwrap();
-                for (name, input) in [
-                    ("set_sheet", json!({"block":"*Model_Space"})),
-                    ("undo", json!({})),
-                    ("redo", json!({})),
-                    ("ai_undo", json!({})),
-                    (
-                        "run_command",
-                        json!({"cmd":{"type":"set_sheet","block":"*Model_Space"}}),
-                    ),
-                    (
-                        "run_command",
-                        json!({"cmd":{"type":"batch","commands":[{"type":"set_sheet","block":"*Model_Space"}]}}),
-                    ),
-                ] {
-                    let error = ipc.call(name, input).unwrap_err();
-                    assert!(
-                        error.as_str().unwrap().contains("Mizan owns the sheet"),
-                        "{name}: {error}"
-                    );
-                    assert_eq!(
-                        with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
-                        layout
-                    );
-                }
-                ipc.bytes("render_batch", json!({}));
-                ipc.bytes("sheet_batch", json!({"sheet":"*Model_Space"}));
-                assert_eq!(
-                    with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
-                    layout
-                );
-                ai_run(&state).release(agent, generation);
-                ipc.call("set_sheet", json!({"block":"*Model_Space"}))
-                    .unwrap();
-                assert_eq!(
-                    with_session(&state, |session| Ok(session.sheet.clone())).unwrap(),
-                    "*Model_Space"
-                );
-            },
-        );
+                let qiyas_ai::ToolOutput::Json(value) = result else {
+                    panic!("json")
+                };
+                assert_eq!(value["ui"]["sheet"], layout);
+                assert_eq!(s.sheet, "*Model_Space");
+                assert_eq!(s.automation_sheet.as_deref(), Some(layout.as_str()));
+                let handle = value["added"][0].as_u64().unwrap();
+                assert!(s
+                    .drawing
+                    .entities_in(&layout)
+                    .any(|e| e.common().handle.value() == handle));
+                assert_eq!(s.history_steps().0.len(), before + 1);
+                assert!(qiyas_ai::surface::run_session(
+                    s,
+                    "qiyas_execute",
+                    "run",
+                    &json!({"command":{"type":"set_sheet","block":"missing"}}),
+                    Source::Ai
+                )
+                .is_err());
+                assert_eq!(s.sheet, "*Model_Space");
+                Ok(())
+            })
+            .unwrap();
+            ipc.bytes("render_batch", json!({}));
+            ipc.bytes("sheet_batch", json!({"sheet":layout}));
+            ai_run(&state).release(agent, generation);
+        });
     }
 
     impl Ipc {

@@ -17,6 +17,8 @@ pub struct Truth {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Item {
+    #[serde(default)]
+    pub confidence: Option<f64>,
     #[serde(default, alias = "code")]
     pub id: String,
     #[serde(default)]
@@ -148,7 +150,10 @@ impl Truth {
 }
 
 pub fn validate_item(item: &Item) -> Result<(), String> {
-    if !matches!(item.kind.as_str(), "count" | "length" | "area" | "volume")
+    if item
+        .confidence
+        .is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+        || !matches!(item.kind.as_str(), "count" | "length" | "area" | "volume")
         || !item.quantity.is_finite()
         || item.quantity < 0.0
         || item.unit.trim().is_empty()

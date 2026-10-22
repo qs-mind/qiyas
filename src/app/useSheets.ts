@@ -409,7 +409,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     run(async () => {
       cancelReveal(false);
       await setSheet(block);
-      // Read the session after the IPC: the assistant may have selected another sheet meanwhile.
+      // Read back the canonical window sheet; automation restores it after every tool call.
       const next = await drawingInfo();
       setSheetBlock(next.sheet);
       // The layers panel's VP freeze column lists this sheet's viewports.

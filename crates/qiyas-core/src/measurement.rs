@@ -99,6 +99,9 @@ pub struct Rounding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
+    /// Confidence in the cited interpretation, from 0 to 1. Unscored legacy rules use 0.5.
+    #[serde(default = "crate::trust::unscored")]
+    pub confidence: f64,
     /// Cited by this rule: allowed quantity discrepancy in percent and/or physical units.
     #[serde(default)]
     pub tolerance: Option<crate::discrepancy::Tolerance>,
@@ -225,6 +228,8 @@ pub struct DimensionLine {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeasuredQuantity {
+    #[serde(default = "crate::trust::unscored")]
+    pub confidence: f64,
     pub object: u64,
     pub rule: String,
     pub method: String,
@@ -236,6 +241,8 @@ pub struct MeasuredQuantity {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeneratedItem {
+    #[serde(default = "crate::trust::unscored")]
+    pub confidence: f64,
     #[serde(default)]
     pub tolerances: Vec<crate::discrepancy::Tolerance>,
     pub code: String,
@@ -251,6 +258,8 @@ pub struct GeneratedItem {
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementReport {
+    #[serde(default)]
+    pub confidence_summary: crate::trust::ConfidenceSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variation: Option<crate::revisions::VariationReport>,
     pub selection: MethodSelection,
@@ -316,6 +325,9 @@ impl RuleSet {
         text(&self.title)?;
         let mut ids = BTreeSet::new();
         for r in &self.rules {
+            if !r.confidence.is_finite() || !(0.0..=1.0).contains(&r.confidence) {
+                return Err(invalid("Measurement confidence must be in 0..1"));
+            }
             if let Some(t) = &r.tolerance {
                 t.validate()?;
             }
@@ -379,6 +391,18 @@ impl Session {
     pub fn measurement_report(&self) -> Result<MeasurementReport, CoreError> {
         let mut report: MeasurementReport = read(self, "result")?;
         report.variation = self.variation()?;
+        report.items.sort_by(|a, b| {
+            a.confidence
+                .total_cmp(&b.confidence)
+                .then(a.code.cmp(&b.code))
+        });
+        report.quantities.sort_by(|a, b| {
+            a.confidence
+                .total_cmp(&b.confidence)
+                .then(a.object.cmp(&b.object))
+        });
+        report.confidence_summary =
+            crate::trust::ConfidenceSummary::of(report.items.iter().map(|i| i.confidence));
         Ok(report)
     }
     pub(crate) fn run_measurement(
@@ -459,6 +483,7 @@ impl MeasurementReport {
                     String::new(),
                     String::new(),
                 );
+                m.confidence = item.confidence;
                 m.id = format!("generated:{}", item.code);
                 m.created.clear();
                 m.unit = item.unit.clone();

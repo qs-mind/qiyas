@@ -134,6 +134,18 @@ pub fn write_outputs(qss: &Path, set: &SheetSet, out: Option<&Path>) -> Result<V
         .map(|r| r.flags.len())
         .sum::<usize>();
     let mut text=format!("# {}\n\n{} drawings; {} failed. {} BOQ items; {} project queries. {} register fields flagged.\n\nCross-drawing checks: {}.\n\nMethod: {}. Quantities only.\n",set.name,project.drawings.len(),failed,project.boq.len(),project.queries.len(),flags,if project.checked{"completed"}else{"incomplete"},project.method.as_ref().map(|m|m.title.as_str()).unwrap_or("drawing methods (see dimension sources)"));
+    let confidence = &project.confidence_summary;
+    text.push_str(&format!("\nConfidence bands: low {}, medium {}, high {}. Review is optional.\n\n| Item (lowest confidence first) | Confidence | Band |\n|---|---:|---|\n", confidence.low, confidence.medium, confidence.high));
+    let mut items = project.boq.iter().collect::<Vec<_>>();
+    items.sort_by(|a, b| a.item.confidence.total_cmp(&b.item.confidence));
+    for row in items {
+        text.push_str(&format!(
+            "| {} | {:.0}% | {} |\n",
+            row.item.code.replace('|', "\\|"),
+            row.item.confidence * 100.,
+            qiyas_core::trust::band(row.item.confidence)
+        ));
+    }
     for warning in &project.warnings {
         text.push_str(&format!("\n- {warning}"));
     }

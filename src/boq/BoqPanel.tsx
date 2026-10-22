@@ -1,4 +1,5 @@
 import { memo, useMemo, useRef, useState } from "react";
+import { Explain } from "./Explain";
 import { GeneratedBoq } from "./GeneratedBoq";
 import type { MeasurementReport, Boq, BoqItem, Measurement } from "../api";
 import { useT } from "../i18n";
@@ -271,6 +272,7 @@ export const BoqPanel = memo(function BoqPanel({
           rowKey={lineKey}
           section={lineSection}
           storageKey="boq"
+          actions={(l) => <Explain item={`boq-row:${l.i}`} />}
           // An item without a code can't be linked, so there is nothing to show for it.
           onRowClick={(l) => onSelect(l.item.code)}
           isDisabled={(l) => l.item.code === ""}

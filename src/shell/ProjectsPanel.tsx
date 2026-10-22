@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { projectCommand, projectHistory, type ProjectReply } from "../api";
 import { open } from "../fileDialogs";
 import { useT } from "../i18n";
+import { Explain } from "../boq/Explain";
 import { DotLoader } from "./DotLoader";
 
 export function ProjectsPanel({ active }: { active: boolean }) {
@@ -87,6 +88,7 @@ export function ProjectsPanel({ active }: { active: boolean }) {
         </li>;
       })}</ul>
       <p>{t("projects.summary", { items: data?.boq.length ?? 0, queries: data?.queries.length ?? 0, register: data?.register.length ?? 0 })}</p>
+      {data?.boq.map(({ item }, index) => <p key={index}><bdi>{item.code} · {item.quantity} {item.unit}</bdi> <Explain item={`project:${index}`} project={selected.result.path} /></p>)}
       {data?.warnings.map((warning) => <p key={warning}>{warning}</p>)}
       {data?.register.filter((row) => row.flags.length > 0).map((row) => <p key={`${row.drawing}:${row.sheet}`}><bdi>{row.drawing.split(/[\\/]/).pop()} · {row.sheet}</bdi>: {t("projects.registerFlags", { n: row.flags.length })}</p>)}
       {selected.outputs && <div role="status"><p>{t("projects.workbook")}: <bdi>{selected.outputs.workbook}</bdi></p><p>{t("projects.report")}: <bdi>{selected.outputs.morning_report}</bdi></p></div>}

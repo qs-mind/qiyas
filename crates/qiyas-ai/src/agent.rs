@@ -721,6 +721,7 @@ impl Agent {
                                     }
                                     self.emit(&events, AgentEvent::Text { text }).await;
                                 }
+                                self.report_confidence(&events).await;
                                 self.emit(&events, AgentEvent::Done { usage }).await;
                             }
                             Ok(())
@@ -756,9 +757,32 @@ impl Agent {
         Ok(())
     }
 
+    async fn report_confidence(&self, events: &mpsc::Sender<AgentEvent>) {
+        let session = self.session.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.as_ref()?.measurement_report().ok()
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(report) = report.filter(|r| !r.items.is_empty()) {
+            let summary = &report.confidence_summary;
+            let items = report
+                .items
+                .iter()
+                .map(|i| format!("{}: {:.0}%", i.code, i.confidence * 100.))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let text = format!("\nConfidence report (lowest first): {items}. Bands: low {}, medium {}, high {}. Review is optional.", summary.low, summary.medium, summary.high);
+            self.emit(events, AgentEvent::Text { text }).await;
+        }
+    }
+
     /// A hard cap may leave no paid request for a final answer. Report the persisted state
     /// locally; never fabricate measurements or discard an already generated BOQ.
     async fn report_interrupted(&self, events: &mpsc::Sender<AgentEvent>, reason: &str) {
+        self.report_confidence(events).await;
         let session = self.session.clone();
         let report = tokio::task::spawn_blocking(move || {
             let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1338,6 +1362,9 @@ impl Agent {
             ));
             let mut picture = None;
             if let Some(session) = guard.as_ref() {
+                if let Some(working) = &session.automation_sheet {
+                    text.push_str(&format!("Automation working sheet: {working}. Window sheet: {}. User browsing does not change the working sheet.\n", session.sheet));
+                }
                 text.push_str(&context::describe(session, &pointed, lang));
                 picture = context::picture(session, &pointed);
             }
