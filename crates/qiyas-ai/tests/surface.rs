@@ -1972,3 +1972,14 @@ fn kit_commands_return_the_complete_short_entry_without_rediscovery() {
         }
     ));
 }
+
+#[test]
+fn deliverable_export_preserves_its_kind_and_writes_through_the_registry() {
+    let (dir, mut session) = sample();
+    for (format, extension) in [("excel", "xlsx"), ("pdf", "pdf")] {
+        let name = format!("deliverable.{extension}");
+        call(&mut session,EXECUTE,json!({"op":"run","args":{"command":{"type":"deliverable.export","kind":"register","format":format,"path":name,"language":"ar"}}})).unwrap();
+        assert!(dir.path().join(name).exists());
+    }
+    assert!(call(&mut session,EXECUTE,json!({"op":"run","args":{"command":{"type":"deliverable.export","kind":"boq","format":"pdf","path":"../escape.pdf"}}})).is_err());
+}

@@ -26,6 +26,10 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Export quantity deliverables using drawing or project report layouts.
+    #[schemars(extend("x-category" = "takeoff", "x-effect" = "file", "x-batch" = false))]
+    #[schemars(example = json!({"type":"deliverable","kind":"export","report":"boq","format":"excel","path":"boq.xlsx"}))]
+    Deliverable(Box<crate::deliverables::DeliverableCommand>),
     /// Create, open and run multi-drawing projects in the Qiyas data home. Drawing knowledge
     /// stays inside each drawing; project edits are single undo steps and run outside batches.
     #[schemars(extend("x-category" = "takeoff", "x-batch" = false))]
@@ -1423,6 +1427,7 @@ impl Command {
                         | "recognition"
                         | "measurement"
                         | "project"
+                        | "deliverable"
                 ) =>
             {
                 format!("{name}.{kind}")
@@ -1436,7 +1441,7 @@ impl Command {
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
             Command::Project(command) => if command.is_read() {None} else {Some(Part::ProjectFile)},
-            Command::CompareRevisions { .. } => None,
+            Command::Deliverable(_) | Command::CompareRevisions { .. } => None,
             Command::CarryKnowledge { .. } | Command::VariationReport { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Check { .. } | Command::DefineCheck { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Measurement(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
@@ -1644,6 +1649,9 @@ impl Command {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    Deliverable {
+        export: Box<crate::deliverables::Export>,
+    },
     Project {
         result: serde_json::Value,
     },
@@ -1813,6 +1821,26 @@ impl Session {
     /// is marked as made by `source`.
     pub(crate) fn execute(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         let mut measurement = match cmd {
+            Command::Deliverable(command) => {
+                let crate::deliverables::DeliverableCommand::Export {
+                    report,
+                    format,
+                    layout,
+                    path,
+                    language,
+                    project,
+                } = *command;
+                return Ok(Outcome::Deliverable {
+                    export: Box::new(self.prepare_deliverable(
+                        report,
+                        format,
+                        layout.as_deref(),
+                        &path,
+                        language,
+                        project.as_deref(),
+                    )?),
+                });
+            }
             Command::Project(command) => return self.project_command(*command, source),
             Command::CenterMark { targets, extension } => {
                 return Ok(Outcome::Added {
@@ -1921,6 +1949,11 @@ impl Session {
                     return Err(CoreError::InvalidCommand(
                         "Use define_object_type/redefine_object_type or recognition.define or measurement commands".into(),
                     ));
+                }
+                if kind == crate::knowledge::Kind::Reports {
+                    let layout: crate::deliverables::Layout = serde_json::from_value(data.clone())
+                        .map_err(|e| invalid(&e.to_string()))?;
+                    layout.validate()?;
                 }
                 if kind == crate::knowledge::Kind::Checks {
                     let rule: crate::discrepancy::CheckRule = serde_json::from_value(data.clone())

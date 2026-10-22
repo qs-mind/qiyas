@@ -5,6 +5,7 @@ use crate::{
     measurement::{DimensionLine, GeneratedItem, MeasurementCommand, MethodScope, RuleSet},
     Command, Conflict, CoreError, Outcome, Session, SheetSet, Source,
 };
+pub use register::read as drawing_register;
 pub use register::{RegisterField, RegisterRow, RegisterRule};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,8 @@ fn invalid(message: impl Into<String>) -> CoreError {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectData {
+    pub reports: BTreeMap<String, crate::deliverables::Layout>,
+    pub variations: BTreeMap<String, crate::revisions::VariationReport>,
     pub method: Option<RuleSet>,
     pub checks: BTreeMap<String, CheckRule>,
     pub register_rules: Vec<RegisterRule>,
@@ -95,6 +98,12 @@ pub enum ProjectCommand {
         path: String,
         rules: Vec<RegisterRule>,
     },
+    /// Replace project report layouts. One undo step; layouts contain no trade rules.
+    #[schemars(example = json!({"kind":"set_reports","path":"Project.qss","reports":{}}))]
+    SetReports {
+        path: String,
+        reports: BTreeMap<String, crate::deliverables::Layout>,
+    },
     /// Run every drawing through the existing script take-off machinery, aggregate and check.
     /// Uses drawing-owned recognition/mappings; missing interpretation is reported, never invented.
     #[schemars(extend("x-takeoff-step" = "project / open, interpret each drawing, run aggregate and cross-drawing checks"))]
@@ -124,6 +133,7 @@ impl ProjectCommand {
             | Self::SetMethod { path, .. }
             | Self::SetChecks { path, .. }
             | Self::SetRegisterRules { path, .. }
+            | Self::SetReports { path, .. }
             | Self::Run { path } => path,
         };
         project_path(name).map(Some)
@@ -170,6 +180,7 @@ pub fn list() -> Result<Value, CoreError> {
     Ok(json!({"projects":projects}))
 }
 fn invalidate(project: &mut ProjectData) {
+    project.variations.clear();
     project.boq.clear();
     project.queries.clear();
     project.register.clear();
@@ -273,6 +284,12 @@ impl Session {
                 let project = set.project.as_mut().unwrap();
                 project.register_rules = rules;
                 invalidate(project);
+            }
+            ProjectCommand::SetReports { reports, .. } => {
+                for report in reports.values() {
+                    report.validate()?;
+                }
+                set.project.as_mut().unwrap().reports = reports;
             }
             ProjectCommand::Run { .. } => {
                 evaluate(&path, &mut set)?;
@@ -502,6 +519,23 @@ pub fn evaluate(path: &Path, set: &mut SheetSet) -> Result<(), CoreError> {
         match processed {
             Ok((session, batch_warnings)) => {
                 let report = session.measurement_report()?;
+                if let Some(variation) = session.variation()? {
+                    result.variations.insert(entry.path.clone(), variation);
+                }
+                for mut query in session.conflicts.iter().cloned() {
+                    query.id = format!("{}::{}", entry.path, query.id);
+                    query.sheets = query
+                        .sheets
+                        .iter()
+                        .map(|sheet| format!("{} :: {sheet}", entry.path))
+                        .collect();
+                    if let Some(details) = &mut query.query {
+                        for reference in &mut details.references {
+                            reference.drawing = Some(entry.path.clone());
+                        }
+                    }
+                    result.queries.push(query);
+                }
                 let mut warnings = report.warnings.clone();
                 warnings.extend(batch_warnings);
                 if report.items.is_empty() {

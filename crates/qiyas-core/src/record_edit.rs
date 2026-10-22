@@ -196,7 +196,8 @@ fn collection_via(collection: Collection) -> Option<&'static str> {
         Collection::Parameters => "set_parameter",
         Collection::ObjectTypes | Collection::KnowledgeTypes => "redefine_object_type",
         Collection::Objects => "set_object_props",
-        Collection::KnowledgeChecks
+        Collection::KnowledgeReports
+        | Collection::KnowledgeChecks
         | Collection::KnowledgeQueries
         | Collection::KnowledgeLevels
         | Collection::KnowledgeTables

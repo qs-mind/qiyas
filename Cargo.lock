@@ -3949,10 +3949,13 @@ version = "0.0.1"
 dependencies = [
  "calamine",
  "qiyas-core",
+ "qiyas-plot",
+ "quick-xml 0.41.0",
  "rust_xlsxwriter",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "zip 8.6.0",
 ]
 
 [[package]]

@@ -28,10 +28,11 @@ pub enum Kind {
     Checks,
     Queries,
     Revisions,
+    Reports,
 }
 
 impl Kind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Types,
         Self::Levels,
         Self::Tables,
@@ -44,6 +45,7 @@ impl Kind {
         Self::Checks,
         Self::Queries,
         Self::Revisions,
+        Self::Reports,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -60,6 +62,7 @@ impl Kind {
             Self::Checks => "checks",
             Self::Queries => "queries",
             Self::Revisions => "revisions",
+            Self::Reports => "reports",
         }
     }
 }

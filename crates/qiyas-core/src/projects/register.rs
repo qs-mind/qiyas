@@ -72,7 +72,7 @@ pub struct RegisterRow {
     pub flags: Vec<String>,
     pub evidence: Vec<RegisterEvidence>,
 }
-pub(super) fn read(
+pub fn read(
     session: &Session,
     drawing: &str,
     layouts: &[String],

@@ -151,3 +151,5 @@ pub mod revisions;
 
 pub mod data_home;
 pub mod projects;
+
+pub mod deliverables;

@@ -1246,11 +1246,7 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
         )));
     }
     // Use the registry's spelling after a lookup that accepts case and hyphens.
-    let mut parts = info.name.split('.');
-    value["type"] = json!(parts.next().unwrap_or_default());
-    if let Some(kind) = parts.next() {
-        value["kind"] = json!(kind);
-    }
+    qiyas_core::registry::canonicalize(&mut value);
     let mut report = session.validate_input(&value);
     batch_limits(&value, "", &mut report);
     if !report.valid {
@@ -1285,13 +1281,7 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
                     .map_err(|error| bad(format!("Batch step {index}: {error}")))?;
                 // Keep omitted fields omitted so the core can report their defaults.
                 *command = command_value(command)?;
-                if let Some(info) = command_info(command) {
-                    let mut parts = info.name.split('.');
-                    command["type"] = json!(parts.next().unwrap_or_default());
-                    if let Some(kind) = parts.next() {
-                        command["kind"] = json!(kind);
-                    }
-                }
+                qiyas_core::registry::canonicalize(command);
                 resolve_paths(session, command)?;
             }
         }
@@ -1449,19 +1439,16 @@ fn resolve_paths(session: &Session, value: &mut Value) -> Result<(), ToolError> 
         if let Some(commands) = value["commands"].as_array_mut() {
             for command in commands {
                 *command = command_value(command)?;
-                if let Some(info) = command_info(command) {
-                    let mut parts = info.name.split('.');
-                    command["type"] = json!(parts.next().unwrap_or_default());
-                    if let Some(kind) = parts.next() {
-                        command["kind"] = json!(kind);
-                    }
-                }
+                qiyas_core::registry::canonicalize(command);
                 resolve_paths(session, command)?;
             }
         }
         return Ok(());
     }
-    if matches!(kind, "set_records" | "records" | "create_entities") {
+    if matches!(
+        kind,
+        "set_records" | "records" | "create_entities" | "deliverable" | "deliverable.export"
+    ) {
         return Ok(());
     }
     if let Some(map) = value.as_object_mut() {
@@ -1519,6 +1506,7 @@ fn run_one(
     let history = session.history_revision();
     let view = ViewState::of(session);
     let outcome = session.run_input(input, source)?;
+    qiyas_boq::deliverables::complete(&outcome.outcome).map_err(bad)?;
     let outputs = if label == "project.run" {
         Some(qiyas_boq::project::outputs(&outcome.outcome, None).map_err(bad)?)
     } else {

@@ -1,0 +1,433 @@
+{
+  "dimensions": {
+    "heading": {
+      "en": "Dimension sheets",
+      "ar": "أوراق القياس"
+    },
+    "columns": [
+      {
+        "field": "code",
+        "heading": {
+          "en": "Item",
+          "ar": "البند"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "label",
+        "heading": {
+          "en": "Line",
+          "ar": "السطر"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "operation",
+        "heading": {
+          "en": "Operation",
+          "ar": "العملية"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "timesing",
+        "heading": {
+          "en": "Timesing",
+          "ar": "التكرار"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "factors",
+        "heading": {
+          "en": "Factors",
+          "ar": "الأبعاد"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "expression",
+        "heading": {
+          "en": "Expression",
+          "ar": "المعادلة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "squaring",
+        "heading": {
+          "en": "Squaring",
+          "ar": "الحاصل"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "included",
+        "heading": {
+          "en": "Included",
+          "ar": "مشمول"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "unit",
+        "heading": {
+          "en": "Unit",
+          "ar": "الوحدة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "reference",
+        "heading": {
+          "en": "Reference",
+          "ar": "المرجع"
+        },
+        "width": 3,
+        "total": false
+      },
+      {
+        "field": "citations",
+        "heading": {
+          "en": "Citations",
+          "ar": "المصادر"
+        },
+        "width": 3,
+        "total": false
+      }
+    ],
+    "sections": [],
+    "group_by": [],
+    "total_heading": {
+      "en": "Total",
+      "ar": "المجموع"
+    },
+    "page": {
+      "width_mm": 297,
+      "height_mm": 210,
+      "margin_mm": 12,
+      "font_size": 8
+    },
+    "font": "thmanyahsans-Regular.otf"
+  },
+  "boq": {
+    "heading": {
+      "en": "Bill of quantities",
+      "ar": "جدول الكميات"
+    },
+    "columns": [
+      {
+        "field": "code",
+        "heading": {
+          "en": "Item",
+          "ar": "البند"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "description",
+        "heading": {
+          "en": "Description",
+          "ar": "الوصف"
+        },
+        "width": 3,
+        "total": false
+      },
+      {
+        "field": "unit",
+        "heading": {
+          "en": "Unit",
+          "ar": "الوحدة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "quantity",
+        "heading": {
+          "en": "Quantity",
+          "ar": "الكمية"
+        },
+        "width": 1,
+        "total": true
+      }
+    ],
+    "sections": [],
+    "group_by": [
+      "section"
+    ],
+    "total_heading": {
+      "en": "Total",
+      "ar": "المجموع"
+    },
+    "page": {
+      "width_mm": 297,
+      "height_mm": 210,
+      "margin_mm": 12,
+      "font_size": 8
+    },
+    "font": "thmanyahsans-Regular.otf"
+  },
+  "queries": {
+    "heading": {
+      "en": "Query list",
+      "ar": "قائمة الاستفسارات"
+    },
+    "columns": [
+      {
+        "field": "id",
+        "heading": {
+          "en": "Reference",
+          "ar": "المرجع"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "reason",
+        "heading": {
+          "en": "Query",
+          "ar": "الاستفسار"
+        },
+        "width": 3,
+        "total": false
+      },
+      {
+        "field": "status",
+        "heading": {
+          "en": "Status",
+          "ar": "الحالة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "sheets",
+        "heading": {
+          "en": "Sheets",
+          "ar": "اللوحات"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "query",
+        "heading": {
+          "en": "Evidence",
+          "ar": "المراجع"
+        },
+        "width": 3,
+        "total": false
+      },
+      {
+        "field": "note",
+        "heading": {
+          "en": "Note",
+          "ar": "ملاحظة"
+        },
+        "width": 1,
+        "total": false
+      }
+    ],
+    "sections": [],
+    "group_by": [],
+    "total_heading": {
+      "en": "Total",
+      "ar": "المجموع"
+    },
+    "page": {
+      "width_mm": 297,
+      "height_mm": 210,
+      "margin_mm": 12,
+      "font_size": 8
+    },
+    "font": "thmanyahsans-Regular.otf"
+  },
+  "variation": {
+    "heading": {
+      "en": "Variation statement",
+      "ar": "بيان التغييرات"
+    },
+    "columns": [
+      {
+        "field": "drawing",
+        "heading": {
+          "en": "Drawing",
+          "ar": "الرسم"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "code",
+        "heading": {
+          "en": "Item",
+          "ar": "البند"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "description",
+        "heading": {
+          "en": "Description",
+          "ar": "الوصف"
+        },
+        "width": 3,
+        "total": false
+      },
+      {
+        "field": "unit",
+        "heading": {
+          "en": "Unit",
+          "ar": "الوحدة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "a_quantity",
+        "heading": {
+          "en": "Previous",
+          "ar": "السابق"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "b_quantity",
+        "heading": {
+          "en": "Current",
+          "ar": "الحالي"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "delta",
+        "heading": {
+          "en": "Change",
+          "ar": "التغيير"
+        },
+        "width": 1,
+        "total": true
+      },
+      {
+        "field": "elements",
+        "heading": {
+          "en": "References",
+          "ar": "المراجع"
+        },
+        "width": 3,
+        "total": false
+      }
+    ],
+    "sections": [],
+    "group_by": [],
+    "total_heading": {
+      "en": "Total",
+      "ar": "المجموع"
+    },
+    "page": {
+      "width_mm": 297,
+      "height_mm": 210,
+      "margin_mm": 12,
+      "font_size": 8
+    },
+    "font": "thmanyahsans-Regular.otf"
+  },
+  "register": {
+    "heading": {
+      "en": "Drawing register",
+      "ar": "سجل الرسومات"
+    },
+    "columns": [
+      {
+        "field": "drawing",
+        "heading": {
+          "en": "Drawing",
+          "ar": "الرسم"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "sheet",
+        "heading": {
+          "en": "Sheet",
+          "ar": "اللوحة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "number",
+        "heading": {
+          "en": "Number",
+          "ar": "الرقم"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "title",
+        "heading": {
+          "en": "Title",
+          "ar": "العنوان"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "revision",
+        "heading": {
+          "en": "Revision",
+          "ar": "المراجعة"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "date",
+        "heading": {
+          "en": "Date",
+          "ar": "التاريخ"
+        },
+        "width": 1,
+        "total": false
+      },
+      {
+        "field": "flags",
+        "heading": {
+          "en": "Notes",
+          "ar": "ملاحظات"
+        },
+        "width": 1,
+        "total": false
+      }
+    ],
+    "sections": [],
+    "group_by": [],
+    "total_heading": {
+      "en": "Total",
+      "ar": "المجموع"
+    },
+    "page": {
+      "width_mm": 297,
+      "height_mm": 210,
+      "margin_mm": 12,
+      "font_size": 8
+    },
+    "font": "thmanyahsans-Regular.otf"
+  }
+}

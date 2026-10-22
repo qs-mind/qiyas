@@ -706,6 +706,25 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   scorer preserves each input recipe's declared measurement basis before opening truth.
 - No new crates or UI libraries. Validation, scores and limits: `docs/2026-10-22-qiyas-phase21.md`.
 
+## Deliverables (Phase 22)
+
+- `qiyas-core/src/deliverables.rs`: report layouts as drawing knowledge kind `reports` or
+  project `.qss` data (`project.set_reports`, one undo step). Neutral bilingual defaults ship
+  as JSON data. Sections, columns, headings, grouping, totals and page setup are layout data;
+  totals separate units. Dimension lines retain timesing, signed deductions and references.
+- Registry `deliverable.export {kind, format, layout?, path, language?, project?}` supports
+  dimensions, boq, queries, variation and register, in Excel/PDF, English/Arabic. It is in the
+  bounded take-off kit. Core prepares the report; shared `qiyas-boq::deliverables` completes it
+  in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
+- PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
+  and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
+  Excel/PDF include lossless report records. Client-template exports preserve the original
+  workbook's package and change only mapped quantity cells, leaving rates and amounts untouched.
+- `qiyas-cli export <drawing|project.qss> --kind boq --format excel --path boq.xlsx`
+  accepts `--language en|ar` and `--layout name`. `project run` adds `--deliverables all`
+  (or comma-separated kinds), `--formats excel,pdf`, `--language` and `--layout`.
+- Details, mapping example and validation: `docs/2026-10-22-qiyas-phase22.md`.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,

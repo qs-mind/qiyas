@@ -298,6 +298,9 @@ fn codex_command(
             "mcp_servers.qiyas.args={}",
             json!(["mcp", "--drawing", drawing, "--workdir", output])
         ))
+        // Without this, `codex exec` refuses every MCP call ("requires approval").
+        .arg("-c")
+        .arg("mcp_servers.qiyas.default_tools_approval_mode=\"approve\"")
         .arg("-c")
         .arg("forced_login_method=\"chatgpt\"")
         .arg("-c")
@@ -482,6 +485,9 @@ mod tests {
         let args: Vec<_> = cmd.get_args().map(|s| s.to_string_lossy()).collect();
         assert!(args.iter().any(|s| s == "gpt-6.1-sol"));
         assert!(args.iter().any(|s| s == "forced_login_method=\"chatgpt\""));
+        assert!(args
+            .iter()
+            .any(|s| s == "mcp_servers.qiyas.default_tools_approval_mode=\"approve\""));
         assert!(args
             .iter()
             .any(|s| s == "model_reasoning_effort=\"medium\""));

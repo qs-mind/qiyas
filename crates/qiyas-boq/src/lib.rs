@@ -15,3 +15,6 @@ pub use export::export_takeoff_with_queries;
 pub mod variation;
 
 pub mod project;
+
+pub mod deliverables;
+pub mod template;

@@ -89,3 +89,86 @@ fn project_prediction_writes_without_any_readable_truth() {
     s.run_input(&json!({"type":"measurement","kind":"report"}), Source::User)
         .unwrap();
 }
+
+#[test]
+fn project_deliverable_flags_and_drawing_export_write_both_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join("projects")).unwrap();
+    let drawing = dir.path().join("drawing.dxf");
+    let mut session = Session::new_blank(&drawing, 6);
+    fixture::fixture(&mut session);
+    fixture::apply(&mut session, fixture::method("reports", false));
+    let item = session.measurement_report().unwrap().items.remove(0);
+    fixture::run(
+        &mut session,
+        json!({"type":"set_boq","boq":{"source":"client.xlsx","imported":"2026-10-22T00:00:00Z","items":[{"code":item.code,"description":item.description_en,"unit":item.unit,"quantity":100.,"section":item.section,"row":2}]}}),
+    );
+    fixture::run(&mut session, json!({"type":"check"}));
+    session.save_as_headless(&drawing).unwrap();
+    let project = home.join("projects/Deliverables.qss");
+    std::fs::write(&project,json!({"name":"Deliverables","drawings":[{"path":drawing}],"project":ProjectData::default()}).to_string()).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_qiyas-cli"))
+        .args(["project", "run"])
+        .arg(&project)
+        .args([
+            "--deliverables",
+            "all",
+            "--formats",
+            "excel,pdf",
+            "--language",
+            "ar",
+        ])
+        .env("QIYAS_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    for kind in ["dimensions", "boq", "queries", "variation", "register"] {
+        for ext in ["xlsx", "pdf"] {
+            assert!(project
+                .with_extension("output")
+                .join(format!("{kind}-ar.{ext}"))
+                .exists());
+        }
+    }
+    let queries = qiyas_boq::deliverables::read_excel(
+        &project.with_extension("output").join("queries-ar.xlsx"),
+    )
+    .unwrap();
+    assert!(!queries.rows.is_empty());
+    assert!(queries
+        .rows
+        .iter()
+        .all(|r| r["id"].as_str().unwrap().contains("drawing.dxf")));
+    assert!(queries.rows[0]["query"]["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["drawing"].as_str().unwrap().ends_with("drawing.dxf")));
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_qiyas-cli"))
+        .arg("export")
+        .arg(&drawing)
+        .args([
+            "--kind",
+            "boq",
+            "--format",
+            "pdf",
+            "--path",
+            "single.pdf",
+            "--language",
+            "ar",
+        ])
+        .env("QIYAS_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(dir.path().join("single.pdf").exists());
+}

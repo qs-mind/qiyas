@@ -50,6 +50,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Export quantities from a drawing or a saved project using a data-defined layout.
+    Export {
+        source: PathBuf,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        format: String,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        layout: Option<String>,
+        #[arg(long, default_value = "en")]
+        language: String,
+    },
     /// Run a project take-off and write its workbook and morning report.
     Project {
         #[command(subcommand)]
@@ -137,6 +151,15 @@ type Done = Result<Option<String>, String>;
 #[derive(Subcommand)]
 enum ProjectCli {
     Run {
+        /// Deliverable kinds, comma separated; all exports the five kinds.
+        #[arg(long)]
+        deliverables: Option<String>,
+        #[arg(long, default_value = "excel,pdf")]
+        formats: String,
+        #[arg(long, default_value = "en")]
+        language: String,
+        #[arg(long)]
+        layout: Option<String>,
         project: PathBuf,
         #[arg(long)]
         out: Option<PathBuf>,
@@ -255,11 +278,27 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
             drawing,
             allow_repaired_save,
         } => run(out, script, drawing.as_deref(), *allow_repaired_save),
+        Cmd::Export {
+            source,
+            kind,
+            format,
+            path,
+            layout,
+            language,
+        } => {
+            export_deliverable(source, kind, format, path, layout.as_deref(), language)?;
+            out.json(&serde_json::json!({"written":path}));
+            Ok(None)
+        }
         Cmd::Project {
             command:
                 ProjectCli::Run {
                     project,
                     out: folder,
+                    deliverables,
+                    formats,
+                    language,
+                    layout,
                 },
         } => {
             let path = qiyas_boq::project::resolve(project)?;
@@ -269,6 +308,33 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
                 folder.as_deref(),
                 Source::User,
             )?;
+            if let Some(kinds) = deliverables {
+                let names = if kinds == "all" {
+                    "dimensions,boq,queries,variation,register"
+                } else {
+                    kinds.as_str()
+                };
+                for kind in names.split(',') {
+                    for format in formats.split(',') {
+                        let folder = folder
+                            .clone()
+                            .unwrap_or_else(|| path.with_extension("output"));
+                        let folder = folder.canonicalize().map_err(|e| e.to_string())?;
+                        let name = folder.join(format!(
+                            "{kind}-{language}.{}",
+                            if format == "pdf" { "pdf" } else { "xlsx" }
+                        ));
+                        export_deliverable(
+                            &path,
+                            kind,
+                            format,
+                            &name.to_string_lossy(),
+                            layout.as_deref(),
+                            language,
+                        )?;
+                    }
+                }
+            }
             out.json(&result);
             out.text(format!(
                 "Project workbook: {}. Morning report: {}",
@@ -344,6 +410,9 @@ struct Excel {
 }
 
 impl Host for Excel {
+    fn deliverable(&mut self, export: &qiyas_core::deliverables::Export) -> Result<(), String> {
+        qiyas_boq::deliverables::write(export)
+    }
     fn export_takeoff(&mut self, session: &Session, path: &Path) -> Result<(), String> {
         let title = match session.drawing.path.file_name() {
             Some(name) => format!("{} take-off", name.to_string_lossy()),
@@ -839,4 +908,26 @@ fn run_one(file: &Path, script: &Script, allow: bool) -> FileReport {
         },
         Err(error) => FileReport::failed(file, error),
     }
+}
+
+fn export_deliverable(
+    source: &Path,
+    kind: &str,
+    format: &str,
+    path: &str,
+    layout: Option<&str>,
+    language: &str,
+) -> Result<(), String> {
+    let project = source.extension().is_some_and(|e| e == "qss");
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let mut session = if project {
+        qiyas_boq::project::session()?
+    } else {
+        Session::open(&source).map_err(|e| e.to_string())?
+    };
+    let input = serde_json::json!({"type":"deliverable.export","kind":kind,"format":format,"path":path,"layout":layout,"language":language,"project":if project {Some(source.to_string_lossy())} else {None}});
+    let outcome = session
+        .run_input(&input, Source::User)
+        .map_err(|e| e.to_string())?;
+    qiyas_boq::deliverables::complete(&outcome.outcome)
 }

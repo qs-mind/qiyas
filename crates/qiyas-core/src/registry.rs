@@ -135,7 +135,7 @@ pub fn parse_command(mut value: Value) -> Result<Command, String> {
         .map_err(|error| format!("{} at {}", error.inner(), error.path()))
 }
 
-pub(crate) fn canonicalize(value: &mut Value) {
+pub fn canonicalize(value: &mut Value) {
     let Some(name) = value["type"].as_str() else {
         return;
     };
@@ -146,9 +146,16 @@ pub(crate) fn canonicalize(value: &mut Value) {
         .as_str()
         .and_then(|kind| registry().get(&format!("{name}.{kind}")))
         .unwrap_or(top);
-    let mut parts = info.name.split('.');
-    value["type"] = json!(parts.next().unwrap_or_default());
-    if let Some(kind) = parts.next() {
+    if info.name == "deliverable.export"
+        && value["kind"] != "export"
+        && value.get("report").is_none()
+    {
+        if let Some(kind) = value.get("kind").cloned() {
+            value["report"] = kind;
+        }
+    }
+    value["type"] = info.schema["properties"]["type"]["const"].clone();
+    if let Some(kind) = info.schema["properties"]["kind"]["const"].as_str() {
         value["kind"] = json!(kind);
     }
     if let Some(commands) = value.get_mut("commands").and_then(Value::as_array_mut) {
@@ -581,7 +588,7 @@ fn inline(schema: &Value, defs: &Map<String, Value>, depth: usize) -> Value {
                     || k == "examples"
                     || k == "$defs"
                     || k == "$schema"
-                    || k == "format"
+                    || (k == "format" && v.is_string())
                 {
                     continue;
                 }

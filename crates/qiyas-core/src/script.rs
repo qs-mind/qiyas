@@ -89,6 +89,9 @@ pub struct ScriptError {
 /// The Excel and comparison steps, which live outside this crate (`qiyas-boq`, `qiyas-takeoff`):
 /// the program running the script supplies them.
 pub trait Host {
+    fn deliverable(&mut self, _export: &crate::deliverables::Export) -> Result<(), String> {
+        Err("This script host does not support deliverables".into())
+    }
     /// Writes the session's take-off to the workbook at `path`.
     fn export_takeoff(&mut self, session: &Session, path: &Path) -> Result<(), String>;
     /// Reads the BOQ in the workbook at `path`.
@@ -257,6 +260,9 @@ pub fn run(
                 let outcome = session
                     .run_input(&input, Source::User)
                     .map_err(|e| fail(e.to_string()))?;
+                if let Outcome::Deliverable { export } = &outcome.outcome {
+                    host.deliverable(export).map_err(fail)?;
+                }
                 describe(cmd, outcome, &mut run.counts)
             }
         };

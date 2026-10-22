@@ -407,6 +407,7 @@ pub async fn run_command(
     } else {
         with_session(&state, |s| s.run_input(&cmd, Source::User))?
     };
+    qiyas_boq::deliverables::complete(&outcome.outcome)?;
     if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
         files::set_clipboard_text(&state, text)?;
         text.clear();

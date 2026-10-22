@@ -403,11 +403,7 @@ fn validate_at(
         .and_then(|kind| reg.get(&format!("{name}.{kind}")))
         .unwrap_or(top);
     let mut canonical = value.clone();
-    let mut parts = info.name.split('.');
-    canonical["type"] = json!(parts.next().unwrap_or(name));
-    if let Some(kind) = parts.next() {
-        canonical["kind"] = json!(kind);
-    }
+    crate::registry::canonicalize(&mut canonical);
     walk(&info.schema, &canonical, path, step, &mut report);
     if report
         .errors
