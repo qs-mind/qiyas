@@ -123,10 +123,10 @@ async fn stdio_client_uses_shared_tools_instructions_finish_and_eof() {
             .serve((child.stdout.take().unwrap(), child.stdin.take().unwrap()))
             .await
             .unwrap();
-        assert_eq!(
-            client.peer_info().unwrap().instructions.as_deref(),
-            Some(qiyas_core::registry::registry().index_text().as_str())
-        );
+        // Outside agents get the same take-off workflow as Mizan, then the registry index.
+        let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
+        assert!(instructions.starts_with(qiyas_ai::prompt::TAKEOFF_WORKFLOW.trim()));
+        assert!(instructions.ends_with(qiyas_core::registry::registry().index_text().as_str()));
         let tools = client.list_all_tools().await.unwrap();
         assert_eq!(
             tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),

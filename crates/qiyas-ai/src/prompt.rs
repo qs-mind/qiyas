@@ -159,6 +159,10 @@ fn sheet_name(session: &Session) -> String {
 }
 
 const EN: &str = include_str!("prompt_en.txt");
+
+/// The take-off workflow every client follows: Mizan's system prompt and MCP clients' server
+/// instructions both carry it, so an outside agent works the same way Mizan does.
+pub const TAKEOFF_WORKFLOW: &str = include_str!("takeoff_workflow.txt");
 const AR: &str = include_str!("prompt_ar.txt");
 
 /// The system prompt in `lang`: the fixed rules and the drawing facts. Build it once per
@@ -168,7 +172,7 @@ pub fn system_prompt(lang: Lang, facts: &DrawingFacts) -> String {
     let t = |en: &'static str, arabic: &'static str| if ar { arabic } else { en };
     let mut s = String::from(if ar { AR } else { EN });
 
-    s.push_str(include_str!("takeoff_workflow.txt"));
+    s.push_str(TAKEOFF_WORKFLOW);
     s.push_str("\n\n## Commands by category\n");
     s.push_str(&qiyas_core::registry::registry().index_text());
 

@@ -330,7 +330,11 @@ impl ServerHandler for Qiyas {
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
-            .with_instructions(qiyas_core::registry::registry().index_text())
+            .with_instructions(format!(
+                "{}\n\nCommands by category:\n{}",
+                crate::prompt::TAKEOFF_WORKFLOW.trim(),
+                qiyas_core::registry::registry().index_text()
+            ))
     }
 
     async fn list_tools(
