@@ -40,7 +40,15 @@ pub(crate) fn write(book: &mut Workbook, queries: &[Conflict]) -> Result<(), Boq
             q.map(|q| {
                 q.references
                     .iter()
-                    .map(|r| format!("{:X}", r.handle))
+                    .map(|r| {
+                        format!(
+                            "{}{}{}:{:X}",
+                            r.drawing.as_deref().unwrap_or(""),
+                            if r.drawing.is_some() { " :: " } else { "" },
+                            r.sheet,
+                            r.handle
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             })

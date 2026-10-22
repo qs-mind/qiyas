@@ -3631,3 +3631,13 @@ span.grid-sort {
 .generated-boq details { margin-block: 6px; }
 .generated-boq li { margin-block: 8px; overflow-wrap: anywhere; }
 .generated-boq button { margin: 3px; }
+
+.projects-panel { padding: var(--space-3, 12px); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.projects-panel form, .projects-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; }
+.projects-panel label { display: flex; flex-direction: column; gap: 4px; }
+.projects-list { list-style: none; margin: 0; padding: 0; }
+.projects-list li { padding-block: 8px; border-block-end: 1px solid var(--rule); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.projects-list li > bdi { flex: 1; overflow-wrap: anywhere; }
+.projects-list li p { width: 100%; margin: 0; }
+.projects-list button[aria-pressed="true"] { color: var(--accent); }
+.projects-panel p { overflow-wrap: anywhere; }

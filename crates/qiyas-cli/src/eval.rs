@@ -349,11 +349,13 @@ impl Provider for Metered {
             };
             step(&self.steps, &json!({"event":"request","id":id,"reserved_usd":upper,"model":req.model,"max_tokens":req.max_tokens,"system":req.system,"messages":trim_log(serde_json::to_value(&req.messages).map_err(|e|AiError::Stream(e.to_string()))?)})).map_err(AiError::Stream)?;
             let mut attempt = 1;
+            let mut backoff = qiyas_ai::RetryBackoff::default();
+            let started = tokio::time::Instant::now();
             let answer = loop {
                 let answer = self.inner.stream_turn(req.clone(), &mut *sink).await;
                 if let Err(AiError::RateLimited { retry_after }) = &answer {
-                    if attempt < 3 {
-                        let seconds = retry_after.unwrap_or(1 << (attempt - 1));
+                    if let Some(delay) = backoff.next_delay(*retry_after, started.elapsed()) {
+                        let seconds = delay.as_secs();
                         step(&self.steps, &json!({"event":"provider_retry","id":id,"attempt":attempt,"wait_seconds":seconds})).map_err(AiError::Stream)?;
                         self.totals
                             .lock()

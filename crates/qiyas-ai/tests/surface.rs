@@ -1924,3 +1924,51 @@ fn revision_kit_runs_through_generic_tools_and_typed_commands() {
         .index_text()
         .contains("revision / open B"));
 }
+
+#[test]
+fn kit_commands_return_the_complete_short_entry_without_rediscovery() {
+    let (_, mut session) = sample();
+    let kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    assert_eq!(kit["complete"], true);
+    for name in [
+        "define_object_type",
+        "recognition.apply",
+        "measurement.set_mappings",
+        "project.run",
+    ] {
+        let result = call(
+            &mut session,
+            READ,
+            json!({"op":"commands","args":{"name":name}}),
+        )
+        .unwrap();
+        assert_eq!(result["in_takeoff_kit"], true);
+        assert!(result.get("schema").is_none());
+        assert!(result["entry"]["example"].is_object());
+        if !name.starts_with("project.") {
+            assert_eq!(result["entry"], kit["commands"][name]);
+        }
+    }
+    let family = call(
+        &mut session,
+        READ,
+        json!({"op":"commands","args":{"name":"measurement"}}),
+    )
+    .unwrap();
+    assert_eq!(family["in_takeoff_kit"], true);
+    assert_eq!(
+        family["entry"]["commands"]["measurement.set_mappings"],
+        kit["commands"]["measurement.set_mappings"]
+    );
+    assert!(matches!(
+        qiyas_ai::surface::route(
+            READ,
+            &json!({"op":"run","args":{"command":{"type":"project","kind":"list"}}})
+        )
+        .unwrap(),
+        qiyas_ai::surface::Route::Host {
+            tool: "project",
+            ..
+        }
+    ));
+}

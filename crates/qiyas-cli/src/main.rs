@@ -48,6 +48,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Run a project take-off and write its workbook and morning report.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCli,
+    },
     /// Carry A's knowledge onto B, remeasure, cloud changes and export variation quantities.
     Variation {
         a: PathBuf,
@@ -122,6 +127,15 @@ fn parse_version(text: &str) -> Result<DxfVersion, String> {
 
 /// How a command finished without an error: cleanly, or with a warning for stderr (exit 2).
 type Done = Result<Option<String>, String>;
+
+#[derive(Subcommand)]
+enum ProjectCli {
+    Run {
+        project: PathBuf,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
 
 fn main() -> ExitCode {
     // A panic (the reader on a damaged drawing) becomes a one-line error below, not a backtrace.
@@ -228,6 +242,36 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
             drawing,
             allow_repaired_save,
         } => run(out, script, drawing.as_deref(), *allow_repaired_save),
+        Cmd::Project {
+            command:
+                ProjectCli::Run {
+                    project,
+                    out: folder,
+                },
+        } => {
+            let path = qiyas_boq::project::resolve(project)?;
+            let result = qiyas_boq::project::run(
+                &mut qiyas_boq::project::session()?,
+                &path.to_string_lossy(),
+                folder.as_deref(),
+                Source::User,
+            )?;
+            out.json(&result);
+            out.text(format!(
+                "Project workbook: {}. Morning report: {}",
+                result["workbook"].as_str().unwrap_or(""),
+                result["morning_report"].as_str().unwrap_or("")
+            ));
+            if result["failed"].as_u64().unwrap_or(0) > 0 {
+                Err("Project has failed drawings; see the morning report".into())
+            } else if result["checked"] == false {
+                Ok(Some(
+                    "Project checks incomplete; see the morning report".into(),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
         Cmd::Variation {
             a,
             b,

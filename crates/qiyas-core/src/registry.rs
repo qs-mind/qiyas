@@ -706,6 +706,7 @@ fn undo_of(examples: &[Value]) -> Option<String> {
 
 fn part_name(part: &Part) -> &'static str {
     match part {
+        Part::ProjectFile => "project",
         Part::Takeoff => "takeoff",
         Part::Boq => "boq",
         Part::Conflicts => "conflicts",

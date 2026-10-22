@@ -148,3 +148,6 @@ pub mod measurement;
 pub mod digest;
 
 pub mod revisions;
+
+pub mod data_home;
+pub mod projects;

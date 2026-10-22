@@ -4,6 +4,7 @@ mod checks;
 mod general;
 pub mod generate;
 pub(crate) mod model;
+mod projects;
 mod recognition;
 mod revisions;
 pub(crate) mod score;
@@ -52,6 +53,16 @@ pub struct BenchArgs {
 
 #[derive(Subcommand)]
 pub enum BenchCommand {
+    /// Score multi-storey IFC and apartment projects, with seeded cross-drawing checks.
+    Projects {
+        #[arg(long, value_enum, default_value = "prepared")]
+        mode: RunMode,
+        #[arg(long)]
+        set: Option<String>,
+        /// Rescore saved project predictions without rerunning interpretation or take-off.
+        #[arg(long, conflicts_with = "set")]
+        rescore: Option<PathBuf>,
+    },
     /// Score only existing revision variants, with the same quick cohort and no model calls.
     Revisions {
         #[arg(long, value_enum, default_value = "prepared")]
@@ -104,6 +115,13 @@ pub enum BenchCommand {
 pub fn run(args: &BenchArgs) -> Result<Value, String> {
     refuse_holdout_path(&args.root)?;
     match &args.command {
+        BenchCommand::Projects { mode, set, rescore } => {
+            if let Some(folder) = rescore {
+                projects::rescore(&args.root, folder)
+            } else {
+                projects::selected(&args.root, set.as_deref(), *mode)
+            }
+        }
         BenchCommand::Revisions { mode, set } => {
             revisions::selected(&args.root, set.as_deref(), *mode)
         }
@@ -488,14 +506,15 @@ fn baseline_run(
         "Add independently sourced CC BY cases after verified downloads and QS spot checks. Synthetic-only scores do not establish performance on consultant drawings.",
     ];
     let revisions = revisions::run(root, &revision_ids, mode, &run_dir)?;
-    let result = json!({"revisions":revisions,"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
+    let projects = projects::run(root, mode, &run_dir.join("projects"), set == Some("quick"))?;
+    let result = json!({"projects":projects,"revisions":revisions,"schema_version":1,"baseline":mode.label(),"mode":mode.name(),"pdf":{"metrics":pdf_metrics,"rates":pdf_metrics.rates()},"previous_rates":previous_rates,"comparison_before":{"cases":before_cases,"metrics":before,"rates":before.rates(),"source":before_file},"set":set,"cases":reports.len(),"metrics":metrics,"rates":metrics.rates(),"median_absolute_percent_error":median,"by_project_type":types,"by_tolerance_class":classes,"reports":reports,"repeatability":repeatability,"repeats":repeats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"holdout":seal(root)?,"next_phases":next,"report_directory":run_dir});
     write_json(&run_dir.join("report.json"), &result)?;
     let md = markdown(&result);
     std::fs::write(run_dir.join("report.md"), &md).map_err(|e| e.to_string())?;
     write_json(&root.join(&latest), &result)?;
     std::fs::write(root.join(latest.replace(".json", ".md")), md).map_err(|e| e.to_string())?;
     Ok(
-        json!({"revisions":result["revisions"],"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates,"comparison_before":result["comparison_before"]}),
+        json!({"projects":result["projects"],"revisions":result["revisions"],"mode":mode.name(),"pdf":result["pdf"],"cases":result["cases"],"metrics":result["metrics"],"rates":result["rates"],"elapsed_ms":result["elapsed_ms"],"repeats":repeats,"report_directory":run_dir,"previous_rates":previous_rates,"comparison_before":result["comparison_before"]}),
     )
 }
 

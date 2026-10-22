@@ -172,7 +172,7 @@ pub(crate) struct ObjectPart {
     #[serde(default)]
     pub role: String,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ObjectFilter {
     #[serde(rename = "type")]

@@ -1,3 +1,4 @@
+import { ProjectsPanel } from "../shell/ProjectsPanel";
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and the side panel (take-off, BOQ, conflicts, Mizan) on the right. */
@@ -369,6 +370,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
     },
     { id: "comments", label: t("comments") },
     { id: "review", label: t("recognition.review") },
+    { id: "projects", label: t("projects.title") },
     { id: "assistant", label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
   ];
 
@@ -431,6 +433,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
         <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null}
           revision={recognition.revision} run={recognition.run} />
       </Tabs.Panel>
+      <Tabs.Panel value="projects" keepMounted tabIndex={-1} className="side-panel"><ProjectsPanel active={sideTab === "projects"} /></Tabs.Panel>
       <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
         <AssistantPanel
           assistant={assistant}

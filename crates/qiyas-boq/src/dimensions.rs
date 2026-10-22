@@ -6,6 +6,12 @@ pub(crate) fn write(book: &mut Workbook, report: &MeasurementReport) -> Result<(
     if report.selection.effective().is_none() {
         return Ok(());
     }
+    write_contents(book, report)
+}
+pub(crate) fn write_contents(
+    book: &mut Workbook,
+    report: &MeasurementReport,
+) -> Result<(), XlsxError> {
     let bold = Format::new().set_bold();
     let sheet = book.add_worksheet().set_name("Generated BOQ")?;
     sheet.write_row_with_format(

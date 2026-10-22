@@ -26,6 +26,7 @@ pub struct TabList {
 
 /// Managed by Tauri and shared by every command.
 pub struct AppState {
+    pub projects: Mutex<crate::projects::Workspace>,
     /// The file tabs. Lock order when several are needed: `tabs`, then `session`, then `parked`.
     pub tabs: Mutex<TabList>,
     /// The drawing on screen (the active tab), if any. Shared with the AI agent and the MCP
@@ -53,6 +54,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(config_dir: PathBuf) -> Self {
         AppState {
+            projects: Mutex::new(crate::projects::Workspace::default()),
             tabs: Mutex::new(TabList::default()),
             session: Arc::new(Mutex::new(None)),
             parked: Mutex::new(Vec::new()),

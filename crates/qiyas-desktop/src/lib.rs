@@ -14,6 +14,7 @@ pub mod methods;
 mod mock;
 mod pdf;
 mod plot;
+mod projects;
 pub mod ribbon;
 mod script;
 pub mod secrets;
@@ -52,6 +53,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            projects::project_command,
+            projects::project_history,
             commands::open_drawing,
             commands::new_drawing,
             commands::recents,

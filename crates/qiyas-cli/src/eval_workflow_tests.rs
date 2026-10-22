@@ -71,10 +71,14 @@ impl Provider for BusyProvider {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn provider_busy_retries_back_off_honor_retry_after_and_charge_only_success() {
-    for (failures, retry_after, minimum_seconds) in [(2, None, 3), (2, Some(1), 2), (9, Some(0), 0)]
-    {
+    for (failures, retry_after, minimum_seconds) in [
+        (2, None, 20),
+        (3, None, 65),
+        (2, Some(30), 60),
+        (9, Some(0), 120),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
         let totals = Arc::new(Mutex::new(RunUsage::default()));
@@ -100,7 +104,7 @@ async fn provider_busy_retries_back_off_honor_retry_after_and_charge_only_succes
             totals: totals.clone(),
             steps: Some(dir.path().join("steps.jsonl")),
         };
-        let started = std::time::Instant::now();
+        let started = tokio::time::Instant::now();
         let result = provider
             .stream_turn(
                 TurnRequest {
@@ -115,19 +119,28 @@ async fn provider_busy_retries_back_off_honor_retry_after_and_charge_only_succes
             )
             .await;
         assert!(started.elapsed().as_secs() >= minimum_seconds);
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if failures < 5 { failures + 1 } else { 5 }
+        );
         let usage = totals.lock().unwrap();
-        assert_eq!(usage.provider_retries, 2);
+        assert_eq!(
+            usage.provider_retries as usize,
+            if failures < 5 { failures } else { 4 }
+        );
         assert_eq!(usage.unknown_usage_requests, 0);
-        assert_eq!(usage.requests, if failures == 2 { 1 } else { 0 });
-        assert_eq!(result.is_ok(), failures == 2);
+        assert_eq!(usage.requests, if failures < 5 { 1 } else { 0 });
+        assert_eq!(result.is_ok(), failures < 5);
         assert_eq!(ledger(dir.path()).unwrap().len(), 1);
         assert!((ledger(dir.path()).unwrap()[0].charged_usd - usage.estimated_usd).abs() < 1e-9);
-        if failures > 2 {
+        if failures >= 5 {
             assert_eq!(usage.estimated_usd, 0.0);
         }
         let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
-        assert_eq!(steps.matches("provider_retry").count(), 2);
+        assert_eq!(
+            steps.matches("provider_retry").count(),
+            if failures < 5 { failures } else { 4 }
+        );
     }
 }
 fn has_boq(value: &Value) -> bool {

@@ -26,6 +26,11 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Create, open and run multi-drawing projects in the Qiyas data home. Drawing knowledge
+    /// stays inside each drawing; project edits are single undo steps and run outside batches.
+    #[schemars(extend("x-category" = "takeoff", "x-batch" = false))]
+    #[schemars(example = json!({"type":"project","kind":"list"}))]
+    Project(Box<crate::projects::ProjectCommand>),
     /// Compare the current revision B with A at other_path. Reports matches, additions,
     /// removals and changes per sheet with bounds. Tolerance is in drawing units.
     #[schemars(extend("x-category" = "takeoff", "x-words" = ["COMPAREREVISIONS"]))]
@@ -1387,6 +1392,7 @@ pub struct Target {
 
 /// The part of the session a command changes, kept whole in its undo step.
 pub(crate) enum Part {
+    ProjectFile,
     Takeoff,
     Boq,
     /// The conflicts and the schedules.
@@ -1410,7 +1416,13 @@ impl Command {
             Some(kind)
                 if matches!(
                     name,
-                    "draw" | "modify" | "edit" | "dimension" | "recognition" | "measurement"
+                    "draw"
+                        | "modify"
+                        | "edit"
+                        | "dimension"
+                        | "recognition"
+                        | "measurement"
+                        | "project"
                 ) =>
             {
                 format!("{name}.{kind}")
@@ -1423,6 +1435,7 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::Project(command) => if command.is_read() {None} else {Some(Part::ProjectFile)},
             Command::CompareRevisions { .. } => None,
             Command::CarryKnowledge { .. } | Command::VariationReport { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Check { .. } | Command::DefineCheck { .. } => Some(Part::Document { tables: true, takeoff: false }),
@@ -1631,6 +1644,9 @@ impl Command {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    Project {
+        result: serde_json::Value,
+    },
     Measurement {
         result: serde_json::Value,
     },
@@ -1797,6 +1813,7 @@ impl Session {
     /// is marked as made by `source`.
     pub(crate) fn execute(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         let mut measurement = match cmd {
+            Command::Project(command) => return self.project_command(*command, source),
             Command::CenterMark { targets, extension } => {
                 return Ok(Outcome::Added {
                     handles: self.center_mark(&targets, extension)?,

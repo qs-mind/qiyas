@@ -1,10 +1,4 @@
-//! Sheet sets: a `.qss` file (JSON) naming a set of drawings and the layouts of each that belong
-//! to it, `{ "name": …, "drawings": [{ "path": …, "layouts": [names] }] }`. Paths are relative to
-//! the `.qss` file, written with `/`, and stay inside its folder (or one below it): a drawing
-//! elsewhere is refused, and so is a file whose paths climb out or are absolute, so the set
-//! never opens or names anything outside its folder. Saving writes the `.qss` file only. An
-//! empty `layouts` means all of the drawing's layouts. Printing the set comes with plotting
-//! (Phase 4).
+//! Sheet sets keep relative drawing paths; projects in the data home may use absolute paths.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -17,10 +11,12 @@ fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SheetSet {
     pub name: String,
     pub drawings: Vec<SheetSetDrawing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::projects::ProjectData>,
 }
 
 /// One drawing of a sheet set: its path relative to the `.qss` file, and its layouts in the set.
@@ -56,8 +52,24 @@ fn inside(path: &str) -> bool {
         && p.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
-fn check(set: &SheetSet) -> Result<(), CoreError> {
-    match set.drawings.iter().find(|d| !inside(&d.path)) {
+fn check(set: &SheetSet, qss: &Path) -> Result<(), CoreError> {
+    let project = set.project.is_some() && crate::data_home::is_project_path(qss);
+    match set.drawings.iter().find(|d| {
+        if project && Path::new(&d.path).is_absolute() {
+            return false;
+        }
+        if !inside(&d.path) {
+            return true;
+        }
+        // Existing symlinks must obey the same boundary as lexical paths.
+        match (
+            folder(qss).canonicalize(),
+            folder(qss).join(&d.path).canonicalize(),
+        ) {
+            (Ok(base), Ok(full)) => !project && !full.starts_with(base),
+            _ => false,
+        }
+    }) {
         Some(d) => Err(invalid(format!(
             "{} is outside the sheet set's folder: a sheet set keeps its drawings beside it",
             d.path
@@ -72,7 +84,7 @@ impl SheetSet {
         let text = std::fs::read_to_string(qss)?;
         let set: SheetSet = serde_json::from_str(&text)
             .map_err(|e| invalid(format!("{} is no sheet set: {e}", qss.display())))?;
-        check(&set)?;
+        check(&set, qss)?;
         Ok(set)
     }
 
@@ -85,7 +97,7 @@ impl SheetSet {
         if !is_qss {
             return Err(invalid("Save the sheet set as a .qss file"));
         }
-        check(self)?;
+        check(self, qss)?;
         let text =
             serde_json::to_string_pretty(self).map_err(|e| CoreError::Project(e.to_string()))?;
         Ok(write_atomic(qss, text.as_bytes())?)
@@ -100,6 +112,12 @@ pub fn sheet_set_entry(
 ) -> Result<SheetSetDrawing, CoreError> {
     let base = folder(qss).canonicalize()?;
     let full = drawing.canonicalize()?;
+    if crate::data_home::is_project_path(qss) {
+        return Ok(SheetSetDrawing {
+            path: full.to_string_lossy().into(),
+            layouts,
+        });
+    }
     let relative = full.strip_prefix(&base).map_err(|_| {
         invalid(format!(
             "{} is outside the sheet set's folder {}",
@@ -121,7 +139,7 @@ pub fn sheet_set_entries(qss: &Path, set: &SheetSet) -> Vec<SheetSetEntry> {
     set.drawings
         .iter()
         .map(|d| {
-            let full: PathBuf = d.path.split('/').fold(base.to_path_buf(), |p, c| p.join(c));
+            let full: PathBuf = base.join(&d.path);
             SheetSetEntry {
                 path: d.path.clone(),
                 layouts: d.layouts.clone(),

@@ -1,7 +1,7 @@
 //! Shared discrepancy engine used by the registry command, desktop and take-off crate.
 mod compare;
 mod matching;
-mod rules;
+pub(crate) mod rules;
 use crate::{
     knowledge, measurement::Citation, Command, Conflict, ConflictKind, ConflictStatus, CoreError,
     Outcome, Session, Source,
@@ -22,6 +22,8 @@ pub enum Severity {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Reference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<String>,
     pub handle: u64,
     pub sheet: String,
     pub grid: Option<String>,
@@ -158,6 +160,7 @@ impl Session {
                 {
                     for &handle in &m.handles {
                         refs.push(Reference {
+                            drawing: None,
                             handle,
                             sheet: m.sheet.clone(),
                             grid: None,
@@ -174,6 +177,7 @@ impl Session {
                         for r in &l.sources {
                             refs.retain(|x| x.handle != r.handle);
                             refs.push(Reference {
+                                drawing: None,
                                 handle: r.handle,
                                 sheet: r.sheet.clone(),
                                 grid: r.grid.clone(),
@@ -194,6 +198,7 @@ impl Session {
                     {
                         if schedule.source != 0 {
                             refs.push(Reference {
+                                drawing: None,
                                 handle: schedule.source,
                                 sheet: schedule.sheet.clone(),
                                 grid: None,

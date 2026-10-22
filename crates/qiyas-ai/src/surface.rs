@@ -106,7 +106,7 @@ operations![
     (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
     (READ, "digest", [Drawing]),
-    (READ, "takeoff_kit", [Drawing]),
+    (READ, "takeoff_kit", [Nothing]),
     (READ, "takeoff_check", [Drawing]),
     (READ, "capabilities", [Nothing]),
     (READ, "commands", [Nothing]),
@@ -500,6 +500,16 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
     if let Some(entry) = operation(name, &op) {
         crate::surface_args::validate(name, &op, &args)
             .map_err(|error| error.json().to_string())?;
+        if matches!(name, READ | EXECUTE) && op == "run" && args["command"]["type"] == "project" {
+            let command = qiyas_core::registry::parse_command(args["command"].clone())?;
+            if name == READ && effect_of(&command) != Effect::Read {
+                return Err("Use qiyas_execute for a project edit".into());
+            }
+            return Ok(Route::Host {
+                tool: "project",
+                input: args["command"].clone(),
+            });
+        }
         return Ok(match (entry.needs.first(), entry.runner) {
             (Some(Need::Host), Some(tool)) => Route::Host { tool, input: args },
             (Some(Need::Window), Some(tool)) => Route::Window { tool, input: args },
@@ -567,6 +577,11 @@ pub fn run_without_drawing(
     }
     let value = match op {
         "document" => crate::document::read(args),
+        "takeoff_kit" if units.is_none() => {
+            let mut kit = qiyas_core::takeoff_kit::kit();
+            finish_kit(&mut kit);
+            Ok(kit)
+        }
         "capabilities" => Ok(capabilities()),
         "commands" => commands(args),
         "record_schema" => args["name"]
@@ -735,9 +750,7 @@ pub fn run_session_with_method(
                 }
             }
             bind(&mut kit["batch"], &digest["example_names"]);
-            let (schema, args) = crate::surface_args::contract(READ, "takeoff_check");
-            kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
-            kit["end_report"] = json!({"action":"final answer","example":{"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved and low-confidence scope":"takeoff_check"}});
+            finish_kit(&mut kit);
             json(kit)
         }
         (READ, "takeoff_check") => {
@@ -982,6 +995,12 @@ fn capabilities() -> Value {
 }
 
 /// `commands`: the index, one command, a category or a search.
+fn finish_kit(kit: &mut Value) {
+    let (schema, args) = crate::surface_args::contract(READ, "takeoff_check");
+    kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
+    kit["end_report"] = json!({"action":"final answer","example":{"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved and low-confidence scope":"takeoff_check"}});
+}
+
 fn commands(args: &Value) -> Result<Value, ToolError> {
     let reg = registry();
     if let Some(names) = args["names"].as_array() {
@@ -1005,6 +1024,11 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
                     close_commands(name).join(", ")
                 ))
             })?;
+        if let Some(entry) = qiyas_core::takeoff_kit::short_entry(info) {
+            return Ok(
+                json!({"name":info.name,"doc":info.summary,"in_takeoff_kit":true,"complete":true,"entry":entry}),
+            );
+        }
         return Ok(json!({
             "name": info.name,
             "words": info.words,
@@ -1493,7 +1517,15 @@ fn run_one(
     let history = session.history_revision();
     let view = ViewState::of(session);
     let outcome = session.run_input(input, source)?;
+    let outputs = if label == "project.run" {
+        Some(qiyas_boq::project::outputs(&outcome.outcome, None).map_err(bad)?)
+    } else {
+        None
+    };
     let mut out = changed(session, &label, effect, history, json!(outcome));
+    if let Some(outputs) = outputs {
+        out["outputs"] = outputs;
+    }
     if label == "set_sheet" {
         out["ui"] = json!({ "action": "show_sheet", "sheet": session.sheet });
     }

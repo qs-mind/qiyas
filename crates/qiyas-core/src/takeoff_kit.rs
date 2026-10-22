@@ -82,38 +82,10 @@ pub fn contract(info: &CommandInfo) -> Value {
     value
 }
 
-/// Keep the fields needed by the complete example. Optional feature families still have
-/// full contracts in commands and error repairs; copying them all defeats a one-read kit.
+/// Complete examples carry the required fields. Keep enum choices, without repeating
+/// every example's field names; full required-field contracts remain in validation repairs.
 pub fn example_contract(info: &CommandInfo) -> Value {
-    fn used(schema: &Value, example: &Value) -> Value {
-        let mut schema = schema.clone();
-        for key in ["anyOf", "oneOf"] {
-            if let Some(variants) = schema[key].as_array() {
-                if let Some(selected) = variants
-                    .iter()
-                    .find(|s| crate::validation::validate_schema(s, example).valid)
-                {
-                    return used(selected, example);
-                }
-            }
-        }
-        let required = schema["required"].as_array().cloned().unwrap_or_default();
-        if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
-            props.retain(|name, _| required.contains(&json!(name)) || example.get(name).is_some());
-            for (name, value) in props.iter_mut() {
-                *value = used(value, &example[name]);
-            }
-        }
-        if let Some(items) = schema.get_mut("items") {
-            *items = used(items, &example[0]);
-        }
-        schema
-    }
-    let example = example(info);
-    let mut value = fields(&used(&info.schema, &example));
-    value["enums"] = fields(&info.schema)["enums"].clone();
-    value["example"] = example;
-    value
+    json!({"enums":fields(&info.schema)["enums"],"example":example(info)})
 }
 
 pub fn kit() -> Value {
@@ -140,5 +112,51 @@ pub fn kit() -> Value {
         .iter()
         .map(|name| example(registry().get(name).expect("revision command")))
         .collect();
-    json!({"revision":revision,"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
+    let project: Vec<_> = [
+        "create",
+        "open",
+        "add_drawing",
+        "remove_drawing",
+        "list",
+        "run",
+        "set_method",
+        "set_checks",
+        "set_register_rules",
+    ]
+    .iter()
+    .map(|kind| {
+        example(
+            registry()
+                .get(&format!("project.{kind}"))
+                .expect("project command"),
+        )
+    })
+    .collect();
+    json!({"complete":true,"project":project,"revision":revision,"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
+}
+
+/// Return exactly the kit entry for covered commands, including the auxiliary paths.
+pub fn short_entry(info: &CommandInfo) -> Option<Value> {
+    if info.takeoff_kit.is_some() {
+        return Some(example_contract(info));
+    }
+    if info.name.starts_with("project.")
+        || ["compare_revisions", "carry_knowledge", "variation_report"]
+            .contains(&info.name.as_str())
+    {
+        return Some(json!({"example":example(info)}));
+    }
+    if !info.name.contains('.') {
+        let prefix = format!("{}.", info.name);
+        let entries: BTreeMap<_, _> = registry()
+            .commands()
+            .iter()
+            .filter(|c| c.name.starts_with(&prefix))
+            .filter_map(|c| short_entry(c).map(|entry| (c.name.clone(), entry)))
+            .collect();
+        if !entries.is_empty() {
+            return Some(json!({"commands":entries}));
+        }
+    }
+    None
 }

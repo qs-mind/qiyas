@@ -316,10 +316,26 @@ pub fn from_base64(text: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Not base64: {e}"))
 }
 
-/// Longest wait before the one retry after a 429 or 529.
-const MAX_RETRY_WAIT: u64 = 30;
-/// Wait when a 429 or 529 gives no `retry-after`.
-const DEFAULT_RETRY_WAIT: u64 = 2;
+/// Shared retry schedule for rejected requests. Retry-After is a lower bound; a delay
+/// beyond the remaining two-minute window fails without sending an early request.
+#[derive(Default)]
+pub struct RetryBackoff {
+    attempt: usize,
+    waited: u64,
+}
+impl RetryBackoff {
+    pub fn next_delay(&mut self, retry_after: Option<u64>, elapsed: Duration) -> Option<Duration> {
+        let base = *[5, 15, 45, 55].get(self.attempt)?;
+        let seconds = base.max(retry_after.unwrap_or(0));
+        let remaining = 120u64.saturating_sub(self.waited.max(elapsed.as_secs()));
+        if seconds > remaining {
+            return None;
+        }
+        self.attempt += 1;
+        self.waited += seconds;
+        Some(Duration::from_secs(seconds))
+    }
+}
 
 /// The HTTP client both providers use: rustls with the `ring` crypto provider.
 pub(crate) fn http_client() -> reqwest::Client {
@@ -336,7 +352,7 @@ pub(crate) fn http_client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// Sends the request built by `make`, retrying once after a 429 or 529, and maps failures to
+/// Sends the request built by `make`, retrying busy/rate-limit replies for up to two minutes, and maps failures to
 /// `AiError`. `make` is called again for the retry. `body` is the JSON `make` sends, kept in a
 /// 4xx error for the log (the key is a header, never in it).
 pub(crate) async fn send(
@@ -354,7 +370,8 @@ pub(crate) async fn send_with_retry(
     body: &Value,
     allow_retry: bool,
 ) -> Result<reqwest::Response, AiError> {
-    let mut retried = false;
+    let mut backoff = RetryBackoff::default();
+    let started = tokio::time::Instant::now();
     loop {
         let response = make()
             .send()
@@ -370,14 +387,14 @@ pub(crate) async fn send_with_retry(
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| retry_after_seconds(v, chrono::Utc::now()));
-            if retried || !allow_retry {
+            let delay = allow_retry
+                .then(|| backoff.next_delay(retry_after, started.elapsed()))
+                .flatten();
+            let Some(delay) = delay else {
                 return Err(AiError::RateLimited { retry_after });
-            }
-            retried = true;
-            let wait = retry_after
-                .unwrap_or(DEFAULT_RETRY_WAIT)
-                .min(MAX_RETRY_WAIT);
-            tokio::time::sleep(Duration::from_secs(wait)).await;
+            };
+            drop(response);
+            tokio::time::sleep(delay).await;
             continue;
         }
         if status == 401 {
@@ -719,4 +736,28 @@ mod tests {
         assert_eq!(error_message(gemini), "Invalid tool call");
         assert_eq!(error_message("oops"), "oops");
     }
+}
+
+#[test]
+fn busy_backoff_is_bounded_and_never_shortens_retry_after() {
+    let mut policy = RetryBackoff::default();
+    let delays: Vec<_> = (0..6)
+        .filter_map(|_| policy.next_delay(None, Duration::ZERO))
+        .map(|d| d.as_secs())
+        .collect();
+    assert_eq!(delays, [5, 15, 45, 55]);
+    let mut policy = RetryBackoff::default();
+    assert_eq!(
+        policy.next_delay(Some(90), Duration::ZERO),
+        Some(Duration::from_secs(90))
+    );
+    assert_eq!(policy.next_delay(Some(31), Duration::ZERO), None);
+    assert_eq!(
+        RetryBackoff::default().next_delay(Some(121), Duration::ZERO),
+        None
+    );
+    assert_eq!(
+        RetryBackoff::default().next_delay(None, Duration::from_secs(118)),
+        None
+    );
 }

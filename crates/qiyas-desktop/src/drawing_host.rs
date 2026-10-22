@@ -181,6 +181,9 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         self.shown(format!("New drawing {title} on screen, unsaved"))
     }
 
+    fn project(&self, input: &Value, source: qiyas_core::Source) -> Result<Value, String> {
+        crate::projects::execute(&self.state(), input, source)
+    }
     fn open(&self, path: &str, user_named: bool) -> Result<Value, String> {
         let path = Path::new(path);
         let drawing = path
@@ -193,7 +196,11 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         if !path.is_file() {
             return Err(format!("{} does not exist", path.display()));
         }
-        if !user_named && !self.known(path) && !self.confirm_open(path) {
+        if !user_named
+            && !self.known(path)
+            && !crate::projects::contains(&self.state().projects, path)
+            && !self.confirm_open(path)
+        {
             return Err(format!("The user did not allow opening {}", path.display()));
         }
         let what = crate::script::open(&self.app, &self.state(), path, true)?;

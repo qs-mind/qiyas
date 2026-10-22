@@ -1781,6 +1781,7 @@ impl Session {
                     },
                 );
             }
+            Some(Part::ProjectFile) => return self.execute(cmd, source),
             Some(Part::Takeoff) => Step::Takeoff(self.takeoff.clone()),
             Some(Part::Boq) => Step::Boq(self.boq.clone()),
             Some(Part::Conflicts) => {
@@ -1798,7 +1799,7 @@ impl Session {
                         self.conflicts = conflicts;
                         self.schedules = schedules;
                     }
-                    Step::Document(_) | Step::Group(..) => {}
+                    Step::Document(_) | Step::Group(..) | Step::ProjectFile(_) => {}
                 }
                 return Err(e);
             }

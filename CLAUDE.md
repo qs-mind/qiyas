@@ -477,8 +477,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
   withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
 - Settings validates local method files and applies changes transactionally to open tabs. Opening
-  a tab applies the selected method. The drawing-level project override is available through
-  commands; project-wide `.qss` propagation remains Phase 21 work. The BOQ panel exposes the
+  a tab applies the selected method. Project `.qss` runs apply their method override to every member before deriving quantities. The BOQ panel exposes the
   generated items and dimension source links; the take-off export adds bilingual BOQ, dimension
   and review worksheets. Comparison adapts generated quantities without replacing the imported BOQ.
 - `recognition.pdf_text` calibrates vectors from a label regex and a ticked scale bar. General
@@ -582,15 +581,17 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 - Start take-off with `digest`, then `takeoff_kit`. The registry index names this first.
   Command/kind `x-takeoff-kit` metadata selects complete registry examples and orders a
-  connected type → recognition → apply → method → mappings → report batch. The drawing
+  connected type → recognition → apply → method → mappings → report batch. Complete examples
+  carry their required fields; enum choices remain explicit, with full contracts in error repairs. The drawing
   digest supplies paired source layer/block names without classifying their meaning.
 - The kit has a 6,144-byte guard and deterministic contracts. Copy and adapt its batch;
   never validate empty command stubs or discover these commands one schema at a time.
   Missing-field validation and run errors include required fields and a filled registry
   example, including nested batch steps. Self-check and the final uncertainty report remain
   required; selected methods must be preserved.
-- Budgeted eval retries rejected busy/rate-limit requests at most three provider attempts,
-  with exponential backoff and Retry-After seconds or HTTP dates. Transient rejections do not
+- Normal and budgeted requests share a bounded busy/rate-limit retry policy: 5, 15, 45 and
+  55 seconds (at most two minutes), with Retry-After seconds or HTTP dates as a lower bound.
+  A server delay beyond the remaining window fails without retrying early. Transient rejections do not
   consume the request allowance or accrue unknown usage; transport/stream failures retain
   conservative accounting. No paid eval belongs to this implementation check.
 - Offline before/after evidence and check results: `docs/2026-10-22-mizan-discovery.md`.
@@ -661,6 +662,49 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Final quick revision scores: 9/9 items in both modes, 100% recall/precision/delta
   accuracy, 0.419–0.640 seconds per case including workbook/drawing persistence.
 - Implementation details, validation and measured results: `docs/2026-10-22-qiyas-phase20.md`.
+
+## Projects (Phase 21)
+
+- `qiyas-core/src/projects.rs` extends `.qss` with optional project data: method override,
+  generated BOQ with per-drawing dimension contributions, cited cross-drawing checks, RFIs,
+  register extraction rules/results and per-drawing status. No rates or drawing-specific
+  interpretation is stored at project level. The data home is shared by desktop and CLI;
+  debug uses `.local/qiyas-home`, release `~/.qiyas`, and `QIYAS_HOME` overrides both.
+- Registry `project.create/open/add_drawing/remove_drawing/list`, `set_method`, `set_checks`,
+  `set_register_rules` and `run` work through the generic tools. Projects live directly in
+  `qiyas_dir()/projects/*.qss` and may reference absolute drawing paths. Ordinary sheet sets
+  keep relative paths within their folder, including existing symlink targets. Each project
+  mutation is one file undo step; undo refuses an intervening external edit. Project commands
+  cannot be nested in drawing batches.
+- Aggregation groups generated items by code (description key when empty), section, trade and
+  unit. Contributions retain drawing path, quantity and complete dimension lines. Project runs
+  apply the override to each isolated drawing session before recognition and measurement,
+  reusing core script parsing/execution. Original drawing files are not overwritten by a run;
+  Mizan saves its interpretations into each drawing before running the project.
+- Phase 19 checks share one evaluator for drawings and projects. Sets may name `drawings`;
+  a table names `drawing` as well as its sheet/handle or extracted document table. References
+  retain drawing paths so repeated CAD handles are unambiguous. Check failures are explicit
+  warnings; unreadable drawings prevent a claim of completed cross-drawing checks.
+- Register rules select a field (number, title, revision, date) and an attribute tag or text
+  regex capture, optionally scoped by layer/block/sheet. No title-block tag vocabulary ships.
+  Missing and conflicting values are flagged, with retained source handles.
+- `qiyas-cli project run <project.qss> [--out folder]` writes `project.xlsx` and
+  `morning-report.md` (default `<project>.output/`). Workbook sheets include Generated BOQ,
+  Dimension sheets, Queries, Register, Drawings and a chunked lossless project record.
+  Failed drawings retain partial output and exit 1; incomplete checks exit 2.
+- The bilingual Projects side panel lists projects, creates/opens them, adds/removes drawings,
+  runs the shared engine and shows status and output paths. Its project history works without
+  an open drawing. Mizan's host uses the same workspace and may open members of its selected
+  project without repeatedly asking for file approval.
+- The take-off workflow includes the project path. The kit explicitly says it is complete;
+  discovery for commands covered by it returns their short kit entry. The 6,144-byte cap stays.
+- `bench projects --set quick --mode prepared|autonomy` and the full quick runs score projects
+  built from existing clinic storeys, duplex storeys and apartment floors. Clean controls and
+  planted schedule/identity discrepancies exercise cross-drawing recall. Prediction writes
+  artifacts before scoring reads truth. These are engine diagnostics, not MIZAN ALONE.
+  `bench projects --rescore <report-folder>` only rescores saved project predictions. The
+  scorer preserves each input recipe's declared measurement basis before opening truth.
+- No new crates or UI libraries. Validation, scores and limits: `docs/2026-10-22-qiyas-phase21.md`.
 
 ## Drawing
 
@@ -1727,7 +1771,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `measurement_method` (a local rule set name, or null for geometric quantities). Multi-phase
   plans wait for approval per the selected mode; Approve sends `Approved, continue.`, while
   Change focuses the composer. In autonomous mode, unfixed errors are reported without an approval pause.
-- `qiyas-desktop/src/methods.rs::qiyas_dir()` is the Qiyas data home: release builds use
+- `qiyas-core/src/data_home.rs::qiyas_dir()` (re-exported by desktop methods) is the Qiyas data home: release builds use
   `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
   `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
   on first use. Settings lists local `methods/*.json`; no measurement rules ship with Qiyas.

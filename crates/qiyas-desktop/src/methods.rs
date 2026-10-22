@@ -8,28 +8,9 @@ use qiyas_core::measurement::{MeasurementCommand, MethodScope, RuleSet};
 use qiyas_core::{Command, CoreError, Session, Source};
 use serde::Serialize;
 
-/// The data home is separate from the app config and from shared drawing project files.
-pub fn qiyas_dir() -> Result<PathBuf, String> {
-    let dir = home_path(std::env::var_os("QIYAS_HOME").map(PathBuf::from))?;
-    for child in ["methods", "projects"] {
-        fs::create_dir_all(dir.join(child)).map_err(|e| e.to_string())?;
-    }
-    Ok(dir)
-}
-
-fn home_path(override_path: Option<PathBuf>) -> Result<PathBuf, String> {
-    if let Some(path) = override_path.filter(|p| !p.as_os_str().is_empty()) {
-        return Ok(path);
-    }
-    if cfg!(debug_assertions) {
-        return Ok(Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(".local/qiyas-home"));
-    }
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .map(|home| PathBuf::from(home).join(".qiyas"))
-        .ok_or_else(|| "The Qiyas data home could not be found; set QIYAS_HOME".into())
-}
+#[cfg(test)]
+use qiyas_core::data_home::home_path;
+pub use qiyas_core::data_home::qiyas_dir;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MeasurementMethodInfo {

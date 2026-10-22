@@ -49,3 +49,5 @@ mod surface_args;
 
 mod document;
 mod history;
+
+pub use provider::RetryBackoff;

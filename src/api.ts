@@ -1902,3 +1902,21 @@ export type MeasurementReport = {
   warnings: string[];
 };
 export const measurementReport = () => invoke<MeasurementReport>("measurement_report");
+
+export type ProjectReply = {
+  type: "project";
+  result: {
+    path?: string;
+    projects?: { path: string; name: string; drawings?: number; checked?: boolean; error?: string }[];
+    entries?: { path: string; full: string; missing: boolean }[];
+    set?: { name: string; project: {
+      method: { title: string } | null;
+      boq: unknown[]; queries: unknown[]; warnings: string[]; checked: boolean;
+      register: { drawing: string; sheet: string; flags: string[] }[];
+      drawings: { drawing: string; status: string; items: number; warnings: string[]; error: string | null }[];
+    } };
+  };
+  outputs?: { workbook: string; morning_report: string; failed: number; checked: boolean };
+};
+export const projectCommand = (command: Record<string, unknown>) => invoke<ProjectReply>("project_command", { command: { ...command, type: "project" } });
+export const projectHistory = (redo: boolean) => invoke<boolean>("project_history", { redo });

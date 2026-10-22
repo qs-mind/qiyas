@@ -14,6 +14,7 @@ fn a_sheet_set_keeps_relative_paths_and_reads_back() {
     let qss = dir.path().join("Villa.qss");
 
     let set = SheetSet {
+        project: None,
         name: "Villa".into(),
         drawings: vec![
             sheet_set_entry(&qss, &a, vec!["Layout1".into()]).unwrap(),
@@ -50,6 +51,7 @@ fn a_sheet_set_never_reaches_outside_its_folder() {
     // So is a path climbing out of it, or an absolute one, in a set saved or read.
     for path in ["../sample.dwg", outside.to_str().unwrap()] {
         let set = SheetSet {
+            project: None,
             name: "Set".into(),
             drawings: vec![SheetSetDrawing {
                 path: path.into(),
@@ -72,6 +74,7 @@ fn a_sheet_set_never_reaches_outside_its_folder() {
     }
     // Only a .qss is written.
     let set = SheetSet {
+        project: None,
         name: "Set".into(),
         drawings: Vec::new(),
     };

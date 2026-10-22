@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CheckRule {
     pub citation: Citation,
@@ -21,24 +21,31 @@ pub struct CheckRule {
     pub question_ar: String,
     pub test: Test,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Set {
+    /// Project drawing paths; empty selects every drawing.
+    #[serde(default)]
+    pub drawings: Vec<String>,
     #[serde(default)]
     pub filter: ObjectFilter,
     /// Exact property values. The engine does not interpret trade names.
     #[serde(default)]
     pub properties: BTreeMap<String, Value>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TableSource {
     Drawing {
+        #[serde(default)]
+        drawing: Option<String>,
         handle: u64,
         sheet: String,
     },
     /// A supplied document's extracted rows in knowledge tables. Data must include rows and citation.
     Document {
+        #[serde(default)]
+        drawing: Option<String>,
         name: String,
     },
 }
@@ -64,7 +71,7 @@ impl Tolerance {
         (a - b).abs() > self.absolute.max(a.abs() * self.percent / 100.) + 1e-9
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Test {
     /// Compare each table row with the selected instances sharing its key.
@@ -183,11 +190,18 @@ fn key(value: &Value) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| value.to_string())
 }
-fn property(o: &ObjectRecord, name: &str) -> Option<String> {
+fn property(o: &CheckObject, name: &str) -> Option<String> {
     match name {
         "type" => Some(o.instance.type_name.clone()),
-        "id" => Some(o.instance.id.to_string()),
-        "host" => o.instance.host.map(|h| h.to_string()),
+        "id" => Some(o.drawing.as_ref().map_or_else(
+            || o.instance.id.to_string(),
+            |d| format!("{d}:{}", o.instance.id),
+        )),
+        "host" => o.instance.host.map(|h| {
+            o.drawing
+                .as_ref()
+                .map_or_else(|| h.to_string(), |d| format!("{d}:{h}"))
+        }),
         _ => o.instance.props.get(name).map(key),
     }
 }
@@ -208,7 +222,7 @@ fn number(o: &ObjectRecord, name: &str) -> Result<f64, CoreError> {
         ))
     })
 }
-fn elements(s: &Session, set: &Set) -> Result<Vec<ObjectRecord>, CoreError> {
+pub(crate) fn local_elements(s: &Session, set: &Set) -> Result<Vec<ObjectRecord>, CoreError> {
     let rows = s.objects(&set.filter)?;
     let rows: Vec<_> = rows
         .into_iter()
@@ -233,8 +247,9 @@ fn elements(s: &Session, set: &Set) -> Result<Vec<ObjectRecord>, CoreError> {
     }
     Ok(rows)
 }
-fn reference(o: &ObjectRecord) -> Reference {
+fn reference(o: &CheckObject) -> Reference {
     Reference {
+        drawing: o.drawing.clone(),
         handle: o.instance.id,
         sheet: o.sheet.clone(),
         grid: o
@@ -245,10 +260,10 @@ fn reference(o: &ObjectRecord) -> Reference {
             .map(str::to_owned),
     }
 }
-type ReadTable = (Vec<Vec<String>>, Vec<Reference>, Citation);
-fn table(s: &Session, source: &TableSource) -> Result<ReadTable, CoreError> {
+pub(crate) type ReadTable = (Vec<Vec<String>>, Vec<Reference>, Citation);
+pub(crate) fn local_table(s: &Session, source: &TableSource) -> Result<ReadTable, CoreError> {
     match source {
-        TableSource::Drawing { handle, sheet } => {
+        TableSource::Drawing { handle, sheet, .. } => {
             let t = s
                 .read_tables(Some(sheet))
                 .into_iter()
@@ -257,6 +272,7 @@ fn table(s: &Session, source: &TableSource) -> Result<ReadTable, CoreError> {
             Ok((
                 t.rows,
                 vec![Reference {
+                    drawing: None,
                     handle: *handle,
                     sheet: sheet.clone(),
                     grid: None,
@@ -267,7 +283,7 @@ fn table(s: &Session, source: &TableSource) -> Result<ReadTable, CoreError> {
                 },
             ))
         }
-        TableSource::Document { name } => {
+        TableSource::Document { name, .. } => {
             #[derive(Deserialize)]
             struct Data {
                 rows: Vec<Vec<String>>,
@@ -291,11 +307,63 @@ fn cell(row: &[String], column: usize) -> Result<&str, CoreError> {
         .ok_or_else(|| invalid("Check table has a missing mapped cell"))
 }
 
+pub(crate) struct CheckObject {
+    pub object: ObjectRecord,
+    pub drawing: Option<String>,
+}
+impl std::ops::Deref for CheckObject {
+    type Target = ObjectRecord;
+    fn deref(&self) -> &ObjectRecord {
+        &self.object
+    }
+}
+pub(crate) trait CheckContext {
+    fn elements(&self, set: &Set) -> Result<Vec<CheckObject>, CoreError>;
+    fn table(&self, source: &TableSource) -> Result<ReadTable, CoreError>;
+}
+impl CheckContext for Session {
+    fn elements(&self, set: &Set) -> Result<Vec<CheckObject>, CoreError> {
+        if !set.drawings.is_empty() {
+            return Err(invalid("Drawing selectors require a project check"));
+        }
+        Ok(local_elements(self, set)?
+            .into_iter()
+            .map(|object| CheckObject {
+                object,
+                drawing: None,
+            })
+            .collect())
+    }
+    fn table(&self, source: &TableSource) -> Result<ReadTable, CoreError> {
+        match source {
+            TableSource::Drawing {
+                drawing: Some(_), ..
+            }
+            | TableSource::Document {
+                drawing: Some(_), ..
+            } => return Err(invalid("A drawing selector requires a project check")),
+            _ => {}
+        }
+        local_table(self, source)
+    }
+}
 pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
+    let rules = knowledge::list(&s.drawing.doc, knowledge::Kind::Checks)?
+        .into_iter()
+        .map(|entry| {
+            serde_json::from_value(entry.data)
+                .map(|rule| (entry.name, rule))
+                .map_err(|e| invalid(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    evaluate_named(s, &rules)
+}
+pub(crate) fn evaluate_named(
+    s: &impl CheckContext,
+    rules: &[(String, CheckRule)],
+) -> Result<Vec<Conflict>, CoreError> {
     let mut out = vec![];
-    for entry in knowledge::list(&s.drawing.doc, knowledge::Kind::Checks)? {
-        let rule: CheckRule =
-            serde_json::from_value(entry.data).map_err(|e| invalid(e.to_string()))?;
+    for (name, rule) in rules {
         rule.validate()?;
         let mut emit = |kind,
                         subject: String,
@@ -306,9 +374,9 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                         citation: Option<Citation>| {
             let mut f = finding(
                 kind,
-                &format!("check:{}:{subject}", entry.name),
-                format!("{}: {subject}", entry.name),
-                format!("{}: {subject}", entry.name),
+                &format!("check:{}:{subject}", name),
+                format!("{}: {subject}", name),
+                format!("{}: {subject}", name),
             );
             f.expected = expected;
             f.found = found;
@@ -324,12 +392,12 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                 citations: std::iter::once(rule.citation.clone())
                     .chain(citation)
                     .collect(),
-                rule: Some(entry.name.clone()),
+                rule: Some(name.clone()),
                 ..Default::default()
             });
             out.push(f);
         };
-        match rule.test {
+        match rule.test.clone() {
             Test::Schedule {
                 table: source,
                 key_column,
@@ -342,8 +410,8 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                 tolerance,
                 unit,
             } => {
-                let (rows, refs, citation) = table(s, &source)?;
-                let objects = elements(s, &set)?;
+                let (rows, refs, citation) = s.table(&source)?;
+                let objects = s.elements(&set)?;
                 for (i, row) in rows.iter().enumerate() {
                     let k = cell(row, key_column)?;
                     let expected = cell(row, value_column)?
@@ -365,7 +433,15 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                                 refs.push(reference(object));
                                 emit(
                                     ConflictKind::ScheduleVsPlan,
-                                    format!("row {i} ({k}) instance {:X}", object.instance.id),
+                                    format!(
+                                        "row {i} ({k}) instance {}{:X}",
+                                        object
+                                            .drawing
+                                            .as_ref()
+                                            .map(|d| format!("{d}:"))
+                                            .unwrap_or_default(),
+                                        object.instance.id
+                                    ),
                                     Some(expected),
                                     Some(found),
                                     unit.clone(),
@@ -405,8 +481,8 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                 minimum,
                 maximum,
             } => {
-                let right = elements(s, &right)?;
-                for o in elements(s, &left)? {
+                let right = s.elements(&right)?;
+                for o in s.elements(&left)? {
                     let k = property(&o, &join);
                     let related: Vec<_> = right
                         .iter()
@@ -421,7 +497,14 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                         refs.extend(related.iter().map(|r| reference(r)));
                         emit(
                             ConflictKind::RelationMismatch,
-                            format!("{:X}", o.instance.id),
+                            format!(
+                                "{}{:X}",
+                                o.drawing
+                                    .as_ref()
+                                    .map(|d| format!("{d}:"))
+                                    .unwrap_or_default(),
+                                o.instance.id
+                            ),
                             Some(minimum as f64),
                             Some(n as f64),
                             "pcs".into(),
@@ -437,12 +520,12 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                 elements: set,
                 property: prop,
             } => {
-                let (rows, refs, citation) = table(s, &source)?;
+                let (rows, refs, citation) = s.table(&source)?;
                 let keys = rows
                     .iter()
                     .map(|r| cell(r, key_column))
                     .collect::<Result<Vec<_>, _>>()?;
-                for o in elements(s, &set)? {
+                for o in s.elements(&set)? {
                     let k = property(&o, &prop)
                         .ok_or_else(|| invalid(format!("Missing check property {prop}")))?;
                     if !keys.contains(&k.as_str()) {
@@ -450,7 +533,14 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                         refs.push(reference(&o));
                         emit(
                             ConflictKind::DocumentMismatch,
-                            format!("{:X} ({k})", o.instance.id),
+                            format!(
+                                "{}{:X} ({k})",
+                                o.drawing
+                                    .as_ref()
+                                    .map(|d| format!("{d}:"))
+                                    .unwrap_or_default(),
+                                o.instance.id
+                            ),
                             None,
                             None,
                             String::new(),
@@ -469,9 +559,9 @@ pub fn evaluate(s: &Session) -> Result<Vec<Conflict>, CoreError> {
                 tolerance,
                 unit,
             } => {
-                let left = elements(s, &left)?;
-                let right = elements(s, &right)?;
-                let sum = |objects: &[ObjectRecord], name: &str| -> Result<f64, CoreError> {
+                let left = s.elements(&left)?;
+                let right = s.elements(&right)?;
+                let sum = |objects: &[CheckObject], name: &str| -> Result<f64, CoreError> {
                     Ok(objects
                         .iter()
                         .map(|o| number(o, name))

@@ -520,6 +520,7 @@ pub async fn sheet_set_from_tabs(
 ) -> Result<FromTabs, String> {
     let qss = Path::new(&qss);
     let mut set = SheetSet {
+        project: None,
         name,
         drawings: Vec::new(),
     };

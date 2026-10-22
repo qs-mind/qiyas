@@ -23,6 +23,7 @@ const MAX_STEPS: usize = 200;
 /// The part of the session a command changed, as it was before (or after, on the redo stack).
 #[derive(Debug)]
 pub(crate) enum Step {
+    ProjectFile(crate::projects::FileChange),
     Takeoff(Takeoff),
     Boq(Option<Boq>),
     Conflicts(Vec<Conflict>, Vec<Schedule>),
@@ -457,6 +458,7 @@ impl Step {
     /// Puts this step in place and returns what it replaced.
     fn swap(self, mut parts: Parts) -> Step {
         match self {
+            Step::ProjectFile(change) => Step::ProjectFile(change.reversed()),
             Step::Takeoff(t) => Step::Takeoff(std::mem::replace(parts.takeoff, t)),
             Step::Boq(b) => Step::Boq(std::mem::replace(parts.boq, b)),
             Step::Conflicts(c, s) => Step::Conflicts(
@@ -628,6 +630,15 @@ impl History {
         if self.undo.len() <= self.floor {
             return false;
         }
+        if let Some(Entry {
+            step: Step::ProjectFile(change),
+            ..
+        }) = self.undo.last()
+        {
+            if change.apply().is_err() {
+                return false;
+            }
+        }
         let Some(entry) = self.undo.pop() else {
             return false;
         };
@@ -640,6 +651,15 @@ impl History {
 
     /// Redoes the last undone command. False when there is none.
     pub(crate) fn redo(&mut self, parts: Parts) -> bool {
+        if let Some(Entry {
+            step: Step::ProjectFile(change),
+            ..
+        }) = self.redo.last()
+        {
+            if change.apply().is_err() {
+                return false;
+            }
+        }
         let Some(entry) = self.redo.pop() else {
             return false;
         };

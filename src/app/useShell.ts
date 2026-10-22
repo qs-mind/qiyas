@@ -9,7 +9,7 @@ import type { Theme } from "../viewport/gl";
 import type { ViewportHandle } from "../viewport/Viewport";
 import { initialTheme, THEME_KEY } from "./shared";
 
-export type SideTab = "takeoff" | "boq" | "conflicts" | "comments" | "review" | "assistant";
+export type SideTab = "takeoff" | "boq" | "conflicts" | "comments" | "review" | "projects" | "assistant";
 
 export function useShell() {
   const [theme, setTheme] = useState<Theme>(initialTheme);

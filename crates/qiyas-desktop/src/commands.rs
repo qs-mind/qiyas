@@ -1359,7 +1359,9 @@ mod tests {
                     crate::files::sheet_set_open,
                     crate::files::sheet_set_save,
                     crate::files::sheet_set_entry,
-                    crate::files::sheet_set_from_tabs
+                    crate::files::sheet_set_from_tabs,
+                    crate::projects::project_command,
+                    crate::projects::project_history
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -1509,6 +1511,76 @@ mod tests {
         assert_eq!(
             ipc.call("sheet_set_open", json!({ "path": qss })).unwrap()["set"],
             view["set"]
+        );
+    }
+
+    #[test]
+    fn project_ipc_runs_exports_and_preserves_undo_and_unsaved_members() {
+        const NAME: &str =
+            "commands::tests::project_ipc_runs_exports_and_preserves_undo_and_unsaved_members";
+        if std::env::var("QIYAS_PROJECT_IPC_CHILD").as_deref() != Ok(NAME) {
+            let home = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture"])
+                .env("QIYAS_PROJECT_IPC_CHILD", NAME)
+                .env("QIYAS_HOME", home.path())
+                .status()
+                .unwrap();
+            assert!(result.success());
+            return;
+        }
+        let ipc = Ipc::open();
+        let drawing = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+        let command = |value: Value| ipc.call("project_command", json!({"command":value}));
+        let created =
+            command(json!({"type":"project","kind":"create","name":"IPC project"})).unwrap();
+        let path = created["result"]["path"].clone();
+        assert!(path.is_string(), "{created}");
+        assert_eq!(created["result"]["active_project"], path);
+        command(json!({"type":"project","kind":"add_drawing","path":path,"drawing":drawing}))
+            .unwrap();
+        let listed = command(json!({"type":"project","kind":"list"})).unwrap();
+        assert_eq!(listed["result"]["projects"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["result"]["active_project"], path);
+        ipc.call(
+            "run_command",
+            json!({"cmd":{"type":"draw","kind":"line","a":[0,0],"b":[5,5]}}),
+        )
+        .unwrap();
+        let rejected = command(json!({"type":"project","kind":"run","path":path})).unwrap_err();
+        assert!(rejected.as_str().unwrap().contains("Save"), "{rejected}");
+        ipc.call("save_drawing", json!({})).unwrap();
+        let run = command(json!({"type":"project","kind":"run","path":path})).unwrap();
+        assert!(matches!(
+            run["result"]["set"]["project"]["drawings"][0]["status"].as_str(),
+            Some("ok" | "warning")
+        ));
+        assert!(std::path::Path::new(run["outputs"]["workbook"].as_str().unwrap()).is_file());
+        assert!(std::path::Path::new(run["outputs"]["morning_report"].as_str().unwrap()).is_file());
+        assert_eq!(
+            ipc.call("project_history", json!({"redo":false})).unwrap(),
+            true
+        );
+        let undone = command(json!({"type":"project","kind":"open","path":path})).unwrap();
+        assert!(undone["result"]["set"]["project"]["drawings"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            undone["result"]["set"]["drawings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            ipc.call("project_history", json!({"redo":true})).unwrap(),
+            true
+        );
+        let redone = command(json!({"type":"project","kind":"open","path":path})).unwrap();
+        assert_eq!(
+            redone["result"]["set"]["project"],
+            run["result"]["set"]["project"]
         );
     }
 
