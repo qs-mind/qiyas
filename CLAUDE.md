@@ -513,7 +513,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Autonomous is the default; saved per-job/per-phase choices still apply. Autonomous runs report
   introduced drawing errors at completion without an approval pause. The Review panel is a
   take-off report with optional corrections, including accepted low-confidence interpretations.
-- Eval submits only mapped generated BOQ items with accepted recognised source elements. Raw
+- Eval submits accepted measured dimension items and their generated BOQ totals. Raw
   manual rows/candidates are excluded. Engine recipes likewise require accepted elements;
   legacy `include_baseline` no longer appends raw geometry. Shared development mappings live in
   `.local/benchmark/general/`, never in the product or live/scripted Mizan input. PDF label areas
@@ -595,6 +595,37 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   consume the request allowance or accrue unknown usage; transport/stream failures retain
   conservative accounting. No paid eval belongs to this implementation check.
 - Offline before/after evidence and check results: `docs/2026-10-22-mizan-discovery.md`.
+
+### First subscription-agent run corrections (22 October 2026)
+
+- Eval and headless MCP submit accepted per-object `measurement.quantities` as dimension
+  items, retaining the source handle in hexadecimal, rule, citation and dimension lines.
+  Generated BOQ totals remain alongside them with `aggregate_of` component IDs. Bench
+  recognition recipes retain the same per-object/grouped representation.
+- Measurement rules expose `kind` (count/length/area/volume) and `basis` (geometric or
+  `rule:<cited note name>`) in the kit and workflow. Explicit basis is preserved exactly.
+  Legacy saved recipes without basis use geometric only for direct geometry or explicit
+  area × numeric height; other transformations retain `rule:<own rule ID>` with a warning.
+  This is a conservative migration, never a guess at a benchmark note name. Saved quantities
+  are never changed; simple volume recipes retain their cited height factor for traceability.
+- The scorer still requires equal kind and basis for handle matching. Complete aggregate
+  totals are reported separately, not counted again as extras. Component IDs, source union,
+  units, basis, total quantity and dimension-line multiset must agree. A matched aggregate
+  consumes its components; partial/repeated/malformed totals get no exemption. Benchmark
+  discrepancy prediction shares this component validation and compares at client granularity,
+  so dimension rows and their BOQ total cannot create duplicate quantity or missing-item alarms.
+- Digest note text is paged without losing its tail, with the three closest geometry handles,
+  layers and bounding-box distances on the same sheet. Proximity is not applicability.
+  Schedule columns include wide tables and detected text grids. Self-check flags dimensional
+  conflicts between a cited note's explicit numeric unit and a rule's geometry/factors,
+  including percentage scope when the note states a unit. Unitless scope still needs judgement.
+- `bench rescore-agent --report <combined report.json> --output <new directory>` rebuilds
+  submissions from saved measurement reports and accepted recognition in the saved drawing.
+  Only the outer scorer then opens truth. Originals and contamination exclusions are retained;
+  missing measurement artefacts remain empty. This command never starts an agent or provider.
+- Keep Codex's `-c mcp_servers.qiyas.default_tools_approval_mode="approve"` and its argument
+  test: read-only agent execution otherwise refuses the configured MCP tools.
+- Verification and saved-run comparison: `docs/2026-10-22-agent-eval-fixes.md`.
 
 ## Discrepancies and queries (Phase 19)
 

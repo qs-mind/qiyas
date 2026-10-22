@@ -585,7 +585,7 @@ pub(crate) fn save_artifacts(
     .map_err(|e| e.to_string())?;
     let submission_path = output.join("takeoff.json");
     let submission = crate::bench::submission::from_session(session)?;
-    let items = submission.items;
+
     write_json(
         &output.join("measurement.json"),
         &session.measurement_report().map_err(|e| e.to_string())?,
@@ -596,7 +596,7 @@ pub(crate) fn save_artifacts(
     )?;
     write_json(
         &submission_path,
-        &json!({ "items": items, "elapsed_ms": elapsed_ms, "findings": [], "drawing": drawing }),
+        &json!({ "items": submission.items, "warnings": submission.warnings, "elapsed_ms": elapsed_ms, "findings": [], "drawing": drawing }),
     )?;
     write_json(&output.join("conflicts.json"), &session.conflicts)?;
     Ok(submission_path)

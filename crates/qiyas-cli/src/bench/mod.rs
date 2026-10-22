@@ -6,6 +6,7 @@ pub mod generate;
 pub(crate) mod model;
 mod projects;
 mod recognition;
+mod rescore;
 mod revisions;
 pub(crate) mod score;
 pub(crate) mod sets;
@@ -53,6 +54,13 @@ pub struct BenchArgs {
 
 #[derive(Subcommand)]
 pub enum BenchCommand {
+    /// Rebuild submissions from saved measurements and recognition evidence, without an agent.
+    RescoreAgent {
+        #[arg(long)]
+        report: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Score multi-storey IFC and apartment projects, with seeded cross-drawing checks.
     Projects {
         #[arg(long, value_enum, default_value = "prepared")]
@@ -115,6 +123,7 @@ pub enum BenchCommand {
 pub fn run(args: &BenchArgs) -> Result<Value, String> {
     refuse_holdout_path(&args.root)?;
     match &args.command {
+        BenchCommand::RescoreAgent { report, output } => rescore::agent(&args.root, report, output),
         BenchCommand::Projects { mode, set, rescore } => {
             if let Some(folder) = rescore {
                 projects::rescore(&args.root, folder)

@@ -158,3 +158,88 @@ fn project_override_wins_and_invalid_methods_roll_back_without_losing_history() 
         .is_err());
     assert_eq!(s.measurement_report().unwrap(), before);
 }
+
+#[test]
+fn digest_preserves_note_scope_neighbours_and_wide_schedule_columns_and_checks_units() {
+    let mut s = Session::new_blank(std::path::Path::new("unused.dxf"), 6);
+    let qiyas_core::Outcome::Added { handles } = run(
+        &mut s,
+        json!({"type":"draw","kind":"line","a":[0,0],"b":[3,0]}),
+    ) else {
+        panic!()
+    };
+    let line = handles[0];
+    let text = format!("{}; factor 2 m", "Evidence ".repeat(100));
+    let qiyas_core::Outcome::Added { handles } = run(
+        &mut s,
+        json!({"type":"text","at":[0,0.5],"height":0.1,"value":text}),
+    ) else {
+        panic!()
+    };
+    let note = handles[0];
+    run(
+        &mut s,
+        json!({"type":"table","at":[10,10],"rows":2,"cols":6,"col_width":2,"row_height":1,"data":[["A","B","C","D","E","F"],["a","b","c","d","e","f"]]}),
+    );
+    let mut offset = 0;
+    let mut notes = Vec::new();
+    let mut columns = Vec::new();
+    loop {
+        let page = s.drawing_digest(offset).unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() <= qiyas_core::digest::MAX_BYTES);
+        for entry in page["entries"].as_array().unwrap() {
+            if entry["handle"] == note && entry["section"] == "text_clusters" {
+                notes.push(entry["text"].as_str().unwrap().to_owned());
+                assert_eq!(entry["closest"][0]["handle"], line);
+                assert_eq!(entry["closest"][0]["layer"], "0");
+            }
+            if entry["section"] == "schedule_columns" {
+                columns.push(entry["heading"].clone());
+            }
+        }
+        let Some(next) = page["next_offset"].as_u64() else {
+            break;
+        };
+        assert!(next as usize > offset);
+        offset = next as usize;
+    }
+    assert_eq!(notes.concat(), text);
+    assert_eq!(
+        columns,
+        [
+            json!("A"),
+            json!("B"),
+            json!("C"),
+            json!("D"),
+            json!("E"),
+            json!("F")
+        ]
+    );
+    let citation = json!({"source":"drawing","clause":format!("note {note}")});
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{"name":"Observed","geometry":"path","category":"Test"}}),
+    );
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_method","scope":"project","method":{"name":"test","title":"test","based_on":"drawing","source_note":"Test","rules":[{"id":"scaled","element_type":"Observed","kind":"area","basis":"rule:sample-note","unit":"m2","terms":[{"label":"Scaled","operation":"add","factors":["geometry.area","2"],"citation":citation}],"citation":citation}]}}),
+    );
+    let check = s.takeoff_check(0, &[]).unwrap();
+    assert_eq!(check["quantity_basis_warnings"], 1);
+    assert_eq!(check["passed"], false);
+    assert!(check["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["section"] == "quantity_basis_warnings" && e["handle"] == note));
+    let selection = s.measurement_selection().unwrap();
+    let rule = &selection.effective().unwrap().rules[0];
+    assert_eq!(rule.kind.as_deref(), Some("area"));
+    assert_eq!(rule.basis.as_deref(), Some("rule:sample-note"));
+    let mut invalid = selection.effective().unwrap().clone();
+    invalid.rules[0].basis = Some("rule:".into());
+    assert!(invalid.validate().is_err());
+    invalid.rules[0].basis = Some("geometric".into());
+    invalid.rules[0].kind = Some("unknown".into());
+    assert!(invalid.validate().is_err());
+}

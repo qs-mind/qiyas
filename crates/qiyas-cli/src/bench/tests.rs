@@ -585,3 +585,145 @@ fn manual_geometry_without_recognition_mapping_is_never_submitted() {
     assert_eq!(session.takeoff.items.len(), 1);
     assert!(submission::from_session(&session).unwrap().items.is_empty());
 }
+
+#[test]
+fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
+    let mut s = Session::new_blank(Path::new("unused.dxf"), 6);
+    let citation = json!({"source":"drawing","clause":"note: sample-factor"});
+    s.run_input(&json!({"type":"batch","commands":[
+        {"type":"draw","kind":"rectangle","a":[0,0],"b":[3,2]},
+        {"type":"draw","kind":"rectangle","a":[5,0],"b":[7,2]},
+        {"type":"define_object_type","definition":{"name":"Observed","geometry":"region","category":"test"}},
+        {"type":"recognition","kind":"define","rule":{"name":"observed","object_type":"Observed","match":{"entity_type":"LwPolyline","closed_region":true},"confidence":0.99}},
+        {"type":"recognition","kind":"apply"},
+        {"type":"measurement","kind":"set_method","scope":"project","method":{"name":"test","title":"Test","based_on":"drawing","source_note":"Visible dimensions","rules":[
+            {"id":"A","element_type":"Observed","unit":"m2","terms":[{"label":"Area","operation":"add","factors":["geometry.area"],"citation":citation}],"citation":citation},
+            {"id":"V","element_type":"Observed","unit":"m3","terms":[{"label":"Volume","operation":"add","factors":["geometry.area","0.25"],"citation":citation}],"citation":citation},
+            {"id":"R","element_type":"Observed","kind":"area","basis":"rule:sample-factor","unit":"m2","terms":[{"label":"Derived","operation":"add","factors":["geometry.length","2"],"citation":citation}],"citation":citation}
+        ]}},
+        {"type":"measurement","kind":"set_mappings","mappings":[
+            {"rule":"A","code":"TOTAL","description_en":"Area","description_ar":"Area","section":"Test","trade":"","unit":"m2","citation":citation}
+        ]}
+    ]}), Source::Ai).unwrap();
+    let submitted = submission::from_session(&s).unwrap();
+    let measured = s.measurement_report().unwrap();
+    assert_eq!(submitted.items.len(), 7);
+    for q in &measured.quantities {
+        let item = submitted
+            .items
+            .iter()
+            .find(|i| {
+                i.rule.as_deref() == Some(&q.rule)
+                    && i.source_objects == [format!("{:X}", q.object)]
+            })
+            .unwrap();
+        assert_eq!(item.quantity, q.quantity);
+        assert_eq!(item.dimension_lines, q.lines);
+        assert_eq!(item.citation.as_ref(), Some(&q.citation));
+        assert_eq!(
+            item.basis,
+            if q.rule == "R" {
+                "rule:sample-factor"
+            } else {
+                "geometric"
+            }
+        );
+        if q.rule == "V" {
+            assert_eq!(item.height_m, Some(0.25));
+        }
+    }
+    let total = submitted.items.iter().find(|i| i.id == "TOTAL").unwrap();
+    assert_eq!(total.quantity, 10.0);
+    assert_eq!(total.aggregate_of.len(), 2);
+    let gold: Vec<_> = submitted
+        .items
+        .iter()
+        .filter(|i| i.rule.as_deref() == Some("A"))
+        .cloned()
+        .collect();
+    let intact = score::score(&truth(gold.clone()), &submitted, None);
+    assert_eq!(intact.reported_aggregates, ["TOTAL"]);
+    let mut broken = submitted.clone();
+    broken
+        .items
+        .iter_mut()
+        .find(|i| i.id == "TOTAL")
+        .unwrap()
+        .dimension_lines
+        .pop();
+    let broken = score::score(&truth(gold), &broken, None);
+    assert!(broken.reported_aggregates.is_empty());
+    assert_eq!(broken.metrics.extras, intact.metrics.extras + 1);
+    let mut report = measured.clone();
+    report.selection.project.as_mut().unwrap().rules[2].basis = None;
+    let legacy = submission::from_report(&report, &s.recognition_evidence().unwrap()).unwrap();
+    assert!(legacy
+        .items
+        .iter()
+        .filter(|i| i.rule.as_deref() == Some("R"))
+        .all(|i| i.basis == "rule:R"));
+    assert!(!legacy.warnings.is_empty());
+    let mut evidence = s.recognition_evidence().unwrap();
+    evidence[0].state = qiyas_core::recognition::ReviewState::Rejected;
+    let partial = submission::from_report(&report, &evidence).unwrap();
+    assert!(!partial.items.iter().any(|i| i.id == "TOTAL"));
+    assert_eq!(partial.items.len(), 3);
+}
+
+#[test]
+fn aggregate_accounting_requires_complete_unique_components_and_never_reuses_matches() {
+    let a = item("a", "area", 6.0, "geometry");
+    let mut b = item("b", "area", 4.0, "geometry");
+    b.source_objects = vec!["20".into()];
+    let mut total = item("total", "area", 10.0, "geometry");
+    total.source_objects = vec!["10".into(), "20".into()];
+    total.aggregate_of = vec!["a".into(), "b".into()];
+    let submission = Submission {
+        items: vec![a.clone(), b.clone(), total.clone()],
+        ..Default::default()
+    };
+    let per_object = score::score(&truth(vec![a.clone(), b.clone()]), &submission, None);
+    assert_eq!(
+        (per_object.metrics.matched, per_object.metrics.extras),
+        (2, 0)
+    );
+    assert_eq!(per_object.reported_aggregates, ["total"]);
+    let grouped = score::score(&truth(vec![total.clone()]), &submission, None);
+    assert_eq!((grouped.metrics.matched, grouped.metrics.extras), (1, 0));
+    for gold in [
+        vec![a.clone(), total.clone()],
+        vec![total.clone(), a.clone()],
+    ] {
+        assert_eq!(
+            score::score(&truth(gold), &submission, None)
+                .metrics
+                .matched,
+            1
+        );
+    }
+    for mutation in 0..5 {
+        let mut broken = submission.clone();
+        match mutation {
+            0 => {
+                broken.items.remove(1);
+            }
+            1 => broken.items[2].quantity = 11.0,
+            2 => broken.items[2].basis = "rule:other".into(),
+            3 => broken.items[2].aggregate_of.push("a".into()),
+            _ => broken.items.push(a.clone()),
+        }
+        let scored = score::score(&truth(vec![a.clone(), b.clone()]), &broken, None);
+        assert!(scored.reported_aggregates.is_empty(), "mutation {mutation}");
+        assert!(scored.metrics.extras > 0);
+    }
+    let mut wrong_basis = submission.clone();
+    wrong_basis.items[0].id = "unrelated".into();
+    wrong_basis.items[0].description = "Unrelated".into();
+    wrong_basis.items[0].basis = "rule:different".into();
+    assert_eq!(
+        score::score(&truth(vec![a]), &wrong_basis, None)
+            .metrics
+            .matched,
+        0
+    );
+}

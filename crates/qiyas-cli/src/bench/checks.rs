@@ -96,6 +96,7 @@ pub fn predict(root: &Path, drawing: &Path, submission: &mut Submission) -> Resu
             }
         }
     }
+    let mut measured = comparison_items(&measured, &client);
     let unverified = client
         .iter()
         .filter(|c| !measured.iter().any(|m| same_sources(c, m)))
@@ -231,6 +232,32 @@ pub fn predict(root: &Path, drawing: &Path, submission: &mut Submission) -> Resu
     }
     Ok(())
 }
+// Compare at the client's granularity, or retain complete totals for missing-scope checks.
+// A dimension row and its verified total must never become two independent measurements.
+fn comparison_items(items: &[Item], client: &[Item]) -> Vec<Item> {
+    let mut omitted = std::collections::BTreeSet::new();
+    for index in 0..items.len() {
+        let Some(parts) = super::submission::aggregate_components(items, index) else {
+            continue;
+        };
+        if client.iter().any(|c| same_sources(c, &items[index]))
+            || !parts
+                .iter()
+                .any(|i| client.iter().any(|c| same_sources(c, &items[*i])))
+        {
+            omitted.extend(parts);
+        } else {
+            omitted.insert(index);
+        }
+    }
+    items
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !omitted.contains(i))
+        .map(|(_, item)| item.clone())
+        .collect()
+}
+
 fn same_sources(a: &Item, b: &Item) -> bool {
     let mut a_sources = a.source_objects.clone();
     a_sources.sort();
@@ -280,8 +307,13 @@ mod tests {
             json!({"items":[client]}).to_string(),
         )
         .unwrap();
+        let mut dimension = item.clone();
+        dimension.id = "dimension".into();
+        let mut total = item.clone();
+        total.id = "total".into();
+        total.aggregate_of = vec![dimension.id.clone()];
         let mut submission = Submission {
-            items: vec![item.clone()],
+            items: vec![dimension, total],
             ..Default::default()
         };
         predict(root, &drawing, &mut submission).unwrap();
@@ -293,6 +325,17 @@ mod tests {
             }]
         );
         client.quantity = 12.;
+        std::fs::write(
+            case.join("input-boq.json"),
+            json!({"items":[client]}).to_string(),
+        )
+        .unwrap();
+        submission.findings.clear();
+        predict(root, &drawing, &mut submission).unwrap();
+        assert!(
+            submission.findings.is_empty(),
+            "A correct total and its dimension must not create an alarm"
+        );
         client.unit = "m".into();
         std::fs::write(
             case.join("input-boq.json"),

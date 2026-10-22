@@ -14,6 +14,13 @@ use serde_json::Value;
 fn takeoff_kit_is_stable_bounded_and_generated_from_registry_metadata() {
     let kit = qiyas_core::takeoff_kit::kit();
     assert_eq!(kit, qiyas_core::takeoff_kit::kit());
+    let rule = &kit["commands"]["measurement.set_method"]["example"]["method"]["rules"][0];
+    assert_eq!(rule["kind"], "count");
+    assert_eq!(rule["basis"], "geometric");
+    assert!(kit["measurement_rules"]
+        .as_str()
+        .unwrap()
+        .contains("rule:<cited note name>"));
     let bytes = serde_json::to_vec(&kit).unwrap().len();
     assert!(
         bytes < qiyas_core::takeoff_kit::MAX_BYTES - 256,

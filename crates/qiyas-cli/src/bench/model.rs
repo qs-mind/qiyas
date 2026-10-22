@@ -36,6 +36,15 @@ pub struct Item {
     pub position: Option<[f64; 2]>,
     #[serde(default)]
     pub height_m: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation: Option<qiyas_core::measurement::Citation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimension_lines: Vec<qiyas_core::measurement::DimensionLine>,
+    /// IDs of the submitted dimension items making up this BOQ total.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aggregate_of: Vec<String>,
 }
 
 fn geometric() -> String {
@@ -175,4 +184,15 @@ pub fn kind_from_unit(text: &str) -> Result<String, String> {
             "cannot infer kind from unit {text}; supply JSON kind explicitly"
         )),
     }
+}
+
+pub fn objects(item: &Item) -> BTreeSet<String> {
+    item.source_objects
+        .iter()
+        .map(|s| {
+            u64::from_str_radix(s.trim_start_matches("0x"), 16)
+                .map(|n| format!("{n:X}"))
+                .unwrap_or_else(|_| s.clone())
+        })
+        .collect()
 }

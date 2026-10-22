@@ -12,7 +12,7 @@ pub(super) fn definition_commands() -> Vec<Value> {
 pub(super) fn mapping_commands() -> Vec<Value> {
     let citation = json!({"source":"drawing geometry","clause":"closed source boundary"});
     vec![
-        json!({"type":"measurement","kind":"set_method","scope":"settings","method":{"name":"observed-geometry","title":"Geometric measurement","based_on":"geometry","source_note":"No standard selected; quantities from the drawing","rules":[{"id":"surface","element_type":"ObservedRegion","unit":"m2","terms":[{"label":"source area","operation":"add","factors":["surface"],"citation":citation}],"citation":citation}]}}),
+        json!({"type":"measurement","kind":"set_method","scope":"settings","method":{"name":"observed-geometry","title":"Geometric measurement","based_on":"geometry","source_note":"No standard selected; quantities from the drawing","rules":[{"id":"surface","kind":"area","basis":"geometric","element_type":"ObservedRegion","unit":"m2","terms":[{"label":"source area","operation":"add","factors":["surface"],"citation":citation}],"citation":citation}]}}),
         json!({"type":"measurement","kind":"set_mappings","mappings":[{"rule":"surface","code":"surface-{id}","description_en":"Measured surface","description_ar":"Measured surface","section":"Observed","trade":"","unit":"m2","citation":citation}]}),
     ]
 }
@@ -199,6 +199,7 @@ impl Provider for Workflow {
                                 let rule = &mut command["method"]["rules"][0];
                                 rule["id"] = json!("surface");
                                 rule["unit"] = json!("m2");
+                                rule["kind"] = json!("area");
                                 rule["citation"]["clause"] = json!("closed source boundary");
                                 rule["terms"][0]["citation"] = rule["citation"].clone();
                                 rule["terms"][0]["label"] = json!("Measured surface");

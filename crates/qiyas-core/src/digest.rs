@@ -126,8 +126,15 @@ impl Session {
                 if let Some(EntityType::Table(table)) = entity {
                     let grid = crate::table::table_info(table);
                     for (index, cells) in grid.cells.iter().enumerate() {
-                        text_entries.push(json!({"section":"text_clusters","kind":"table_or_schedule","sheet":sheet.block,"handle":row.handle,"row":index,"cells":cells.iter().take(4).map(|c|short(c)).collect::<Vec<_>>(),"columns":cells.len()}));
+                        for (column, cell) in cells.iter().enumerate() {
+                            text_entries.push(json!({"section":"text_clusters","kind":"table_or_schedule","sheet":sheet.block,"handle":row.handle,"row":index,"column":column,"text":cell}));
+                        }
                     }
+                }
+            }
+            for schedule in self.read_tables(Some(&sheet.block)) {
+                for (column, heading) in schedule.columns.iter().enumerate() {
+                    text_entries.push(json!({"section":"schedule_columns","sheet":sheet.block,"handle":schedule.source,"schedule":schedule.name,"column":column,"heading":heading}));
                 }
             }
             let texts = self.read_text(Some(&sheet.block), None);
@@ -160,7 +167,34 @@ impl Session {
                             && text.at[1] >= r.bounds[0][1]
                             && text.at[1] <= r.bounds[1][1]
                     });
-                    text_entries.push(json!({"section":"text_clusters","cluster":cluster,"group_size":group_size,"kind":if grid {"possible_legend_or_schedule"} else if enclosed {"possible_room_label"} else {"text"},"sheet":sheet.block,"handle":text.handle,"at":text.at,"text":short(&text.text),"xref":text.xref}));
+                    let mut nearest: Vec<_> = rows
+                        .iter()
+                        .filter(|r| {
+                            r.handle != text.handle
+                                && (r.length.is_some()
+                                    || r.area.is_some()
+                                    || r.block_name.is_some())
+                        })
+                        .map(|r| {
+                            let dx = (r.bounds[0][0] - text.at[0])
+                                .max(0.0)
+                                .max(text.at[0] - r.bounds[1][0]);
+                            let dy = (r.bounds[0][1] - text.at[1])
+                                .max(0.0)
+                                .max(text.at[1] - r.bounds[1][1]);
+                            (dx.hypot(dy), r)
+                        })
+                        .collect();
+                    nearest
+                        .sort_by(|(a, ar), (b, br)| a.total_cmp(b).then(ar.handle.cmp(&br.handle)));
+                    let closest: Vec<_> = nearest.iter().take(3).map(|(distance, r)|
+                        json!({"handle":r.handle,"layer":r.layer,"distance_m":distance*self.drawing.units.to_metres(),"xref":r.xref})).collect();
+                    // Preserve complete note text across entries instead of hiding its scope
+                    // behind a 96-character preview. Proximity is evidence, not applicability.
+                    let chars: Vec<_> = text.text.chars().collect();
+                    for (part, chunk) in chars.chunks(600).enumerate() {
+                        text_entries.push(json!({"section":"text_clusters","cluster":cluster,"group_size":group_size,"kind":if grid {"possible_legend_or_schedule"} else if enclosed {"possible_room_label"} else {"text"},"sheet":sheet.block,"handle":text.handle,"at":text.at,"text":chunk.iter().collect::<String>(),"part":part,"closest":closest,"xref":text.xref}));
+                    }
                 }
             }
         }
@@ -324,6 +358,53 @@ impl Session {
         for warning in &report.warnings {
             detail.push(json!({"section":"measurement_warnings","message":short(warning)}));
         }
+        let mut basis_warnings = Vec::new();
+        if let Some(method) = report.selection.effective() {
+            let notes: Vec<_> = self
+                .info()
+                .sheets
+                .iter()
+                .flat_map(|sheet| self.read_text(Some(&sheet.block), None))
+                .collect();
+            for rule in &method.rules {
+                for term in rule
+                    .terms
+                    .iter()
+                    .chain(rule.bands.iter().flat_map(|b| &b.terms))
+                {
+                    for note in &notes {
+                        let citation = format!(
+                            "{} {} {} {}",
+                            rule.citation.source,
+                            rule.citation.clause,
+                            term.citation.source,
+                            term.citation.clause
+                        );
+                        let cited =
+                            citation
+                                .split(|c: char| !c.is_ascii_alphanumeric())
+                                .any(|word| {
+                                    word == note.handle.to_string()
+                                        || word
+                                            .eq_ignore_ascii_case(&format!("0x{:X}", note.handle))
+                                })
+                                || citation.contains(&note.text);
+                        if cited && !note.text.is_empty() {
+                            let unit = rule
+                                .bands
+                                .iter()
+                                .find(|b| b.terms.contains(term))
+                                .map_or(rule.unit.as_str(), |b| b.unit.as_str());
+                            for reason in note_basis_warnings(term, unit, &note.text) {
+                                basis_warnings.push(json!({"section":"quantity_basis_warnings","rule":rule.id,"handle":note.handle,"term":term.label,"message":reason}));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let basis_warning_count = basis_warnings.len();
+        detail.extend(basis_warnings);
         let verification = self.verify(expectations)?;
         let verification_ok = !verification.is_empty() && verification.iter().all(|v| v.passed);
         let unexplained = entries
@@ -334,7 +415,128 @@ impl Session {
             detail.push(json!({"section":"expectations","result":result}));
         }
         detail.extend(entries);
-        let overview = json!({"passed":unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
+        let overview = json!({"quantity_basis_warnings":basis_warning_count,"passed":basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
         Ok(page(overview, detail, offset))
+    }
+}
+
+fn unit_power(unit: &str) -> Option<i32> {
+    match unit
+        .trim()
+        .to_lowercase()
+        .replace('²', "2")
+        .replace('³', "3")
+        .as_str()
+    {
+        "m" | "mm" | "cm" | "ft" | "in" => Some(1),
+        "m2" | "mm2" | "cm2" | "ft2" | "sqm" => Some(2),
+        "m3" | "mm3" | "cm3" | "ft3" | "cum" => Some(3),
+        "pcs" => Some(0),
+        _ => None,
+    }
+}
+
+/// Check only dimensions explicitly evidenced by a cited note. Unitless text cannot prove
+/// applicability; the model must still choose the correct source geometry and interpretation.
+fn note_basis_warnings(
+    term: &crate::measurement::Term,
+    output_unit: &str,
+    note: &str,
+) -> Vec<String> {
+    use std::sync::LazyLock;
+    static UNITS: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)([0-9]+(?:\.[0-9]+)?)\s*(mm|cm|ft|in|m)([²³]|[23]\b|\b)").unwrap()
+    });
+    static UNIT_NAMES: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:mm|cm|ft|in|m)(?:[²³]|[23]\b|\b)").unwrap());
+    static PERCENT: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*%").unwrap());
+    let Some(output) = unit_power(output_unit) else {
+        return vec![];
+    };
+    let inputs: Vec<_> = term
+        .factors
+        .iter()
+        .filter_map(|f| match f.trim() {
+            "geometry.length" => Some(1),
+            "geometry.area" => Some(2),
+            "geometry.volume" => Some(3),
+            "geometry.count" => Some(0),
+            _ => None,
+        })
+        .collect();
+    let values: Vec<f64> = term
+        .factors
+        .iter()
+        .chain((term.timesing.trim() != "1").then_some(&term.timesing))
+        .filter_map(|f| f.parse().ok())
+        .collect();
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+    let mut warnings = BTreeSet::new();
+    for clause in note.split([';', '\n']) {
+        let units: Vec<_> = UNITS.captures_iter(clause).collect();
+        for capture in &units {
+            let power = capture
+                .get(3)
+                .filter(|p| !p.as_str().is_empty())
+                .map_or(1, |p| match p.as_str() {
+                    "2" | "²" => 2,
+                    _ => 3,
+                });
+            let scale: f64 = match capture[2].to_lowercase().as_str() {
+                "mm" => 0.001,
+                "cm" => 0.01,
+                "ft" => 0.3048,
+                "in" => 0.0254,
+                _ => 1.0,
+            };
+            let value = capture[1].parse::<f64>().unwrap() * scale.powi(power);
+            if inputs.len() == 1
+                && values.iter().any(|v| close(*v, value))
+                && inputs[0] + power != output
+            {
+                warnings.insert(format!("Cited factor {} has dimension {}; input dimension {} does not produce {}. Check the quantity basis and source handles.", &capture[0], power, inputs[0], output_unit));
+            }
+        }
+        for percent in PERCENT.captures_iter(clause) {
+            let factor = percent[1].parse::<f64>().unwrap() / 100.0;
+            let powers: BTreeSet<_> = UNIT_NAMES
+                .find_iter(clause)
+                .filter_map(|unit| unit_power(unit.as_str()))
+                .collect();
+            if powers.len() == 1
+                && !powers.contains(&output)
+                && values
+                    .iter()
+                    .any(|v| close(*v, factor) || close(*v, 1.0 + factor))
+            {
+                warnings.insert(format!("Cited percentage {} applies to dimension {}, but this rule produces {}. Check the quantity basis.", &percent[0], powers.first().unwrap(), output_unit));
+            }
+        }
+    }
+    warnings.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn note_units_check_dimensions_without_interpreting_domain_words() {
+        let mut term: crate::measurement::Term = serde_json::from_value(json!({
+            "label":"Derived", "operation":"add", "factors":["geometry.area","2"],
+            "citation":{"source":"drawing","clause":"note 24"}
+        }))
+        .unwrap();
+        assert_eq!(note_basis_warnings(&term, "m2", "Factor 2000 mm").len(), 1);
+        term.factors[0] = "geometry.length".into();
+        assert!(note_basis_warnings(&term, "m2", "Factor 2 m").is_empty());
+        term.factors = vec!["geometry.area".into()];
+        assert!(note_basis_warnings(&term, "m2", "Reference 1 m").is_empty());
+        term.factors = vec!["geometry.area".into(), "0.1".into()];
+        assert_eq!(note_basis_warnings(&term, "m2", "10% (m3)").len(), 1);
+        assert_eq!(note_basis_warnings(&term, "m2", "10% of 20 m³").len(), 1);
+        assert!(note_basis_warnings(&term, "m3", "10% of 20 m3").is_empty());
+        assert!(note_basis_warnings(&term, "m2", "10% working factor").is_empty());
+        assert!(note_basis_warnings(&term, "m2", "Value 20 m3, factor 5%").is_empty());
     }
 }

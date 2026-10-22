@@ -103,6 +103,12 @@ pub struct Rule {
     #[serde(default)]
     pub tolerance: Option<crate::discrepancy::Tolerance>,
     pub id: String,
+    /// Output quantity kind: count, length, area or volume. Omitted legacy rules use the unit.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// geometric, or rule:<cited note name>. Declare the interpretation, not the BOQ code.
+    #[serde(default)]
+    pub basis: Option<String>,
     /// Exact type and/or category selection. No trade names are built into the engine.
     #[serde(default)]
     pub element_type: Option<String>,
@@ -167,9 +173,9 @@ pub enum MethodScope {
 pub enum MeasurementCommand {
     /// Apply a validated method snapshot. Null clears this scope; project takes precedence.
     /// Quantities, dimension sheets and BOQ re-derive in the same undo step.
-    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
+    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","kind":"length","basis":"geometric","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
     #[schemars(extend("x-takeoff-step" = "4 apply selected method"))]
-    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"name":"observed","title":"Geometric quantities","based_on":"drawing","source_note":"Visible geometry; no standard selected","rules":[{"id":"count","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"source insert"}}],"citation":{"source":"drawing","clause":"source insert"}}]}}))]
+    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"name":"observed","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"count","kind":"count","basis":"geometric","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"insert"}}],"citation":{"source":"drawing","clause":"insert"}}]}}))]
     #[schemars(extend("x-takeoff-kit" = {"order":50,"example":1,"batch":40}))]
     SetMethod {
         scope: MethodScope,
@@ -178,7 +184,7 @@ pub enum MeasurementCommand {
     /// Replace BOQ mappings. Descriptions and grouping are data; quantities are always derived.
     #[schemars(example = json!({"kind":"set_mappings","mappings":[{"rule":"length","code":"L-{id}","description_en":"Measured {type}","description_ar":"Measured {type}","section":"Drawing quantities","trade":"","unit":"m","citation":{"source":"drawing","clause":"source path"}}]}))]
     #[schemars(extend("x-takeoff-step" = "5 map recognised elements to BOQ"))]
-    #[schemars(example = json!({"kind":"set_mappings","mappings":[{"rule":"count","code":"C","description_en":"Observed inserts","description_ar":"Observed inserts","section":"Drawing","trade":"","unit":"pcs","citation":{"source":"drawing","clause":"source insert"}}]}))]
+    #[schemars(example = json!({"kind":"set_mappings","mappings":[{"rule":"count","code":"C","description_en":"Observed inserts","description_ar":"Observed inserts","section":"Drawing","trade":"","unit":"pcs","citation":{"source":"drawing","clause":"insert"}}]}))]
     #[schemars(extend("x-takeoff-kit" = {"order":60,"example":1,"batch":50}))]
     SetMappings { mappings: Vec<Mapping> },
     /// Read the applied methods, quantities, generated BOQ and dimension sheets.
@@ -315,6 +321,24 @@ impl RuleSet {
             }
             text(&r.id)?;
             text(&r.unit)?;
+            if r.kind
+                .as_deref()
+                .is_some_and(|k| !matches!(k, "count" | "length" | "area" | "volume"))
+            {
+                return Err(invalid(
+                    "Measurement kind must be count, length, area or volume",
+                ));
+            }
+            if r.basis.as_deref().is_some_and(|b| {
+                b != "geometric"
+                    && !b
+                        .strip_prefix("rule:")
+                        .is_some_and(|n| !n.trim().is_empty())
+            }) {
+                return Err(invalid(
+                    "Measurement basis must be geometric or rule:<cited note name>",
+                ));
+            }
             citation(&r.citation)?;
             if !ids.insert(&r.id) {
                 return Err(invalid("Duplicate measurement rule id"));

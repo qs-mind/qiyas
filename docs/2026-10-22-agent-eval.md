@@ -73,6 +73,7 @@ codex exec --json --skip-git-repo-check --sandbox read-only --ignore-user-config
   -C /absolute/run \
   -c 'mcp_servers.qiyas.command="/absolute/qiyas-cli"' \
   -c 'mcp_servers.qiyas.args=["mcp","--drawing","/absolute/run/drawing.dxf","--workdir","/absolute/run"]' \
+  -c 'mcp_servers.qiyas.default_tools_approval_mode="approve"' \
   -c 'forced_login_method="chatgpt"' -c project_doc_max_bytes=0 \
   -m gpt-6.1-sol -c 'model_reasoning_effort="medium"' '<plain take-off request>'
 ```

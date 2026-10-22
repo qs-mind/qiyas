@@ -1983,3 +1983,32 @@ fn deliverable_export_preserves_its_kind_and_writes_through_the_registry() {
     }
     assert!(call(&mut session,EXECUTE,json!({"op":"run","args":{"command":{"type":"deliverable.export","kind":"boq","format":"pdf","path":"../escape.pdf"}}})).is_err());
 }
+
+#[test]
+fn takeoff_self_check_preserves_unicode_note_unit_dimensions() {
+    let mut s = Session::new_blank(std::path::Path::new("unused.dxf"), 6);
+    let added = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"text","at":[0,0],"height":0.1,"value":"10% of 20 m³"
+        }}}),
+    )
+    .unwrap();
+    let note = added["added"][0].as_u64().unwrap();
+    let citation = json!({"source":"drawing","clause":format!("note {note}")});
+    call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{
+        "type":"define_object_type","definition":{"name":"Observed","geometry":"region","category":"Test"}
+    }}})).unwrap();
+    for (unit, kind, warnings) in [("m3", "volume", 0), ("m2", "area", 1)] {
+        call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{
+            "type":"measurement","kind":"set_method","scope":"project","method":{
+                "name":"test","title":"Test","based_on":"drawing","source_note":"Test",
+                "rules":[{"id":"scaled","element_type":"Observed","kind":kind,"basis":"rule:sample-note","unit":unit,
+                    "terms":[{"label":"Scaled","operation":"add","factors":["geometry.area","0.1"],"citation":citation}],"citation":citation}]
+            }
+        }}})).unwrap();
+        let checked = call(&mut s, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
+        assert_eq!(checked["quantity_basis_warnings"], warnings);
+    }
+}

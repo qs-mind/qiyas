@@ -61,6 +61,7 @@ fn adapt(kit: &Value) -> Value {
             }
             (_, Some("set_method")) => {
                 command["method"]["rules"][0]["unit"] = json!("m2");
+                command["method"]["rules"][0]["kind"] = json!("area");
                 command["method"]["rules"][0]["terms"][0]["factors"] = json!(["geometry.area"]);
             }
             (_, Some("set_mappings")) => {
@@ -87,10 +88,17 @@ fn assert_artifacts(run: &Path) {
     ] {
         assert!(run.join(name).is_file(), "{name}");
     }
-    assert_eq!(read(&run.join("takeoff.json"))["items"][0]["quantity"], 6.0);
+    let submission = read(&run.join("takeoff.json"));
+    assert_eq!(submission["items"].as_array().unwrap().len(), 2);
+    assert_eq!(submission["items"][0]["quantity"], 6.0);
+    assert_eq!(submission["items"][1]["quantity"], 6.0);
+    assert_eq!(
+        submission["items"][1]["aggregate_of"],
+        json!([submission["items"][0]["id"]])
+    );
     assert_eq!(
         read(&run.join("end-report.json"))["facts"]["submitted_items"],
-        1
+        2
     );
 }
 
@@ -259,6 +267,38 @@ fn fake_agent_is_scored_and_truth_reads_are_excluded() {
             assert_eq!(case["score"]["metrics"]["passed"], 1);
             assert_eq!(report["metrics"]["matched"], 1);
         }
+        let original_takeoff = fs::read(run.join("takeoff.json")).unwrap();
+        let replay = dir.path().join(if contaminated {
+            "replay-contaminated"
+        } else {
+            "replay-clean"
+        });
+        let combined = Path::new(report["report_directory"].as_str().unwrap()).join("report.json");
+        let rescored = Command::new(CLI)
+            .args(["--json", "bench", "--root"])
+            .arg(dir.path())
+            .args(["rescore-agent", "--report"])
+            .arg(&combined)
+            .arg("--output")
+            .arg(&replay)
+            .output()
+            .unwrap();
+        assert!(
+            rescored.status.success(),
+            "{}",
+            String::from_utf8_lossy(&rescored.stderr)
+        );
+        let rescored: Value = serde_json::from_slice(&rescored.stdout).unwrap();
+        assert_eq!(
+            rescored["metrics"]["matched"],
+            if contaminated { 0 } else { 1 }
+        );
+        assert_eq!(rescored["metrics"]["extras"], 0);
+        assert_eq!(
+            fs::read(run.join("takeoff.json")).unwrap(),
+            original_takeoff
+        );
+        assert_eq!(rescored["reports"][0]["score"].is_null(), contaminated);
     }
 }
 

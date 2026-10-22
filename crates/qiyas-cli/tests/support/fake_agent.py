@@ -51,6 +51,7 @@ for command in batch["commands"]:
     elif kind == "set_method":
         rule = command["method"]["rules"][0]
         rule["unit"] = "m2"
+        rule["kind"] = "area"
         rule["terms"][0]["factors"] = ["geometry.area"]
     elif kind == "set_mappings":
         command["mappings"][0]["unit"] = "m2"

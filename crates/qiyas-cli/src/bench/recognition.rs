@@ -114,7 +114,7 @@ fn measure_with_scope(
         .objects(&ObjectFilter::default())
         .map_err(|e| e.to_string())?;
     let evidence = session.recognition_queue(None).map_err(|e| e.to_string())?;
-    for measurement in recipe.measurements {
+    for (measurement_index, measurement) in recipe.measurements.into_iter().enumerate() {
         let found: Vec<_> = objects
             .iter()
             .filter(|o| o.instance.type_name == measurement.object_type && o.valid)
@@ -156,7 +156,7 @@ fn measure_with_scope(
                     })
                     .collect();
             }
-            let item = Item {
+            let mut item = Item {
                 id: measurement.id.clone(),
                 description: measurement.description.clone(),
                 kind: measurement.kind.clone(),
@@ -172,6 +172,9 @@ fn measure_with_scope(
                 ..Default::default()
             };
             super::model::validate_item(&item)?;
+            if measurement.aggregate || measurement.group_by.is_some() {
+                item.id = format!("dimension:{}:{:X}", measurement_index, object.instance.id);
+            }
             if let Some(property) = &measurement.group_by {
                 let group = object
                     .instance
@@ -184,25 +187,11 @@ fn measure_with_scope(
                 items.push(item);
             }
         }
-        for (_, mut group) in groups {
-            let mut total = group.remove(0);
-            for item in group {
-                total.quantity += item.quantity;
-                total.source_objects.extend(item.source_objects);
-            }
-            total.source_objects.sort();
-            total.source_objects.dedup();
-            submission.items.push(total);
+        for (_, group) in groups {
+            append_group(&mut submission, group, &measurement.id);
         }
         if measurement.aggregate && !items.is_empty() {
-            let mut total = items.remove(0);
-            for item in items {
-                total.quantity += item.quantity;
-                total.source_objects.extend(item.source_objects);
-            }
-            total.source_objects.sort();
-            total.source_objects.dedup();
-            submission.items.push(total);
+            append_group(&mut submission, items, &measurement.id);
         } else {
             submission.items.extend(items);
         }
@@ -218,6 +207,21 @@ fn measure_with_scope(
     }
     submission.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     Ok(submission)
+}
+
+fn append_group(submission: &mut Submission, items: Vec<Item>, id: &str) {
+    let mut total = items[0].clone();
+    total.id = id.into();
+    total.quantity = items.iter().map(|i| i.quantity).sum();
+    total.source_objects = items
+        .iter()
+        .flat_map(|i| i.source_objects.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    total.aggregate_of = items.iter().map(|i| i.id.clone()).collect();
+    submission.items.extend(items);
+    submission.items.push(total);
 }
 
 // Shared recipes may use selectors and extracted evidence, never object handles, literal

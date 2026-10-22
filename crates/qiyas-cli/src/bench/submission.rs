@@ -1,9 +1,10 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
 use serde_json::Value;
 
-use super::model::{kind_from_unit, validate_item, Item, Submission};
+use super::model::{kind_from_unit, objects, unit, validate_item, Item, Submission};
 
 pub fn read(path: &Path) -> Result<Submission, String> {
     let mut submission = if path
@@ -144,48 +145,203 @@ fn excel(path: &Path) -> Result<Submission, String> {
     })
 }
 
-/// Submit only generated BOQ mappings whose dimension lines cite accepted recognised elements.
-/// Raw manual measurements and geometry candidates are intentionally absent.
+/// Submit measured elements and retain generated BOQ totals with their exact components.
+/// This boundary takes only prediction artefacts, never benchmark truth.
 pub fn from_session(session: &qiyas_core::Session) -> Result<Submission, String> {
-    let report = session.measurement_report().map_err(|e| e.to_string())?;
-    let evidence = session.recognition_evidence().map_err(|e| e.to_string())?;
+    from_report(
+        &session.measurement_report().map_err(|e| e.to_string())?,
+        &session.recognition_evidence().map_err(|e| e.to_string())?,
+    )
+}
+
+pub fn from_report(
+    report: &qiyas_core::measurement::MeasurementReport,
+    evidence: &[qiyas_core::recognition::Candidate],
+) -> Result<Submission, String> {
     let mut submission = Submission {
         warnings: report.warnings.clone(),
         ..Default::default()
     };
+    for q in &report.quantities {
+        let Some(candidate) = evidence.iter().find(|c| {
+            c.object == Some(q.object) && c.state == qiyas_core::recognition::ReviewState::Accepted
+        }) else {
+            continue;
+        };
+        let rule = report
+            .selection
+            .effective()
+            .and_then(|m| m.rules.iter().find(|r| r.id == q.rule));
+        let kind = rule
+            .and_then(|r| r.kind.clone())
+            .map(Ok)
+            .unwrap_or_else(|| kind_from_unit(&q.unit))?;
+        let basis = rule
+            .and_then(|r| r.basis.clone())
+            .unwrap_or_else(|| legacy_basis(q, &kind));
+        if rule.is_none_or(|r| r.basis.is_none()) && basis != "geometric" {
+            submission.warnings.push(format!(
+                "{} has no declared basis; retained as {} from its saved recipe",
+                q.rule, basis
+            ));
+        }
+        let height_m = geometric_height(q, &kind);
+        submission.items.push(Item {
+            id: format!("dimension:{:X}:{}:{}", q.object, q.rule, q.unit),
+            description: q
+                .lines
+                .first()
+                .map(|l| l.label.clone())
+                .unwrap_or_else(|| q.rule.clone()),
+            kind,
+            unit: q.unit.clone(),
+            quantity: q.quantity,
+            source_objects: vec![format!("{:X}", candidate.handle)],
+            basis,
+            height_m,
+            rule: Some(q.rule.clone()),
+            citation: Some(q.citation.clone()),
+            dimension_lines: q.lines.clone(),
+            ..Default::default()
+        });
+    }
     for item in &report.items {
-        let mut sources = std::collections::BTreeSet::new();
-        let mut valid = !item.lines.is_empty();
-        for line in item.lines.iter().filter(|l| l.included) {
-            for source in &line.sources {
-                let candidate = evidence.iter().find(|c| {
-                    c.object == Some(source.handle)
-                        && c.state == qiyas_core::recognition::ReviewState::Accepted
-                });
-                let Some(candidate) = candidate else {
-                    valid = false;
-                    continue;
-                };
-                sources.insert(format!("{:X}", candidate.handle));
+        // Consume whole dimension recipes, including excluded deductions and rounding lines.
+        let mut remaining = item.lines.clone();
+        let mut components = Vec::new();
+        for q in &submission.items {
+            if !q.aggregate_of.is_empty() || q.dimension_lines.is_empty() {
+                continue;
+            }
+            let mut rest = remaining.clone();
+            let fits = q.dimension_lines.iter().all(|line| {
+                if let Some(i) = rest.iter().position(|l| l == line) {
+                    rest.remove(i);
+                    true
+                } else {
+                    false
+                }
+            });
+            if fits {
+                remaining = rest;
+                components.push(q.clone());
             }
         }
-        if !valid || sources.is_empty() {
+        if !remaining.is_empty() || components.is_empty() {
             submission.warnings.push(format!(
-                "{} has no accepted recognised source; not submitted",
+                "{} lacks complete accepted dimension sources; not submitted",
                 item.code
             ));
             continue;
         }
+        let first = &components[0];
+        let homogeneous = components
+            .iter()
+            .all(|q| q.kind == first.kind && q.basis == first.basis);
+        let sources: std::collections::BTreeSet<_> = components
+            .iter()
+            .flat_map(|q| q.source_objects.clone())
+            .collect();
         submission.items.push(Item {
             id: item.code.clone(),
             description: item.description_en.clone(),
-            kind: kind_from_unit(&item.unit)?,
+            kind: if homogeneous {
+                first.kind.clone()
+            } else {
+                kind_from_unit(&item.unit)?
+            },
+            basis: if homogeneous {
+                first.basis.clone()
+            } else {
+                format!("rule:mixed:{}", item.code)
+            },
             unit: item.unit.clone(),
             quantity: item.quantity,
             source_objects: sources.into_iter().collect(),
-            basis: "geometric".into(),
+            aggregate_of: components.iter().map(|q| q.id.clone()).collect(),
+            dimension_lines: item.lines.clone(),
             ..Default::default()
         });
     }
     Ok(submission)
+}
+
+// Legacy artefacts did not declare basis. Only direct geometry and an explicit area-times-
+// height recipe establish geometric quantities. Other interpretations keep their own rule ID;
+// no drawing-note name or benchmark label is guessed.
+fn legacy_basis(q: &qiyas_core::measurement::MeasuredQuantity, kind: &str) -> String {
+    let direct = q.lines.len() == 1
+        && q.lines[0].included
+        && q.lines[0].operation == qiyas_core::measurement::Operation::Add
+        && q.lines[0].source_expressions == ["1".to_string(), format!("geometry.{kind}")];
+    if direct || geometric_height(q, kind).is_some() {
+        "geometric".into()
+    } else {
+        format!("rule:{}", q.rule)
+    }
+}
+
+fn geometric_height(q: &qiyas_core::measurement::MeasuredQuantity, kind: &str) -> Option<f64> {
+    let line = q.lines.first()?;
+    if kind != "volume"
+        || q.lines.len() != 1
+        || !line.included
+        || line.operation != qiyas_core::measurement::Operation::Add
+        || line.source_expressions.len() != 3
+        || line.source_expressions[0] != "1"
+        || line.source_expressions[1] != "geometry.area"
+    {
+        return None;
+    }
+    // The saved factor, not a truth quantity or ratio, is the cited height in metres.
+    let height = line.source_expressions[2].parse::<f64>().ok()?;
+    (height.is_finite() && height > 0.0).then_some(height)
+}
+
+/// An aggregate is redundant only when every complete dimension item is present and the
+/// quantities, sources and dimension lines reproduce it. A label alone earns no exemption.
+pub fn aggregate_components(items: &[Item], index: usize) -> Option<Vec<usize>> {
+    let aggregate = &items[index];
+    if aggregate.aggregate_of.is_empty() {
+        return None;
+    }
+    let mut components = Vec::new();
+    let mut sources = BTreeSet::new();
+    let mut lines = aggregate.dimension_lines.clone();
+    let mut total = 0.0;
+    for id in &aggregate.aggregate_of {
+        let found: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| &q.id == id)
+            .collect();
+        if found.len() != 1 {
+            return None;
+        }
+        let (i, q) = found[0];
+        if i == index
+            || components.contains(&i)
+            || !q.aggregate_of.is_empty()
+            || q.kind != aggregate.kind
+            || q.basis != aggregate.basis
+            || unit(&q.unit) != unit(&aggregate.unit)
+            || q.source_objects.is_empty()
+        {
+            return None;
+        }
+        for line in &q.dimension_lines {
+            let at = lines.iter().position(|l| l == line)?;
+            lines.remove(at);
+        }
+        sources.extend(objects(q));
+        total += q.quantity;
+        components.push(i);
+    }
+    if !lines.is_empty()
+        || sources != objects(aggregate)
+        || (total - aggregate.quantity).abs() > 1e-10 * total.abs().max(1.0)
+    {
+        return None;
+    }
+    Some(components)
 }

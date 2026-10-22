@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use qiyas_core::Session;
 use serde::{Deserialize, Serialize};
 
-use super::model::{unit, Finding, Item, Submission, Truth};
+use super::model::{objects, unit, Finding, Item, Submission, Truth};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metrics {
@@ -87,20 +87,10 @@ pub struct CaseScore {
     pub rates: serde_json::Value,
     pub items: Vec<ItemScore>,
     pub extra_items: Vec<String>,
+    pub reported_aggregates: Vec<String>,
     pub error_classes: serde_json::Value,
     pub elapsed_ms: f64,
     pub warnings: Vec<String>,
-}
-
-fn objects(item: &Item) -> BTreeSet<String> {
-    item.source_objects
-        .iter()
-        .map(|s| {
-            u64::from_str_radix(s.trim_start_matches("0x"), 16)
-                .map(|n| format!("{n:X}"))
-                .unwrap_or_else(|_| s.clone())
-        })
-        .collect()
 }
 
 fn description(text: &str) -> String {
@@ -253,6 +243,11 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         truth_items: truth.items.len(),
         ..Default::default()
     };
+    let aggregates: std::collections::BTreeMap<_, _> = (0..submission.items.len())
+        .filter_map(|i| {
+            super::submission::aggregate_components(&submission.items, i).map(|c| (i, c))
+        })
+        .collect();
     let mut used = BTreeSet::new();
     let mut items = Vec::new();
     for gold in &truth.items {
@@ -267,8 +262,24 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
             traceable: false,
             trace_reason: "missing item".into(),
         };
-        if let Some((i, mode)) = match_item(gold, &truth.items, &submission.items, &used) {
+        // Prefer dimension items. Grouped truth can still match a complete BOQ total, but
+        // neither a total nor any of its components can earn a second match.
+        let mut excluded = used.clone();
+        excluded.extend(aggregates.keys());
+        let matched = match_item(gold, &truth.items, &submission.items, &excluded).or_else(|| {
+            let mut excluded = used.clone();
+            excluded.extend((0..submission.items.len()).filter(|i| {
+                aggregates
+                    .get(i)
+                    .is_none_or(|parts| parts.iter().any(|p| used.contains(p)))
+            }));
+            match_item(gold, &truth.items, &submission.items, &excluded)
+        });
+        if let Some((i, mode)) = matched {
             used.insert(i);
+            if let Some(parts) = aggregates.get(&i) {
+                used.extend(parts);
+            }
             let s = &submission.items[i];
             metrics.matched += 1;
             row.submitted = Some(s.quantity);
@@ -311,7 +322,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         .items
         .iter()
         .enumerate()
-        .filter(|(i, _)| !used.contains(i))
+        .filter(|(i, _)| !used.contains(i) && !aggregates.contains_key(i))
         .map(|(_, i)| {
             if i.id.is_empty() {
                 i.description.clone()
@@ -369,6 +380,10 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         metrics,
         items,
         extra_items,
+        reported_aggregates: aggregates
+            .keys()
+            .map(|i| submission.items[*i].id.clone())
+            .collect(),
         error_classes: error_classes.into(),
         elapsed_ms: submission.elapsed_ms,
         warnings: submission.warnings.clone(),
