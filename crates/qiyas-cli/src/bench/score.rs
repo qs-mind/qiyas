@@ -219,6 +219,14 @@ fn match_item(
             return Some((candidates[0], mode));
         }
         if candidates.len() > 1 {
+            // Several items on the same objects (a base volume and its allowance): pick the one
+            // whose own words (id, basis, description) share the most words with the gold item's,
+            // when exactly one leads. Never the quantity; a tie stays unmatched.
+            if mode.starts_with("handles") {
+                if let Some(i) = closest_by_words(gold, submitted, &candidates) {
+                    return Some((i, mode));
+                }
+            }
             return None;
         }
     }
@@ -489,4 +497,40 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
 /// The part of a basis before ':' (`rule:lining-height` -> `rule`).
 fn basis_category(basis: &str) -> &str {
     basis.split(':').next().unwrap_or("").trim()
+}
+
+/// Words of three letters or more in an item's id, basis and description, without the
+/// structural words every submission repeats.
+fn words(texts: &[&str]) -> BTreeSet<String> {
+    const COMMON: [&str; 6] = ["rule", "dimension", "geometric", "item", "the", "and"];
+    texts
+        .iter()
+        .flat_map(|t| t.split(|c: char| !c.is_alphanumeric()))
+        .map(|w| w.to_lowercase())
+        .filter(|w| {
+            w.len() >= 3 && !w.chars().all(|c| c.is_ascii_digit()) && !COMMON.contains(&w.as_str())
+        })
+        .collect()
+}
+
+/// The single candidate sharing the most words with `gold`, if one leads with at least one.
+fn closest_by_words(gold: &Item, submitted: &[Item], candidates: &[usize]) -> Option<usize> {
+    let target = words(&[&gold.description, &gold.basis]);
+    let mut scored: Vec<(usize, usize)> = candidates
+        .iter()
+        .map(|&i| {
+            let s = &submitted[i];
+            let shared = words(&[&s.id, &s.basis, &s.description])
+                .intersection(&target)
+                .count();
+            (shared, i)
+        })
+        .collect();
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+    match scored.as_slice() {
+        [(best, i), rest @ ..] if *best > 0 && rest.first().is_none_or(|(next, _)| next < best) => {
+            Some(*i)
+        }
+        _ => None,
+    }
 }

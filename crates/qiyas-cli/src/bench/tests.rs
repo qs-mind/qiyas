@@ -897,3 +897,56 @@ fn description_matching_ignores_a_leading_item_number_only() {
         0
     );
 }
+
+#[test]
+fn same_object_candidates_are_told_apart_by_words_never_quantity() {
+    let mut volume = item("volume-1", "volume", 1.9125, "geometry");
+    volume.description = "Slab volume".into();
+    volume.basis = "geometric".into();
+    volume.source_objects = vec!["34".into()];
+    let mut allowance = item("judgement-1", "volume", 2.10375, "judgement");
+    allowance.description = "Provisional excavation with 10% working allowance".into();
+    allowance.basis = "rule:working-allowance".into();
+    allowance.source_objects = vec!["34".into()];
+    let mut base = item(
+        "dimension:34:material_volume:m3",
+        "volume",
+        1.9125,
+        "geometry",
+    );
+    base.description = "1 Reception".into();
+    base.basis = "rule:material depth".into();
+    base.source_objects = vec!["34".into()];
+    let mut extra = item(
+        "dimension:34:material_allowance:m3",
+        "volume",
+        2.10375,
+        "judgement",
+    );
+    extra.description = "1 Reception".into();
+    extra.basis = "rule:provisional allowance".into();
+    extra.source_objects = vec!["34".into()];
+    let sub = Submission {
+        items: vec![extra, base],
+        ..Default::default()
+    };
+    let scored = score::score(&truth(vec![volume, allowance]), &sub, None);
+    assert_eq!(scored.metrics.matched, 2);
+    assert_eq!(scored.metrics.passed, 2);
+    // Identical words leave the tie unmatched.
+    let mut a = item("a", "area", 5.0, "geometry");
+    a.source_objects = vec!["9".into()];
+    let mut b = a.clone();
+    b.id = "b".into();
+    let mut gold = item("g", "area", 5.0, "geometry");
+    gold.source_objects = vec!["9".into()];
+    gold.description = "Unrelated words".into();
+    let tie = Submission {
+        items: vec![a, b],
+        ..Default::default()
+    };
+    assert_eq!(
+        score::score(&truth(vec![gold]), &tie, None).metrics.matched,
+        0
+    );
+}
