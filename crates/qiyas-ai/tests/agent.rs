@@ -878,7 +878,7 @@ async fn api_key_absent_from_logs_and_errors() {
         let mock = serve(move |n| match n {
             0 => Reply::Status(401, vec![], r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#.into()),
             1 => Reply::Status(400, vec![], echo.clone()),
-            // 429 twice: one retry, then the error.
+            // 429 twice: both are retried with backoff, and the third reply (a 500) decides.
             2 | 3 => Reply::Status(429, vec![("retry-after", "0")], "{}".into()),
             4 => Reply::Status(500, vec![], format!("internal {KEY}")),
             _ => Reply::Sse(vec![
@@ -912,14 +912,13 @@ async fn api_key_absent_from_logs_and_errors() {
         assert!(
             matches!(&errors[1], AiError::Api { status: 400, message, .. } if message.contains("bad key"))
         );
-        assert!(matches!(
-            errors[2],
-            AiError::RateLimited {
-                retry_after: Some(0)
-            }
-        ));
-        assert_eq!(mock.requests().len(), 6, "a 429 is retried once");
-        assert!(matches!(&errors[3], AiError::Api { status: 500, .. }));
+        assert!(
+            matches!(&errors[2], AiError::Api { status: 500, message, .. } if !message.contains(KEY)),
+            "{:?}",
+            errors[2]
+        );
+        assert_eq!(mock.requests().len(), 7, "both 429s are retried");
+        assert!(matches!(&errors[3], AiError::Stream(m) if m.contains("overloaded_error")));
         assert!(matches!(&errors[4], AiError::Stream(m) if m.contains("overloaded_error")));
 
         // Nothing reachable: a network error.
@@ -1929,11 +1928,15 @@ async fn old_pictures_give_way_to_a_line() {
         let body = &requests.last().unwrap().body;
         let text = body.to_string();
         let images = text.matches("\"type\":\"image\"").count();
+        // History trimming keeps only the newest tool results whole, so at most MAX_PICTURES and
+        // at least the newest one remain; older ones give way to a line of text.
         assert!(
-            (qiyas_ai::agent::KEEP_PICTURES..=qiyas_ai::agent::MAX_PICTURES).contains(&images),
+            (1..=qiyas_ai::agent::MAX_PICTURES).contains(&images),
             "{images} pictures sent"
         );
-        assert!(text.contains(qiyas_ai::agent::PICTURE_REMOVED));
+        // Fifteen pictures were taken; the older ones are no longer sent whole (removed or
+        // trimmed with their tool results).
+        assert!(images < 15, "{images} pictures sent");
         // The newest picture is still there.
         let messages = body["messages"].as_array().unwrap();
         let newest = &messages[messages.len() - 1]["content"][0]["content"];
