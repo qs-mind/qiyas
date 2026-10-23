@@ -1987,23 +1987,25 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
   `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and
-  `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), effort,
+  `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), per-profile effort,
   MCP on/off, port and token, language, theme. Loading an old flat model and base URL moves them
   into the selected provider's profile and writes the new shape; the other provider keeps its
   defaults. Switching providers in Settings switches the edited profile and clears any unsaved
   key text. The model is chosen from a list (`src/shell/ModelPicker.tsx`, IPC
   `ai_models`, `qiyas-ai/src/models.rs`): Anthropic's Models API (`GET /v1/models`, paged with
-  `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with the key from the
-  keychain; the saved model stays listed, a filter shows past 12 models, "Other…" takes a typed id,
+  `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with a key explicitly typed for that address or its saved, address-bound
+  keychain entry; a filter shows past 12 models, "Other…" takes a typed id,
   and when the service can't be asked Claude's built-in list shows (`CLAUDE_MODELS`) with why.
-  A service list missing the saved model shows a warning without blocking Save; an empty
+  A readable service list missing the typed/saved model blocks Save; models explicitly lacking
+  tools or image input are hidden. Missing capability metadata stays unknown (no paid probe). An empty
   compatible profile can be saved, but sending asks for a model. Both providers explain a
-  missing model with the service and model name and direct the user to Settings, in English
-  or Arabic in the window.
+  missing model with a stable error code and direct the user to Settings, in English
+  or Arabic in the window. The support log keeps the service and model details.
 - The API key is never in a file: it lives in the OS keychain (service `qiyas`, account = the
   provider plus normalized complete base URL, including path), is set only in the Settings dialog,
   and is never sent back to the window. Legacy entries migrate only to their saved address before
-  that address changes. Draft model discovery requires saving the address first; it never reads
+  that address changes. Draft model discovery can use a key explicitly typed for that address; without one it requires
+  saving the address first. It never reads
   a saved key for a different destination. Remote endpoints require HTTPS; HTTP is accepted only
   for loopback. Malformed endpoints are rejected before credentials are fetched, and HTTP
   redirects are disabled for provider requests.
@@ -2147,8 +2149,10 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   signature) is kept by call id in the provider and sent back on that call. Each request asks for
   the effort (`reasoning_effort`: low, medium, high for high/xhigh/max), the answer's length
   (`max_completion_tokens`, else `max_tokens`) and the usage (`stream_options.include_usage`); a
-  400 naming one of those (`OPTIONAL_FIELDS`) drops it, sends again, and leaves it out for the rest
-  of the conversation. Cached and reasoning tokens are read into `Usage` and the log ("(n
+  400 explicitly refusing an unsupported parameter can drop that parameter and retry. Output
+  caps always remain: an unsupported `max_completion_tokens` switches to `max_tokens`; a range
+  error or refusal of both names stops with `ai.error.output_limit`. Cap-name choices are not
+  restored across conversations. Cached and reasoning tokens are read into `Usage` and the log ("(n
   thinking)"); reasoning accepts both `usage.completion_tokens_details.reasoning_tokens` and
   `usage.reasoning_tokens`. Each actual request, including optional-field retries, logs
   `sent:` with the controls present in its body. Both providers turn a missing-model reply
@@ -2548,3 +2552,53 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Delete all conversations opens a confirmation naming the count; Cancel or Escape preserves
   the saved chats. Single-conversation deletion is unchanged.
 - Report and evidence: `docs/2026-10-23-qiyas-goal-F.md`. No new dependencies or licence changes.
+
+
+## Goal E: providers and clear errors (23 October 2026)
+
+- Provider failures return stable `ai.error.*` codes with plain English `message` and Arabic
+  `message_ar`. `AiError::for_window` serializes this envelope in the existing `ai:done.error`
+  string; model-list failures use the same envelope. `src/i18n/errors.ts` recognizes the code
+  before legacy text patterns. Both languages live in `src/i18n/en.json` and `ar.json`; Rust
+  includes those catalogs. Raw, scrubbed diagnostics remain in the support log.
+- Billing/credit/quota failures never retry, even when delivered as 400/403/429/5xx or a stream
+  error. Classification sees the complete scrubbed response, before support-log clipping. Temporary 429, 5xx, connection failures and interrupted/overloaded streams use bounded
+  backoff. Each wait logs `RETRY`, the reason, wait and available partial text, and emits
+  `retrying {seconds, code, discard_partial}`. Unfinished text is removed before a repeated
+  response; no tool from an unfinished response executes. The existing retry after an answer
+  uses all its room thinking also emits the notice. Cancellation interrupts the wait.
+  Strict-budget providers disable automatic retries; model discovery does too. HTTP requests
+  now have a 10-minute total deadline in addition to connect/read timeouts.
+- A context-limit refusal gets at most one smaller request. Large tool-result text and pictures
+  are shortened, with explicit reread markers and intact call/result pairing and user words.
+  If no space can be made, or the retry fails, the translated error asks for a new chat. Normal
+  compaction, prompts and drafting workflow are unchanged. A provider error never emits a
+  take-off end report into a drawing chat; it leaves the already completed work in place.
+- Model discovery accepts a draft key only for the explicitly typed address, after endpoint
+  validation. Editing that address clears the draft key. Without a draft key, Goal A's saved
+  address check still happens before keychain access. Discovery refreshes after typing a key.
+  Save checks a typed model against a readable filtered list. Unknown capability metadata is
+  kept; explicit lack of tools or vision is hidden. No model invocation tests run on Save.
+- Profiles keep independent effort: new Anthropic profiles default to medium, compatible ones
+  to low. None omits the effort field (the service default); compatible services show only
+  none/low/medium/high. Old global effort migrates only into the selected profile; old
+  compatible xhigh/max becomes its previous effective value, high. Headless eval reads the
+  selected profile too. Changing effort applies to the next message without clearing the chat.
+  The legacy top-level effort remains for old-file compatibility.
+- Streaming tokens append in memory without copying the full conversation. Checkpoints are
+  made at response/step boundaries, including errors and cancellation. Desktop progress saves
+  occur on the opening message and completed steps. The existing AI lock still serializes
+  file writes with conversation reset/deletion, avoiding stale or overlapping writes.
+  Final conversation saves retain the existing recovery contract.
+- Partial compatible-provider usage objects update only the supplied counters, including
+  cached/reasoning tokens and DeepSeek cache aliases. Output limits are never dropped merely
+  because a value error names the field.
+- Settings offers **Replace token on Save**. It generates 16 random bytes locally, updates the
+  displayed setup snippets, and only Save persists it and restarts MCP. Cancel keeps the old
+  token. Existing MCP address/origin restrictions remain in place.
+- Evidence and remaining sandbox restrictions: `docs/2026-10-23-qiyas-goal-E.md`. No new
+  dependencies, paid calls, commits or pushes.
+
+Headless take-off evaluation keeps its own brief stopped-run summary when a request/cost cap or
+provider error arrives before a completed answer. That report belongs to the evaluation host;
+it is not appended to desktop drawing chats. The existing budget-stop report test remains intact.

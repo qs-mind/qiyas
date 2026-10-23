@@ -38,6 +38,7 @@ export type Item =
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
   | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean }
+  | { kind: "retrying"; seconds: number; code: string }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
   | { kind: "stopped"; reason: string };
@@ -100,6 +101,15 @@ export function reduce(state: Transcript, action: Action): Transcript {
       return { items: finishText(next.items).map((item, i) =>
         i === plan && item.kind === "plan" ? { ...item, awaitingApproval: true } : item,
       ) };
+    }
+    case "retrying": {
+      let kept = items;
+      if (action.discard_partial) {
+        let end = kept.length;
+        while (end > 0 && ["assistant", "thinking"].includes(kept[end - 1].kind)) end--;
+        kept = kept.slice(0, end);
+      }
+      return { items: [...kept, { kind: "retrying", seconds: action.seconds, code: action.code }] };
     }
     case "text":
       if (last?.kind === "assistant" && !last.finished) {

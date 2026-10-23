@@ -635,7 +635,17 @@ impl SavedProvider {
             name: name.into(),
             model: model.into(),
             base_url,
-            effort: value["effort"].as_str().unwrap_or("high").into(),
+            effort: profile["effort"]
+                .as_str()
+                .or_else(|| {
+                    (!profile
+                        .as_object()
+                        .is_some_and(|p| p.contains_key("effort")))
+                    .then(|| value["effort"].as_str())
+                    .flatten()
+                })
+                .unwrap_or(if name == "anthropic" { "medium" } else { "low" })
+                .into(),
             language: value["language"].as_str().unwrap_or("en").into(),
             method: value["measurement_method"].as_str().map(str::to_owned),
         })
@@ -972,6 +982,7 @@ async fn run_agent(
     preparation: &str,
     output: Option<&Path>,
 ) -> String {
+    let language = settings.language;
     let mut agent = Agent::new(provider, session.clone(), settings);
     if let Some(output) = output {
         agent = agent.with_log(qiyas_ai::log::AgentLog::evaluation(
@@ -1013,7 +1024,19 @@ async fn run_agent(
     }
     let mut status = match result {
         Ok(()) => status,
-        Err(e) => format!("failed: {e}"),
+        Err(e) => {
+            // This host owns a take-off report even when no model answer was completed.
+            // The desktop agent must not insert that narrative into ordinary drawing chats.
+            if text.is_empty() {
+                let message = qiyas_ai::provider_error::public_error("takeoff_stopped");
+                text = if language == qiyas_ai::prompt::Lang::Ar {
+                    message.message_ar
+                } else {
+                    message.message
+                };
+            }
+            format!("failed: {e}")
+        }
     };
     let end_report_text = text.clone();
     let facts = tokio::task::spawn_blocking(move || {

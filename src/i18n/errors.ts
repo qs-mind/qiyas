@@ -38,6 +38,14 @@ export function uiError(error: unknown, lang: Lang = typeof document !== "undefi
   } catch {
     raw = String(error);
   }
+  // Stable provider codes take precedence over the legacy diagnostic text patterns.
+  try {
+    const value = JSON.parse(raw);
+    if (typeof value?.code === "string" && value.code.startsWith("ai.error.") && value.code in en) {
+      return translate(lang, value.code);
+    }
+  } catch { /* Older errors are plain strings. */ }
+  if (raw.startsWith("ai.error.") && raw in en) return translate(lang, raw);
   // Already translated validation errors can pass through a caller's catch unchanged.
   if ([...Object.values(en), ...Object.values(ar)].includes(raw)) return raw;
   if (failures.at(-1) !== raw) failures.push(raw);

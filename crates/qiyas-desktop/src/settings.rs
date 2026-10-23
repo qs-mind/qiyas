@@ -17,7 +17,7 @@ const FILE: &str = "settings.json";
 /// Drawings kept in the Open menu's recent list.
 pub const MAX_RECENTS: usize = 10;
 
-pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub const EFFORTS: [&str; 6] = ["none", "low", "medium", "high", "xhigh", "max"];
 
 /// Buttons the tool palette keeps at most.
 pub const MAX_PALETTE: usize = 100;
@@ -95,6 +95,8 @@ impl Provider {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct ProviderProfile {
+    /// Independent effort for this provider; absent profiles use the provider default.
+    pub effort: Option<String>,
     /// Used exactly as typed.
     pub model: String,
     /// Only OpenAI-compatible services use an address.
@@ -104,6 +106,7 @@ pub struct ProviderProfile {
 
 fn anthropic_profile() -> ProviderProfile {
     ProviderProfile {
+        effort: None,
         model: "claude-opus-5-5".into(),
         base_url: None,
     }
@@ -131,7 +134,7 @@ pub struct Settings {
     pub provider: Provider,
     /// Each provider keeps its own model and address when the chosen provider changes.
     pub providers: ProviderProfiles,
-    /// One of `EFFORTS`.
+    /// Legacy effort, migrated into the selected profile when loading older settings.
     pub effort: String,
     /// When Mizan waits for approval of its plan.
     pub autonomy: qiyas_ai::Autonomy,
@@ -189,6 +192,16 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn effective_effort(&self) -> &str {
+        self.profile()
+            .effort
+            .as_deref()
+            .unwrap_or(match self.provider {
+                Provider::Anthropic => "medium",
+                Provider::OpenaiCompatible => "low",
+            })
+    }
+
     pub fn profile(&self) -> &ProviderProfile {
         match self.provider {
             Provider::Anthropic => &self.providers.anthropic,
@@ -218,7 +231,7 @@ impl Default for Settings {
         Settings {
             provider: Provider::Anthropic,
             providers: ProviderProfiles::default(),
-            effort: "high".into(),
+            effort: "medium".into(),
             autonomy: qiyas_ai::Autonomy::default(),
             measurement_method: None,
             mcp_enabled: false,
@@ -288,11 +301,22 @@ pub fn validate(s: &Settings) -> Result<(), String> {
         ));
     }
     if !EFFORTS.contains(&s.effort.as_str()) {
-        return Err(format!(
-            "Unknown effort \"{}\": use one of {}",
-            s.effort,
-            EFFORTS.join(", ")
-        ));
+        return Err(format!("Unknown effort: {}", s.effort));
+    }
+    for (provider, profile) in [
+        (Provider::Anthropic, &s.providers.anthropic),
+        (Provider::OpenaiCompatible, &s.providers.openai_compatible),
+    ] {
+        if let Some(effort) = &profile.effort {
+            let allowed = if provider == Provider::Anthropic {
+                &EFFORTS[..]
+            } else {
+                &EFFORTS[..4]
+            };
+            if !allowed.contains(&effort.as_str()) {
+                return Err("Choose a supported effort for this provider".into());
+            }
+        }
     }
     if s.provider == Provider::Anthropic && s.profile().model.trim().is_empty() {
         return Err("The model is empty".into());
@@ -527,6 +551,36 @@ fn read_settings(text: &str) -> Result<(Settings, bool), serde_json::Error> {
                     serde_json::Value::Object(profile)
                 });
             }
+        }
+    }
+    if let Some(legacy) = value["effort"].as_str().map(str::to_string) {
+        let provider = value["provider"]
+            .as_str()
+            .unwrap_or("anthropic")
+            .to_string();
+        if value["providers"][&provider]
+            .as_object()
+            .is_none_or(|p| !p.contains_key("effort"))
+        {
+            if value["providers"].is_null() {
+                value["providers"] = serde_json::json!({});
+            }
+            if value["providers"][&provider].is_null() {
+                value["providers"][&provider] = serde_json::to_value(if provider == "anthropic" {
+                    anthropic_profile()
+                } else {
+                    ProviderProfile::default()
+                })
+                .expect("provider profile");
+            }
+            let effort =
+                if provider == "openai_compatible" && matches!(legacy.as_str(), "xhigh" | "max") {
+                    "high".into()
+                } else {
+                    legacy
+                };
+            value["providers"][&provider]["effort"] = serde_json::json!(effort);
+            migrated = true;
         }
     }
     serde_json::from_value(value).map(|settings| (settings, migrated))

@@ -30,7 +30,7 @@ fn defaults_when_missing() {
     assert_eq!(s.provider, Provider::Anthropic);
     assert_eq!(s.profile().model, "claude-opus-5-5");
     assert_eq!(s.profile().base_url, None);
-    assert_eq!(s.effort, "high");
+    assert_eq!(s.effective_effort(), "medium");
     assert_eq!(s.autonomy, qiyas_ai::Autonomy::Autonomous);
     assert_eq!(s.measurement_method, None);
     assert!(!s.mcp_enabled);
@@ -49,6 +49,7 @@ fn round_trip() {
         provider: Provider::OpenaiCompatible,
         providers: settings::ProviderProfiles {
             openai_compatible: settings::ProviderProfile {
+                effort: None,
                 model: "my-model".into(),
                 base_url: Some("http://localhost:11434/v1".into()),
             },
@@ -462,4 +463,23 @@ async fn credentials_follow_the_saved_address_and_never_a_draft() {
             .is_none()
     );
     secrets::delete_at("openai_compatible", &first).unwrap();
+}
+
+#[test]
+fn effort_is_per_provider_with_responsive_defaults_and_legacy_migration() {
+    let mut defaults = Settings::default();
+    assert_eq!(defaults.effective_effort(), "medium");
+    defaults.provider = Provider::OpenaiCompatible;
+    assert_eq!(defaults.effective_effort(), "low");
+    defaults.profile_mut().effort = Some("none".into());
+    assert!(settings::validate(&defaults).is_ok());
+    defaults.provider = Provider::Anthropic;
+    assert_eq!(defaults.effective_effort(), "medium");
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("settings.json"), r#"{"provider":"openai_compatible","effort":"max","providers":{"openai_compatible":{"model":"x","base_url":"https://example.test/v1"}}}"#).unwrap();
+    let mut migrated = settings::load(dir.path());
+    assert_eq!(migrated.effective_effort(), "high");
+    migrated.provider = Provider::Anthropic;
+    assert_eq!(migrated.effective_effort(), "medium");
+    assert!(settings::validate(&migrated).is_ok());
 }

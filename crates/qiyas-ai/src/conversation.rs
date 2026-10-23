@@ -98,6 +98,24 @@ impl Conversation {
 
 /// Delta merging preserves the exact visible text and keeps long streams small on disk.
 pub(crate) fn append(transcript: &mut Vec<TranscriptEntry>, entry: TranscriptEntry) {
+    if matches!(
+        &entry,
+        TranscriptEntry::Event {
+            event: AgentEvent::Retrying {
+                discard_partial: true,
+                ..
+            }
+        }
+    ) {
+        while matches!(
+            transcript.last(),
+            Some(TranscriptEntry::Event {
+                event: AgentEvent::Text { .. } | AgentEvent::Thinking { .. }
+            })
+        ) {
+            transcript.pop();
+        }
+    }
     match (transcript.last_mut(), &entry) {
         (
             Some(TranscriptEntry::Event {
@@ -119,7 +137,7 @@ pub(crate) fn append(transcript: &mut Vec<TranscriptEntry>, entry: TranscriptEnt
     }
 }
 
-/// Checkpoints can happen on every streamed delta; never copy megabytes of image data first.
+/// Checkpoints happen at step boundaries; never copy megabytes of image data first.
 pub(crate) fn history_without_pictures(history: &[Message]) -> Vec<Message> {
     history
         .iter()

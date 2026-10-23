@@ -194,3 +194,15 @@ test("an approval event restores the current checklist and finishes streaming te
     { kind: "assistant", text: "Here is the plan.", finished: true },
   ]);
 });
+
+test("a retried stream removes the incomplete answer and keeps the completed tools", () => {
+  let state = reduce(EMPTY, { type: "user", text: "Continue" });
+  state = reduce(state, { type: "text", text: "An incomplete answer" });
+  state = reduce(state, { type: "retrying", seconds: 5, code: "ai.error.service_error", discard_partial: true });
+  state = reduce(state, { type: "text", text: "The complete answer" });
+  expect(state.items).toEqual([
+    { kind: "user", text: "Continue" },
+    { kind: "retrying", seconds: 5, code: "ai.error.service_error" },
+    { kind: "assistant", text: "The complete answer", finished: false },
+  ]);
+});

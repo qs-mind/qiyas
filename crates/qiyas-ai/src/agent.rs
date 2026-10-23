@@ -106,6 +106,11 @@ impl Default for AgentSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    Retrying {
+        seconds: u64,
+        code: String,
+        discard_partial: bool,
+    },
     Text {
         text: String,
     },
@@ -392,7 +397,10 @@ impl Agent {
                 event: event.clone(),
             },
         );
-        self.update_checkpoint();
+        // Text deltas append in place. Copy the full conversation only at a step boundary.
+        if !matches!(event, AgentEvent::Text { .. } | AgentEvent::Thinking { .. }) {
+            self.update_checkpoint();
+        }
         let _ = events.send(event).await;
     }
 
@@ -584,6 +592,7 @@ impl Agent {
         };
         let mut usage = Usage::default();
         let mut requests = 0;
+        let mut context_retried = false;
         // Grows when an answer spends all its room thinking (see `MAX_TOKENS_CAP`).
         let mut max_tokens = self.settings.max_tokens;
         loop {
@@ -622,7 +631,8 @@ impl Agent {
                 Err(e) => {
                     self.log("ERROR", || match &e {
                         AiError::Api { body, request, .. } => {
-                            let mut text = format!("{e}\nThe service's answer: {body}");
+                            let mut text =
+                                format!("{e}\nThe service's answer: {}", crate::log::clip(body));
                             if let Some(request) = request {
                                 text.push_str(&format!("\nThe request: {request}"));
                             }
@@ -630,7 +640,27 @@ impl Agent {
                         }
                         _ => e.to_string(),
                     });
-                    self.report_interrupted(&events, &e.to_string()).await;
+                    if e.code() == "context_too_long" && !context_retried {
+                        context_retried = true;
+                        if self.make_context_room() {
+                            self.log("COMPACTED (context limit)", || {
+                                "Large results and older pictures shortened; retrying once".into()
+                            });
+                            self.emit(
+                                &events,
+                                AgentEvent::Retrying {
+                                    seconds: 0,
+                                    code: "ai.error.context_retry".into(),
+                                    discard_partial: false,
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                    }
+                    // Provider errors are displayed once by the window, in its language.
+                    // A failed drawing request must never produce a take-off end report.
+                    self.update_checkpoint();
                     return Err(e);
                 }
             };
@@ -688,6 +718,15 @@ impl Agent {
                     self.log("RETRY", || {
                         format!("the answer was cut off before it said anything; asking again with max_tokens {max_tokens}")
                     });
+                    self.emit(
+                        &events,
+                        AgentEvent::Retrying {
+                            seconds: 0,
+                            code: "ai.error.output_limit".into(),
+                            discard_partial: true,
+                        },
+                    )
+                    .await;
                 }
                 reason => {
                     let assistant = Message::assistant(turn.content);
@@ -834,6 +873,8 @@ impl Agent {
         };
         let forward = async {
             let mut reported = false;
+            let mut partial = String::new();
+            let mut streamed = false;
             while let Some(e) = rx.recv().await {
                 let event = match e {
                     StreamEvent::RequestSent(fields) => {
@@ -843,8 +884,38 @@ impl Agent {
                         });
                         continue;
                     }
-                    StreamEvent::TextDelta(text) => AgentEvent::Text { text },
-                    StreamEvent::Thinking(text) => AgentEvent::Thinking { text },
+                    StreamEvent::Retrying {
+                        seconds,
+                        code,
+                        diagnostic,
+                        discard_partial,
+                    } => {
+                        self.log("RETRY", || {
+                            format!(
+                                "{code}; {diagnostic}; waiting {seconds} s; partial answer: {}",
+                                crate::log::clip(&partial)
+                            )
+                        });
+                        let discard_partial = discard_partial && streamed;
+                        partial.clear();
+                        streamed = false;
+                        AgentEvent::Retrying {
+                            seconds,
+                            code,
+                            discard_partial,
+                        }
+                    }
+                    StreamEvent::TextDelta(text) => {
+                        streamed = true;
+                        if partial.len() < crate::log::MAX_TEXT {
+                            partial.push_str(&text);
+                        }
+                        AgentEvent::Text { text }
+                    }
+                    StreamEvent::Thinking(text) => {
+                        streamed = true;
+                        AgentEvent::Thinking { text }
+                    }
                     _ => continue,
                 };
                 self.emit(events, event).await;
@@ -856,10 +927,12 @@ impl Agent {
                 );
             }
         };
-        tokio::select! {
+        let result = tokio::select! {
             (result, ()) = async { tokio::join!(turn, forward) } => Some(result),
             () = cancel.cancelled() => None,
-        }
+        };
+        self.update_checkpoint();
+        result
     }
 
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
@@ -1441,6 +1514,45 @@ impl Agent {
         self.log("PICTURES", || {
             format!("{cut} older pictures removed from the conversation, {kept} kept")
         });
+    }
+
+    /// A context refusal gets one smaller request. User words, tool ids and result pairing
+    /// stay intact. The ordinary history policy belongs to the conversation workflow.
+    fn make_context_room(&mut self) -> bool {
+        let mut changed = false;
+        for message in &mut self.history {
+            for block in &mut message.content {
+                match block {
+                    ContentBlock::ToolResult { content, .. } => {
+                        for part in content {
+                            match part {
+                                ResultPart::Png(_) => {
+                                    *part = ResultPart::Text(
+                                        "[Picture removed to make room. Capture again if needed.]"
+                                            .into(),
+                                    );
+                                    changed = true;
+                                }
+                                ResultPart::Text(text) if text.len() > 1000 => {
+                                    *text = format!("{} [Result shortened to make room. Read the drawing for full details.]", text.chars().take(400).collect::<String>());
+                                    changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    ContentBlock::Image { .. } => {
+                        *block = ContentBlock::Text {
+                            text: "[Picture removed to make room. Ask for it again if needed.]"
+                                .into(),
+                        };
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        changed
     }
 
     /// Makes room in a long conversation instead of ending it. Past `COMPACT_AT` messages,
@@ -2295,5 +2407,187 @@ mod tests {
         assert!(agent.history.iter().any(|m| m.content.iter().any(
             |b| matches!(b, ContentBlock::Text { text } if text == "Draw the whole package")
         )));
+    }
+}
+
+#[cfg(test)]
+mod provider_failure_tests {
+    use super::*;
+    use crate::provider::{BoxFuture, Sink, TurnResult};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct ContextProvider(Arc<AtomicUsize>);
+    impl Provider for ContextProvider {
+        fn stream_turn<'a>(
+            &'a self,
+            req: TurnRequest,
+            _: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            let attempt = self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if attempt == 0 {
+                    Err(AiError::Api {
+                        status: 400,
+                        message: "context_length_exceeded".into(),
+                        body: String::new(),
+                        request: None,
+                    })
+                } else {
+                    assert!(serde_json::to_string(&req.messages).unwrap().len() < 15_000);
+                    assert!(req
+                        .messages
+                        .iter()
+                        .any(|m| m.tool_uses().any(|(id, _, _)| id == "earlier")));
+                    Ok(TurnResult {
+                        content: vec![],
+                        stop_reason: StopReason::EndTurn,
+                        usage: Usage::default(),
+                    })
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn context_refusal_shortens_large_results_once_without_losing_call_pairing() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut agent = Agent::new(
+            Box::new(ContextProvider(attempts.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        agent.history = vec![
+            Message::user(vec![ContentBlock::Text {
+                text: "Keep my drawing unchanged.".into(),
+            }]),
+            Message::assistant(vec![ContentBlock::ToolUse {
+                id: "earlier".into(),
+                name: "qiyas_read".into(),
+                input: serde_json::json!({"op":"records"}),
+            }]),
+            Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: "earlier".into(),
+                content: vec![ResultPart::Text("evidence ".repeat(5000))],
+                is_error: false,
+            }]),
+        ];
+        let (tx, mut rx) = mpsc::channel(100);
+        agent
+            .run_turn("Continue".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let mut retry = false;
+        while let Ok(event) = rx.try_recv() {
+            retry |= matches!(event, AgentEvent::Retrying { code, .. } if code == "ai.error.context_retry");
+        }
+        assert!(retry);
+        assert!(serde_json::to_string(agent.history())
+            .unwrap()
+            .contains("Keep my drawing unchanged."));
+    }
+
+    struct ThinkingLimit(Arc<AtomicUsize>);
+    impl Provider for ThinkingLimit {
+        fn stream_turn<'a>(
+            &'a self,
+            req: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            let attempt = self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if attempt == 0 {
+                    sink(StreamEvent::Thinking("unfinished thinking".into()));
+                    Ok(TurnResult {
+                        content: vec![ContentBlock::Thinking {
+                            thinking: "unfinished thinking".into(),
+                            signature: String::new(),
+                        }],
+                        stop_reason: StopReason::MaxTokens,
+                        usage: Usage::default(),
+                    })
+                } else {
+                    assert_eq!(req.max_tokens, 200);
+                    Ok(TurnResult {
+                        content: vec![],
+                        stop_reason: StopReason::EndTurn,
+                        usage: Usage::default(),
+                    })
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_after_only_thinking_is_visible_and_discards_the_unfinished_thought() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut agent = Agent::new(
+            Box::new(ThinkingLimit(attempts.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings {
+                max_tokens: 100,
+                ..AgentSettings::default()
+            },
+        );
+        let (tx, mut rx) = mpsc::channel(100);
+        agent
+            .run_turn("Continue".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let mut retry = false;
+        while let Ok(event) = rx.try_recv() {
+            retry |= matches!(event, AgentEvent::Retrying { code, discard_partial: true, .. } if code == "ai.error.output_limit");
+        }
+        assert!(retry);
+        assert!(!serde_json::to_string(&agent.transcript)
+            .unwrap()
+            .contains("unfinished thinking"));
+    }
+
+    struct Tokens(Arc<AtomicUsize>);
+    impl Provider for Tokens {
+        fn save_state(&self) -> Value {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Value::Null
+        }
+        fn stream_turn<'a>(
+            &'a self,
+            _: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            Box::pin(async move {
+                for _ in 0..1000 {
+                    sink(StreamEvent::TextDelta("word ".into()));
+                }
+                Ok(TurnResult {
+                    content: vec![ContentBlock::Text {
+                        text: "word ".repeat(1000),
+                    }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage::default(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_thousand_tokens_do_not_make_a_thousand_full_checkpoints() {
+        let saves = Arc::new(AtomicUsize::new(0));
+        let checkpoint = Arc::new(Mutex::new(None));
+        let mut agent = Agent::new(
+            Box::new(Tokens(saves.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        )
+        .with_checkpoint(checkpoint.clone());
+        let (tx, _rx) = mpsc::channel(2000);
+        agent
+            .run_turn("Tell me".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(saves.load(Ordering::SeqCst) < 10);
+        let saved = checkpoint.lock().unwrap();
+        assert!(saved.as_ref().unwrap().transcript.iter().any(|entry| matches!(entry, TranscriptEntry::Event { event: AgentEvent::Text { text } } if text == &"word ".repeat(1000))));
     }
 }
