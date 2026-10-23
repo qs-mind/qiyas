@@ -1,9 +1,14 @@
 """Offline protocol client: decisions use only the returned take-off kit."""
 import json
+from pathlib import Path
 import subprocess
 import sys
 
 cli, drawing, workdir = sys.argv[1:4]
+# Before MCP starts, only the permitted case inputs and runner logs may be present.
+assert {path.name for path in Path(workdir).iterdir()} <= {
+    Path(drawing).name, "preamble.md", "agent-events.jsonl", "agent-stderr.log",
+}
 server = subprocess.Popen(
     [cli, "mcp", "--drawing", drawing, "--workdir", workdir],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,

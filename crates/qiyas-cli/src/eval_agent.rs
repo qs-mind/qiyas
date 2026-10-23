@@ -1,4 +1,6 @@
 //! Subscription clients drive a drawing-only workspace. Only this outer harness scores truth.
+mod holdout;
+
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -10,8 +12,14 @@ use clap::{ArgGroup, Args};
 use serde_json::{json, Value};
 
 #[derive(Args)]
-#[command(group(ArgGroup::new("selection").args(["case", "cases", "set"]).required(true)))]
+#[command(group(ArgGroup::new("selection").args(["case", "cases", "set", "holdout"]).required(true)))]
 pub struct EvalAgentArgs {
+    /// Open the sealed final exam instead of selecting development cases.
+    #[arg(long)]
+    pub holdout: bool,
+    /// Acknowledge that this run opens the holdout and is recorded permanently.
+    #[arg(long, requires = "holdout")]
+    pub i_understand_this_opens_the_holdout: bool,
     #[arg(long)]
     pub case: Option<String>,
     #[arg(long, value_delimiter = ',', num_args = 1..)]
@@ -46,11 +54,17 @@ fn folder(root: &Path, prefix: &str) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
+    if args.holdout && !args.i_understand_this_opens_the_holdout {
+        return Err("The holdout is sealed. Opening it requires --i-understand-this-opens-the-holdout and is logged.".into());
+    }
     if args.agent != "codex" && args.agent_cmd.is_none() {
         return Err("Provide --agent-cmd for clients other than codex".into());
     }
     crate::eval::validate_path(&args.root)?;
     let root = args.root.canonicalize().map_err(|e| e.to_string())?;
+    if args.holdout {
+        return holdout::run(args, &root);
+    }
     let cases = if let Some(set) = &args.set {
         crate::bench::sets::select(&root, set)?
     } else if let Some(case) = &args.case {
@@ -61,10 +75,38 @@ pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
     if cases.is_empty() || cases.iter().collect::<BTreeSet<_>>().len() != cases.len() {
         return Err("Choose distinct development cases".into());
     }
-    for case in &cases {
-        crate::bench::load_case(&root, case)?;
-    }
+    let inputs = cases
+        .iter()
+        .map(|id| {
+            let (truth, directory) = crate::bench::load_case(&root, id)?;
+            let drawing = fs::read(crate::bench::safe_file(
+                &directory,
+                Path::new(&truth.drawing),
+            )?)
+            .map_err(|e| e.to_string())?;
+            Ok(CaseInput {
+                id: id.clone(),
+                truth,
+                drawing,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let combined = folder(&root, "eval-agent-set")?;
+    run_cases(args, &root, &inputs, &combined)
+}
+
+struct CaseInput {
+    id: String,
+    truth: crate::bench::Truth,
+    drawing: Vec<u8>,
+}
+
+fn run_cases(
+    args: &EvalAgentArgs,
+    root: &Path,
+    cases: &[CaseInput],
+    combined: &Path,
+) -> Result<Value, String> {
     let cli = std::env::current_exe().map_err(|e| e.to_string())?;
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -73,13 +115,21 @@ pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
     let mut reports = Vec::new();
     let mut metrics = crate::bench::score::Metrics::default();
     for (index, case) in cases.iter().enumerate() {
+        let output = if args.holdout {
+            let path = combined.join(format!("case-{index}"));
+            fs::create_dir(&path).map_err(|e| e.to_string())?;
+            path
+        } else {
+            folder(root, "eval-agent")?
+        };
         let report = run_case(
             args,
-            &root,
+            root,
             case,
             &cli,
             &repo,
             &combined.join(format!("mcp-{index}.json")),
+            &output,
         )?;
         if report["status"] != "contaminated" {
             let m = serde_json::from_value(report["score"]["metrics"].clone())
@@ -87,13 +137,13 @@ pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
             metrics.merge(&m);
         }
         reports.push(report);
-        let report = combined_report(args, &reports, &metrics, &combined);
+        let report = combined_report(args, &reports, &metrics, combined);
         crate::bench::write_json(&combined.join("report.json"), &report)?;
     }
     if args.case.is_some() {
         Ok(reports.remove(0))
     } else {
-        Ok(combined_report(args, &reports, &metrics, &combined))
+        Ok(combined_report(args, &reports, &metrics, combined))
     }
 }
 
@@ -103,36 +153,41 @@ fn combined_report(
     metrics: &crate::bench::score::Metrics,
     output: &Path,
 ) -> Value {
-    json!({"headline":format!("AGENT ALONE ({})",args.agent),"cases":reports.len(),
+    let mut report = json!({"headline":format!("AGENT ALONE ({})",args.agent),"cases":reports.len(),
         "scored_cases":reports.iter().filter(|r|r["status"] != "contaminated").count(),
         "reports":reports,"metrics":metrics,"rates":metrics.rates(),"cost":"subscription",
         "elapsed_ms":reports.iter().filter_map(|r|r["elapsed_ms"].as_u64()).sum::<u64>(),
-        "tool_calls":reports.iter().filter_map(|r|r["tool_calls"].as_u64()).sum::<u64>(),"report_directory":output})
+        "tool_calls":reports.iter().filter_map(|r|r["tool_calls"].as_u64()).sum::<u64>(),"report_directory":output});
+    if args.holdout {
+        report["holdout"] = json!(true);
+        report["north_star"] = holdout::north_star(metrics);
+        report["metric_scope"] = json!("Uncontaminated scored cases only; contaminated cases are excluded, not a complete exam result.");
+    }
+    report
 }
 
 fn run_case(
     args: &EvalAgentArgs,
     root: &Path,
-    case: &str,
+    input: &CaseInput,
     cli: &Path,
     repo: &Path,
     config: &Path,
+    output: &Path,
 ) -> Result<Value, String> {
-    let (truth, directory) = crate::bench::load_case(root, case)?;
-    let output = folder(root, "eval-agent")?;
+    let truth = &input.truth;
+    let case = &input.id;
     let extension = Path::new(&truth.drawing)
         .extension()
         .and_then(|s| s.to_str())
         .ok_or("Drawing has no extension")?;
     let drawing = output.join(format!("drawing.{extension}"));
-    fs::copy(
-        crate::bench::safe_file(&directory, Path::new(&truth.drawing))?,
-        &drawing,
-    )
-    .map_err(|e| e.to_string())?;
+    fs::write(&drawing, &input.drawing).map_err(|e| e.to_string())?;
+    // Keep the verified original geometry in memory before the agent can change its copy.
+    let original = qiyas_core::Session::open_standalone(&drawing).ok();
     // The drawing is the only case input copied, plus the project preamble a QS receives with a
     // tender: each rule's specification wording, never its numbers' results, quantities or truth.
-    let preamble = preamble_text(&truth);
+    let preamble = preamble_text(truth);
     if let Some(text) = &preamble {
         fs::write(output.join("preamble.md"), text).map_err(|e| e.to_string())?;
     }
@@ -163,9 +218,9 @@ fn run_case(
         command.arg("-c").arg(expanded);
         command
     } else {
-        codex_command(cli, &drawing, &output, &request, &args.model, &args.effort)
+        codex_command(cli, &drawing, output, &request, &args.model, &args.effort)
     };
-    command.current_dir(&output).stdin(Stdio::null());
+    command.current_dir(output).stdin(Stdio::null());
     // Remove common API credential variables without inspecting their contents. Codex is also
     // forced to subscription login, so missing subscription auth fails instead of billing an API.
     for name in [
@@ -235,21 +290,29 @@ fn run_case(
     let _ = process_id;
     let elapsed_ms = started.elapsed().as_millis();
     let log = fs::read_to_string(output.join("agent-events.jsonl")).map_err(|e| e.to_string())?;
-    let mut contamination = contaminated(&log, &output, root, repo);
+    let mut contamination = contaminated(&log, output, root, repo);
     let mcp_log = fs::read_to_string(output.join("mcp-events.jsonl")).unwrap_or_default();
-    contamination.extend(contaminated(&mcp_log, &output, root, repo));
+    contamination.extend(contaminated(&mcp_log, output, root, repo));
     let submission = output.join("takeoff.json");
     let mut status = status;
     let score = if !contamination.is_empty() {
         status = "contaminated".into();
         Value::Null
     } else if submission.exists() {
-        match crate::bench::score_submission(root, case, &submission) {
+        match crate::eval::validate_path(&submission)
+            .and_then(|()| crate::bench::submission::read(&submission))
+            .map(|submission| {
+                json!(crate::bench::score::score(
+                    truth,
+                    &submission,
+                    original.as_ref()
+                ))
+            }) {
             Ok(score) => score,
             Err(error) => {
                 status = format!("failed to score submission: {error}");
                 json!(crate::bench::score::score(
-                    &truth,
+                    truth,
                     &crate::bench::model::Submission::default(),
                     None
                 ))
@@ -258,7 +321,7 @@ fn run_case(
     } else {
         status = format!("{status}; no submission");
         json!(crate::bench::score::score(
-            &truth,
+            truth,
             &crate::bench::model::Submission::default(),
             None
         ))

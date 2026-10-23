@@ -325,3 +325,301 @@ fn eof_save_refuses_symlinked_temporary_output() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("symlinks"));
     assert_eq!(fs::read(&outside).unwrap(), b"untouched");
 }
+
+struct SealedFixture {
+    temp: tempfile::TempDir,
+    hashes: Vec<String>,
+}
+
+impl SealedFixture {
+    fn root(&self) -> &Path {
+        self.temp.path()
+    }
+
+    fn permissions(&self, mode: u32) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                self.root().join("holdout"),
+                fs::Permissions::from_mode(mode),
+            )
+            .unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+    }
+
+    fn assert_closed(&self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(self.root().join("holdout"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0
+            );
+        }
+        assert!(!self.root().join("holdout-exam.lock").exists());
+    }
+
+    fn log(&self) -> Vec<Value> {
+        fs::read_to_string(self.root().join("holdout-log.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn command(&self) -> Command {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/fake_agent.py");
+        let mut command = Command::new(CLI);
+        command
+            .args([
+                "--json",
+                "eval-agent",
+                "--holdout",
+                "--agent",
+                "fake",
+                "--agent-cmd",
+            ])
+            .arg(format!(
+                "python3 '{}' {{cli}} {{drawing}} {{workdir}}",
+                script.display()
+            ))
+            .arg("--root")
+            .arg(self.root());
+        command
+    }
+}
+
+impl Drop for SealedFixture {
+    fn drop(&mut self) {
+        self.permissions(0o700);
+    }
+}
+
+fn sealed_fixture() -> SealedFixture {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let drawing = fixture(temp.path());
+    let drawing_bytes = fs::read(&drawing).unwrap();
+    let mut truth = read(&drawing.with_file_name("truth.json"));
+    truth["id"] = json!("sealed");
+    let mut missing = truth["items"][0].clone();
+    missing["id"] = json!("perimeter");
+    missing["description"] = json!("Perimeter");
+    missing["kind"] = json!("length");
+    missing["unit"] = json!("m");
+    missing["quantity"] = json!(10);
+    truth["items"].as_array_mut().unwrap().push(missing);
+    truth["rules"] = json!({"private-rule-name":{"operation":"area_times_height","height_m":0.2475,
+        "clause":"project preamble: Use the dimensions shown on the drawing."}});
+    truth["seeded_errors"] = json!([{"item_id":"perimeter","kind":"wrong_quantity"}]);
+    let mut hashes = Vec::new();
+    for typ in ["office", "warehouse"] {
+        truth["project_type"] = json!(typ);
+        let truth_bytes = serde_json::to_vec_pretty(&truth).unwrap();
+        let mut digest = Sha256::new();
+        digest.update(&drawing_bytes);
+        digest.update(&truth_bytes);
+        let hash = format!("{:x}", digest.finalize());
+        let case = temp.path().join("holdout").join(&hash);
+        fs::create_dir_all(&case).unwrap();
+        fs::write(case.join("drawing.dxf"), &drawing_bytes).unwrap();
+        fs::write(case.join("truth.json"), truth_bytes).unwrap();
+        fs::write(case.join("recognition.json"), "must not reach the agent").unwrap();
+        fs::write(case.join("drawing.dxf.qiyas"), "must not reach the agent").unwrap();
+        hashes.push(hash);
+    }
+    hashes.sort();
+    fs::write(
+        temp.path().join("holdout-manifest.json"),
+        json!({"schema_version":1,
+        "hash_algorithm":"sha256(drawing.dxf || truth.json)",
+        "entries":hashes.iter().map(|hash| json!({"sha256":hash})).collect::<Vec<_>>()})
+        .to_string(),
+    )
+    .unwrap();
+    fs::remove_dir_all(temp.path().join("cases")).unwrap();
+    let fixture = SealedFixture { temp, hashes };
+    fixture.permissions(0);
+    fixture
+}
+
+#[test]
+fn holdout_refuses_without_acknowledgement_and_cannot_mix_dev_selection() {
+    let fixture = sealed_fixture();
+    let result = fixture.command().output().unwrap();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("--i-understand-this-opens-the-holdout")
+    );
+    for selection in ["--case", "--cases", "--set"] {
+        let result = fixture
+            .command()
+            .args([
+                "--i-understand-this-opens-the-holdout",
+                selection,
+                "live-dev",
+            ])
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+    }
+    assert!(!fixture.root().join("runs").exists());
+    assert!(!fixture.root().join("holdout-log.jsonl").exists());
+    fixture.assert_closed();
+}
+
+#[test]
+fn holdout_verifies_every_seal_before_any_agent_and_logs_failed_openings() {
+    for file in ["drawing.dxf", "truth.json"] {
+        let fixture = sealed_fixture();
+        fixture.permissions(0o700);
+        let path = fixture
+            .root()
+            .join("holdout")
+            .join(&fixture.hashes[1])
+            .join(file);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.push(b' ');
+        fs::write(path, bytes).unwrap();
+        fixture.permissions(0);
+        let result = fixture
+            .command()
+            .arg("--i-understand-this-opens-the-holdout")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("hash mismatch"));
+        let log = fixture.log();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0]["status"], "opening");
+        assert_eq!(log[1]["status"], "failed");
+        let run = Path::new(log[0]["report_directory"].as_str().unwrap());
+        assert!(!run.join("case-0").exists());
+        assert!(run.join("failure.json").exists());
+        fixture.assert_closed();
+    }
+}
+
+#[test]
+fn holdout_fake_agent_scores_logs_and_keeps_only_drawing_and_clause_inputs() {
+    let fixture = sealed_fixture();
+    let result = fixture
+        .command()
+        .arg("--i-understand-this-opens-the-holdout")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["holdout"], true);
+    assert_eq!(report["complete"], true);
+    assert_eq!(report["sealed_cases"], 2);
+    assert_eq!(report["metrics"]["truth_items"], 4);
+    assert_eq!(report["metrics"]["matched"], 2);
+    assert_eq!(report["metrics"]["passed"], 2);
+    let north = &report["north_star"];
+    assert_eq!(north["within_2_percent_all_items"], 0.5);
+    assert_eq!(north["within_2_percent_matched_items"], 1.0);
+    assert_eq!(north["coverage"], 0.5);
+    assert_eq!(north["traceability_submitted"], 1.0);
+    assert_eq!(north["seeded_error_recall"], 0.0);
+    assert_eq!(north["precision"], 1.0);
+    assert!(north["seeded_error_precision"].is_null());
+    assert_eq!(north["accuracy_target_met"], false);
+    assert_eq!(north["coverage_target_met"], false);
+    let run = Path::new(report["report_directory"].as_str().unwrap());
+    assert!(run
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("holdout-exam-"));
+    assert_eq!(read(&run.join("report.json")), report);
+    for case in report["reports"].as_array().unwrap() {
+        let workspace = Path::new(case["report_directory"].as_str().unwrap());
+        assert!(workspace.starts_with(run));
+        assert_artifacts(workspace);
+        for forbidden in [
+            "truth.json",
+            "recognition.json",
+            "input-boq.json",
+            "schedule.json",
+        ] {
+            assert!(!workspace.join(forbidden).exists());
+        }
+        let preamble = fs::read_to_string(workspace.join("preamble.md")).unwrap();
+        assert!(preamble.contains("Use the dimensions shown on the drawing."));
+        for private in [
+            "0.2475",
+            "private-rule-name",
+            "area_times_height",
+            "perimeter",
+        ] {
+            assert!(!preamble.contains(private));
+        }
+    }
+    let log = fixture.log();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log[0]["status"], "opening");
+    assert_eq!(log[1]["status"], "completed");
+    assert_eq!(log[1]["coverage"], 0.5);
+    assert_eq!(log[1]["accuracy"], 0.5);
+    assert_eq!(log[1]["precision"], 1.0);
+    assert_eq!(log[1]["agent"], "fake");
+    assert_eq!(log[1]["model"], "gpt-6.1-sol");
+    assert_eq!(log[1]["git_commit"].as_str().unwrap().len(), 40);
+    assert!(chrono::DateTime::parse_from_rfc3339(log[0]["time"].as_str().unwrap()).is_ok());
+    fixture.assert_closed();
+}
+
+#[test]
+fn holdout_contaminated_cases_are_excluded_and_exam_is_incomplete() {
+    let fixture = sealed_fixture();
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/fake_agent.py");
+    let forbidden = fixture.root().join("truth.json");
+    fs::write(&forbidden, "test contamination bait").unwrap();
+    let result = Command::new(CLI)
+        .args([
+            "--json",
+            "eval-agent",
+            "--holdout",
+            "--i-understand-this-opens-the-holdout",
+            "--agent",
+            "fake",
+            "--agent-cmd",
+        ])
+        .arg(format!(
+            "python3 '{}' {{cli}} {{drawing}} {{workdir}} '{}'",
+            script.display(),
+            forbidden.display()
+        ))
+        .arg("--root")
+        .arg(fixture.root())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["complete"], false);
+    assert_eq!(report["scored_cases"], 0);
+    assert!(report["north_star"]["within_2_percent_all_items"].is_null());
+    for case in report["reports"].as_array().unwrap() {
+        assert_eq!(case["status"], "contaminated");
+        assert!(case["score"].is_null());
+    }
+    assert_eq!(fixture.log()[1]["status"], "incomplete");
+    fixture.assert_closed();
+}

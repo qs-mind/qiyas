@@ -47,17 +47,77 @@ review; it is not passed to the live agent. Only seeded-error cases supply `inpu
   holdout-manifest.json     only SHA-256 seals, no quantities or project identities
   runs/baseline-*/          each repetition's submission plus report.json/report.md
   runs/eval-*/              live evaluation outputs
+  runs/holdout-exam-*/      deliberate external-agent final exam, report.json and case folders
+  holdout-log.jsonl         append-only opening and outcome events
   baseline.json            latest baseline report
   baseline.md
   .venv/                   optional converters, never shipped
 ```
 
-Existing holdout contents are never read or regenerated. On Unix the generator removes
+Development commands never read or regenerate existing holdout contents. On Unix the generator removes
 directory permissions after sealing. This is an operational separation, not a cryptographic
 defence against the machine owner: generator code and seeds are public. A blind human-run
 evaluation should create new private seeds and keep its truth outside developer access.
 `bench list` reads only the external seal manifest. Case selection accepts a clean ID or
 `<id>/variants/<variant>`; traversal, absolute paths, `holdout` and symlink aliases are refused.
+
+## Deliberate holdout final exam
+
+Only the reviewer runs this command, once, after development is finished:
+
+```sh
+./target/debug/qiyas-cli eval-agent --holdout --i-understand-this-opens-the-holdout --agent codex --model gpt-6.1-sol --effort medium --timeout-min 20
+```
+
+The long acknowledgement is mandatory; without it the command refuses before accessing the
+holdout. `--holdout` cannot be combined with `--case`, `--cases` or `--set`. The existing
+`--root` and `--agent-cmd` options also work, including for offline temporary-fixture tests.
+This path makes no model API calls and never reads Qiyas settings or API keys. The external
+client uses the existing subscription login, as described in `2026-10-22-agent-eval.md`.
+
+The loader accepts the published version-1 seal format, SHA-256 of the exact bytes of
+`drawing.dxf || truth.json`. It requires every manifest case, rejects unlisted cases and
+symlink inputs, and verifies every hash before any agent starts. A mismatch aborts the whole
+exam. On Unix it temporarily grants the owner read/traverse access to the holdout directory,
+then restores its original permissions before agents start, including on verification failure.
+Verified drawing bytes and truth stay in the outer harness's memory. Each case workspace
+receives only the drawing and `preamble.md` when there are clauses: specification wording only,
+without rule parameters, truth quantities, recipes, sidecars or visible BOQ/schedule files.
+The scorer snapshots the original geometry before the agent can edit its drawing copy.
+
+The report and all case runs are under `.local/benchmark/runs/holdout-exam-<timestamp>/`.
+`report.json` retains the shared scorer's metrics and per-case scores, plus `north_star`:
+
+| Field | Definition / target |
+|---|---|
+| `within_2_percent_all_items` | Items within ±2% / all truth items; target at least 95%. Misses count against it. |
+| `within_2_percent_matched_items` | The existing P@2% among matched items, shown separately. |
+| `coverage` | Matched / truth items; target strictly over 90%. |
+| `traceability_submitted` | Reproducibly cited items / submitted non-aggregate items, including extras. |
+| `seeded_error_recall` | Correctly located and classified findings / seeded errors; null when none exist. |
+| `precision` | Item precision: matched / (matched + extras). |
+| `seeded_error_precision` | Correct seeded-error findings / all submitted findings; null when no findings exist. |
+
+All rates use 0–1. Zero denominators are null, never perfect. Existing scorer unit, basis,
+matching and traceability rules apply. The same logged-action contamination guard excludes
+contaminated cases from metrics; `complete: false` prevents that subset from looking like a
+complete exam. Failed clean agents still contribute zero-submission scores when appropriate.
+Seeded-error recall remains visible even though extra BOQ/schedule input files are not supplied.
+
+`holdout-log.jsonl` is append-only. An `opening` event is flushed before sealed contents are
+accessed, followed by a `completed`, `incomplete` or `failed` event. Both carry time, agent,
+model, git commit, coverage, accuracy (±2% over all truth items), precision (item precision)
+and the report directory; metrics are null until available. Outcome events also include the
+north-star metrics or an error. The shared report directory correlates both events. A crash
+therefore leaves an opening record even without an outcome. Partial reports remain available.
+An exclusive `holdout-exam.lock` prevents concurrent exams. After an abrupt termination, inspect
+the log, saved reports and directory permissions before manually resolving a stale lock; do
+not automatically retry. A subsequent deliberate invocation creates another logged opening.
+
+Offline tests use a fake external agent and newly generated temporary sealed cases. They cover
+mandatory acknowledgement, drawing/truth hash mismatches before any agent starts, append-only
+logging, permission restoration, allowed inputs, north-star denominators and contamination.
+Implementation and tests never enumerate or open the real holdout. No real final exam was run.
 
 ## Version 1 truth schema
 

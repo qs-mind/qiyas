@@ -2166,7 +2166,8 @@ and Mizan's turn epoch together.
   --agent codex [--agent-cmd TEMPLATE] [--model M] [--effort E] [--timeout-min N]`.
   Defaults: `gpt-6.1-sol`, medium effort, 20 minutes per case. It never loads Qiyas provider
   settings, keys or a budget ledger. The external client uses its existing subscription login.
-  Each case starts with only a drawing copy in a fresh `.local/benchmark/runs/` directory.
+  Each case starts with a drawing copy and, when declared, clause-only `preamble.md` in a
+  fresh `.local/benchmark/runs/` directory.
   The harness keeps agent events, MCP calls and eval-compatible scoring reports, headed
   `AGENT ALONE (<agent>)`, with cost `subscription`. Logged access to truth, recipes, the
   benchmark store or repository outside the run contaminates the case and excludes its score.
@@ -2174,6 +2175,21 @@ and Mizan's turn epoch together.
   must emit command/file-read events and use subscription authentication.
   See `docs/2026-10-22-agent-eval.md` for the template contract and reviewer command. Do not
   run real agent evaluations during implementation checks.
+
+- Final exam: `qiyas-cli eval-agent --holdout --i-understand-this-opens-the-holdout
+  --agent codex --model gpt-6.1-sol --effort medium --timeout-min 20`. Only the reviewer runs
+  this, deliberately once; implementation checks never open the real holdout. Without the long
+  flag it refuses. The exam verifies every published SHA-256 over `drawing.dxf || truth.json`
+  before starting any agent, restores the sealed directory's permissions, and retains verified
+  inputs in memory. Agents receive only a drawing and clause-only preamble in fresh case folders
+  under `.local/benchmark/runs/holdout-exam-<timestamp>/`. The shared scorer uses original geometry;
+  the usual contamination guard still excludes contaminated cases. `report.json` includes explicit
+  north-star accuracy within ±2% over all truth items (target ≥95%), coverage (target >90%),
+  submitted-item traceability, seeded-error recall, item precision and seeded-error precision.
+  Undefined rates are null. `.local/benchmark/holdout-log.jsonl` appends an opening event before
+  accessing sealed contents and a completed/incomplete/failed event with metrics afterward; both
+  retain time, agent, model, git commit and report path. An interrupted opening remains recorded.
+  No automatic retry. Development loaders and `bench list` remain sealed/hash-only.
 
 - Command scripts (`qiyas-core/src/script.rs`, `.scr`): one command per line, its points on the
   same line or the lines after it; a line starting with `;` is a comment; blank lines are
