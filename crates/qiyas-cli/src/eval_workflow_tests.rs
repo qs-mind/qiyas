@@ -553,7 +553,9 @@ async fn live_pattern_has_bounded_history_finishes_at_eighty_percent_and_scores_
     for (name, finish, max_requests, max_cost) in [
         ("finish", true, 25, 1.0),
         ("request-cap", false, 25, 1.0),
-        ("cost-cap", false, 40, 0.22),
+        // Let the retained recent evidence window fill before comparing long-history savings.
+        // The same cost-limit, twofold reduction and 20,000-token assertions still apply.
+        ("cost-cap", false, 40, 0.30),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let drawing = dir.path().join("drawing.dxf");

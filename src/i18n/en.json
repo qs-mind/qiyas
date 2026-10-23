@@ -1701,5 +1701,7 @@
   "err.pdf": "PDF support is unavailable in this installation. Contact support.",
   "evidence.explain": "Explain",
   "props.width": "Width",
-  "props.tag": "Mark"
+  "props.tag": "Mark",
+  "ai.repeatedEdit": "Stopped after two attempts made no change. The requested edit is incomplete.",
+  "ai.unresolvedChecks": "Drawing issues remain. The work is incomplete."
 }

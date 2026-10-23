@@ -43,6 +43,13 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
             object(json!({"item":string,"project":string}), &["item"]),
             json!({"item":"generated:A"}),
         ),
+        (READ, "workflow") => (
+            object(
+                json!({"language":{"type":"string","enum":["en","ar"]}}),
+                &[],
+            ),
+            json!({"language":"en"}),
+        ),
         (READ, "digest" | "takeoff_check" | "takeoff_kit") => {
             let mut props = json!({"offset":{"type":"integer","minimum":0}});
             if op == "takeoff_check" {
@@ -115,7 +122,7 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
         }
         (EXECUTE, "finish") => (
             object(json!({"answer":string}), &[]),
-            json!({"answer":"Generated BOQ; unresolved scope is in the self-check."}),
+            json!({"answer":"Requested work completed; remaining issues are listed."}),
         ),
         (EXECUTE, "plan") => {
             let info = surface::plan_info();

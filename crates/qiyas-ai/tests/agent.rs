@@ -614,13 +614,25 @@ async fn malformed_tool_input_still_stops_after_40_calls() {
     .expect("test malformed_tool_input_still_stops_after_40_calls timed out after 60 seconds");
 }
 
-/// Each message of a request body as its JSON text.
+/// User requests and evidence stay unchanged; job-specific guidance expires at a new turn.
 fn serialised(body: &Value) -> Vec<String> {
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .map(Value::to_string)
+        .map(|message| {
+            let mut message = message.clone();
+            if let Some(blocks) = message["content"].as_array_mut() {
+                blocks.retain(|b| {
+                    !b["text"].as_str().is_some_and(|text| {
+                        text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
+                            || text
+                                == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar)
+                    })
+                });
+            }
+            message.to_string()
+        })
         .collect()
 }
 
@@ -657,7 +669,7 @@ async fn history_is_append_only_and_system_prompt_is_stable() {
             "no live take-off in the system prompt"
         );
 
-        // Each request only appends to the one before it.
+        // Evidence and user messages only append; expired job guidance is excluded.
         for pair in reqs.windows(2) {
             let (before, after) = (serialised(&pair[0].body), serialised(&pair[1].body));
             assert!(after.len() > before.len());

@@ -20,6 +20,8 @@ use crate::state::AppState;
 pub const CAPTURE: &str = "ai:capture";
 /// Asks what the user points at: `{ id }`, answered with a `TurnContext`.
 pub const POINTED: &str = "ai:pointed";
+/// Read visible panels, without opening or changing any of them.
+pub const PANELS: &str = "ai:panels";
 /// Asks the window to select entities: `{ handles, zoom }`.
 pub const SELECT: &str = "ai:select";
 /// How long the window may take to answer.
@@ -95,6 +97,10 @@ impl AiWindow {
     pub fn pointed<R: Runtime>(&self, app: &AppHandle<R>) -> Result<TurnContext, String> {
         let reply = self.ask(app, POINTED, json!({}))?;
         serde_json::from_value(reply).map_err(|e| format!("What the window points at: {e}"))
+    }
+
+    pub fn panels<R: Runtime>(&self, app: &AppHandle<R>) -> Result<Value, String> {
+        self.ask(app, PANELS, json!({}))
     }
 
     /// Asks the window to select `handles`, zooming to them with `zoom`.
@@ -215,5 +221,18 @@ mod tests {
             .state::<AppState>()
             .ai_window
             .answer(999, Err("late".into())));
+    }
+    #[test]
+    fn panels_use_the_existing_window_reply_channel() {
+        let (_dir, app, asked) = app_answering(PANELS, |_| {
+            (
+                Some(json!({"open_panel":"assistant","layers":{"view":"flat"}})),
+                None,
+            )
+        });
+        let state = app.state::<AppState>();
+        let panels = state.ai_window.panels(app.handle()).unwrap();
+        assert_eq!(panels["layers"]["view"], "flat");
+        assert_eq!(asked.lock().unwrap().len(), 1);
     }
 }

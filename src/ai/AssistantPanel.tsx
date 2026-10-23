@@ -130,6 +130,8 @@ export const AssistantPanel = memo(function AssistantPanel({
 
   function stopText(reason: string) {
     if (reason === "cancelled") return t("ai.cancelled");
+    if (reason === "repeated_ineffective_edit") return translate(chatLang, "ai.repeatedEdit");
+    if (reason === "drawing_checks_unresolved") return translate(chatLang, "ai.unresolvedChecks");
     if (reason === TOO_LONG) return t("ai.tooLong");
     if (reason === "max_tokens") return t("ai.maxTokens");
     const steps = /^stopped after (\d+) steps$/.exec(reason);

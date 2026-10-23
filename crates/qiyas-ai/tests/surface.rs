@@ -165,10 +165,7 @@ fn commands_without_arguments_return_the_registry_index() {
         json!({"op": "commands"}),
     ] {
         let answer = call(&mut s, READ, input).unwrap();
-        assert_eq!(
-            answer["index"],
-            qiyas_core::registry::registry().index_text()
-        );
+        assert_eq!(answer["index"], qiyas_ai::prompt::command_index());
     }
     assert!(!s.can_undo());
 }
@@ -587,7 +584,7 @@ fn exports_refuse_new_files_beneath_a_symlink_outside_the_drawing_folder() {
 #[test]
 fn every_name_in_the_prompt_index_exists_in_the_registry() {
     let registry = qiyas_core::registry::registry();
-    let index = registry.index_text();
+    let index = qiyas_ai::prompt::command_index();
     for language in [Lang::En, Lang::Ar] {
         let prompt = system_prompt(language, &DrawingFacts::none());
         assert!(prompt.contains(&format!("## Commands by category\n{index}\n")));
@@ -1055,12 +1052,13 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
 }
 
 #[tokio::test]
-async fn selected_modes_pause_and_autonomous_reports_unfixed_errors_without_blocking() {
+async fn selected_modes_pause_and_autonomous_stops_with_unfixed_findings() {
     use qiyas_ai::Autonomy;
     let line = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}});
     for mode in [Autonomy::PerJob, Autonomy::PerPhase, Autonomy::Autonomous] {
         for repair in [false, true] {
-            let (_dir, session) = sample();
+            let (_dir, mut session) = sample();
+            session.current.layer = "A-WALL".into();
             let requests = Arc::new(Mutex::new(Vec::new()));
             let mut calls = vec![(EXECUTE, line.clone()), (EXECUTE, line.clone())];
             if repair {
@@ -1081,11 +1079,16 @@ async fn selected_modes_pause_and_autonomous_reports_unfixed_errors_without_bloc
                 "{mode:?}, repair={repair}: {events:?}"
             );
             if mode == Autonomy::Autonomous && !repair {
-                assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
-                assert!(events.iter().any(|e|matches!(e,AgentEvent::Text{text} if text.contains("Unresolved drawing checks"))));
+                assert!(
+                    matches!(events.last(), Some(AgentEvent::Stopped { reason }) if reason == "drawing_checks_unresolved")
+                );
+                assert!(events.iter().any(
+                    |e| matches!(e,AgentEvent::Text{text} if text.contains("work is incomplete"))
+                ));
             }
         }
         let (_dir, mut session) = sample();
+        session.current.layer = "A-WALL".into();
         call(&mut session, EXECUTE, line.clone()).unwrap();
         call(&mut session, EXECUTE, line.clone()).unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -1134,7 +1137,8 @@ fn state_read_reports_method_name_and_whether_rules_are_loaded() {
 
 #[tokio::test]
 async fn unfinished_phase_error_attribution_survives_restart_until_repaired() {
-    let (_dir, session) = sample();
+    let (_dir, mut session) = sample();
+    session.current.layer = "A-WALL".into();
     let shared = Arc::new(Mutex::new(Some(session)));
     let settings = AgentSettings {
         autonomy: qiyas_ai::Autonomy::PerJob,
@@ -2323,4 +2327,296 @@ fn read_shortcuts_accept_the_same_handle_strings_as_commands() {
         assert_eq!(measured["handle"], handle);
         assert_eq!(measured["length_m"], 1.0);
     }
+}
+
+#[tokio::test]
+async fn goal_d_same_ineffective_edit_stops_after_two_attempts_with_plain_reason() {
+    let (_dir, mut session) = sample();
+    call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{"type":"new_layer","name":"Repeated"}}}),
+    )
+    .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let input = json!({"op":"run","args":{"command":{"type":"new_layer","name":"Repeated"}}});
+    let mut agent = Agent::new(
+        Box::new(Script::new(
+            vec![
+                (EXECUTE, input.clone()),
+                (READ, json!({"op":"state","args":{}})),
+                (EXECUTE, input.clone()),
+                (EXECUTE, input),
+            ],
+            requests.clone(),
+        )),
+        Arc::new(Mutex::new(Some(session))),
+        AgentSettings::default(),
+    );
+    let events = events_for(&mut agent, "Create the requested layer").await;
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Stopped {reason}) if reason == "repeated_ineffective_edit")
+    );
+    assert!(events.iter().any(
+        |e| matches!(e, AgentEvent::Text{text} if text.contains("two attempts made no change"))
+    ));
+    assert_eq!(requests.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
+    for (request, takeoff, arabic) in [
+        ("Draw a mounting plate", false, false),
+        ("Take off the quantities", true, false),
+        ("احصر كميات المخطط", true, true),
+    ] {
+        let (_dir, session) = sample();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut calls = vec![(READ, json!({"op":"commands","args":{"name":"draw.line"}}))];
+        calls.extend((0..33).map(|_| (READ, json!({"op":"state","args":{}}))));
+        let mut agent = Agent::new(
+            Box::new(Script::new(calls, requests.clone())),
+            Arc::new(Mutex::new(Some(session))),
+            AgentSettings::default(),
+        );
+        let events = events_for(&mut agent, request).await;
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+        {
+            let reqs = requests.lock().unwrap();
+            if let Some(root) = std::env::var_os("QIYAS_GOAL_D_EVIDENCE") {
+                let root = std::path::PathBuf::from(root);
+                std::fs::create_dir_all(&root).unwrap();
+                let label = if arabic {
+                    "takeoff-ar"
+                } else if takeoff {
+                    "takeoff-en"
+                } else {
+                    "drafting-en"
+                };
+                std::fs::write(
+                    root.join(format!("{label}-requests.json")),
+                    serde_json::to_vec_pretty(
+                        &reqs
+                            .iter()
+                            .map(|r| json!({"system":r.system,"messages":r.messages}))
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                std::fs::write(
+                    root.join(format!("{label}-events.json")),
+                    serde_json::to_vec_pretty(&events).unwrap(),
+                )
+                .unwrap();
+            }
+            let last = reqs.last().unwrap();
+            assert!(!last.system.contains("Take-off workflow"));
+            let texts = last
+                .messages
+                .iter()
+                .flat_map(|m| &m.content)
+                .filter_map(|b| match b {
+                    qiyas_ai::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                texts.contains("Take-off workflow:") || texts.contains("سير عمل الحصر:"),
+                takeoff
+            );
+            let notice = last
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .iter()
+                .find_map(|b| match b {
+                    qiyas_ai::ContentBlock::Text { text } if text.starts_with("[finish now]") => {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                notice.contains("BOQ") || notice.contains("ربط الكميات"),
+                takeoff
+            );
+            assert_eq!(notice.contains("قاربت"), arabic);
+            // The original schema remains, after far more than three results.
+            let contract = last.messages.iter().flat_map(|m| &m.content).find(|b| matches!(b,qiyas_ai::ContentBlock::ToolResult{tool_use_id,..} if tool_use_id == "call_0")).unwrap();
+            assert!(serde_json::to_string(contract).unwrap().contains("schema"));
+            assert!(!serde_json::to_string(contract)
+                .unwrap()
+                .contains("tool result summary"));
+        }
+        if takeoff {
+            events_for(&mut agent, "Draw a bracket, drawing only.").await;
+            let reqs = requests.lock().unwrap();
+            assert!(
+                !reqs
+                    .last()
+                    .unwrap()
+                    .messages
+                    .iter()
+                    .flat_map(|m| &m.content)
+                    .any(|b| matches!(b, qiyas_ai::ContentBlock::Text { text }
+                    if text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
+                        || text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar)))
+            );
+        }
+    }
+}
+
+#[test]
+fn goal_d_redo_restores_the_original_handles_and_respects_ownership() {
+    let (_dir, mut session) = sample();
+    let result = call(&mut session, EXECUTE,json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}})).unwrap();
+    let handle = result["added"][0].as_u64().unwrap();
+    assert!(session.entity_info(handle, &[]).is_ok());
+    assert_eq!(
+        call(&mut session, EXECUTE, json!({"op":"undo_own","args":{}})).unwrap()["undone"],
+        true
+    );
+    assert!(!session.entity_info(handle, &[]).is_ok());
+    assert_eq!(
+        call(
+            &mut session,
+            EXECUTE,
+            json!({"op":"type","args":{"line":"REDO"}})
+        )
+        .unwrap()["redone"],
+        true
+    );
+    assert!(session.entity_info(handle, &[]).is_ok());
+    session
+        .run(qiyas_core::Command::NewLayer {
+            name: "User layer".into(),
+        })
+        .unwrap();
+    session.undo();
+    assert_eq!(
+        call(&mut session, EXECUTE, json!({"op":"redo_own","args":{}})).unwrap()["redone"],
+        false
+    );
+    assert!(session.can_redo());
+    session.undo();
+    assert_eq!(
+        call(&mut session, EXECUTE, json!({"op":"redo_own","args":{}})).unwrap()["redone"],
+        true
+    );
+    assert!(session.entity_info(handle, &[]).is_ok());
+    assert_eq!(
+        call(&mut session, EXECUTE, json!({"op":"redo_own","args":{}})).unwrap()["redone"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn goal_d_new_warnings_prevent_completion_in_all_drawing_units() {
+    for (unit, factor) in [(4, 0.001), (5, 0.01), (6, 1.0), (1, 0.0254)] {
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new_blank(&dir.path().join("warning.dxf"), unit);
+        // A new line on layer 0 is a warning, not an error. It still needs correction.
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            Box::new(Script::new(
+                vec![(
+                    EXECUTE,
+                    json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[5.0/factor,0]}}}),
+                )],
+                requests.clone(),
+            )),
+            Arc::new(Mutex::new(Some(session))),
+            AgentSettings::default(),
+        );
+        let events = events_for(&mut agent, "Draw a line").await;
+        assert!(
+            matches!(events.last(),Some(AgentEvent::Stopped{reason}) if reason == "drawing_checks_unresolved"),
+            "{unit}: {events:?}"
+        );
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::Done { .. })));
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            4,
+            "one edit, then at most two correction requests"
+        );
+    }
+}
+
+#[test]
+fn goal_d_workflow_is_optional_localised_and_separate_from_the_bounded_kit() {
+    for (language, heading) in [("en", "Take-off workflow:"), ("ar", "سير عمل الحصر:")] {
+        let ToolOutput::Json(workflow) =
+            surface::run_without_drawing(READ, "workflow", &json!({"language":language}), None)
+                .unwrap()
+                .unwrap()
+        else {
+            panic!()
+        };
+        assert!(workflow["workflow"].as_str().unwrap().contains(heading));
+        let ToolOutput::Json(kit) =
+            surface::run_without_drawing(READ, "takeoff_kit", &json!({}), None)
+                .unwrap()
+                .unwrap()
+        else {
+            panic!()
+        };
+        assert!(kit["batch"]["commands"].is_array());
+        assert!(kit.get("workflow").is_none());
+        assert!(serde_json::to_vec(&kit).unwrap().len() <= qiyas_core::takeoff_kit::MAX_BYTES);
+    }
+}
+
+#[tokio::test]
+async fn goal_d_switching_jobs_preserves_requests_and_evidence() {
+    let (_dir, session) = sample();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = Agent::new(
+        Box::new(Script::new(
+            vec![(READ, json!({"op":"state"}))],
+            requests.clone(),
+        )),
+        Arc::new(Mutex::new(Some(session))),
+        AgentSettings::default(),
+    );
+    events_for(&mut agent, "Take off the quantities").await;
+    events_for(&mut agent, "Draw a bracket, drawing only.").await;
+    let requests = requests.lock().unwrap();
+    let evidence = |messages: &[qiyas_ai::Message]| {
+        let mut messages = messages.to_vec();
+        for message in &mut messages {
+            message.content.retain(|b| {
+                !matches!(b, qiyas_ai::ContentBlock::Text { text }
+                if text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
+                    || text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar))
+            });
+        }
+        serde_json::to_value(messages).unwrap()
+    };
+    let before = evidence(&requests[1].messages);
+    let after = evidence(&requests[2].messages);
+    assert_eq!(
+        before.as_array().unwrap(),
+        &after.as_array().unwrap()[..requests[1].messages.len()]
+    );
+    assert_eq!(requests[0].system, requests[2].system);
+}
+
+#[tokio::test]
+async fn goal_d_interrupted_quantity_work_reports_in_the_chat_language() {
+    let (_dir, session) = sample();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let reads = (0..40).map(|_| (READ, json!({"op":"state"}))).collect();
+    let mut agent = Agent::new(
+        Box::new(Script::new(reads, requests)),
+        Arc::new(Mutex::new(Some(session))),
+        AgentSettings::default(),
+    );
+    let events = events_for(&mut agent, "احصر كميات المخطط").await;
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Text { text } if text.contains("ملخص العمل المتوقف:"))));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Text { text } if text.contains("End report:") || text.contains("generated BOQ items"))));
 }

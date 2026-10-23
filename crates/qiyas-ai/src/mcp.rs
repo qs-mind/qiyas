@@ -147,6 +147,7 @@ pub struct Qiyas {
     on_ui: OnUi,
     tools: Arc<Vec<Tool>>,
     retries: Arc<Mutex<VecDeque<Retry>>>,
+    ineffective: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
 }
 
 #[derive(Clone)]
@@ -195,12 +196,14 @@ impl Qiyas {
             on_ui,
             tools: Arc::new(tools),
             retries: Arc::new(Mutex::new(VecDeque::new())),
+            ineffective: Arc::default(),
         }
     }
 
     fn new_connection(&self) -> Self {
         Self {
             retries: Arc::new(Mutex::new(VecDeque::new())),
+            ineffective: Arc::default(),
             ..self.clone()
         }
     }
@@ -260,6 +263,35 @@ impl Qiyas {
     /// Runs one tool on the session, holding the lock only while it runs; a file tool through the
     /// host, without the session's lock (the host locks the app's tabs first).
     fn run(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
+        let Some(key) = crate::agent::edit_fingerprint(name, input) else {
+            return self.run_checked(name, input);
+        };
+        let revision = self
+            .session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|s| (s.epoch(), s.history_revision()));
+        let key = format!("{revision:?}:{key}");
+        let mut attempts = self
+            .ineffective
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if attempts.get(&key).copied().unwrap_or(0) >= 2 {
+            return Err(ToolError::Structured {code: "repeated_ineffective_edit".into(),
+                message: "This edit made no change in two attempts. Stop repeating it and explain what remains incomplete.".into(),
+                details: serde_json::json!({"attempts":2})});
+        }
+        let output = self.run_checked(name, input);
+        if output.is_err() || matches!(&output, Ok(ToolOutput::Json(v)) if v["no_change"] == true) {
+            *attempts.entry(key).or_default() += 1;
+        } else {
+            attempts.clear();
+        }
+        output
+    }
+
+    fn run_checked(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
         if let Some(host) = self.host.as_deref() {
             host.before_tool(name, input).map_err(ToolError::Failed)?;
@@ -332,8 +364,8 @@ impl ServerHandler for Qiyas {
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
                 "{}\n\nCommands by category:\n{}",
-                crate::prompt::TAKEOFF_WORKFLOW.trim(),
-                qiyas_core::registry::registry().index_text()
+                "Follow the user's request. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after two identical ineffective edits, stop and explain. Fix new warnings before claiming completion. Save only when asked; finish does not save.",
+                crate::prompt::command_index()
             ))
     }
 

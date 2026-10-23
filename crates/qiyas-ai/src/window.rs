@@ -16,7 +16,12 @@ use crate::prompt::Lang;
 use crate::ToolOutput;
 
 /// The tools run through the window.
-pub const WINDOW_TOOLS: [&str; 3] = ["view_screen", "get_selection", "select_entities"];
+pub const WINDOW_TOOLS: [&str; 4] = [
+    "view_screen",
+    "get_selection",
+    "select_entities",
+    "panel_state",
+];
 /// Longest side of a picture of the screen, in pixels.
 const SCREEN_SIDE: u32 = 1600;
 /// Most entities marked on a picture of the screen.
@@ -40,6 +45,7 @@ pub fn run_window(
     lang: Lang,
 ) -> Result<ToolOutput, String> {
     match name {
+        "panel_state" => host.panel_state().map(ToolOutput::Json),
         "view_screen" => view_screen(host, session, input),
         "get_selection" => {
             let pointed = host.pointed()?;
@@ -203,6 +209,11 @@ mod tests {
         fn pointed(&self) -> Result<TurnContext, String> {
             Ok(self.pointed.clone())
         }
+        fn panel_state(&self) -> Result<Value, String> {
+            Ok(
+                json!({"window":true,"open_panel":"assistant","layers":{"view":"folders","selected":["0"],"rows":[{"name":"A-","kind":"group","expanded":false}]}}),
+            )
+        }
     }
 
     fn sample() -> (tempfile::TempDir, Arc<Mutex<Option<Session>>>, u64) {
@@ -331,5 +342,19 @@ mod tests {
                 "{tool}: {err}"
             );
         }
+    }
+    #[test]
+    fn panel_state_reads_the_window_without_a_drawing_or_mutating_it() {
+        let host = window(42);
+        let session = Mutex::new(None);
+        let ToolOutput::Json(state) =
+            run_window(&host, &session, "panel_state", &json!({}), Lang::Ar).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(state["layers"]["view"], "folders");
+        assert_eq!(state["open_panel"], "assistant");
+        assert!(host.selected.lock().unwrap().is_empty());
+        assert!(session.lock().unwrap().is_none());
     }
 }

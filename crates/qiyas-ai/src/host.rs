@@ -42,9 +42,11 @@ pub trait DrawingHost: Send + Sync {
     fn before_tool(&self, _name: &str, _input: &Value) -> Result<(), String> {
         Ok(())
     }
-    /// Save the work and, for evaluation hosts, write the submission and end report.
+    /// Record completion only. Saving is a separate, explicit operation.
     fn finish(&self, _answer: &str) -> Result<Value, String> {
-        self.save()
+        Ok(
+            json!({"completed": true, "message": "Work finished. This action does not save the drawing."}),
+        )
     }
 
     /// Registry project commands run in a project workspace, including before a drawing opens.
@@ -94,6 +96,10 @@ pub trait DrawingHost: Send + Sync {
         let _ = (handles, zoom);
         Err(NO_WINDOW.into())
     }
+    /// The visible panels and their current state, read without changing the window.
+    fn panel_state(&self) -> Result<Value, String> {
+        Err(NO_WINDOW.into())
+    }
     /// What the user points at in the window now: the selection, a marked region, the view.
     fn pointed(&self) -> Result<TurnContext, String> {
         Err(NO_WINDOW.into())
@@ -110,8 +116,7 @@ pub struct Screen {
 
 /// What a window tool answers when there is no window to ask.
 pub const NO_WINDOW: &str =
-    "The Qiyas window can't be asked from here; use qiyas_capture with source picture to look \
-                             at the drawing";
+    "No Qiyas window is connected. Visible panels and the screen cannot be read here.";
 
 /// Runs the host tool `name` with `input`. `user_text` is the user's message of this turn (the
 /// agent's; `None` for MCP, which has none): a path in it counts as named by the user.
@@ -253,5 +258,14 @@ mod tests {
                 "close Some(3)",
             ]
         );
+    }
+    #[test]
+    fn finish_never_calls_save_or_opens_a_dialog() {
+        let host = Fake::default();
+        let result =
+            run_host(&host, "finish", &json!({"answer":"Drawing complete"}), None).unwrap();
+        assert_eq!(result["completed"], true);
+        assert!(result.get("saved").is_none());
+        assert!(host.calls.lock().unwrap().is_empty());
     }
 }

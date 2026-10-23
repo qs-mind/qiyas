@@ -32,10 +32,11 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 19] = [
+pub const READ_OPS: [&str; 21] = [
     "explain",
     "digest",
     "takeoff_kit",
+    "workflow",
     "takeoff_check",
     "document",
     "state",
@@ -51,10 +52,11 @@ pub const READ_OPS: [&str; 19] = [
     "history",
     "drawings",
     "selection",
+    "panel_state",
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 19] = [
+pub const EXECUTE_OPS: [&str; 20] = [
     "plan",
     "finish",
     "run",
@@ -63,6 +65,7 @@ pub const EXECUTE_OPS: [&str; 19] = [
     "set_records",
     "create_entities",
     "undo_own",
+    "redo_own",
     "select",
     "view",
     "new_drawing",
@@ -110,6 +113,7 @@ operations![
     (READ, "explain", [Nothing]),
     (READ, "digest", [Drawing]),
     (READ, "takeoff_kit", [Nothing]),
+    (READ, "workflow", [Nothing]),
     (READ, "takeoff_check", [Drawing]),
     (READ, "capabilities", [Nothing]),
     (READ, "commands", [Nothing]),
@@ -124,6 +128,7 @@ operations![
     (READ, "rooms", [Drawing]),
     (READ, "drawings", [Host], "list_drawings"),
     (READ, "selection", [Window, Drawing], "get_selection"),
+    (READ, "panel_state", [Window], "panel_state"),
     (EXECUTE, "plan", [Nothing]),
     (EXECUTE, "run", [Drawing]),
     (EXECUTE, "type", [Drawing]),
@@ -131,6 +136,7 @@ operations![
     (EXECUTE, "set_records", [Drawing]),
     (EXECUTE, "create_entities", [Drawing]),
     (EXECUTE, "undo_own", [Drawing]),
+    (EXECUTE, "redo_own", [Drawing]),
     (EXECUTE, "view", [Drawing]),
     (EXECUTE, "import_boq", [Drawing]),
     (EXECUTE, "compare", [Drawing]),
@@ -201,7 +207,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -215,7 +221,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: saves the drawing and writes the headless submission and end report); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -438,12 +444,15 @@ pub(crate) fn needs_sheet_authority(route: &Route) -> bool {
                 .is_some_and(|commands| commands.iter().any(changes)),
             "type" => args["line"].as_str().is_some_and(|line| {
                 matches!(
+                    line.trim().to_ascii_uppercase().as_str(),
+                    "UNDO" | "U" | "REDO"
+                ) || matches!(
                     qiyas_core::cmdline::Machine::default().step(line),
                     Ok(qiyas_core::cmdline::Step::Command(command)) if changes(&json!(command))
                 )
             }),
             "view" => args["sheet"].is_string(),
-            "undo_own" => true,
+            "undo_own" | "redo_own" => true,
             _ => false,
         },
         _ => false,
@@ -587,6 +596,9 @@ pub fn run_without_drawing(
         )
         .map_err(Into::into),
         "document" => crate::document::read(args),
+        "workflow" => Ok(
+            json!({"workflow":crate::prompt::takeoff_workflow(crate::prompt::Lang::from_code(args["language"].as_str().unwrap_or("en")))}),
+        ),
         "takeoff_kit" if units.is_none() => {
             let mut kit = qiyas_core::takeoff_kit::kit();
             finish_kit(&mut kit);
@@ -769,6 +781,9 @@ fn run_working_session(
         (READ, "digest") => {
             json(session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?)
         }
+        (READ, "workflow") => json(
+            json!({"workflow": crate::prompt::takeoff_workflow(crate::prompt::Lang::from_code(args["language"].as_str().unwrap_or("en")))}),
+        ),
         (READ, "takeoff_kit") => {
             let mut kit = qiyas_core::takeoff_kit::kit();
             let digest = session.drawing_digest(0)?;
@@ -882,6 +897,17 @@ fn run_working_session(
             let line = args["line"]
                 .as_str()
                 .ok_or_else(|| bad("type needs {line}: a complete typed command line"))?;
+            if matches!(
+                line.trim().to_ascii_uppercase().as_str(),
+                "UNDO" | "U" | "REDO"
+            ) {
+                let op = if line.trim().eq_ignore_ascii_case("REDO") {
+                    "redo_own"
+                } else {
+                    "undo_own"
+                };
+                return run_session_with_method(session, EXECUTE, op, &json!({}), source, method);
+            }
             let mut machine = qiyas_core::cmdline::Machine::default();
             machine.set_ucs(session.ucs);
             match machine.step(line).map_err(bad)? {
@@ -915,12 +941,24 @@ fn run_working_session(
             json(run_one(session, command, &input, source)?)
         }
         (EXECUTE, "batch") => json(batch(session, args, source)?),
+        (EXECUTE, "redo_own") => {
+            let step = session.history_steps().1.first().cloned();
+            let view = ViewState::of(session);
+            let redone = step.as_ref().is_some_and(|step| step.source == source) && session.redo();
+            let mut out = json!({"redone": redone, "no_change": !redone,
+                "step": if redone { step } else { None },
+                "why": if redone { Value::Null } else { json!("The next step is not yours, or there is none") },
+                "ui": {"action": "redraw"}});
+            view.update_ui(session, &mut out);
+            json(out)
+        }
         (EXECUTE, "undo_own") => {
             let label = session.history_steps().0.last().map(|s| s.label.clone());
             let view = ViewState::of(session);
             let undone = session.undo_if(source);
             let mut out = json!({
                 "undone": undone,
+            "no_change": !undone,
                 "step": if undone { label } else { None },
                 "why": if undone { Value::Null } else { json!("The last step is not yours, or there is none") },
                 "ui": { "action": "redraw" },
@@ -1102,7 +1140,7 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
         return Ok(json!({ "commands": list(cs) }));
     }
     Ok(json!({
-        "index": reg.index_text(),
+        "index": crate::prompt::command_index(),
         "operations": [plan_info()],
         "next": "qiyas_read commands {\"name\": \"…\"} gives a command's schema and examples",
     }))
@@ -1612,6 +1650,7 @@ fn changed(
     let mut out = json!({
         "ok": true,
         "command": label,
+        "no_change": effect == Effect::Edit && session.history_revision() == history_before,
         "effect": effect,
         "outcome": outcome,
         "added": change.added,
