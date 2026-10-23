@@ -92,6 +92,9 @@ pub struct RoomRow {
     /// Persistent closed boundary used by labels, schedules and take-off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary_handle: Option<u64>,
+    /// How a generated label fits: inside or wrapped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<String>,
 }
 
 /// A seed that found no room, and why.
@@ -252,6 +255,7 @@ impl Session {
                 label_point: labels.map(|(points, _)| points[i]),
                 label_handle: labels.and_then(|(_, handles)| handles.get(i).copied()),
                 boundary_handle: self.room_at(&self.sheet, room.point).map(|(h, _)| h),
+                placement: None,
             })
             .collect();
         RoomsReport {
@@ -272,7 +276,10 @@ impl Session {
     ) -> (f64, [f64; 2], LabelLanguage) {
         let label_height = height.map(|m| m / self.drawing.units.to_metres());
         let (h, at) = match room.from_text {
-            Some((h, at)) => (label_height.unwrap_or(h), [at[0], at[1] - LABEL_GAP * h]),
+            Some((h, at)) => (
+                label_height.unwrap_or((h * 0.7).max(self.default_text_height())),
+                [at[0], at[1] - LABEL_GAP * h],
+            ),
             None => (
                 label_height.unwrap_or_else(|| self.default_text_height()),
                 room.point,
@@ -352,6 +359,7 @@ impl Session {
             let previous = s.current.clone();
             let mut points = Vec::new();
             let mut handles = Vec::new();
+            let mut placements = Vec::new();
             for room in &rooms {
                 let boundary = s.keep_room(
                     room.name.clone(),
@@ -361,16 +369,22 @@ impl Session {
                     &q.boundary_layers,
                 )?;
                 let (h, at, language) = s.room_label(room, height, language);
-                points.push(at);
+
                 let template = s.room_label_template(boundary, language)?;
                 let code = crate::room_objects::room_area_code(&[boundary], decimals);
                 s.current.layer = layer.clone();
                 let handle = s.add_text(at, h, 0.0, template.replace("{area}", &code), None)?;
                 s.mark_room_label(handle, boundary, decimals);
+                let (at, wrapped) = s.fit_room_label(handle, &room.boundary, at)?;
+                points.push(at);
+                placements.push(if wrapped { "wrapped" } else { "inside" });
                 handles.push(handle);
             }
             s.current = previous;
             let mut report = s.report(&rooms, skipped, Some((&points, &handles)));
+            for (room, placement) in report.rooms.iter_mut().zip(placements) {
+                room.placement = Some(placement.into());
+            }
             report.layer = Some(layer);
             report.layer_created = Some(created);
             Ok(Outcome::Rooms {
@@ -439,7 +453,9 @@ impl Session {
                     .drawing
                     .doc
                     .get_entity(opencadcodec::Handle::new(row.handle))
-                    .is_some_and(crate::draw::room_boundary::is_grid)
+                    .is_some_and(|e| {
+                        crate::draw::room_boundary::is_grid(e) || crate::object_tags::is_tag(e)
+                    })
             {
                 continue;
             }

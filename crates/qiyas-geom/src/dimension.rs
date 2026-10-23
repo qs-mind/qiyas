@@ -422,9 +422,14 @@ fn by_block(mut e: EntityType) -> EntityType {
 struct Parts<'l> {
     look: &'l DimLook,
     out: Vec<EntityType>,
+    measured_width: Option<f64>,
 }
 
 impl Parts<'_> {
+    fn width(&self, text: &str, height: f64) -> f64 {
+        self.measured_width
+            .unwrap_or_else(|| text_width(text, height))
+    }
     fn line(&mut self, a: P, b: P) {
         if len(sub(a, b)) > 1e-12 {
             self.out
@@ -479,12 +484,23 @@ impl Parts<'_> {
 
 /// What `dim` draws in `doc`, generated from its definition points and its style.
 pub fn dimension_entities(doc: &CadDocument, dim: &Dimension) -> DimGeometry {
+    dimension_entities_with_width(doc, dim, None)
+}
+
+/// Generate dimension geometry with the width measured by the host text shaper.
+pub fn dimension_entities_with_width(
+    doc: &CadDocument,
+    dim: &Dimension,
+    width: Option<f64>,
+) -> DimGeometry {
     let look = DimLook::of(doc, dim);
     let text = dimension_text(dim, &look);
     let mut parts = Parts {
         look: &look,
         out: Vec::new(),
+        measured_width: None,
     };
+    parts.measured_width = width;
     let base = dim.base();
     let placed = base
         .text_user_positioned
@@ -579,7 +595,7 @@ pub fn dimension_entities(doc: &CadDocument, dim: &Dimension) -> DimGeometry {
             parts.line(elbow, landing);
             parts.line(landing, end);
             let dir = unit(sub(end, landing)).unwrap_or([1.0, 0.0]);
-            let w = text_width(&text, look.text_height);
+            let w = parts.width(&text, look.text_height);
             let r = readable(dir[1].atan2(dir[0]));
             let p = placed.unwrap_or(add(end, mul(dir, look.gap + w / 2.0)));
             parts.text(&text, p, r, look.text_height);
@@ -640,7 +656,7 @@ fn linear(
     let r = readable(along[1].atan2(along[0]));
     let mid = mul(add(a1, a2), 0.5);
     let h = look.text_height;
-    let w = text_width(text, h);
+    let w = parts.width(text, h);
     let at = match placed {
         Some(p) => p,
         None if look.text_above => add(mid, mul(left(polar(r)), look.gap + h / 2.0)),
@@ -690,7 +706,7 @@ fn radial(parts: &mut Parts, c: P, p: P, text: &str, placed: Option<P>) -> Optio
     let landing = add(p, mul(e, 2.0 * look.arrow));
     parts.line(c, landing);
     parts.arrow(p, mul(e, -1.0));
-    let w = text_width(text, look.text_height);
+    let w = parts.width(text, look.text_height);
     let side = if e[0] < 0.0 { -1.0 } else { 1.0 };
     let at = placed.unwrap_or(add(landing, [side * (look.gap + w / 2.0), 0.0]));
     parts.text(text, at, 0.0, look.text_height);
@@ -800,6 +816,7 @@ pub fn leader_entities(doc: &CadDocument, leader: &Leader) -> Vec<EntityType> {
     let mut parts = Parts {
         look: &look,
         out: Vec::new(),
+        measured_width: None,
     };
     let points: Vec<P> = leader.vertices.iter().map(xy).collect();
     if points.len() >= 2 {
@@ -826,6 +843,7 @@ pub fn tolerance_entities(doc: &CadDocument, tol: &Tolerance) -> Vec<EntityType>
     let mut parts = Parts {
         look: &look,
         out: Vec::new(),
+        measured_width: None,
     };
     if h.is_nan() || h <= 0.0 {
         return parts.out;

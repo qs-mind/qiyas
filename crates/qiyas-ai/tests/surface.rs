@@ -2324,3 +2324,44 @@ fn read_shortcuts_accept_the_same_handle_strings_as_commands() {
         assert_eq!(measured["length_m"], 1.0);
     }
 }
+
+#[tokio::test]
+async fn new_layout_warnings_are_visible_until_repaired() {
+    for repair in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new_blank(&dir.path().join("labels.dxf"), 6);
+        session
+            .run_input(
+                &json!({"type":"text","at":[0,0],"height":0.25,"value":"First label"}),
+                Source::User,
+            )
+            .unwrap();
+        let mut calls = vec![(
+            EXECUTE,
+            json!({"op":"run","args":{"command":{"type":"text","at":[0.02,0],"height":0.25,"value":"Second label"}}}),
+        )];
+        if repair {
+            calls.push((EXECUTE, json!({"op":"undo_own","args":{}})));
+        }
+        let mut agent = Agent::new(
+            Box::new(Script::new(calls, Arc::new(Mutex::new(Vec::new())))),
+            Arc::new(Mutex::new(Some(session))),
+            AgentSettings {
+                autonomy: qiyas_ai::Autonomy::PerJob,
+                ..Default::default()
+            },
+        );
+        let events = events_for(&mut agent, "Add a label").await;
+        assert_eq!(
+            matches!(events.last(), Some(AgentEvent::AwaitingApproval { .. })),
+            !repair,
+            "{events:?}"
+        );
+        let serialized = serde_json::to_string(agent.history()).unwrap();
+        assert!(
+            serialized.contains("text_overlaps_text"),
+            "The model must see what needs fixing"
+        );
+        assert!(serialized.contains("layout_findings"));
+    }
+}

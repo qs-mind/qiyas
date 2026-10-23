@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 18] = [
+pub const RULES: [&str; 22] = [
     "literal_newline",
     "duplicate",
     "overlap",
@@ -31,6 +31,10 @@ pub const RULES: [&str; 18] = [
     "room_size_text_differs",
     "room_area_mismatch",
     "dim_override_mismatch",
+    "object_tag_mismatch",
+    "annotation_overlap",
+    "annotation_over_grid",
+    "label_outside_room",
     "text_overlaps_text",
     "text_over_lines",
     "text_height_vs_scale",
@@ -63,14 +67,10 @@ const SIZE_SLACK: f64 = 0.05;
 /// Dimension overrides may differ by 5 mm as well as 1% of the measured length.
 const DIM_TOL_M: f64 = 0.005;
 /// Text on paper smaller than this can't be read, larger than this shouts (millimetres).
-const PAPER_MIN_MM: f64 = 1.5;
-const PAPER_MAX_MM: f64 = 15.0;
+pub(crate) const PAPER_MIN_MM: f64 = 2.5;
+pub(crate) const PAPER_MAX_MM: f64 = 15.0;
 /// Most findings listed (the counts count them all).
 const MAX_FINDINGS: usize = 200;
-/// Most texts looked at for rooms and collisions.
-const MAX_TEXTS: usize = 2_000;
-/// Most room texts traced round.
-const MAX_ROOMS: usize = 200;
 
 /// What to check.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -82,12 +82,16 @@ pub struct CheckScope {
     /// when empty.
     pub handles: Vec<u64>,
     /// Packs to check: "general" and "construction". Empty selects general, plus construction
-    /// when the drawing has take-off rows or a layer named for rooms, spaces or areas.
+    /// when the drawing has retained rooms, take-off rows or enclosure geometry. Explicit rule
+    /// requests run regardless of that inference; an explicit pack remains binding.
+    #[schemars(extend("items" = serde_json::json!({"type":"string","enum":["general","construction"]})))]
     pub packs: Vec<String>,
     /// Only these rules; every rule when empty: literal_newline, duplicate, overlap,
     /// dangling_end, overshoot, tiny_segment, room_open, room_size_text_differs,
     /// dim_override_mismatch, text_overlaps_text, text_over_lines, text_height_vs_scale,
-    /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark.
+    /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark,
+    /// room_area_mismatch, annotation_overlap, annotation_over_grid, label_outside_room, object_tag_mismatch.
+    #[schemars(extend("items" = serde_json::json!({"type":"string","enum":RULES})))]
     pub rules: Vec<String>,
 }
 
@@ -119,6 +123,10 @@ pub struct CheckReport {
     pub sheet: String,
     /// Entities looked at.
     pub entities: usize,
+    /// False when a nested entity or room could not be checked completely.
+    pub complete: bool,
+    pub not_checked: Vec<u64>,
+    pub checked_rules: Vec<String>,
     /// Findings, errors first, at most 200.
     pub findings: Vec<Finding>,
     /// Every finding by rule, listed or not.
@@ -245,7 +253,7 @@ impl Grid {
 impl Session {
     /// Definitions inherit the space of their reference. A dimension/table block is not a
     /// paper layout merely because its name differs from Model_Space.
-    fn check_space(&self, block: &str) -> (f64, f64) {
+    pub(crate) fn check_space(&self, block: &str) -> (f64, f64) {
         let doc = &self.drawing.doc;
         let mut name = block.to_string();
         let mut seen = HashSet::new();
@@ -306,16 +314,17 @@ impl Session {
         let unit = |metres: f64| metres / to_m;
         let doc = &self.drawing.doc;
         let construction = !self.takeoff.items.is_empty()
-            || doc.layers.iter().any(|layer| {
-                let name = layer.name.to_lowercase();
-                ["room", "space", "area"]
-                    .iter()
-                    .any(|word| name.contains(word))
+            || self.has_rooms()
+            || doc.entities_in_block(&sheet).any(|e| {
+                matches!(
+                    e,
+                    EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_)
+                )
             });
         let wanted = |rule: &str| {
             let pack = rule_pack(rule);
             let enabled = if scope.packs.is_empty() {
-                pack == "general" || construction
+                pack == "general" || construction || !scope.rules.is_empty()
             } else {
                 scope.packs.iter().any(|p| p == pack)
             };
@@ -346,6 +355,14 @@ impl Session {
         let entities: Vec<&EntityType> = self.drawing.entities_in(&sheet).collect();
         let mut drawn: Vec<Drawn> = Vec::new();
         for e in &entities {
+            if e.common().invisible
+                || doc
+                    .layers
+                    .get(&e.common().layer)
+                    .is_some_and(|l| !l.is_plottable || l.flags.off || l.flags.frozen)
+            {
+                continue;
+            }
             let open = match e {
                 EntityType::Line(_) | EntityType::Arc(_) => true,
                 EntityType::LwPolyline(p) => !p.is_closed,
@@ -471,7 +488,6 @@ impl Session {
         let texts: Vec<_> = entities
             .iter()
             .filter(|e| matches!(e, EntityType::Text(_) | EntityType::MText(_)))
-            .take(MAX_TEXTS)
             .map(|e| {
                 self.entity_row(
                     &xrefs,
@@ -506,82 +522,12 @@ impl Session {
                 }
             }
         }
-        if wanted("text_overlaps_text") {
-            for (i, a) in texts.iter().enumerate() {
-                for b in &texts[i + 1..] {
-                    let (ia, ib) = (area(a.bounds), area(b.bounds));
-                    let shared = area_of(intersect(a.bounds, b.bounds));
-                    if shared > 0.1 * ia.min(ib) && ia > 0.0 && ib > 0.0 {
-                        push(Finding {
-                            rule: "text_overlaps_text",
-                            pack: "general",
-                            severity: Severity::Warning,
-                            handles: vec![a.handle, b.handle],
-                            at: Some(centre(intersect(a.bounds, b.bounds).unwrap_or(a.bounds))),
-                            message: format!(
-                                "\"{}\" and \"{}\" overlap",
-                                clip(a.text.as_deref()),
-                                clip(b.text.as_deref())
-                            ),
-                        });
-                    }
-                }
-            }
-        }
-        if wanted("text_over_lines") {
-            for t in &texts {
-                let Some(entity) = doc.get_entity(opencadcodec::Handle::new(t.handle)) else {
-                    continue;
-                };
-                let paths = qiyas_geom::flatten(doc, entity, &Xform::identity(), tol).into_paths();
-                let Some(outline) = paths.first().filter(|p| p.points.len() >= 4) else {
-                    continue;
-                };
-                let crossing = grid.within(t.bounds).into_iter().find(|&s| {
-                    let s = grid.segs[s];
-                    segment_hits_text(s.a, s.b, &outline.points)
-                });
-                if let Some(s) = crossing {
-                    push(Finding {
-                        rule: "text_over_lines",
-                        pack: "general",
-                        severity: Severity::Warning,
-                        handles: vec![t.handle, drawn[grid.segs[s].owner].handle],
-                        at: Some(centre(t.bounds)),
-                        message: format!("a line runs through \"{}\"", clip(t.text.as_deref())),
-                    });
-                }
-            }
-        }
-        if wanted("text_height_vs_scale") {
-            let (scale_name, _) = self.annotation_scale();
-            for e in &entities {
-                let height = match e {
-                    EntityType::Text(t) => t.height,
-                    EntityType::MText(t) => t.height,
-                    _ => continue,
-                };
-                let paper_mm = height * to_m * 1000.0 / paper_scale;
-                if paper_mm > 0.0 && !(PAPER_MIN_MM..=PAPER_MAX_MM).contains(&paper_mm) {
-                    let small = paper_mm < PAPER_MIN_MM;
-                    push(Finding {
-                        rule: "text_height_vs_scale",
-                        pack: "general",
-                        severity: Severity::Warning,
-                        handles: vec![e.common().handle.value()],
-                        at: None,
-                        message: format!(
-                            "text {} on paper at {scale_name}: {}",
-                            format_args!("{paper_mm:.1} mm"),
-                            if small {
-                                "too small to read"
-                            } else {
-                                "far larger than notes and labels"
-                            }
-                        ),
-                    });
-                }
-            }
+        let ink = self.sheet_ink(&sheet);
+        let mut not_checked = ink.incomplete.clone();
+        self.check_layout_ink(&ink, &sheet, to_m, paper_scale, &mut push);
+
+        if wanted("object_tag_mismatch") {
+            self.check_object_tags(&sheet, &mut push);
         }
 
         if wanted("room_area_mismatch") {
@@ -590,7 +536,7 @@ impl Session {
 
         // Rooms.
         if wanted("room_open") || wanted("room_size_text_differs") {
-            self.check_rooms(&texts, &sheet, to_m, &mut push);
+            self.check_rooms(&texts, &sheet, to_m, &mut not_checked, &mut push);
         }
 
         // Dimensions.
@@ -746,10 +692,26 @@ impl Session {
             .filter(|f| f.severity == Severity::Warning)
             .count();
         found.truncate(limit);
-        let line = check_line(errors, warnings, found.len(), &counts);
+        not_checked.sort_unstable();
+        not_checked.dedup();
+        let complete = not_checked.is_empty();
+        let mut line = check_line(errors, warnings, found.len(), &counts);
+        if !complete {
+            line = format!(
+                "Incomplete check: {} entities not checked. {line}",
+                not_checked.len()
+            );
+        }
         CheckReport {
             sheet,
             entities: entities.len(),
+            complete,
+            not_checked,
+            checked_rules: RULES
+                .iter()
+                .filter(|r| wanted(r))
+                .map(|r| (*r).into())
+                .collect(),
             findings: found,
             counts,
             errors,
@@ -875,19 +837,32 @@ impl Session {
         texts: &[crate::EntityRow],
         sheet: &str,
         to_m: f64,
+        not_checked: &mut Vec<u64>,
         push: &mut impl FnMut(Finding),
     ) {
         let roomish = |r: &crate::EntityRow| {
-            let layer = r.layer.to_lowercase();
             let text = r.text.as_deref().unwrap_or("");
-            !layer.starts_with("qiyas")
+            !text.trim().is_empty()
                 && !crate::rooms::looks_like_a_label(text)
-                && (["room", "space", "name", "area"]
-                    .iter()
-                    .any(|w| layer.contains(w))
-                    || size_label(text).is_some())
+                && self
+                    .drawing
+                    .doc
+                    .get_entity(opencadcodec::Handle::new(r.handle))
+                    .is_some_and(|e| {
+                        !crate::object_tags::is_tag(e)
+                            && e.common()
+                                .extended_data
+                                .get_record(crate::conventions::GRID_APP)
+                                .is_none()
+                            && self
+                                .drawing
+                                .doc
+                                .layers
+                                .get(&e.common().layer)
+                                .is_none_or(|l| l.is_plottable)
+                    })
         };
-        for row in texts.iter().filter(|r| roomish(r)).take(MAX_ROOMS) {
+        for row in texts.iter().filter(|r| roomish(r)) {
             let text = row.text.as_deref().unwrap_or("");
             let at = centre(row.bounds);
             match self.room_boundary_in(sheet, at, &Default::default()) {
@@ -924,7 +899,7 @@ impl Session {
                         clip(Some(text))
                     ),
                 }),
-                Boundary::TooDense => {}
+                Boundary::TooDense => not_checked.push(row.handle),
             }
         }
     }
@@ -1113,7 +1088,7 @@ fn far_off(
     push: &mut impl FnMut(Finding),
 ) {
     let mut centres: Vec<(u64, [f64; 2])> = Vec::new();
-    for e in entities.iter().take(20_000) {
+    for e in entities.iter() {
         if matches!(
             e,
             EntityType::Viewport(_) | EntityType::Ray(_) | EntityType::XLine(_)
@@ -1356,51 +1331,6 @@ fn centre(b: [[f64; 2]; 2]) -> [f64; 2] {
     midpoint(b[0], b[1])
 }
 
-fn area(b: [[f64; 2]; 2]) -> f64 {
-    (b[1][0] - b[0][0]).max(0.0) * (b[1][1] - b[0][1]).max(0.0)
-}
-
-fn intersect(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> Option<[[f64; 2]; 2]> {
-    let lo = [a[0][0].max(b[0][0]), a[0][1].max(b[0][1])];
-    let hi = [a[1][0].min(b[1][0]), a[1][1].min(b[1][1])];
-    (lo[0] < hi[0] && lo[1] < hi[1]).then_some([lo, hi])
-}
-
-fn area_of(b: Option<[[f64; 2]; 2]>) -> f64 {
-    b.map_or(0.0, area)
-}
-
-/// Work in the text's own rotated box. Its axis-aligned bounds include empty corners, which
-/// would falsely collide with a dimension line parallel to the text's baseline.
-fn segment_hits_text(a: [f64; 2], b: [f64; 2], corners: &[[f64; 2]]) -> bool {
-    let origin = corners[0];
-    let x = [corners[1][0] - origin[0], corners[1][1] - origin[1]];
-    let y = [corners[3][0] - origin[0], corners[3][1] - origin[1]];
-    let determinant = x[0] * y[1] - x[1] * y[0];
-    if determinant.abs() <= f64::MIN_POSITIVE {
-        return false;
-    }
-    let local = |p: [f64; 2]| {
-        let p = [p[0] - origin[0], p[1] - origin[1]];
-        [
-            (p[0] * y[1] - p[1] * y[0]) / determinant,
-            (x[0] * p[1] - x[1] * p[0]) / determinant,
-        ]
-    };
-    segment_hits_box(local(a), local(b), [[0.2, 0.2], [0.8, 0.8]])
-}
-
-/// Whether the segment crosses into the box.
-fn segment_hits_box(a: [f64; 2], b: [f64; 2], bx: [[f64; 2]; 2]) -> bool {
-    let inside =
-        |p: [f64; 2]| p[0] > bx[0][0] && p[0] < bx[1][0] && p[1] > bx[0][1] && p[1] < bx[1][1];
-    if inside(a) || inside(b) {
-        return true;
-    }
-    let corners = [bx[0], [bx[1][0], bx[0][1]], bx[1], [bx[0][0], bx[1][1]]];
-    (0..4).any(|i| crossing(a, b, corners[i], corners[(i + 1) % 4]).is_some())
-}
-
 /// The straight segments of a flattened path, including its closing edge.
 fn segments(path: &qiyas_geom::Path) -> impl Iterator<Item = ([f64; 2], [f64; 2])> + '_ {
     let count = if path.closed && path.points.len() > 2 {
@@ -1409,4 +1339,38 @@ fn segments(path: &qiyas_geom::Path) -> impl Iterator<Item = ([f64; 2], [f64; 2]
         path.points.len().saturating_sub(1)
     };
     (0..count).map(|i| (path.points[i], path.points[(i + 1) % path.points.len()]))
+}
+
+/// Layout findings must be repaired before an annotation job is complete.
+pub fn layout_rule(rule: &str) -> bool {
+    matches!(
+        rule,
+        "annotation_overlap"
+            | "annotation_over_grid"
+            | "label_outside_room"
+            | "text_overlaps_text"
+            | "text_over_lines"
+            | "text_height_vs_scale"
+            | "object_tag_mismatch"
+    )
+}
+impl CheckScope {
+    pub fn validate(&self) -> Result<(), crate::CoreError> {
+        if let Some(rule) = self.rules.iter().find(|r| !RULES.contains(&r.as_str())) {
+            return Err(crate::CoreError::InvalidCommand(format!(
+                "Unknown drawing check {rule}. Choose: {}",
+                RULES.join(", ")
+            )));
+        }
+        if let Some(pack) = self
+            .packs
+            .iter()
+            .find(|p| !["general", "construction"].contains(&p.as_str()))
+        {
+            return Err(crate::CoreError::InvalidCommand(format!(
+                "Unknown check pack {pack}. Choose general or construction"
+            )));
+        }
+        Ok(())
+    }
 }

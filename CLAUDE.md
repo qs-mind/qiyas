@@ -391,7 +391,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   lines clipped to the boundary (range flag `PATTERN`, never part of a hatch boundary, left out
   when denser than 20,000 lines); rays and xlines run across the sheet without growing its
   bounds; multilines draw their element lines but measure along their centre line (the drawn
-  points); points draw as a cross (PDSIZE, or 1% of the sheet). Splines flatten from control
+  points); points obey PDMODE (dot, hidden, plus, cross, tick, circle and square combinations) and PDSIZE (drawing size, or a percentage of sheet size). Splines flatten from control
   points and knots (the curve through the fit points when there are none). Measuring sees
   outlines only (`FlattenOutcome::into_paths`).
 
@@ -1643,7 +1643,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Lines are paper millimetres: the plot style's lineweight, else the entity's with `lineweights`
   (ByLayer and ByBlock resolved as inside blocks, Default 0.25 mm), else the thinnest line. White
   plots black. Layers set not to plot are left out, and Defpoints never plots (an xref's
-  either). Linetypes plot continuous, as the screen draws them.
+  either). Simple dash, gap and dot linetypes plot as they appear on screen; patterns resolve ByLayer and ByBlock and apply entity and global linetype scales. Complex linetype text/shapes and viewport-specific PSLTSCALE remain unsupported.
 - Text is real PDF text: each font used becomes an embedded TrueType subset (`subsetter`, Type0,
   Identity-H) with a ToUnicode map from the shaped text (`LaidText::text`, `Session::font_bytes`).
   The map keeps the first characters seen per glyph, and Noto Sans Arabic draws letters that
@@ -1713,8 +1713,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Older grids recover axis and letter provenance from stamped bubbles when opened.
   These are unapproved candidate areas. `LabelSpaces { query, layer, height, decimals,
   language }` writes "Area 19.31 m²" or "المساحة ١٩٫٣١ م²" (Arabic digits and decimal separator).
-  The label sits 1.6 name heights below the name, or at the seed point. An explicit `height`
-  is in metres; otherwise it uses the name's height, or the default text height for a seed.
+  Labels prefer the space below the name or near the seed, then search inside the room and wrap
+  at the same height when necessary. Default height is 70% of the name height, at least 2.5 mm
+  on paper; an explicit `height` is in metres. Values and units stay together when wrapping.
+  The report says `placement: inside|wrapped`. A room too small for readable text returns a
+  clear error and rolls back, so the caller can choose a larger scale or an external linked note.
   Both return `Outcome::Rooms`; labelling is one transaction named `label_spaces`.
   Labels now contain live `QiyasRoomArea` fields. `LabelSpaces` retains each closed outer ring
   as a polyline on non-plotting `A-ROOM-BOUNDARY`, with its seed, name, exact bulges and islands
@@ -1768,8 +1771,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `qiyas-core/src/check.rs`: `Command::CheckDrawing { scope }` (`Session::check_drawing`)
   checks the current sheet, or `scope.sheet`. Optional `handles` and `rules` keep only the
   findings requested. `scope.packs` selects `general` and/or `construction`. Empty selects
-  general, plus construction when the drawing has take-off rows or a layer suggesting rooms,
-  spaces or areas. An explicit `["general"]` keeps construction rules off.
+  general, plus construction when the drawing has retained rooms, take-off rows or enclosure
+  geometry. Explicit rule requests run independently of inference; an explicit `["general"]`
+  keeps construction rules off. Room candidates never depend on English layer fragments.
+  Unknown rule or pack names are validation errors; the schemas list every allowed name.
   It reads without changing the drawing or undo history.
 - Rules find short or overshooting ends, duplicates, overlaps, tiny segments, open
   rooms, room-size text that differs, text collisions and poor paper height, layer 0, explicit
@@ -1799,7 +1804,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   wall loops, junctions, openings near ends and corners, and small curves. No error or warning
   is accepted; informational notes are allowed.
 - `Outcome::Checked` gives each finding's rule, pack, severity, handles, place and message,
-  counts by rule and a short summary. At most 200 findings are listed.
+  counts by rule and a short summary. At most 200 findings are listed; every text and room
+  candidate is inspected. `checked_rules`, `complete` and `not_checked` disclose coverage.
+  Nested geometry limits, unsupported multileaders/viewports and dense room tracing make the
+  report explicitly incomplete. `check_drawing_all` also removes the findings display limit.
 
 ## Verify
 
@@ -2660,3 +2668,50 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 Headless take-off evaluation keeps its own brief stopped-run summary when a request/cost cap or
 provider error arrives before a completed answer. That report belongs to the evaluation host;
 it is not appended to desktop drawing chats. The existing budget-stop report test remains intact.
+
+
+## Goal G: drawing quality and honest checks (23 October 2026)
+
+- `ink.rs` builds a spatial index of plotted geometry with top-level ownership. It flattens
+  tables, dimensions, blocks, attributes, leaders and hatches, excludes non-plotting/hidden
+  layers, and shapes text through the same `TextEngine` as the viewport. Query bounds also use
+  shaped text. Checks use full oriented footprints, including text edges, solid fill interiors
+  and table cells. Text is also checked against its own cell borders or symbol geometry; the reserved table
+  footprint itself is excluded from these internal checks. Dimension extension-line connections
+  and arrows touching measured geometry are allowed.
+- Added `annotation_overlap`, `annotation_over_grid`, `label_outside_room` and
+  `object_tag_mismatch`. The minimum readable text height is 2.5 mm on paper. Annotation
+  warnings introduced in a Mizan phase join its existing error gate. Automatic results report
+  `layout_findings` and coverage; the English/Arabic prompts add only a short repair note.
+- Registry `free_space {size:[w,h] | entity, near?, side?:any|right|below, clearance_mm?,
+  sheet?, within?}` reads without changing drawing/history. Size and coordinates are drawing
+  units; clearance is paper mm (default 2.5). It returns up to eight ranked top-left positions,
+  bounds, deltas, current collisions, and occupied plotted bounds. A finite candidate search
+  can return no position; that does not prove that none exists. Incomplete source geometry is
+  refused rather than treated as empty space.
+- Registry `auto_place {targets, near?, side?, clearance_mm?}` places tables and labels in
+  available space in one undo step. Live room labels stay inside their own region, wrapping
+  when necessary. Linear/aligned dimensions retain measured endpoints and search both sides
+  for a clear dimension line, including extension lines against grid bubbles and annotations.
+  Explicit dimension creation coordinates stay literal: use the helper to resolve findings.
+  Failed placement rolls back. `room_schedule` and `opening_schedule` accept omitted `at`,
+  placing beyond the annotated extents with 10 mm paper clearance. Explicit `at` is top-left.
+- Registry `object_tags {targets, property, height?}` labels any text/number object property,
+  including door/window `mark`, at 2.5 mm paper height by default. Tags store the object's
+  persistent identity, follow its position/property through edits, undo and DWG/DXF, and reuse
+  existing tags. Rebuilt source handles follow the existing field-remapping pass. They use the
+  same free-space search. Manual offsets are retained when the
+  source moves. Missing sources or divergent tag text are findings. Opening schedules supply
+  their marks; custom mark policy remains Goal B's work.
+- The legacy door recipe uses `host_width / 2` for the hinge's normal offset: the face on the
+  swing side. No object or wall engine logic changed. New linetype painting leaves measured
+  paths continuous and applies dash phase across path vertices. Screen/capture/PDF share it.
+  Hatch/room boundary tracing uses `flatten_continuous_within`, including block arrays: printed
+  gaps never open or divide the underlying CAD geometry.
+  Imported PDMODE 1 points draw nothing; PDMODE 0 is a dot. Positive PDSIZE is a drawing-unit
+  size; negative PDSIZE is a percentage of the sheet extent (not a zoom-dependent viewport size).
+- Dimension generation accepts the rendered text width for gaps and leader landings, so radius
+  and ordinate text no longer rely on a character-count estimate.
+- Approval remains in the room/take-off report. Plan wording stays `Area 19.31 m²` /
+  `المساحة ١٩٫٣١ م²`, with Arabic digits and decimal separator. No new dependencies or licence changes.
+- Evidence and exact check results: `docs/2026-10-23-qiyas-goal-G.md`.

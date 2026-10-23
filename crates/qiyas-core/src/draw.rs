@@ -17,7 +17,7 @@ use opencadcodec::{
     Vector2, Vector3,
 };
 use opencadkernel::geom2d::{bounded_faces, Curve, Line as KernelLine, NurbsCurve, Tolerance};
-use qiyas_geom::{flatten, flatten_within, snap_shapes, Paint, Xform};
+use qiyas_geom::{flatten, flatten_continuous_within, snap_shapes, Paint, Xform};
 use qiyas_render::layer_shown_with;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1033,12 +1033,13 @@ impl Session {
     /// coordinates, as the sheet draws them (multiline elements, rays across the box, no texts,
     /// pattern lines or hidden layers): the segments reaching into the box `lo hi`, and the
     /// circles and arcs among the entities' true shapes. An entity inside an arrayed block
-    /// reference keeps its drawn segments.
+    /// reference is flattened once with continuous CAD edges.
     fn exact_near(&self, near: &Near, lo: [f64; 2], hi: [f64; 2]) -> (Vec<[f64; 4]>, Vec<Round>) {
         let xrefs = self.xref_docs();
         let doc = &self.drawing.doc;
         let mut segments = Vec::new();
         let mut rounds = Vec::new();
+        let mut arrays = std::collections::BTreeSet::new();
         let reaches = |[x0, y0, x1, y1]: [f64; 4]| {
             x0.min(x1) <= hi[0] && x0.max(x1) >= lo[0] && y0.min(y1) <= hi[1] && y0.max(y1) >= lo[1]
         };
@@ -1058,20 +1059,27 @@ impl Session {
             }) {
                 continue;
             }
-            let arrayed = chain.iter().any(|&h| {
+            let arrayed = chain.iter().position(|&h| {
                 matches!(doc.get_entity(Handle::new(h)),
                     Some(EntityType::Insert(r)) if r.row_count > 1 || r.column_count > 1)
             });
-            let located = locate(doc, &xrefs, *handle, chain)
-                .ok()
-                .filter(|_| !arrayed);
+            let located = if let Some(index) = arrayed {
+                // Rebuild the whole array once: painted dashes are not its CAD edges.
+                let source = (chain[index], chain[..index].to_vec());
+                if !arrays.insert(source.clone()) {
+                    continue;
+                }
+                locate(doc, &xrefs, source.0, &source.1).ok()
+            } else {
+                locate(doc, &xrefs, *handle, chain).ok()
+            };
             let Some(located) = located else {
                 let drawn = near.drawn.iter().filter(|(k, _)| *k == i);
                 segments.extend(drawn.map(|(_, s)| *s));
                 continue;
             };
             let mut budget = qiyas_geom::MAX_WORK;
-            let flat = flatten_within(
+            let flat = flatten_continuous_within(
                 located.doc,
                 &xrefs,
                 located.entity,

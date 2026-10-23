@@ -51,7 +51,14 @@ fn wall_faces_ignore_doors_windows_grid_and_annotation_in_all_units() {
             };
             let label = report.rooms[0].label_handle.unwrap();
             assert_eq!(
-                s.entity_info(label, &[]).unwrap().text.unwrap(),
+                // Wrapping keeps the value and unit together with a non-breaking space.
+                s.entity_info(label, &[])
+                    .unwrap()
+                    .text
+                    .unwrap()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 "المساحة ٢٠٫٠٠ م²"
             );
             run(

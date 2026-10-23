@@ -1832,7 +1832,10 @@ fn drawing_errors(session: &Session, handles: &[u64]) -> BTreeSet<String> {
     report
         .findings
         .into_iter()
-        .filter(|f| f.severity == qiyas_core::check::Severity::Error)
+        .filter(|f| {
+            f.severity == qiyas_core::check::Severity::Error
+                || qiyas_core::check::layout_rule(f.rule)
+        })
         .map(|mut f| {
             f.handles.sort_unstable();
             format!("{}:{}:{:?}", report.sheet, f.rule, f.handles)

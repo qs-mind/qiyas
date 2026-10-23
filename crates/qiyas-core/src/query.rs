@@ -454,8 +454,24 @@ impl Session {
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
     pub(crate) fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
-        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, self.batch_tol()).into_paths();
-        let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
+        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, self.batch_tol()).paths;
+        let points: Vec<[f64; 2]> = paths
+            .into_iter()
+            .flat_map(|p| {
+                p.text
+                    .as_ref()
+                    .and_then(|text| {
+                        self.text.borrow_mut().lay_out_text(
+                            c.doc,
+                            xrefs,
+                            text,
+                            self.arabic_reversed,
+                        )
+                    })
+                    .map(|laid| laid.corners.to_vec())
+                    .unwrap_or(p.path.points)
+            })
+            .collect();
         if !points.is_empty() {
             return points;
         }

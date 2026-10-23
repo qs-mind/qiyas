@@ -158,3 +158,8 @@ pub mod data_home;
 pub mod projects;
 
 pub mod deliverables;
+
+mod check_layout;
+mod ink;
+mod object_tags;
+pub mod placement;
