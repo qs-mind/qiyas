@@ -9,6 +9,32 @@ section below, so add the section before pushing the tag.
 
 ### Added
 
+- Mizan takes off a drawing alone. It reads a one-call drawing digest and a take-off kit, writes
+  its own recognition and measurement rules as data, generates the BOQ, checks itself, and
+  ends with the items it is unsure of. On the sealed holdout benchmark it found 96% of the items,
+  and 96% of all items were within ±2%.
+- Measurement methods as data, chosen in Settings: cited deduction, unit and rounding rules,
+  dimension sheets that trace every line to its handle, and a bilingual generated BOQ that
+  follows every edit.
+- A discrepancy engine raises bilingual RFIs with clouds when an imported BOQ and the drawing
+  disagree, or when a schedule and the plan disagree.
+- Revisions: compare drawing A with drawing B, carry the knowledge across, and get a
+  variation statement per item with the changes clouded.
+- Projects: many drawings combined into one BOQ, with cross-drawing checks and a drawing
+  register. `qiyas-cli project run` builds the whole project.
+- Deliverables in English and Arabic Excel and PDF: dimension sheets, BOQ, queries,
+  variation statement and drawing register. Qiyas can also fill a client's own BOQ template,
+  writing quantity cells only.
+- "How did you get this number?" for any quantity, confidence bands, and browsing the drawing
+  while Mizan works.
+- `qiyas-cli mcp`: a headless MCP server, so Codex, Claude Code or any MCP client can drive
+  Qiyas with Mizan's own take-off workflow. `qiyas-cli eval-agent` scores such an agent on the
+  benchmark.
+- The QS benchmark (`qiyas-cli bench`), which measures coverage, precision, accuracy,
+  traceability, seeded errors and revisions, with a sealed holdout exam.
+- Saved conversations, approval modes (per job, per phase, autonomous) and a method of
+  measurement setting.
+
 - Check a command or a whole batch before running it, with all input problems reported
   together. Unknown fields are shown as warnings, and results say which defaults were used.
 - Outside agents can safely retry an edit with a request id without drawing it twice.
