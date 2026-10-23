@@ -5,10 +5,16 @@
 //! It opens drawings as the app does (the failsafe reader, the `.qiyas` project file beside a
 //! drawing when there is one) and writes only what it is asked to: a converted drawing (alone,
 //! no project file), a script's SAVE, SAVEAS and EXPORT, a take-off workbook. It never opens a
-//! window and never touches the app's settings, the keychain, MCP, the AI, or the autosaves and
+//! window. Only explicitly approved `eval` runs access provider settings, keychain and AI.
+//! Ordinary commands never touch these, or the autosaves and
 //! lock files beside drawings. Exit codes: 0 done; 1 an error (one line on stderr,
 //! `qiyas-cli: ...`, a mistake in the arguments too); 2 done, but a drawing opened with problems
 //! the reader repaired (a warning, one line on stderr).
+
+mod bench;
+mod eval;
+mod eval_agent;
+mod headless;
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +50,43 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Export quantities from a drawing or a saved project using a data-defined layout.
+    Export {
+        source: PathBuf,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        format: String,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        layout: Option<String>,
+        #[arg(long, default_value = "en")]
+        language: String,
+    },
+    /// Run a project take-off and write its workbook and morning report.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCli,
+    },
+    /// Carry A's knowledge onto B, remeasure, cloud changes and export variation quantities.
+    Variation {
+        a: PathBuf,
+        b: PathBuf,
+        #[arg(long)]
+        export: PathBuf,
+        /// Save B with its knowledge and clouds to a new drawing.
+        #[arg(long)]
+        drawing_output: Option<PathBuf>,
+    },
+    /// Generate, run and score the local development QS benchmark.
+    Bench(bench::BenchArgs),
+    /// Run Mizan headlessly on one dev case, with explicit approval and a daily budget.
+    Eval(eval::EvalArgs),
+    /// Serve the three Qiyas MCP tools over stdio without a window or credentials.
+    Mcp(headless::McpArgs),
+    /// Evaluate a subscription agent through headless MCP, without paid API calls.
+    EvalAgent(eval_agent::EvalAgentArgs),
     /// Converts a drawing between DWG and DXF, by the output's extension: the drawing alone, as
     /// read (no project file, no take-off embedded).
     Convert {
@@ -104,6 +147,24 @@ fn parse_version(text: &str) -> Result<DxfVersion, String> {
 
 /// How a command finished without an error: cleanly, or with a warning for stderr (exit 2).
 type Done = Result<Option<String>, String>;
+
+#[derive(Subcommand)]
+enum ProjectCli {
+    Run {
+        /// Deliverable kinds, comma separated; all exports the five kinds.
+        #[arg(long)]
+        deliverables: Option<String>,
+        #[arg(long, default_value = "excel,pdf")]
+        formats: String,
+        #[arg(long, default_value = "en")]
+        language: String,
+        #[arg(long)]
+        layout: Option<String>,
+        project: PathBuf,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
 
 fn main() -> ExitCode {
     // A panic (the reader on a damaged drawing) becomes a one-line error below, not a backtrace.
@@ -188,6 +249,25 @@ impl Out {
 
 fn dispatch(cmd: &Cmd, out: &Out) -> Done {
     match cmd {
+        Cmd::Mcp(args) => headless::run(args),
+        Cmd::EvalAgent(args) => {
+            let result = eval_agent::run(args)?;
+            out.text(serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
+            out.json(&result);
+            Ok(None)
+        }
+        Cmd::Bench(args) => {
+            let result = bench::run(args)?;
+            out.text(serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
+            out.json(&result);
+            Ok(None)
+        }
+        Cmd::Eval(args) => {
+            let result = eval::run(args)?;
+            out.text(serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
+            out.json(&result);
+            Ok(None)
+        }
         Cmd::Convert {
             input,
             output,
@@ -198,6 +278,110 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
             drawing,
             allow_repaired_save,
         } => run(out, script, drawing.as_deref(), *allow_repaired_save),
+        Cmd::Export {
+            source,
+            kind,
+            format,
+            path,
+            layout,
+            language,
+        } => {
+            export_deliverable(source, kind, format, path, layout.as_deref(), language)?;
+            out.json(&serde_json::json!({"written":path}));
+            Ok(None)
+        }
+        Cmd::Project {
+            command:
+                ProjectCli::Run {
+                    project,
+                    out: folder,
+                    deliverables,
+                    formats,
+                    language,
+                    layout,
+                },
+        } => {
+            let path = qiyas_boq::project::resolve(project)?;
+            let result = qiyas_boq::project::run(
+                &mut qiyas_boq::project::session()?,
+                &path.to_string_lossy(),
+                folder.as_deref(),
+                Source::User,
+            )?;
+            if let Some(kinds) = deliverables {
+                let names = if kinds == "all" {
+                    "dimensions,boq,queries,variation,register"
+                } else {
+                    kinds.as_str()
+                };
+                for kind in names.split(',') {
+                    for format in formats.split(',') {
+                        let folder = folder
+                            .clone()
+                            .unwrap_or_else(|| path.with_extension("output"));
+                        let folder = folder.canonicalize().map_err(|e| e.to_string())?;
+                        let name = folder.join(format!(
+                            "{kind}-{language}.{}",
+                            if format == "pdf" { "pdf" } else { "xlsx" }
+                        ));
+                        export_deliverable(
+                            &path,
+                            kind,
+                            format,
+                            &name.to_string_lossy(),
+                            layout.as_deref(),
+                            language,
+                        )?;
+                    }
+                }
+            }
+            out.json(&result);
+            out.text(format!(
+                "Project workbook: {}. Morning report: {}",
+                result["workbook"].as_str().unwrap_or(""),
+                result["morning_report"].as_str().unwrap_or("")
+            ));
+            if result["failed"].as_u64().unwrap_or(0) > 0 {
+                Err("Project has failed drawings; see the morning report".into())
+            } else if result["checked"] == false {
+                Ok(Some(
+                    "Project checks incomplete; see the morning report".into(),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        Cmd::Variation {
+            a,
+            b,
+            export,
+            drawing_output,
+        } => {
+            let mut session = Session::open_standalone(b).map_err(|e| e.to_string())?;
+            let a = a.canonicalize().map_err(|e| e.to_string())?;
+            session
+                .run(Command::CarryKnowledge {
+                    from_path: a.to_string_lossy().into(),
+                    tolerance: None,
+                })
+                .map_err(|e| e.to_string())?;
+            session
+                .run(Command::VariationReport { layer: None })
+                .map_err(|e| e.to_string())?;
+            Excel {
+                allow_repaired_save: false,
+            }
+            .export_takeoff(&session, export)?;
+            if let Some(path) = drawing_output {
+                session.save_as_headless(path).map_err(|e| e.to_string())?;
+            }
+            if out.json {
+                out.json(&session.variation().map_err(|e| e.to_string())?);
+            } else if !out.quiet {
+                println!("Variation written to {}", export.display());
+            }
+            Ok(None)
+        }
         Cmd::Takeoff {
             drawing,
             counts,
@@ -226,16 +410,21 @@ struct Excel {
 }
 
 impl Host for Excel {
+    fn deliverable(&mut self, export: &qiyas_core::deliverables::Export) -> Result<(), String> {
+        qiyas_boq::deliverables::write(export)
+    }
     fn export_takeoff(&mut self, session: &Session, path: &Path) -> Result<(), String> {
         let title = match session.drawing.path.file_name() {
             Some(name) => format!("{} take-off", name.to_string_lossy()),
             None => "Take-off".to_string(),
         };
-        qiyas_boq::export_takeoff(
+        qiyas_boq::export_takeoff_with_queries(
             path,
             &session.takeoff.items,
             &session.takeoff.totals(),
             &title,
+            &session.measurement_report().map_err(|e| e.to_string())?,
+            &session.conflicts,
         )
         .map_err(|e| e.to_string())
     }
@@ -540,7 +729,9 @@ fn written_by(script: &Script, drawing: &Path) -> Vec<PathBuf> {
             }
             Action::Save => written.push(current.clone()),
             Action::Export(path) => written.push(path.clone()),
-            Action::Command(Command::WriteBlock { path, .. }) => written.push(PathBuf::from(path)),
+            Action::Command(Command::WriteBlock { path, .. }) => {
+                written.push(PathBuf::from(path));
+            }
             _ => {}
         }
     }
@@ -717,4 +908,26 @@ fn run_one(file: &Path, script: &Script, allow: bool) -> FileReport {
         },
         Err(error) => FileReport::failed(file, error),
     }
+}
+
+fn export_deliverable(
+    source: &Path,
+    kind: &str,
+    format: &str,
+    path: &str,
+    layout: Option<&str>,
+    language: &str,
+) -> Result<(), String> {
+    let project = source.extension().is_some_and(|e| e == "qss");
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let mut session = if project {
+        qiyas_boq::project::session()?
+    } else {
+        Session::open(&source).map_err(|e| e.to_string())?
+    };
+    let input = serde_json::json!({"type":"deliverable.export","kind":kind,"format":format,"path":path,"layout":layout,"language":language,"project":if project {Some(source.to_string_lossy())} else {None}});
+    let outcome = session
+        .run_input(&input, Source::User)
+        .map_err(|e| e.to_string())?;
+    qiyas_boq::deliverables::complete(&outcome.outcome)
 }

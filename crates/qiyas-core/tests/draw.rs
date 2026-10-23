@@ -209,7 +209,7 @@ fn polylines_keep_their_bulges_and_closing_and_bad_ones_are_refused() {
     let EntityType::LwPolyline(p) = one(
         &mut s,
         DrawSpec::Polyline {
-            points: vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]],
+            points: vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]].into(),
             bulges: vec![0.0, 1.0, 0.0],
             closed: true,
         },
@@ -227,7 +227,7 @@ fn polylines_keep_their_bulges_and_closing_and_bad_ones_are_refused() {
     let EntityType::LwPolyline(p) = one(
         &mut s,
         DrawSpec::Polyline {
-            points: vec![[0.0, 0.0], [1.0, 1.0]],
+            points: vec![[0.0, 0.0], [1.0, 1.0]].into(),
             bulges: Vec::new(),
             closed: false,
         },
@@ -239,7 +239,7 @@ fn polylines_keep_their_bulges_and_closing_and_bad_ones_are_refused() {
     refused(
         &mut s,
         DrawSpec::Polyline {
-            points: vec![[0.0, 0.0]],
+            points: vec![[0.0, 0.0]].into(),
             bulges: Vec::new(),
             closed: false,
         },
@@ -247,7 +247,7 @@ fn polylines_keep_their_bulges_and_closing_and_bad_ones_are_refused() {
     refused(
         &mut s,
         DrawSpec::Polyline {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
             bulges: vec![0.5],
             closed: false,
         },
@@ -255,7 +255,7 @@ fn polylines_keep_their_bulges_and_closing_and_bad_ones_are_refused() {
     refused(
         &mut s,
         DrawSpec::Polyline {
-            points: vec![[0.0, 0.0], [f64::NAN, 0.0]],
+            points: vec![[0.0, 0.0], [f64::NAN, 0.0]].into(),
             bulges: Vec::new(),
             closed: false,
         },
@@ -424,7 +424,7 @@ fn splines_points_and_donuts() {
     let EntityType::Spline(sp) = one(
         &mut s,
         DrawSpec::Spline {
-            fit_points: fit.clone(),
+            fit_points: fit.clone().into(),
         },
     ) else {
         panic!("a spline");
@@ -442,7 +442,7 @@ fn splines_points_and_donuts() {
     refused(
         &mut s,
         DrawSpec::Spline {
-            fit_points: vec![[0.0, 0.0]],
+            fit_points: vec![[0.0, 0.0]].into(),
         },
     );
 
@@ -520,8 +520,8 @@ fn a_revision_cloud_is_a_closed_polyline_of_outward_arcs() {
     let EntityType::LwPolyline(c) = one(
         &mut s,
         DrawSpec::RevCloud {
-            points: square,
-            arc_len: 1.0,
+            points: square.into(),
+            arc_len: Some(1.0),
         },
     ) else {
         panic!("a polyline");
@@ -539,15 +539,15 @@ fn a_revision_cloud_is_a_closed_polyline_of_outward_arcs() {
     refused(
         &mut s,
         DrawSpec::RevCloud {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
-            arc_len: 1.0,
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
+            arc_len: Some(1.0),
         },
     );
     refused(
         &mut s,
         DrawSpec::RevCloud {
-            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
-            arc_len: 0.0,
+            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]].into(),
+            arc_len: Some(0.0),
         },
     );
 }
@@ -578,7 +578,7 @@ fn a_wipeout_covers_its_polygon() {
     let EntityType::Wipeout(w) = one(
         &mut s,
         DrawSpec::Wipeout {
-            points: points.clone(),
+            points: points.clone().into(),
         },
     ) else {
         panic!("a wipeout");
@@ -599,7 +599,7 @@ fn a_wipeout_covers_its_polygon() {
     refused(
         &mut s,
         DrawSpec::Wipeout {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
         },
     );
 }
@@ -612,7 +612,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,
@@ -635,7 +635,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Ansi31,
@@ -656,7 +656,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Ansi37,
@@ -671,7 +671,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Custom {
@@ -692,7 +692,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Custom {
@@ -717,7 +717,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: vec![rectangle],
-            points: Vec::new(),
+            points: Vec::new().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,
@@ -751,7 +751,7 @@ fn hatches_from_points_or_closed_entities_with_solid_or_pattern_fills() {
             &mut s,
             DrawSpec::Hatch {
                 boundary_handles: handles,
-                points,
+                points: points.into(),
                 holes: Vec::new(),
                 bulges: Vec::new(),
                 pattern: HatchPattern::Solid,
@@ -776,7 +776,7 @@ fn the_hatch_boundary_inside_the_sample_rectangle_is_its_ring() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
+            points: ring.into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,
@@ -793,7 +793,7 @@ fn solids_traces_multilines_and_sketches() {
     let EntityType::Solid(sd) = one(
         &mut s,
         DrawSpec::Solid2D {
-            points: vec![[0.0, 0.0], [2.0, 0.0], [0.0, 1.0], [2.0, 1.0]],
+            points: vec![[0.0, 0.0], [2.0, 0.0], [0.0, 1.0], [2.0, 1.0]].into(),
         },
     ) else {
         panic!("a solid");
@@ -804,7 +804,7 @@ fn solids_traces_multilines_and_sketches() {
     let EntityType::Solid(tri) = one(
         &mut s,
         DrawSpec::Solid2D {
-            points: vec![[0.0, 0.0], [2.0, 0.0], [1.0, 1.0]],
+            points: vec![[0.0, 0.0], [2.0, 0.0], [1.0, 1.0]].into(),
         },
     ) else {
         panic!("a solid");
@@ -813,7 +813,7 @@ fn solids_traces_multilines_and_sketches() {
     refused(
         &mut s,
         DrawSpec::Solid2D {
-            points: vec![[0.0, 0.0], [2.0, 0.0]],
+            points: vec![[0.0, 0.0], [2.0, 0.0]].into(),
         },
     );
 
@@ -821,7 +821,7 @@ fn solids_traces_multilines_and_sketches() {
     let handles = draw(
         &mut s,
         DrawSpec::Trace {
-            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]],
+            points: vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]].into(),
             width: 0.5,
         },
     );
@@ -843,7 +843,7 @@ fn solids_traces_multilines_and_sketches() {
     let EntityType::MLine(m) = one(
         &mut s,
         DrawSpec::MLine {
-            points: vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]],
+            points: vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]].into(),
             style: None,
             scale: None,
         },
@@ -858,7 +858,7 @@ fn solids_traces_multilines_and_sketches() {
     refused(
         &mut s,
         DrawSpec::MLine {
-            points: vec![[0.0, 0.0], [5.0, 0.0]],
+            points: vec![[0.0, 0.0], [5.0, 0.0]].into(),
             style: Some("NO-SUCH".into()),
             scale: None,
         },
@@ -867,7 +867,7 @@ fn solids_traces_multilines_and_sketches() {
     let EntityType::LwPolyline(k) = one(
         &mut s,
         DrawSpec::Sketch {
-            points: vec![[0.0, 0.0], [0.1, 0.1], [0.3, 0.1]],
+            points: vec![[0.0, 0.0], [0.1, 0.1], [0.3, 0.1]].into(),
         },
     ) else {
         panic!("a polyline");
@@ -885,7 +885,7 @@ fn every_draw() -> Vec<DrawSpec> {
             b: [1.0, 1.0],
         },
         DrawSpec::Polyline {
-            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]].into(),
             bulges: vec![0.0, 0.5, 0.0],
             closed: false,
         },
@@ -920,7 +920,7 @@ fn every_draw() -> Vec<DrawSpec> {
             ratio: 0.5,
         },
         DrawSpec::Spline {
-            fit_points: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]],
+            fit_points: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]].into(),
         },
         DrawSpec::Point { p: [1.0, 1.0] },
         DrawSpec::Donut {
@@ -937,40 +937,40 @@ fn every_draw() -> Vec<DrawSpec> {
             dir: [1.0, 0.0],
         },
         DrawSpec::RevCloud {
-            points: ring.clone(),
-            arc_len: 1.0,
+            points: ring.clone().into(),
+            arc_len: Some(1.0),
         },
         DrawSpec::Wipeout {
-            points: ring.clone(),
+            points: ring.clone().into(),
         },
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Ansi37,
         },
         DrawSpec::Solid2D {
-            points: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]].into(),
         },
         DrawSpec::Trace {
-            points: vec![[0.0, 0.0], [2.0, 0.0]],
+            points: vec![[0.0, 0.0], [2.0, 0.0]].into(),
             width: 0.2,
         },
         DrawSpec::MLine {
-            points: vec![[0.0, 0.0], [3.0, 0.0], [3.0, 3.0]],
+            points: vec![[0.0, 0.0], [3.0, 0.0], [3.0, 3.0]].into(),
             style: None,
             scale: Some(0.5),
         },
         DrawSpec::Sketch {
-            points: vec![[0.0, 0.0], [0.5, 0.2], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [0.5, 0.2], [1.0, 0.0]].into(),
         },
     ]
 }
@@ -1110,18 +1110,23 @@ fn drawn_hatches_solids_and_wipeouts_fill_in_the_batch() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring.clone(),
+            points: ring.clone().into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
     )[0];
-    let wipeout = draw(&mut s, DrawSpec::Wipeout { points: ring })[0];
+    let wipeout = draw(
+        &mut s,
+        DrawSpec::Wipeout {
+            points: ring.into(),
+        },
+    )[0];
     let pattern = draw(
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: vec![[40.0, 0.0], [50.0, 0.0], [50.0, 10.0], [40.0, 10.0]],
+            points: vec![[40.0, 0.0], [50.0, 0.0], [50.0, 10.0], [40.0, 10.0]].into(),
             holes: Vec::new(),
             bulges: Vec::new(),
             pattern: HatchPattern::Ansi31,
@@ -1172,8 +1177,8 @@ fn the_boundary_search_grows_until_the_region_fits_and_finds_its_islands() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
-            holes,
+            points: ring.into(),
+            holes: holes.into_iter().map(Into::into).collect(),
             bulges: Vec::new(),
             pattern: HatchPattern::Solid,
         },
@@ -1227,7 +1232,7 @@ fn a_multiline_measures_along_its_centre_line() {
     let h = draw(
         &mut s,
         DrawSpec::MLine {
-            points: vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]],
+            points: vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]].into(),
             style: None,
             scale: Some(2.0),
         },
@@ -1283,7 +1288,7 @@ fn pattern_lines_near_the_click_do_not_count_toward_too_dense() {
             &mut s,
             DrawSpec::Hatch {
                 boundary_handles: Vec::new(),
-                points: vec![[x, 0.0], [x + 5.0, 0.0], [x + 5.0, 5.0], [x, 5.0]],
+                points: vec![[x, 0.0], [x + 5.0, 0.0], [x + 5.0, 5.0], [x, 5.0]].into(),
                 holes: Vec::new(),
                 bulges: Vec::new(),
                 pattern: HatchPattern::Custom {
@@ -1335,8 +1340,8 @@ fn hatch_by_click_inside_a_circle_follows_the_circle_not_its_chords() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
-            holes,
+            points: ring.into(),
+            holes: holes.into_iter().map(Into::into).collect(),
             bulges,
             pattern: HatchPattern::Solid,
         },
@@ -1377,8 +1382,8 @@ fn hatch_by_click_inside_a_circle_follows_the_circle_not_its_chords() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
-            holes,
+            points: ring.into(),
+            holes: holes.into_iter().map(Into::into).collect(),
             bulges,
             pattern: HatchPattern::Solid,
         },
@@ -1456,7 +1461,7 @@ fn hatch_by_click_inside_a_block_follows_its_entities_and_an_array_cell_as_drawn
     };
     assert!(close(signed_area(&ring).abs(), 4.0), "{ring:?}");
     assert_eq!(holes.len(), 1, "{holes:?}");
-    // The island's ring is the circle flattened at `MEASURE_TOL`; its bulges make it exact.
+    // The island's ring is the circle flattened at the measuring tolerance; its bulges make it exact.
     let want = PI * 0.6 * 0.6;
     let hole = signed_area(&holes[0]).abs();
     assert!((hole - want).abs() / want < 5e-3, "{hole} vs {want}");
@@ -1469,8 +1474,8 @@ fn hatch_by_click_inside_a_block_follows_its_entities_and_an_array_cell_as_drawn
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
-            holes,
+            points: ring.into(),
+            holes: holes.into_iter().map(Into::into).collect(),
             bulges,
             pattern: HatchPattern::Solid,
         },
@@ -1539,7 +1544,7 @@ fn hatch_by_click_beside_a_multiline_wall_stops_at_its_drawn_face() {
     draw(
         &mut s,
         DrawSpec::MLine {
-            points: vec![[2000.0, 1995.0], [2000.0, 2015.0]],
+            points: vec![[2000.0, 1995.0], [2000.0, 2015.0]].into(),
             style: None,
             scale: Some(2.0),
         },
@@ -1620,8 +1625,8 @@ fn a_hatch_by_click_with_an_island_keeps_its_paths_through_dwg_and_dxf() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
-            holes,
+            points: ring.into(),
+            holes: holes.into_iter().map(Into::into).collect(),
             bulges,
             pattern: HatchPattern::Solid,
         },
@@ -1702,8 +1707,8 @@ fn hatch_by_click_beside_an_island_touching_the_wall_leaves_it_out() {
         &mut s,
         DrawSpec::Hatch {
             boundary_handles: Vec::new(),
-            points: ring,
-            holes,
+            points: ring.into(),
+            holes: holes.into_iter().map(Into::into).collect(),
             bulges,
             pattern: HatchPattern::Solid,
         },

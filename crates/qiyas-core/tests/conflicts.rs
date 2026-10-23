@@ -12,6 +12,7 @@ fn sample_session() -> (tempfile::TempDir, Session) {
 
 fn conflict(id: &str) -> Conflict {
     Conflict {
+        query: None,
         id: id.to_string(),
         kind: ConflictKind::QuantityMismatch,
         boq_code: Some("A.1".to_string()),

@@ -105,6 +105,7 @@ test("LAYOFF and LAYON take names, quoted when they hold spaces", () => {
   expect(parse("LAYOFF", cmd)).toEqual({ type: "error", key: "cmd.needLayer", args: { name: "LAYOFF" } });
   expect(parse("LAYISO Ground Floor", cmd)).toEqual({ type: "isolate", name: "Ground Floor" });
   expect(parse("LAYALL", cmd)).toEqual({ type: "showAll" });
+  expect(parse("LAYUNISO", cmd)).toEqual({ type: "unisolate" });
   expect(tokenize('a "b c" "d')).toEqual(["a", "b c", "d"]);
 });
 
@@ -122,8 +123,17 @@ test("AI sends the rest of the line as typed", () => {
   expect(parse("AI", cmd)).toEqual({ type: "error", key: "cmd.needText", args: { name: "AI" } });
 });
 
+test("UCSICON turns the origin icon on or off, or flips it", () => {
+  expect(parse("UCSICON ON", cmd)).toEqual({ type: "ucsIcon", on: true });
+  expect(parse("ucsicon off", cmd)).toEqual({ type: "ucsIcon", on: false });
+  expect(parse("UCSICON", cmd)).toEqual({ type: "ucsIcon", on: null });
+  expect(parse("UCSICON OR", cmd)).toEqual({ type: "error", key: "cmd.ucsIconOption" });
+});
+
 test("file, view and drafting commands", () => {
   const runs = {
+    NEW: "new",
+    QNEW: "new",
     OPEN: "open",
     SAVE: "save",
     SAVEAS: "saveAs",
@@ -152,6 +162,7 @@ test("suggestions list commands, then aliases, the exact match first", () => {
     "LAYON",
     "LAYSTATE",
     "LAYTRANS",
+    "LAYUNISO",
     "LAS",
   ]);
   expect(suggest("dis", aliases)).toEqual([{ name: "DIST" }, { name: "DISTANCE", target: "DIST" }]);

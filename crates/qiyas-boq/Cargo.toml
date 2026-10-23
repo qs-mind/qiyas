@@ -6,12 +6,17 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 qiyas-core = { path = "../qiyas-core" }
 calamine.workspace = true
 rust_xlsxwriter.workspace = true
 thiserror.workspace = true
 
+qiyas-plot = { path = "../qiyas-plot" }
+tempfile.workspace = true
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+quick-xml = "0.41.0"
+
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }

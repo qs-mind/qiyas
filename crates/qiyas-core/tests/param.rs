@@ -117,7 +117,7 @@ fn width(s: &mut Session, rect: u64, expression: Option<&str>) -> u32 {
         .run(Command::AddDimConstraint {
             kind: ConstraintKind::Linear,
             targets: vec![t(rect)],
-            points: vec![[2.0, 0.0]],
+            points: vec![[2.0, 0.0]].into(),
             line_point: [2.0, -1.0],
             expression: expression.map(str::to_string),
         })
@@ -130,7 +130,7 @@ fn height(s: &mut Session, rect: u64) -> u32 {
         .run(Command::AddDimConstraint {
             kind: ConstraintKind::Linear,
             targets: vec![t(rect)],
-            points: vec![[0.0, 1.5]],
+            points: vec![[0.0, 1.5]].into(),
             line_point: [-1.0, 1.5],
             expression: None,
         })
@@ -168,6 +168,7 @@ fn review_focus_4_the_rectangle_stays_a_rectangle_when_its_width_changes() {
     assert_eq!(params[0].expression, "4");
     assert!((params[0].value.unwrap() - 4.0).abs() < TOL);
 
+    let reference = performance::reference();
     let t0 = Instant::now();
     s.run(Command::SetParameter {
         name: "d1".into(),
@@ -180,9 +181,7 @@ fn review_focus_4_the_rectangle_stays_a_rectangle_when_its_width_changes() {
         &vertices(&s, rect),
         [[0.0, 0.0], [6.0, 0.0], [6.0, 3.0], [0.0, 3.0]],
     );
-    // The solver's own 50 ms guard is the release test `solver_speed`; through the command bus
-    // in a debug build, under parallel tests, a looser bound.
-    assert!(took.as_millis() < 250, "the width change took {took:?}");
+    performance::assert_relative(took, reference, 0.625, "command width change");
     // The Dimension follows, shows its parameter in brackets (the lock mark), and reads 6.
     let dim = params[0].dimension;
     match s.drawing.doc.get_entity(Handle::new(dim)) {
@@ -226,7 +225,7 @@ fn geometric_constraints_move_what_they_hold() {
     s.run(Command::AddConstraint {
         kind: ConstraintKind::Horizontal,
         targets: vec![t(slanted)],
-        points: vec![[7.0, 6.0]],
+        points: vec![[7.0, 6.0]].into(),
     })
     .unwrap();
     let [a, b] = line_ends(&s, slanted);
@@ -238,7 +237,7 @@ fn geometric_constraints_move_what_they_hold() {
     s.run(Command::AddConstraint {
         kind: ConstraintKind::Perpendicular,
         targets: vec![t(rect), t(upper)],
-        points: vec![[4.0, 1.5], [7.0, 10.25]],
+        points: vec![[4.0, 1.5], [7.0, 10.25]].into(),
     })
     .unwrap();
     let [a, b] = line_ends(&s, upper);
@@ -247,7 +246,7 @@ fn geometric_constraints_move_what_they_hold() {
     s.run(Command::AddConstraint {
         kind: ConstraintKind::Equal,
         targets: vec![t(rect), t(slanted)],
-        points: vec![[2.0, 0.0], [7.0, 6.0]],
+        points: vec![[2.0, 0.0], [7.0, 6.0]].into(),
     })
     .unwrap();
     let [a, b] = line_ends(&s, slanted);
@@ -265,14 +264,14 @@ fn geometric_constraints_move_what_they_hold() {
         .run(Command::AddConstraint {
             kind: ConstraintKind::Horizontal,
             targets: vec![t(slanted)],
-            points: vec![[7.0, 6.0]],
+            points: vec![[7.0, 6.0]].into(),
         })
         .is_err());
     assert!(s
         .run(Command::AddConstraint {
             kind: ConstraintKind::Tangent,
             targets: vec![t(slanted), t(upper)],
-            points: vec![[7.0, 6.0], [7.0, 10.25]],
+            points: vec![[7.0, 6.0], [7.0, 10.25]].into(),
         })
         .is_err());
 }
@@ -285,7 +284,7 @@ fn a_move_solves_again_in_the_same_step_and_an_erase_takes_the_constraints_along
     s.run(Command::AddConstraint {
         kind: ConstraintKind::Coincident,
         targets: vec![t(rect), t(line)],
-        points: vec![[0.0, 0.0], [0.0, 0.0]],
+        points: vec![[0.0, 0.0], [0.0, 0.0]].into(),
     })
     .unwrap();
     s.run(Command::Modify(ModifySpec::Move {
@@ -333,7 +332,7 @@ fn a_fixed_point_refuses_a_move_that_breaks_it() {
     s.run(Command::AddConstraint {
         kind: ConstraintKind::Fixed,
         targets: vec![t(rect)],
-        points: vec![[0.1, 0.1]],
+        points: vec![[0.1, 0.1]].into(),
     })
     .unwrap();
     let err = s
@@ -463,7 +462,7 @@ fn what_constraints_refuse() {
         .run(Command::AddConstraint {
             kind: ConstraintKind::Fixed,
             targets: vec![t(text)],
-            points: vec![[0.0, -2.0]],
+            points: vec![[0.0, -2.0]].into(),
         })
         .unwrap_err();
     assert!(
@@ -480,14 +479,14 @@ fn what_constraints_refuse() {
         .run(Command::AddConstraint {
             kind: ConstraintKind::Horizontal,
             targets: vec![inside],
-            points: vec![[2.0, 0.0]],
+            points: vec![[2.0, 0.0]].into(),
         })
         .is_err());
     assert!(s
         .run(Command::AddConstraint {
             kind: ConstraintKind::Linear,
             targets: vec![t(rect)],
-            points: vec![[2.0, 0.0]],
+            points: vec![[2.0, 0.0]].into(),
         })
         .is_err());
     // A circle's radius, and an angle between two lines.
@@ -496,7 +495,7 @@ fn what_constraints_refuse() {
         .run(Command::AddDimConstraint {
             kind: ConstraintKind::Radius,
             targets: vec![t(arc)],
-            points: vec![[20.0, 2.0]],
+            points: vec![[20.0, 2.0]].into(),
             line_point: [21.0, 3.0],
             expression: Some("2.5".into()),
         })
@@ -640,7 +639,7 @@ fn a_broken_expression_is_marked_and_skipped_and_can_be_repaired() {
     s.run(Command::AddConstraint {
         kind: ConstraintKind::Horizontal,
         targets: vec![t(line)],
-        points: vec![[5.0, 0.0]],
+        points: vec![[5.0, 0.0]].into(),
     })
     .unwrap();
     let d1 = parameters(&mut s)[0].clone();
@@ -788,7 +787,7 @@ fn a_one_metre_rectangle_far_from_the_origin_solves_as_one_at_the_origin() {
     s.run(Command::AddDimConstraint {
         kind: ConstraintKind::Linear,
         targets: vec![t(rect)],
-        points: vec![[5_000_000.5, 3_000_000.0]],
+        points: vec![[5_000_000.5, 3_000_000.0]].into(),
         line_point: [5_000_000.5, 2_999_999.0],
         expression: Some("1.5".into()),
     })
@@ -808,3 +807,6 @@ fn a_one_metre_rectangle_far_from_the_origin_solves_as_one_at_the_origin() {
         [[x, y], [x + 0.25, y], [x + 0.25, y + 1.0], [x, y + 1.0]],
     );
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

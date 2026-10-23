@@ -70,54 +70,7 @@ fn assert_strict_keywords(name: &str, v: &Value) {
 fn catalogue_schemas_are_strict_objects() {
     let tools = catalogue();
     let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-    assert_eq!(
-        names,
-        [
-            "list_sheets",
-            "set_sheet",
-            "list_layers",
-            "show_layers",
-            "find_entities",
-            "get_entity",
-            "read_text",
-            "read_tables",
-            "read_dimensions",
-            "block_summary",
-            "measure_length",
-            "measure_area",
-            "count_blocks",
-            "add_measurement",
-            "set_height",
-            "list_takeoff",
-            "remove_measurement",
-            "set_description",
-            "import_boq",
-            "list_boq",
-            "link_boq",
-            "compare_boq",
-            "list_conflicts",
-            "resolve_conflict",
-            "add_markup",
-            "add_dimension",
-            "set_annotation_scale",
-            "add_comment",
-            "list_comments",
-            "measure_geometry",
-            "divide_along",
-            "measure_along",
-            "id_point",
-            "extract_data",
-            "zoom_to",
-            "add_text",
-            "room_areas",
-            "label_spaces",
-            "add_table",
-            "edit_table_cell",
-            "draw",
-            "insert_block",
-            "view_image",
-        ]
-    );
+    assert_eq!(names, ["qiyas_read", "qiyas_execute", "qiyas_capture"]);
     for tool in &tools {
         let schema = &tool.input_schema;
         assert_eq!(schema["type"], "object", "{}", tool.name);
@@ -348,6 +301,59 @@ fn handles_at(session: &Session, offset: usize) -> Value {
     )
 }
 
+/// Dark pixels in a PNG (any channel under 128).
+fn dark_pixels(png: &[u8]) -> usize {
+    let pixmap = tiny_skia::Pixmap::decode_png(png).expect("a PNG");
+    pixmap
+        .pixels()
+        .iter()
+        .filter(|p| p.red() < 128 || p.green() < 128 || p.blue() < 128)
+        .count()
+}
+
+/// Mizan looks at what the engineer sees: a text is drawn as its letters (it once saw nothing
+/// of text, and drew labels again over labels it couldn't see), and a solid hatch as a fill.
+#[test]
+fn view_image_shows_text_and_solid_fills() {
+    let (_dir, mut session) = sample();
+    let picture = |session: &mut Session| {
+        let out = execute(
+            session,
+            "view_image",
+            &json!({ "width": 800, "bounds": [[100, 100], [110, 105]] }),
+            Source::Ai,
+        )
+        .unwrap();
+        let ToolOutput::Image { png, caption } = out else {
+            panic!("expected an image");
+        };
+        assert!(caption.contains("text"), "{caption}");
+        dark_pixels(&png)
+    };
+    assert_eq!(picture(&mut session), 0, "an empty corner of the sheet");
+    qiyas_ai::surface::run_session(
+        &mut session,
+        qiyas_ai::surface::EXECUTE,
+        "run",
+        &json!({ "command": {"type":"text", "value": "MAJLIS", "at": [101, 102], "height": 1.0, "rotation":0} }),
+        Source::Ai,
+    )
+    .unwrap();
+    let text = picture(&mut session);
+    assert!(text > 500, "the letters: {text} dark pixels");
+    qiyas_ai::surface::run_session(
+        &mut session,
+        qiyas_ai::surface::EXECUTE,
+        "run",
+        &json!({ "command": {"type":"draw", "kind": "hatch", "points": [[107, 101], [109, 101], [109, 104], [107, 104]], "pattern":"solid"} }),
+        Source::Ai,
+    )
+    .unwrap();
+    let filled = picture(&mut session) - text;
+    // A 2 x 3 unit square at 80 px a unit: about 38,400 pixels.
+    assert!(filled > 30_000, "the solid fill: {filled} dark pixels");
+}
+
 #[test]
 fn view_image_is_a_png_of_the_right_size() {
     let (_dir, mut session) = sample();
@@ -388,12 +394,28 @@ fn unknown_tool_is_an_error() {
     let (_dir, mut session) = sample();
     let err = execute(&mut session, "delete_everything", &json!({}), Source::Ai).unwrap_err();
     assert!(matches!(err, ToolError::UnknownTool(ref n) if n == "delete_everything"));
-    // Every tool in the catalogue is known to `execute`.
+    // Every offered tool routes to its runner with valid input.
     for tool in catalogue() {
-        let result = execute(&mut session, tool.name, &json!({}), Source::Ai);
+        let input = match tool.name {
+            qiyas_ai::surface::READ => json!({"op": "state", "args": "{}"}),
+            qiyas_ai::surface::EXECUTE => json!({"op": "run", "args": {"command": {
+                "type": "draw", "kind": "line", "a": [30, 0], "b": [35, 0]
+            }}}),
+            qiyas_ai::surface::CAPTURE => json!({"source": "picture", "args": {"width": 64}}),
+            name => panic!("No dispatch input for {name}"),
+        };
+        let qiyas_ai::surface::Route::Session {
+            tool: name,
+            op,
+            args,
+        } = qiyas_ai::surface::route(tool.name, &input).unwrap()
+        else {
+            panic!("{} did not route to the session", tool.name);
+        };
+        let result = qiyas_ai::surface::run_session(&mut session, &name, &op, &args, Source::Ai);
         assert!(
-            !matches!(result, Err(ToolError::UnknownTool(_))),
-            "{} is not dispatched",
+            result.is_ok(),
+            "{} is not dispatched: {result:?}",
             tool.name
         );
     }

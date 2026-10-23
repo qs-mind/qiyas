@@ -5,8 +5,8 @@
 //! `@dx,dy`, `@d<angle` in degrees, drawing units, world coordinates, Arabic digits accepted),
 //! and a line starting with `{` is a command in its wire form (`{"type":"draw","kind":"line",
 //! ...}`, exactly what `Command` reads), so every command of the bus can be scripted without a
-//! second parser. The window's command line keeps its own grammar (`src/tools/commandParser.ts`);
-//! this file is the headless one.
+//! second parser. Words outside this file's legacy grammar use `cmdline::Machine`, the same
+//! schema-driven prompts as the window and AI.
 //!
 //! The whole script is read and checked before anything runs: words, points, handles and paths.
 //! A relative path is taken from the script's folder (a written one from `Context::out_dir` when
@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::{Boq, Command, Current, Kind, LayerProp, Outcome, Session};
+use crate::{Boq, Command, Current, Kind, LayerProp, Outcome, Reported, Session, Source};
 
 /// Where a script runs: the script file (relative paths are taken from its folder), the drawing
 /// it starts on when there is one, and where its written files go.
@@ -68,6 +68,8 @@ pub struct Step {
     /// The line of the script it came from (the command's line), from 1.
     pub line: usize,
     pub action: Action,
+    /// Original command input after resolving file paths, before serde supplies defaults.
+    pub input: Option<serde_json::Value>,
 }
 
 /// A script read and checked whole.
@@ -87,6 +89,9 @@ pub struct ScriptError {
 /// The Excel and comparison steps, which live outside this crate (`qiyas-boq`, `qiyas-takeoff`):
 /// the program running the script supplies them.
 pub trait Host {
+    fn deliverable(&mut self, _export: &crate::deliverables::Export) -> Result<(), String> {
+        Err("This script host does not support deliverables".into())
+    }
     /// Writes the session's take-off to the workbook at `path`.
     fn export_takeoff(&mut self, session: &Session, path: &Path) -> Result<(), String>;
     /// Reads the BOQ in the workbook at `path`.
@@ -123,18 +128,7 @@ pub struct Run {
 
 /// Reads and checks the whole of `text`; the first bad line is the error.
 pub fn parse(text: &str, cx: &Context) -> Result<Script, ScriptError> {
-    let script_dir = cx
-        .script
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let mut parser = Parser {
-        script_dir: real_or_lexical(script_dir),
-        out_dir: cx.out_dir.map(real_or_lexical),
-        drawing: cx.drawing.map(real_or_lexical),
-        last: None,
-        steps: Vec::new(),
-    };
+    let mut parser = Parser::new(cx);
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
@@ -150,6 +144,17 @@ pub fn parse(text: &str, cx: &Context) -> Result<Script, ScriptError> {
     Ok(Script {
         steps: parser.steps,
     })
+}
+
+/// Resolves a command's paths, including commands in a batch, through the script's folder rule.
+/// Paths become absolute. `write_block` uses the output folder when one is given.
+/// Errors carry `line`, as they do when parsing a script.
+pub fn resolve_command_paths(
+    value: &mut serde_json::Value,
+    cx: &Context,
+    line: usize,
+) -> Result<(), ScriptError> {
+    Parser::new(cx).json_paths(line, value)
 }
 
 /// Runs `script` on `session` (none: the script must OPEN a drawing first), stopping at QUIT or
@@ -251,7 +256,13 @@ pub fn run(
             }
             Action::Command(cmd) => {
                 let session = open(&mut run.session, line)?;
-                let outcome = session.run(cmd.clone()).map_err(|e| fail(e.to_string()))?;
+                let input = step.input.clone().unwrap_or_else(|| serde_json::json!(cmd));
+                let outcome = session
+                    .run_input(&input, Source::User)
+                    .map_err(|e| fail(e.to_string()))?;
+                if let Outcome::Deliverable { export } = &outcome.outcome {
+                    host.deliverable(export).map_err(fail)?;
+                }
                 describe(cmd, outcome, &mut run.counts)
             }
         };
@@ -325,8 +336,9 @@ fn refuse_repaired(host: &dyn Host, line: usize) -> Result<(), ScriptError> {
 }
 
 /// What `cmd` did, in a line; a count goes into `counts` by block name.
-fn describe(cmd: &Command, outcome: Outcome, counts: &mut BTreeMap<String, f64>) -> String {
-    match outcome {
+fn describe(cmd: &Command, outcome: Reported, counts: &mut BTreeMap<String, f64>) -> String {
+    let notes = outcome.input_notes();
+    let text = match outcome.outcome {
         Outcome::Measured { measurement: m } => {
             let shown = match m.kind {
                 Kind::Count => format!("{:.0}", m.shown),
@@ -360,8 +372,26 @@ fn describe(cmd: &Command, outcome: Outcome, counts: &mut BTreeMap<String, f64>)
             _ => "done".to_string(),
         },
         Outcome::Added { handles } => format!("added {} entities", handles.len()),
+        Outcome::TitleBlock {
+            handles,
+            empty_fields,
+        } => format!(
+            "title block: {} entities; empty fields: {}",
+            handles.len(),
+            empty_fields.join(", ")
+        ),
+        Outcome::Batch { outcomes, added } => format!(
+            "ran {} commands as one step, added {} entities",
+            outcomes.len(),
+            added.len()
+        ),
         Outcome::Nothing => "nothing to do".to_string(),
         other => format!("{other:?}"),
+    };
+    if notes.is_empty() {
+        text
+    } else {
+        format!("{text}; {notes}")
     }
 }
 
@@ -384,6 +414,21 @@ fn at(line: usize, message: impl Into<String>) -> ScriptError {
 }
 
 impl Parser {
+    fn new(cx: &Context) -> Self {
+        let script_dir = cx
+            .script
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        Self {
+            script_dir: real_or_lexical(script_dir),
+            out_dir: cx.out_dir.map(real_or_lexical),
+            drawing: cx.drawing.map(real_or_lexical),
+            last: None,
+            steps: Vec::new(),
+        }
+    }
+
     /// Reads the command on `text` (line `line`, not blank, not a comment); a measure with its
     /// points on the lines after it reads on through `lines`, moving `i` past them.
     fn line(
@@ -397,9 +442,8 @@ impl Parser {
             let mut value: serde_json::Value =
                 serde_json::from_str(text).map_err(|e| at(line, e.to_string()))?;
             self.json_paths(line, &mut value)?;
-            let cmd: Command =
-                serde_json::from_value(value).map_err(|e| at(line, e.to_string()))?;
-            self.push(line, Action::Command(cmd));
+            let cmd = crate::registry::parse_command(value.clone()).map_err(|e| at(line, e))?;
+            self.push_input(line, cmd, value);
             return Ok(());
         }
         let (first, rest) = match text.find(char::is_whitespace) {
@@ -499,7 +543,12 @@ impl Parser {
                         format!("DIST takes 2 points, {} given", points.len()),
                     ));
                 }
-                self.push(line, Action::Command(Command::MeasureDistance { points }));
+                self.push(
+                    line,
+                    Action::Command(Command::MeasureDistance {
+                        points: points.into(),
+                    }),
+                );
             }
             "AA" | "AREA" => {
                 let points = self.points(line, &args, lines, i, None)?;
@@ -512,7 +561,12 @@ impl Parser {
                         ),
                     ));
                 }
-                self.push(line, Action::Command(Command::MeasureArea { points }));
+                self.push(
+                    line,
+                    Action::Command(Command::MeasureArea {
+                        points: points.into(),
+                    }),
+                );
             }
             "MEASURE" => {
                 let handle = match args.as_slice() {
@@ -565,9 +619,64 @@ impl Parser {
                 }
             }
             "ECHO" => self.push(line, Action::Echo(rest.to_string())),
-            _ => return Err(at(line, format!("unknown command {first}"))),
+            _ => {
+                if crate::registry::registry().by_word(first).is_none() {
+                    return Err(at(line, format!("unknown command {first}")));
+                }
+                self.typed(text, line, lines, i)?;
+            }
         }
         Ok(())
+    }
+
+    /// Registry words keep the legacy script's whole-file validation and continuation lines.
+    fn typed(
+        &mut self,
+        text: &str,
+        line: usize,
+        lines: &[&str],
+        i: &mut usize,
+    ) -> Result<(), ScriptError> {
+        use crate::cmdline::{Machine, Step as TypedStep};
+
+        let mut machine = Machine::default();
+        machine.set_last(self.last);
+        let mut on = line;
+        let mut answer = machine.step(text).map_err(|e| at(on, e))?;
+        loop {
+            match answer {
+                TypedStep::Command(_) => {
+                    let mut value = machine
+                        .take_input()
+                        .expect("a completed command has wire input");
+                    self.json_paths(line, &mut value)?;
+                    let command =
+                        crate::registry::parse_command(value.clone()).map_err(|e| at(line, e))?;
+                    self.last = machine.last();
+                    self.push_input(line, command, value);
+                    return Ok(());
+                }
+                TypedStep::Cancelled => {
+                    self.last = machine.last();
+                    return Ok(());
+                }
+                TypedStep::Prompt(prompt) => {
+                    while *i < lines.len() && lines[*i].trim().starts_with(';') {
+                        *i += 1;
+                    }
+                    let eof = *i == lines.len();
+                    let next = if eof { "" } else { lines[*i].trim() };
+                    if !eof {
+                        *i += 1;
+                        on = *i;
+                    }
+                    answer = machine.step(next).map_err(|e| at(on, e))?;
+                    if next.is_empty() && matches!(answer, TypedStep::Prompt(_)) {
+                        return Err(at(line, format!("incomplete command: {prompt}")));
+                    }
+                }
+            }
+        }
     }
 
     /// A JSON line's paths (`path`, `from_path`, any `..._path`) through the folder rule, made
@@ -599,7 +708,23 @@ impl Parser {
     }
 
     fn push(&mut self, line: usize, action: Action) {
-        self.steps.push(Step { line, action });
+        let input = match &action {
+            Action::Command(command) => Some(serde_json::json!(command)),
+            _ => None,
+        };
+        self.steps.push(Step {
+            line,
+            action,
+            input,
+        });
+    }
+
+    fn push_input(&mut self, line: usize, command: Command, input: serde_json::Value) {
+        self.steps.push(Step {
+            line,
+            action: Action::Command(command),
+            input: Some(input),
+        });
     }
 
     /// The points of a measure: `first` are the words after the command on its line, then the

@@ -1,0 +1,50 @@
+.mizan-plan {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+.mizan-plan > strong {
+  display: block;
+  margin-block-end: 7px;
+}
+.mizan-plan ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+.mizan-plan li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.mizan-plan .plan-mark {
+  width: 1em;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--muted);
+}
+.mizan-plan .plan-title {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.mizan-plan .plan-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+.mizan-plan [data-status="active"] .plan-title,
+.mizan-plan [data-status="active"] .plan-mark,
+.mizan-plan [data-status="done"] .plan-mark {
+  color: var(--accent);
+}
+.mizan-plan [data-status="active"] .plan-title {
+  font-weight: 600;
+}
+.mizan-plan [data-status="skipped"] .plan-title {
+  color: var(--muted);
+}
+/* Status changes are immediate, including when reduced motion is requested. */

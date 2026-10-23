@@ -7,7 +7,7 @@ use std::sync::Once;
 use std::time::Duration;
 
 use base64::Engine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ToolSpec;
@@ -20,6 +20,18 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
+    /// Current request/cost limits, supplied by a metered host without changing the system.
+    fn budget_notice(&self) -> Option<String> {
+        None
+    }
+
+    /// Conversation-local memory only; credentials and URLs never belong here.
+    fn save_state(&self) -> Value {
+        Value::Null
+    }
+
+    fn restore_state(&self, _state: Value) {}
+
     /// Sends `req`, calls `sink` with each event as it arrives, and returns the whole turn.
     fn stream_turn<'a>(
         &'a self,
@@ -40,13 +52,14 @@ pub struct TurnRequest {
     pub max_tokens: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<ContentBlock>,
@@ -96,7 +109,8 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -113,6 +127,12 @@ pub enum ContentBlock {
         content: Vec<ResultPart>,
         is_error: bool,
     },
+    /// A picture in a user message (one the user attached, or of what they selected): its
+    /// media type ("image/png", ...) and base64 data.
+    Image {
+        media_type: String,
+        data: String,
+    },
     /// Kept with its signature exactly as streamed; the API checks it when it is sent back.
     Thinking {
         thinking: String,
@@ -122,7 +142,8 @@ pub enum ContentBlock {
     Raw(Value),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ResultPart {
     Text(String),
     /// A PNG, base64-encoded.
@@ -132,6 +153,8 @@ pub enum ResultPart {
 /// What arrives while a turn streams.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// The optional fields in an actual HTTP request, including retries after a refusal.
+    RequestSent(String),
     TextDelta(String),
     ToolUseStart {
         id: String,
@@ -166,12 +189,15 @@ pub enum StopReason {
     Other(String),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
+    /// Output tokens the model spent thinking, when the service says (OpenAI-compatible
+    /// `completion_tokens_details.reasoning_tokens`); part of `output_tokens`.
+    pub reasoning_tokens: u64,
 }
 
 impl Usage {
@@ -180,6 +206,7 @@ impl Usage {
         self.output_tokens += other.output_tokens;
         self.cache_creation_input_tokens += other.cache_creation_input_tokens;
         self.cache_read_input_tokens += other.cache_read_input_tokens;
+        self.reasoning_tokens += other.reasoning_tokens;
     }
 }
 
@@ -193,6 +220,8 @@ pub struct TurnResult {
 /// Errors from a provider. None of them ever holds the API key.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AiError {
+    #[error("{service} has no model {model}: choose one in Settings")]
+    ModelNotFound { service: String, model: String },
     #[error("The API key was refused. Check it in Settings.")]
     Auth,
     #[error("The AI service is busy or the rate limit was reached; try again shortly")]
@@ -218,6 +247,39 @@ pub enum AiError {
 }
 
 impl AiError {
+    /// Give both providers the same actionable model selection error.
+    pub(crate) fn for_model(self, service: &str, model: &str) -> AiError {
+        let missing = match &self {
+            AiError::Api { status, body, .. } => {
+                let value: Value = serde_json::from_str(body).unwrap_or_default();
+                let error = if value.is_array() {
+                    &value[0]["error"]
+                } else {
+                    &value["error"]
+                };
+                *status == 404
+                    || ["type", "code"].iter().any(|key| {
+                        matches!(
+                            error[*key].as_str(),
+                            Some("model_not_found" | "not_found_error" | "model_not_found_error")
+                        )
+                    })
+            }
+            AiError::Stream(message) => {
+                message.contains("model_not_found") || message.contains("not_found_error")
+            }
+            _ => false,
+        };
+        if missing {
+            AiError::ModelNotFound {
+                service: service.into(),
+                model: model.into(),
+            }
+        } else {
+            self
+        }
+    }
+
     /// The same error with every copy of `secret` blanked out of its text.
     pub(crate) fn scrubbed(self, secret: &str) -> AiError {
         match self {
@@ -247,10 +309,33 @@ pub fn png_base64(png: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(png)
 }
 
-/// Longest wait before the one retry after a 429 or 529.
-const MAX_RETRY_WAIT: u64 = 30;
-/// Wait when a 429 or 529 gives no `retry-after`.
-const DEFAULT_RETRY_WAIT: u64 = 2;
+/// The bytes of base64 `text` (a picture the window sent).
+pub fn from_base64(text: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .map_err(|e| format!("Not base64: {e}"))
+}
+
+/// Shared retry schedule for rejected requests. Retry-After is a lower bound; a delay
+/// beyond the remaining two-minute window fails without sending an early request.
+#[derive(Default)]
+pub struct RetryBackoff {
+    attempt: usize,
+    waited: u64,
+}
+impl RetryBackoff {
+    pub fn next_delay(&mut self, retry_after: Option<u64>, elapsed: Duration) -> Option<Duration> {
+        let base = *[5, 15, 45, 55].get(self.attempt)?;
+        let seconds = base.max(retry_after.unwrap_or(0));
+        let remaining = 120u64.saturating_sub(self.waited.max(elapsed.as_secs()));
+        if seconds > remaining {
+            return None;
+        }
+        self.attempt += 1;
+        self.waited += seconds;
+        Some(Duration::from_secs(seconds))
+    }
+}
 
 /// The HTTP client both providers use: rustls with the `ring` crypto provider.
 pub(crate) fn http_client() -> reqwest::Client {
@@ -267,7 +352,7 @@ pub(crate) fn http_client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// Sends the request built by `make`, retrying once after a 429 or 529, and maps failures to
+/// Sends the request built by `make`, retrying busy/rate-limit replies for up to two minutes, and maps failures to
 /// `AiError`. `make` is called again for the retry. `body` is the JSON `make` sends, kept in a
 /// 4xx error for the log (the key is a header, never in it).
 pub(crate) async fn send(
@@ -275,7 +360,18 @@ pub(crate) async fn send(
     secret: &str,
     body: &Value,
 ) -> Result<reqwest::Response, AiError> {
-    let mut retried = false;
+    send_with_retry(make, secret, body, true).await
+}
+
+/// Budgeted evaluations reserve one request, so they must disable the automatic retry.
+pub(crate) async fn send_with_retry(
+    make: impl Fn() -> reqwest::RequestBuilder,
+    secret: &str,
+    body: &Value,
+    allow_retry: bool,
+) -> Result<reqwest::Response, AiError> {
+    let mut backoff = RetryBackoff::default();
+    let started = tokio::time::Instant::now();
     loop {
         let response = make()
             .send()
@@ -285,21 +381,20 @@ pub(crate) async fn send(
         if response.status().is_success() {
             return Ok(response);
         }
-        if status == 429 || status == 529 {
+        if matches!(status, 429 | 503 | 529) {
             let retry_after = response
                 .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<f64>().ok())
-                .map(|s| s.max(0.0).ceil() as u64);
-            if retried {
+                .and_then(|v| retry_after_seconds(v, chrono::Utc::now()));
+            let delay = allow_retry
+                .then(|| backoff.next_delay(retry_after, started.elapsed()))
+                .flatten();
+            let Some(delay) = delay else {
                 return Err(AiError::RateLimited { retry_after });
-            }
-            retried = true;
-            let wait = retry_after
-                .unwrap_or(DEFAULT_RETRY_WAIT)
-                .min(MAX_RETRY_WAIT);
-            tokio::time::sleep(Duration::from_secs(wait)).await;
+            };
+            drop(response);
+            tokio::time::sleep(delay).await;
             continue;
         }
         if status == 401 {
@@ -317,6 +412,60 @@ pub(crate) async fn send(
             request,
         });
     }
+}
+
+fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+    if let Ok(seconds) = value.trim().parse::<f64>() {
+        return seconds.is_finite().then(|| seconds.max(0.0).ceil() as u64);
+    }
+    chrono::DateTime::parse_from_rfc2822(value.trim())
+        .ok()
+        .map(|date| {
+            (date.signed_duration_since(now).num_milliseconds().max(0) as u64).div_ceil(1000)
+        })
+}
+
+#[test]
+fn retry_after_accepts_seconds_and_http_dates_without_shortening_the_delay() {
+    let now = chrono::DateTime::parse_from_rfc2822("Thu, 22 Oct 2026 12:00:00 GMT")
+        .unwrap()
+        .to_utc();
+    assert_eq!(retry_after_seconds("1.2", now), Some(2));
+    assert_eq!(
+        retry_after_seconds("Thu, 22 Oct 2026 12:01:30 GMT", now),
+        Some(90)
+    );
+    assert_eq!(
+        retry_after_seconds("Thu, 22 Oct 2026 11:59:59 GMT", now),
+        Some(0)
+    );
+    assert_eq!(retry_after_seconds("invalid", now), None);
+}
+
+/// Only request controls, never messages, URLs or credentials.
+pub(crate) fn sent_fields(body: &Value) -> String {
+    [
+        "reasoning_effort",
+        "max_completion_tokens",
+        "max_tokens",
+        "stream_options",
+        "output_config",
+        "thinking",
+        "fallbacks",
+    ]
+    .into_iter()
+    .filter_map(|key| {
+        body.get(key).map(|value| {
+            format!(
+                "{key}={}",
+                value
+                    .as_str()
+                    .map_or_else(|| value.to_string(), str::to_string)
+            )
+        })
+    })
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// A request body as the log keeps it: compact JSON, pictures as `<image>`, the tool definitions
@@ -549,6 +698,36 @@ mod tests {
     }
 
     #[test]
+    fn missing_models_name_the_service_and_settings_for_both_providers() {
+        for service in ["Anthropic", "api.example.test"] {
+            for (status, body) in [
+                (404, "{}"),
+                (400, r#"{"error":{"code":"model_not_found"}}"#),
+                (400, r#"{"error":{"type":"not_found_error"}}"#),
+            ] {
+                let error = AiError::Api {
+                    status,
+                    body: body.into(),
+                    message: "missing".into(),
+                    request: None,
+                }
+                .for_model(service, "chosen-model");
+                assert_eq!(
+                    error.to_string(),
+                    format!("{service} has no model chosen-model: choose one in Settings")
+                );
+            }
+        }
+        let refused = AiError::Api {
+            status: 400,
+            body: "{}".into(),
+            message: "bad input".into(),
+            request: None,
+        };
+        assert_eq!(refused.clone().for_model("Anthropic", "model"), refused);
+    }
+
+    #[test]
     fn error_message_reads_the_api_shape() {
         let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#;
         assert_eq!(error_message(body), "bad");
@@ -557,4 +736,28 @@ mod tests {
         assert_eq!(error_message(gemini), "Invalid tool call");
         assert_eq!(error_message("oops"), "oops");
     }
+}
+
+#[test]
+fn busy_backoff_is_bounded_and_never_shortens_retry_after() {
+    let mut policy = RetryBackoff::default();
+    let delays: Vec<_> = (0..6)
+        .filter_map(|_| policy.next_delay(None, Duration::ZERO))
+        .map(|d| d.as_secs())
+        .collect();
+    assert_eq!(delays, [5, 15, 45, 55]);
+    let mut policy = RetryBackoff::default();
+    assert_eq!(
+        policy.next_delay(Some(90), Duration::ZERO),
+        Some(Duration::from_secs(90))
+    );
+    assert_eq!(policy.next_delay(Some(31), Duration::ZERO), None);
+    assert_eq!(
+        RetryBackoff::default().next_delay(Some(121), Duration::ZERO),
+        None
+    );
+    assert_eq!(
+        RetryBackoff::default().next_delay(None, Duration::from_secs(118)),
+        None
+    );
 }

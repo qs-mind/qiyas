@@ -24,20 +24,23 @@ use qiyas_geom::{
     clear_dimpost, dimension_entities, dimpost, flatten, is_logical_text, set_dimpost,
     set_dimscale, snap_shapes, style_named, DimLook, Xform,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::session::MEASURE_TOL;
 use crate::text::{escape_mtext, mark_logical};
 use crate::{CoreError, Session, Target, Units};
 
 /// A dimension to add (`Command::Dimension`). Points are in drawing coordinates, angles in
 /// degrees. Circles and arcs are picked as `Target`s at the top of the sheet.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DimSpec {
     /// The distance from `p1` to `p2` along `rotation` (degrees), its line through `line_point`.
     /// No rotation: horizontal, or vertical when `line_point` lies beside the points rather than
     /// above or below them (AutoCAD's DIMLINEAR).
+    #[schemars(example = json!({"kind": "linear", "p1": [0, 0], "p2": [5, 0], "line_point": [2.5, -1]}))]
+    #[schemars(extend("x-words" = ["DIMLINEAR", "DLI"]))]
     Linear {
         p1: [f64; 2],
         p2: [f64; 2],
@@ -46,12 +49,16 @@ pub enum DimSpec {
         rotation: Option<f64>,
     },
     /// The true distance from `p1` to `p2`, its line `offset` to their left (negative: right).
+    #[schemars(example = json!({"kind": "aligned", "p1": [0, 0], "p2": [3, 4], "offset": 0.8}))]
+    #[schemars(extend("x-words" = ["DIMALIGNED", "DAL"]))]
     Aligned {
         p1: [f64; 2],
         p2: [f64; 2],
         offset: f64,
     },
     /// The angle at `vertex` from `p1` to `p2`, its arc through `arc_point`.
+    #[schemars(example = json!({"kind": "angular", "vertex": [0, 0], "p1": [5, 0], "p2": [0, 5], "arc_point": [2, 2]}))]
+    #[schemars(extend("x-words" = ["DIMANGULAR", "DAN"]))]
     Angular {
         vertex: [f64; 2],
         p1: [f64; 2],
@@ -59,24 +66,44 @@ pub enum DimSpec {
         arc_point: [f64; 2],
     },
     /// The radius of a circle or arc, toward `point`.
+    #[schemars(example = json!({"kind": "radius", "target": {"handle": 1234}, "point": [1, 1]}))]
+    #[schemars(extend("x-words" = ["DIMRADIUS", "DRA"]))]
     Radius { target: Target, point: [f64; 2] },
     /// The diameter of a circle or arc, through `point`'s direction.
+    #[schemars(example = json!({"kind": "diameter", "target": {"handle": 1234}, "point": [1, 1]}))]
+    #[schemars(extend("x-words" = ["DIMDIAMETER", "DDI"]))]
     Diameter { target: Target, point: [f64; 2] },
     /// The length of an arc, its dimension arc through `point`.
+    #[schemars(example = json!({"kind": "arc_length", "target": {"handle": 1234}, "point": [1, 1.5]}))]
+    #[schemars(extend("x-words" = ["DIMARC", "DAR"]))]
     ArcLength { target: Target, point: [f64; 2] },
     /// The X (leader mostly up or down) or Y ordinate of `feature` from the drawing's origin.
+    #[schemars(example = json!({"kind": "ordinate", "feature": [5, 3], "leader_end": [5, 6]}))]
+    #[schemars(extend("x-words" = ["DIMORDINATE", "DOR"]))]
     Ordinate {
         feature: [f64; 2],
         leader_end: [f64; 2],
     },
     /// Dimensions from the first point of the linear or aligned dimension `from` to each of
     /// `points`, each line a baseline spacing (DIMDLI) further out.
-    Baseline { from: Target, points: Vec<[f64; 2]> },
+    #[schemars(example = json!({"kind": "baseline", "from": {"handle": 1234}, "points": [[8, 0], [12, 0]]}))]
+    #[schemars(extend("x-words" = ["DIMBASELINE", "DBA"]))]
+    Baseline {
+        from: Target,
+        points: crate::PointRun,
+    },
     /// Dimensions on the line of `from`, from its second point to the first of `points`, then
     /// from each point to the next.
-    Continue { from: Target, points: Vec<[f64; 2]> },
+    #[schemars(example = json!({"kind": "continue", "from": {"handle": 1234}, "points": [[8, 0], [12, 0]]}))]
+    #[schemars(extend("x-words" = ["DIMCONTINUE", "DCO"]))]
+    Continue {
+        from: Target,
+        points: crate::PointRun,
+    },
     /// One dimension per entity: a line its horizontal or vertical length (its line through
     /// `line_point`), an arc its radius, a circle its diameter.
+    #[schemars(example = json!({"kind": "quick", "targets": [{"handle": 1234}, {"handle": 1235}], "line_point": [0, -1.5]}))]
+    #[schemars(extend("x-words" = ["QDIM"]))]
     Quick {
         targets: Vec<Target>,
         line_point: [f64; 2],
@@ -84,7 +111,7 @@ pub enum DimSpec {
 }
 
 /// What `Command::DimEdit` changes on a dimension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DimEditOp {
     /// The text shown instead of the measurement; `<>` stands for it, empty clears the override.
@@ -96,7 +123,7 @@ pub enum DimEditOp {
 }
 
 /// The common fields of a dimension style, in drawing units (before its scale).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DimStyleFields {
     /// DIMASZ.
     pub arrow_size: f64,
@@ -252,7 +279,7 @@ fn linear_dimension(p1: [f64; 2], p2: [f64; 2], line_point: [f64; 2], angle: f64
 
 /// Horizontal (0) or vertical (90 degrees) for a line through `line_point`: vertical when it lies
 /// further beside the points than above or below them.
-fn auto_angle(p1: [f64; 2], p2: [f64; 2], line_point: [f64; 2]) -> f64 {
+pub(crate) fn auto_angle(p1: [f64; 2], p2: [f64; 2], line_point: [f64; 2]) -> f64 {
     let outside = |v: f64, a: f64, b: f64| (a.min(b) - v).max(v - a.max(b)).max(0.0);
     let beside = outside(line_point[0], p1[0], p2[0]);
     let above = outside(line_point[1], p1[1], p2[1]);
@@ -521,9 +548,70 @@ impl Session {
         }
     }
 
+    /// A dimension style nobody sized: the codec's stock "Standard" (text and arrows 0.18, offset
+    /// 0.625, extension 1.25, gap 0.625, no unit at all), which a drawing gets when it was written
+    /// without a style of its own (by Qiyas before its metric template, or a DXF without one).
+    /// AutoCAD's own imperial Standard differs (offset 0.0625), so it is never taken for one.
+    fn is_stock_style(s: &DimStyle) -> bool {
+        s.dimtxt == 0.18
+            && s.dimasz == 0.18
+            && s.dimexo == 0.625
+            && s.dimexe == 1.25
+            && s.dimgap == 0.625
+    }
+
+    /// On open: in a drawing that is not in inches or feet, each stock style (`is_stock_style`)
+    /// takes the metric template's sizes in the drawing's units (text and arrows 2.5 mm,
+    /// offset 0.625, extension 1.25, gap 0.625, baseline 3.75, centre 2.5), and the dimensions
+    /// Qiyas made in it are drawn again. In a metre drawing at 1:100 the stock sizes gave text
+    /// 18 m tall and extension lines 125 m long. AutoCAD's dimensions keep their own blocks.
+    pub(crate) fn size_stock_dim_styles(&mut self) {
+        if matches!(self.drawing.units, Units::Inches | Units::Feet) {
+            return;
+        }
+        let mm = 0.001 / self.drawing.units.to_metres();
+        let doc = &mut self.drawing.doc;
+        let current = doc.header.current_dimstyle_name.clone();
+        let mut sized = Vec::new();
+        for style in doc
+            .dim_styles
+            .iter_mut()
+            .filter(|s| Self::is_stock_style(s))
+        {
+            style.dimtxt = 2.5 * mm;
+            style.dimasz = 2.5 * mm;
+            style.dimexo = 0.625 * mm;
+            style.dimexe = 1.25 * mm;
+            style.dimgap = 0.625 * mm;
+            style.dimdli = 3.75 * mm;
+            style.dimcen = 2.5 * mm;
+            sized.push(style.name.clone());
+        }
+        if sized.iter().any(|n| n.eq_ignore_ascii_case(&current)) {
+            let h = &mut doc.header;
+            h.dim_text_height = 2.5 * mm;
+            h.dim_arrow_size = 2.5 * mm;
+            h.dim_ext_line_offset = 0.625 * mm;
+            h.dim_ext_line_extension = 1.25 * mm;
+            h.dim_line_gap = 0.625 * mm;
+            h.dim_line_increment = 3.75 * mm;
+            h.dim_center_mark = 2.5 * mm;
+        }
+        for name in sized {
+            for h in self.generated_dimensions(&name) {
+                // A dimension Qiyas can't draw again keeps the block it has.
+                let _ = self.rebuild_dimension(h);
+            }
+        }
+    }
+
     /// The DIMSCALE a new annotation keeps as its own: the annotation scale's factor, which
     /// replaces its style's DIMSCALE; `None` at 1:1 (it then follows its style).
     fn annotation_dimscale(&self) -> Option<f64> {
+        if !self.sheet.eq_ignore_ascii_case("*Model_Space") {
+            // Style lengths are in model drawing units; layout annotations use paper mm.
+            return Some(self.drawing.units.to_metres() / 0.001);
+        }
         let (_, factor) = self.annotation_scale();
         ((factor - 1.0).abs() >= 1e-12).then_some(factor)
     }
@@ -536,7 +624,12 @@ impl Session {
         if !matches!(entity, EntityType::Circle(_) | EntityType::Arc(_)) {
             return Err(invalid("Pick a circle or an arc"));
         }
-        let shapes = snap_shapes(&self.drawing.doc, entity, &Xform::identity(), MEASURE_TOL);
+        let shapes = snap_shapes(
+            &self.drawing.doc,
+            entity,
+            &Xform::identity(),
+            self.measure_tol(),
+        );
         match shapes.first().and_then(|s| s.pieces.first()) {
             Some(Curve::Circle(c)) => Ok((c.centre, c.radius, None)),
             Some(Curve::Arc(a)) => Ok((a.centre, a.radius, Some((a.start_angle, a.end_angle)))),
@@ -554,7 +647,7 @@ impl Session {
     }
 
     /// The dimensions `spec` describes, not yet in the drawing.
-    fn dimensions_of(&self, spec: DimSpec) -> Result<Vec<Dimension>, CoreError> {
+    pub(crate) fn dimensions_of(&self, spec: DimSpec) -> Result<Vec<Dimension>, CoreError> {
         let out = match spec {
             DimSpec::Linear {
                 p1,
@@ -975,7 +1068,7 @@ impl Session {
         };
         let cutting: Vec<([f64; 2], [f64; 2])> = {
             let doc = &self.drawing.doc;
-            flatten(doc, self.entity(c), &Xform::identity(), MEASURE_TOL)
+            flatten(doc, self.entity(c), &Xform::identity(), self.measure_tol())
                 .into_paths()
                 .iter()
                 .flat_map(|p| {
@@ -1061,6 +1154,12 @@ impl Session {
         self.replace_line(line, &[zigzag])
     }
 
+    /// The automatic spacing follows the base dimension's style and text-height overrides.
+    pub(crate) fn dimension_spacing_default(&self, base: &Target) -> Result<f64, CoreError> {
+        let (_, dimension) = self.linear_target(base)?;
+        Ok(2.0 * DimLook::of(&self.drawing.doc, &dimension).text_height)
+    }
+
     /// `Command::DimSpace`: the linear or aligned dimensions `targets`, parallel to `base`, get
     /// their lines `spacing` apart going out from `base`'s (none: twice the text height), in the
     /// order they were out from it.
@@ -1079,7 +1178,7 @@ impl Session {
         let step = match spacing {
             Some(s) if s > 0.0 && s.is_finite() => s,
             Some(_) => return Err(invalid("The spacing must be more than 0")),
-            None => 2.0 * DimLook::of(&self.drawing.doc, &b).text_height,
+            None => self.dimension_spacing_default(base)?,
         };
         let mut placed = Vec::with_capacity(targets.len());
         for t in targets {

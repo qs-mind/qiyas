@@ -17,9 +17,10 @@ type Deps = {
   boqLinked: Measurement[];
   conflictLinked: Measurement[];
   aiHighlight: number[];
+  revealOverlay: Float64Array | null;
 };
 
-export function useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight }: Deps) {
+export function useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight, revealOverlay }: Deps) {
   const highlight = useMemo(() => {
     const rows = [...(selected ? [selected] : []), ...boqLinked, ...conflictLinked];
     const targets: Target[] = [
@@ -59,14 +60,13 @@ export function useOverlay({ tool, measure, batch, selected, boqLinked, conflict
   // A measure in progress hides the selected row's outline; the snap marker goes over either.
   const overlay = useMemo(() => {
     const lines = rubberBand ?? selectedOverlay;
-    const marker = measure.marker;
-    if (!marker) return lines;
-    if (!lines) return marker;
-    const all = new Float64Array(lines.length + marker.length);
-    all.set(lines);
-    all.set(marker, lines.length);
+    const parts = [lines, measure.marker, revealOverlay].filter((part) => part !== null);
+    if (parts.length === 0) return null;
+    if (parts.length === 1) return parts[0];
+    const all = new Float64Array(parts.reduce((n, part) => n + part.length, 0));
+    parts.reduce((at, part) => (all.set(part, at), at + part.length), 0);
     return all;
-  }, [rubberBand, selectedOverlay, measure.marker]);
+  }, [rubberBand, selectedOverlay, measure.marker, revealOverlay]);
 
   return { highlight, overlay };
 }

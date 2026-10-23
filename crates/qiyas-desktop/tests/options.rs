@@ -240,8 +240,8 @@ fn the_default_ribbon_is_valid_and_holds_every_tab() {
         .map(|g| g.id.as_str())
         .collect();
     assert_eq!(annotate, ["dims", "notes", "markup", "tables"]);
-    // Open, Save, Save as, Undo and Redo are the window's quick-access bar, in no layout.
-    for command in ["open", "save", "saveAs", "undo", "redo"] {
+    // New, Open, Save, Save as, Undo and Redo are the window's quick-access bar, in no layout.
+    for command in ["new", "open", "save", "saveAs", "undo", "redo"] {
         assert!(buttons.iter().all(|b| b.command != command), "{command}");
     }
 }
@@ -309,6 +309,35 @@ fn the_default_ribbon_is_the_one_the_window_draws() {
         serde_json::to_value(ribbon::default_ribbon()).unwrap(),
         window
     );
+}
+
+#[test]
+fn registry_words_are_available_to_customize_and_valid_saved_buttons() {
+    let catalog = ribbon::command_ribbon();
+    let buttons: Vec<_> = catalog
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.groups)
+        .flat_map(|group| &group.buttons)
+        .filter(|button| button.kind == ButtonKind::Command)
+        .collect();
+    for command in qiyas_core::registry::registry()
+        .commands()
+        .iter()
+        .filter(|command| !command.internal)
+    {
+        if let Some(word) = command.words.first() {
+            assert!(
+                buttons.iter().any(|button| &button.command == word),
+                "{word}"
+            );
+        }
+    }
+    assert!(!buttons.is_empty());
+    assert_eq!(ribbon::validate(&catalog), Ok(()));
+    let mut custom = ribbon::default_ribbon();
+    custom.tabs[0].groups[0].buttons.push((*buttons[0]).clone());
+    assert_eq!(ribbon::validate(&custom), Ok(()));
 }
 
 #[test]

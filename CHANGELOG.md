@@ -7,6 +7,134 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
+### Added
+
+- Mizan takes off a drawing alone. It reads a one-call drawing digest and a take-off kit, writes
+  its own recognition and measurement rules as data, generates the BOQ, checks itself, and
+  ends with the items it is unsure of. On the sealed holdout benchmark it found 96% of the items,
+  and 96% of all items were within ±2%.
+- Measurement methods as data, chosen in Settings: cited deduction, unit and rounding rules,
+  dimension sheets that trace every line to its handle, and a bilingual generated BOQ that
+  follows every edit.
+- A discrepancy engine raises bilingual RFIs with clouds when an imported BOQ and the drawing
+  disagree, or when a schedule and the plan disagree.
+- Revisions: compare drawing A with drawing B, carry the knowledge across, and get a
+  variation statement per item with the changes clouded.
+- Projects: many drawings combined into one BOQ, with cross-drawing checks and a drawing
+  register. `qiyas-cli project run` builds the whole project.
+- Deliverables in English and Arabic Excel and PDF: dimension sheets, BOQ, queries,
+  variation statement and drawing register. Qiyas can also fill a client's own BOQ template,
+  writing quantity cells only.
+- "How did you get this number?" for any quantity, confidence bands, and browsing the drawing
+  while Mizan works.
+- `qiyas-cli mcp`: a headless MCP server, so Codex, Claude Code or any MCP client can drive
+  Qiyas with Mizan's own take-off workflow. `qiyas-cli eval-agent` scores such an agent on the
+  benchmark.
+- The QS benchmark (`qiyas-cli bench`), which measures coverage, precision, accuracy,
+  traceability, seeded errors and revisions, with a sealed holdout exam.
+- Saved conversations, approval modes (per job, per phase, autonomous) and a method of
+  measurement setting.
+
+- Check a command or a whole batch before running it, with all input problems reported
+  together. Unknown fields are shown as warnings, and results say which defaults were used.
+- Outside agents can safely retry an edit with a request id without drawing it twice.
+- Drawing examples are checked automatically in millimetres, centimetres, metres and inches.
+- Offline drafting evaluation through Mizan's three generic tools: a villa and a flange
+  check geometry, layers, quantities and captures, with regressions for earlier drafting
+  faults. The scripted evaluation does not assess live model judgement.
+- Verify drawing intent with pass/fail results, measured values and tolerances: sizes,
+  areas, geometric relationships, symmetry, bounds, intersections and counts.
+- Draw centre marks, centre lines, symmetry axes and labelled reference grids in one undo
+  step, sized for the drawing's units and annotation scale.
+- Select general drafting or construction check packs. Construction checks turn on
+  automatically for drawings with take-off rows or room, space or area layers; general
+  checks now flag circles missing a centre mark. Mizan checks stated intent before finishing.
+- Core commands now supply their command-line words and aliases to suggestions, ribbon
+  customisation, scripts and Mizan. Typed commands share schema-driven prompts, relative
+  points, UCS coordinates and Arabic number input while existing window tools keep their
+  command-line behaviour.
+- Draw joined walls with clean corners and junctions, measurable wall hatches, room holes,
+  and reusable door and window symbols. Wall quantities report length, gross and net plan
+  area, and volume with opening heights, in metres across drawing units.
+- Create and rename paper layouts, set a viewport's scale and model centre, and add a sheet
+  frame and title block containing only the information supplied. Text and dimensions on
+  layouts use paper millimetres.
+- Define reusable blocks directly from drawing objects through the command registry.
+- Mizan's drawing changes appear live, entity by entity, with consecutive steps queued.
+  Reduced motion shows them at once; a command, undo or drawing switch ends the animation.
+- Mizan can now use every command in Qiyas, discover the properties of drawing objects, and
+  make related changes together as one undo step. Outside AI apps have the same access.
+- Check a drawing for gaps, overlaps, stray lines, unreadable or colliding text, room sizes
+  that disagree with their labels, and take-off rows whose drawing links are gone.
+- Scripts can find rooms, label their unapproved candidate areas in English or Arabic, and
+  add take-off clouds and notes, using the same commands as Mizan.
+- Text and tables can choose their own readable sizes for the drawing's units and annotation
+  scale when no size is given.
+- Choose the AI model from a list: the provider's own models (Anthropic, or an OpenAI-compatible
+  service's), with a filter for long lists and "Other…" for an id the list lacks.
+- Isolating a layer can be undone: isolate it again, LAYUNISO or Un-isolate in the Layers panel
+  puts back only what isolating hid; the panel says which layer is isolated.
+- New drawing (New on the quick-access bar, Ctrl+N or NEW): an empty drawing in metres,
+  centimetres or millimetres, saved with Save As the first time.
+- Mizan can list, make, open, switch, save and close drawings, in the same conversation. Opening a
+  file you have not opened or named before, Save As and closing unsaved work stay your choice in
+  Qiyas. The MCP server has the same tools.
+- New chat button at the top of Mizan's panel.
+- Mizan can move, copy, rotate, scale, mirror, array, offset, trim, extend, fillet, chamfer and
+  erase what is drawn, and undo its own last step.
+- The origin icon: X and Y arrows on 0,0 (or the UCS origin), parked in the corner when 0,0 is off
+  screen; UCSICON ON / OFF or View, Origin icon.
+- Point Mizan at something: what you select shows as a chip above Mizan's box and goes with your
+  message, with a picture of it; the box's area button marks an area (drag a box, or click its
+  corners); right-click, Ask Mizan about this.
+- Paste, drop or attach pictures (a screenshot, a site photo, a scanned schedule) in Mizan's box.
+- Mizan sees the drawing as you do: its pictures show images and PDF underlays, model space in a
+  layout's viewports and any sheet, with numbered marks it can act on; it can look at your screen
+  as it is and select entities for you.
+
+### Fixed
+
+- A wall path that returns to its start now joins the first corner correctly. Boundaries share
+  the same closure rule; a plain open polyline keeps its return vertex.
+- Windows use a 0.9 m sill and a head at 2.1 m or the wall height when those sizes are omitted.
+  Contradictory opening heights are still refused.
+- Command descriptions and input validation work without an open drawing, and wall descriptions
+  now include their complete inputs.
+- Switching AI provider restores that provider's model and address. A missing model offers a
+  clear Settings instruction, and model lists show a warning when the saved model is absent.
+- Every file picker starts in the drawing's folder, the last folder used, or Documents.
+  The first save of an untitled drawing no longer starts in the app's working folder.
+- The agent log records the effort and output limit actually sent on each request, and reads
+  reasoning-token counts from both supported OpenAI-compatible usage formats.
+- Grid bubbles at neighbouring corners no longer collide, and title blocks share the sheet
+  frame without drawing its edges twice. Text collision checks respect text alignment.
+- Drawing checks distinguish real gaps and overlaps from nearby parallel lines and curve
+  approximations. Using the default layer is an informational note.
+- Layers and layouts made by Mizan now appear in their panels as soon as the change arrives.
+- Text typed with a literal `\n` now breaks onto a new line. A multiline Text becomes MText
+  automatically.
+- AI and MCP measurements share the same checks for empty items and counts of block references.
+- The effort chosen for an OpenAI-compatible service (Gemini through Runware, OpenRouter, a local
+  server) was never sent; it is now, with the answer's length, and the log shows thinking tokens.
+- Undoing a layer rename after showing every layer hid the old set of layers again, and the
+  drawing seemed to vanish; undo now takes back only what the rename changed.
+- Circles and arcs drew as polygons in metre and centimetre drawings: curves are now drawn within
+  0.05 mm in every unit, with 64 segments a circle at least, and again finer when zoomed in close.
+- New drawings get readable dimensions and text (a metric template at 1:100), a metre grid and
+  AutoCAD's multiline width, whatever their units.
+- A block inserted from a drawing in other units comes in at its real size.
+- AUTOCONSTRAIN no longer welds ends a few centimetres apart in metre drawings.
+- Mizan's hatches use the right pattern scale for the drawing's units.
+- A hatch made by clicking inside a square round a circle found slivers as islands.
+- Mizan no longer makes up explanations of how Qiyas works, and its formulas read as plain text.
+- Dimensions in metre drawings without a dimension style of their own were metres tall, with
+  extension lines running off the sheet; such drawings are sized when they open.
+- Mizan's picture of the drawing now shows its text and solid fills, so it no longer writes labels
+  over labels it could not see; it can change a text in place.
+- Table rows grow to hold text that wraps, instead of running over the next row.
+- A new drawing's autosave is offered back after a crash, even before its first save.
+- JOIN, trim and duplicate points work at large survey coordinates.
+
 ## [0.0.1] - 2026-10-12
 
 First public release.

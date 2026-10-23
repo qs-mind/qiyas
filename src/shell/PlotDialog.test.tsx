@@ -327,15 +327,15 @@ test("without printers, Print goes to the default one", async () => {
 });
 
 test("a plot that fails says why and stays open", async () => {
+  let fail = (_reason: string) => {};
   const { props } = setup({
-    onPlotPdf: vi.fn(
-      () => new Promise<void>((_, reject) => setTimeout(() => reject("Nothing to plot: the area is empty"), 20)),
-    ),
+    onPlotPdf: vi.fn(() => new Promise<void>((_, reject) => (fail = reject))),
   });
   await loaded();
   fireEvent.click(plotButton());
   // Plotting runs off the drawing: the dialog says so while it waits.
   expect((await screen.findByText("Plotting…")).querySelector(".dot-loader")).toBeTruthy();
+  fail("Nothing to plot: the area is empty");
   expect((await screen.findByRole("alert")).textContent).toBe("Nothing to plot: the area is empty");
   expect(screen.queryByText("Plotting…")).toBeNull();
   expect(props.onClose).not.toHaveBeenCalled();
@@ -399,21 +399,26 @@ test("the preview draws the area's lines once per area while the dialog is open"
   };
   const { props, view } = setup({ batch });
   await loaded();
-  expect(drawn.moveTo).toBe(2);
+  // Loading the paper catalog can finish before the portal's canvas effect runs.
+  await waitFor(() => {
+    expect(drawn.moveTo).toBe(2);
+    expect(drawn.drawImage).toBeGreaterThan(0);
+  });
   const blits = drawn.drawImage;
-  expect(blits).toBeGreaterThan(0);
 
   // Another paper and orientation reuse the picture of the area.
   fireEvent.change(combo("Paper"), { target: { value: "ISO A4" } });
   fireEvent.change(combo("Orientation"), { target: { value: "portrait" } });
+  await waitFor(() => expect(drawn.drawImage).toBeGreaterThan(blits));
   expect(drawn.moveTo).toBe(2);
-  expect(drawn.drawImage).toBeGreaterThan(blits);
 
   // A window is another area: drawn once, then reused.
   fireEvent.change(combo("What to plot"), { target: { value: "window" } });
   view.rerender(<PlotDialog {...props} picked={[[-1, -1], [2, 2]]} />);
-  expect(drawn.moveTo).toBe(3);
+  await waitFor(() => expect(drawn.moveTo).toBe(3));
+  const windowBlits = drawn.drawImage;
   fireEvent.change(combo("Scale"), { target: { value: "1:50" } });
+  await waitFor(() => expect(drawn.drawImage).toBeGreaterThan(windowBlits));
   expect(drawn.moveTo).toBe(3);
 });
 

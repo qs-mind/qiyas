@@ -246,3 +246,5 @@ pub fn spool_dir() -> Result<PathBuf, PlotError> {
     }
     Ok(dir)
 }
+
+pub mod report;

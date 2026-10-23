@@ -15,12 +15,14 @@ use opencadcodec::entities::{
 use opencadcodec::types::{Matrix3, Transform};
 use opencadcodec::{Circle, EntityType, Handle, Vector3};
 use qiyas_geom::{flatten, is_xref_block, Xform};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use std::collections::HashSet;
 
 use crate::commands::insert_point;
-use crate::session::{locate, variant_name, BATCH_TOL};
+use crate::session::{locate, variant_name};
 use crate::takeoff::in_metres;
 use crate::{Command, CoreError, Kind, Measurement, Outcome, Session, Target};
 
@@ -29,21 +31,27 @@ pub(crate) const MAX_NEW: usize = 100_000;
 
 /// What `Command::Modify` does, to the entities `targets` (as picked, see `Target`). Points are
 /// in drawing coordinates, angles in degrees counter-clockwise.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModifySpec {
     /// Moves them by `delta`.
+    #[schemars(example = json!({"kind": "move", "targets": [{"handle": 1234}], "delta": [2, 0]}))]
+    #[schemars(extend("x-words" = ["MOVE", "M"]))]
     Move {
         targets: Vec<Target>,
         delta: [f64; 2],
     },
     /// Adds `count` copies (1 or more), the first `delta` away, each next one `delta` further.
+    #[schemars(example = json!({"kind": "copy", "targets": [{"handle": 1234}], "delta": [0, 3], "count": 4}))]
+    #[schemars(extend("x-words" = ["COPY", "CO", "CP"]))]
     Copy {
         targets: Vec<Target>,
         delta: [f64; 2],
         count: u32,
     },
     /// Turns them `angle` about `base`; with `copy`, turns a copy and keeps them.
+    #[schemars(example = json!({"kind": "rotate", "targets": [{"handle": 1234}], "base": [0, 0], "angle": 90}))]
+    #[schemars(extend("x-words" = ["ROTATE", "RO"]))]
     Rotate {
         targets: Vec<Target>,
         base: [f64; 2],
@@ -52,6 +60,8 @@ pub enum ModifySpec {
         copy: bool,
     },
     /// Scales them by `factor` (above 0) about `base`; with `copy`, scales a copy.
+    #[schemars(example = json!({"kind": "scale", "targets": [{"handle": 1234}], "base": [0, 0], "factor": 2}))]
+    #[schemars(extend("x-words" = ["SCALE", "SC"]))]
     Scale {
         targets: Vec<Target>,
         base: [f64; 2],
@@ -61,6 +71,8 @@ pub enum ModifySpec {
     },
     /// Mirrors them across the line through `p1` and `p2`; with `keep`, mirrors a copy and keeps
     /// them. Texts still read forwards (AutoCAD's MIRRTEXT 0).
+    #[schemars(example = json!({"kind": "mirror", "targets": [{"handle": 1234}], "p1": [5, 0], "p2": [5, 1], "keep": true}))]
+    #[schemars(extend("x-words" = ["MIRROR", "MI"]))]
     Mirror {
         targets: Vec<Target>,
         p1: [f64; 2],
@@ -71,6 +83,8 @@ pub enum ModifySpec {
     /// lines and polylines; any other entity moves whole when it lies wholly inside the window,
     /// or when its centre or insertion point does (circles, arcs, ellipses, texts, block
     /// references, points).
+    #[schemars(example = json!({"kind": "stretch", "targets": [{"handle": 1234}], "window": [[4, -1], [6, 5]], "delta": [1, 0]}))]
+    #[schemars(extend("x-words" = ["STRETCH", "S"]))]
     Stretch {
         targets: Vec<Target>,
         window: [[f64; 2]; 2],
@@ -79,12 +93,16 @@ pub enum ModifySpec {
     /// Moves them so each pair's source point (the first) lands on its destination (the second):
     /// one pair moves; two pairs also turn them so the line between the sources lies along the
     /// line between the destinations (no scaling).
+    #[schemars(example = json!({"kind": "align", "targets": [{"handle": 1234}], "pairs": [[[0, 0], [10, 10]], [[1, 0], [10, 11]]]}))]
+    #[schemars(extend("x-words" = ["ALIGN", "AL"]))]
     Align {
         targets: Vec<Target>,
         pairs: Vec<[[f64; 2]; 2]>,
     },
     /// Copies them into `rows` x `cols` (1 or more each, 2 cells at least), `dy` apart up and `dx`
     /// across; they are the first cell.
+    #[schemars(example = json!({"kind": "array_rect", "targets": [{"handle": 1234}], "rows": 3, "cols": 4, "dy": 6, "dx": 6}))]
+    #[schemars(extend("x-words" = ["ARRAY", "AR"]))]
     ArrayRect {
         targets: Vec<Target>,
         rows: u32,
@@ -94,6 +112,7 @@ pub enum ModifySpec {
     },
     /// Copies them round `centre` into `count` items (2 or more, they are the first), each turned
     /// `angle` from the one before (90 with 4 items fills the circle).
+    #[schemars(example = json!({"kind": "array_polar", "targets": [{"handle": 1234}], "centre": [0, 0], "count": 8, "angle": 45}))]
     ArrayPolar {
         targets: Vec<Target>,
         centre: [f64; 2],
@@ -104,6 +123,8 @@ pub enum ModifySpec {
     /// ByBlock take the reference's layer, colour, linetype and lineweight), polylines and
     /// multilines into their parts. Entities that have no parts are left as they are; nothing to
     /// explode at all is refused.
+    #[schemars(example = json!({"kind": "explode", "targets": [{"handle": 1234}]}))]
+    #[schemars(extend("x-words" = ["EXPLODE", "X"]))]
     Explode { targets: Vec<Target> },
 }
 
@@ -147,6 +168,14 @@ impl Placing {
             transform: translation(d),
             mirror_line: None,
             shift: Some(d),
+        }
+    }
+
+    pub(crate) fn mirror(transform: Transform, line: f64) -> Placing {
+        Placing {
+            transform,
+            mirror_line: Some(line),
+            shift: None,
         }
     }
 }
@@ -205,6 +234,35 @@ fn check_placeable(e: &EntityType, copying: bool, translation: bool) -> Result<(
 
 /// Places `e` by `p`, its stored DWG graphics dropped (they would show it where it was).
 pub(crate) fn place(e: &mut EntityType, p: &Placing) {
+    // A typed point is also the local frame for its data-defined symbol. The codec moves
+    // points but does not transform their display angle, so retain that frame explicitly.
+    let object_angle = match e {
+        EntityType::Point(point)
+            if point
+                .common
+                .extended_data
+                .get_record(crate::objects::OBJECT_APP)
+                .is_some() =>
+        {
+            let direction = p.transform.apply_rotation(Vector3::new(
+                point.x_axis_angle.cos(),
+                point.x_axis_angle.sin(),
+                0.0,
+            ));
+            let x = p.transform.apply_rotation(Vector3::UNIT_X);
+            let y = p.transform.apply_rotation(Vector3::UNIT_Y);
+            let reflection = if x.x * y.y - x.y * y.x < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            Some((
+                direction.y.atan2(direction.x).rem_euclid(TAU),
+                point.normal.z * reflection,
+            ))
+        }
+        _ => None,
+    };
     match p.mirror_line {
         Some(line) => {
             e.apply_mirror(&p.transform);
@@ -212,6 +270,13 @@ pub(crate) fn place(e: &mut EntityType, p: &Placing) {
         }
         None => e.apply_transform(&p.transform),
     }
+    if let (Some((angle, normal_z)), EntityType::Point(point)) = (object_angle, &mut *e) {
+        point.x_axis_angle = angle;
+        // A reflected local frame needs both its X direction and its handedness. Point
+        // normals are native DWG/DXF data, so this also survives reopening without xdata edits.
+        point.normal.z = normal_z;
+    }
+    crate::object_regions::transform_region_source(e, &p.transform);
     e.common_mut().graphic_data = None;
 }
 
@@ -397,7 +462,8 @@ impl Session {
     /// `Command::Modify`: see `ModifySpec`. `Changed` for a change in place (`Nothing` when a
     /// stretch moved nothing), `Added` with the new handles for copies, arrays and explode.
     pub(crate) fn modify(&mut self, spec: ModifySpec) -> Result<Outcome, CoreError> {
-        let handles = self.sheet_targets(spec.targets())?;
+        let targets = self.object_edit_targets(spec.targets());
+        let handles = self.sheet_targets(&targets)?;
         match spec {
             ModifySpec::Move { delta, .. } => {
                 finite(&delta)?;
@@ -582,6 +648,7 @@ impl Session {
         let owner = self.sheet_owner();
         let mut added = Vec::with_capacity(handles.len() * copies.len());
         for p in &copies {
+            let start = added.len();
             for &h in handles {
                 let mut copy = self.entity(h).clone();
                 let dimension_block = place_keeping_blocks(&mut copy, p);
@@ -608,6 +675,7 @@ impl Session {
                 }
                 added.push(self.add_fresh(copy, owner)?);
             }
+            self.copied_wall_groups(&added[start..], p.mirror_line.is_some())?;
         }
         Ok(Outcome::Added { handles: added })
     }
@@ -792,7 +860,8 @@ impl Session {
 
     /// Every point of `e` as drawn lies in `window`.
     fn wholly_inside(&self, e: &EntityType, [lo, hi]: [[f64; 2]; 2]) -> bool {
-        let paths = flatten(&self.drawing.doc, e, &Xform::identity(), BATCH_TOL).into_paths();
+        let paths =
+            flatten(&self.drawing.doc, e, &Xform::identity(), self.batch_tol()).into_paths();
         !paths.is_empty()
             && paths
                 .iter()
@@ -1059,6 +1128,10 @@ impl Session {
     pub(crate) fn document_extras(&self, cmd: &Command) -> (bool, bool) {
         let edited;
         let (targets, copying, erasing) = match cmd {
+            Command::Walls(_)
+            | Command::AddWallOpenings { .. }
+            | Command::RemoveWallOpenings { .. }
+            | Command::EditWallOpening { .. } => return (true, true),
             Command::DeleteEntities { targets } => (targets.as_slice(), false, true),
             Command::Modify(spec) => (
                 spec.targets(),

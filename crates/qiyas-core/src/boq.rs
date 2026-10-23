@@ -1,11 +1,12 @@
 //! The bill of quantities imported from Excel: the items the take-off is checked against.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 /// An imported BOQ.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Boq {
     /// The workbook it was read from.
     pub source: String,
@@ -32,7 +33,7 @@ impl Boq {
 }
 
 /// One BOQ line.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BoqItem {
     pub code: String,
     pub description: String,

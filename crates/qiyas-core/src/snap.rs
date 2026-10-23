@@ -7,6 +7,7 @@ use opencadkernel::geom2d::{
     SnapKind as KernelKind, Tolerance,
 };
 use qiyas_geom::snap_shapes;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::session::locate;
@@ -14,7 +15,9 @@ use crate::{CoreError, Session};
 
 /// What kind of point a snap found. Declared best first: a snap prefers the earlier kind, and
 /// the nearer point between two of one kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapKind {
     /// An end of a line or arc, or a polyline vertex.
@@ -35,7 +38,7 @@ pub enum SnapKind {
 }
 
 /// Which snaps are on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SnapModes {
     pub end: bool,
@@ -78,7 +81,7 @@ impl SnapModes {
 
 /// How the window draws and measures: object snaps, ortho, polar tracking, the grid and the
 /// number of decimals shown. Saved in the project file; not an undo step.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct Drafting {
     /// Object snaps on at all (F3).

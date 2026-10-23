@@ -174,9 +174,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
 dependencies = [
  "clipboard-win",
+ "image",
  "log",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
@@ -1439,6 +1442,15 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "erased-discriminant"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1a6df962265a53221f29081896c412ef325c17fa7d638cd9578febe53d3c82c"
+dependencies = [
+ "typeid",
+]
 
 [[package]]
 name = "erased-serde"
@@ -3914,6 +3926,7 @@ dependencies = [
  "opencadcodec",
  "qiyas-boq",
  "qiyas-core",
+ "qiyas-pdf",
  "qiyas-render",
  "qiyas-takeoff",
  "reqwest",
@@ -3927,6 +3940,7 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -3935,10 +3949,13 @@ version = "0.0.1"
 dependencies = [
  "calamine",
  "qiyas-core",
+ "qiyas-plot",
+ "quick-xml 0.41.0",
  "rust_xlsxwriter",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -3946,14 +3963,25 @@ name = "qiyas-cli"
 version = "0.0.1"
 dependencies = [
  "calamine",
+ "chrono",
  "clap",
+ "keyring",
+ "keyring-core",
  "opencadcodec",
+ "qiyas-ai",
  "qiyas-boq",
  "qiyas-core",
+ "qiyas-pdf",
+ "qiyas-plot",
  "qiyas-takeoff",
+ "rmcp",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
+ "tiny-skia",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3969,8 +3997,12 @@ dependencies = [
  "qiyas-param",
  "qiyas-pdf",
  "qiyas-render",
+ "regex",
+ "schemars 1.2.2",
  "serde",
+ "serde-reflection",
  "serde_json",
+ "serde_path_to_error",
  "tempfile",
  "thiserror 2.0.21",
  "time",
@@ -4001,12 +4033,14 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]
 name = "qiyas-geom"
 version = "0.0.1"
 dependencies = [
+ "cavalier_contours",
  "opencadcodec",
  "opencadkernel",
 ]
@@ -4084,6 +4118,8 @@ name = "qiyas-takeoff"
 version = "0.0.1"
 dependencies = [
  "qiyas-core",
+ "serde_json",
+ "tempfile",
  "time",
 ]
 
@@ -4698,6 +4734,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-reflection"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af0fdf9c543af37502581e3d6cf4e6cd1628d6616d6a1f8f4ca88aae3a405f5c"
+dependencies = [
+ "erased-discriminant",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "typeid",
+]
+
+[[package]]
 name = "serde-untagged"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4762,6 +4812,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

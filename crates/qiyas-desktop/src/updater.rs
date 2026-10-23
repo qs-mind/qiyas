@@ -600,7 +600,7 @@ mod tests {
                 }))
                 .unwrap();
             assert!(session.is_dirty());
-            crate::tabs::add(&ipc.app.state::<AppState>(), session);
+            crate::tabs::add(&ipc.app.state::<AppState>(), session).unwrap();
         }
 
         #[test]

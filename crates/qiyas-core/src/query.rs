@@ -1,6 +1,7 @@
 //! Read-only questions about the open drawing: what is there, what it says, what it measures.
 //! These are the AI's eyes; nothing here changes the session.
 
+use schemars::JsonSchema;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
@@ -16,7 +17,7 @@ use qiyas_render::{layer_on_in_file_with, layer_shown_with};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{effective_block_name, variant_name, Extent};
-use crate::{Session, BATCH_TOL};
+use crate::Session;
 
 /// Most rows one `find_entities` page returns.
 const MAX_LIMIT: usize = 500;
@@ -27,7 +28,7 @@ const MAX_INSTANCES: usize = 100_000;
 
 /// Which entities `find_entities` returns. Every filter that is set must match; names match
 /// case-insensitively. Missing fields take their defaults when read from JSON.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct EntityFilter {
     /// Sheet block or layout name; the current sheet when `None`.
@@ -429,7 +430,7 @@ impl Session {
             .map_or_else(|| name.to_string(), |s| s.block)
     }
 
-    fn entity_row(&self, xrefs: &XrefDocs, c: Candidate) -> EntityRow {
+    pub(crate) fn entity_row(&self, xrefs: &XrefDocs, c: Candidate) -> EntityRow {
         let e = c.entity;
         let Extent { length, area, .. } = self.extent(c.doc, e, &c.xf);
         let texts = texts_of(e);
@@ -453,7 +454,7 @@ impl Session {
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
     pub(crate) fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
-        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, BATCH_TOL).into_paths();
+        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, self.batch_tol()).into_paths();
         let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
         if !points.is_empty() {
             return points;

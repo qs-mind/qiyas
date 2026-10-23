@@ -71,7 +71,9 @@ test("measured sum and an over-tolerance difference", () => {
     "+20.0 %",
     "2",
     "5 %",
+    "?",
   ]);
+  expect(within(cells[8]).getByRole("button", { name: "How did you get this number? boq-row:0" })).toBeTruthy();
   expect(cells[5].className).toContain("diff-over");
   expect(bodyRows()[1].getAttribute("aria-current")).toBe("true");
 
@@ -83,6 +85,19 @@ test("measured sum and an over-tolerance difference", () => {
 
   fireEvent.click(cells[1]);
   expect(props.onSelect).toHaveBeenCalledWith("A.1");
+});
+
+test("generated quantities own their codes in the imported BOQ comparison and follow edits", () => {
+  const item = { code: "A.1", description_en: "Generated", description_ar: "مشتق", section: "Test", trade: "Test", unit: "m", quantity: 100, lines: [] };
+  const props = { boq, takeoff, selectedCode: null, onSelect: vi.fn(), onTolerance: vi.fn() };
+  const view = render(<BoqPanel {...props} generated={{ items: [item], warnings: [] }} />);
+  const cells = () => within(bodyRows()[1]).getAllByRole("cell");
+  expect(cells()[4].textContent).toBe("100.000");
+  expect(cells()[5].textContent).toBe("0.0 %");
+  expect(cells()[6].textContent).toBe("1");
+  view.rerender(<BoqPanel {...props} generated={{ items: [{ ...item, quantity: 110 }], warnings: [] }} />);
+  expect(cells()[4].textContent).toBe("110.000");
+  expect(cells()[5].textContent).toBe("+10.0 %");
 });
 
 test("a link in another unit shows a unit mismatch", () => {

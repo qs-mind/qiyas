@@ -92,16 +92,51 @@ impl Provider {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProviderProfile {
+    /// Used exactly as typed.
+    pub model: String,
+    /// Only OpenAI-compatible services use an address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
+fn anthropic_profile() -> ProviderProfile {
+    ProviderProfile {
+        model: "claude-opus-5-5".into(),
+        base_url: None,
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProviderProfiles {
+    pub anthropic: ProviderProfile,
+    pub openai_compatible: ProviderProfile,
+}
+
+impl Default for ProviderProfiles {
+    fn default() -> Self {
+        Self {
+            anthropic: anthropic_profile(),
+            openai_compatible: ProviderProfile::default(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
     pub provider: Provider,
-    /// Used exactly as typed.
-    pub model: String,
-    /// The OpenAI-compatible service's address; unused for Anthropic.
-    pub base_url: Option<String>,
+    /// Each provider keeps its own model and address when the chosen provider changes.
+    pub providers: ProviderProfiles,
     /// One of `EFFORTS`.
     pub effort: String,
+    /// When Mizan waits for approval of its plan.
+    pub autonomy: qiyas_ai::Autonomy,
+    /// The name of a local measurement rule set; none means geometric quantities.
+    pub measurement_method: Option<String>,
     pub mcp_enabled: bool,
     pub mcp_port: u16,
     /// 32 hex characters, made once and kept. Empty when missing from the file, so `load` makes
@@ -154,6 +189,20 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn profile(&self) -> &ProviderProfile {
+        match self.provider {
+            Provider::Anthropic => &self.providers.anthropic,
+            Provider::OpenaiCompatible => &self.providers.openai_compatible,
+        }
+    }
+
+    pub fn profile_mut(&mut self) -> &mut ProviderProfile {
+        match self.provider {
+            Provider::Anthropic => &mut self.providers.anthropic,
+            Provider::OpenaiCompatible => &mut self.providers.openai_compatible,
+        }
+    }
+
     /// Puts `path` first in the recent list, once (another spelling of the same file goes), and
     /// keeps the newest `MAX_RECENTS`.
     pub fn push_recent(&mut self, path: &str) {
@@ -168,9 +217,10 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             provider: Provider::Anthropic,
-            model: "claude-opus-5-5".into(),
-            base_url: None,
+            providers: ProviderProfiles::default(),
             effort: "high".into(),
+            autonomy: qiyas_ai::Autonomy::default(),
+            measurement_method: None,
             mcp_enabled: false,
             mcp_port: 48123,
             mcp_token: new_token(),
@@ -216,6 +266,12 @@ fn valid_token(token: &str) -> bool {
 
 /// Checks settings coming from the window before they are kept.
 pub fn validate(s: &Settings) -> Result<(), String> {
+    if s.measurement_method
+        .as_ref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err("The measurement method name is empty; choose None instead".into());
+    }
     if s.mcp_port < 1024 {
         return Err(format!(
             "The MCP port must be between 1024 and 65535, not {}",
@@ -229,7 +285,7 @@ pub fn validate(s: &Settings) -> Result<(), String> {
             EFFORTS.join(", ")
         ));
     }
-    if s.model.trim().is_empty() {
+    if s.provider == Provider::Anthropic && s.profile().model.trim().is_empty() {
         return Err("The model is empty".into());
     }
     if !valid_token(&s.mcp_token) {
@@ -383,8 +439,8 @@ pub fn validate_palette(items: &[PaletteItem]) -> Result<(), String> {
 pub fn load(dir: &Path) -> Settings {
     let path = dir.join(FILE);
     let (mut settings, mut write) = match fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str::<Settings>(&text) {
-            Ok(s) => (s, false),
+        Ok(text) => match read_settings(&text) {
+            Ok(result) => result,
             Err(e) => {
                 eprintln!("settings.json could not be read ({e}); using the defaults");
                 if let Err(e) = fs::rename(&path, dir.join(format!("{FILE}.bak"))) {
@@ -421,6 +477,50 @@ pub fn load(dir: &Path) -> Settings {
         }
     }
     settings
+}
+
+/// Moves the old flat model and address into the selected provider's profile. No keychain
+/// access is involved. A profile already present wins over obsolete flat fields.
+fn read_settings(text: &str) -> Result<(Settings, bool), serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(text)?;
+    let mut migrated = false;
+    if let Some(object) = value.as_object_mut() {
+        let model = object.remove("model");
+        let base_url = object.remove("base_url");
+        migrated = model.is_some() || base_url.is_some();
+        if migrated {
+            let provider = object
+                .get("provider")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("anthropic")
+                .to_string();
+            let profiles = object
+                .entry("providers")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(profiles) = profiles.as_object_mut() {
+                profiles.entry(provider.clone()).or_insert_with(|| {
+                    let mut profile = serde_json::Map::new();
+                    profile.insert(
+                        "model".into(),
+                        model.unwrap_or_else(|| {
+                            if provider == "anthropic" {
+                                anthropic_profile().model.into()
+                            } else {
+                                String::new().into()
+                            }
+                        }),
+                    );
+                    if provider == "openai_compatible" {
+                        if let Some(base_url) = base_url {
+                            profile.insert("base_url".into(), base_url);
+                        }
+                    }
+                    serde_json::Value::Object(profile)
+                });
+            }
+        }
+    }
+    serde_json::from_value(value).map(|settings| (settings, migrated))
 }
 
 /// On Unix, lets only the user read and write `path`, if it exists.

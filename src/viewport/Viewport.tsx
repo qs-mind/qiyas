@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent, type Ref } from "react";
 import {
+  curvesNeedRedraw,
   glyphsNeedRedraw,
   picturesToFetch,
   picturesToRelease,
@@ -29,7 +30,9 @@ import type { ModifyKind } from "../tools/modifyTools";
 import type { TextKind } from "../tools/textTools";
 import type { PaperView, Ucs } from "../api";
 import { palette, type CanvasColours } from "./colours";
+import { toPngBase64 } from "./capture";
 import { createRenderer, type Renderer, type Theme } from "./gl";
+import { UCS_ICON_PX, ucsIconPlace } from "./ucsIcon";
 import { wheelFactor } from "./wheel";
 
 export type Tool =
@@ -67,7 +70,9 @@ export type Tool =
   | "mview"
   /** UCS: an origin, then a point on its x axis; UCS OB: an entity's. */
   | "ucs"
-  | "ucsObject";
+  | "ucsObject"
+  /** Marks an area for Mizan: a box dragged, or a polygon clicked and closed with Enter. */
+  | "mizanArea";
 
 export type ViewportHandle = {
   fitExtents(): void;
@@ -80,6 +85,9 @@ export type ViewportHandle = {
   visible(): Bounds;
   /** Where the drawing point `p` is on the canvas, in CSS pixels from its top left corner. */
   toScreen(p: Point): Point;
+  /** A picture of the view as drawn now (Mizan's `view_screen`): a PNG, base64, its longer side
+   *  at most `maxSide` pixels, and the drawing area it shows. */
+  capture(maxSide: number): Promise<{ png: string; bounds: Bounds }>;
 };
 
 type Props = {
@@ -95,8 +103,11 @@ type Props = {
   overlay?: Float64Array | null;
   /** Drawing units between the grid's dots; null or left out for no grid. */
   grid?: number | null;
-  /** The user coordinate system the grid runs along. */
+  /** The user coordinate system the grid runs along; the UCS icon sits on its origin. */
   ucs?: Ucs | null;
+  /** The UCS icon (UCSICON): on the origin while it is on screen, else bottom left. On when left
+   *  out. */
+  ucsIcon?: boolean;
   /** On a layout: model space (`batch`) drawn inside each of its viewports (`views`). */
   inset?: { batch: Batch; views: PaperView[] } | null;
   /** A left click; `worldPerPixel` is the zoom at that moment, for pick tolerances; `shift` when
@@ -146,6 +157,7 @@ export function Viewport({
   overlay = null,
   grid = null,
   ucs = null,
+  ucsIcon = true,
   inset = null,
   onClick,
   boxes = false,
@@ -163,6 +175,11 @@ export function Viewport({
   /** The world box the user (or the app) last chose to show; a resize keeps it in view. */
   const view = useRef<Bounds | null>(null);
   const lookRef = useRef(palette(theme, colours));
+  /** The UCS icon, moved on every frame without a React render (the camera is a ref). */
+  const iconRef = useRef<SVGGElement>(null);
+  const iconMarkRef = useRef<SVGRectElement>(null);
+  const ucsRef = useRef(ucs);
+  ucsRef.current = ucs;
   const batchRef = useRef(batch);
   const frame = useRef(0);
   const drag = useRef<Drag | null>(null);
@@ -185,11 +202,15 @@ export function Viewport({
 
   const pxPerUnit = () => window.devicePixelRatio / camera.current.scale;
 
-  /** Asks for glyphs at the current size once the zoom has rested, if they are off by over 2x. */
+  /** Asks for glyphs at the current size once the zoom has rested, if they are off by over 2x,
+   *  and for curves drawn again when the zoom shows their corners (or no longer needs them so
+   *  fine), as AutoCAD regenerates. */
   function checkGlyphs() {
     const stale = () => {
       const b = batchRef.current;
-      return !!b && b.quads.length > 0 && glyphsNeedRedraw(b.pxPerUnit, pxPerUnit());
+      if (!b) return false;
+      const glyphs = b.quads.length > 0 && glyphsNeedRedraw(b.pxPerUnit, pxPerUnit());
+      return glyphs || curvesNeedRedraw(b.baseTol ?? 0, b.curveTol ?? 0, pxPerUnit());
     };
     if (!stale()) return;
     clearTimeout(zoomTimer.current);
@@ -220,7 +241,20 @@ export function Viewport({
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       renderer.current?.draw(camera.current, lookRef.current);
+      placeIcon();
     });
+  }
+
+  /** Puts the UCS icon where `ucsIconPlace` says, in a colour that reads on the background. */
+  function placeIcon() {
+    const icon = iconRef.current;
+    if (!icon) return;
+    const place = ucsIconPlace(camera.current, ucsRef.current);
+    icon.setAttribute("transform", `translate(${place.x} ${place.y}) rotate(${place.angle})`);
+    const look = lookRef.current;
+    const [r, g, b] = (look.light ? look.ink : look.paper).map((c) => Math.round(c * 255));
+    icon.style.color = `rgb(${r}, ${g}, ${b})`;
+    iconMarkRef.current?.setAttribute("visibility", place.atOrigin ? "visible" : "hidden");
   }
 
   function setCamera(c: Camera, keepView = false) {
@@ -248,6 +282,15 @@ export function Viewport({
       pxPerUnit,
       visible: () => visibleBounds(camera.current),
       toScreen: (p) => worldToScreen(camera.current, p),
+      capture: async (maxSide) => {
+        const r = renderer.current;
+        if (!r) throw new Error("The drawing is not on screen");
+        // Drawn and read in one go: the browser clears the canvas once it has shown it.
+        r.draw(camera.current, lookRef.current);
+        const shot = r.read();
+        const bounds = visibleBounds(camera.current);
+        return { png: await toPngBase64(shot, maxSide), bounds };
+      },
     }),
     [],
   );
@@ -369,6 +412,10 @@ export function Viewport({
   }, [grid, ucs]);
 
   useEffect(() => {
+    if (ucsIcon) requestDraw();
+  }, [ucsIcon]);
+
+  useEffect(() => {
     renderer.current!.setInset(inset?.batch ?? null, inset?.views ?? []);
     requestDraw();
   }, [inset]);
@@ -485,6 +532,34 @@ export function Viewport({
           setSelectBox(null);
         }}
       />
+      {ucsIcon && (
+        <svg
+          data-testid="ucs-icon"
+          aria-hidden="true"
+          // The drawing never mirrors in Arabic, so neither does its icon.
+          style={{
+            direction: "ltr",
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+            overflow: "visible",
+          }}
+        >
+          <g ref={iconRef} opacity={0.7} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+            <path d={`M0 0H${UCS_ICON_PX}M${UCS_ICON_PX - 6} -4L${UCS_ICON_PX} 0L${UCS_ICON_PX - 6} 4`} />
+            <path d={`M0 0V${-UCS_ICON_PX}M-4 ${6 - UCS_ICON_PX}L0 ${-UCS_ICON_PX}L4 ${6 - UCS_ICON_PX}`} />
+            <rect ref={iconMarkRef} x={-3} y={-3} width={6} height={6} />
+            <text x={UCS_ICON_PX + 4} y={4} fill="currentColor" stroke="none" fontSize={11}>
+              X
+            </text>
+            <text x={-4} y={-UCS_ICON_PX - 4} fill="currentColor" stroke="none" fontSize={11}>
+              Y
+            </text>
+          </g>
+        </svg>
+      )}
       {selectBox && (
         <div
           data-testid="select-box"

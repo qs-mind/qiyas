@@ -14,12 +14,21 @@ pub const MAX_TEXT: usize = 4000;
 #[derive(Debug, Clone)]
 pub struct AgentLog {
     path: PathBuf,
+    rotate: bool,
 }
 
 impl AgentLog {
     /// A log at `path`; its folder is made at the first entry.
     pub fn new(path: PathBuf) -> AgentLog {
-        AgentLog { path }
+        AgentLog { path, rotate: true }
+    }
+
+    /// Evaluation keeps every step for the complete run.
+    pub fn evaluation(path: PathBuf) -> AgentLog {
+        AgentLog {
+            path,
+            rotate: false,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -38,7 +47,7 @@ impl AgentLog {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        if fs::metadata(&self.path).is_ok_and(|m| m.len() > MAX_BYTES) {
+        if self.rotate && fs::metadata(&self.path).is_ok_and(|m| m.len() > MAX_BYTES) {
             let mut old = self.path.clone().into_os_string();
             old.push(".1");
             fs::rename(&self.path, old)?;

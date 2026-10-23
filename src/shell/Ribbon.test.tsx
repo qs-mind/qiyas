@@ -430,11 +430,11 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
   fireEvent.click(screen.getByRole("button", { name: "Compare" }));
   expect(onCompare).toHaveBeenCalled();
   // The quick-access bar is the window's, whatever the layout.
-  expect(within(screen.getByRole("toolbar", { name: "Quick access" })).getAllByRole("button").length).toBe(5);
+  expect(within(screen.getByRole("toolbar", { name: "Quick access" })).getAllByRole("button").length).toBe(6);
 });
 
-test("the quick-access bar sits after the app name, before the tabs: Open (with recents), Save, Save as, Undo, Redo", () => {
-  const handlers = { onOpen: vi.fn(), onSave: vi.fn(), onSaveAs: vi.fn(), onUndo: vi.fn(), onRedo: vi.fn() };
+test("the quick-access bar sits after the app name, before the tabs: New, Open (with recents), Save, Save as, Undo, Redo", () => {
+  const handlers = { onNew: vi.fn(), onOpen: vi.fn(), onSave: vi.fn(), onSaveAs: vi.fn(), onUndo: vi.fn(), onRedo: vi.fn() };
   render(
     <Ribbon
       {...props}
@@ -446,6 +446,7 @@ test("the quick-access bar sits after the app name, before the tabs: Open (with 
   );
   const bar = screen.getByRole("toolbar", { name: "Quick access" });
   expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+    "New…",
     "Open…",
     "Recent drawings",
     "Save",
@@ -454,6 +455,7 @@ test("the quick-access bar sits after the app name, before the tabs: Open (with 
     "Redo",
   ]);
   for (const [name, handler] of [
+    ["New…", handlers.onNew],
     ["Open…", handlers.onOpen],
     ["Save", handlers.onSave],
     ["Save as", handlers.onSaveAs],
@@ -624,7 +626,7 @@ test("the tabs' row scrolls sideways and stops short of the preferences instead 
 });
 
 test("the quick-access bar is a toolbar: one tab stop, arrows, Home and End move between its buttons", () => {
-  const handlers = { onSave() {}, onSaveAs() {}, onUndo() {}, onRedo() {} };
+  const handlers = { onNew() {}, onSave() {}, onSaveAs() {}, onUndo() {}, onRedo() {} };
   render(
     <Ribbon
       {...props}
@@ -636,29 +638,31 @@ test("the quick-access bar is a toolbar: one tab stop, arrows, Home and End move
   );
   const bar = screen.getByRole("toolbar", { name: "Quick access" });
   const names = () => within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
-  expect(names()).toEqual(["Open…", "Recent drawings", "Save", "Save as", "Undo", "Redo"]);
+  expect(names()).toEqual(["New…", "Open…", "Recent drawings", "Save", "Save as", "Undo", "Redo"]);
   const stops = () => within(bar).getAllByRole("button").map((b) => b.tabIndex);
-  expect(stops()).toEqual([0, -1, -1, -1, -1, -1]);
+  expect(stops()).toEqual([0, -1, -1, -1, -1, -1, -1]);
   const button = (name: string) => within(bar).getByRole("button", { name });
-  button("Open…").focus();
+  button("New…").focus();
+  fireEvent.keyDown(button("New…"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(button("Open…"));
   fireEvent.keyDown(button("Open…"), { key: "ArrowRight" });
   expect(document.activeElement).toBe(button("Recent drawings"));
-  expect(stops()).toEqual([-1, 0, -1, -1, -1, -1]);
+  expect(stops()).toEqual([-1, -1, 0, -1, -1, -1, -1]);
   fireEvent.keyDown(button("Recent drawings"), { key: "ArrowRight" });
   expect(document.activeElement).toBe(button("Save"));
   fireEvent.keyDown(button("Save"), { key: "End" });
   expect(document.activeElement).toBe(button("Redo"));
   fireEvent.keyDown(button("Redo"), { key: "ArrowRight" });
-  expect(document.activeElement).toBe(button("Open…"));
-  fireEvent.keyDown(button("Open…"), { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(button("New…"));
+  fireEvent.keyDown(button("New…"), { key: "ArrowLeft" });
   expect(document.activeElement).toBe(button("Redo"));
   fireEvent.keyDown(button("Redo"), { key: "Home" });
-  expect(document.activeElement).toBe(button("Open…"));
+  expect(document.activeElement).toBe(button("New…"));
   // The tab stop stays on the last button focused when focus leaves the bar.
   button("Undo").focus();
   fireEvent.keyDown(button("Undo"), { key: "ArrowLeft" });
   screen.getByRole("tab", { name: "Measure" }).focus();
-  expect(stops()).toEqual([-1, -1, -1, 0, -1, -1]);
+  expect(stops()).toEqual([-1, -1, -1, -1, 0, -1, -1]);
 });
 
 test("the quick-access arrows skip a disabled button and mirror in Arabic", () => {

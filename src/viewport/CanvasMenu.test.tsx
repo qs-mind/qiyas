@@ -23,7 +23,7 @@ function setup(more: Partial<Parameters<typeof CanvasMenu>[0]> = {}) {
 
 const rightClick = () => fireEvent.contextMenu(document.querySelector("canvas")!, { clientX: 40, clientY: 50 });
 
-test("a right-click on the drawing opens a menu with Move, Copy, Erase, Properties and Zoom extents", async () => {
+test("a right-click on the drawing opens a menu with Move, Copy, Erase, Properties, Zoom extents and Ask Mizan", async () => {
   setup();
   expect(screen.queryByRole("menu")).toBeNull();
   rightClick();
@@ -34,6 +34,7 @@ test("a right-click on the drawing opens a menu with Move, Copy, Erase, Properti
     "Erase",
     "Properties",
     "Zoom extents",
+    "Ask Mizan about this",
   ]);
   // The command line alias is a small chip: M, CO, E, and Z E.
   expect(Array.from(menu.querySelectorAll("kbd")).map((k) => k.textContent)).toEqual(["M", "CO", "E", "Z E"]);
@@ -76,4 +77,18 @@ test("the user's own aliases are the chips", async () => {
   const menu = await screen.findByRole("menu");
   expect(menu.querySelectorAll("kbd")[0].textContent).toBe("M");
   expect(menu.querySelectorAll("kbd")[1].textContent).toBe("CP");
+});
+
+test("Ask Mizan takes the selection to Mizan, and waits for something selected", async () => {
+  setup();
+  rightClick();
+  const ask = await screen.findByRole("menuitem", { name: "Ask Mizan about this" });
+  expect(ask.getAttribute("aria-disabled")).toBe("true");
+  cleanup();
+
+  const onAskMizan = vi.fn();
+  setup({ onAskMizan });
+  rightClick();
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Ask Mizan about this" }));
+  expect(onAskMizan).toHaveBeenCalledTimes(1);
 });

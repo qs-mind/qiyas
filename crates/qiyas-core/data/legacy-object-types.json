@@ -1,0 +1,281 @@
+{
+  "wall": {
+    "name": "Legacy wall",
+    "category": "wall",
+    "properties": {
+      "width": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      },
+      "wall_height": {
+        "kind": "number",
+        "unit": "length",
+        "default": 3,
+        "min": 0
+      },
+      "justification": {
+        "kind": "choice",
+        "default": "centre",
+        "choices": [
+          "centre",
+          "left",
+          "right"
+        ]
+      },
+      "outline_layer": {
+        "kind": "text",
+        "default": "A-WALL"
+      },
+      "hatch_layer": {
+        "kind": "text",
+        "default": "A-WALL-PATT"
+      },
+      "centreline_layer": {
+        "kind": "text",
+        "default": "A-WALL-CNTR"
+      },
+      "doors_layer": {
+        "kind": "text",
+        "default": "A-DOOR"
+      },
+      "windows_layer": {
+        "kind": "text",
+        "default": "A-GLAZ"
+      }
+    },
+    "geometry": "band",
+    "vertical": {
+      "height": "wall_height"
+    },
+    "plan": {
+      "outline": true,
+      "band_faces": "width",
+      "hatch": true,
+      "centreline": true,
+      "centreline_driver": true,
+      "band_justification": "justification"
+    },
+    "quantities": {
+      "run_length": "length",
+      "gross_plan_area": "gross_area",
+      "net_plan_area": "net_area",
+      "net_volume": "volume"
+    },
+    "join": "union"
+  },
+  "room": {
+    "name": "Legacy room",
+    "category": "room",
+    "properties": {
+      "name": {
+        "kind": "text",
+        "default": ""
+      },
+      "label_en": {
+        "kind": "text",
+        "default": "Unapproved candidate {area} m²"
+      },
+      "label_ar": {
+        "kind": "text",
+        "default": "مساحة مرشحة غير معتمدة {area} م²"
+      }
+    },
+    "geometry": "region",
+    "plan": {
+      "outline": false
+    },
+    "quantities": {
+      "net_floor_area": "round(area, 6)",
+      "boundary_length": "perimeter"
+    }
+  },
+  "door": {
+    "name": "Legacy door",
+    "category": "opening",
+    "properties": {
+      "width": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      },
+      "distance": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      },
+      "sill": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      },
+      "head": {
+        "kind": "number",
+        "unit": "length",
+        "default": 2.1,
+        "min": 0
+      },
+      "mark": {
+        "kind": "text",
+        "default": ""
+      },
+      "swing": {
+        "kind": "choice",
+        "default": "left",
+        "choices": [
+          "left",
+          "right"
+        ]
+      },
+      "host_width": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      }
+    },
+    "geometry": "hosted",
+    "vertical": {
+      "base": "sill",
+      "height": "head-sill"
+    },
+    "host_cut": {
+      "width": "width",
+      "at": "distance",
+      "offset_along": "if(swing == 'right', width / 2, -width / 2)",
+      "offset_normal": "-host_width / 2",
+      "mirror": "swing == 'right'"
+    },
+    "quantities": {
+      "pieces": "count",
+      "opening_area": "width * (head-sill)"
+    },
+    "plan": {
+      "symbols": [
+        {
+          "kind": "line",
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            "=width / unit"
+          ]
+        },
+        {
+          "kind": "arc",
+          "centre": [
+            0,
+            0
+          ],
+          "radius": "=width / unit",
+          "start": 0,
+          "end": 90
+        }
+      ],
+      "symbols_in_driver": true
+    },
+    "property_bindings": {
+      "host_width": "host.band_width"
+    }
+  },
+  "window": {
+    "name": "Legacy window",
+    "category": "opening",
+    "properties": {
+      "width": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      },
+      "distance": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      },
+      "sill": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0.9,
+        "min": 0
+      },
+      "head": {
+        "kind": "number",
+        "unit": "length",
+        "default": 2.1,
+        "min": 0
+      },
+      "mark": {
+        "kind": "text",
+        "default": ""
+      },
+      "swing": {
+        "kind": "choice",
+        "default": "left",
+        "choices": [
+          "left",
+          "right"
+        ]
+      },
+      "host_width": {
+        "kind": "number",
+        "unit": "length",
+        "default": 0,
+        "min": 0
+      }
+    },
+    "geometry": "hosted",
+    "vertical": {
+      "base": "sill",
+      "height": "head-sill"
+    },
+    "host_cut": {
+      "width": "width",
+      "at": "distance",
+      "offset_along": "0",
+      "offset_normal": "0",
+      "mirror": "false"
+    },
+    "quantities": {
+      "pieces": "count",
+      "opening_area": "width * (head-sill)"
+    },
+    "plan": {
+      "symbols": [
+        {
+          "kind": "rectangle",
+          "a": [
+            "=-width / (2 * unit)",
+            "=-host_width / (2 * unit)"
+          ],
+          "b": [
+            "=width / (2 * unit)",
+            "=host_width / (2 * unit)"
+          ]
+        },
+        {
+          "kind": "line",
+          "a": [
+            "=-width / (2 * unit)",
+            0
+          ],
+          "b": [
+            "=width / (2 * unit)",
+            0
+          ]
+        }
+      ],
+      "symbols_in_driver": true
+    },
+    "property_bindings": {
+      "host_width": "host.band_width"
+    }
+  }
+}

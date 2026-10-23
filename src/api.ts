@@ -109,8 +109,12 @@ export type DrawingInfo = {
   xrefs: XrefInfo[];
   /** Block name of the sheet on screen. */
   sheet: string;
+  /** Physical layout paper size in millimetres, after rotation; null on Model. */
+  paper?: Paper | null;
   /** The layers the user has hidden, sorted. */
   hidden_layers: string[];
+  /** The layer isolated on screen (LAYISO), if one is. */
+  isolated_layer?: string | null;
   /** What new entities are drawn with. */
   current: Current;
   /** The drawing's own text styles, sorted. */
@@ -140,6 +144,8 @@ export type DrawingInfo = {
   ucs?: Ucs;
   /** The drawing has (or had) parametric constraints (left out: none). */
   has_constraints?: boolean;
+  /** A new drawing never saved yet: `path` is a placeholder, Save goes through Save As. */
+  untitled?: boolean;
 };
 
 /** A user coordinate system: an origin and a unit x axis in the plan (`qiyas_core::Ucs`). */
@@ -372,27 +378,41 @@ export type BlockCount = { block_name: string; layer: string; count: number; att
 /** Opens the drawing in a new tab, or shows its tab when it is open already. */
 export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path });
 
+/** A new drawing's units: metres, centimetres or millimetres (INSUNITS 6, 5, 4). */
+export type NewUnits = "m" | "cm" | "mm";
+
+/** A new, empty drawing in a new tab, untitled until its first Save As; its info. The assistant
+ *  starts a new conversation. */
+export const newDrawing = (units: NewUnits) => invoke<DrawingInfo>("new_drawing", { units });
+
 /** One file tab (`qiyas_desktop::tabs::TabInfo`). */
-export type TabInfo = { id: number; path: string; title: string; dirty: boolean };
+export type TabInfo = { id: number; path: string; title: string; dirty: boolean; untitled?: boolean };
 
 /** Every open drawing's tab, in order, and the one on screen (null when none is open). */
 export type Tabs = { tabs: TabInfo[]; active: number | null };
 
 export const tabs = () => invoke<Tabs>("tabs");
 
-/** Shows the drawing of tab `id`; its info. The assistant starts a new conversation. */
-export const activateTab = (id: number) => invoke<DrawingInfo>("activate_tab", { id });
+/** Shows the drawing of tab `id`; its info. The assistant starts a new conversation, unless
+ *  `keepConversation` (Mizan asked to close it, and it is shown first). */
+export const activateTab = (id: number, keepConversation = false) =>
+  invoke<DrawingInfo>("activate_tab", { id, keepConversation });
 
 /** What `closeTab` refuses with for a drawing with unsaved changes, without `force`. */
 export const UNSAVED = "unsaved";
 
-/** Closes tab `id`; the tabs left. */
-export const closeTab = (id: number, force = false) => invoke<Tabs>("close_tab", { id, force });
+/** Closes tab `id`; the tabs left. `keepConversation` as for `activateTab`. */
+export const closeTab = (id: number, force = false, keepConversation = false) =>
+  invoke<Tabs>("close_tab", { id, force, keepConversation });
 
 /** A drawing opened or saved lately. */
 export type Recent = { path: string; name: string; folder: string; missing: boolean };
 
 /** The recent drawings, most recent first (at most 10). */
+/** Untitled drawings whose autosave is still in the app's folder (Qiyas closed before their
+ *  first Save As): asked about at launch with the recent drawings. */
+export const untitledAutosaves = () => invoke<string[]>("untitled_autosaves");
+
 export const recents = () => invoke<Recent[]>("recents");
 
 export const clearRecents = () => invoke<void>("clear_recents");
@@ -542,6 +562,12 @@ export const pickWindow = (bounds: [P, P], crossing: boolean) =>
     crossing,
   });
 
+/** What a selection polygon `points` (drawing coordinates, three corners or more) picks: the
+ *  entities wholly inside it, or with `crossing` those touching it. Whole entities at the top of
+ *  the sheet, sorted by handle, as `pickWindow`. */
+export const pickPolygon = (points: P[], crossing: boolean) =>
+  invoke<Picked[]>("pick_polygon", { points, crossing });
+
 /** What kind of point an object snap found (`qiyas_core::SnapKind`), best first. */
 export type SnapKind =
   | "end"
@@ -684,7 +710,10 @@ export type ConflictKind =
   | "not_in_drawings"
   | "schedule_vs_plan"
   | "drawing_vs_drawing"
-  | "unit_doubt";
+  | "unit_doubt"
+  | "duplicate_item"
+  | "relation_mismatch"
+  | "document_mismatch";
 
 export type ConflictStatus = "open" | "resolved" | "ignored";
 
@@ -714,6 +743,15 @@ export type Conflict = {
   created: string;
   /** What `id` is hashed from, for debugging. */
   hash_key: string;
+  query?: {
+    severity: "information" | "warning" | "error";
+    question_en: string;
+    question_ar: string;
+    references: { handle: number; sheet: string; grid: string | null }[];
+    citations: { source: string; clause: string }[];
+    clouds: number[];
+    rule: string | null;
+  } | null;
 };
 
 type P = [number, number];
@@ -833,7 +871,17 @@ export type Current = {
 };
 
 /** The command bus (`qiyas_core::Command`). Points are in drawing coordinates. */
+export type RecognitionCandidate = {
+  handle: number; rule: string; confidence: number; state: "pending" | "accepted" | "rejected";
+  placement: { type: string; props: Record<string, string | number | boolean> };
+  evidence: { handle?: number; path?: string; page?: number; detail: string }[];
+  issues: string[]; unresolved: string[]; object: number | null;
+};
 export type Command =
+  | { type: "recognition"; kind: "queue"; state?: "pending" | "accepted" | "rejected" }
+  | { type: "recognition"; kind: "review"; handle: number; decision: "accepted" | "rejected";
+      props?: Record<string, string | number | boolean>; object_type?: string; save_as?: string }
+
   | { type: "measure_distance"; points: [number, number][] }
   | { type: "measure_area"; points: [number, number][] }
   /** `chain`: the block references the entity sits inside, outermost first; empty on the sheet. */
@@ -842,6 +890,10 @@ export type Command =
   | { type: "remove_measurement"; id: string }
   | { type: "set_description"; id: string; text: string }
   | { type: "set_layer_hidden"; name: string; hidden: boolean }
+  /** Shows only the layer (LAYISO); the layer isolated already un-isolates. Not an undo step. */
+  | { type: "isolate_layer"; name: string }
+  /** Puts back what isolating hid (LAYUNISO). Not an undo step. */
+  | { type: "unisolate_layers" }
   | { type: "set_sheet"; block: string }
   /** The drawing holds its Arabic text backwards; not an undo step. */
   | { type: "set_arabic_reversed"; on: boolean }
@@ -1039,8 +1091,13 @@ export type Command =
    *  a paste of the system clipboard at `at` (as one block reference with `as_block`). */
   | { type: "copy_to_clipboard"; targets: EntityTarget[]; base: P | null }
   | { type: "paste_from_clipboard"; at: P; as_block: boolean; height?: number | null }
-  /** A paper-space viewport on the layout on screen. */
-  | { type: "mview"; corner1: P; corner2: P }
+  /** Paper layouts and a title block containing only supplied values. */
+  | { type: "new_layout"; name: string; paper: string; orientation?: "portrait" | "landscape" }
+  | { type: "set_layout_paper"; name: string; paper: string; orientation?: "portrait" | "landscape" }
+  | { type: "rename_layout"; from: string; to: string }
+  | { type: "title_block"; fields: Record<string, string>; margin_mm?: number; binding_mm?: number; layer?: string }
+  /** A viewport: ratio string or paper millimetres per model unit, centred at a model point. */
+  | { type: "mview"; corner1?: P; corner2?: P; scale?: string | number | null; centre?: P | null; model_bounds?: [P, P] | null; paper_centre?: P | null; target?: EntityTarget | null }
   /** The user coordinate system (not an undo step): an origin and an x axis, or an entity's. */
   | { type: "ucs"; origin: P; x_axis: P }
   | { type: "ucs_object"; target: EntityTarget }
@@ -1168,11 +1225,13 @@ export type TextScope = "sheet" | "drawing";
 export type TextMatch = { handle: number; sheet: string };
 
 export type Outcome =
+  | { type: "recognition"; result: { candidates?: RecognitionCandidate[]; candidate?: RecognitionCandidate } }
   | { type: "measured"; measurement: Measurement }
   | { type: "removed"; id: string }
   | { type: "changed" }
   /** Entities added to the drawing (PDF import or underlay). */
   | { type: "added"; handles: number[] }
+  | { type: "title_block"; handles: number[]; empty_fields: string[] }
   /** An explode's parts, how many entities picked had none and were left as they are, and the
    *  take-off rows that followed (as `takeoff_followed`). */
   | { type: "exploded"; handles: number[]; left_alone: number; remeasured: number; unlinked: number }
@@ -1217,6 +1276,17 @@ export type Outcome =
   | { type: "comments"; comments: CommentInfo[] };
 
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
+
+/** Registry words and aliases, in command order; each command's first word is its full name. */
+export type CommandWord = { word: string; command: string; summary: string };
+export const commandWords = () => invoke<CommandWord[]>("command_words");
+export type CmdlineStep =
+  | { type: "command"; command: Command; last: P | null }
+  | { type: "prompt"; prompt: string; last: P | null }
+  | { type: "cancelled" };
+/** The core reads a line; the caller applies a completed command through the usual window path. */
+export const cmdlineStep = (line: string, last?: P | null) =>
+  invoke<CmdlineStep>("cmdline_step", { line, ...(last === undefined ? {} : { last }) });
 
 /** The constraints of the sheet on screen. */
 export async function listConstraints(): Promise<ConstraintInfo[]> {
@@ -1292,14 +1362,18 @@ export type Provider = "anthropic" | "openai_compatible";
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
+/** A provider keeps its model and service address when another provider is chosen. */
+export type ProviderProfile = { model: string; base_url?: string | null };
+
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
   provider: Provider;
-  /** Used exactly as typed. */
-  model: string;
-  /** The OpenAI-compatible service's address. */
-  base_url: string | null;
+  providers: Record<Provider, ProviderProfile>;
   effort: Effort;
+  /** The plan approval setting (per_job when absent in older settings). */
+  autonomy?: "per_job" | "per_phase" | "autonomous";
+  /** A local rule set name; null means geometric quantities. */
+  measurement_method?: string | null;
   mcp_enabled: boolean;
   mcp_port: number;
   /** 32 hex characters, made once. */
@@ -1331,7 +1405,7 @@ export type Settings = {
 };
 
 /** How the window runs a ribbon button: picks a tool, runs an action, or a checkbox. */
-export type RibbonButtonKind = "tool" | "action" | "toggle";
+export type RibbonButtonKind = "tool" | "action" | "toggle" | "command";
 /** One ribbon button; `label` is an i18n key (or the user's own text). */
 export type RibbonButton = { kind: RibbonButtonKind; command: string; label: string };
 /** `main`: how many of the buttons the group shows; the rest wait behind its "⋯" button (all when left out). */
@@ -1443,6 +1517,15 @@ export const sheetSetFromTabs = (qss: string, name: string) =>
   invoke<{ set: SheetSet; skipped: string[] }>("sheet_set_from_tabs", { qss, name });
 
 export const getSettings = () => invoke<Settings>("get_settings");
+
+export type MeasurementMethod = {
+  name: string;
+  title: string;
+  based_on: string;
+  source_note: string;
+  rules_loaded: boolean;
+};
+export const measurementMethods = () => invoke<MeasurementMethod[]>("measurement_methods");
 
 /** One button of the tool palette: a block to insert or a command line to run. */
 export type PaletteItem = { kind: "block" | "command"; label: string; value: string };
@@ -1627,6 +1710,14 @@ export const OPEN_REQUESTED = "open:requested";
 /** The drawings the OS asked to open, oldest first; the queue is empty after. */
 export const takeOpenRequests = () => invoke<string[]>("take_open_requests");
 
+/** Sent when Mizan (or an MCP client) put another drawing on screen, or closed the last one. */
+export const DRAWING_SHOWN = "drawing:shown";
+/** Sent when Mizan asked to save a drawing the window asks about first (untitled, or repaired on
+ *  open): the window runs its Save. */
+export const DRAWING_SAVE = "drawing:save";
+/** Sent with a tab id when Mizan asked to close a drawing with unsaved changes: the window asks. */
+export const DRAWING_CLOSE = "drawing:close";
+
 /** Sent when an outside AI app changed the take-off through the MCP server. */
 export const TAKEOFF_CHANGED = "takeoff:changed";
 /** Sent (with the tool result's `ui`) after an MCP tool showed another sheet, hid or showed layers,
@@ -1635,7 +1726,7 @@ export const SESSION_CHANGED = "session:changed";
 
 /** What the window should do after a tool, from the tool's result. Bounds in drawing coordinates. */
 export type AiUi = {
-  /** "zoom", "show_sheet", "show_markup" or "redraw". */
+  /** "reveal", "zoom", "show_sheet", "show_markup" or "redraw". */
   action: string;
   bounds?: [[number, number], [number, number]];
   handles?: number[];
@@ -1645,11 +1736,19 @@ export type AiUi = {
   id?: string;
 };
 
+export type PlanPhase = {
+  id: string;
+  title: string;
+  status: "pending" | "active" | "done" | "skipped";
+};
+
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
 export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_call"; id: string; name: string; input: unknown; mutating: boolean }
+  | { type: "plan"; phases: PlanPhase[] }
+  | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
+  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean }
   | {
       type: "tool_result";
       id: string;
@@ -1674,9 +1773,66 @@ export type AiStatus = {
   message_count: number;
 };
 
+/** A region the user marked for Mizan: a box (two opposite corners) or a polygon, drawing
+ *  coordinates (`qiyas_ai::Region`). */
+export type AiRegion = { kind: "box" | "polygon"; points: P[] };
+
+/** What the user points Mizan at with a message (`qiyas_ai::TurnContext`): the entities selected,
+ *  a marked region, the view on screen; `picture` when the selection or region is new since the
+ *  last message, so a picture of it goes too. */
+export type AiContext = {
+  selection: EntityTarget[];
+  region: AiRegion | null;
+  view: [P, P] | null;
+  picture: boolean;
+};
+
+/** A picture the user attached to a message: its type and base64 data (`qiyas_ai::UserImage`). */
+export type AiImage = { media_type: string; data: string };
+
 /** Starts a turn and returns at once; events follow as `ai:event`, then `ai:done`. Rejects with
  *  "busy", "no_api_key" or "no_base_url". */
-export const aiSend = (text: string) => invoke<void>("ai_send", { text });
+export const aiSend = (text: string, context?: AiContext, images?: AiImage[], pointed?: string[]) =>
+  invoke<void>("ai_send", { text, context: context ?? null, images: images ?? null, pointed: pointed ?? null });
+
+export type TranscriptEntry =
+  | { type: "user"; text: string; pointed: string[]; images: string[] }
+  | { type: "event"; event: AgentEvent };
+
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  drawing: string | null;
+  drawing_exists: boolean;
+  /** Milliseconds since 1970. */
+  updated: number;
+  turns: number;
+};
+
+export const aiConversations = (drawing?: string) =>
+  invoke<ConversationSummary[]>("ai_conversations", { drawing: drawing ?? null });
+export const aiResume = (id: string) =>
+  invoke<{ transcript: TranscriptEntry[]; drawing: string | null }>("ai_resume", { id });
+export const aiDeleteConversation = (id: string) => invoke<void>("ai_delete_conversation", { id });
+export const aiDeleteConversations = () => invoke<void>("ai_delete_conversations");
+
+/** Mizan's `view_screen` asks for a picture of the main view: `{ id, maxSide }`, answered with
+ *  `{ png, bounds }` (a base64 PNG and the drawing area it shows). */
+export const AI_CAPTURE = "ai:capture";
+/** Mizan's `get_selection` (and `view_screen`) ask what the user points at: `{ id }`, answered
+ *  with an `AiContext`. */
+export const AI_POINTED = "ai:pointed";
+/** Mizan's `select_entities` asks the window to select: `{ handles, zoom }`. */
+export const AI_SELECT = "ai:select";
+
+/** The window's answer to the core's question `id` (`ai:capture`, `ai:pointed`), or why it has
+ *  none. */
+export const aiWindowReply = (id: number, answer: { value: unknown } | { error: string }) =>
+  invoke<void>("ai_window_reply", {
+    id,
+    value: "value" in answer ? answer.value : null,
+    error: "error" in answer ? answer.error : null,
+  });
 
 export const aiCancel = () => invoke<void>("ai_cancel");
 
@@ -1684,6 +1840,17 @@ export const aiCancel = () => invoke<void>("ai_cancel");
 export const aiClear = () => invoke<void>("ai_clear");
 
 export const aiStatus = () => invoke<AiStatus>("ai_status");
+
+/** One model a provider offers: its id, as the API takes it, and a name to show. */
+export type ModelInfo = { id: string; label: string };
+/** The models a provider offers (`qiyas_ai::models::ModelList`): from the service, or the
+ *  built-in list with why (`error`; "no_base_url" when there is no address to ask). */
+export type ModelList = { models: ModelInfo[]; from_service: boolean; error: string | null };
+
+/** The models `provider` offers at `base_url` (the saved ones when left out); the key stays in
+ *  the core. */
+export const aiModels = (provider?: Provider, baseUrl?: string | null) =>
+  invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null });
 
 /** The agent log: where the file is and its newest part (empty before the first conversation). */
 export type AiLog = { path: string; text: string };
@@ -1696,3 +1863,74 @@ export const aiUndo = () => invoke<boolean>("ai_undo");
 
 /** The assistant answers in this language; a change starts a new conversation. */
 export const aiSetLanguage = (lang: "en" | "ar") => invoke<void>("ai_set_language", { lang });
+
+/** The clipboard's text for a paste into a text field, or null (`files::clipboard_read_text`). */
+export const clipboardReadText = () => invoke<string | null>("clipboard_read_text");
+/** The clipboard's picture: width, height (u32 little-endian), RGBA; empty when none. */
+export const clipboardReadImage = () => invoke<ArrayBuffer>("clipboard_read_image");
+
+export type PdfAttachment = { name: string; path: string; pages: number };
+export const aiAttachPdf = (name: string, bytes: number[]) => invoke<PdfAttachment>("ai_attach_pdf", { name, bytes });
+
+export type MeasurementCitation = { source: string; clause: string };
+export type DimensionLine = {
+  label: string;
+  operation: "add" | "deduct";
+  timesing: number;
+  factors: number[];
+  expression: string;
+  value: number;
+  unit: string;
+  method: string;
+  included: boolean;
+  decision: string | null;
+  citations: MeasurementCitation[];
+  sources: { handle: number; sheet: string; grid: string | null }[];
+};
+export type GeneratedBoqItem = {
+  confidence?: number;
+  code: string;
+  description_en: string;
+  description_ar: string;
+  section: string;
+  trade: string;
+  unit: string;
+  quantity: number;
+  lines: DimensionLine[];
+};
+export type MeasurementReport = {
+  confidence_summary?: { low: number; medium: number; high: number };
+  items: GeneratedBoqItem[];
+  warnings: string[];
+};
+export const measurementReport = () => invoke<MeasurementReport>("measurement_report");
+
+export type ProjectReply = {
+  type: "project";
+  result: {
+    path?: string;
+    projects?: { path: string; name: string; drawings?: number; checked?: boolean; error?: string }[];
+    entries?: { path: string; full: string; missing: boolean }[];
+    set?: { name: string; project: {
+      method: { title: string } | null;
+      boq: { item: GeneratedBoqItem }[]; queries: unknown[]; warnings: string[]; checked: boolean;
+      register: { drawing: string; sheet: string; flags: string[] }[];
+      drawings: { drawing: string; status: string; items: number; warnings: string[]; error: string | null }[];
+    } };
+  };
+  outputs?: { workbook: string; morning_report: string; failed: number; checked: boolean };
+};
+export const projectCommand = (command: Record<string, unknown>) => invoke<ProjectReply>("project_command", { command: { ...command, type: "project" } });
+export const projectHistory = (redo: boolean) => invoke<boolean>("project_history", { redo });
+
+export type Explanation = {
+  item: string; quantity: number; unit: string; confidence: number;
+  confidence_band: "low" | "medium" | "high";
+  dimension_lines: DimensionLine[];
+  drawings: string[];
+  evidence: { handle: number; sheet: string; drawing: string }[];
+  elements?: unknown[]; recognition?: unknown[]; recognition_rules?: unknown[]; measurement_rules?: unknown[];
+  contributions?: { explanation: Explanation }[];
+  notes?: string[];
+};
+export const explainItem = (item: string, project?: string) => invoke<Explanation>("explain_item", { item, project });

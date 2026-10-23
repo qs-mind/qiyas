@@ -179,3 +179,31 @@ fn a_turned_page_imports_and_renders_as_it_is_shown() {
     assert!(red(9, 35) || red(10, 35));
     assert!(!red(35, 10) && !red(35, 190), "not drawn unturned");
 }
+
+#[test]
+#[cfg_attr(not(pdfium), ignore = "needs pdfium: run scripts/pdfium.sh")]
+fn plain_text_retains_page_numbers_and_rejects_invalid_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_wall(dir.path());
+    let pages = qiyas_pdf::page_text(&path, &[1]).unwrap();
+    assert_eq!(pages[0].0, 1);
+    assert!(pages[0].1.contains("WALL"));
+    assert!(matches!(
+        qiyas_pdf::page_text(&path, &[0]),
+        Err(PdfError::NoSuchPage { .. })
+    ));
+    assert!(matches!(
+        qiyas_pdf::page_text(&path, &[2]),
+        Err(PdfError::NoSuchPage { .. })
+    ));
+    assert!(qiyas_pdf::page_text(&path, &[]).is_err());
+    let jobs: Vec<_> = (0..4)
+        .map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || qiyas_pdf::page_text(&path, &[1]).unwrap())
+        })
+        .collect();
+    for job in jobs {
+        assert_eq!(job.join().unwrap(), pages);
+    }
+}

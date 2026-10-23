@@ -1,7 +1,8 @@
 /** The right-click menu of the drawing, on Base UI's Context Menu: the commands the ribbon and the
  *  command line already have, where the hand is. Move, Copy and Erase start the modify tool on the
  *  selection (they ask for objects when nothing is picked, as from the ribbon); Properties shows
- *  the properties palette; Zoom extents fits the sheet. Each row says its command line alias in a
+ *  the properties palette; Zoom extents fits the sheet; Ask Mizan sends the selection to Mizan's
+ *  composer (only with something selected). Each row says its command line alias in a
  *  small chip. Without a drawing the modify rows are disabled. It wraps the canvas's box: the box
  *  keeps its own props through `render`. */
 import { ContextMenu } from "@base-ui/react/context-menu";
@@ -18,6 +19,8 @@ type Props = {
   onTool(tool: Tool): void;
   onProperties(): void;
   onZoomExtents(): void;
+  /** Opens Mizan with the selection; left out while nothing is selected. */
+  onAskMizan?(): void;
   /** The command line's aliases, for the chips; the built-in ones when left out. */
   aliases?: Record<string, string>;
   children: ReactNode;
@@ -29,7 +32,16 @@ const MODIFY: { tool: Tool; label: string }[] = [
   { tool: "erase", label: "modify.erase" },
 ];
 
-export function CanvasMenu({ box, hasDrawing, onTool, onProperties, onZoomExtents, aliases, children }: Props) {
+export function CanvasMenu({
+  box,
+  hasDrawing,
+  onTool,
+  onProperties,
+  onZoomExtents,
+  onAskMizan,
+  aliases,
+  children,
+}: Props) {
   const t = useT();
   const chip = (command: string) => {
     const [alias] = aliasesFor(command, aliases);
@@ -59,6 +71,10 @@ export function CanvasMenu({ box, hasDrawing, onTool, onProperties, onZoomExtent
             <ContextMenu.Item className="rb-item" onClick={onZoomExtents}>
               <span>{t("zoomExtents")}</span>
               {chip("zoomExtents")}
+            </ContextMenu.Item>
+            <ContextMenu.Separator className="menu-rule" />
+            <ContextMenu.Item className="rb-item" disabled={!onAskMizan} onClick={() => onAskMizan?.()}>
+              <span>{t("canvas.askMizan")}</span>
             </ContextMenu.Item>
           </ContextMenu.Popup>
         </ContextMenu.Positioner>

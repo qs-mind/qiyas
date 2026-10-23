@@ -1,0 +1,28 @@
+.chat-history-trigger { display: inline-flex; align-items: center; gap: 4px; }
+.chat-history-trigger svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.chat-history-positioner { z-index: 100; }
+.chat-history-popup {
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 40px));
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 6px 24px #0002;
+  font-size: 12px;
+}
+.chat-history-popup h2 { margin: 0 0 10px; font-size: 13px; }
+.chat-history-filter { display: flex; gap: 6px; margin-block-end: 10px; }
+.chat-history-filter [aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.chat-history-list { margin: 0; padding: 0; list-style: none; }
+.chat-history-list li { display: flex; align-items: center; border-block-end: 1px solid var(--rule); }
+.chat-history-resume { flex: 1; min-width: 0; display: grid; gap: 4px; padding: 9px 4px; text-align: start; border: 0; background: transparent; }
+.chat-history-resume strong { overflow-wrap: anywhere; }
+.chat-history-resume span, .chat-history-resume time { color: var(--muted); font-size: 11px; }
+.chat-history-delete { flex-shrink: 0; margin-inline-start: 6px; }
+.chat-history-delete-all { margin-block-start: 12px; }
+.assistant-empty .continue-chat { margin-block: 4px 12px; text-align: start; overflow-wrap: anywhere; }
+.plan-actions { display: flex; gap: 6px; margin-block-start: 10px; }
+/* History and approval controls use no motion. */

@@ -12,15 +12,56 @@ use opencadcodec::entities::Viewport;
 use opencadcodec::tables::normalize_name;
 use opencadcodec::{CadDocument, EntityType, Handle, Vector3};
 use qiyas_render::{layer_shown, Batch, Range};
-use serde::Serialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::session::{locate, Picked};
-use crate::{CoreError, Session};
+use crate::{CoreError, Session, Target};
 
 const MODEL: &str = "*Model_Space";
 
 fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
+}
+
+/// A physical paper:model ratio, or a custom scale in paper millimetres per model unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ViewportScale {
+    /// A paper:model ratio such as "1:100", accounting for the drawing's model units.
+    Ratio(String),
+    /// Paper millimetres per model drawing unit, as the viewport's custom scale stores it.
+    Number(f64),
+}
+
+impl ViewportScale {
+    fn custom_scale(&self, metres_per_unit: f64) -> Result<f64, CoreError> {
+        let value = match self {
+            Self::Number(value) => *value,
+            Self::Ratio(ratio) => {
+                let (paper, model) = ratio
+                    .split_once(':')
+                    .ok_or_else(|| invalid("Write a viewport scale as 1:100 or a number"))?;
+                let parse = |value: &str| {
+                    value
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v| v.is_finite() && *v > 0.0)
+                };
+                let (Some(paper), Some(model)) = (parse(paper), parse(model)) else {
+                    return Err(invalid(
+                        "A viewport ratio needs two finite positive numbers",
+                    ));
+                };
+                paper / model * metres_per_unit / 0.001
+            }
+        };
+        if !value.is_finite() || value <= 0.0 {
+            return Err(invalid("A viewport scale must be finite and positive"));
+        }
+        Ok(value)
+    }
 }
 
 /// One viewport of the layout on screen, as the window draws model space inside it.
@@ -38,6 +79,13 @@ pub struct PaperView {
     pub lines: Option<Vec<[u32; 2]>>,
     pub fills: Option<Vec<[u32; 2]>>,
     pub texts: Option<Vec<[u32; 2]>>,
+}
+
+pub(crate) struct ViewportFrame {
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    pub centre: [f64; 2],
+    pub scale: f64,
 }
 
 /// The model point at `v`'s centre and its scale; `None` when it shows nothing (the sheet's own,
@@ -98,16 +146,14 @@ fn frozen_names(doc: &CadDocument, v: &Viewport) -> HashSet<String> {
 }
 
 impl Session {
-    /// `Command::MView`: a viewport on the layout on screen with the corners `a` and `b`,
-    /// showing all of model space; on the current layer and state. Its handle.
-    pub(crate) fn mview(&mut self, a: [f64; 2], b: [f64; 2]) -> Result<u64, CoreError> {
+    /// Fits the model bounds in a paper rectangle without adding a viewport.
+    pub(crate) fn viewport_fit_default(
+        &self,
+        a: [f64; 2],
+        b: [f64; 2],
+    ) -> Result<([f64; 2], f64), CoreError> {
         if ![a, b].iter().flatten().all(|v| v.is_finite()) {
             return Err(invalid("Points must have finite coordinates"));
-        }
-        if self.sheet.eq_ignore_ascii_case(MODEL) {
-            return Err(invalid(
-                "Viewports go on a layout: choose a layout tab first",
-            ));
         }
         let (w, h) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
         if !(w > 0.0 && h > 0.0) {
@@ -121,7 +167,7 @@ impl Session {
         });
         let [[x0, y0], [x1, y1]] = bounds;
         let (ew, eh) = (x1 - x0, y1 - y0);
-        let (centre, scale) = if empty || !(ew > 0.0 || eh > 0.0) {
+        Ok(if empty || !(ew > 0.0 || eh > 0.0) {
             ([x0, y0], 1.0)
         } else {
             let fit = |paper: f64, model: f64| {
@@ -135,7 +181,93 @@ impl Session {
                 [(x0 + x1) / 2.0, (y0 + y1) / 2.0],
                 fit(w, ew).min(fit(h, eh)),
             )
-        };
+        })
+    }
+
+    /// Resolve either an explicit paper frame or a model window at a physical scale.
+    pub(crate) fn viewport_frame(
+        &self,
+        a: [f64; 2],
+        b: [f64; 2],
+        scale: Option<&ViewportScale>,
+        centre: Option<[f64; 2]>,
+        model_bounds: Option<[[f64; 2]; 2]>,
+        paper_centre: Option<[f64; 2]>,
+    ) -> Result<ViewportFrame, CoreError> {
+        if self.sheet.eq_ignore_ascii_case(MODEL) {
+            return Err(invalid("Viewports go on a layout: use new_layout to create one or set_layout_paper to size an existing layout, then set_sheet to select it"));
+        }
+        if ![a, b].iter().flatten().all(|v| v.is_finite()) {
+            return Err(invalid("Points must have finite coordinates"));
+        }
+        if centre.is_some_and(|p| !p.into_iter().all(f64::is_finite)) {
+            return Err(invalid("The model centre must have finite coordinates"));
+        }
+        let given_scale = scale
+            .map(|s| s.custom_scale(self.drawing.units.to_metres()))
+            .transpose()?;
+        if let Some(bounds) = model_bounds {
+            if a != [0.0, 0.0] || b != [0.0, 0.0] || centre.is_some() {
+                return Err(invalid("Use model_bounds with scale and paper_centre, or corner1/corner2 with centre; do not combine the two forms"));
+            }
+            let Some(paper_centre) = paper_centre else {
+                return Err(invalid(
+                    "model_bounds needs paper_centre: [x, y] in paper millimetres",
+                ));
+            };
+            let Some(scale) = given_scale else {
+                return Err(invalid("model_bounds needs scale, for example \"1:100\""));
+            };
+            if !bounds
+                .iter()
+                .flatten()
+                .chain(paper_centre.iter())
+                .all(|v| v.is_finite())
+            {
+                return Err(invalid(
+                    "model_bounds and paper_centre must have finite coordinates",
+                ));
+            }
+            let w = (bounds[1][0] - bounds[0][0]).abs() * scale;
+            let h = (bounds[1][1] - bounds[0][1]).abs() * scale;
+            if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+                return Err(invalid(
+                    "model_bounds must enclose a finite nonzero width and height",
+                ));
+            }
+            return Ok(ViewportFrame {
+                a: [paper_centre[0] - w / 2.0, paper_centre[1] - h / 2.0],
+                b: [paper_centre[0] + w / 2.0, paper_centre[1] + h / 2.0],
+                centre: [
+                    (bounds[0][0] + bounds[1][0]) / 2.0,
+                    (bounds[0][1] + bounds[1][1]) / 2.0,
+                ],
+                scale,
+            });
+        }
+        if paper_centre.is_some() {
+            return Err(invalid(
+                "paper_centre needs model_bounds; explicit frames use corner1 and corner2",
+            ));
+        }
+        let (fit_centre, fit_scale) = self.viewport_fit_default(a, b)?;
+        Ok(ViewportFrame {
+            a,
+            b,
+            centre: centre.unwrap_or(fit_centre),
+            scale: given_scale.unwrap_or(fit_scale),
+        })
+    }
+
+    /// Create a viewport from a checked frame; the generated layer is part of this command.
+    pub(crate) fn mview(&mut self, frame: ViewportFrame) -> Result<u64, CoreError> {
+        let ViewportFrame {
+            a,
+            b,
+            centre,
+            scale,
+        } = frame;
+        let (w, h) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
         let id = self
             .drawing
             .doc
@@ -154,7 +286,64 @@ impl Session {
         v.view_target = Vector3::ZERO;
         v.view_center = Vector3::new(centre[0], centre[1], 0.0);
         v.set_scale(scale);
-        Ok(self.add_styled(vec![EntityType::Viewport(v)])?[0])
+        let entities = vec![EntityType::Viewport(v)];
+        let added = if self.current.layer.eq_ignore_ascii_case("0") {
+            self.add_on_annotation_layer("A-VIEW", entities, true)?
+        } else {
+            self.add_styled(entities)?
+        };
+        Ok(added[0])
+    }
+
+    /// Resize the same viewport, preserving identity, frozen layers and its other settings.
+    pub(crate) fn resize_viewport(
+        &mut self,
+        target: &Target,
+        frame: ViewportFrame,
+    ) -> Result<(), CoreError> {
+        let handle = Handle::new(target.handle);
+        if !target.chain.is_empty() {
+            return Err(invalid("Choose a viewport directly on the current layout"));
+        }
+        let entity = self
+            .drawing
+            .doc
+            .entities_in_block(&self.sheet)
+            .find(|entity| entity.common().handle == handle)
+            .ok_or_else(|| invalid("The viewport target must be on the current layout"))?;
+        let EntityType::Viewport(view) = entity else {
+            return Err(invalid("The target is not a viewport"));
+        };
+        if view.id == 1 {
+            return Err(invalid(
+                "The layout's overall viewport cannot be resized; choose a model viewport",
+            ));
+        }
+        if self
+            .drawing
+            .doc
+            .layers
+            .get(&view.common.layer)
+            .is_some_and(|layer| layer.flags.locked)
+        {
+            return Err(invalid("The viewport's layer is locked: unlock it first"));
+        }
+        let Some(EntityType::Viewport(view)) = self.drawing.doc.get_entity_mut(handle) else {
+            unreachable!("checked viewport");
+        };
+        let ViewportFrame {
+            a,
+            b,
+            centre,
+            scale,
+        } = frame;
+        view.center = Vector3::new((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, 0.0);
+        view.width = (b[0] - a[0]).abs();
+        view.height = (b[1] - a[1]).abs();
+        view.view_target = Vector3::ZERO;
+        view.view_center = Vector3::new(centre[0], centre[1], 0.0);
+        view.set_scale(scale);
+        Ok(())
     }
 
     /// The viewports of the layout on screen and how the window draws model space inside each
@@ -173,50 +362,61 @@ impl Session {
         if viewports.is_empty() {
             return Vec::new();
         }
+        self.with_model(None, |batch| self.views_against(viewports, batch))
+    }
+
+    /// `paper_views_of` with its spans counted in `batch`, a model space batch drawn for another
+    /// zoom (Mizan's picture of a layout).
+    pub fn paper_views_against(&self, sheet: &str, batch: &Batch) -> Vec<PaperView> {
+        if sheet.eq_ignore_ascii_case(MODEL) {
+            return Vec::new();
+        }
+        self.views_against(viewports_on(self, sheet), batch)
+    }
+
+    fn views_against(&self, viewports: Vec<&Viewport>, batch: &Batch) -> Vec<PaperView> {
         let doc = &self.drawing.doc;
         let xrefs = self.xref_docs();
-        self.with_model(None, |batch| {
-            viewports
-                .into_iter()
-                .filter_map(|v| {
-                    let (centre, scale) = view_of(v)?;
-                    let (cx, cy, w, h) = (v.center.x, v.center.y, v.width / 2.0, v.height / 2.0);
-                    let frozen = frozen_names(doc, v);
-                    let (lines, fills, texts) = if frozen.is_empty() {
-                        (None, None, None)
-                    } else {
-                        let mut memo: HashMap<(u64, u32), bool> = HashMap::new();
-                        let mut hidden = |r: &Range| {
-                            *memo.entry((r.entity, r.chain)).or_insert_with(|| {
-                                let chain = batch.chain_of(r);
-                                let outer = chain.iter().any(|&h| {
-                                    doc.get_entity(Handle::new(h)).is_some_and(|e| {
-                                        frozen.contains(&normalize_name(&e.common().layer))
-                                    })
-                                });
-                                outer
-                                    || locate(doc, &xrefs, r.entity, chain)
-                                        .is_ok_and(|l| frozen.contains(&normalize_name(&l.layer)))
-                            })
-                        };
-                        (
-                            Some(spans(&batch.ranges, &mut hidden)),
-                            Some(spans(&batch.fill_ranges, &mut hidden)),
-                            Some(spans(&batch.text_ranges, &mut hidden)),
-                        )
+        viewports
+            .into_iter()
+            .filter_map(|v| {
+                let (centre, scale) = view_of(v)?;
+                let (cx, cy, w, h) = (v.center.x, v.center.y, v.width / 2.0, v.height / 2.0);
+                let frozen = frozen_names(doc, v);
+                let (lines, fills, texts) = if frozen.is_empty() {
+                    (None, None, None)
+                } else {
+                    let mut memo: HashMap<(u64, u32), bool> = HashMap::new();
+                    let mut hidden = |r: &Range| {
+                        *memo.entry((r.entity, r.chain)).or_insert_with(|| {
+                            let chain = batch.chain_of(r);
+                            let outer = chain.iter().any(|&h| {
+                                doc.get_entity(Handle::new(h)).is_some_and(|e| {
+                                    frozen.contains(&normalize_name(&e.common().layer))
+                                })
+                            });
+                            outer
+                                || locate(doc, &xrefs, r.entity, chain)
+                                    .is_ok_and(|l| frozen.contains(&normalize_name(&l.layer)))
+                        })
                     };
-                    Some(PaperView {
-                        handle: v.common.handle.value(),
-                        rect: [[cx - w, cy - h], [cx + w, cy + h]],
-                        centre,
-                        scale,
-                        lines,
-                        fills,
-                        texts,
-                    })
+                    (
+                        Some(spans(&batch.ranges, &mut hidden)),
+                        Some(spans(&batch.fill_ranges, &mut hidden)),
+                        Some(spans(&batch.text_ranges, &mut hidden)),
+                    )
+                };
+                Some(PaperView {
+                    handle: v.common.handle.value(),
+                    rect: [[cx - w, cy - h], [cx + w, cy + h]],
+                    centre,
+                    scale,
+                    lines,
+                    fills,
+                    texts,
                 })
-                .collect()
-        })
+            })
+            .collect()
     }
 
     /// Model space as drawn inside the layout's viewports (`with_model`).

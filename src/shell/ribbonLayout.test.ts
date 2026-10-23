@@ -46,9 +46,9 @@ test("the window's default has the eight tabs, Measure first, Draw its six group
   expect(home.groups.map((g) => g.id)).toEqual(["draw", "modify", "edit", "text", "clipboard", "layers"]);
   expect(home.groups.find((g) => g.id === "modify")!.buttons).toHaveLength(10);
   expect(home.groups.find((g) => g.id === "edit")!.buttons).toHaveLength(13);
-  // Open, Save, Save as, Undo and Redo are the quick-access bar's, never a layout's.
+  // New, Open, Save, Save as, Undo and Redo are the quick-access bar's, never a layout's.
   const commands = DEFAULT_RIBBON.tabs.flatMap((t) => t.groups.flatMap((g) => g.buttons.map((b) => b.command)));
-  for (const c of ["open", "save", "saveAs", "undo", "redo"]) expect(commands).not.toContain(c);
+  for (const c of ["new", "open", "save", "saveAs", "undo", "redo"]) expect(commands).not.toContain(c);
   const measure = DEFAULT_RIBBON.tabs.find((t) => t.id === "measure")!;
   expect(measure.groups.find((g) => g.id === "takeoff")!.buttons.map((b) => b.command)).toEqual([
     "exportTakeoff",

@@ -87,6 +87,7 @@ function setup(over: { info?: DrawingInfo | null; sheet?: string; visible?: Boun
 beforeEach(() => {
   core.calls.length = 0;
   core.answers = {
+    drawing_info: info(),
     paper_catalog: PAPERS,
     list_printers: ["Office", "Plotter"],
     default_printer: "Office",

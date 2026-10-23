@@ -406,7 +406,7 @@ fn every_kind_of_dimension_measures_what_it_dimensions() {
     let baseline = added(
         s.run(Command::Dimension(DimSpec::Baseline {
             from: t(base),
-            points: vec![[12.0, 0.0], [15.0, 0.0]],
+            points: vec![[12.0, 0.0], [15.0, 0.0]].into(),
         }))
         .unwrap(),
     );
@@ -415,7 +415,7 @@ fn every_kind_of_dimension_measures_what_it_dimensions() {
     let continued = added(
         s.run(Command::Dimension(DimSpec::Continue {
             from: t(base),
-            points: vec![[12.0, 0.0], [15.0, 0.0]],
+            points: vec![[12.0, 0.0], [15.0, 0.0]].into(),
         }))
         .unwrap(),
     );
@@ -634,7 +634,7 @@ fn leaders_multileaders_and_tolerances_are_real_entities() {
         let (dir, mut s, _) = dimensioned(&format!("notes.{ext}"));
         let leader = added(
             s.run(Command::Leader {
-                points: vec![[0.0, 0.0], [2.0, 2.0], [4.0, 2.0]],
+                points: vec![[0.0, 0.0], [2.0, 2.0], [4.0, 2.0]].into(),
                 text: "SEE DETAIL".to_string(),
             })
             .unwrap(),
@@ -657,7 +657,7 @@ fn leaders_multileaders_and_tolerances_are_real_entities() {
 
         let mleader = added(
             s.run(Command::MLeader {
-                points: vec![[0.0, 10.0], [2.0, 12.0]],
+                points: vec![[0.0, 10.0], [2.0, 12.0]].into(),
                 text: "NOTE".to_string(),
             })
             .unwrap(),
@@ -711,7 +711,7 @@ fn the_annotation_scale_sizes_new_annotations_and_is_kept() {
     );
     let note = added(
         s.run(Command::Leader {
-            points: vec![[0.0, 0.0], [2.0, 2.0]],
+            points: vec![[0.0, 0.0], [2.0, 2.0]].into(),
             text: "A".to_string(),
         })
         .unwrap(),
@@ -842,7 +842,7 @@ fn continued_dimensions_stay_on_the_base_line_and_baselines_step_out_from_it() {
     let next = added(
         s.run(Command::Dimension(DimSpec::Continue {
             from: t(base),
-            points: vec![[14.0, 1.0], [20.0, -2.0]],
+            points: vec![[14.0, 1.0], [20.0, -2.0]].into(),
         }))
         .unwrap(),
     );
@@ -854,7 +854,7 @@ fn continued_dimensions_stay_on_the_base_line_and_baselines_step_out_from_it() {
     let out = added(
         s.run(Command::Dimension(DimSpec::Baseline {
             from: t(base),
-            points: vec![[14.0, 1.0], [20.0, -2.0]],
+            points: vec![[14.0, 1.0], [20.0, -2.0]].into(),
         }))
         .unwrap(),
     );
@@ -890,7 +890,7 @@ fn the_annotation_scale_replaces_the_style_scale() {
     );
     let note = added(
         s.run(Command::Leader {
-            points: vec![[0.0, 0.0], [2.0, 2.0]],
+            points: vec![[0.0, 0.0], [2.0, 2.0]].into(),
             text: "A".to_string(),
         })
         .unwrap(),
@@ -1365,7 +1365,8 @@ fn the_style_wire_format_takes_show_units_and_defaults_it_on() {
             "ext_extension": 0.2, "gap": 0.05, "scale": 1.0
         }
     });
-    let Command::SetDimStyle { fields, .. } = serde_json::from_value(old).unwrap() else {
+    let Command::SetDimStyle { fields, .. } = serde_json::from_value::<Command>(old).unwrap()
+    else {
         panic!("a style command")
     };
     assert!(fields.show_units, "an older caller gets the units");

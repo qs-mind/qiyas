@@ -13,8 +13,9 @@ type Props = {
 /** One tool the assistant ran: its name, dots moving while it runs, then its one-line result. */
 export function ToolCard({ card, onShow, onUndo }: Props) {
   const t = useT();
-  const key = `tool.${card.name}`;
-  const label = t(key) === key ? card.name : t(key);
+  const key = card.label ? `command.${card.label}` : `tool.${card.name}`;
+  const readable = (card.label ?? card.name).replaceAll("_", " ").replaceAll(".", " · ");
+  const label = t(key) === key ? readable.charAt(0).toUpperCase() + readable.slice(1) : t(key);
   return (
     <div className={`tool-card ${card.status}`} title={JSON.stringify(card.input)}>
       <div className="tool-head">

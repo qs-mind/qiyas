@@ -2,9 +2,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AssistantPanel } from "./AssistantPanel";
+import { LanguageProvider } from "../i18n";
+import ar from "../i18n/ar.json";
 
 const aiLog = vi.fn();
-vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog() }));
+const aiAttachPdf = vi.fn();
+vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog(), aiAttachPdf: (...args: unknown[]) => aiAttachPdf(...args) }));
 import { EMPTY, type ToolCardItem, type Transcript } from "./messages";
 
 afterEach(cleanup);
@@ -12,8 +15,9 @@ afterEach(cleanup);
 const card: ToolCardItem = {
   kind: "tool",
   id: "t1",
-  name: "measure_area",
-  input: { handle: 7 },
+  name: "qiyas_execute",
+  label: "measure_area",
+  input: { op: "run", args: JSON.stringify({ command: { type: "measure_area", handle: 7 } }) },
   status: "done",
   summary: "12.000 m2: wall",
   handles: [7],
@@ -47,7 +51,68 @@ test("empty state offers three examples; one fills the box", () => {
   expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe(
     "Count the doors on this sheet",
   );
-  expect((screen.getByText("Clear") as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("the phase checklist appears above the running answer and has no Undo action", () => {
+  setup({ items: [
+    { kind: "user", text: "Draw the plan" },
+    { kind: "plan", phases: [
+      { id: "sizes", title: "Check sizes", status: "done" },
+      { id: "walls", title: "Draw walls", status: "active" },
+      { id: "labels", title: "Room labels", status: "pending" },
+      { id: "sheet", title: "Sheet", status: "skipped" },
+    ] },
+    { ...card, id: "plan", label: "plan", mutating: false, summary: "Done" },
+    { kind: "assistant", text: "Drawing the walls.", finished: false },
+  ] }, true);
+  const plan = screen.getByRole("region", { name: "Plan" });
+  expect(plan.querySelectorAll("li")).toHaveLength(4);
+  expect(plan.querySelector('[aria-current="step"]')?.textContent).toContain("Draw walls");
+  for (const status of ["Done", "Active", "Pending", "Skipped"]) expect(screen.getByText(status)).toBeTruthy();
+  const answer = screen.getByText("Drawing the walls.");
+  expect(plan.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByText("Undo")).toBeNull();
+  expect(document.querySelector(".tool-card")).toBeNull();
+});
+
+test("the checklist translates all states into Arabic and follows the page direction", () => {
+  localStorage.setItem("qiyas.lang", "ar");
+  try {
+    const assistant = {
+      transcript: { items: [{ kind: "plan" as const, phases: [
+        { id: "a", title: "A", status: "pending" as const },
+        { id: "drawing-check", title: "Review drawing check errors", status: "active" as const },
+        { id: "drawing-check-review", title: "Review drawing errors: rule:[7]", status: "done" as const },
+        { id: "d", title: "D", status: "skipped" as const },
+      ] }] },
+      busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn(),
+    };
+    render(<LanguageProvider><AssistantPanel assistant={assistant} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} /></LanguageProvider>);
+    expect(screen.getByRole("region", { name: ar["ai.plan"] })).toBeTruthy();
+    for (const key of ["ai.plan.pending", "ai.plan.active", "ai.plan.done", "ai.plan.skipped"] as const) expect(screen.getByText(ar[key])).toBeTruthy();
+    expect(document.documentElement.dir).toBe("rtl");
+    expect(screen.getByText(ar["ai.reviewDrawingErrors"])).toBeTruthy();
+    expect(screen.getByText(`${ar["ai.reviewDrawingErrors"]}: rule:[7]`)).toBeTruthy();
+  } finally {
+    localStorage.removeItem("qiyas.lang");
+    document.documentElement.dir = "ltr";
+    document.documentElement.lang = "en";
+  }
+});
+
+test("a missing provider model explains how to choose another", () => {
+  setup(EMPTY, false, "Anthropic has no model google:gemini@3.8-flash: choose one in Settings");
+  expect(screen.getByText("Anthropic has no model google:gemini@3.8-flash: choose one in Settings")).toBeTruthy();
+});
+
+test("New chat in the header starts a new conversation; not while Mizan works", () => {
+  const { assistant } = setup({ items: [{ kind: "user", text: "Measure the wall" }] });
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  expect(assistant.clear).toHaveBeenCalledTimes(1);
+  cleanup();
+  setup({ items: [{ kind: "user", text: "Measure the wall" }] }, true);
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("a transcript shows messages, Markdown and a tool card with Show and Undo", () => {
@@ -70,6 +135,19 @@ test("a transcript shows messages, Markdown and a tool card with Show and Undo",
   expect(onShow).toHaveBeenCalledWith(card);
   fireEvent.click(screen.getByText("Undo"));
   expect(onUndo).toHaveBeenCalledWith(card);
+});
+
+test("tool cards translate command labels and make unknown labels readable", () => {
+  setup({
+    items: [
+      { ...card, id: "line", label: "draw.line" },
+      { ...card, id: "ellipse", label: "draw.ellipse" },
+      { ...card, id: "read", name: "qiyas_read", label: null, mutating: false },
+    ],
+  });
+  expect(screen.getByText("Draw line")).toBeTruthy();
+  expect(screen.getByText("Draw · ellipse")).toBeTruthy();
+  expect(screen.getByText("Read drawing")).toBeTruthy();
 });
 
 test("Undo is only offered on the newest change, and not while busy", () => {
@@ -257,4 +335,153 @@ test("Mizan's answers render headings, rules, nested lists and tables, and links
   expect(md.textContent).not.toContain("|");
   expect(md.querySelector("a")).toBeNull();
   expect(md.querySelector(".md-link")?.getAttribute("title")).toBe("https://example.com");
+});
+
+function pointingSetup(more: Partial<import("../app/useAssistantWiring").Pointing> = {}) {
+  const send = vi.fn<import("../app/useAssistantWiring").Pointing["send"]>().mockResolvedValue(true);
+  const pointing = {
+    selection: { count: 3, kinds: "2 LwPolyline, 1 Insert" },
+    region: { width: 12.3456, height: 8.1, count: 47 },
+    detachSelection: vi.fn(),
+    clearRegion: vi.fn(),
+    markArea: vi.fn(),
+    send,
+    focusKey: 0,
+    ask: vi.fn(),
+    ...more,
+  };
+  const read = vi.fn(async (file: File) => ({
+    media_type: file.type,
+    data: "QUJD",
+    url: `data:${file.type};base64,QUJD`,
+  }));
+  const assistant = {
+    transcript: EMPTY,
+    busy: false,
+    error: null,
+    status: null,
+    send: vi.fn().mockResolvedValue(true),
+    cancel: vi.fn(),
+    clear: vi.fn(),
+  };
+  render(
+    <AssistantPanel
+      assistant={assistant}
+      onShow={() => {}}
+      onUndo={() => {}}
+      onSettings={() => {}}
+      pointing={pointing}
+      read={read}
+    />,
+  );
+  return { pointing, read, assistant, send };
+}
+
+test("what the user points at shows as chips above the box; × leaves it out", () => {
+  const { pointing } = pointingSetup();
+  expect(screen.getByText("Selection · 3")).toBeTruthy();
+  expect(screen.getByText("2 LwPolyline, 1 Insert")).toBeTruthy();
+  expect(screen.getByText("Area · 12.35 × 8.10 m")).toBeTruthy();
+  expect(screen.getByText("47 entities")).toBeTruthy();
+  const [selectionX, areaX] = screen.getAllByRole("button", { name: "Remove" });
+  fireEvent.click(selectionX);
+  expect(pointing.detachSelection).toHaveBeenCalledTimes(1);
+  fireEvent.click(areaX);
+  expect(pointing.clearRegion).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Mark an area for Mizan" }));
+  expect(pointing.markArea).toHaveBeenCalledTimes(1);
+});
+
+test("a pasted picture shows as a thumbnail and goes with the message", async () => {
+  const { send: sendPointed, read } = pointingSetup({ selection: null, region: null });
+  const box = screen.getByLabelText("Type your request…");
+  const photo = new File(["x"], "site.jpg", { type: "image/jpeg" });
+  fireEvent.paste(box, { clipboardData: { files: [photo] } });
+  await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(1));
+  expect(read).toHaveBeenCalledWith(photo);
+  // A picture alone can be sent.
+  const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+  expect(send.disabled).toBe(false);
+  fireEvent.change(box, { target: { value: "What is this?" } });
+  fireEvent.click(send);
+  await waitFor(() => expect(sendPointed).toHaveBeenCalledTimes(1));
+  expect(sendPointed.mock.calls[0][0]).toBe("What is this?");
+  expect(sendPointed.mock.calls[0][1]).toEqual([
+    { media_type: "image/jpeg", data: "QUJD", url: "data:image/jpeg;base64,QUJD" },
+  ]);
+  await waitFor(() => expect(screen.queryAllByAltText("Picture")).toHaveLength(0));
+});
+
+test("at most four pictures go with one message", async () => {
+  pointingSetup({ selection: null, region: null });
+  const box = screen.getByLabelText("Type your request…");
+  const files = [1, 2, 3, 4, 5].map((n) => new File(["x"], `p${n}.png`, { type: "image/png" }));
+  fireEvent.paste(box, { clipboardData: { files } });
+  await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(4));
+  expect(screen.getByRole("alert").textContent).toBe("At most 4 pictures in one message");
+  expect((screen.getByRole("button", { name: "Attach pictures or PDFs" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("a user's message shows what went with it", () => {
+  setup({
+    items: [{ kind: "user", text: "And this?", pointed: ["Selection · 2"], images: ["data:image/png;base64,QUJD"] }],
+  });
+  expect(screen.getByText("Selection · 2")).toBeTruthy();
+  expect(screen.getByAltText("Picture").getAttribute("src")).toBe("data:image/png;base64,QUJD");
+});
+
+test("an awaiting plan offers Approve and Change only until the next message", () => {
+  const plan = { kind: "plan" as const, phases: [{ id: "walls", title: "Walls", status: "pending" as const }], awaitingApproval: true };
+  const { assistant } = setup({ items: [{ kind: "user", text: "Draw" }, plan] });
+  fireEvent.click(screen.getByRole("button", { name: "Change" }));
+  expect(document.activeElement).toBe(screen.getByRole("textbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  expect(assistant.send).toHaveBeenCalledWith("Approved, continue.");
+  cleanup();
+  setup({ items: [plan, { kind: "user", text: "Approved, continue." }] });
+  expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  cleanup();
+  setup({ items: [plan] }, true);
+  expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+});
+
+test("restored pictures are placeholders and old tool cards have no Undo action", () => {
+  setup({ items: [
+    { kind: "user", text: "This drawing", images: ["[picture removed]"] },
+    { ...card, restored: true },
+  ] });
+  expect(screen.getByText("[picture removed]")).toBeTruthy();
+  expect(screen.queryByRole("img", { name: "Picture" })).toBeNull();
+  expect(screen.queryByText("Undo")).toBeNull();
+});
+
+test("a pending resume cannot send, approve, undo, or start another chat", () => {
+  const value = assistant({ transcript: { items: [card] } });
+  const history: import("./ConversationHistory").ConversationHistoryState = {
+    chats: [], drawing: null, latest: null, pending: true, error: null,
+    resume: vi.fn(), remove: vi.fn(),
+  };
+  render(<AssistantPanel assistant={value} history={history} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Continue" } });
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  expect(value.send).not.toHaveBeenCalled();
+  expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+});
+
+
+test("PDF attachments are retained with page provenance and sent without a drawing mutation", async () => {
+  aiAttachPdf.mockResolvedValue({ name: "schedule.pdf", path: "/local/attachments/schedule.pdf", pages: 3 });
+  const { assistant } = setup();
+  const file = new File(["%PDF-test"], "schedule.pdf", { type: "application/pdf" });
+  Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("%PDF-test").buffer });
+  const input = document.querySelector('input[type="file"]')!;
+  expect(input.getAttribute("accept")).toContain("application/pdf");
+  fireEvent.change(input, { target: { files: [file] } });
+  await screen.findByText("schedule.pdf · 3 pages");
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith('[PDF attachment: "schedule.pdf"; 3 pages; path: "/local/attachments/schedule.pdf"]'));
+  expect(assistant.send.mock.calls[0][0]).toContain("/local/attachments/schedule.pdf");
+  await waitFor(() => expect(screen.queryByText("schedule.pdf · 3 pages")).toBeNull());
 });

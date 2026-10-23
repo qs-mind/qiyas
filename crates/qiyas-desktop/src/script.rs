@@ -19,7 +19,7 @@ use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use qiyas_core::script::{self, Action, Context};
-use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Session, Source};
+use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Reported, Session, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
@@ -195,7 +195,7 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
                         break;
                     }
                 }
-                match run_step(app, &state, &step.action, &control.stop) {
+                match run_step(app, &state, step, &control.stop) {
                     Ok((message, change)) => {
                         changed |= change;
                         unsaved = match step.action {
@@ -238,7 +238,7 @@ fn on_screen_tab(state: &AppState) -> Option<u32> {
 }
 
 /// How many records the failsafe reader dropped or repaired reading `session`'s drawing.
-fn read_problems(session: &Session) -> usize {
+pub(crate) fn read_problems(session: &Session) -> usize {
     session.drawing.report.dropped.iter().map(|d| d.count).sum()
 }
 
@@ -263,15 +263,15 @@ fn saves_over_drawing(state: &AppState, action: &Action) -> bool {
 fn run_step<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
-    action: &Action,
+    step: &script::Step,
     stop: &AtomicBool,
 ) -> Result<(String, bool), String> {
-    Ok(match action {
+    Ok(match &step.action {
         Action::Quit => ("quit".to_string(), false),
         Action::Delay(ms) => (wait(*ms, DELAY_CAP_MS, stop)?, false),
         Action::Echo(text) => (text.clone(), false),
         Action::Zoom => ("zoom: nothing to do in a script".to_string(), false),
-        Action::Open(path) => (open(app, state, path)?, true),
+        Action::Open(path) => (open(app, state, path, false)?, true),
         Action::SaveAs(path) => {
             with_session(state, |s| s.save_as(path))?;
             remember_recent(state, &path.display().to_string());
@@ -296,14 +296,23 @@ fn run_step<R: Runtime>(
         }
         Action::Export(path) => {
             // As the Export button: the take-off copied out, so writing doesn't hold the lock.
-            let (items, totals, title) = with_session(state, |s| {
+            let (items, totals, title, report, queries) = with_session(state, |s| {
                 let title = match s.drawing.path.file_name() {
                     Some(name) => format!("{} take-off", name.to_string_lossy()),
                     None => "Take-off".to_string(),
                 };
-                Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
+                Ok((
+                    s.takeoff.items.clone(),
+                    s.takeoff.totals(),
+                    title,
+                    s.measurement_report()?,
+                    s.conflicts.clone(),
+                ))
             })?;
-            qiyas_boq::export_takeoff(path, &items, &totals, &title).map_err(|e| e.to_string())?;
+            qiyas_boq::export_takeoff_with_queries(
+                path, &items, &totals, &title, &report, &queries,
+            )
+            .map_err(|e| e.to_string())?;
             (format!("exported {}", path.display()), false)
         }
         Action::ImportBoq(path) => {
@@ -322,9 +331,10 @@ fn run_step<R: Runtime>(
             (format!("{} conflicts", conflicts.len()), true)
         }
         Action::Command(cmd) => {
-            let outcome = with_session(state, |s| s.run(cmd.clone()))?;
+            let input = step.input.clone().unwrap_or_else(|| serde_json::json!(cmd));
+            let outcome = with_session(state, |s| s.run_input(&input, Source::User))?;
             let change = !matches!(
-                outcome,
+                &outcome.outcome,
                 Outcome::Nothing | Outcome::Info { .. } | Outcome::Table { .. }
             );
             (describe(cmd, outcome), change)
@@ -333,11 +343,18 @@ fn run_step<R: Runtime>(
 }
 
 /// OPEN: the drawing's tab is shown when it is open already; else it opens in a new tab, as the
-/// Open button does (the assistant starts a new conversation, the file goes first in recents).
-fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result<String, String> {
+/// Open button does (the assistant starts a new conversation unless `keep_conversation`, the
+/// assistant's own open; the file goes first in recents). A drawing whose autosave the user must
+/// decide about first is refused (see below); so is it for the assistant (`drawing_host`).
+pub(crate) fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    path: &Path,
+    keep_conversation: bool,
+) -> Result<String, String> {
     let shown = path.display().to_string();
     if let Some(id) = tabs::find_path(state, path) {
-        tabs::activate(app, state, id)?;
+        tabs::activate(app, state, id, keep_conversation)?;
         remember_recent(state, &shown);
         return Ok(format!("showed {shown}, open already"));
     }
@@ -370,8 +387,10 @@ fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result
     }
     let session = Session::open(path).map_err(|e| e.to_string())?;
     let problems = read_problems(&session);
-    new_conversation(app, state);
-    tabs::add(state, session);
+    if !keep_conversation {
+        new_conversation(app, state);
+    }
+    tabs::add(state, session)?;
     remember_recent(state, &shown);
     Ok(match problems {
         0 => format!("opened {shown}"),
@@ -382,8 +401,9 @@ fn open<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) -> Result
 
 /// What `cmd` did, in a line, as `qiyas-cli run` says it (`qiyas_core::script` keeps its own
 /// private).
-fn describe(cmd: &Command, outcome: Outcome) -> String {
-    match outcome {
+fn describe(cmd: &Command, outcome: Reported) -> String {
+    let notes = outcome.input_notes();
+    let message = match outcome.outcome {
         Outcome::Measured { measurement: m } => {
             let shown = match m.kind {
                 Kind::Count => format!("{:.0}", m.shown),
@@ -410,8 +430,26 @@ fn describe(cmd: &Command, outcome: Outcome) -> String {
             _ => "done".to_string(),
         },
         Outcome::Added { handles } => format!("added {} entities", handles.len()),
+        Outcome::TitleBlock {
+            handles,
+            empty_fields,
+        } => format!(
+            "title block: {} entities; empty fields: {}",
+            handles.len(),
+            empty_fields.join(", ")
+        ),
+        Outcome::Batch { outcomes, added } => format!(
+            "ran {} commands as one step, added {} entities",
+            outcomes.len(),
+            added.len()
+        ),
         Outcome::Nothing => "nothing to do".to_string(),
         other => format!("{other:?}"),
+    };
+    if notes.is_empty() {
+        message
+    } else {
+        format!("{message}; {notes}")
     }
 }
 
@@ -975,5 +1013,49 @@ mod tests {
         .unwrap();
         let result = ipc.run("count.scr", "COUNT DOOR\n").unwrap();
         assert_eq!(result["lines"][0]["ok"], json!(true));
+    }
+
+    #[test]
+    fn command_ipc_reports_all_missing_fields_and_keeps_unknown_field_warnings() {
+        let ipc = Ipc::open();
+        let error = ipc
+            .call(
+                "run_command",
+                json!({"cmd": {"type": "draw", "kind": "line"}}),
+            )
+            .unwrap_err();
+        let message = error.as_str().unwrap();
+        assert!(message.contains("/a"), "{message}");
+        assert!(message.contains("/b"), "{message}");
+        let outcome = ipc
+            .call(
+                "run_command",
+                json!({"cmd": {
+                    "type": "draw", "kind": "line", "a": [0,0], "b": [10,0],
+                    "unexpected": true
+                }}),
+            )
+            .unwrap();
+        assert_eq!(outcome["type"], "added");
+        assert_eq!(outcome["warnings"][0]["code"], "unknown_field");
+        assert_eq!(outcome["warnings"][0]["pointer"], "/unexpected");
+    }
+
+    #[test]
+    fn script_logs_keep_defaults_and_unknown_fields_from_raw_input() {
+        let ipc = Ipc::open();
+        let result = ipc.run(
+            "input-notes.scr",
+            "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+        ).unwrap();
+        let lines = result["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            assert_eq!(line["ok"], true, "{line}");
+            let text = line["message"].as_str().unwrap();
+            assert!(text.contains("/height="), "{text}");
+            assert!(text.contains("/rotation=0"), "{text}");
+        }
+        assert!(lines[0]["message"].as_str().unwrap().contains("/typo"));
     }
 }

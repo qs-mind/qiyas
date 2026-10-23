@@ -5,16 +5,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use qiyas_core::{
-    Command, ConflictStatus, CoreError, DimSpec, EntityFilter, Field, Kind, Outcome, Session,
-    Source, Target, COMMENT_LAYER,
+    Command, ConflictStatus, CoreError, DimSpec, EntityFilter, Field, Kind, MarkupKind, Outcome,
+    Session, Source, Target, COMMENT_LAYER,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::image::{height_for, normalized, render_png, MAX_SIDE};
+use qiyas_render::Batch;
 
-mod author;
+use crate::image::{self, normalized, Inset, Raster, Scene, TextSize, View, MAX_SIDE};
+use crate::marks::Mark;
 
 /// Largest JSON result, in bytes. Longer results lose rows (or have their strings cut).
 const MAX_OUTPUT: usize = 40_960;
@@ -27,6 +28,11 @@ const DEFAULT_WIDTH: u32 = 800;
 const MIN_WIDTH: u32 = 16;
 /// Margin around the whole sheet in `view_image`, as a share of its size.
 const MARGIN: f64 = 0.02;
+/// Most entities marked with numbers in one picture.
+const MAX_MARKS: usize = 40;
+/// Longest side, in pixels, a picture under the lines is drawn at.
+const MAX_RASTER_PX: f64 = 4096.0;
+const MODEL: &str = "*Model_Space";
 /// Why a tool refuses a path outside the drawing's folder.
 const OUTSIDE_FOLDER: &str = "Only files beside the open drawing can be opened by the assistant; \
                               use the BOQ tab's Import for other files";
@@ -40,8 +46,14 @@ pub enum ToolOutput {
     Image { png: Vec<u8>, caption: String },
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ToolError {
+    #[error("{message}")]
+    Structured {
+        code: String,
+        message: String,
+        details: Value,
+    },
     #[error("No tool named {0}")]
     UnknownTool(String),
     /// The input is wrong: bad JSON shape, a missing entity, sheet, block or measurement.
@@ -54,9 +66,78 @@ pub enum ToolError {
     Failed(String),
 }
 
+impl ToolError {
+    pub fn json(&self) -> Value {
+        match self {
+            Self::Structured {
+                code,
+                message,
+                details,
+            } => {
+                let mut out = details.clone();
+                if !out.is_object() {
+                    out = json!({});
+                }
+                out["code"] = json!(code);
+                out["message"] = json!(message);
+                out
+            }
+            other => {
+                let mut out = crate::errors::json_error(&self.to_string());
+                if out["code"] == "failed" {
+                    out["code"] = json!(match other {
+                        Self::UnknownTool(_) => "not_found",
+                        Self::BadInput(_) => "invalid_value",
+                        Self::NotAvailable(_) => "refused",
+                        _ => "failed",
+                    });
+                }
+                out
+            }
+        }
+    }
+}
+
 impl From<CoreError> for ToolError {
     fn from(e: CoreError) -> Self {
         match e {
+            CoreError::InputWarnings { error, warnings } => {
+                let underlying = ToolError::from(*error);
+                let mut details = underlying.json();
+                details["warnings"] = json!(warnings);
+                ToolError::Structured {
+                    code: details["code"].as_str().unwrap_or("failed").into(),
+                    message: details["message"].as_str().unwrap_or_default().into(),
+                    details,
+                }
+            }
+            CoreError::Step {
+                index,
+                label,
+                error,
+            } => {
+                let mut details = ToolError::from(*error).json();
+                for field in ["errors", "warnings"] {
+                    if let Some(issues) = details.get_mut(field).and_then(Value::as_array_mut) {
+                        for issue in issues {
+                            if let Some(pointer) = issue["pointer"].as_str() {
+                                issue["pointer"] = json!(format!("/commands/{index}{pointer}"));
+                            }
+                        }
+                    }
+                }
+                let message = format!(
+                    "Batch step {index} ({label}): {}",
+                    details["message"].as_str().unwrap_or_default()
+                );
+                details["step"] = json!(index);
+                details["command"] = json!(label);
+                ToolError::Structured {
+                    code: details["code"].as_str().unwrap_or("failed").into(),
+                    message,
+                    details,
+                }
+            }
             // Handles are integers in the tools' JSON, not hex as in the core's message.
             CoreError::NoSuchEntity(h) => ToolError::BadInput(format!("No entity with handle {h}")),
             CoreError::NoSuchSheet(_) | CoreError::InvalidCommand(_) => {
@@ -113,7 +194,7 @@ pub fn execute(
             } = parse(input)?;
             let block = sheet_block(session, sheet.as_deref())?;
             let rows = session.read_text(Some(&block), within);
-            (with_units(session, page(rows, offset)), offset)
+            (with_units(session, &block, page(rows, offset)), offset)
         }
         "read_tables" => {
             let SheetInput { sheet, offset } = parse(input)?;
@@ -124,7 +205,7 @@ pub fn execute(
             let SheetInput { sheet, offset } = parse(input)?;
             let block = sheet_block(session, sheet.as_deref())?;
             let rows = session.read_dimensions(Some(&block));
-            (with_units(session, page(rows, offset)), offset)
+            (with_units(session, &block, page(rows, offset)), offset)
         }
         "block_summary" => {
             let SheetInput { sheet, offset } = parse(input)?;
@@ -209,7 +290,7 @@ pub fn execute(
             match session.run_as(cmd, source)? {
                 Outcome::Nothing => {
                     return Err(bad(&format!(
-                        "No conflict with id {id}; list_conflicts gives the ids"
+                        "No conflict with id {id}; qiyas_read records with collection conflicts gives the ids"
                     )))
                 }
                 _ => {
@@ -220,16 +301,6 @@ pub fn execute(
         }
         "add_markup" => (add_markup(session, parse(input)?, source)?, 0),
         "add_dimension" => (add_dimension(session, parse(input)?, source)?, 0),
-        "add_text" => (author::add_text(session, parse(input)?, source)?, 0),
-        "room_areas" => (
-            author::room_areas(session, parse(input)?, false, source)?,
-            0,
-        ),
-        "label_spaces" => (author::room_areas(session, parse(input)?, true, source)?, 0),
-        "add_table" => (author::add_table(session, parse(input)?, source)?, 0),
-        "edit_table_cell" => (author::edit_table_cell(session, parse(input)?, source)?, 0),
-        "draw" => (author::draw(session, parse(input)?, source)?, 0),
-        "insert_block" => (author::insert_block(session, parse(input)?, source)?, 0),
         "set_annotation_scale" => {
             let ScaleInput { scale } = parse(input)?;
             session.run_as(Command::AnnotationScale { name: scale }, source)?;
@@ -243,7 +314,7 @@ pub fn execute(
                 arc_length,
             } = parse(input)?;
             let cmd = Command::Comment {
-                points,
+                points: points.into(),
                 text,
                 arc_len: arc_length,
             };
@@ -458,13 +529,6 @@ struct Resolve {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum MarkupKind {
-    Cloud,
-    Note,
-}
-
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MarkupInput {
     points: Vec<[f64; 2]>,
@@ -581,6 +645,11 @@ struct ExtractInput {
 struct ImageInput {
     bounds: Option<[[f64; 2]; 2]>,
     width: Option<u32>,
+    sheet: Option<String>,
+    #[serde(default)]
+    highlight: Vec<u64>,
+    #[serde(default)]
+    marks: bool,
 }
 
 fn parse<T: DeserializeOwned>(input: &Value) -> Result<T, ToolError> {
@@ -646,7 +715,7 @@ fn show_layers(
         .collect();
     if !unknown.is_empty() {
         return Err(ToolError::BadInput(format!(
-            "No layer named {}; list_layers gives the names",
+            "No layer named {}; qiyas_read query with kind layers gives the names",
             unknown.join(", ")
         )));
     }
@@ -668,6 +737,7 @@ fn find_entities(session: &Session, input: FindInput) -> Result<Value, ToolError
         Some(name) => Some(sheet_block(session, Some(&name))?),
         None => None,
     };
+    let coordinates = units_of(session, sheet.as_deref().unwrap_or(&session.sheet));
     let page = session.find_entities(&EntityFilter {
         sheet,
         layer: input.layer,
@@ -682,7 +752,7 @@ fn find_entities(session: &Session, input: FindInput) -> Result<Value, ToolError
         "rows": page.rows,
         "total": page.total,
         "next_offset": page.next_offset,
-        "units": units(session),
+        "units": coordinates,
     }))
 }
 
@@ -704,23 +774,27 @@ fn measure(
                 value: None,
                 unit: None,
                 height: None,
-                points: Vec::new(),
+                points: Vec::new().into(),
                 handles: vec![handle],
                 chain: input.chain,
                 description: format!("{} on {}", entity.kind, entity.layer_short),
                 note: String::new(),
+                empty_item: false,
             }
         }
-        (None, Some(points)) if kind == Kind::Length => Command::MeasureDistance { points },
-        (None, Some(points)) => Command::MeasureArea { points },
+        (None, Some(points)) if kind == Kind::Length => Command::MeasureDistance {
+            points: points.into(),
+        },
+        (None, Some(points)) => Command::MeasureArea {
+            points: points.into(),
+        },
         (Some(_), Some(_)) => return Err(bad("Give handle or points, not both")),
         (None, None) => return Err(bad("Give handle or points")),
     };
     let default_name = matches!(cmd, Command::AddMeasurement { .. });
     let by_points = match &cmd {
-        Command::MeasureDistance { points } | Command::MeasureArea { points } => {
-            Some(points.clone())
-        }
+        Command::MeasureDistance { points } => Some(points.to_vec()),
+        Command::MeasureArea { points } => Some(points.to_vec()),
         _ => None,
     };
     let mut outcome = session.run_as(cmd, source)?;
@@ -851,33 +925,12 @@ fn add_measurement(
     if input.unit.as_deref() == Some("markup") {
         return Err(bad("Use add_markup for markups"));
     }
-    // Notes and analysis are not take-off rows: a row needs a measured quantity.
-    if input.kind == Kind::Item
-        && input.points.is_empty()
-        && input.handles.is_empty()
-        && input.value.is_none_or(|v| v == 0.0)
-        && !input.empty_item
-    {
-        return Err(bad(
-            "A take-off row needs a real measured quantity, and this one has no geometry and a \
-             quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
-             comments) are not rows: write them in your answer, or into the drawing with \
-             add_text or add_comment. Only if the user explicitly asked for an empty item, call \
-             again with empty_item true.",
-        ));
-    }
     let mut seen = HashSet::new();
     for &h in &input.handles {
         if !seen.insert(h) {
             return Err(bad(&format!("Handle {h} is given twice")));
         }
-        let entity = session.entity_info(h, &[])?;
-        if input.kind == Kind::Count && entity.kind != "Insert" {
-            return Err(bad(&format!(
-                "Handle {h} is a {}, not a block reference; a count takes block references only",
-                entity.kind
-            )));
-        }
+        session.entity_info(h, &[])?;
     }
     let to_drawing_units = session.drawing.units.to_metres();
     let cmd = Command::AddMeasurement {
@@ -886,11 +939,12 @@ fn add_measurement(
         value: input.value.or(input.empty_item.then_some(0.0)),
         unit: input.unit,
         height: input.height.map(|h| h / to_drawing_units),
-        points: input.points,
+        points: input.points.into(),
         handles: input.handles,
         chain: Vec::new(),
         description: input.description,
         note: input.note,
+        empty_item: input.empty_item,
     };
     measured(session.run_as(cmd, source)?)
 }
@@ -922,24 +976,11 @@ fn add_markup(
     input: MarkupInput,
     source: Source,
 ) -> Result<Value, ToolError> {
-    let (note, least) = match input.kind {
-        MarkupKind::Cloud => ("cloud", 3),
-        MarkupKind::Note => ("note", 1),
-    };
-    if input.points.len() < least {
-        return Err(bad(&format!("A {note} needs at least {least} point(s)")));
-    }
     let bounds = bounds_of(&input.points);
-    let cmd = Command::AddMeasurement {
-        kind: Kind::Item,
-        value: Some(0.0),
-        unit: Some("markup".to_string()),
-        height: None,
-        points: input.points,
-        handles: Vec::new(),
-        chain: Vec::new(),
-        description: input.text,
-        note: note.to_string(),
+    let cmd = Command::AddMarkup {
+        kind: input.kind,
+        points: input.points.into(),
+        text: input.text,
     };
     let mut out = measured(session.run_as(cmd, source)?)?;
     let id = out["measurement"]["id"].clone();
@@ -998,11 +1039,11 @@ fn add_dimension(
         },
         DimKind::Baseline => DimSpec::Baseline {
             from: target(input.handle)?,
-            points: need(input.points, "points")?,
+            points: need(input.points, "points")?.into(),
         },
         DimKind::Continue => DimSpec::Continue {
             from: target(input.handle)?,
-            points: need(input.points, "points")?,
+            points: need(input.points, "points")?.into(),
         },
         DimKind::Quick => DimSpec::Quick {
             targets: need(input.handles, "handles")?
@@ -1086,40 +1127,254 @@ fn zoom_to(session: &Session, input: ZoomInput) -> Result<Value, ToolError> {
 }
 
 fn view_image(session: &Session, input: ImageInput) -> Result<ToolOutput, ToolError> {
-    let width = input
-        .width
-        .unwrap_or(DEFAULT_WIDTH)
-        .clamp(MIN_WIDTH, MAX_SIDE);
-    let batch = session.batch();
-    let bounds = match input.bounds {
+    let look = Look {
+        sheet: input.sheet.as_deref(),
+        bounds: input.bounds,
+        width: input.width.unwrap_or(DEFAULT_WIDTH),
+        highlight: &input.highlight,
+        region: &[],
+        marks: input.marks,
+    };
+    let (png, caption) = picture(session, &look)?;
+    Ok(ToolOutput::Image { png, caption })
+}
+
+/// What a picture of the drawing shows: `view_image`'s, and the one sent with what the user
+/// selected or marked.
+pub(crate) struct Look<'a> {
+    /// A sheet by layout or block name; the one on screen when `None`.
+    pub sheet: Option<&'a str>,
+    /// The part shown, drawing coordinates; the whole sheet when `None`.
+    pub bounds: Option<[[f64; 2]; 2]>,
+    pub width: u32,
+    /// Entities at the top of the sheet drawn thick violet and marked first.
+    pub highlight: &'a [u64],
+    /// A region the user marked, dashed.
+    pub region: &'a [[f64; 2]],
+    /// Numbered marks on the entities in view, listed in the caption.
+    pub marks: bool,
+}
+
+/// A PNG of the drawing as `look` asks, drawn as the engineer sees it (pictures and PDF
+/// underlays under the lines, model space in a layout's viewports, the text as letters), and
+/// its caption: where it is, how big a pixel is, how tall the text is, the marks' handles and
+/// what could not be drawn.
+pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String), ToolError> {
+    let width = look.width.clamp(MIN_WIDTH, MAX_SIDE);
+    let sheet = sheet_block(session, look.sheet)?;
+    let bounds = match look.bounds {
         Some(b) => normalized(b),
-        None if batch.segments.is_empty() => {
-            return Err(bad("Nothing is drawn on the sheet shown"));
+        None => {
+            let drawn = if sheet == session.sheet {
+                session.batch()
+            } else {
+                session.sheet_batch(&sheet)
+            };
+            let (pictures, problems) = session.plot_pictures(&sheet, 1.0, MAX_RASTER_PX);
+            let geometry = !drawn.segments.is_empty() || !drawn.fills.is_empty();
+            if !geometry && pictures.is_empty() {
+                if !problems.is_empty() {
+                    return Err(bad(&format!(
+                        "Pictures unavailable: {}",
+                        problems.join("; ")
+                    )));
+                }
+                return Err(bad("Nothing is drawn on that sheet"));
+            }
+            let mut bounds = if geometry {
+                drawn.bounds
+            } else {
+                [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]]
+            };
+            for (_, placement, _) in pictures {
+                for point in placement.corners {
+                    for axis in 0..2 {
+                        bounds[0][axis] = bounds[0][axis].min(point[axis]);
+                        bounds[1][axis] = bounds[1][axis].max(point[axis]);
+                    }
+                }
+            }
+            with_margin(bounds)
         }
-        None => with_margin(batch.bounds),
     };
     let bounds = fit(bounds, width);
+    let view = View::new(bounds, width);
+    // Drawn afresh for this picture's zoom, its text as glyphs: what the engineer sees.
+    let px = view.px_per_unit();
+    let (batch, pages) = session.picture_batch_of(&sheet, px);
+
+    // Pictures in view, under the lines.
+    let (placed, mut left_out) = session.plot_pictures(&sheet, px, MAX_RASTER_PX);
+    let mut rasters = Vec::new();
+    let mut shown = Vec::new();
+    for (_, placement, image) in placed {
+        if !overlaps(&placement.corners, bounds) {
+            continue;
+        }
+        let file = image.path.file_name().map_or_else(
+            || image.path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        match qiyas_core::draw_picture(&image, |_| {}) {
+            Ok(drawn) => {
+                let (w, h) = (drawn.width(), drawn.height());
+                if let Some(r) = Raster::from_rgba(placement.corners, w, h, drawn.into_raw()) {
+                    rasters.push(r);
+                    shown.push(file);
+                }
+            }
+            Err(e) => left_out.push(format!("{file}: {e}")),
+        }
+    }
+
+    // Model space in the layout's viewports in view, drawn for the closest of their zooms.
+    let frames = session.paper_views_against(&sheet, &Batch::default());
+    let scale = frames
+        .iter()
+        .filter(|v| boxes_overlap(v.rect, bounds))
+        .map(|v| v.scale)
+        .fold(0.0, f64::max);
+    let (model, model_pages, views) = if scale > 0.0 {
+        let (model, pages) = session.picture_batch_of(MODEL, px * scale);
+        let views = session.paper_views_against(&sheet, &model);
+        (model, pages, views)
+    } else {
+        (Batch::default(), Vec::new(), Vec::new())
+    };
+    let insets: Vec<Inset> = views
+        .iter()
+        .map(|view| Inset {
+            batch: &model,
+            pages: &model_pages,
+            view,
+        })
+        .collect();
+
     let measurements: Vec<_> = session
         .takeoff
         .items
         .iter()
-        .filter(|m| m.sheet == session.sheet)
+        .filter(|m| m.sheet == sheet)
         .cloned()
         .collect();
-    let png = render_png(&batch, &measurements, bounds, width);
-    let [lo, hi] = bounds;
-    let height = height_for(hi[0] - lo[0], hi[1] - lo[1], width);
-    let caption = format!(
-        "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in drawing units ({}), {width} x {height} px. \
-         Lines in their colours on white (white lines drawn black); the take-off in violet.",
-        session.sheet,
-        lo[0],
-        lo[1],
-        hi[0],
-        hi[1],
-        units(session),
+    let drawn = image::draw(
+        &Scene {
+            batch: &batch,
+            pages: &pages,
+            rasters: &rasters,
+            insets: &insets,
+            measurements: &measurements,
+            highlight: look.highlight,
+            region: look.region,
+            marks: if look.marks { MAX_MARKS } else { 0 },
+        },
+        view,
     );
-    Ok(ToolOutput::Image { png, caption })
+    let mut caption = format!(
+        "Sheet {}, bounds [[{:.3}, {:.3}], [{:.3}, {:.3}]] in {}, {} x {} px, {}.",
+        sheet_label(session, &sheet),
+        bounds[0][0],
+        bounds[0][1],
+        bounds[1][0],
+        bounds[1][1],
+        sheet_units(session, &sheet),
+        drawn.width,
+        drawn.height,
+        pixel_size(session, &sheet, px),
+    );
+    if !shown.is_empty() {
+        caption.push_str(&format!(" Pictures: {}.", shown.join(", ")));
+    }
+    if !look.highlight.is_empty() {
+        caption.push_str(" Highlighted entities are thick violet.");
+    }
+    if !look.region.is_empty() {
+        caption.push_str(" The region the user marked is dashed blue.");
+    }
+    caption.push_str(&text_note(drawn.text));
+    caption.push_str(&marks_legend(session, &drawn.marks));
+    if !left_out.is_empty() {
+        caption.push_str(&format!(" Left out: {}.", left_out.join("; ")));
+    }
+    Ok((drawn.png, caption))
+}
+
+/// How big a pixel is: drawing units, and millimetres.
+fn pixel_size(session: &Session, sheet: &str, px_per_unit: f64) -> String {
+    let per_px = 1.0 / px_per_unit.max(f64::MIN_POSITIVE);
+    if !sheet.eq_ignore_ascii_case("*Model_Space") {
+        return format!("1 px = {per_px:.4} paper millimetres");
+    }
+    let mm = per_px * session.drawing.units.to_metres() * 1000.0;
+    format!("1 px = {per_px:.4} drawing units ({mm:.1} mm)")
+}
+
+/// What the caption says of the text in view.
+pub(crate) fn text_note(text: Option<TextSize>) -> String {
+    match text {
+        Some(t) => format!(
+            " Text: the smallest text is about {:.1} px tall, most text about {:.1} px; letters \
+             read from about 8 px, so zoom in with bounds to read smaller text.",
+            t.smallest, t.typical
+        ),
+        None => " No CAD text in view; pictures may contain text.".to_string(),
+    }
+}
+
+/// The caption's list of marks: number, handle, kind, layer, and a text's words.
+pub(crate) fn marks_legend(session: &Session, marks: &[Mark]) -> String {
+    if marks.is_empty() {
+        return String::new();
+    }
+    let rows: Vec<String> = marks
+        .iter()
+        .map(|m| match session.entity_info(m.top, &[]) {
+            Ok(info) => {
+                let mut row = format!(
+                    "#{} handle {} {} {}",
+                    m.n, m.top, info.kind, info.layer_short
+                );
+                if let Some(text) = info.plain_text.as_ref().or(info.text.as_ref()) {
+                    let short: String = text.chars().take(40).collect();
+                    row.push_str(&format!(" \"{short}\""));
+                }
+                row
+            }
+            Err(_) => format!("#{} handle {}", m.n, m.top),
+        })
+        .collect();
+    format!(
+        " Marks (orange badges; use the handle, never guess one): {}.",
+        rows.join("; ")
+    )
+}
+
+/// The sheet's layout name, with its block name when they differ.
+fn sheet_label(session: &Session, block: &str) -> String {
+    session
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|s| s.block.eq_ignore_ascii_case(block))
+        .map_or_else(
+            || block.to_string(),
+            |s| {
+                if s.name == s.block {
+                    s.name
+                } else {
+                    format!("{} ({})", s.name, s.block)
+                }
+            },
+        )
+}
+
+/// Whether the corners' box overlaps `bounds`.
+fn overlaps(corners: &[[f64; 2]; 4], bounds: [[f64; 2]; 2]) -> bool {
+    boxes_overlap(bounds_of(corners), bounds)
+}
+
+fn boxes_overlap(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> bool {
+    a[0][0] <= b[1][0] && b[0][0] <= a[1][0] && a[0][1] <= b[1][1] && b[0][1] <= a[1][1]
 }
 
 // ---- Helpers ----
@@ -1141,8 +1396,20 @@ pub(crate) fn resolve_in_drawing_folder(
         .canonicalize()
         .map_err(|e| ToolError::Failed(format!("The drawing's folder can't be read: {e}")))?;
     let full = folder.join(path);
-    // A file that doesn't exist yet can't be resolved; its path is cleaned up as written.
-    let real = full.canonicalize().unwrap_or_else(|_| lexical(&full));
+    // Resolve the existing parent too: a new export inside a symlink must stay in the folder.
+    let mut ancestor = full.as_path();
+    let mut suffix = Vec::new();
+    let real = loop {
+        if let Ok(mut real) = ancestor.canonicalize() {
+            for part in suffix.iter().rev() {
+                real.push(part);
+            }
+            break lexical(&real);
+        }
+        let name = ancestor.file_name().ok_or_else(|| bad(OUTSIDE_FOLDER))?;
+        suffix.push(name);
+        ancestor = ancestor.parent().ok_or_else(|| bad(OUTSIDE_FOLDER))?;
+    };
     if real.starts_with(&folder) {
         Ok(real)
     } else {
@@ -1200,17 +1467,41 @@ fn sheet_block(session: &Session, name: Option<&str>) -> Result<String, ToolErro
         .map(|s| s.block)
         .ok_or_else(|| {
             bad(&format!(
-                "No sheet named {name}; list_sheets gives the names"
+                "No sheet named {name}; qiyas_read state gives the sheets"
             ))
         })
 }
 
-fn units(session: &Session) -> String {
-    session.info().units
+pub(crate) fn sheet_units(session: &Session, sheet: &str) -> String {
+    if sheet.eq_ignore_ascii_case("*Model_Space") {
+        format!("drawing units ({})", session.info().units)
+    } else {
+        "paper millimetres".into()
+    }
 }
 
-fn with_units(session: &Session, mut out: Value) -> Value {
-    out["units"] = json!(units(session));
+fn units(session: &Session) -> String {
+    units_of(session, &session.sheet)
+}
+
+fn units_of(session: &Session, sheet: &str) -> String {
+    if sheet.eq_ignore_ascii_case("*Model_Space") {
+        session.info().units
+    } else {
+        "paper millimetres".into()
+    }
+}
+
+pub(crate) fn sheet_metres_per_unit(session: &Session) -> f64 {
+    if session.sheet.eq_ignore_ascii_case("*Model_Space") {
+        session.drawing.units.to_metres()
+    } else {
+        0.001
+    }
+}
+
+fn with_units(session: &Session, sheet: &str, mut out: Value) -> Value {
+    out["units"] = json!(units_of(session, sheet));
     out
 }
 
@@ -1272,7 +1563,7 @@ fn edit(session: &mut Session, cmd: Command, id: &str, source: Source) -> Result
 
 fn no_measurement(id: &str) -> ToolError {
     bad(&format!(
-        "No measurement with id {id}; list_takeoff gives the ids"
+        "No measurement with id {id}; qiyas_read records with collection takeoff gives the ids"
     ))
 }
 

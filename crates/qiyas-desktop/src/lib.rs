@@ -1,13 +1,20 @@
 mod ai;
+mod ai_window;
 mod blocks;
+mod cmdline;
 mod commands;
+mod conversations;
+mod documents;
+mod drawing_host;
 mod files;
 mod launch;
 mod mcp;
+pub mod methods;
 #[cfg(debug_assertions)]
 mod mock;
 mod pdf;
 mod plot;
+mod projects;
 pub mod ribbon;
 mod script;
 pub mod secrets;
@@ -23,6 +30,7 @@ pub fn run() {
         .manage(launch::OpenRequests::default())
         .manage(updater::Pending::default())
         .manage(script::ScriptControl::default())
+        .manage(cmdline::CommandLineState::default())
         // First of the plugins: a second Qiyas hands its files to this one and quits.
         .plugin(launch::single_instance())
         .plugin(tauri_plugin_dialog::init())
@@ -45,7 +53,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            projects::project_command,
+            projects::project_history,
             commands::open_drawing,
+            commands::new_drawing,
             commands::recents,
             commands::clear_recents,
             commands::views,
@@ -63,8 +74,11 @@ pub fn run() {
             commands::sheet_batch,
             commands::sheet_batch_version,
             files::paper_views,
+            files::clipboard_read_text,
+            files::clipboard_read_image,
             files::autosave_drawings,
             files::recoverable_drawings,
+            files::untitled_autosaves,
             files::recover_autosave,
             files::discard_autosave,
             files::recover_drawing,
@@ -75,12 +89,15 @@ pub fn run() {
             commands::pick,
             commands::boundary_at,
             commands::pick_window,
+            commands::pick_polygon,
             commands::snap,
             commands::get_drafting,
             commands::set_drafting,
             commands::entity_info,
             commands::table_cell_at,
             commands::run_command,
+            cmdline::command_words,
+            cmdline::cmdline_step,
             commands::undo,
             commands::redo,
             commands::takeoff,
@@ -111,8 +128,18 @@ pub fn run() {
             updater::cancel_update,
             launch::take_open_requests,
             commands::ai_send,
+            documents::ai_attach_pdf,
+            commands::ai_models,
+            ai_window::ai_window_reply,
             commands::ai_cancel,
             commands::ai_clear,
+            commands::ai_conversations,
+            commands::ai_resume,
+            commands::ai_delete_conversation,
+            commands::ai_delete_conversations,
+            methods::measurement_methods,
+            commands::measurement_report,
+            commands::explain_item,
             commands::ai_status,
             commands::ai_log,
             commands::ai_set_language,
@@ -147,6 +174,9 @@ pub fn run() {
         .expect("error while running Qiyas")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<state::AppState>() {
+                    commands::ai_run(&state).save_logged();
+                }
                 files::release_locks(app);
             }
         });

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints.clippy]
+await_holding_lock = "deny"
+
 [lib]
 name = "qiyas_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -13,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
+uuid.workspace = true
 qiyas-ai = { path = "../qiyas-ai" }
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
@@ -33,9 +37,10 @@ getrandom = "0.4"
 # cancel it.
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 tokio-util = "0.7"
-# The system clipboard for COPYCLIP and PASTECLIP (MIT OR Apache-2.0): text only, on Wayland
-# through its data-control protocol, else X11.
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+# The system clipboard (MIT OR Apache-2.0): COPYCLIP and PASTECLIP, and every paste into a text
+# field (`clipboard_read_text`, `clipboard_read_image`); on Wayland through its data-control
+# protocol, else X11.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
 # Updates from a signed static feed (MIT OR Apache-2.0): the About box, and a launch check once
 # a day (`updater`).
 tauri-plugin-updater = "2.13"

@@ -1,0 +1,28 @@
+{
+  "opening": {
+    "at": [0, 0],
+    "filter": {"category": "opening"},
+    "columns": ["mark", "kind", "size", "count"],
+    "headers": ["Mark", "Kind", "Width x height (mm)", "Count"],
+    "group_by": ["mark"],
+    "templates": {
+      "mark": "{if(type == 'Legacy door', 'D', 'W')}-{width * 1000:6t}x{(head-sill) * 1000:6t}",
+      "kind": "{if(type == 'Legacy door', 'Door', 'Window')}",
+      "size": "{width * 1000:6t} x {(head-sill) * 1000:6t}"
+    },
+    "decimals": {"count": 0},
+    "totals": {"mark": "Total", "count": ""},
+    "default_layer": "A-ANNO-TABL"
+  },
+  "room": {
+    "at": [0, 0],
+    "filter": {"category": "room"},
+    "columns": ["name", "net_floor_area"],
+    "headers": ["Room", "Candidate area (m2)"],
+    "templates": {"name": "{if(name == '', 'Room ', '')}{if(name == '', id_hex, name)}"},
+    "decimals": {"net_floor_area": 2},
+    "totals": {"name": "Total candidate area", "net_floor_area": ""},
+    "default_layer": "A-ANNO-TABL",
+    "preserve_overrides": true
+  }
+}

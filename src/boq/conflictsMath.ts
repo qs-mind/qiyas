@@ -9,6 +9,9 @@ export const KINDS: ConflictKind[] = [
   "schedule_vs_plan",
   "drawing_vs_drawing",
   "unit_doubt",
+  "duplicate_item",
+  "relation_mismatch",
+  "document_mismatch",
 ];
 
 export const STATUSES: ConflictStatus[] = ["open", "resolved", "ignored"];

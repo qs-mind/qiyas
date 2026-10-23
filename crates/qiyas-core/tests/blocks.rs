@@ -944,7 +944,7 @@ fn an_edit_begun_on_a_full_undo_stack_saves_without_duplicates() {
         let x = f64::from(i);
         session
             .run(Command::MeasureDistance {
-                points: vec![[x, 50.0], [x + 1.0, 50.0]],
+                points: vec![[x, 50.0], [x + 1.0, 50.0]].into(),
             })
             .unwrap();
     }
@@ -1082,9 +1082,12 @@ fn a_batch_cannot_put_the_edited_block_inside_itself() {
             attribute_values: BTreeMap::new(),
             from_path: None,
         }],
+        layer: None,
+        color: None,
     });
     assert!(
-        matches!(&refused, Err(CoreError::InvalidCommand(m)) if m.contains("inside itself")),
+        matches!(&refused, Err(CoreError::Step { index: 0, error, .. })
+            if matches!(error.as_ref(), CoreError::InvalidCommand(m) if m.contains("inside itself"))),
         "{refused:?}"
     );
     assert_eq!(sheet_handles(&session), before);
@@ -1285,7 +1288,7 @@ fn only_block_making_commands_wait_for_the_edit() {
     // The take-off and the sheets are not held up.
     session
         .run(Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
         })
         .unwrap();
     session

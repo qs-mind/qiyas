@@ -133,7 +133,7 @@ fn calibrating_an_image_makes_its_distances_true() {
     // The image's bottom edge, end to end, now measures 10 m.
     let outcome = session
         .run(Command::MeasureDistance {
-            points: vec![[5.0, 5.0], [15.0, 5.0]],
+            points: vec![[5.0, 5.0], [15.0, 5.0]].into(),
         })
         .unwrap();
     let Outcome::Measured { measurement } = outcome else {

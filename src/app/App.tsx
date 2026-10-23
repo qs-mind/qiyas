@@ -3,8 +3,9 @@
  *  the selection) and hands their results to the top bar, the dialogs and the panels. Hooks
  *  that call back into one made later (`apply`, `onCommand`, the tool's `cancel`) reach it
  *  through a ref filled right after it exists. */
-import { useRef, useState, type CSSProperties } from "react";
-import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type DrawingInfo } from "../api";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type AiRegion, type DrawingInfo } from "../api";
+import { EXPLAIN_EVIDENCE, type Evidence } from "../boq/Explain";
 import { useLanguage, useT } from "../i18n";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import { CommandLine } from "../shell/CommandLine";
@@ -19,6 +20,7 @@ import { LeftPanels, SidePanel, WorkArea } from "./Panels";
 import { readProblems } from "./shared";
 import { useAnnotate } from "./useAnnotate";
 import { useAssistantWiring } from "./useAssistantWiring";
+import { useConversationHistory } from "../ai/ConversationHistory";
 import { useAttach } from "./useAttach";
 import { useBlocks } from "./useBlocks";
 import { useCommandLine } from "./useCommandLine";
@@ -47,8 +49,14 @@ export default function App() {
   // The BOQ and conflicts tabs want a wider right panel: their width is kept apart.
   const rightSlot = shell.sideTab === "boq" || shell.sideTab === "conflicts" ? "rightWide" : "right";
   const options = useOptions({ t, info, setError: shell.setError });
-  const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, run, focusDrawing } =
+  const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, focusDrawing } =
     shell;
+  /** User commands end Mizan's animation before running. Background refreshes use shell.run. */
+  const cancelRevealRef = useRef<(() => void) | null>(null);
+  const run = async (step: () => Promise<void>) => {
+    cancelRevealRef.current?.();
+    await shell.run(step);
+  };
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
   const { autosaveOff, autosave } = useAutosave(t, setError);
   /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
@@ -60,7 +68,8 @@ export default function App() {
   const { items, setSelectedId, setCompared, aiHighlight, setAiHighlight, setInfoCard, refreshTakeoffAndBoq } = takeoffState;
   /** The tool hook comes after the sheets (it takes their state); the sheets cancel it through this. */
   const measureRef = useRef<{ cancel(): void } | null>(null);
-  const sheets = useSheets({ switchGen, viewport, run, autosave, setInfo, refreshTabs, items, measure: measureRef });
+  const sheets = useSheets({ switchGen, viewport, run: shell.run, autosave, setInfo, refreshTabs, items, measure: measureRef });
+  cancelRevealRef.current = sheets.cancelReveal;
   const {
     batch,
     batchHeld,
@@ -71,10 +80,14 @@ export default function App() {
     hidden,
     setHidden,
     fitMatch,
-    redraw,
+    redraw: redrawSheet,
     syncPictures,
     chooseSheet,
   } = sheets;
+  const redraw = async (fit = false) => {
+    sheets.cancelReveal(false);
+    await redrawSheet(fit);
+  };
   const layers = useLayers({
     switchGen,
     info,
@@ -83,18 +96,24 @@ export default function App() {
     run,
     autosave,
     redraw,
+    cancelReveal: sheets.cancelReveal,
     refreshTakeoffAndBoq,
     hidden,
     setHidden,
   });
   const { setGroupAsk, runDrawingCommand, runLayerCommand, groupOf, syncInfo } = layers;
-  const toolChoice = useToolChoice(focusDrawing);
+  const toolChoice = useToolChoice(() => {
+    sheets.cancelReveal();
+    focusDrawing();
+  });
   const { tool, lastPoint, preset, chooseTool } = toolChoice;
   const attach = useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, syncPictures });
   /** `apply` and `onCommand` come after the hooks that call them back (a block placed, a
    *  palette's command line); those reach them through these, filled once they exist. */
   const applyRef = useRef<Commands["apply"] | null>(null);
   const onCommandRef = useRef<((a: Action) => void) | null>(null);
+  /** The area tool hands the area it marked to Mizan's wiring, made after the tool. */
+  const markRegionRef = useRef<((region: AiRegion) => void) | null>(null);
   const blocks = useBlocks({
     t,
     switchGen,
@@ -187,6 +206,7 @@ export default function App() {
       editText: (handle, at) => run(() => openTextEdit(handle, at)),
       dimText: setDimText,
       groupOf,
+      markRegion: (region) => markRegionRef.current?.(region),
     },
     drafting,
     info?.ucs,
@@ -194,25 +214,34 @@ export default function App() {
   );
   measureRef.current = measure;
   const ai = useAssistantWiring({
+    t,
     lang,
     switchGen,
     info,
     setInfo,
-    run,
+    run: shell.run,
     autosave,
     setSettingsOpen,
     viewport,
     batch,
+    sheet,
+    chooseSheet,
+    queueReveal: sheets.queueReveal,
+    cancelReveal: sheets.cancelReveal,
     setSheetBlock,
     setHidden,
     setRenderProgress,
-    redraw,
+    redraw: redrawSheet,
     refreshTakeoffAndBoq,
     setCompared,
     setAiHighlight,
     syncInfo,
     measure,
+    tool,
+    chooseTool,
+    setSideTab,
   });
+  markRegionRef.current = ai.markRegion;
   const { assistant } = ai;
   const drawings = useDrawings({
     t,
@@ -242,6 +271,14 @@ export default function App() {
     lastPoint,
     measure,
   });
+  const conversationHistory = useConversationHistory({
+    drawing: info?.path ?? null,
+    busy: assistant.busy,
+    empty: assistant.transcript.items.length === 0,
+    savedVersion: assistant.savedVersion,
+    prepare: drawings.prepareConversation,
+    resume: assistant.resume,
+  });
   const takeoff = useTakeoff({
     t,
     info,
@@ -253,17 +290,19 @@ export default function App() {
     sheet,
     batch,
     chooseSheet,
+    redraw,
     takeoffState,
     apply,
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
   const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
-  const { commandLineOn, commandInput, onCommand, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
+  const { commandLineOn, commandInput, onCommand, typeCommand, startCommand, coreActive, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
     t,
+    switchGen,
     info,
     measure,
     assistant,
-    shell,
+    shell: { ...shell, run },
     drafting: { toggleDrafting },
     toolChoice,
     commands,
@@ -280,8 +319,27 @@ export default function App() {
     parametric,
   });
   onCommandRef.current = onCommand;
+  useEffect(() => {
+    const show = (event: Event) => {
+      const evidence = (event as CustomEvent<Evidence[]>).detail;
+      if (!evidence.length) return;
+      void run(async () => {
+        const first = evidence[0];
+        if (first.drawing !== info?.path) await drawings.openPath(first.drawing);
+        // A cancelled open must never highlight unrelated handles in the previous drawing.
+        const current = await import("../api").then(api => api.drawingInfo());
+        if (current.path !== first.drawing) return;
+        await chooseSheet(first.sheet);
+        setAiHighlight(evidence.map(e => e.handle));
+      });
+    };
+    window.addEventListener(EXPLAIN_EVIDENCE, show);
+    return () => window.removeEventListener(EXPLAIN_EVIDENCE, show);
+  }, [info?.path, drawings.openPath, chooseSheet, run, setAiHighlight]);
   const selection = useSelection({ info, tool, measure, batch, redraw, runLayerCommand });
-  const { highlight, overlay } = useOverlay({ tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight });
+  const { highlight, overlay } = useOverlay({
+    tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight, revealOverlay: sheets.revealOverlay,
+  });
   const comments = useComments({ sideTab: shell.sideTab, viewport, sheet, chooseSheet, switchGen, info, batch });
 
   // An empty model is said next to the file name, not counted as a reading problem.
@@ -311,6 +369,9 @@ export default function App() {
         plot={plot}
         options={options}
         parametric={parametric}
+        onCommandLine={(line) => {
+          void startCommand(line).catch((error) => shell.setError(String(error)));
+        }}
       />
       <Dialogs
         info={info}
@@ -370,6 +431,7 @@ export default function App() {
           colours={options.colours}
           parametric={parametric}
           chooseTool={chooseTool}
+          askMizan={ai.pointing}
           onProperties={() => {
             panels.setFolded("left", false);
             setRevealProperties((n) => n + 1);
@@ -391,11 +453,14 @@ export default function App() {
           takeoffState={takeoffState}
           takeoff={takeoff}
           ai={ai}
+          conversationHistory={conversationHistory}
           comments={comments}
+          recognition={{ revision: batch, run: runDrawingCommand }}
         />
       </div>
       {commandLineOn && (
-        <CommandLine state={commandState} prompt={prompt} onAction={onCommand} inputRef={commandInput} />
+        <CommandLine state={commandState} prompt={prompt} onAction={onCommand} inputRef={commandInput}
+          words={shell.words} onTyped={typeCommand} coreActive={coreActive} />
       )}
       <StatusBar
         cursor={measure.cursor}

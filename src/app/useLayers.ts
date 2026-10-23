@@ -1,7 +1,7 @@
 /** The layers panel and what goes with it: hiding and isolating layers, their properties, layer
  *  states and the translator, groups, and what new entities are drawn with. */
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../fileDialogs";
 import {
   drawingInfo,
   drawingLayers,
@@ -22,6 +22,7 @@ type Deps = {
   run(step: () => Promise<void>): Promise<void>;
   autosave(): Promise<void>;
   redraw(): Promise<void>;
+  cancelReveal(): void;
   refreshTakeoffAndBoq(): Promise<void>;
   hidden: Set<string>;
   setHidden(hidden: Set<string>): void;
@@ -35,6 +36,7 @@ export function useLayers({
   run,
   autosave,
   redraw,
+  cancelReveal,
   refreshTakeoffAndBoq,
   hidden,
   setHidden,
@@ -55,6 +57,7 @@ export function useLayers({
   /** Runs a layer, group or property command (its error goes to the caller), then reads the
    *  drawing again: the batch, the take-off, the layers, groups and hidden layers. */
   async function runDrawingCommand(cmd: Command) {
+    cancelReveal();
     const gen = switchGen.current;
     const outcome = await runCommand(cmd);
     await redraw();
@@ -100,6 +103,7 @@ export function useLayers({
    *  shows the calls that went through and the canvas is redrawn from the core. */
   async function applyHidden(target: Set<string>) {
     if (layerBusy.current) return;
+    cancelReveal();
     layerBusy.current = true;
     setLayersBusy(true);
     const done = new Set(hidden);
@@ -137,14 +141,49 @@ export function useLayers({
     [hidden, info],
   );
 
-  /** Shows only `name`: hides every other layer and unhides it. */
+  /** Runs a view command on the layers (isolate, un-isolate), then reads the hidden layers back
+   *  and redraws. Not an undo step. */
+  async function viewCommand(cmd: Command) {
+    if (layerBusy.current) return;
+    cancelReveal();
+    layerBusy.current = true;
+    setLayersBusy(true);
+    let failure: string | null = null;
+    try {
+      await runCommand(cmd);
+      await syncInfo();
+      await redraw();
+    } catch (e) {
+      failure = String(e);
+    }
+    setError(failure);
+    layerBusy.current = false;
+    setLayersBusy(false);
+  }
+
+  /** Shows only `name` (LAYISO); the layer isolated already un-isolates. The core keeps what it
+   *  hid, so un-isolating puts back only that. */
   const isolateLayer = useCallback(
-    (name: string) =>
-      applyHidden(new Set(info?.layers.map((l) => l.name).filter((n) => n !== name))),
+    (name: string) => viewCommand({ type: "isolate_layer", name }),
     [hidden, info],
   );
 
-  const showAll = useCallback(() => applyHidden(new Set()), [hidden, info]);
+  /** Puts back what isolating hid (LAYUNISO). */
+  const unisolateLayers = useCallback(() => viewCommand({ type: "unisolate_layers" }), [hidden, info]);
+
+  /** Shows every layer, ending an isolation too. */
+  const showAll = useCallback(async () => {
+    cancelReveal();
+    if (info?.isolated_layer) {
+      try {
+        await runCommand({ type: "unisolate_layers" });
+      } catch (e) {
+        setError(String(e));
+      }
+    }
+    await applyHidden(new Set());
+    if (info?.isolated_layer) await syncInfo();
+  }, [hidden, info]);
 
   /** One property of the drawing's layer `name` (one undo step). */
   const setLayerProp = useCallback(
@@ -223,6 +262,7 @@ export function useLayers({
     applyHidden,
     toggleLayer,
     isolateLayer,
+    unisolateLayers,
     showAll,
     setLayerProp,
     renameLayer,

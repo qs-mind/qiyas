@@ -26,23 +26,37 @@ use opencadkernel::geom2d::{
 };
 use qiyas_geom::{flatten_with, snap_shapes, Xform};
 use qiyas_render::layer_shown;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::session::{variant_name, MEASURE_TOL};
+use crate::session::variant_name;
 use crate::{CoreError, Outcome, Session, Target};
 
 /// Points closer than this, in drawing units, are the same point; crossings closer than it
-/// to an end are at that end.
+/// to an end are at that end. Far from the origin it grows with the coordinates (`tol_near`).
 const TOL: f64 = 1e-6;
+/// Past a million or so, `TOL` is a few float steps of the coordinates (a UTM northing in
+/// millimetres, 3.3e9, has steps of 5e-7): two ends that meet may differ by more. There the
+/// tolerance is this share of the coordinates' size instead (3 µm at 3.3e9 mm), still far below
+/// anything drawn.
+const REL_TOL: f64 = 1e-12;
+
+/// `TOL` near the point `p`: never less than `REL_TOL` of its coordinates' size.
+fn tol_near(p: [f64; 2]) -> f64 {
+    TOL.max(p[0].abs().max(p[1].abs()) * REL_TOL)
+}
 
 /// What `Command::Edit` does. Points are in drawing coordinates; a pick point (`at_point`,
 /// `at_end`, `at_a`...) is where the entity was clicked, which says which piece, end or side is
 /// meant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EditSpec {
     /// Cuts away the piece of `target` around `at_point` between the crossings of the `cutters`
     /// (none: everything drawn on the sheet cuts).
+    #[schemars(example = json!({"kind": "trim", "cutters": [{"handle": 1235}], "target": {"handle": 1234}, "at_point": [6, 0]}))]
+    #[schemars(extend("x-words" = ["TRIM", "TR"]))]
     Trim {
         #[serde(default)]
         cutters: Vec<Target>,
@@ -51,6 +65,8 @@ pub enum EditSpec {
     },
     /// Runs the end of `target` nearest `at_end` on to the first of the `boundaries` it meets
     /// (none: everything drawn on the sheet). Lines, arcs and open polylines.
+    #[schemars(example = json!({"kind": "extend", "boundaries": [{"handle": 1235}], "target": {"handle": 1234}, "at_end": [4.9, 0]}))]
+    #[schemars(extend("x-words" = ["EXTEND", "EX"]))]
     Extend {
         #[serde(default)]
         boundaries: Vec<Target>,
@@ -59,6 +75,8 @@ pub enum EditSpec {
     },
     /// Removes the part of `target` between `p1` and `p2` (the same point splits it there). A
     /// circle keeps the part counter-clockwise from `p2` round to `p1`.
+    #[schemars(example = json!({"kind": "break", "target": {"handle": 1234}, "p1": [2, 0], "p2": [3, 0]}))]
+    #[schemars(extend("x-words" = ["BREAK", "BR"]))]
     Break {
         target: Target,
         p1: [f64; 2],
@@ -67,18 +85,26 @@ pub enum EditSpec {
     /// Joins lines, arcs and open polylines whose ends meet, starting from the first, into one
     /// polyline under the first's handle (closed when the chain closes). The others that don't
     /// meet the chain are left as they are.
+    #[schemars(example = json!({"kind": "join", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
+    #[schemars(extend("x-words" = ["JOIN", "J"]))]
     Join { targets: Vec<Target> },
     /// Lengthens (or with a negative change, shortens) the end of `target` nearest `at_end`.
     /// Lines, arcs and open polylines (their end side).
+    #[schemars(example = json!({"kind": "lengthen", "target": {"handle": 1234}, "at_end": [5, 0], "by": {"delta": 0.5}}))]
+    #[schemars(extend("x-words" = ["LENGTHEN", "LEN"]))]
     Lengthen {
         target: Target,
         at_end: [f64; 2],
         by: LengthenBy,
     },
     /// Turns lines and polylines to run the other way; anything else is left as it is.
+    #[schemars(example = json!({"kind": "reverse", "targets": [{"handle": 1234}]}))]
+    #[schemars(extend("x-words" = ["REVERSE"]))]
     Reverse { targets: Vec<Target> },
     /// A copy of `target` `distance` away (above 0) on the side of `side_point`: lines, arcs,
     /// circles and polylines (arcs stay arcs; straight corners stay sharp).
+    #[schemars(example = json!({"kind": "offset", "target": {"handle": 1234}, "distance": 0.2, "side_point": [1, 1]}))]
+    #[schemars(extend("x-words" = ["OFFSET", "O"]))]
     Offset {
         target: Target,
         distance: f64,
@@ -87,6 +113,8 @@ pub enum EditSpec {
     /// Rounds the corner where two lines meet (each kept on its picked side) with an arc of
     /// `radius`; 0 meets them at the corner. `a` and `b` may be one polyline: then its two
     /// straight sides picked, which must meet at a vertex.
+    #[schemars(example = json!({"kind": "fillet", "a": {"handle": 1234}, "b": {"handle": 1235}, "at_a": [4, 0], "at_b": [5, 1], "radius": 0.5}))]
+    #[schemars(extend("x-words" = ["FILLET", "F"]))]
     Fillet {
         a: Target,
         b: Target,
@@ -96,6 +124,8 @@ pub enum EditSpec {
     },
     /// Cuts the corner as `Fillet` rounds it: `d1` back along `a`, `d2` back along `b`, and a
     /// line between.
+    #[schemars(example = json!({"kind": "chamfer", "a": {"handle": 1234}, "b": {"handle": 1235}, "at_a": [4, 0], "at_b": [5, 1], "d1": 0.3, "d2": 0.3}))]
+    #[schemars(extend("x-words" = ["CHAMFER", "CHA"]))]
     Chamfer {
         a: Target,
         b: Target,
@@ -106,6 +136,8 @@ pub enum EditSpec {
     },
     /// A spline from the end of `a` nearest `at_a` to the end of `b` nearest `at_b`, tangent to
     /// both. Lines, arcs and open polylines.
+    #[schemars(example = json!({"kind": "blend", "a": {"handle": 1234}, "b": {"handle": 1235}, "at_a": [4, 0], "at_b": [6, 1]}))]
+    #[schemars(extend("x-words" = ["BLEND"]))]
     Blend {
         a: Target,
         b: Target,
@@ -114,27 +146,35 @@ pub enum EditSpec {
     },
     /// Edits a polyline (or turns a line or an arc into one).
     #[serde(rename = "pedit")]
+    #[schemars(example = json!({"kind": "pedit", "target": {"handle": 1234}, "op": "close"}))]
+    #[schemars(example = json!({"kind": "pedit", "target": {"handle": 1234}, "op": {"width": 0.05}}))]
+    #[schemars(extend("x-words" = ["PEDIT", "PE"]))]
     PEdit { target: Target, op: PEditOp },
     /// Removes duplicates among `targets`: lines lying on one another within `tol` (drawing
     /// units) become one line covering them all; circles, arcs, points and polylines drawn twice
     /// go. Only entities with the same layer, colour, linetype and lineweight count as the same.
+    #[schemars(example = json!({"kind": "overkill", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
+    #[schemars(extend("x-words" = ["OVERKILL"]))]
     Overkill {
         targets: Vec<Target>,
-        #[serde(default = "default_overkill_tol")]
-        tol: f64,
+        /// Default: 0.000001 mm converted to drawing units. Explicit zero is allowed.
+        #[serde(default)]
+        tol: Option<f64>,
     },
     /// Puts `targets` on the plan: every height to 0 and normals up, looking the same from above.
     /// What lies tilted (or faces down, for texts and block references) is left as it is.
+    #[schemars(example = json!({"kind": "flatten", "targets": [{"handle": 1234}]}))]
+    #[schemars(extend("x-words" = ["FLATTEN"]))]
     Flatten { targets: Vec<Target> },
 }
 
-fn default_overkill_tol() -> f64 {
-    1e-6
+pub(crate) fn default_overkill_tol(units: crate::Units) -> f64 {
+    1e-9 / units.to_metres()
 }
 
 /// How `Lengthen` changes the length: by `Delta` drawing units, to a `Total`, or to a `Percent`
 /// of what it is.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LengthenBy {
     Delta(f64),
@@ -146,7 +186,7 @@ pub enum LengthenBy {
 /// given; `DeleteVertex` removes the vertex nearest it (the side across is straight);
 /// `FitCurve` runs tangent arcs through the vertices; `Decurve` straightens every side;
 /// `ConvertToPolyline` turns a line or an arc into a polyline under its own handle.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PEditOp {
     Close,
@@ -200,8 +240,9 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
     }
 }
 
-fn tol() -> Tolerance {
-    Tolerance::new(TOL)
+/// The kernel's tolerance for curves near `p` (`tol_near`).
+fn tol(p: [f64; 2]) -> Tolerance {
+    Tolerance::new(tol_near(p))
 }
 
 /// "Line 2A": how a message names an entity.
@@ -239,7 +280,7 @@ fn unit(v: [f64; 2]) -> Option<[f64; 2]> {
 }
 
 fn same(a: [f64; 2], b: [f64; 2]) -> bool {
-    dist(a, b) <= TOL
+    dist(a, b) <= tol_near(a)
 }
 
 /// The normal points straight up (+Z): object coordinates are world coordinates on plan.
@@ -747,12 +788,13 @@ impl Session {
                 self.pedit(h, op)
             }
             EditSpec::Overkill { targets, tol } => {
+                let tol = tol.unwrap_or_else(|| default_overkill_tol(self.drawing.units));
                 finite(&[tol])?;
                 if tol < 0.0 {
                     return Err(invalid("The tolerance must be 0 or more"));
                 }
                 let handles = self.sheet_targets(&targets)?;
-                self.overkill(&handles, tol.max(1e-12))
+                self.overkill(&handles, tol.max(1e-15 / self.drawing.units.to_metres()))
             }
             EditSpec::Flatten { targets } => {
                 let handles = self.sheet_targets(&targets)?;
@@ -817,11 +859,11 @@ impl Session {
             let Some(e) = doc.get_entity(h) else {
                 continue;
             };
-            let shapes = snap_shapes(doc, e, &Xform::identity(), MEASURE_TOL);
+            let shapes = snap_shapes(doc, e, &Xform::identity(), self.measure_tol());
             if !shapes.is_empty() {
                 out.extend(shapes.into_iter().flat_map(|s| s.pieces));
             } else if matches!(e, EntityType::Insert(_)) {
-                let drawn = flatten_with(doc, &xrefs, e, &Xform::identity(), MEASURE_TOL);
+                let drawn = flatten_with(doc, &xrefs, e, &Xform::identity(), self.measure_tol());
                 out.extend(drawn.into_paths().into_iter().map(|path| {
                     Curve::Polyline(Polyline {
                         vertices: path
@@ -867,7 +909,7 @@ impl Session {
         let mut cuts: Vec<f64> = self
             .edge_curves(edges)
             .iter()
-            .flat_map(|c| intersect(&curve, c, tol()))
+            .flat_map(|c| intersect(&curve, c, tol(at)))
             .map(|x| x.t_a)
             .collect();
         let picked = curve.parameter_at(at);
@@ -900,7 +942,7 @@ impl Session {
                     named(&e)
                 )));
             }
-            trim_spans(&curve, &cuts, picked, tol())
+            trim_spans(&curve, &cuts, picked, tol(at))
         };
         if spans.is_empty() {
             return Err(invalid(format!(
@@ -942,7 +984,7 @@ impl Session {
         let reach = self
             .edge_curves(edges)
             .iter()
-            .flat_map(|c| intersect(&carrier, c, tol()))
+            .flat_map(|c| intersect(&carrier, c, tol(at)))
             .map(|x| match end.way {
                 Way::Straight { .. } => x.t_a,
                 Way::Round {
@@ -975,7 +1017,7 @@ impl Session {
         let e = self.entity(h).clone();
         let curve = curve_of(&e)?;
         let (t1, t2) = (curve.parameter_at(p1), curve.parameter_at(p2));
-        let spans = break_spans(&curve, t1, t2, tol())
+        let spans = break_spans(&curve, t1, t2, tol(p1))
             .ok_or_else(|| invalid(format!("{} can't be broken there", named(&e))))?;
         if spans.is_empty() {
             return Err(invalid(format!(

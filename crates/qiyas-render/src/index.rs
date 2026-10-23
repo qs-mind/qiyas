@@ -79,7 +79,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pick_index_one_million_segments_in_0_6_s() {
+    fn pick_index_one_million_segments_relative_to_reference() {
         // Short segments scattered over 1 km, as a big drawing has them.
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut next = || {
@@ -95,13 +95,20 @@ mod tests {
                 .segments
                 .extend([x, y, x + next() * 2.0, y + next() * 2.0]);
         }
+        let reference = performance::reference();
         let t = std::time::Instant::now();
         let index = PickIndex::new(&batch);
-        let secs = t.elapsed().as_secs_f64();
+        let elapsed = t.elapsed();
         assert!(index.pick([0.0, 0.0], 1000.0).is_some());
+        performance::assert_relative(elapsed, reference, 1.5, "PickIndex::new 1 M segments");
+        // Also reject a reference that is so slow that the known 4x regression could pass.
         assert!(
-            secs < 0.6,
-            "PickIndex::new took {secs:.2} s for 1 M segments"
+            elapsed.as_secs_f64() * 4.0 > reference.as_secs_f64() * 1.5,
+            "Reference lost sensitivity to the known 4x index regression"
         );
     }
 }
+
+#[cfg(all(test, not(debug_assertions)))]
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

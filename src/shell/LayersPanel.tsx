@@ -17,6 +17,9 @@ type Props = {
   busy?: boolean;
   onToggle(name: string): void;
   onIsolate(name: string): void;
+  /** The layer isolated (LAYISO), if one is, and putting back what isolating hid. */
+  isolated?: string | null;
+  onUnisolate?(): void;
   onShowAll(): void;
   /** The layer new entities are drawn on, and making another one that. Without a handler there
    *  is no button. */
@@ -163,6 +166,8 @@ export const LayersPanel = memo(function LayersPanel({
   busy = false,
   onToggle,
   onIsolate,
+  isolated = null,
+  onUnisolate,
   onShowAll,
   current,
   onMakeCurrent,
@@ -279,6 +284,7 @@ export const LayersPanel = memo(function LayersPanel({
                 className="icon"
                 aria-label={isolateLabel}
                 title={isolateLabel}
+                aria-pressed={isolated !== null && isolated.toUpperCase() === l.name.toUpperCase()}
                 disabled={locked}
                 aria-disabled={busy || undefined}
                 onClick={() => !busy && onIsolate(l.name)}
@@ -375,6 +381,18 @@ export const LayersPanel = memo(function LayersPanel({
           {t("showAll")}
         </button>
       </div>
+      {isolated && (
+        <p className="layers-isolated" role="status">
+          <span>
+            {t("layer.isolated")}: <bdi>{isolated}</bdi>
+          </span>
+          {onUnisolate && (
+            <button type="button" className="link" onClick={onUnisolate} disabled={busy}>
+              {t("layer.unisolate")}
+            </button>
+          )}
+        </p>
+      )}
       {viewport && viewports.length > 1 && (
         <label className="layers-vp">
           <span>{t("layer.viewport")}</span>

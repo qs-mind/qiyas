@@ -5,18 +5,36 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-# The headless command line: convert, run a script, take off, batch. No window, no settings,
-# keychain, MCP or AI: only the core, Excel and the comparison.
+# Headless drawing commands and the local QS benchmark. Only explicitly approved `eval`
+# reads provider settings and the keychain; ordinary commands remain entirely offline.
 [dependencies]
 qiyas-core = { path = "../qiyas-core" }
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-takeoff = { path = "../qiyas-takeoff" }
+qiyas-ai = { path = "../qiyas-ai" }
+qiyas-plot = { path = "../qiyas-plot" }
+qiyas-pdf = { path = "../qiyas-pdf" }
+tiny-skia.workspace = true
 opencadcodec.workspace = true
 # Arguments (MIT OR Apache-2.0); no colour or suggestions, so fewer crates come along.
 clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 serde.workspace = true
 serde_json.workspace = true
+calamine.workspace = true
+# Existing workspace dependencies: SHA-256 seals (MIT OR Apache-2.0), the app's keychain
+# (MIT OR Apache-2.0), async runtime (MIT), and local budget dates (MIT OR Apache-2.0).
+sha2 = "0.10"
+keyring = "4"
+keyring-core = "1"
+tokio = { version = "1", features = ["macros", "sync", "time", "rt", "net", "io-std", "process"] }
+tokio-util = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# Existing MCP dependency (Apache-2.0), also used by the desktop bridge.
+rmcp = { version = "3.5", default-features = false, features = ["server", "transport-io"] }
 
 [dev-dependencies]
+rmcp = { version = "3.5", default-features = false, features = ["client", "transport-child-process"] }
+qiyas-pdf = { path = "../qiyas-pdf", features = ["fixtures"] }
 tempfile.workspace = true
-calamine.workspace = true
+tokio = { version = "1", features = ["test-util"] }

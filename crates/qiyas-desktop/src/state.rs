@@ -26,6 +26,7 @@ pub struct TabList {
 
 /// Managed by Tauri and shared by every command.
 pub struct AppState {
+    pub projects: Mutex<crate::projects::Workspace>,
     /// The file tabs. Lock order when several are needed: `tabs`, then `session`, then `parked`.
     pub tabs: Mutex<TabList>,
     /// The drawing on screen (the active tab), if any. Shared with the AI agent and the MCP
@@ -46,20 +47,24 @@ pub struct AppState {
     /// The system clipboard, opened on first use and kept: on X11 a dropped one takes what it
     /// copied with it.
     pub clipboard: Mutex<Option<arboard::Clipboard>>,
+    /// The questions Mizan's window tools put to the window, waiting for its reply.
+    pub ai_window: crate::ai_window::AiWindow,
 }
 
 impl AppState {
     pub fn new(config_dir: PathBuf) -> Self {
         AppState {
+            projects: Mutex::new(crate::projects::Workspace::default()),
             tabs: Mutex::new(TabList::default()),
             session: Arc::new(Mutex::new(None)),
             parked: Mutex::new(Vec::new()),
             settings: Mutex::new(settings::load(&config_dir)),
+            ai: Mutex::new(AiRun::new(&config_dir)),
             config_dir,
-            ai: Mutex::new(AiRun::default()),
             mcp: Mutex::new(McpRun::default()),
             pictures: Mutex::new(PictureCache::default()),
             clipboard: Mutex::new(None),
+            ai_window: crate::ai_window::AiWindow::default(),
         }
     }
 }

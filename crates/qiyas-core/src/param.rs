@@ -17,6 +17,7 @@
 //! constraints it is part of are solved again in the same undo step, and a conflict (a fixed point
 //! moved, a dimension scaled) refuses the whole command.
 
+use schemars::JsonSchema;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use opencadcodec::entities::{Dimension, EntityCommon};
@@ -44,6 +45,13 @@ const MAX_AUTO: usize = 2000;
 /// site grid), are no moves.
 const SAME: f64 = 1e-12;
 
+struct DimConstraintGeometry {
+    refs: Vec<Ref>,
+    spec: DimSpec,
+    measured: f64,
+    sides: [f64; 2],
+}
+
 /// `a` and `b` are one point, within float noise at their distance from the origin.
 fn same_point(a: [f64; 2], b: [f64; 2]) -> bool {
     dist(a, b) <= SAME * (1.0 + a[0].abs().max(a[1].abs()))
@@ -54,7 +62,7 @@ fn invalid(why: impl Into<String>) -> CoreError {
 }
 
 /// What a constraint keeps: the geometric kinds, then the dimensional ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
     Coincident,
@@ -133,15 +141,16 @@ pub struct Ref {
 }
 
 /// What `Command::AutoConstrain` looks for, and how close the drawing must be already.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AutoSettings {
     /// The kinds to apply, first first. Without Equal by default (opposite sides of a rectangle
     /// are not meant to stay equal).
     #[serde(default = "AutoSettings::default_kinds")]
     pub kinds: Vec<ConstraintKind>,
-    /// Drawing units.
-    #[serde(default = "AutoSettings::default_distance")]
-    pub distance_tolerance: f64,
+    /// Drawing units; left out, 0.05 mm in the drawing's units (as AutoCAD's 0.05 in a millimetre
+    /// drawing), so ends 5 cm apart in a metre plan are never welded.
+    #[serde(default)]
+    pub distance_tolerance: Option<f64>,
     /// Degrees.
     #[serde(default = "AutoSettings::default_angle")]
     pub angle_tolerance: f64,
@@ -161,9 +170,6 @@ impl AutoSettings {
             Vertical,
         ]
     }
-    fn default_distance() -> f64 {
-        0.05
-    }
     fn default_angle() -> f64 {
         1.0
     }
@@ -173,7 +179,7 @@ impl Default for AutoSettings {
     fn default() -> Self {
         AutoSettings {
             kinds: AutoSettings::default_kinds(),
-            distance_tolerance: AutoSettings::default_distance(),
+            distance_tolerance: None,
             angle_tolerance: AutoSettings::default_angle(),
         }
     }
@@ -724,7 +730,7 @@ pub(crate) enum Reshape {
 impl Reshape {
     pub(crate) fn of(cmd: &crate::Command) -> Reshape {
         match cmd {
-            crate::Command::Edit(_) => Reshape::Edited,
+            crate::Command::Edit(_) | crate::Command::SetRecords { .. } => Reshape::Edited,
             crate::Command::Modify(crate::ModifySpec::Mirror { .. }) => Reshape::Mirrored,
             _ => Reshape::Placed,
         }
@@ -1295,6 +1301,16 @@ impl Session {
         targets: &[Target],
         points: &[[f64; 2]],
     ) -> Result<Vec<Ref>, CoreError> {
+        self.picked_refs_for(kind, targets, points, true)
+    }
+
+    fn picked_refs_for(
+        &self,
+        kind: ConstraintKind,
+        targets: &[Target],
+        points: &[[f64; 2]],
+        editing: bool,
+    ) -> Result<Vec<Ref>, CoreError> {
         if targets.is_empty() {
             return Err(invalid("Pick the entities first"));
         }
@@ -1314,7 +1330,11 @@ impl Session {
             if !at.iter().all(|v| v.is_finite()) {
                 return Err(invalid("The points must be numbers"));
             }
-            let h = self.sheet_targets(std::slice::from_ref(t))?[0];
+            let h = if editing {
+                self.sheet_targets(std::slice::from_ref(t))?[0]
+            } else {
+                self.sheet_targets_any(std::slice::from_ref(t))?[0]
+            };
             let geo = geo_of(self.entity(h)).map_err(invalid)?;
             refs.push(Ref {
                 handle: h.value(),
@@ -1325,6 +1345,75 @@ impl Session {
             return Err(invalid("Pick two different parts"));
         }
         Ok(refs)
+    }
+
+    /// A read-only sketch of the same parts AddConstraint picks. Dimensional kinds measure
+    /// against zero; the caller supplies its expectation and tolerance without adding a constraint.
+    pub(crate) fn verification_sketch(
+        &self,
+        kind: ConstraintKind,
+        targets: &[Target],
+        points: &[[f64; 2]],
+    ) -> Result<Sketch, CoreError> {
+        let mut refs = self.picked_refs_for(kind, targets, points, false)?;
+        if matches!(kind, ConstraintKind::Linear | ConstraintKind::Aligned) && refs.len() == 1 {
+            let r = refs[0];
+            let Part::Edge { index } = r.part else {
+                unreachable!("picked a straight edge")
+            };
+            let geo = self.geo(r.handle).expect("validated target");
+            refs = geo
+                .edge_ends(index)
+                .expect("a straight edge")
+                .map(|index| Ref {
+                    handle: r.handle,
+                    part: Part::Point { index },
+                })
+                .to_vec();
+        }
+        let mut built = Built::default();
+        for r in &refs {
+            if !built.ents.contains_key(&r.handle) {
+                let geo = self
+                    .geo(r.handle)
+                    .ok_or_else(|| invalid("The entity has no geometry"))?;
+                built.add(r.handle, &geo);
+            }
+        }
+        // A zero-length direction cannot meaningfully be parallel, tangent or symmetric.
+        for curve in &built.sketch.curves {
+            if let Curve::Line { a, b } = curve {
+                if dist(built.sketch.points[*a], built.sketch.points[*b]) == 0.0 {
+                    return Err(invalid("A zero-length line has no direction"));
+                }
+            }
+        }
+        for (index, curve) in built.sketch.curves.iter().enumerate() {
+            if matches!(curve, Curve::Arc { .. })
+                && built
+                    .sketch
+                    .radius_of(index)
+                    .is_none_or(|r| !r.is_finite() || r <= 0.0)
+            {
+                return Err(invalid("A zero or invalid radius has no round curve"));
+            }
+        }
+        let stored = Stored {
+            id: 0,
+            holder: 0,
+            kind,
+            refs,
+            at: None,
+            dim: kind.is_dimensional().then(|| DimData {
+                name: "verify".into(),
+                expression: "0".into(),
+                rotation: 0.0,
+                sides: [1.0, 1.0],
+            }),
+        };
+        built.sketch.constraints =
+            Self::to_solver(&built, &stored, &BTreeMap::from([("verify".into(), 0.0)]))?;
+        Ok(built.sketch)
     }
 
     /// `Command::AddConstraint`: the geometric constraint `kind` on the parts `targets` pick at
@@ -1433,18 +1522,14 @@ impl Session {
         Ok(())
     }
 
-    /// `Command::AddDimConstraint`: a dimensional constraint `kind` on the parts `targets` pick at
-    /// `points` (a linear or aligned one: one line or segment, or two points; an angular one: two
-    /// lines; a radius or diameter: a circle or an arc), its Dimension through `line_point`, its
-    /// value `expression` (the measured value when none). Its id.
-    pub(crate) fn add_dim_constraint(
-        &mut self,
+    /// Prepares the picked geometry without adding a dimension or constraint.
+    fn dim_constraint_geometry(
+        &self,
         kind: ConstraintKind,
         targets: &[Target],
         points: &[[f64; 2]],
         line_point: [f64; 2],
-        expression: Option<&str>,
-    ) -> Result<u32, CoreError> {
+    ) -> Result<DimConstraintGeometry, CoreError> {
         if !kind.is_dimensional() {
             return Err(invalid(
                 "Geometric constraints are added with AddConstraint",
@@ -1454,7 +1539,6 @@ impl Session {
             return Err(invalid("The points must be numbers"));
         }
         let picked = self.picked_refs(kind, targets, points)?;
-        let mut rotation = 0.0;
         let mut sides = [1.0, 1.0];
         let (refs, spec, measured) = match kind {
             ConstraintKind::Linear | ConstraintKind::Aligned => {
@@ -1536,6 +1620,48 @@ impl Session {
             }
             _ => unreachable!("dimensional"),
         };
+        let measured = if kind == ConstraintKind::Angular {
+            measured
+        } else {
+            self.dimensions_of(spec.clone())?[0].measurement()
+        };
+        Ok(DimConstraintGeometry {
+            refs,
+            spec,
+            measured,
+            sides,
+        })
+    }
+
+    /// The omitted expression is the same measured number the new constraint starts with.
+    pub(crate) fn dimension_expression_default(
+        &self,
+        kind: ConstraintKind,
+        targets: &[Target],
+        points: &[[f64; 2]],
+        line_point: [f64; 2],
+    ) -> Result<String, CoreError> {
+        let geometry = self.dim_constraint_geometry(kind, targets, points, line_point)?;
+        Ok(number(geometry.measured))
+    }
+
+    /// `Command::AddDimConstraint`: a dimensional constraint on the picked parts, its dimension
+    /// through `line_point`, taking the measured value when no expression is supplied.
+    pub(crate) fn add_dim_constraint(
+        &mut self,
+        kind: ConstraintKind,
+        targets: &[Target],
+        points: &[[f64; 2]],
+        line_point: [f64; 2],
+        expression: Option<&str>,
+    ) -> Result<u32, CoreError> {
+        let DimConstraintGeometry {
+            refs,
+            spec,
+            measured,
+            sides,
+        } = self.dim_constraint_geometry(kind, targets, points, line_point)?;
+        let mut rotation = 0.0;
         let all = self.stored();
         let mut taken: HashSet<String> = all
             .iter()
@@ -1547,19 +1673,11 @@ impl Session {
             .expect("a free name");
         taken.insert(name.clone());
         let dim_handle = self.add_dimensions(spec)?[0];
-        let measured = match self.drawing.doc.get_entity(Handle::new(dim_handle)) {
-            Some(EntityType::Dimension(d)) => {
-                if let Dimension::Linear(l) = d {
-                    rotation = l.rotation;
-                }
-                if kind == ConstraintKind::Angular {
-                    measured
-                } else {
-                    d.measurement()
-                }
-            }
-            _ => measured,
-        };
+        if let Some(EntityType::Dimension(Dimension::Linear(d))) =
+            self.drawing.doc.get_entity(Handle::new(dim_handle))
+        {
+            rotation = d.rotation;
+        }
         let given = expression.map(normalize).filter(|e| !e.is_empty());
         let data = DimData {
             name: name.clone(),
@@ -1835,7 +1953,10 @@ impl Session {
         targets: &[Target],
         settings: &AutoSettings,
     ) -> Result<Vec<u32>, CoreError> {
-        if !(settings.distance_tolerance >= 0.0 && settings.distance_tolerance.is_finite())
+        let distance = settings
+            .distance_tolerance
+            .unwrap_or_else(|| self.batch_tol());
+        if !(distance >= 0.0 && distance.is_finite())
             || !(settings.angle_tolerance >= 0.0 && settings.angle_tolerance.is_finite())
         {
             return Err(invalid("The tolerances must be 0 or more"));
@@ -1884,7 +2005,7 @@ impl Session {
             &prims,
             &InferenceSettings {
                 priority,
-                distance_tolerance: settings.distance_tolerance,
+                distance_tolerance: distance,
                 angle_tolerance_radians: settings.angle_tolerance.to_radians(),
                 ..InferenceSettings::default()
             },

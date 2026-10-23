@@ -1,9 +1,13 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { aiLog, type AiLog } from "../api";
+import { aiAttachPdf, aiLog, type AiLog, type PdfAttachment } from "../api";
+import type { Pointing } from "../app/useAssistantWiring";
 import { useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
+import { PlanChecklist } from "./PlanChecklist";
+import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
 import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
+import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
 import { ToolCard } from "./ToolCard";
 import type { Assistant } from "./useAssistant";
 import { useStickToBottom } from "./useStickToBottom";
@@ -11,22 +15,77 @@ import { useStickToBottom } from "./useStickToBottom";
 type Props = {
   assistant: Pick<
     Assistant,
-    "transcript" | "busy" | "error" | "status" | "send" | "cancel" | "clear"
+    "transcript" | "busy" | "error" | "send" | "cancel" | "clear"
   >;
   onShow(card: ToolCardItem): void;
   onUndo(card: ToolCardItem): void;
   onSettings(): void;
+  /** What the user points at (the selection, a marked area) as chips above the box, and the send
+   *  that takes them along. Without it the message goes alone. */
+  pointing?: Pointing;
+  history?: ConversationHistoryState;
+  /** Reads a picture pasted, dropped or picked (tests give their own). */
+  read?(file: File): Promise<Picture>;
 };
 
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
 
 /** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
  *  Memoised: the app re-renders on every pointer move. */
-export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, onUndo, onSettings }: Props) {
+export const AssistantPanel = memo(function AssistantPanel({
+  assistant,
+  onShow,
+  onUndo,
+  onSettings,
+  pointing,
+  history,
+  read = readPicture,
+}: Props) {
   const t = useT();
-  const { transcript, busy, error, status } = assistant;
+  const { transcript, busy, error } = assistant;
+  const [attaching, setAttaching] = useState(false);
+  const unavailable = busy || !!history?.pending || attaching;
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
+  /** The pictures to send with the next message. */
+  const [pictures, setPictures] = useState<Picture[]>([]);
+  const [documents, setDocuments] = useState<PdfAttachment[]>([]);
+  const [pictureError, setPictureError] = useState<string | null>(null);
+
+  // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
+  const focusKey = pointing?.focusKey ?? 0;
+  useEffect(() => {
+    if (focusKey > 0) box.current?.focus();
+  }, [focusKey]);
+
+  /** Adds the pictures among `files`, up to `MAX_PICTURES` in all. */
+  async function addPictures(files: File[]) {
+    if (unavailable) return;
+    const pdfs = files.filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+    if (pdfs.length) {
+      setAttaching(true);
+      setPictureError(null);
+      try {
+        if (documents.length + pdfs.length > MAX_PICTURES) throw new Error(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
+        for (const file of pdfs) {
+          if (file.size > 20 * 1024 * 1024) throw new Error(t("ai.pdfTooLarge"));
+          const attachment = await aiAttachPdf(file.name, Array.from(new Uint8Array(await file.arrayBuffer())));
+          setDocuments((now) => [...now, attachment]);
+        }
+      } catch (error) { setPictureError(String(error)); }
+      finally { setAttaching(false); }
+    }
+    const wanted = files.filter(isPicture);
+    if (wanted.length === 0) return;
+    setPictureError(null);
+    const room = MAX_PICTURES - pictures.length;
+    if (wanted.length > room) setPictureError(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
+    const results = await Promise.allSettled(wanted.slice(0, Math.max(0, room)).map((file) => read(file)));
+    const ok = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    if (ok.length < results.length) setPictureError(t("ai.pictureFailed"));
+    setPictures((now) => [...now, ...ok].slice(0, MAX_PICTURES));
+  }
 
   // The agent log, in place of the conversation while it is shown.
   const [showLog, setShowLog] = useState(false);
@@ -50,11 +109,24 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
   const thread = useStickToBottom([transcript, busy]);
 
   async function submit() {
-    const text = draft.trim();
-    if (!text || busy) return;
+    const text = [draft.trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
+    if ((!text && pictures.length === 0) || unavailable) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
-    if (await assistant.send(text)) setDraft("");
+    const sent = pointing
+      ? await pointing.send(text, pictures)
+      : pictures.length > 0
+        ? await assistant.send(text, {
+            images: pictures.map(({ media_type, data }) => ({ media_type, data })),
+            shown: { images: pictures.map((p) => p.url) },
+          })
+        : await assistant.send(text);
+    if (sent) {
+      setDraft("");
+      setPictures([]);
+      setDocuments([]);
+      setPictureError(null);
+    }
   }
 
   // Undo is offered on the card whose change is the assistant's newest still in the take-off.
@@ -82,6 +154,9 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
     if (e === "busy") return t("ai.busy");
     if (e === "no_api_key") return t("ai.noKey");
     if (e === "no_base_url") return t("ai.noBaseUrl");
+    if (e === "no_model") return t("ai.noModel");
+    const missingModel = /^(.+) has no model (.+): choose one in Settings$/.exec(e);
+    if (missingModel) return t("ai.modelNotFound", { service: missingModel[1], model: missingModel[2] });
     if (e === "restarted") return t("ai.restarted");
     if (e === "crashed") return t("ai.crashed");
     return e;
@@ -89,9 +164,28 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
 
   function show(item: Item, i: number): ReactNode {
     switch (item.kind) {
+      case "plan":
+        return <PlanChecklist key={i} phases={item.phases}
+          onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
+            ? () => { void assistant.send("Approved, continue."); } : undefined}
+          onChange={() => box.current?.focus()} />;
       case "user":
         return (
           <div key={i} className="msg user" dir="auto">
+            {((item.pointed?.length ?? 0) > 0 || (item.images?.length ?? 0) > 0) && (
+              <div className="msg-attached">
+                {item.pointed?.map((label) => (
+                  <span key={label} className="chip">
+                    {label}
+                  </span>
+                ))}
+                {item.images?.map((url, k) => (
+                  url === "[picture removed]"
+                    ? <span key={k} className="chip">{t("ai.pictureRemoved")}</span>
+                    : <img key={k} src={url} alt={t("ai.picture")} className="thumb" />
+                ))}
+              </div>
+            )}
             {item.text}
           </div>
         );
@@ -109,8 +203,9 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           </details>
         );
       case "tool": {
+        if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
-        const canUndo = !busy && item === undoable;
+        const canUndo = !unavailable && item === undoable;
         return (
           <ToolCard
             key={i}
@@ -141,11 +236,19 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
   return (
     <section className="assistant-panel" aria-label={t("assistant")}>
       <div className="assistant-head">
-        {status && (
-          <span className="model-badge" dir="ltr" title={t("settings.model")}>
-            {status.model}
-          </span>
-        )}
+        <button
+          type="button"
+          className="new-chat"
+          onClick={assistant.clear}
+          disabled={unavailable || empty}
+          title={t("ai.newChatTip")}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 3.5v9M3.5 8h9" />
+          </svg>
+          {t("ai.newChat")}
+        </button>
+        {history && <ConversationHistory history={history} disabled={busy} />}
         <button type="button" aria-pressed={showLog} onClick={() => setShowLog((on) => !on)}>
           {t("ai.log")}
         </button>
@@ -167,6 +270,7 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
       <p className="sr-only" role="status" aria-live="polite">
         {announce}
       </p>
+      {history?.error && <p className="msg notice" role="alert">{history.error}</p>}
       {showLog ? (
         <div className="agent-log">
           <div className="agent-log-bar">
@@ -187,6 +291,10 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           {empty ? (
             <div className="assistant-empty">
               <p>{t("ai.emptyTitle")}</p>
+              {history?.latest && <button type="button" className="continue-chat" disabled={busy || history.pending}
+                onClick={() => { void history.resume(history.latest!); }}>
+                {t("ai.continue", { title: history.latest.title })}
+              </button>}
               <ul>
                 {EXAMPLES.map((key) => (
                   <li key={key}>
@@ -212,7 +320,7 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
               {t("ai.working")}
             </p>
           )}
-          {!busy && (startNewOffered(transcript) || error === "crashed") && (
+          {!unavailable && (startNewOffered(transcript) || error === "crashed") && (
             <button type="button" className="primary new-conversation" onClick={assistant.clear}>
               {t("ai.newConversation")}
             </button>
@@ -244,7 +352,76 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           e.preventDefault();
           submit();
         }}
+        onDragOver={(e) => {
+          if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = [...e.dataTransfer.files];
+          if (files.length === 0) return;
+          e.preventDefault();
+          addPictures(files);
+        }}
       >
+        {(pointing?.selection || pointing?.region || pictures.length > 0) && (
+          <div className="composer-chips">
+            {pointing?.selection && (
+              <span className="chip" title={pointing.selection.kinds}>
+                {t("ai.chip.selection", { n: String(pointing.selection.count) })}
+                {pointing.selection.kinds && <span className="chip-detail">{pointing.selection.kinds}</span>}
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={t("ai.chip.remove")}
+                  title={t("ai.chip.remove")}
+                  onClick={pointing.detachSelection}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {pointing?.region && (
+              <span className="chip">
+                {t("ai.chip.area", {
+                  w: pointing.region.width.toFixed(2),
+                  h: pointing.region.height.toFixed(2),
+                })}
+                {pointing.region.count !== null && (
+                  <span className="chip-detail">
+                    {t("ai.chip.entities", { n: String(pointing.region.count) })}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={t("ai.chip.remove")}
+                  title={t("ai.chip.remove")}
+                  onClick={pointing.clearRegion}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {pictures.map((p, k) => (
+              <span key={k} className="chip picture">
+                <img src={p.url} alt={t("ai.picture")} className="thumb" />
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={t("ai.removePicture")}
+                  title={t("ai.removePicture")}
+                  onClick={() => setPictures((now) => now.filter((_, j) => j !== k))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {pictureError && (
+          <p className="composer-note" role="alert">
+            {pictureError}
+          </p>
+        )}
         <textarea
           ref={box}
           dir="auto"
@@ -253,6 +430,12 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
           placeholder={t("ai.placeholder")}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            const files = [...(e.clipboardData?.files ?? [])].filter((file) => isPicture(file) || file.type === "application/pdf");
+            if (files.length === 0) return;
+            e.preventDefault();
+            addPictures(files);
+          }}
           onKeyDown={(e) => {
             // Enter sends, Shift+Enter is a new line; not while an input method is composing.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -261,16 +444,59 @@ export const AssistantPanel = memo(function AssistantPanel({ assistant, onShow, 
             }
           }}
         />
+        {documents.map((document) => (
+          <div className="pointing-chip" key={document.path}>
+            <span>{document.name} · {document.pages} {t("ai.pdfPages")}</span>
+            <button type="button" aria-label={t("ai.removeDocument")} disabled={unavailable}
+              onClick={() => setDocuments((now) => now.filter((item) => item.path !== document.path))}>×</button>
+          </div>
+        ))}
+        <input
+          ref={filePicker}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+          multiple
+          hidden
+          onChange={(e) => {
+            addPictures([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
         <div className="composer-buttons">
-          <button type="button" onClick={assistant.clear} disabled={busy || empty}>
-            {t("ai.clear")}
+          {pointing && (
+            <button
+              type="button"
+              className="icon"
+              aria-label={t("ai.markArea")}
+              title={t("ai.markArea")}
+              onClick={pointing.markArea}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
+                <path d="M8 6v4M6 8h4" />
+              </svg>
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon"
+            aria-label={t("ai.attach")}
+            title={t("ai.attach")}
+            disabled={pictures.length >= MAX_PICTURES}
+            onClick={() => filePicker.current?.click()}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="10" rx="1.5" />
+              <circle cx="6" cy="6.5" r="1.2" />
+              <path d="M2.5 11.5l3.5-3 2.5 2 2-1.5 3 2.5" />
+            </svg>
           </button>
           {busy ? (
             <button type="button" className="primary" onClick={assistant.cancel}>
               {t("ai.stop")}
             </button>
           ) : (
-            <button type="submit" className="primary" disabled={!draft.trim()}>
+            <button type="submit" className="primary" disabled={unavailable || (!draft.trim() && pictures.length === 0 && documents.length === 0)}>
               {t("ai.send")}
             </button>
           )}

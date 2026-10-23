@@ -10,6 +10,7 @@ export type Shortcut =
   | "undo"
   | "redo"
   | "save"
+  | "new"
   | "escape"
   | "finish"
   | "commandLine"
@@ -56,6 +57,7 @@ function builtInShortcut(e: Keys): Shortcut | null {
     if (e.code === "KeyZ") return e.shiftKey ? "redo" : "undo";
     if (e.code === "KeyY") return "redo";
     if (e.code === "KeyS" && !e.shiftKey) return "save";
+    if (e.code === "KeyN" && !e.shiftKey) return "new";
     // Shows and hides the command line, as in AutoCAD.
     if (e.code === "Digit9" && !e.shiftKey) return "commandLine";
     // The file tabs, as in a browser.
@@ -82,6 +84,7 @@ export const BUILT_IN_SHORTCUTS: [string, string][] = [
   ["redo", "Ctrl+Shift+Z"],
   ["redo", "Ctrl+Y"],
   ["save", "Ctrl+S"],
+  ["new", "Ctrl+N"],
   ["commandLine", "Ctrl+9"],
   ["nextTab", "Ctrl+Tab"],
   ["prevTab", "Ctrl+Shift+Tab"],

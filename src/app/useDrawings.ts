@@ -3,18 +3,22 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
+import { ask, message as messageDialog, open, save } from "../fileDialogs";
 import {
   activateTab,
   autosaveDrawings,
   closeTab,
   discardAutosave,
+  DRAWING_CLOSE,
+  DRAWING_SAVE,
+  DRAWING_SHOWN,
   drawingInfo,
   exportTable,
   exportTakeoff,
   getDrafting,
   getSettings,
   isDirty,
+  newDrawing as makeNewDrawing,
   openDrawing,
   recents as readRecents,
   recoverableDrawings,
@@ -33,10 +37,13 @@ import {
   sheetSetOpen,
   sheetSetSave,
   tabs as readTabs,
+  untitledAutosaves,
   type Drafting,
+  type ConversationSummary,
   type DrawingInfo,
   type EntityFilter,
   type Field,
+  type NewUnits,
   type ReadReport,
   type ScriptResult,
   type TabInfo,
@@ -44,7 +51,7 @@ import {
 import { useLanguage } from "../i18n";
 import { cycleTab } from "../shell/FileTabs";
 import { useOpenRequests } from "../shell/openRequests";
-import { atLaunch, drop, enqueue, forgetThen, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
+import { atLaunch, drop, enqueue, forgetThen, laterOpens, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
 import { isStale, serial } from "../shell/switcher";
 import { leaveDrawing, readChoice } from "../shell/unsaved";
@@ -163,6 +170,7 @@ export function useDrawings({
   const [opening, setOpening] = useState(false);
   const [xrefsOpen, setXrefsOpen] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
   /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
    *  ignored (they would land on a drawing about to go). */
   const switching = useRef(0);
@@ -171,11 +179,22 @@ export function useDrawings({
   /** The drawing on screen now, for checks inside queued work. */
   const infoRef = useRef(info);
   infoRef.current = info;
+  /** A resumed chat waits until the usual autosave question has selected its drawing. */
+  const conversationOpen = useRef(new Map<string, (opened: boolean) => void>());
+  function finishConversationOpen(path: string, opened: boolean) {
+    conversationOpen.current.get(path)?.(opened);
+    conversationOpen.current.delete(path);
+  }
+  useEffect(() => () => {
+    conversationOpen.current.forEach((finish) => finish(false));
+    conversationOpen.current.clear();
+  }, []);
 
   /** Before the open drawing is left: asks "Save changes to the drawing?" when the drawing itself
    *  has unsaved changes, and saves when told to. False when the user cancels. */
   async function leaveOpenDrawing(): Promise<boolean> {
     if (!info) return true;
+    let saveTo: string | null = null;
     const labels = { yes: t("unsaved.yes"), no: t("unsaved.no"), cancel: t("unsaved.cancel") };
     return leaveDrawing({
       isDirty,
@@ -193,9 +212,15 @@ export function useDrawings({
         if (choice === "discard") await discardAutosave((await drawingInfo()).path).catch(() => {});
         return choice;
       },
-      // The drawing on screen now: closing the window shows each drawing before asking.
-      confirmSave: async () => confirmRecoveredSave(await drawingInfo()),
-      save: saveDrawing,
+      // The drawing on screen now: closing the window shows each drawing before asking. A new
+      // drawing has no file yet: it asks where to save it, and cancelling that keeps it open.
+      confirmSave: async () => {
+        const now = await drawingInfo();
+        if (!now.untitled) return confirmRecoveredSave(now);
+        saveTo = await askSavePath(now);
+        return saveTo !== null;
+      },
+      save: () => (saveTo ? saveDrawingAs(saveTo) : saveDrawing()),
     });
   }
   /** Before the window closes: asks about each open drawing with unsaved changes in turn, showing
@@ -232,10 +257,12 @@ export function useDrawings({
     };
   }, []);
 
-  // On launch: the recent drawings' autosaves newer than them, or left by a crash, are offered back.
+  // On launch: the recent drawings' autosaves newer than them, or left by a crash, are offered back,
+  // and those of untitled drawings Qiyas closed on before their first Save As.
   useEffect(() => {
     (async () => {
-      const paths = (await readRecents()).map((r) => r.path);
+      const untitled = (await untitledAutosaves().catch(() => null)) ?? [];
+      const paths = [...(await readRecents()).map((r) => r.path), ...untitled];
       const found = atLaunch(await recoverableDrawings(paths));
       if (found.length > 0) setRecoveries((q) => enqueue(q, found, null, true));
     })().catch(() => {});
@@ -336,19 +363,90 @@ export function useDrawings({
       }
     }
     setOpening(true);
+    let opened = false;
     await drawingChange(() =>
       run(async () => {
         const next = await openDrawing(path);
+        opened = true;
         // The drawing on screen asked for again: the core changed nothing.
         if (infoRef.current && next.path === infoRef.current.path) return;
         await showDrawing(next, beginShow());
       }),
     );
     setOpening(false);
+    finishConversationOpen(path, opened);
+  }
+
+  async function prepareConversation(chat: ConversationSummary): Promise<boolean> {
+    const now = await readTabs();
+    const tab = chat.drawing && now.tabs.find((item) => item.path === chat.drawing);
+    if (tab) return now.active === tab.id || drawingChange(() => activate(tab.id, true));
+    if (!chat.drawing || !chat.drawing_exists) {
+      setNotice(t("ai.drawingMissing"));
+      return true;
+    }
+    const path = chat.drawing;
+    const opened = new Promise<boolean>((resolve) => conversationOpen.current.set(path, resolve));
+    try {
+      await openPath(path);
+    } catch (e) {
+      finishConversationOpen(path, false);
+      throw e;
+    }
+    return opened;
+  }
+
+  function dismissRecovery(ask: RecoveryAsk) {
+    const then = laterOpens(ask);
+    setRecoveries((q) => q.filter((item) => item.id !== ask.id));
+    if (then) void openPath(then, false);
+    else if (ask.then) finishConversationOpen(ask.then, false);
   }
 
   // Drawings the OS asks to open (a double click on one, a second launch) come the same way.
   useOpenRequests(openPath);
+
+  // Mizan (or an MCP client) chose the drawing on screen, or asked the window to save or close
+  // one where the user decides: the listeners are set once and call the latest code through this.
+  const fromMizan = useRef({ shown: async () => {}, save: async () => {}, close: async (_id: number) => {} });
+  fromMizan.current = {
+    shown: () =>
+      drawingChange(() =>
+        run(async () => {
+          const now = await readTabs();
+          setFileTabs(now.tabs);
+          setActiveTab(now.active);
+          if (now.active === null) showNoDrawing();
+          else await showDrawing(await drawingInfo(), beginShow());
+        }),
+      ),
+    save: saveFile,
+    close: (id) => closeFileTab(id, true),
+  };
+  useEffect(() => {
+    let gone = false;
+    const offs: (() => void)[] = [];
+    const keep = (unlisten: () => void) => (gone ? unlisten() : offs.push(unlisten));
+    listen(DRAWING_SHOWN, () => fromMizan.current.shown()).then(keep, () => {});
+    listen(DRAWING_SAVE, () => fromMizan.current.save()).then(keep, () => {});
+    listen<number>(DRAWING_CLOSE, (e) => fromMizan.current.close(e.payload)).then(keep, () => {});
+    return () => {
+      gone = true;
+      offs.forEach((off) => off());
+    };
+  }, []);
+
+  /** A new, empty drawing in `units` in a new tab (NEW, Ctrl+N, the quick-access bar, after the
+   *  units dialog). */
+  async function newDrawing(units: NewUnits) {
+    setNewOpen(false);
+    await drawingChange(() =>
+      run(async () => {
+        await showDrawing(await makeNewDrawing(units), beginShow());
+        await refreshTabs();
+      }),
+    );
+  }
 
   async function openFile() {
     const path = await open({ filters: [{ name: "Drawings", extensions: ["dwg", "dxf"] }] });
@@ -371,6 +469,7 @@ export function useDrawings({
     setRecoveries((q) => forgetThen(drop(q, ask.id, drawing, copy), ask.id, drawing));
     // The recovered drawing itself: this render's `info` is the one before it (none at launch).
     const savedTo = await saveAs(recovered);
+    finishConversationOpen(drawing, true);
     // Times and paths isolated (FSI … PDI): they keep their own order inside Arabic. One notice,
     // so where it came from never hides where it went.
     const iso = (text: string) => `\u2068${text}\u2069`;
@@ -477,12 +576,12 @@ export function useDrawings({
   }
 
   /** Shows the drawing of tab `id` (call inside `drawingChange`); false when that failed (the
-   *  error shows). */
-  async function activate(id: number): Promise<boolean> {
+   *  error shows). `keepConversation`: Mizan asked for it, its conversation goes on. */
+  async function activate(id: number, keepConversation = false): Promise<boolean> {
     let ok = false;
     await run(async () => {
       const gen = beginShow();
-      const next = await activateTab(id);
+      const next = await activateTab(id, keepConversation);
       if (isStale(gen, switchGen.current)) return;
       // Work started while the core was switching (a zoom's glyphs) may have read the old drawing
       // under the new generation: bump it again now that the new one is in place.
@@ -504,14 +603,15 @@ export function useDrawings({
     });
 
   /** Closes tab `id` (the one on screen when null). A drawing with unsaved changes is shown first
-   *  and asks "Save changes to the drawing?"; Cancel keeps it open. */
-  const closeFileTab = (id: number | null) =>
+   *  and asks "Save changes to the drawing?"; Cancel keeps it open. `keepConversation`: Mizan
+   *  asked to close it, its conversation goes on. */
+  const closeFileTab = (id: number | null, keepConversation = false) =>
     drawingChange(async () => {
       const now = await readTabs().catch(() => null);
       const tab = now?.tabs.find((f) => f.id === (id ?? now.active));
       if (!now || !tab) return;
       try {
-        if (tab.dirty && (!(await activate(tab.id)) || !(await leaveOpenDrawing()))) return;
+        if (tab.dirty && (!(await activate(tab.id, keepConversation)) || !(await leaveOpenDrawing()))) return;
       } catch (e) {
         setError(t("save.failed", { error: String(e) }));
         return;
@@ -519,7 +619,7 @@ export function useDrawings({
       await run(async () => {
         // On screen before the close: shown above when it had unsaved changes.
         const shown = tab.dirty ? tab.id : now.active;
-        const left = await closeTab(tab.id, tab.dirty);
+        const left = await closeTab(tab.id, tab.dirty, keepConversation);
         setFileTabs(left.tabs);
         setActiveTab(left.active);
         if (left.active === null) showNoDrawing();
@@ -565,9 +665,14 @@ export function useDrawings({
     return ask(t("save.confirmRecovered"), { title: t("appName"), kind: "warning" });
   }
 
-  /** Saves over the drawing's own file, after `confirmRecoveredSave`. */
+  /** Saves over the drawing's own file, after `confirmRecoveredSave`; a new drawing has none yet,
+   *  so it asks where (Save As). */
   async function saveFile() {
     if (!info) return;
+    if (info.untitled) {
+      await saveAs(info);
+      return;
+    }
     if (!(await confirmRecoveredSave(info))) return;
     await saveWith(saveDrawing);
   }
@@ -594,15 +699,20 @@ export function useDrawings({
 
   /** Save As for `of`, the drawing on screen (given, as one just recovered is not in `info` yet). */
   async function saveAs(of: DrawingInfo): Promise<string | null> {
-    const path = await save({
-      defaultPath: of.path,
+    const path = await askSavePath(of);
+    if (!path) return null;
+    return (await saveWith(() => saveDrawingAs(path))) ? path : null;
+  }
+
+  /** Keeps the offered name; the shared picker chooses a folder for untitled drawings. */
+  async function askSavePath(of: DrawingInfo): Promise<string | null> {
+    return save({
+      defaultPath: of.untitled ? (of.path.split(/[\\/]/).pop() ?? of.path) : of.path,
       filters: [
         { name: "DWG", extensions: ["dwg"] },
         { name: "DXF", extensions: ["dxf"] },
       ],
-    });
-    if (!path) return null;
-    return (await saveWith(() => saveDrawingAs(path))) ? path : null;
+    }, of);
   }
 
   /** Asks where to save the Excel take-off, next to the drawing by default, and writes it. */
@@ -663,7 +773,12 @@ export function useDrawings({
     setExtractOpen,
     switching,
     openPath,
+    prepareConversation,
+    dismissRecovery,
     openFile,
+    newOpen,
+    setNewOpen,
+    newDrawing,
     recoverFrom,
     discardFrom,
     openAnyway,

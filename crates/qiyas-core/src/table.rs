@@ -8,7 +8,7 @@
 
 use opencadcodec::entities::{CellRange, CellStyle, CellValue, CellValueType, Table, TableCell};
 use opencadcodec::objects::ObjectType;
-use opencadcodec::{BlockRecord, EntityType, Handle, Vector3};
+use opencadcodec::{BlockRecord, EntityType, Handle, MText, Vector3};
 use qiyas_geom::{merge_owners, table_entities};
 use serde::Serialize;
 
@@ -122,6 +122,33 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
 }
 
 impl Session {
+    /// The conventional table sizes, shared with the input-default report.
+    pub(crate) fn table_sizes(
+        &self,
+        col_width: f64,
+        row_height: f64,
+        data: &[Vec<String>],
+    ) -> (f64, f64) {
+        let row_height = if row_height == 0.0 {
+            self.default_text_height() / TEXT_IN_ROW
+        } else {
+            row_height
+        };
+        let col_width = if col_width == 0.0 {
+            let longest = data
+                .iter()
+                .flatten()
+                .flat_map(|cell| cell.lines())
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0);
+            longest as f64 * 0.7 * row_height * TEXT_IN_ROW + row_height
+        } else {
+            col_width
+        };
+        (col_width, row_height)
+    }
+
     /// The table `target` at the top of the sheet on screen.
     fn table_target(&self, target: &Target) -> Result<(Handle, Table), CoreError> {
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
@@ -153,7 +180,11 @@ impl Session {
             plain.to_string()
         };
         set_cell_value(t, r, c, &escape_mtext(&shown));
-        set_cell_fields(t, &fields);
+        set_cell_fields(
+            t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
     }
 
     /// `Command::Table`: a table of `rows` x `cols` cells with its top left corner at `at`,
@@ -175,12 +206,13 @@ impl Session {
         if rows.saturating_mul(cols) > MAX_CELLS {
             return Err(invalid(format!("A table takes {MAX_CELLS} cells at most")));
         }
-        if col_width <= 0.0 || row_height <= 0.0 {
-            return Err(invalid("Column widths and row heights must be more than 0"));
+        if col_width < 0.0 || row_height < 0.0 {
+            return Err(invalid("Column widths and row heights must be 0 or more"));
         }
         if data.len() > rows || data.iter().any(|r| r.len() > cols) {
             return Err(invalid("There is more text than cells"));
         }
+        let (col_width, row_height) = self.table_sizes(col_width, row_height, data);
         let style = self.text_style();
         let doc = &self.drawing.doc;
         let style_handle = doc.text_styles.get(&style).map(|s| s.handle);
@@ -222,6 +254,8 @@ impl Session {
             return Err(invalid("This is no table"));
         };
         let mut t = t.clone();
+        // Rows grow to hold their wrapped text (AutoCAD's tables do).
+        qiyas_geom::fit_rows(&mut t, &mut |m| self.mtext_height(m));
         let parts = table_entities(&t);
         let owner = self.table_block(&mut t)?;
         for mut e in parts {
@@ -234,6 +268,27 @@ impl Session {
         t.common.graphic_data = None;
         *self.drawing.doc.get_entity_mut(h).expect("found above") = EntityType::Table(t);
         Ok(())
+    }
+
+    /// The height an MText takes laid out (wrapped at its width) by the screen's text engine.
+    fn mtext_height(&self, m: &MText) -> Option<f64> {
+        let entity = EntityType::MText(m.clone());
+        let flat = qiyas_geom::flatten(
+            &self.drawing.doc,
+            &entity,
+            &qiyas_geom::Xform::identity(),
+            self.batch_tol(),
+        );
+        let text = flat.paths.into_iter().find_map(|p| p.text)?;
+        let (_, _, corners) =
+            self.text
+                .borrow_mut()
+                .lay_out(&self.drawing.doc, &text, self.arabic_reversed)?;
+        let ys = corners.map(|c| c[1]);
+        let (lo, hi) = ys
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
+        Some(hi - lo)
     }
 
     /// The block record `t`'s picture goes in, emptied: its own `*T` block, or a new one under
@@ -333,7 +388,11 @@ impl Session {
             .into_iter()
             .map(|(r, c, f)| (if r >= at { r + 1 } else { r }, c, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 
@@ -357,7 +416,11 @@ impl Session {
             .into_iter()
             .map(|(r, c, f)| (r, if c >= at { c + 1 } else { c }, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 
@@ -376,7 +439,11 @@ impl Session {
             .filter(|(r, _, _)| *r != row)
             .map(|(r, c, f)| (if r > row { r - 1 } else { r }, c, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 
@@ -395,7 +462,11 @@ impl Session {
             .filter(|(_, c, _)| *c != col)
             .map(|(r, c, f)| (r, if c > col { c - 1 } else { c }, f))
             .collect();
-        set_cell_fields(&mut t, &fields);
+        set_cell_fields(
+            &mut t,
+            &fields,
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         self.store_table(h, t)
     }
 

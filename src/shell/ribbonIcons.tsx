@@ -23,6 +23,7 @@ const DIM = {
 /** Icon bodies by command. */
 export const ICON_BODIES: Record<string, string> = {
   // File and history: the quick-access bar.
+  new: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M12 11v6M9 14h6"/>',
   open: '<path d="M3 7h6l2 2h10v11H3z"/>',
   save: '<path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h8V4M8 20v-6h8v6"/>',
   saveAs: '<path d="M4 4h11l3 3v4"/><path d="M4 4v16h8M8 4v5h7M15 21l1-3.5 5-5 2.5 2.5-5 5z"/>',
@@ -181,6 +182,7 @@ export const ICON_BODIES: Record<string, string> = {
   ucsWorld: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
   sheetSet: '<rect x="7" y="3" width="13" height="15" rx="1"/><path d="M4 7v14h13"/><path d="M10 8h7M10 12h7"/>',
   arabicReversed: '<path d="M12 3v18" stroke-dasharray="2 2.2"/><path d="M8 7H4M8 12H5M8 17H3"/><path d="M16 7h4M16 12h3M16 17h5" opacity=".55"/>',
+  ucsIcon: '<path d="M5 19H19M16 16l3 3-3 3M5 19V5M2 8l3-3 3 3"/><rect x="3.5" y="17.5" width="3" height="3"/>',
 
   // Manage.
   runScript: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/>',

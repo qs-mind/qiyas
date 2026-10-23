@@ -1,10 +1,13 @@
+import { ProjectsPanel } from "../shell/ProjectsPanel";
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and the side panel (take-off, BOQ, conflicts, Mizan) on the right. */
+import { RecognitionPanel } from "../shell/RecognitionPanel";
 import { MizanMark } from "../ai/MizanMark";
 import { Tabs } from "@base-ui/react/tabs";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
+import type { ConversationHistoryState } from "../ai/ConversationHistory";
 import { BoqPanel } from "../boq/BoqPanel";
 import { ConflictsPanel } from "../boq/ConflictsPanel";
 import { openCount } from "../boq/conflictsMath";
@@ -30,7 +33,7 @@ import { SplitPane } from "../viewport/SplitPane";
 import { Viewport } from "../viewport/Viewport";
 import { type Measure, NO_VIEWPORTS } from "./shared";
 import type { Annotate } from "./useAnnotate";
-import type { AssistantWiring } from "./useAssistantWiring";
+import type { AssistantWiring, Pointing } from "./useAssistantWiring";
 import type { Attach } from "./useAttach";
 import type { Blocks } from "./useBlocks";
 import type { Comments } from "./useComments";
@@ -63,6 +66,7 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
     layersBusy,
     toggleLayer,
     isolateLayer,
+    unisolateLayers,
     showAll,
     makeCurrent,
     setLayerProp,
@@ -87,6 +91,8 @@ export function LeftPanels({ info, sheetShown, theme, drafting, sheets, layers, 
         busy={layersBusy}
         onToggle={toggleLayer}
         onIsolate={isolateLayer}
+        isolated={info?.isolated_layer ?? null}
+        onUnisolate={unisolateLayers}
         onShowAll={showAll}
         current={info?.current.layer}
         onMakeCurrent={info ? makeCurrent : undefined}
@@ -138,9 +144,11 @@ type WorkProps = {
   /** The Options dialog's background and highlight colours (null: the theme's). */
   colours: CanvasColours;
   parametric: Pick<Parametric, "constraints" | "deleteConstraint" | "hoverConstraint" | "barHidden" | "setBarHidden">;
-  /** The right-click menu: a tool chosen, the properties palette shown. */
+  /** The right-click menu: a tool chosen, the properties palette shown, Mizan asked about the
+   *  selection. */
   chooseTool(tool: Tool): void;
   onProperties(): void;
+  askMizan?: Pick<Pointing, "selection" | "ask">;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -166,6 +174,7 @@ export function WorkArea({
   parametric,
   chooseTool,
   onProperties,
+  askMizan,
 }: WorkProps) {
   const { theme, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -181,6 +190,7 @@ export function WorkArea({
     syncPictures,
     syncAtlas,
     chooseSheet,
+    ucsIcon,
   } = sheets;
   const { pending } = attach;
   const { closeBlockEdit } = blocks;
@@ -209,6 +219,7 @@ export function WorkArea({
           hasDrawing={info !== null}
           onTool={chooseTool}
           onProperties={onProperties}
+          onAskMizan={askMizan?.selection ? askMizan.ask : undefined}
           onZoomExtents={() => {
             viewport.current?.fitExtents();
             focusDrawing();
@@ -234,6 +245,7 @@ export function WorkArea({
             }}
             grid={drafting?.grid ? drafting.grid_spacing : null}
             ucs={info?.ucs}
+            ucsIcon={ucsIcon}
             inset={inset}
             onMove={measure.onMove}
             onWindowZoomed={measure.cancel}
@@ -296,6 +308,7 @@ export function WorkArea({
             theme={theme}
             colours={colours}
             ucs={info.ucs}
+            ucsIcon={ucsIcon}
             syncAtlas={syncAtlas}
             onError={(e) => setError(String(e))}
             onClose={() => setSplit(false)}
@@ -314,15 +327,17 @@ type SideProps = {
   takeoffState: TakeoffState;
   takeoff: Takeoff;
   ai: AssistantWiring;
+  conversationHistory: ConversationHistoryState;
   comments: Comments;
+  recognition: { revision: unknown; run: Layers["runDrawingCommand"] };
 };
 
 /** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts, comments and
  *  Mizan panels (all mounted, one shown). */
-export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, comments }: SideProps) {
+export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments, recognition }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
-  const { items, itemTotals, selectedId, bill, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
+  const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
   const {
     selectRow,
     removeRow,
@@ -337,7 +352,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
     resolveConflict,
     openBoqTab,
   } = takeoff;
-  const { assistant, showCard, undoCard, openSettings } = ai;
+  const { assistant, showCard, undoCard, openSettings, pointing } = ai;
   const openConflicts = openCount(conflicts);
 
   const tabs: SideTabItem<SideTab>[] = [
@@ -354,6 +369,8 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
         ) : undefined,
     },
     { id: "comments", label: t("comments") },
+    { id: "review", label: t("recognition.review") },
+    { id: "projects", label: t("projects.title") },
     { id: "assistant", label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
   ];
 
@@ -383,6 +400,8 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
       <Tabs.Panel value="boq" keepMounted tabIndex={-1} className="side-panel">
         <BoqPanel
           boq={bill}
+          generated={generated}
+          onShowGenerated={takeoff.showGenerated}
           takeoff={items}
           selectedCode={boqCode}
           onSelect={selectBoq}
@@ -410,12 +429,19 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
           onShow={comments.show}
         />
       </Tabs.Panel>
+      <Tabs.Panel value="review" keepMounted tabIndex={-1} className="side-panel">
+        <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null}
+          revision={recognition.revision} run={recognition.run} />
+      </Tabs.Panel>
+      <Tabs.Panel value="projects" keepMounted tabIndex={-1} className="side-panel"><ProjectsPanel active={sideTab === "projects"} /></Tabs.Panel>
       <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
         <AssistantPanel
           assistant={assistant}
+          history={conversationHistory}
           onShow={showCard}
           onUndo={undoCard}
           onSettings={openSettings}
+          pointing={pointing}
         />
       </Tabs.Panel>
     </SideTabs>

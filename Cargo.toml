@@ -14,6 +14,12 @@ opencadcodec = { git = "https://github.com/HakanSeven12/opencadcodec.git", rev =
 opencadkernel = { git = "https://github.com/HakanSeven12/opencadkernel.git", rev = "99b6b48", default-features = false, features = ["geom2d", "offset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# JSON schemas of the commands, generated from the enum (MIT): the command registry.
+schemars = "1.2"
+# The record types' formats, traced from their serde (MIT OR Apache-2.0): `record_schema`.
+serde-reflection = "0.6"
+# Which field of a record an edit broke (MIT OR Apache-2.0): `SetRecords`.
+serde_path_to_error = "0.1"
 thiserror = "2"
 tauri = "2.11"
 tauri-build = "2.6"
@@ -44,7 +50,8 @@ opt-level = 3
 opt-level = 3
 # One codegen unit: split across units, rstar's bulk load in the pick index runs about 4 times
 # slower (1.6 s against 0.35 s on a 1.4 M-segment drawing). Guarded by the release test
-# `pick_index_one_million_segments_in_0_6_s` in scripts/check.sh (0.27 s with it, 1.1 s without).
+# `pick_index_one_million_segments_relative_to_reference` (a fixed integer-sort reference;
+# also checks that the ratio budget cannot hide a 4x slowdown).
 codegen-units = 1
 
 [profile.release.package.qiyas-render]

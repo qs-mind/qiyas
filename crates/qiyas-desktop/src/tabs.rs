@@ -3,14 +3,14 @@
 //! others are parked in `AppState::parked` (without their batch and pick index, rebuilt on the
 //! next draw or pick) and swapped in when their tab is chosen.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{MutexGuard, PoisonError};
 
 use qiyas_core::{DrawingInfo, Session};
 use serde::Serialize;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::commands::new_conversation;
+use crate::commands::ai_run;
 use crate::pdf::pictures;
 use crate::settings::same_file;
 use crate::state::{AppState, ParkedTab};
@@ -27,6 +27,8 @@ pub struct TabInfo {
     pub title: String,
     /// The drawing itself has changes not saved yet.
     pub dirty: bool,
+    /// A new drawing never saved yet: `path` is a placeholder in the app's folder.
+    pub untitled: bool,
 }
 
 /// Every tab in order, and the one on screen (null when none is open).
@@ -51,7 +53,23 @@ fn tab_info(id: u32, s: &Session) -> TabInfo {
             |n| n.to_string_lossy().into_owned(),
         ),
         dirty: s.is_dirty(),
+        untitled: s.is_untitled(),
     }
+}
+
+/// Where a new drawing stands until its first Save As: `<config>/untitled/Untitled-N.dwg`, with
+/// the smallest N no open tab uses and no autosave of an earlier one holds (a crash's work is
+/// never written over). The folder is made when missing.
+pub(crate) fn untitled_path(state: &AppState) -> Result<PathBuf, String> {
+    let dir = state.config_dir.join("untitled");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let open: Vec<String> = snapshot(state).tabs.into_iter().map(|t| t.path).collect();
+    (1u32..)
+        .map(|n| dir.join(format!("Untitled-{n}.dwg")))
+        .find(|p| {
+            !open.contains(&p.display().to_string()) && !qiyas_core::autosave_path(p).exists()
+        })
+        .ok_or_else(|| "No name left for a new drawing".to_string())
 }
 
 /// The tabs as they are now; path and dirty are read off the sessions, so they never go stale.
@@ -97,7 +115,10 @@ pub(crate) fn find_path(state: &AppState, path: &Path) -> Option<u32> {
 
 /// Puts `session` on screen in a new tab after the others; the drawing on screen before is
 /// parked. Returns the new tab's id.
-pub(crate) fn add(state: &AppState, session: Session) -> u32 {
+pub(crate) fn add(state: &AppState, mut session: Session) -> Result<u32, String> {
+    let name = lock(&state.settings).measurement_method.clone();
+    let method = crate::methods::load_at(&crate::methods::qiyas_dir()?, name.as_deref())?;
+    crate::methods::apply(&mut session, method.as_ref()).map_err(|e| e.to_string())?;
     let mut list = lock(&state.tabs);
     let mut active = lock(&state.session);
     let mut parked = lock(&state.parked);
@@ -114,17 +135,20 @@ pub(crate) fn add(state: &AppState, session: Session) -> u32 {
     *active = Some(session);
     list.order.push(id);
     list.active = Some(id);
-    id
+    Ok(id)
 }
 
 /// Swaps the parked session of tab `id` onto the screen, parking the one there. The assistant
-/// starts a new conversation (it was about the other drawing). Nothing happens when `id` is on
-/// screen already.
+/// starts a new conversation (it was about the other drawing), unless `keep_conversation`: the
+/// assistant itself switched (`drawing_host`). Nothing happens when `id` is on screen already.
 pub(crate) fn activate<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     id: u32,
+    keep_conversation: bool,
 ) -> Result<(), String> {
+    // Keep the same lock order as external sheet changes: turn, tabs, then session.
+    let mut turn = (!keep_conversation).then(|| ai_run(state));
     let mut list = lock(&state.tabs);
     if list.active == Some(id) {
         return Ok(());
@@ -136,7 +160,10 @@ pub(crate) fn activate<R: Runtime>(
         .position(|p| p.id == id)
         .ok_or_else(|| format!("No tab {id}"))?;
     // Stop a running turn first, so it can't run another tool on the other drawing.
-    new_conversation(app, state);
+    if let Some(turn) = turn.as_mut() {
+        turn.new_conversation();
+        let _ = app.emit("ai:cleared", ());
+    }
     let incoming = parked.remove(at).session;
     let outgoing = session.replace(incoming);
     if let (Some(old_id), Some(mut old)) = (list.active, outgoing) {
@@ -163,13 +190,15 @@ fn forget_autosave(s: &Session) {
 
 /// Closes tab `id`. One with unsaved drawing changes is refused with `UNSAVED` unless `force`
 /// (the window asks first; closed without saving, its autosave is deleted). Closing the tab on screen shows the next one (else the one before);
-/// the assistant then starts a new conversation.
-fn close<R: Runtime>(
+/// the assistant then starts a new conversation, unless `keep_conversation` (the assistant closed it).
+pub(crate) fn close<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     id: u32,
     force: bool,
+    keep_conversation: bool,
 ) -> Result<(), String> {
+    let mut turn = (!keep_conversation).then(|| ai_run(state));
     let mut list = lock(&state.tabs);
     let Some(pos) = list.order.iter().position(|&t| t == id) else {
         return Err(format!("No tab {id}"));
@@ -184,7 +213,10 @@ fn close<R: Runtime>(
         if let Some(s) = session.as_ref().filter(|s| s.is_dirty()) {
             forget_autosave(s);
         }
-        new_conversation(app, state);
+        if let Some(turn) = turn.as_mut() {
+            turn.new_conversation();
+            let _ = app.emit("ai:cleared", ());
+        }
         list.order.remove(pos);
         let next = list
             .order
@@ -222,25 +254,34 @@ pub async fn tabs(state: State<'_, AppState>) -> Result<Tabs, String> {
     Ok(snapshot(&state))
 }
 
-/// Shows the drawing of tab `id`; returns its info.
+/// Shows the drawing of tab `id`; returns its info. `keep_conversation`: the assistant asked for
+/// it (closing a drawing with unsaved changes shows it first), so its conversation goes on.
 #[tauri::command]
 pub async fn activate_tab<R: Runtime>(
     id: u32,
+    keep_conversation: Option<bool>,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
-    activate(&app, &state, id)?;
+    activate(&app, &state, id, keep_conversation.unwrap_or(false))?;
     crate::commands::with_session(&state, |s| Ok(s.info()))
 }
 
-/// Closes tab `id` (see `close`); returns the tabs left.
+/// Closes tab `id` (see `close`); returns the tabs left. `keep_conversation` as for `activate_tab`.
 #[tauri::command]
 pub async fn close_tab<R: Runtime>(
     id: u32,
     force: Option<bool>,
+    keep_conversation: Option<bool>,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Tabs, String> {
-    close(&app, &state, id, force.unwrap_or(false))?;
+    close(
+        &app,
+        &state,
+        id,
+        force.unwrap_or(false),
+        keep_conversation.unwrap_or(false),
+    )?;
     Ok(snapshot(&state))
 }

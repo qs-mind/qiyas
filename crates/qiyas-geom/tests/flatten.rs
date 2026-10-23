@@ -1,6 +1,6 @@
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use opencadcodec::entities::{
     BoundaryEdge, BoundaryPath, CircularArcEdge, EntityType, Hatch, Insert, LineEdge, LwPolyline,
@@ -238,6 +238,7 @@ fn self_referencing_block_stops_at_depth_limit() {
         "X",
         vec![line(0.0, 0.0, 1.0, 0.0), EntityType::Insert(inner)],
     );
+    let reference = performance::reference();
     let start = Instant::now();
     let outcome = flatten(
         &doc,
@@ -248,7 +249,7 @@ fn self_referencing_block_stops_at_depth_limit() {
     // Inserts at depths 0 to 31 expand, each adding one line; the rest is reported cut.
     assert_eq!(outcome.paths.len(), 32);
     assert!(outcome.truncated);
-    assert!(start.elapsed() < Duration::from_secs(1));
+    performance::assert_relative(start.elapsed(), reference, 2.5, "recursive flatten limit");
 }
 
 #[test]
@@ -467,3 +468,6 @@ fn exact_full_ellipse() {
     // Ramanujan for a = 2, b = 1: 9.688448220...
     assert!((exact_length(&e, &id).unwrap() - 9.688_448_220_5).abs() < 1e-6);
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

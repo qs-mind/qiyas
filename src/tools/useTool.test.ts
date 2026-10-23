@@ -777,3 +777,39 @@ test("a parametric tool picks parts where they are clicked, places a dimension, 
   const pruned = toolReducer(run("gcEqual", [click([0, 0], 0, 6)]), { type: "prune", present: (h) => h !== 6 });
   expect(pruned.param?.picks).toEqual([]);
 });
+
+test("the area tool marks a polygon closed with Enter or a double click, never with two corners", () => {
+  const two = run("mizanArea", [click([0, 0], 0), click([4, 0], 1000), { type: "finish" }]);
+  expect(two.pendingRegion).toBeNull();
+  expect(two.hint).toBe("ai.area.prompt");
+  const polygon = run("mizanArea", [click([0, 0], 0), click([4, 0], 1000), click([4, 3], 2000), { type: "finish" }]);
+  expect(polygon.pendingRegion).toEqual({
+    kind: "polygon",
+    points: [
+      [0, 0],
+      [4, 0],
+      [4, 3],
+    ],
+  });
+  expect(polygon.points).toEqual([]);
+  const double = run("mizanArea", [click([0, 0], 0), click([4, 0], 1000), click([4, 3], 2000), click([4, 3], 2200)]);
+  expect(double.pendingRegion?.points).toHaveLength(3);
+  // The region is handed on once.
+  expect(toolReducer(polygon, { type: "escape" }).pendingRegion).toBeNull();
+});
+
+test("a box dragged with the area tool marks it; other tools ignore it", () => {
+  const box = run("mizanArea", [{ type: "region", region: { kind: "box", points: [[0, 0], [5, 2]] } }]);
+  expect(box.pendingRegion).toEqual({ kind: "box", points: [[0, 0], [5, 2]] });
+  expect(run("select", [{ type: "region", region: { kind: "box", points: [[0, 0], [5, 2]] } }]).pendingRegion).toBeNull();
+});
+
+test("Mizan's selection becomes the select tool's selection set, from any tool", () => {
+  const fromLine = run("line", [{ type: "aiSelect", handles: [7, 9] }]);
+  expect(fromLine.tool).toBe("select");
+  expect(fromLine.selection).toEqual([7, 9]);
+  expect(fromLine.hint).toBe("");
+  const replaced = run("select", [click([0, 0], 0, 3), { type: "aiSelect", handles: [5] }]);
+  expect(replaced.selection).toEqual([5]);
+  expect(replaced.selected).toBeNull();
+});

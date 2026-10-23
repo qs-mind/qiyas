@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { Boq, Kind, Measurement, Total } from "../api";
+import { Explain } from "../boq/Explain";
 import { LinkPicker } from "../boq/LinkPicker";
 import { useT } from "../i18n";
 import { DataGrid, type GridColumn } from "../ui/DataGrid";
@@ -181,6 +182,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
             const linkLabel = boq ? `${t("boq.link")}: ${m.description}` : t("boq.importFirst");
             return (
               <>
+                <Explain item={`takeoff:${m.id}`} />
                 <button
                   type="button"
                   className="icon"

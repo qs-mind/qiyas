@@ -21,6 +21,7 @@
 //! FFI call safe, but documents and pages would still be shared across threads, and a long render
 //! would still block every other caller.)
 
+mod calibration;
 mod pages;
 mod raster;
 mod vectors;
@@ -33,7 +34,8 @@ use std::thread;
 
 use pdfium_render::prelude::{PdfDocument, PdfPageIndex, Pdfium, PdfiumError};
 
-pub use pages::{page_count, page_size, thumbnails};
+pub use calibration::{refine_raster_span, RasterSpan};
+pub use pages::{page_count, page_size, page_text, thumbnails};
 pub use raster::{render_page, MAX_SIDE};
 pub use vectors::{extract_vectors, FILL_LAYER_PREFIX, LAYER_PREFIX, TEXT_LAYER};
 

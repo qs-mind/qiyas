@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./markdown.css";
+import { plainMath } from "./plainMath";
 
 /** Links never navigate the window: Mizan's answers show where a link points, as text. */
 function Link({ href, children }: { href?: string; children?: ReactNode }) {
@@ -38,12 +39,13 @@ const components: Components = {
 };
 
 /** Mizan's answers as GitHub-flavoured Markdown: headings, lists (nested), tables, rules, quotes,
- *  code. Raw HTML in the text stays text, never markup, and links never navigate. */
+ *  code. Raw HTML in the text stays text, never markup, and links never navigate. TeX formulas
+ *  read as plain text (`plainMath`). */
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {text}
+        {plainMath(text)}
       </ReactMarkdown>
     </div>
   );

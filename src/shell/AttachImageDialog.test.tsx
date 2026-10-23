@@ -41,6 +41,9 @@ test("a new image is a tenth of the sheet wide, or 10 units on an empty sheet", 
   expect(defaultImageWidth([[0, 0], [250, 100]])).toBe(25);
   expect(defaultImageWidth([[-50, 0], [50, 0]])).toBe(10);
   expect(defaultImageWidth(null)).toBe(10);
+  // 10 m on an empty sheet, in the drawing's units.
+  expect(defaultImageWidth(null, 0.001)).toBe(10_000);
+  expect(defaultImageWidth([[0, 0], [0, 0]], 0.01)).toBe(1000);
   expect(defaultImageWidth([[0, 0], [0, 0]])).toBe(10);
 });
 

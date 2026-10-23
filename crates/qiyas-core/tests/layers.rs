@@ -891,3 +891,152 @@ fn find_replace_and_sync_attributes_leave_locked_entities_but_fields_follow() {
     .unwrap();
     assert_eq!(marks(&s), 0);
 }
+
+// ---- Isolating a layer, and undo leaving layers hidden or shown since as they are ----
+
+fn sample_session() -> (tempfile::TempDir, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
+    (dir, s)
+}
+
+fn new_layer(s: &mut Session, name: &str) {
+    s.run(Command::NewLayer { name: name.into() }).unwrap();
+}
+
+fn hidden(s: &Session) -> Vec<String> {
+    s.hidden_layers()
+}
+
+/// The founder's case: a layer isolated, an empty layer renamed, every layer shown again, then
+/// Ctrl+Z. Undo once put back the whole hidden set of before the rename, and the drawing
+/// vanished again; now it takes back only the rename.
+#[test]
+fn undoing_a_rename_restores_only_that_layers_hidden_entry() {
+    let (_dir, mut s) = sample_session();
+    new_layer(&mut s, "QIYAS-AREA");
+    s.run(Command::IsolateLayer {
+        name: "A-WALL".into(),
+    })
+    .unwrap();
+    assert!(hidden(&s).contains(&"A-DOOR".to_string()));
+    s.run(Command::RenameLayer {
+        from: "QIYAS-AREA".into(),
+        to: "QIYAS-AREA-2".into(),
+    })
+    .unwrap();
+    // Show all.
+    s.unisolate_layers();
+    for name in hidden(&s) {
+        s.set_layer_hidden(&name, false);
+    }
+    assert!(hidden(&s).is_empty());
+    assert!(s.undo());
+    assert!(
+        s.drawing.doc.layers.get("QIYAS-AREA").is_some(),
+        "the rename is undone"
+    );
+    assert!(
+        hidden(&s).is_empty(),
+        "nothing hidden again: {:?}",
+        hidden(&s)
+    );
+    assert!(drawn(&s).len() > 3, "the drawing is on screen");
+
+    // A layer still hidden under its new name is hidden under its old one again; a layer hidden
+    // since stays hidden.
+    assert!(s.redo());
+    s.set_layer_hidden("QIYAS-AREA-2", true);
+    s.run(Command::RenameLayer {
+        from: "QIYAS-AREA-2".into(),
+        to: "QIYAS-AREA-3".into(),
+    })
+    .unwrap();
+    s.set_layer_hidden("A-DOOR", true);
+    assert!(s.undo());
+    let now = hidden(&s);
+    assert!(now.contains(&"QIYAS-AREA-2".to_string()), "{now:?}");
+    assert!(now.contains(&"A-DOOR".to_string()), "{now:?}");
+    assert!(!now.contains(&"QIYAS-AREA-3".to_string()), "{now:?}");
+}
+
+#[test]
+fn isolating_twice_restores_the_hidden_layers_as_before() {
+    let (_dir, mut s) = sample_session();
+    new_layer(&mut s, "NOTES");
+    s.set_layer_hidden("NOTES", true);
+    let before = hidden(&s);
+    let undo_before = s.can_undo();
+    s.run(Command::IsolateLayer {
+        name: "a-wall".into(),
+    })
+    .unwrap();
+    assert_eq!(s.info().isolated_layer.as_deref(), Some("A-WALL"));
+    assert!(hidden(&s).contains(&"A-DOOR".to_string()));
+    assert!(!hidden(&s).iter().any(|n| n == "A-WALL"));
+    assert_eq!(s.can_undo(), undo_before, "not an undo step");
+    s.run(Command::IsolateLayer {
+        name: "A-WALL".into(),
+    })
+    .unwrap();
+    assert_eq!(hidden(&s), before);
+    assert_eq!(s.info().isolated_layer, None);
+    let err = s
+        .run(Command::IsolateLayer {
+            name: "NO-SUCH".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(err, CoreError::InvalidCommand(_)));
+}
+
+#[test]
+fn unisolate_keeps_layers_the_user_changed_since() {
+    let (_dir, mut s) = sample_session();
+    new_layer(&mut s, "NOTES");
+    s.set_layer_hidden("A-WALL", true);
+    // Isolating a hidden layer shows it; un-isolating hides it again.
+    s.run(Command::IsolateLayer {
+        name: "A-WALL".into(),
+    })
+    .unwrap();
+    assert!(!hidden(&s).contains(&"A-WALL".to_string()));
+    // The user shows A-DOOR and hides NOTES's neighbour while isolated.
+    s.set_layer_hidden("A-DOOR", false);
+    s.set_layer_hidden("NOTES", true);
+    s.run(Command::UnisolateLayers).unwrap();
+    let now = hidden(&s);
+    assert!(now.contains(&"A-WALL".to_string()), "hidden again: {now:?}");
+    assert!(!now.contains(&"A-DOOR".to_string()), "{now:?}");
+    assert!(
+        now.contains(&"NOTES".to_string()),
+        "the user's own hide stays: {now:?}"
+    );
+    assert_eq!(s.info().isolated_layer, None);
+}
+
+#[test]
+fn isolation_follows_a_renamed_layer_and_ends_with_a_layer_state() {
+    let (_dir, mut s) = sample_session();
+    s.run(Command::IsolateLayer {
+        name: "A-WALL".into(),
+    })
+    .unwrap();
+    s.run(Command::RenameLayer {
+        from: "A-WALL".into(),
+        to: "WALLS".into(),
+    })
+    .unwrap();
+    assert_eq!(s.info().isolated_layer.as_deref(), Some("WALLS"));
+    s.run(Command::UnisolateLayers).unwrap();
+    assert!(hidden(&s).is_empty(), "{:?}", hidden(&s));
+
+    s.run(Command::SaveLayerState { name: "ALL".into() })
+        .unwrap();
+    s.run(Command::IsolateLayer {
+        name: "WALLS".into(),
+    })
+    .unwrap();
+    s.run(Command::RestoreLayerState { name: "ALL".into() })
+        .unwrap();
+    assert_eq!(s.info().isolated_layer, None);
+}

@@ -2,6 +2,11 @@
 
 Qiyas (قياس) is a desktop measurement CAD for quantity surveyors, part of QS Mind. It opens DWG and DXF drawings, lets the QS measure and edit, and uses AI to build and check BOQs against the drawing. Public repo (`qs-mind/qiyas`, Apache-2.0, `LICENSE`). Stack: Tauri 2, React, TypeScript, Vite, Rust.
 
+The engine is general; the product focuses on construction. Checks, verification and drafting
+conventions must work on any drawing. Trade rules belong in optional packs: construction first,
+interiors and fit-out next, MEP and structure later. No plane-specific or mechanical-specific
+features, and no general CAD marketing. See `docs/2026-10-20-qiyas-scope-decision.md`.
+
 ## Layout
 
 ```
@@ -20,7 +25,7 @@ qiyas/
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
-    qiyas-ai        the 43 AI tools over the command bus, the agent loop, the Claude and
+    qiyas-ai        three generic AI tools over the command registry, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
     qiyas-mcp       the stdio bridge Claude Desktop and Claude Code start (bundled beside the app)
     qiyas-cli       the command line without a window: convert, run a script, take off, batch
@@ -47,7 +52,8 @@ order they always ran: `useShell`, `useOptions`, `useFileTabs`, `useAutosave`, `
 `usePlot`, `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and
 the tool's `cancel` to hooks made before them through refs filled right after they exist, and
 renders `Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
-in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. The
+in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. It uses condition waits and a file-only 30-second
+test timeout because it renders the whole shell; the five-repeat load check uses two workers. The
 three late refs are `measureRef` (`useSheets` cancels the tool when the sheet changes), `applyRef`
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
 with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
@@ -162,10 +168,111 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   unsaved changes (see Clipboard, viewports, UCS, sheet sets and recovery); a save, or closing it
   with Don't Save, deletes them.
 
+## Command registry
+
+- `qiyas-core/src/registry.rs`: every `Command` describes itself from its JSON schema (schemars
+  1.2, MIT: `JsonSchema` on `Command` and every type it holds). Each entry: the wire name, category,
+  summary and doc (the doc comment), effect (read, view, edit, file, session), the undo part
+  (`changes()` on its examples: takeoff, boq, conflicts, drawing, drawing+tables…), destructive,
+  batchable, internal, needs (pdf, clipboard), a self-contained schema (definitions inlined,
+  number formats left out; `batch`'s commands left open) and examples. A command whose payload is
+  a tagged enum lists its kinds, each an entry of its own: `draw.line`, `modify.move`,
+  `edit.offset`, `dimension.linear`. `registry()`, `get` (any case, `-` as `_`), `search` (the
+  name, doc and the schema's property names, values and descriptions; internal ones left out),
+  `index_text` (one line per category, about 2,000 characters, deterministic: the AI's index) and
+  `effect_of(&Command)` (a dry-run purge reads, a real one edits).
+- A new command needs a doc comment, `#[schemars(extend("x-category" = "…"))]` and an example
+  (`#[schemars(example = json!({…}))]`), and each kind an example; `tests/registry.rs` fails
+  without them, and checks that every example reads back as its command, every schema is
+  self-contained and names its type, and that a command that reads leaves the session as it was.
+  Other extensions: `x-effect` ("view", "file", "session" for one that is not an undo step),
+  `x-destructive`, `x-batch` false, `x-internal` (hosts only: `set_boq`, `set_conflicts`),
+  `x-needs`. Command-line words live on the command or kind variant too:
+  `#[schemars(extend("x-words" = ["LINE", "L"]))]`, upper case, the full word first.
+  `CommandInfo::words`, `Registry::by_word` and `Registry::words` expose them; the guard
+  refuses a word owned by two commands. `x-prompts` overrides argument order or prompt text.
+- `validation.rs` checks raw inputs against those schemas before execution, collecting missing
+  fields, wrong types, enums, constants and bounds together with JSON pointers. Unknown fields
+  are returned as warnings. The existing serde path error, schema and example remain available.
+  `Session::run_input(&Value, Source)` is the JSON execution boundary: it validates the raw
+  input, deserializes a plain `Command`, resolves omitted defaults, then executes. Its separate
+  `Reported` struct holds `outcome: Outcome`, `defaults_used: [{field, value, unit}]` and
+  `warnings`; JSON keeps the ordinary outcome fields with metadata beside them. `Command`
+  uses derived serde and both enums can be matched directly. Native Rust callers keep using
+  `run` or `run_as`. Raw batch steps pass through `run_input` in order within one transaction,
+  so each step's defaults use its actual sheet, scale and geometry. The aggregate report uses
+  `/commands/i/…` pointers and the wire batch also includes each step's own metadata.
+  The command-line machine exposes its original completed input through `take_input`; script
+  steps keep that raw input beside their plain command. Desktop IPC, scripts, typed commands
+  and the shared AI/MCP surface all execute wire commands through `run_input`.
+- Serde defaults appear in each field's registry schema and description. Conventional lengths
+  are resolved using drawing units and the sheet's annotation scale; the result says which
+  values were chosen. Text rotation is zero, MText width zero means no wrapping, polygons are
+  inscribed, and hatches are solid when omitted. Geometry that defines a shape remains required.
+  `input_context_defaults.rs` shares read-only runtime calculations for grid extents, room
+  label heights/languages, viewport fitting, clipboard bases and dimensional expressions.
+  Per-room defaults carry `{index, name, value}` entries. Revision clouds and comments share
+  a default arc length of one thirty-second of their outline; explicit zero is refused.
+  Custom hatch rotation/scale default to 0/1; image brightness/contrast/fade to 50/50/0.
+
+## Records
+
+- `qiyas-core/src/records.rs`: every object as a record, `{key, type, …summary, data}`, where
+  `data` is the object as opencadcodec serialises it (an entity without its variant wrapper:
+  `/common/layer`, `/radius`). `Command::Records { query }` (`Session::records`,
+  `Outcome::Records`): collections entities (a sheet, the one on screen by default, or `block`;
+  an xref's entities carry `xref` and `chain` and are read-only), layers, linetypes, text and dim
+  styles, blocks, layouts, viewports, groups, views, header, layer states, xrefs, take-off, BOQ,
+  conflicts, schedules, comments, constraints, parameters; filters handles, names, type, layer,
+  sheet, bounds and `where` (eq, ne, lt, le, gt, ge, contains, exists on a JSON pointer into
+  `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) under 12 KB
+  (`MAX_BYTES`, `truncated`); arrays past 100 items say how many they left out.
+- `qiyas-core/src/record_edit.rs`: `Command::SetRecords { collection, updates: [{key, path,
+  value, expected}] }`: serialise, set the JSON pointer, read back with `serde_path_to_error` (the
+  error names the field), `entity_from_record` puts back what serde skips (and a block
+  reference's attributes'); `expected` refuses a record changed since it was read. Entities
+  (and viewports) on a sheet's top level, not locked, layers (not an xref's; the current one
+  can't freeze), text styles, and the header variables in `HEADER_WRITABLE` (kept in the undo
+  step's `HeaderBits`). Refused, each naming its command: identity and ownership, extended data,
+  a text's value (edit_text), a block reference's place and attributes (modify, set_property,
+  edit_attributes), a dimension's block (dim_edit), a table's cells (edit_cell), a layer's name
+  (rename_layer), units (new_drawing), dimension variables (set_dim_style), other collections
+  (`collection_via`). One undo step (tables and take-off kept); dimensions and tables are drawn
+  again, the take-off and fields follow, an edited entity's constraints go (`Reshape::Edited`).
+- `Command::CreateEntities { entities: [{type, data}], sheet }`: the type's default
+  (`default_entity`, `CREATABLE`), the current layer, colour, linetype and lineweight, then `data`
+  merged over; a layer it names that is missing is made (white); texts are marked as Qiyas's;
+  dimensions, tables, viewports, references, pictures and attributes are refused with their
+  command. `Outcome::Added`.
+- `Command::RecordSchema { name }` (`record_schema`): every path of an entity type, "layer",
+  "text_style" or "header" (four levels deep) with its value type, `write: false` with `why` and
+  `via` where refused, the shapes of the named types (enums as their variants: `Color` is
+  `"ByLayer" | … | {"Index": …} | {"Rgb": {…}}`), whether the type can be created, and that
+  angles are radians there. Traced once off the types' serde (`serde-reflection`, MIT OR
+  Apache-2.0: repeated passes until every enum variant is seen, about 12 ms) and kept as JSON.
+- `record_input_schema` caches those traced types as input schemas too. Creation and block
+  definition check all supplied data fields before merging the entity defaults. Record edits
+  stage each replacement without mutation, including sequential `expected` values, and collect
+  type, unknown-field and path problems. Required fields in a replacement object are checked
+  against the codec's actual serde by omitting each field from a valid record; serde defaults
+  and optional fields remain optional.
+
 ## Undo
 
 - `qiyas-core/src/undo.rs`: one step per command, at most 200, each with its `Source`
-  (`undo_if` lets the AI undo only its own). Take-off, BOQ and conflict steps keep that part whole.
+  (`undo_if` lets the AI undo only its own) and label (`Command::label`: "draw.line",
+  "set_layer"; `Session::history_steps`). Take-off, BOQ and conflict steps keep that part whole;
+  one whose command fails half way is put back.
+- Transactions (`qiyas-core/src/transaction.rs`): `Session::transaction(source, label, f)` runs
+  `f`'s commands as one step: each `run_as` records its own step into an open group
+  (`History::begin_group`), which closes into one `Step::Group` (held last first, so undo runs
+  them backwards and redo forwards; a group of one is that step). On failure `abort_group` puts
+  every step back, last first, and the view state (sheet, hidden layers, current, drafting, UCS,
+  isolation, layer states' hidden layers) is restored, with `document_revision` as it was. Not one
+  outer recording: the codec's change recorder can't nest. Transactions nest; inside one, commands
+  the registry marks `x-batch` false are refused. `Session::last_change()` (`Change { added,
+  changed, removed }`): what the last command or transaction did to the entities (drawn and erased
+  in one transaction: in none).
 - A drawing command (`Part::Document` in `Command::changes`) runs inside
   `Session::record_document_change`: opencadcodec's entity change recorder keeps the before image
   of each entity it adds, removes or edits (`DocChange`), never a copy of the whole drawing.
@@ -188,15 +295,41 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Arabic, or the drawing's own TrueType font when the computer has it; SHX falls back to Noto.
   Arabic is shaped and joined. View tab, "Arabic text is reversed" fixes drawings whose Arabic
   was stored backwards (saved in the project file).
+  Picking and drawing checks place approximate text bounds with the same alignment, MTEXT
+  attachment and paragraph spacing as the drawing, including rotated text and attributes;
+  wrapping uses estimated character widths.
 - Snaps (end, mid, centre, node, intersection, nearest, perpendicular), ortho, polar and the dot
   grid: status bar toggles, F3 / F8 / F10 / F7, settings under the gear. Saved per drawing in the
   project file.
+- The UCS icon (`src/viewport/ucsIcon.ts`, an SVG over the canvas moved on every frame without a
+  React render): an L of X and Y arrows on the UCS origin (0,0 without a UCS), turned with its x
+  axis, a small square marking the point; when the whole icon would not fit on screen it parks
+  bottom left (AutoCAD's UCSICON ON, ORigin). Drawn in the canvas's ink or paper at 70%, never
+  mirrored in Arabic. UCSICON ON / OFF (bare flips it) and View, Display, "Origin icon"; kept on
+  this computer in `localStorage` `qiyas.ucsIcon`, on by default; the split view follows.
 - Xrefs are read-only: loaded from the stored path, beside the drawing, `xrefs/` or `x-refs/`
   (depth 4); View tab, External references to reload or locate one (kept in the project file).
 - Command line (Ctrl+9 shows or hides it): AutoCAD-style words and aliases (DI, AA, COUNT, DIV,
   ME, ID, Z E/W/IN/OUT, LAYOFF, U…), typed points `x,y`, `@dx,dy`, `@d<angle` in drawing units,
   Arabic digits accepted. Extra aliases: `aliases` in `settings.json`, edited in ALIASEDIT. Typing
-  a command lists the matches in a cmdk list above the line (see the UI kit).
+  a command lists the matches in a cmdk list above the line (see the UI kit). IPC `command_words`
+  supplies the core's words, aliases and summaries; the window adds its own tools and actions.
+  Its existing parser keeps click-driven tools and their options. Unknown words go through
+  `cmdline_step { line }` to `qiyas-core/src/cmdline::Machine`, with the current UCS and last
+  point. A completed command uses the window's usual apply path; an incomplete one shows its
+  next prompt. The pure machine reads points, numbers, names and options from the registry
+  schema, with `x-prompts` when a command needs a different order or prompt. A new core word
+  requires no window parser change.
+- Pastes into text fields (Ctrl+V, Ctrl+Shift+V, Shift+Insert) go through `src/shell/safePaste.ts`
+  and IPC `clipboard_read_text` / `clipboard_read_image` (arboard), never the web view's own
+  clipboard read: WebKitGTK 2.54 on Wayland hung and then crashed the app there. The field gets a
+  paste event (Mizan's composer takes pictures from it), then the text typed in as one edit. The
+  web view's right-click Paste is not covered. Keys outside text fields stay PASTECLIP.
+- Native file dialogs all go through `src/fileDialogs.ts`. Open and Save start in the folder
+  of the drawing on screen (never an untitled placeholder), then the last chosen folder in
+  `localStorage`, then the user's Documents folder from Tauri. Suggested filenames are kept.
+  This applies to drawings, PDFs, images, scripts, exports, blocks, libraries, sheet sets and
+  plot styles. A Vitest guard prevents direct dialog-plugin imports elsewhere.
 - Properties palette under Layers: what the Select tool picked, in AutoCAD's folding sections
   (`PropertiesPanel.tsx`, `propertiesGeometry.ts`; folded ones kept in `qiyas.properties.folded`):
   General (handle, type, layer, colour as drawn, linetype, weight, sheet, block path, xref),
@@ -214,6 +347,38 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   sums, but a hatch and its boundary both count) and the General fields they share ("Varies"
   otherwise), read-only. A drawing's own entity is edited there (see Layers, groups and
   properties).
+- Units (Kareem's ruling: AutoCAD level in every unit; `qiyas-core/tests/units.rs` runs one plan in
+  mm, cm, m and inches and must stay green). Nothing is a bare length in drawing units:
+  - The screen draws curves within 0.05 mm whatever the units (`Session::batch_tol`,
+    `batch_tol_for`); a metre drawing once drew a 1 m circle as a 10-gon. Every circle gets 16
+    segments at least (`qiyas-geom` `MAX_STEP`; 64 made the DWG corpus 6.6 times heavier, and
+    the zoom regen below already rounds what is zoomed into), and an arc of exactly whole steps
+    gains none from rounding (a hatch traced round a circle would leave slivers). The DWG corpus
+    gives 22,672 segments (`docs/dwg-corpus.md`).
+  - Zoomed in past that, the sheet on screen draws its curves again within a quarter pixel
+    (`ZOOM_TOL_PX`, `zoom_tol`, `Session::screen_tol`; part of `batch_version`), and lets them go
+    zoomed out: the batch carries `curve_tol` and `base_tol` (atlas section, 40 bytes) and the
+    viewport's `checkGlyphs` asks through the glyph zoom hint (`curvesNeedRedraw`), as AutoCAD
+    regenerates.
+  - Measuring flattens within 1 µm (`measure_tol`, `measure_tol_of`).
+  - A new drawing takes AutoCAD's metric template in its units at 1:100 (`metric_template`): dimension
+    text 2.5 mm on paper (0.25 m in metres), the grid a metre (`Drafting::grid_spacing` from the
+    units when there is no project file), MLINE 20 mm, AUTOCONSTRAIN welding within 0.05 mm
+    (`distance_tolerance` left out), Mizan's ANSI hatches at the Hatch tool's 0.025 / metres per
+    unit, a table cell without a height at half its row, an image on an empty sheet 10 m wide.
+  - INSERT scales a block by its block units (or its source drawing's INSUNITS) to the drawing's
+    (`insert_unit_factor`), as AutoCAD; xrefs are not scaled again (AutoCAD bakes that into the
+    reference's scale on attach). The last text height used is kept per drawing (`useAnnotate`).
+  - On open, a dimension style nobody sized (the codec's stock Standard: text 0.18, offset 0.625,
+    extension 1.25; AutoCAD's imperial Standard differs) takes the metric template's sizes in a
+    drawing not in inches or feet, and Qiyas's dimensions in it are drawn again
+    (`size_stock_dim_styles`): at 1:100 in metres it gave 18 m text and 125 m extension lines.
+  - Tables: when Qiyas draws a table again (`rebuild_table`), each row grows to hold its cells'
+    text as the text engine wraps it (`qiyas_geom::fit_rows`, `mtext_height`); rows never shrink.
+  - Survey coordinates: the edit tolerance (`modify2` `TOL`, 1e-6) and the same-point test
+    (`qiyas-geom` `SAME_POINT`) grow with the coordinates' size past a million (`tol_near`,
+    1e-12 of it; `SAME_POINT_REL` 1e-13), as float steps there exceed them: JOIN once refused two
+    walls meeting at a 3.3e9 mm UTM northing.
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,
@@ -230,6 +395,438 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   points and knots (the curve through the fit points when there are none). Measuring sees
   outlines only (`FlattenOutcome::into_paths`).
 
+## Data-defined elements (Phase 16)
+
+- `knowledge.rs`: versioned JSON XRecords in `NOD/QIYAS_KNOWLEDGE`, with subdictionaries
+  types, levels, tables, rules, sheets, mappings, views and measurement. Objects and the NOD
+  pointer participate in undo; stale DWG raw payloads are cleared on write. `xdata.rs` shares
+  UTF-8 chunking and application-specific raw EED invalidation among walls, rooms and fields.
+- `objects.rs`: `define_object_type`, `redefine_object_type`, `delete_object_type`,
+  `place_objects`, `set_object_props`, `object_schedule` and `set_knowledge`. Type properties,
+  geometry recipes and quantity expressions are data. Physical property values use metres,
+  m², m³, degrees or counts; driver coordinates use drawing units. `unit` converts metres to
+  drawing coordinates in symbol recipes. Records expose `object_types`, `objects` and
+  `knowledge_<kind>`. Generated graphics carry `QIYAS_OBJECT_PART` owner/role links; drivers
+  carry `QIYAS_OBJECT`. Generic part move/copy/erase resolves to the driver.
+  Point symbols retain rotation and reflection through DWG/DXF. Scaling a point driver moves
+  its insertion; explicit physical dimensions and their quantities change through properties.
+  Union bands share graphics within the same type, sheet and level; automatic groups also
+  share a vertical span, while an explicit assembly supports mixed heights. The shared band
+  service integrates volume by vertical span and applies hosted cuts. Deleting an owner transfers
+  shared graphics to a survivor so quantity and field references follow. Justification, role
+  layers and hosted offsets/reflection are recipe data. Property bindings can read `host.*`.
+  The existing geometry kernel refuses overlapping parallel runs in a union group; failed
+  placements roll back atomically.
+- `derived.rs`: one ordered derivation list inside `record_document_change` (objects, views,
+  schedules, BOQ rows, fields). Phase 18 fills the BOQ slot; views remain reserved. Object
+  schedules are CAD field tables that follow edits and grouping in the same undo step.
+- Expressions now include powers, comparisons, logic, typed strings/booleans, lazy `if`,
+  `min/max/round/ceil/floor` and resolver lookups; the numeric constraint API is preserved.
+  Arabic digits inside strings remain literal. `geometry.*` is separate from named quantities.
+- Legacy wall, room and opening definitions are stored in `data/legacy-object-types.json`.
+  The converter runs on open and edits, retaining visible geometry and old quantity behavior.
+  Door/window symbols use the stored recipes; redefining them repoints their existing inserts
+  to regenerated symbol blocks, retaining placement, schedules and references.
+  Wall commands translate old arguments into ordinary typed drivers and shared band rendering;
+  legacy tags remain for old API/field compatibility. Rooms use the shared seeded-region source
+  (`QIYAS_OBJECT_REGION`), with holes and validity; invalid regions expose no usable quantity.
+  Old room/opening schedule commands select JSON recipes for the shared schedule renderer.
+  Headers, templates, decimal precision, totals, explicit IDs and default layers are data;
+  manual room overrides remain detectable until the source quantity changes.
+- Details and verification: `docs/2026-10-21-qiyas-phase16.md`. No new dependencies.
+
+## Drawing recognition and documents (Phase 17)
+
+- `qiyas-core/src/recognition.rs` and `recognition/`: the `recognition` command family
+  defines/lists/tests/applies drawing-owned rules in knowledge kind `recognition`. Selectors
+  cover globs/regex, layers, blocks, attributes, hatches, closed regions, text and colour.
+  Extraction reads attributes, note/section captures, parallel-line distances and geometry.
+  Accepted candidates become ordinary Phase 16 instances. Missing evidence, rule conflicts
+  and low confidence stay in persistent review metadata (`QIYAS_RECOGNITION`). Each mutation
+  is one undo step. Corrections can save scoped or explicitly generalised rules as data.
+- Drawing tables, text grids and attribute blocks become type/rule definitions through an
+  explicit column mapping. Calibrated PDF imports retain `QIYAS_SOURCE` path/page evidence;
+  vision hints snap to CAD geometry or raster ink, with raster interpretations requiring review.
+  Recognition uses types with empty plan recipes to retain the source graphics. It currently
+  operates on the drawing's own top-level entities; xref content remains read-only.
+- The window's Review tab accepts, fixes or rejects candidates in English and Arabic.
+  `qiyas_read document {path,pages?}` reads plain PDF text through the pdfium worker without
+  changing a drawing. `qiyas_capture` source `document` renders a PDF page with a coordinate
+  caption. The composer accepts PDFs up to 20 MiB under the Qiyas data home's `attachments/`;
+  debug attachments and all development recipes/reports stay in `.local/`.
+- `qiyas-cli bench recognize --case ID --plan FILE --output FILE` computes submissions from
+  recognition recipes. `bench run` uses case-local `recognition.json` where available. Rules
+  and quantity mappings are data; prediction code never reads gold quantities. Scoring rules
+  are unchanged, and PDF citations do not claim to reproduce original CAD handles.
+- The Phase 17 dev run improved the original 956-case cohort from 65.03% to 70.97%
+  coverage with 100% matched accuracy within 1%; the current 1,099-case set reaches 71.59%.
+  All 120 PDF variants produce scored submissions, but each currently covers selected
+  measurements. Independent 95% QS recall and live vision validation remain outstanding.
+- Workflow, schema, limits and verification: `docs/2026-10-22-qiyas-phase17.md`.
+
+## Measurement methods and generated BOQ (Phase 18)
+
+- `measurement.rs` / `measurement/evaluate.rs`: user-supplied, cited rules for types/trades,
+  timesing and factors, hosted opening/void thresholds, boundary exceptions, unit bands,
+  per-object rounding and coverage notes. No standard or trade thresholds ship with Qiyas.
+  `measurement.set_method` snapshots Settings/project scopes in drawing knowledge; project
+  takes precedence. `measurement.set_mappings` supplies bilingual description/code templates,
+  sections, trades and units. `measurement.report` reads quantities, BOQ and dimension sheets.
+- The derivation hook refreshes the generated result with every drawing edit in its undo step.
+  Lines retain expressions, operands, inclusion decisions, method/clause/source and handle/sheet/
+  assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
+  withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
+- Settings validates local method files and applies changes transactionally to open tabs. Opening
+  a tab applies the selected method. Project `.qss` runs apply their method override to every member before deriving quantities. The BOQ panel exposes the
+  generated items and dimension source links; the take-off export adds bilingual BOQ, dimension
+  and review worksheets. Comparison adapts generated quantities without replacing the imported BOQ.
+- `recognition.pdf_text` calibrates vectors from a label regex and a ticked scale bar. General
+  label/legend rules live as data; ambiguous calibration and scans stay in review.
+- `bench run --mode prepared|autonomy`: prepared case recipes versus shared rules only. Autonomy
+  never opens case recipes. Both reports show item coverage, precision, F1 and extras per case
+  and overall, plus PDF totals, in `baseline-<mode>.json/.md`. Rules/runs stay in `.local/`.
+- Algorithm performance guards use `tests/support/performance.rs`, a fixed integer sort workload.
+  The million-segment guard also checks that its ratio budget would reject a 4x slowdown.
+- Schema, verification, benchmark comparison and limits: `docs/2026-10-22-qiyas-phase18.md`.
+
+## Mizan autonomous take-off (22 October 2026; before Phases 19–23)
+
+- Founder ruling: Mizan works from a request to the completed take-off alone. Human review is
+  optional. The headline is **MIZAN ALONE** through live `qiyas-cli eval`; prepared and shared-rule
+  engine benchmarks are separate diagnostics, never claims about autonomous model performance.
+- `qiyas_read digest {offset?}`: all-sheet units/scale, sheets, layer/kind counts, block inserts
+  and attribute tags, spatial text/table evidence, closed-area statistics, hatches, knowledge and
+  take-off counts, selected method and a suggested picture. Pages are at most 6,144 JSON bytes;
+  `next_offset` continues them. Text previews are bounded; records retain the full source.
+  Text clusters are geometric hints, not semantic assertions about a legend or a room.
+- `commands {names:[...]}` fetches several schemas in one call. The registry index generates its
+  take-off workflow from command/kind `x-takeoff-step` schema metadata. The three tools remain.
+- `takeoff_workflow.txt` guides digest/picture, batched type/rule authoring, recognition, Settings
+  method (project override wins), mappings, self-check and repairs by handle. No case names,
+  trade lists, standards text, thresholds or rates are supplied. Missing methods may be authored
+  as explicitly cited geometric data; selected standards must not be silently replaced.
+- `qiyas_read takeoff_check {offset?,expectations?}` reports per-layer and per-block explanation,
+  closed-region coverage, unexplained handles, unmapped tables, unmatched schedule rules,
+  uncertainties and verify results. It reads only. These are evidence shares, not truth coverage.
+  Unexplained annotations can keep the check incomplete; Mizan must disclose that at the budget
+  limit. Multi-sheet recognition evidence is used by measurement derivation and submissions.
+- Autonomous is the default; saved per-job/per-phase choices still apply. Autonomous runs report
+  introduced drawing errors at completion without an approval pause. The Review panel is a
+  take-off report with optional corrections, including accepted low-confidence interpretations.
+- Eval submits accepted measured dimension items and their generated BOQ totals. Raw
+  manual rows/candidates are excluded. Engine recipes likewise require accepted elements;
+  legacy `include_baseline` no longer appends raw geometry. Shared development mappings live in
+  `.local/benchmark/general/`, never in the product or live/scripted Mizan input. PDF label areas
+  become typed recognised enclosures before their explicit mapping is submitted.
+- `eval --cases ID ID ...` or `--set live-dev --total-budget-usd N` writes one combined report.
+  Each case retains `agent.log` (every step, no rotation), `steps.jsonl` (requests, trimmed tool
+  results, usage, reservations and cost), BOQ/dimensions, drawing and self-check. Reservations
+  cover the next request only: UTF-8 input bytes plus protocol/image allowance and output cap;
+  actual usage settles the ledger. Unknown usage retains the reservation and stops the case.
+  Unused case allocations carry forward; the total and daily caps both apply. Selected Settings
+  method files are applied to the isolated evaluation drawing. No case recipes are supplied.
+- Frozen sets live in `.local/benchmark/sets/`. `live-dev` selects the first lexical clean case
+  in apartment, office, warehouse, MEP and external, plus the first lexical PDF case. `quick`
+  round-robins project-type × variant strata, SHA-256 case-ID order within each, up to 120 cases.
+  `bench run --set quick --mode prepared|autonomy` forces one repetition. Existing full reports
+  provide the before scores for the exact quick cohort. The full 1,099 × 3 remains for milestones.
+- `eval_workflow_tests.rs` runs the real agent with a conversation-only scripted provider on two
+  newly generated drawings, writes its own rules and mappings, resolves pending candidates by
+  handle, and scores positive coverage. The provider has no Session/filesystem/truth access.
+  This tests orchestration; live model quality still requires the reviewer's paid evaluation.
+- Verified quick cohort (120 cases, one repetition): prepared coverage unchanged at 30.17%,
+  precision 19.02% → 69.73%; shared-rule autonomy coverage unchanged at 19.50%, precision
+  14.43% → 98.76%. Before scores use exactly these cases from the retained full reports. The
+  scripted office/apartment runs reached 37.5%/44.44% coverage and 100% item precision in ten
+  requests each. These results do not replace a live MIZAN ALONE score.
+- No dependencies added. Validation and measured results: `docs/2026-10-22-mizan-autonomous-takeoff.md`.
+
+### First live-run corrections (22 October 2026)
+
+- MIZAN ALONE remains the priority. No paid eval is part of implementation. The first six-case
+  run exposed expensive repeated history, invalid authored definitions and a PDF-only capture
+  failure; its 22% coverage is the live baseline, not a target achieved by engine diagnostics.
+- `qiyas-ai/src/history.rs` keeps the newest three tool results whole and summarizes older
+  results once, retaining handles, ids, names, decisions and error codes. The first digest and
+  system prompt remain unchanged for caching; tool ids, arguments and signatures stay paired.
+  The older message-count compactor remains the final guard for long conversations.
+- Records default to summaries without null/empty fields, with 12 KB pages; digest previews and capture captions
+  are compact. PDF digest entries expose real source paths/pages and document capture arguments.
+  Picture framing includes PDF/raster bounds, even without vector geometry. Relative document
+  paths resolve beside the active drawing. Scans use calibrated `recognition.vision` hints and
+  retained review metadata, or an explicit failure/missing-evidence explanation.
+- Batch knowledge validation stages definitions in order on a private document, shared across
+  types, schedule-derived types/rules, methods, mappings, checks and every `set_knowledge` kind.
+  Execution still runs sequentially in one undo transaction. A genuinely missing type remains
+  an error, including in rejection rules. Use `geometry.count`/`geometry.length` for quantity
+  expressions, or distinct aliases; `count: "count"` is circular.
+- Prompts execute batches directly and repair returned errors. Registry method/mapping examples
+  contain complete recipes and citations. Recognition and mapping should be published together,
+  then extended, so partial work remains measurable if a cap interrupts the run.
+- The provider exposes current budget notices to the agent. At 80% of requests or cost used,
+  or when fewer than two conservative reservations fit, it tells Mizan to stop exploring,
+  finish mappings and write the end report. Hard stops report retained quantities locally.
+- Eval always writes `end-report.json` and logs it in both logs, retaining the actual answer,
+  measurement report, submission count and self-check. `done` with zero submitted items becomes
+  a failed investigation with capture/calibration/recognition/mapping diagnostics. The existing
+  save-and-score path also runs after request/cost caps; tests exercise both caps with nonempty
+  generated submissions. Prediction and providers never receive benchmark truth.
+- Offline replay evidence and exact validation outcomes are recorded in
+  `docs/2026-10-22-mizan-live-fixes.md`; `.local/mizan-live-fixes/` holds raw check logs and
+  per-request token estimates. The 21-request finishing replay peaked at 18,188 estimated input
+  tokens and cost $0.231; request 21 fell from 58,841 to 17,086 tokens. Both cap replays retained
+  and scored nonempty BOQs. These are scripted accounting comparisons, not live model scores.
+
+### Discovery waste corrections (22 October 2026)
+
+- Start take-off with `digest`, then `takeoff_kit`. The registry index names this first.
+  Command/kind `x-takeoff-kit` metadata selects complete registry examples and orders a
+  connected type → recognition → apply → method → mappings → report batch. Complete examples
+  carry their required fields; enum choices remain explicit, with full contracts in error repairs. The drawing
+  digest supplies paired source layer/block names without classifying their meaning.
+- The kit has a 6,144-byte guard and deterministic contracts. Copy and adapt its batch;
+  never validate empty command stubs or discover these commands one schema at a time.
+  Missing-field validation and run errors include required fields and a filled registry
+  example, including nested batch steps. Self-check and the final uncertainty report remain
+  required; selected methods must be preserved.
+- Normal and budgeted requests share a bounded busy/rate-limit retry policy: 5, 15, 45 and
+  55 seconds (at most two minutes), with Retry-After seconds or HTTP dates as a lower bound.
+  A server delay beyond the remaining window fails without retrying early. Transient rejections do not
+  consume the request allowance or accrue unknown usage; transport/stream failures retain
+  conservative accounting. No paid eval belongs to this implementation check.
+- Offline before/after evidence and check results: `docs/2026-10-22-mizan-discovery.md`.
+
+### First subscription-agent run corrections (22 October 2026)
+
+- Eval and headless MCP submit accepted per-object `measurement.quantities` as dimension
+  items, retaining the source handle in hexadecimal, rule, citation and dimension lines.
+  Generated BOQ totals remain alongside them with `aggregate_of` component IDs. Bench
+  recognition recipes retain the same per-object/grouped representation.
+- Measurement rules expose `kind` (count/length/area/volume) and `basis` (geometric or
+  `rule:<cited note name>`) in the kit and workflow. Explicit basis is preserved exactly.
+  Legacy saved recipes without basis use geometric only for direct geometry or explicit
+  area × numeric height; other transformations retain `rule:<own rule ID>` with a warning.
+  This is a conservative migration, never a guess at a benchmark note name. Saved quantities
+  are never changed; simple volume recipes retain their cited height factor for traceability.
+- The reviewer’s scorer uses exact-basis, same-category and same-kind/unit handle tiers,
+  never quantity to choose a match; ambiguity stays unmatched. A submitted geometric claim
+  must independently reproduce. Complete aggregate totals are reported separately, not counted again as extras. Component IDs, source union,
+  units, basis, total quantity and dimension-line multiset must agree. A matched aggregate
+  consumes its components; partial/repeated/malformed totals get no exemption. Benchmark
+  discrepancy prediction shares this component validation and compares at client granularity,
+  so dimension rows and their BOQ total cannot create duplicate quantity or missing-item alarms.
+- Digest note text is paged without losing its tail, with the three closest geometry handles,
+  layers and bounding-box distances on the same sheet. `named_handles` lists explicit numeric
+  references that resolve to drawing entities (decimal or `0x` hexadecimal). Proximity is not applicability.
+  Schedule columns include wide tables and detected text grids. Self-check flags dimensional
+  conflicts between a cited note's explicit numeric unit and a rule's geometry/factors,
+  including percentage scope when the note states a unit. Fractional count quantities and a
+  cited percentage applied across every rule are self-check errors, including base-plus-percentage
+  recipes. The kit/workflow require fixing these before completion; factors apply only to the
+  items named in their note. Named handles rejected or omitted from every rule are errors, as
+  are cited factors applied to disjoint handles. `takeoff_check.end_report` accepts a draft final
+  answer with `Exclude <handle>: <reason> (note <handle>)` lines; finish checks the retained answer
+  with the same rules. Only a matching note-citing exclusion excuses omission. Overlapping note
+  scopes and other unitless scope still need judgement.
+- `bench rescore-agent --report <combined report.json> --output <new directory>` rebuilds
+  retains saved submissions and re-evaluates embedded measurement rules on the saved drawing.
+  Traceability never uses truth quantities or rule names; counts reproduce exactly and other
+  quantities within 0.5%. All cited handles must exist; rule-derived drawing-note citations
+  need note handles. Complete aggregates require every component to trace. Per-submission
+  reasons include extras; submitted and all-truth traceability use separate numerators.
+  Development scoring then opens truth only for correctness and matching. Holdout replay
+  retains saved correctness/correspondence and appends a `rescore` event without opening
+  sealed inputs. New reports save submission indices. Legacy mixed outcomes recover the
+  scored set only from a unique partition of saved extras and aggregate memberships; missing
+  per-truth-row links remain undisclosed, with exact failure identities in `submission_traces`.
+  No quantity chooses a correspondence. Originals and contamination exclusions are retained; missing saved
+  submissions remain empty. This command never starts an agent or provider.
+- Submissions and saved replay use drawing-owned element metadata: centroid/insertion point
+  converted to metres (PDF drivers already contain calibration), and verbatim element labels
+  with rule text as fallback. PDF regions use the nearest enclosed text; equally near labels
+  remain ambiguous. Vision/OCR spatial texts are retained on the source driver. BOQ totals use the unweighted
+  centre of their distinct source elements; PDF evidence never claims original CAD handles.
+- Open paths use their half-length point; regions use area centroids and blocks use insertion
+  points. `bench regenerate-positions` updates only generated development truth position arrays,
+  including variants, from source geometry. PDF truth uses calibrated page coordinates. Original
+  quantity literals and all other truth bytes stay intact; hashes are appended to
+  `sources/qiyas-generator/position-provenance.jsonl`. Holdout contents are never opened.
+- PDF `description_position` matching uses max(0.25 m, 2% of the element's geometry-derived
+  diagonal); CAD retains 0.05 m. Quantity values never select matches and ambiguity remains
+  unmatched. A subsequent PDF-only `pdf_position` tier requires kind/unit and distance within
+  max(0.5 m, 3% of the geometry diagonal). Only candidates at the same position can use the
+  existing word tie-break; different nearby elements remain ambiguous. Position metadata and
+  diagonals come from drawing geometry, not quantities.
+- Raster vision refines supplied tick anchors using sub-pixel ink coverage, selects the longest
+  verified span and cross-checks supplied dimension strings/endpoints. Its result and evidence
+  report residual uncertainty; above 0.5%, candidate confidence is capped at 0.5. Supply
+  `calibration_spans`, `dimensions` and verbatim spatial `texts` from vision/OCR; PDF text is
+  collected automatically. Missing ticks or independent dimensions are reported explicitly.
+  `bench calibrate-scans --output FILE` audits all generated scans against their geometry only
+  after production calibration, without agents or changes to cases.
+- `bench regenerate-scans` refreshes only existing generated scanned-PDF variants using their
+  saved seeds, adds a 4% margin and reframes prepared vision recipes. Other variants and saved
+  agent artefacts remain untouched. No model calls are involved.
+- Keep Codex's `-c mcp_servers.qiyas.default_tools_approval_mode="approve"` and its argument
+  test: read-only agent execution otherwise refuses the configured MCP tools.
+- Verification and saved-run comparison: `docs/2026-10-22-agent-eval-fixes.md`.
+
+## Discrepancies and queries (Phase 19)
+
+- The registry command `check` compares the imported client BOQ with mapped element quantities
+  and manual take-off, evaluates drawing knowledge kind `checks`, and raises queries and Comment
+  clouds as one transaction. `qiyas-takeoff::compare` and `compare_session` retain their public
+  API; the shared comparison implementation now lives in `qiyas-core/src/discrepancy/` so the
+  generic command registry, Mizan, desktop and CLI use the same engine.
+- `define_check {name,rule}` and `set_knowledge {kind:"checks",name,data}` validate cited rules.
+  Rules carry severity and English/Arabic questions. General operations are schedule row joins
+  against element counts or summed/per-instance numeric properties, host/property joins, quantity relations between
+  sets, and membership in a drawing or supplied document table. Column mappings, element
+  selectors, tolerances, units and conversion factors are data. Extracted document tables live
+  under knowledge `tables` as `{rows,citation}`; missing evidence is an error, never a zero/pass.
+- BOQ comparison finds mapped codes absent from the client list, unmeasured client scope,
+  wrong quantities/units (including measurement unit bands) and duplicate codes. A method rule
+  may supply `tolerance:{percent,absolute}`; generated items retain their applicable tolerances
+  and citations. Existing manual comparison defaults remain for older drawings.
+- Findings carry `query` metadata: severity, source citations, bilingual question, evidence
+  handles/sheets/grids, rule identity and cloud handles. Stable finding ids retain statuses and
+  notes on repeated checks. The drawing's `queries/result` XRecord stores the list; standalone
+  DWG/DXF reopen restores it without a sidecar. Resolution and comparison are each one undo
+  step. Rechecking replaces owned clouds without accumulating duplicates. Findings describe
+  the last check; run `check` again after repairs.
+- The conflicts panel shows query questions, severity and evidence; Compare redraws the clouds.
+  Take-off exports from all hosts add `Queries`, with readable bilingual columns and lossless
+  records. `qiyas_boq::queries::import_queries` reads them back. No rates are exported here.
+- Mizan's registry workflow gains `check` after BOQ generation; it authors cited rules, runs
+  comparison and reports uncertainties without requiring a human step. Scripted workflow tests
+  exercise this command through the production generic tool surface.
+- Benchmark prediction now reads client inputs and shared check interpretations from `.local/`,
+  submits findings, and leaves evidence-to-truth identity matching to the scorer. Shared data
+  declares which interpretations establish complete scope for missing-item checks. Neither
+  prediction nor Mizan reads truth. Engine prepared/autonomy modes remain diagnostics; no live
+  provider evaluation was authorized or run. Results and limits: `docs/2026-10-22-qiyas-phase19.md`.
+- Verified quick results (120 identical cases, one run per mode): seeded-error recall 0/36 →
+  36/36 (100%) in both modes; finding precision 80%, nine false alarms over 111 clean cases
+  (0.081/case), all on overlap variants. BOQ coverage/item precision remain 30.17%/69.73%
+  prepared and 19.50%/98.76% autonomy. DWG/DXF and Excel query round trips passed. Two socket
+  tests still require a reviewer outside the sandbox; all other requested checks passed.
+
+## Revisions and variations (Phase 20)
+
+- `revisions.rs` compares the current B with A using stable handles, geometry, layers,
+  blocks and attributes, including changed block definitions and renumbered exports.
+  `compare_revisions {other_path,tolerance?}` reads per-sheet changes and bounds.
+  Tolerance is in drawing units; different-unit inputs must be converted first.
+- `carry_knowledge {from_path,tolerance?}` carries types, recognition, measurement methods,
+  mappings and checks, re-extracts B on all sheets and retains A's measured baseline in
+  drawing knowledge. Revision identities survive handle changes; local object ids stay
+  driver handles. BOQ `{id}` templates use the stable identity.
+- `variation_report {layer?}` stores quantity-only A/B/delta rows with element/handle traces
+  and replaces its Comment clouds in one undo step. Its cloud layer is data, retained in
+  knowledge `revisions/cloud_layer` (default VARIATION). Carry is also one undo step.
+  Take-off exports include bilingual Variation and lossless chunked records; the drawing
+  retains the report and clouds through DWG/DXF. No rates or domain rules were added.
+- The three commands have command-line words and generic-tool access. The take-off kit
+  contains revision examples within its existing byte budget; the workflow index describes
+  open B → carry A → re-take-off → variation/clouds → export.
+- `qiyas-cli variation A B --export x.xlsx [--drawing-output B-clouded.dxf]` runs the same
+  offline flow. Quick benchmark runs also score existing revision-B variants, with
+  per-item recall/precision, delta accuracy and per-case time. Prediction never reads truth.
+  Engine diagnostics remain distinct from live MIZAN ALONE performance.
+  `bench revisions --set quick --mode prepared|autonomy` runs only the revision cohort.
+  Final quick revision scores: 9/9 items in both modes, 100% recall/precision/delta
+  accuracy, 0.419–0.640 seconds per case including workbook/drawing persistence.
+- Implementation details, validation and measured results: `docs/2026-10-22-qiyas-phase20.md`.
+
+## Projects (Phase 21)
+
+- `qiyas-core/src/projects.rs` extends `.qss` with optional project data: method override,
+  generated BOQ with per-drawing dimension contributions, cited cross-drawing checks, RFIs,
+  register extraction rules/results and per-drawing status. No rates or drawing-specific
+  interpretation is stored at project level. The data home is shared by desktop and CLI;
+  debug uses `.local/qiyas-home`, release `~/.qiyas`, and `QIYAS_HOME` overrides both.
+- Registry `project.create/open/add_drawing/remove_drawing/list`, `set_method`, `set_checks`,
+  `set_register_rules` and `run` work through the generic tools. Projects live directly in
+  `qiyas_dir()/projects/*.qss` and may reference absolute drawing paths. Ordinary sheet sets
+  keep relative paths within their folder, including existing symlink targets. Each project
+  mutation is one file undo step; undo refuses an intervening external edit. Project commands
+  cannot be nested in drawing batches.
+- Aggregation groups generated items by code (description key when empty), section, trade and
+  unit. Contributions retain drawing path, quantity and complete dimension lines. Project runs
+  apply the override to each isolated drawing session before recognition and measurement,
+  reusing core script parsing/execution. Original drawing files are not overwritten by a run;
+  Mizan saves its interpretations into each drawing before running the project.
+- Phase 19 checks share one evaluator for drawings and projects. Sets may name `drawings`;
+  a table names `drawing` as well as its sheet/handle or extracted document table. References
+  retain drawing paths so repeated CAD handles are unambiguous. Check failures are explicit
+  warnings; unreadable drawings prevent a claim of completed cross-drawing checks.
+- Register rules select a field (number, title, revision, date) and an attribute tag or text
+  regex capture, optionally scoped by layer/block/sheet. No title-block tag vocabulary ships.
+  Missing and conflicting values are flagged, with retained source handles.
+- `qiyas-cli project run <project.qss> [--out folder]` writes `project.xlsx` and
+  `morning-report.md` (default `<project>.output/`). Workbook sheets include Generated BOQ,
+  Dimension sheets, Queries, Register, Drawings and a chunked lossless project record.
+  Failed drawings retain partial output and exit 1; incomplete checks exit 2.
+- The bilingual Projects side panel lists projects, creates/opens them, adds/removes drawings,
+  runs the shared engine and shows status and output paths. Its project history works without
+  an open drawing. Mizan's host uses the same workspace and may open members of its selected
+  project without repeatedly asking for file approval.
+- The take-off workflow includes the project path. The kit explicitly says it is complete;
+  discovery for commands covered by it returns their short kit entry. The 6,144-byte cap stays.
+- `bench projects --set quick --mode prepared|autonomy` and the full quick runs score projects
+  built from existing clinic storeys, duplex storeys and apartment floors. Clean controls and
+  planted schedule/identity discrepancies exercise cross-drawing recall. Prediction writes
+  artifacts before scoring reads truth. These are engine diagnostics, not MIZAN ALONE.
+  `bench projects --rescore <report-folder>` only rescores saved project predictions. The
+  scorer preserves each input recipe's declared measurement basis before opening truth.
+- No new crates or UI libraries. Validation, scores and limits: `docs/2026-10-22-qiyas-phase21.md`.
+
+## Deliverables (Phase 22)
+
+- `qiyas-core/src/deliverables.rs`: report layouts as drawing knowledge kind `reports` or
+  project `.qss` data (`project.set_reports`, one undo step). Neutral bilingual defaults ship
+  as JSON data. Sections, columns, headings, grouping, totals and page setup are layout data;
+  totals separate units. Dimension lines retain timesing, signed deductions and references.
+- Registry `deliverable.export {kind, format, layout?, path, language?, project?}` supports
+  dimensions, boq, queries, variation and register, in Excel/PDF, English/Arabic. It is in the
+  bounded take-off kit. Core prepares the report; shared `qiyas-boq::deliverables` completes it
+  in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
+- PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
+  and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
+  Excel/PDF include lossless report records. Client-template exports preserve the original
+  workbook's package and change only mapped quantity cells, leaving rates and amounts untouched.
+- `qiyas-cli export <drawing|project.qss> --kind boq --format excel --path boq.xlsx`
+  accepts `--language en|ar` and `--layout name`. `project run` adds `--deliverables all`
+  (or comma-separated kinds), `--formats excel,pdf`, `--language` and `--layout`.
+- Details, mapping example and validation: `docs/2026-10-22-qiyas-phase22.md`.
+
+## Trust (Phase 23)
+
+- `qiyas_read explain {item, project?}` and the window's “How did you get this number?” action
+  share `Session::explain`. Item selectors: `generated:<code>`, `boq:<code>`, `takeoff:<id>`,
+  `dimension:<decimal object handle>:<rule id>`. Imported rows with duplicate or blank codes use
+  `boq-row:<zero-based row index>`. For projects supply `project` (the `.qss` path)
+  and the item code or `project:<zero-based row index>` for duplicate codes. Reads never mutate.
+- Explanations include dimension arithmetic, elements, handles/sheets, recognition candidates and
+  rules with source evidence, measurement rules/citations and confidence. Imported client figures
+  and manual rows explicitly disclose missing authored rules. English/Arabic window actions show
+  the evidence, with drawing and sheet selection for project contributions. Project runs snapshot
+  explanations alongside quantities, so later drawing edits cannot silently change their provenance.
+- Measurement rules may supply `confidence` in [0,1]. Generated quantities use the minimum of
+  rule confidence and every contributing element's recognition confidence, including deduction
+  decisions. Grouped BOQ and project lines take the minimum of their components. Unscored rules,
+  authored elements without recognition and legacy/manual quantities use 0.5, never assumed 100%.
+  This is conservative evidence confidence, not a statistically proven probability.
+- Shared bands: low <0.6, medium [0.6,0.9), high >=0.9. Reports list lowest confidence first and
+  include counts by band. Normal and interrupted Mizan completions emit the confidence report;
+  project reports retain summaries. Confidence never adds a review or approval gate.
+- Benchmark submissions retain confidence before truth is opened. Each case and the overall
+  JSON/Markdown report compare confidence with correctness using the existing strict tolerances.
+  Extras fail; valid aggregate duplicates do not count twice; missing predictions have no confidence.
+  Empty bands report N/A. Prepared/shared-rule diagnostics remain distinct from live MIZAN ALONE.
+- No new dependencies, trade rules, rates or paid model runs. Phase report:
+  `docs/2026-10-22-qiyas-phase23.md`.
+
 ## Drawing
 
 - `Command::Draw(DrawSpec)` (`qiyas-core/src/draw.rs`): line, polyline (bulges), rectangle,
@@ -239,10 +836,20 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   multiline, sketch. One undo step on the sheet on screen; `Outcome::Added` lists the handles.
   Wire form `{"type":"draw","kind":"line",...}`, angles in degrees. Mizan's `draw` (line,
   polyline, rectangle, circle, arc, hatch, revcloud).
-- `Command::Batch { commands }` runs `Draw`, `Text`, `MText`, `InsertBlock`, `Table`, `EditCell`,
-  `NewLayer` and `SetCurrent` in order as ONE undo step (tables snapshot, so the current layer
-  comes back too) and as all or nothing; `Outcome::Added` lists every entity. Anything else is
-  refused. The AI's drawing tools use it.
+- Path and outline inputs use the core's transparent `PointRun<CLOSE>` type. Its schema states
+  the policy: a returned start point closes boundaries and is removed; an open path keeps the
+  vertex, like AutoCAD's plain polyline. An explicitly closed polyline removes the duplicate.
+  The test uses `SAME_POINT` converted from millimetres and `tol_near` for survey coordinates.
+  Walls, hatch rings and islands, area measurement and clouds share this rule with picking;
+  open polylines, splines, leaders, traces, multilines and sketches preserve their paths.
+- `Command::Batch { commands, layer?, color? }` runs any commands in order as ONE undo step, all
+  or nothing (a transaction, see Undo): each through `run_as` with its usual follow-ups. Refused:
+  what the registry marks `x-batch` false (editing a block in place, writing a block, the
+  clipboard copy, another batch). With `layer` they draw on that layer (made when missing), with
+  `color` in that colour, and the current state is put back after; undo puts back a current
+  state the commands changed. A failure is `CoreError::Step { index, label, error }` ("Batch step
+  2 (draw.line): …", from 0). `Outcome::Batch { outcomes, added }`. The AI's drawing tools use
+  it.
 - `Session::current` (layer, colour, linetype, lineweight; layer "0" and ByLayer by default)
   styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file;
   layer and linetype as the drawing spells them, lineweights from AutoCAD's standard set; a
@@ -252,7 +859,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   undo; Esc keeps what is drawn), Rectangle, Circle (2P, 3P, typed radius), Arc (three points,
   or C centre first), Ellipse, Spline, Point, Hatch, Revision cloud, Wipeout.
 - Hatch: click inside. `Session::boundary_at` runs `arrangement::bounded_faces` over the entities
-  drawn in a box about 50 screen pixels across, flattened again at `MEASURE_TOL` (f64), growing
+  drawn in a box about 50 screen pixels across, flattened again at the measuring tolerance (1 µm in any unit, `Session::measure_tol`), growing
   the box 4 times until the region found fits inside it; regions inside it become islands. An
   edge along a drawn circle or arc comes back as that arc (`Boundary::Ring::bulges`, passed on
   as `DrawSpec::Hatch::bulges`). An entity inside an arrayed reference keeps its drawn
@@ -269,6 +876,79 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   sides x,y radius [I|C], DONUT (DO) inner outer x,y, RAY / XLINE (XL) x,y x,y, SOLID (SO) 3 or
   4 points, TRACE width points, MLINE (ML) points, SKETCH points.
 
+## Drafting conventions
+
+- `qiyas-core/src/conventions.rs`: `CenterMark { targets, extension? }` draws crosses through
+  circle and arc centres, extending past the radius. `CenterLine { a, b }` draws the middle
+  of two parallel lines over their shared length plus an extension, or their acute angle
+  bisector. `SymmetryAxis { p1, p2 }` draws an axis between two points. Handles name entities
+  on the current sheet. These use layer `CENTER` and the `CENTER` linetype.
+- `Grid { x: [{label, at}], y: [{label, at}], extent?, bubble? }` draws axes with labelled
+  bubbles at both ends on `GRID`. `extent` is `{min: [x, y], max: [x, y]}`; omitted, the current
+  sheet and axes determine the extent. `bubble` is the radius. Explicit sizes and coordinates use drawing
+  units. Default extension is 2.5 mm on paper, bubble radius 3.5 mm, text height 2.5 mm, all
+  converted using the drawing's units and annotation scale. Long labels shrink to fit their bubble.
+  Grid lines extend one bubble radius beyond the extent before the bubble, keeping bubbles
+  on perpendicular axes from colliding at a corner.
+- Each command is one undo step including missing layers and linetypes. Setting a layer's
+  linetype to `CENTER` or `HIDDEN` also adds that standard linetype when absent, in the same
+  undo step. Existing definitions are kept. The command registry exposes these to Mizan
+  through its existing tools.
+
+## Walls
+
+- `qiyas-core/src/walls.rs`: `Command::Walls(WallSpec)` creates an editable wall system:
+  joined outlines, one solid hatch per region, centrelines and reusable door/window inserts.
+  The entire command, including joined existing systems, layers, blocks and xdata, is one undo
+  step. Every caller uses the same core rules, including Mizan, MCP, scripts and the command line.
+- `WallSpec { runs: [{points, closed, thickness?, height?, justification?}], thickness,
+  justification, openings, height, layers, join }`: each run inherits omitted thickness,
+  height and justification from the spec. Plan points, thickness, opening `at` (distance to
+  its centre along the run) and width use drawing units. Height, sill and head use metres
+  above floor. Justification is `centre`, `left` or `right` of the directed run. Height
+  defaults to 3 m. Curves use straight polyline approximations.
+- `join` defaults to true. A new run meeting or crossing existing centrelines within the
+  drawing's tolerance joins their groups when their wall layers match. The original runs and
+  openings and the new runs are rebuilt as one system; outer walls and later partitions have
+  the same geometry and quantities as one command containing all runs. `join: false` creates
+  a separate system. Layers are `outline`, `hatch`, `centreline`, `doors`, `windows`, defaulting
+  to `A-WALL`, `A-WALL-PATT`, `A-WALL-CNTR`, `A-DOOR`, `A-GLAZ`.
+- Wall members carry `QIYAS_WALL` xdata containing the group's definition, its
+  member roles, runs and openings. The drawing is authoritative: DWG/DXF saves, copies and
+  undo retain the editable definition. The centreline's first two real values remain its
+  thickness in drawing units and height in metres. Measure hatches for net wall plan area.
+- `add_wall_openings {centreline, openings: [{at, width, kind, swing?, sill?, head?}]}` adds
+  doors/windows to the run named by its centreline handle. `remove_wall_openings {inserts}`
+  closes the cuts named by opening insert handles. `edit_wall_opening {insert, at?, width?,
+  kind?, swing?, sill?, head?}` moves or resizes an opening or changes its properties. Each
+  rebuilds the group in one undo step. `delete_entities` refuses wall opening inserts and
+  names `remove_wall_openings`, so erasing a symbol cannot leave an unexplained hole.
+- `wall_groups {width?}` is a read command, reachable with `qiyas_read run`. It reports each
+  group on the sheet, its layers, and runs with centreline handle, length, thickness, height,
+  justification and opening insert handles/properties. With `width`, each run includes
+  `free_ranges` of opening-centre `at` values. Both ends are accepted by the same geometry
+  checks used by the mutating commands. Read it again after a rebuild to get current handles.
+- Openings must fit a straight segment clear of corners, junctions and other openings.
+  Refusals name the junction and offer the fitting ranges (or say none fit). A door defaults
+  to left swing, sill 0 and head `min(2.1, run height)`; a window defaults to sill 0.9 m and
+  the same head convention. Explicit contradictions are refused. Openings cannot wrap across
+  a closed run's start. Symbols reuse block definitions named by millimetre size, with their
+  geometry converted to drawing units.
+- Rebuild outcomes retain `type: "walls"`, handles by role, centreline length (m), gross/net
+  area (m²), volume (m³), and `handle_map` from old handles to their replacements. Take-off
+  measurements and fields follow replaced hatches/centrelines; constraints on reshaped
+  entities are dropped. Undo restores definitions, geometry and these dependent measurements.
+  For unequal heights, volume integrates the wall union over each height interval and subtracts
+  opening voids. Hatch replacement maps follow positive area overlap, so unrelated regions do
+  not gain each other's measurements.
+- `qiyas-geom/src/walls.rs` normalises around a local origin and thickness before booleans,
+  preserving survey-coordinate accuracy. Each strip uses its run's width and justification.
+  Mixed widths join at L, T and X junctions, with overlaps counted once; a partition butts
+  into an outer wall's face. The public `where_it_fits` uses the widths of every meeting wall.
+  Tests cover hand-calculated mixed 250/150 mm areas in mm, cm, m and inches, staged versus
+  one-command construction, editing and persistence. The release `walls_speed` test guards
+  500 walls relative to a fixed CPU reference workload.
+
 ## Modify
 
 - `Command::Modify(ModifySpec)` (`qiyas-core/src/modify.rs`): move, copy (A: several in a row),
@@ -280,7 +960,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   the reference's; visible attributes become texts holding their values; polylines and
   multilines; anything else is left as it is, `Outcome::Exploded { left_alone }` says how many).
   One undo step. Wire form `{"type":"modify","kind":"move","targets":[...],...}`, angles in
-  degrees. Erase is `DeleteEntities`. Not an AI tool yet.
+  degrees. Erase is `DeleteEntities`. Mizan's `modify`, `edit` and `erase` run them
+  (`qiyas-ai/src/execute/edit.rs`), and `undo_last` takes back only its own newest step.
 - Targets as for delete: the drawing's own entities at the top of the sheet, all or nothing.
   Changes in place keep handles; copies get new ones (attributes too; vertex, face and sequence
   end handles are nulled for the writers to give) and drop reactors, extension dictionaries and
@@ -304,7 +985,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   after an undo or redo it keeps only what is still drawn. A modify tool starts on it (or on the select
   tool's pick, whole), else asks for one (clicks or a box, then Enter); stretch always asks for
   its crossing window. Home tab, Modify group; command line M, CO/CP, RO, SC, MI, S, AL, AR (R or
-  P), X, E. Grips come later.
+  P), X, E. Grips come later. `Session::pick_polygon(points, crossing)` (IPC `pick_polygon`) does
+  the same for a polygon (concave too, either way round; an entity wholly inside has both ends and
+  the middle of every segment inside and crosses no edge); Mizan's area tool uses it.
 - `Command::Edit(EditSpec)` (`qiyas-core/src/modify2.rs`, wire `{"type":"edit","kind":"trim",...}`):
   trim, extend, break, join, lengthen, reverse, offset, fillet, chamfer, blend, pedit, overkill,
   flatten; same targets, one undo step. The take-off follows (`follow_edit`): rows on a cut
@@ -314,17 +997,23 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   polylines are reshaped; anything drawn can cut or bound. Trim and break keep the handle on the
   longest piece; join keeps the first's. Offset keeps exact arcs (kernel `offset_polyline`, sharp
   straight corners). Fillet and chamfer: two lines or two straight sides of one polyline.
+  Overkill's omitted tolerance is 0.000001 mm converted to the drawing's units; an explicit
+  tolerance remains in drawing units, including zero.
   `Outcome::Edited { added, removed, left_alone }`. Home tab, Modify group, after the modify tools; command line TR, EX
   (Shift+click swaps), BR, J, LEN, REVERSE, O, F, CHA, BLEND, PE, OVERKILL, FLATTEN.
 
 ## Text
 
-- `qiyas-core/src/text.rs`: `Command::Text` (one line; `rotation` in degrees) and `MText` (wire
-  `mtext`; plain text, `\n` becomes `\P`, `\`, `{`, `}` escaped; box top left and width) go on the
+- `qiyas-core/src/text.rs`: `Command::Text` (`rotation` in degrees) and `MText` (wire
+  `mtext`; plain text, line breaks become `\P`, `\`, `{`, `}` escaped; box top left and width) go on the
   current layer and state with a text style (`None`: the drawing's TEXTSTYLE, else "Standard");
   `EditText { target, value, tag }` changes a text, an MText (as plain text: its formatting goes)
   or one attribute (`tag`, may be cleared) of a block reference; chains refused. One undo step
   each.
+- `Text`, `MText`, `AttDef` and `Field` accept an omitted or zero `height`: 2.5 mm on paper at
+  the annotation scale, converted to drawing units. Negative heights are refused. `Text`,
+  `MText` and `EditText` read a literal backslash-n as a line break. A `Text` with a line break
+  becomes an MText, with top left `[at.x, at.y + height]` and width 0.
 - New and edited text is stored in reading order and marked with xdata app `QIYAS_TEXT`
   (`qiyas_geom::LOGICAL_TEXT_APP`, never `QIYAS`: `embed_measurements` deletes those);
   `FlatText::logical` makes the renderer ignore "Arabic text is reversed" for it.
@@ -420,7 +1109,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   split into groups joined by shared unknowns, on a copy moved to its middle and scaled to one
   unit across (site grids); what no constraint holds stays put, exactly; a conflict fails with
   the sketch untouched. `cargo test -p qiyas-param --release --test solver_speed`
-  (in `scripts/check.sh`): 200 connected constraints in about 4 ms, guard 50 ms. `expr.rs`: own
+  (in `scripts/check.sh`): 200 connected constraints, guarded relative to a fixed CPU reference. `expr.rs`: own
   parser for `d1 = 2*d2 + 1.5` (numbers with Arabic digits, `+ - * /`, brackets, names, `pi`,
   sin/cos/tan in degrees, sqrt, abs); `evaluate_all` refuses unknown names and circles,
   `evaluate_each` works each out on its own (a broken one spoils only its users), `normalize`
@@ -484,6 +1173,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   A table's block is found by name, else by `block_record_handle` (the DWG reader sets only the
   handle; `qiyas_geom::table_block`), also when copying. Find and replace reaches cells. Qiyas's
   tables are marked `QIYAS_TEXT` (reading order).
+- `Table` sizes can be omitted or zero. The row height is twice the default text height
+  (2.5 mm on paper at the annotation scale). The column width fits the longest cell text,
+  allowing about 0.7 text heights per character and one row height of padding.
 - `qiyas-core/src/field.rs`: fields are AutoCAD field codes in the text (`%<\AcVar Date ...>%`,
   `%<\AcVar Filename>%`, `%<\AcObjProp Object(%<\_ObjId HEX>%).Area|Length ...>%`, Qiyas's own
   `%<\AcVar QiyasCount "BLOCK">%`). The visible text is the value; the code (the whole text as
@@ -502,6 +1194,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Blocks
 
+- `DefineBlock { name, base, entities: [{type, data}] }` creates a named definition directly
+  from the same record shapes and validation as `CreateEntities`. Coordinates and `base` are
+  drawing units; the block keeps the drawing's units. `Session::define_block` runs the command
+  and returns its entity handles (`Outcome::Added`); the internal `define_block_entities`
+  helper joins a command already being recorded, such as Walls. Names already taken (any case),
+  invalid names, empty definitions and supplied ownership are refused. Its entities and new
+  layers are one undo step. Place it with `InsertBlock`.
 - `qiyas-core/src/blocks.rs`: `CreateBlock { name, base, targets, convert_to_insert }` (sheet
   entities leave for a new block, relative to `base`; names AutoCAD refuses, or the drawing's own,
   are refused; with convert a reference takes their place; rows on them are unlinked and counted,
@@ -554,8 +1253,16 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   freezes, a match's source). Field values on a locked layer still follow what they read
   (`follow_fields`, `UpdateFields`): the lock blocks user-initiated changes only (find and
   replace, attribute sync, edits). A document step that moves `Session::current`, the hidden layers
-  or the layer states' hidden layers keeps them as they were (`undo::ViewState`) and undo and
-  redo put them back. Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
+  or the layer states' hidden layers keeps only what it changed (`undo::ViewDelta`: current before
+  and after, layers it hid and showed, each state's list before and after), and undo and redo put
+  back only that: layers hidden or shown since stay as they are, and a renamed hidden layer is
+  hidden again under its old name only while it is still hidden under the new one (undoing a
+  rename after Show all once hid the whole old set again). Isolating is the core's
+  (`Command::IsolateLayer` / `UnisolateLayers`, LAYISO / LAYUNISO, `Session::isolated`, not undo
+  steps): isolating the isolated layer again, LAYUNISO or Show all put back only what isolating
+  hid (a layer the user showed or hid meanwhile stays so); a rename follows it; restoring a layer
+  state ends it. `DrawingInfo::isolated_layer`; the Layers panel says "Isolated: X" with
+  Un-isolate, and the row's isolate button is pressed. Layer states are AutoCAD's own (`ACAD_LAYERSTATES` XRecords, codec
   `capture_layer_state`): `SaveLayerState` (Qiyas's current layer as the state's; the layer
   table's extension dictionary is made outside the step so an undo never leaves a dangling
   pointer), `RestoreLayerState` (the header's current layer is put back), `RenameLayerState`,
@@ -597,6 +1304,53 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   LAYSTATE (LAS), LAYTRANS, VPLAYER (the VP freeze column), GROUP (G: pick, Enter, name),
   UNGROUP, MATCHPROP (MA: source, then targets, Enter), PROPERTIES (PR, CH: the palette).
 
+## Layouts
+
+- Fresh drawings size their default paper layouts in `Drawing::blank`: ISO A3 landscape
+  (420 x 297 mm) for metric templates, ANSI B landscape (431.8 x 279.4 mm) for inches/feet.
+  This is initialization, with no undo step. Existing drawings' unsized layouts stay unsized
+  on open; `SetLayoutPaper { name, paper, orientation }` (`SETLAYOUTPAPER`) explicitly sizes
+  them or changes their paper in one undo step, preserving the selected sheet and entities.
+  Sized-layout errors name both `new_layout` and `set_layout_paper`. Input validation lists
+  layout selection, paper sizing and whether frames fit the paper in `not_checked`; a schema
+  success alone does not certify those drawing-dependent conditions.
+- `qiyas-core/src/layouts.rs` owns `Paper { name, w_mm, h_mm }` and `paper_catalog()` (ISO A0
+  to A4, ANSI A to E, ARCH A to E1, portrait), re-exported by `qiyas-plot` to avoid a dependency
+  cycle. `NewLayout { name, paper, orientation }` creates a sized paper layout through the
+  codec's `add_layout`; `paper` is a catalog name such as `"ISO A1"`, and orientation is
+  `portrait` (default) or `landscape`. It leaves the sheet on screen selected. A taken name
+  (any case), invalid name or collision with the backing paper-space block is refused.
+  `RenameLayout { from, to }` changes the layout and dictionary entry while keeping its block.
+- `DrawingInfo.paper` is the current layout's `{name, w_mm, h_mm}` after rotation, or null on
+  Model or an unsized layout. `Session::paper_unit()` gives one paper millimetre in sheet
+  coordinates. Layout text defaults to 2.5 paper millimetres; dimensions convert the drawing's
+  style sizes to paper millimetres with no model annotation scale.
+- `MView { corner1, corner2, scale?, centre? }` can set its physical paper:model ratio with a
+  string such as `"1:100"` (model units are accounted for), or a numeric custom scale in
+  paper millimetres per model unit. `centre` is the model point shown at the viewport's middle.
+  Without them it fits and centres the model extents.
+  Its alternative form `{ model_bounds: [[x1,y1],[x2,y2]], scale: "1:100",
+  paper_centre: [x,y] }` computes the paper frame from the model window and drawing units.
+  The two forms are validated together; model bounds use drawing units and paper centre uses
+  paper millimetres. Either form accepts `target: {handle}` to resize the same viewport,
+  preserving its handle, frozen layers and other settings. A new viewport made on current
+  layer 0 goes on non-plotting `A-VIEW`, creating that layer in the same undo step; another
+  chosen current layer is respected. Tests cover mm, cm, m and inches at 1:50 and 1:100.
+  `x-prompts.required` retains the two corner questions in the typed `MVIEW` form while the
+  JSON command also accepts model bounds; explicit prompt requirements ignore schema defaults.
+- `TitleBlock { fields, margin_mm?, binding_mm?, layer? }` draws Qiyas's frame and title grid at the
+  bottom right of the layout on screen, in paper millimetres. Defaults: margin 10 mm, binding
+  20 mm; the left margin is the larger of those. `fields` maps names to values, including
+  `title`, `project`, `drawing_no`, `scale`, `date`, `drawn_by`, `sheet` and extra names. Only
+  supplied values become text, with literal escaping; missing values stay empty, including the
+  date and scale. `Outcome::TitleBlock { handles, empty_fields }` explicitly lists every
+  standard or supplied field left empty. The default layer is `A-ANNO-TTLB`; `layer` can
+  override it. Missing layers are made in the same undo step and the current layer is kept.
+  The title grid shares the frame's outside edges without drawing them twice,
+  including on small paper where it fills the frame's width. It requires a sized layout.
+  NewLayout, SetLayoutPaper, RenameLayout, MView and TitleBlock
+  each make one undo step, keeping their table changes too.
+
 ## Clipboard, viewports, UCS, sheet sets and recovery
 
 - Clipboard (`qiyas-core/src/clipboard.rs`): `CopyToClipboard { targets, base }` (base null: the
@@ -617,9 +1371,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   takes its copy with it) and puts a copy's text on it. Home tab, Clipboard group;
   Ctrl+C (COPYCLIP), Ctrl+Shift+C (COPYBASE), Ctrl+V (PASTECLIP), Ctrl+Shift+V (PASTEBLOCK); Ctrl+C
   with text selected in a panel copies the text.
-- Paper-space viewports (`qiyas-core/src/viewports.rs`): `MView { corner1, corner2 }` (wire
-  `mview`; layouts only) adds a `Viewport` on the current layer showing model extents
-  (`set_scale`). Its frame draws (flatten's Viewport arm, never number 1); a click inside one with
+- Paper-space viewports (`qiyas-core/src/viewports.rs`): `MView { corner1, corner2, scale?,
+  centre? }` (wire `mview`; layouts only; see Layouts) adds a `Viewport` on the current layer,
+  fitting model extents when no scale is given. Its frame draws (flatten's Viewport arm, never
+  number 1); a click inside one with
   nothing of the layout near picks it. `paper_views()` gives each viewport's frame, model centre,
   scale and, when it freezes layers, the spans of the model batch it draws; the window fetches
   model space once (`sheet_batch("*Model_Space")`, `Session::with_sheet` keeps two sheets beside
@@ -752,15 +1507,15 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   two commands on one key refused, `settings::shortcut_key` spells a key one way), `ribbon`
   (null = `ribbon::default_ribbon`), `aliases` (no two that differ only in case). The ribbon
   (`qiyas-desktop/src/ribbon.rs`, IPC `get_default_ribbon`) is data: tabs, groups, buttons
-  `{ kind: tool | action | toggle, command, label }` as `Ribbon.tsx` draws them, in groups that may
+  `{ kind: tool | action | toggle | command, command, label }` as `Ribbon.tsx` draws them, in groups that may
   carry `main` (how many buttons show; the rest wait behind the group's "⋯" flyout). Tabs: Measure
   (Measure, Inquiry, Take-off, Dimensions with `main` 5, Markup), Draw (id `home`: Draw, Modify,
   Edit, Annotation, Clipboard, Layers), Annotate (Dimensions with all kinds and the style,
   Leaders, Markup, Tables); those three show on the tab row and the rest (Parametric, Insert, View,
   Manage (Drawing: Audit, Purge, Recover), Output) are under "More" (`SHOWN_TABS`). Group id
   `markup` holds the revision cloud and the comment cloud (COMMENT). `src/shell/ribbon.default.json` is that default, and both
-  `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may only
-  use the default's buttons (moved between groups and tabs as it likes), and one that no longer
+  `tests/options.rs` and `ribbonLayout.test.ts` compare theirs with it. A saved layout may use
+  the default's buttons and the registry's command words (moved between groups and tabs as it likes), and one that no longer
   checks out falls back to the default on load. An icon ribbon (`ribbonIcons.tsx`: one family, 24
   grid, 1.5 stroke, `currentColor`, keyed by command, a test fails when a button has none; icons
   that point along the text mirror in Arabic): every button is an icon with its name as
@@ -776,7 +1531,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (`RibbonFlyout.tsx`, a Base UI Menu) are placed on the window, so the scroll never clips them, and take the
   keyboard (Left and Right move between their columns). Views (and Open's recents menu) are drop-downs, still
   our own, placed the same way; Views never goes
-  behind a "⋯". Open (with its recents arrow), Save, Save as, Undo and Redo are not in the data:
+  behind a "⋯". New, Open (with its recents arrow), Save, Save as, Undo and Redo are not in the data:
   they are the quick-access bar on the tabs' row after the app name (`QUICK_ACCESS` in
   `ribbonLayout.ts`; logical sides, so Arabic mirrors it), always shown, a `role="toolbar"` with
   one tab stop and arrow/Home/End movement (`useToolbarRoving`). The tabs' row scrolls sideways
@@ -810,9 +1565,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   bound (`SHORTCUT_COMMANDS`), not ribbon actions. CUI (`CustomizeUi`): the ribbon as a tree
   (`ribbonLayout.ts` `editTree`: the saved layout, or the window's default, then what the core's
   `get_default_ribbon` has that it leaves out, hidden); show/hide and up/down; Reset saves null.
+  That IPC catalog includes a Command line tab grouped by registry category, initially hidden.
+  Its `kind: "command"` buttons start the core machine's prompts on the command line. Adding
+  words to a core variant makes it available here without editing window code. The registry's
+  ribbon guard checks every shipped button against core names, words or actual window handlers.
   `Ribbon.tsx` draws `layout ?? DEFAULT_RIBBON` (the same default as the core's). ALIASEDIT (`AliasEditor`): alias
   to command, upper-cased; refused: two that differ only in case, a command's own name
-  (`COMMANDS`), a command that is not one; saved aliases reach the command line (`loadAliases`).
+  (the window and registry catalog), a command that is not one; saved aliases reach the command line (`loadAliases`).
 
 ## PDF
 
@@ -931,6 +1690,43 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Inquiry
 
+- `Command::Rooms { query }` (`qiyas-core/src/rooms.rs`) reads rooms round name texts or seed
+  points, using the same closed boundaries as Hatch. `enclosed_area_m2` is the drawn area;
+  `net_area_m2` and `candidate_area_m2` take islands off unless `subtract_islands` is false.
+  These are unapproved candidate areas. `LabelSpaces { query, layer, height, decimals,
+  language }` writes "Unapproved candidate … m²" under each name, or its Arabic wording.
+  The label sits 1.6 name heights below the name, or at the seed point. An explicit `height`
+  is in metres; otherwise it uses the name's height, or the default text height for a seed.
+  Both return `Outcome::Rooms`; labelling is one transaction named `label_spaces`.
+  Labels now contain live `QiyasRoomArea` fields. `LabelSpaces` retains each closed outer ring
+  as a polyline on non-plotting `A-ROOM-BOUNDARY`, with its seed, name, exact bulges and islands
+  in `QIYAS_ROOM` xdata. The report includes `boundary_handle`. This is a durable room object
+  through DWG/DXF; it keeps the existing "Unapproved candidate" wording and approval status.
+  Changed generated boundaries invalidate the codec's whole `raw_record` and graphics cache;
+  changed room metadata also invalidates only its own application's raw DWG EED blob, preserving
+  other applications' data. Tests save, reopen, edit, save and reopen again, checking the retained
+  area before any command can refresh it.
+  Repeated labels reuse the room; conflicting island policies are refused. Every drawing edit
+  retraces rooms from their seeds, excluding retained boundaries from the search, then updates
+  labels, schedules and linked take-off inside the same undo step. A broken enclosure shows
+  `####`; its take-off is explicitly stale, and the construction check reports it.
+- `RoomSchedule { at, source_sheet?, labels?, decimals? }` (`ROOMSCHEDULE`) builds a drawing
+  table from retained rooms, with per-room area fields and a total field. Source defaults to
+  Model; the table goes on the current sheet, using `A-ANNO-TABL` when the current layer is 0.
+  `MeasureRoom { label? , point? }` (`MEASUREROOM`) accepts exactly one live label/boundary
+  target or a seed. It measures the same net boundary in square metres, retaining a newly found
+  seed region when needed; all quantities remain unapproved candidates. Both commands are one
+  undo step. Construction rule `room_area_mismatch` compares linked labels, schedule cells and
+  take-off rows with their canonical room, including missing or opened boundaries.
+  The drafting replay still compares every room geometry and quantity before/after Grid;
+  it removes only `boundary_handle` from that comparison because LabelSpaces between the reads
+  now retains room objects, and separately checks their closed polylines and boundary layer.
+  Its layer assertions now check label texts and retained boundaries separately, and title-block
+  entities on `A-ANNO-TTLB` while the explicitly chosen viewport layer stays `A-ANNO-TEXT`.
+- `AddMeasurement` refuses an empty zero-quantity Item from AI or MCP unless `empty_item` is
+  true, and their Counts given as handles accept only block references. User and script
+  commands keep their existing measurement rules. `AddMarkup { kind: cloud | note, points, text }` adds a take-off
+  markup of quantity 0, with at least three points for a cloud or one for a note.
 - Measure tab: Geometry (click an entity: radius, diameter, centre, angles, lengths, block and text
   facts in an Info card at the top of the right panel), Divide (click, then the number of parts),
   Measure along (click, then the step in metres), ID point (snapped coordinates in metres), and
@@ -942,6 +1738,69 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - The same five are AI tools: `measure_geometry`, `divide_along`, `measure_along` (step in
   metres), `id_point`, `extract_data` (paged under 40 KB).
 
+## Drawing check
+
+- `qiyas-core/src/check.rs`: `Command::CheckDrawing { scope }` (`Session::check_drawing`)
+  checks the current sheet, or `scope.sheet`. Optional `handles` and `rules` keep only the
+  findings requested. `scope.packs` selects `general` and/or `construction`. Empty selects
+  general, plus construction when the drawing has take-off rows or a layer suggesting rooms,
+  spaces or areas. An explicit `["general"]` keeps construction rules off.
+  It reads without changing the drawing or undo history.
+- Rules find short or overshooting ends, duplicates, overlaps, tiny segments, open
+  rooms, room-size text that differs, text collisions and poor paper height, layer 0, explicit
+  colours, dimension overrides that differ, literal backslash-n, far-off entities and lost
+  take-off links. `room_open`, `room_size_text_differs` and `unlinked_takeoff` belong to
+  construction; the others belong to general. General's informational `missing_center_mark`
+  flags circles and full arcs without a centre mark or centre line through their centre.
+  Automatic `missing_axis` detection is omitted: arbitrary outlines do not reliably identify
+  their intended axis. Use an explicit symmetry expectation instead.
+- `duplicate` and `overlap` compare only entities on the same layer (case-insensitive layer
+  names), as AutoCAD OVERKILL does by default: layer is a property that must match. Coincident
+  geometry on different layers is intentional, such as grid axes on wall centrelines, a hatch
+  boundary on its outline layer, or a viewport frame on a title line.
+- `layer_zero` is a warning for entities drawn on a sheet (Model or a layout); inside a block
+  definition layer 0 is right (contents take the reference's layer) and is not flagged. The
+  own-output guard draws on a layer of its own. `tiny_segment` measures
+  actual curve pieces, not display tessellation chords; `overlap` compares actual straight
+  CAD edges. A dangling end must continue towards the nearby edge, so a parallel offset
+  does not count as a gap. Text checks use the same alignment and attachment as rendering.
+  Definition scopes follow their owning layout for model or paper units. Dimension extension
+  endpoints are exempt from overshoot only when their location and extension match the style;
+  changing an end still exposes a real overshoot. Text/line collision uses oriented text bounds.
+- `tests/own_output.rs` runs registry drawing examples in mm, cm, m and inches, with declared
+  prerequisites for operations on existing geometry, and checks their additions with the
+  general pack, including additions inside block definitions. Every drawing-edit example must
+  execute successfully; there is no allowlist of refused examples. Harder cases cover closed
+  wall loops, junctions, openings near ends and corners, and small curves. No error or warning
+  is accepted; informational notes are allowed.
+- `Outcome::Checked` gives each finding's rule, pack, severity, handles, place and message,
+  counts by rule and a short summary. At most 200 findings are listed.
+
+## Verify
+
+- `qiyas-core/src/verify.rs`: `Command::Verify { expectations }` is read-only and returns
+  `Outcome::Verified { results }`, one pass/fail result per expectation, with its measured
+  value and tolerance. Invalid targets fail their own expectation with an explanation.
+  Mizan uses `qiyas_read` with `op: "run"` and `args.command.type: "verify"` before saying done.
+- Each expectation has a `kind`, `targets: [{handle}]`, optional picking `points`, `value`,
+  `tolerance` and `in_metres`. Targets and pick points use the same part selection as
+  `AddConstraint`; distance can also use two literal points. Kinds cover length, distance,
+  angle, radius, area, closed, parallel, perpendicular, tangent, concentric, collinear,
+  horizontal, vertical, coincident, equal, symmetric, inside_bounds, no_self_intersection
+  and count. Count can filter by `layer`, `entity_type` or `block`; bounds are
+  `[[min_x, min_y], [max_x, max_y]]` in drawing coordinates.
+- Lengths use drawing units, or metres with `in_metres`; areas use the corresponding square
+  units and angles use degrees. Defaults are 0.5 mm, 0.1 degree, (0.5 mm)² for areas and zero
+  for counts and intersections. Geometric
+  relations reuse qiyas-param's constraint kinds and residuals without solving or moving
+  the drawing. Whole-outline symmetry accepts a flat closed straight polyline with 3–1024
+  vertices and an axis line; picked point symmetry uses two points and an axis line.
+  Self-intersection checks flatten paths and refuse more than 4096 vertices per path.
+- Relationship results measure deviation from zero: angle or distance error, the largest
+  open-end gap for `closed`, distance outside for `inside_bounds`, or the number of paths
+  crossing or doubling back for `no_self_intersection`. Bounds use analytic extrema and
+  refuse shapes without exact bounds rather than reporting an approximate pass.
+
 ## Drawings, tabs, recents and views
 
 - Several drawings open at once, one file tab each above the drawing (title, "•" while the drawing
@@ -949,8 +1808,21 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   screen is `AppState::session`, so every IPC command, the assistant and MCP act on it; the others
   are parked (`AppState::parked`, without their batch and pick index) and swapped in by
   `activate_tab`. Lock order: `tabs`, `session`,
-  `parked`. Switching or closing the tab on screen starts a new assistant conversation. Opening a
-  file that is open already shows its tab. Closing (or quitting) with unsaved drawing changes asks.
+  `parked`. Switching or closing the tab on screen starts a new assistant conversation, unless
+  Mizan did it (`keep_conversation`, see the AI section). Opening a file that is open already
+  shows its tab. Closing (or quitting) with unsaved drawing changes asks.
+- New drawing (quick-access New, Ctrl+N, NEW / QNEW): `NewDrawingDialog` asks metres,
+  centimetres or millimetres (the last choice kept in `localStorage` `qiyas.newUnits`), then IPC
+  `new_drawing { units }`: `Session::new_blank` (`CadDocument::new()`, INSUNITS 6, 5 or 4) in a
+  new tab at a placeholder `<config>/untitled/Untitled-N.dwg` (`tabs::untitled_path`: the
+  smallest N no tab uses and no autosave holds). It is clean until it changes (closing it untouched
+  asks nothing) and untitled (`is_untitled`, `DrawingInfo`/`TabInfo` `untitled`): `save()` is
+  refused (`UNTITLED`), so the window's Save, and the save of "Save changes?", go through Save As
+  (just the name offered); `save_project` writes nothing beside the placeholder; no "no geometry"
+  warning; not a recent drawing until its first Save As. Its autosave works as any other's, in
+  the placeholder folder; at launch `untitled_autosaves` lists the ones left there (Qiyas closed
+  before their first Save As) with the recent drawings for the recovery question, and a recovered
+  one stays untitled (`Session::mark_untitled`).
 - Recent drawings: `recents` in `settings.json` (10 at most, newest first, kept by the app on every
   open and Save As; the Settings dialog never changes them); the arrow beside Open lists them,
   greyed "(missing)" when the file is gone, then Clear recents.
@@ -959,18 +1831,155 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - A drawing that opens with nothing in model space says "This drawing has no geometry in Model"
   in the status bar.
 
+## Automation contracts and sheet ownership (2026-10-21)
+
+- Item 2: `qiyas-ai/src/surface_args.rs` describes every operation's arguments and calls core
+  `validate_schema` before routing, including window and host operations. Failures carry JSON
+  pointers, the expected schema and an example. Private surface contracts refuse unknown
+  properties through that validator before serde; registry-backed operations retain the core's
+  warnings and command-relative paths. Read shortcuts include their warnings in the result.
+  Query contracts match each runner and preserve nullable options. Run with several commands directs callers to
+  batch. Command payloads still use registry validation. Capabilities expose these contracts.
+  Record schemas now include layouts, block records, dimension styles, linetypes, views,
+  viewports, measurements, schedules, BOQ and conflicts. Other collections explicitly name
+  supported schemas and direct callers to `records` with `detail: "full"`.
+- Item 6: state includes the computer's current local ISO date in `local_date`. Both prompt
+  languages require title-block/project metadata from the user or drawing, leaving and listing
+  empty fields. Neither the date nor a drawing number is silently chosen for a title block.
+- Item 9: both prompt languages require schedules generated from drawing objects; quantities
+  must come from measurements or tool results, never typed schedule quantities.
+- Item 10: capture captions distinguish model drawing units from layout paper millimetres,
+  including pixels' physical size. State reports `sheet_units`, physical `paper`, and layout
+  annotation height in paper units while retaining model `metres_per_unit` for model geometry.
+- Item 12 (superseded by Phase 23): window sheet selections, including commands and scripts,
+  remain available during a turn. Desktop sessions retain an automation working sheet. Generic
+  AI/MCP session tools enter it under the session lock and restore the window sheet on success,
+  error or panic. Typed commands, batches, reads and picture captures share this boundary.
+  Sheet removal falls back to Model. Automatic UI events never change the user's sheet or zoom;
+  reveals animate only on the sheet currently visible. User history Undo/Redo and external MCP
+  drawing replacements retain turn protection; switching drawing tabs still cancels the old turn.
+
 ## AI assistant and settings
 
+- Agent session access always runs on a blocking worker, including turn-opening state, drawing
+  paths/epochs and drawing checks. Snapshot/checkpoint/resume use cached metadata returned by
+  those workers. The first mutation's error baseline is captured under the same session lock,
+  after cancellation/epoch validation and before execution; phase/end checks validate again
+  after checking. Never hold a `std::sync::MutexGuard` across `.await`: both AI and desktop
+  packages deny Clippy's `await_holding_lock` for every target. Agent integration tests and
+  desktop AI turn tests have named 60-second timeouts.
+
+- Conversations are app-wide, outside the shared `.qiyas` drawing project: one private JSON
+  file per chat in `<app config>/conversations/`, with a small `index.json`. Mizan saves after
+  each turn and before resetting for New chat, another drawing, settings or a failed turn.
+  The store keeps at most 100 chats, removing the least recently updated first. History defaults
+  to the drawing on screen; All drawings, individual delete and Delete all are available there.
+  An empty panel offers the latest saved chat for the current drawing.
+- Resume restores the visible thread and the compacted model conversation, the exact saved
+  system prompt and provider memory (including Gemini call signatures). Changing provider or
+  model discards old thinking, raw provider blocks and provider memory. The first resumed turn
+  tells Mizan to read the drawing before acting. Old tool cards cannot undo earlier sessions.
+  Pictures and thumbnails become `[picture removed]` on disk; keys are never included.
+- Settings include `autonomy` (`autonomous`, the default; `per_job`; `per_phase`) and
+  `measurement_method` (a local rule set name, or null for geometric quantities). Multi-phase
+  plans wait for approval per the selected mode; Approve sends `Approved, continue.`, while
+  Change focuses the composer. In autonomous mode, unfixed errors are reported without an approval pause.
+- `qiyas-core/src/data_home.rs::qiyas_dir()` (re-exported by desktop methods) is the Qiyas data home: release builds use
+  `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
+  `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
+  on first use. Settings lists local `methods/*.json`; no measurement rules ship with Qiyas.
+  Version 1 validates `{name, title, based_on, source_note, rules: []}` and the cited rule
+  contents through the Phase 18 engine (an omitted version means 1). Mizan's live state reports the name and whether a nonempty rule set was loaded;
+  without rules, quantities are geometric and answers say so.
+
+Mizan's `reveal` results draw the changed entities in order in the highlight overlay over the
+previous batch, then show the new batch (`viewport/reveal.ts`, `useSheets`, `useAssistantWiring`).
+Steps queue; redraws wait, and zoom cannot expose a pending batch. Reduced motion, another
+sheet, empty or very large steps show at once. A user command, undo or drawing/sheet switch
+cancels the queue and shows the current drawing. Mutation refreshes also sync layers and layouts.
+
+- `qiyas-ai/src/surface.rs` is the catalogue shared by Mizan and MCP. It offers exactly three
+  tools: `qiyas_read { op, args }`, `qiyas_execute { op, args }` and
+  `qiyas_capture { source, args }`. `args` is a JSON object written as a string (an object is
+  accepted too). Their schemas are strict and closed for Claude and Gemini; every property is
+  required, with no open objects or references. The old tool names in `execute.rs`, `window.rs`
+  and `host.rs` are private runners, never offered to a model.
+- Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
+  and examples; `search`: matching commands), validate, records, record_schema, query, measure (numbers
+  only), run (read-only commands), check, history, drawings, selection and rooms. Execute
+  operations: plan (conversation progress), run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
+  view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
+  compare, export_takeoff and export_conflicts. Capture's source is screen or picture.
+- `qiyas_execute {op: "type", args: {"line": "PLINE 0,0 10,0 C"}}` uses the same registry
+  machine as scripts and the command line, then the same folder rules, undo attribution,
+  drawing check and reveal as `run`. Coordinates use the session's UCS, with relative points
+  following earlier points in that line. Each call supplies a whole command: incomplete
+  input returns the next prompt without running anything; resend the complete line with its
+  answers. `commands` includes words and aliases, and capabilities describe this operation.
+- `qiyas_execute {op: "plan", args: {phases: [{id, title, status}]}}` reports a complete
+  checklist snapshot. Status is `pending`, `active`, `done` or `skipped`; it changes no drawing
+  and creates no undo step. It works without an open drawing, is described by capabilities
+  and `commands {name: "plan"}`, and MCP accepts and returns the same operation. The agent
+  emits a `plan` event; the panel shows the latest snapshot above that turn's answer and keeps
+  it in conversation history. Titles are the model's words; status labels are English/Arabic,
+  styled with brand tokens and no motion dependency.
+- Mizan plans in words before drafting: parts or rooms and their sizes, checked against the
+  user's numbers. Then it works one phase at a time, one batch per phase. Applicable phases
+  include grid, outer walls, inner walls, openings, rooms, dimensions/table and sheet; other
+  drafting follows the same loop. After each phase it captures, checks and fixes by handle
+  before continuing. It never draws trial geometry and undoes it to discover behaviour:
+  validation and wall reads supply that information. Openings are added to existing walls.
+  Both prompt languages enforce this rule within the 900-word budget.
+- A batch is one undo step, all or nothing, and can read earlier results through
+  `{"$step": 0, "pointer": "/added/0"}`. `Session::batch_with` sets the batch's layer and colour,
+  making a missing layer, then puts the previous current state back. Errors name the field,
+  schema and example; unknown names suggest close matches. Changed geometry comes with a
+  drawing check. The loop discovers a command, acts, checks and fixes by handle.
+- Before execution, the core checks all fields together against the command registry: missing
+  fields, wrong values and ranges are errors with JSON pointers; unknown fields are visible
+  warnings. Results include `defaults_used` with each field, value and unit. Errors preserve
+  the serde field message, schema and example; unknown names still suggest close matches.
+  All automation errors carry `code` beside `message`; `capabilities.error_codes` lists them.
+- `qiyas_read validate {command}` or `{commands}` checks inputs without changing the drawing,
+  including whether `$step` references point to earlier steps. It returns `valid`, `errors`,
+  `warnings`, `defaults_used` and `not_checked` (geometry, locks and object existence need a run).
+  Batch validation also names defaults affected by earlier sheet or scale changes and record
+  checks that depend on earlier steps; execution reports the defaults each step actually used.
+  `surface::OPERATIONS` declares each operation's environment: nothing, drawing, window or file
+  host; selection and screen capture explicitly list both window and drawing. A file host
+  reports whether it supplies a window through `DrawingHost::has_window`. Commands,
+  capabilities, record_schema and validate work without an open drawing;
+  unavailable environments answer `no_drawing`, `needs_window` or `needs_host`.
+- Each user message allows 40 calls, raised to 120 after a call changes the drawing. When 10
+  or fewer remain, each result includes `budget: "N calls left"`. At most 10 destructive
+  commands per message, counted from registry metadata in run and every batch step. A tool
+  card carries its command label (`draw.line`), batch or operation; the window translates
+  `command.<label>` when present, otherwise makes the label readable. Execute calls are
+  mutating except plan, select and view.
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
-  `openai_compatible`), model (default `claude-opus-5-5`), base URL, effort, MCP on/off, port and
-  token, language, theme.
+  `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and
+  `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), effort,
+  MCP on/off, port and token, language, theme. Loading an old flat model and base URL moves them
+  into the selected provider's profile and writes the new shape; the other provider keeps its
+  defaults. Switching providers in Settings switches the edited profile and clears any unsaved
+  key text. The model is chosen from a list (`src/shell/ModelPicker.tsx`, IPC
+  `ai_models`, `qiyas-ai/src/models.rs`): Anthropic's Models API (`GET /v1/models`, paged with
+  `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with the key from the
+  keychain; the saved model stays listed, a filter shows past 12 models, "Other…" takes a typed id,
+  and when the service can't be asked Claude's built-in list shows (`CLAUDE_MODELS`) with why.
+  A service list missing the saved model shows a warning without blocking Save; an empty
+  compatible profile can be saved, but sending asks for a model. Both providers explain a
+  missing model with the service and model name and direct the user to Settings, in English
+  or Arabic in the window.
 - The API key is never in a file: it lives in the OS keychain (service `qiyas`, account = the
   provider name), is set only in the Settings dialog, and is never sent back to the window.
   Agents never read or type a real key; the founder pastes it himself.
 - `QIYAS_AI_MOCK=1` with a debug build (`pnpm tauri dev`) uses a canned provider: it says a
-  sentence, measures the first polyline on layer A-WALL and answers. No key, no network. Release
-  builds leave it out.
+  sentence, measures the first polyline on layer A-WALL and answers; with a selection in the
+  message's `[state]` it calls `qiyas_capture` with source screen and `qiyas_execute` select on it instead. No key, no
+  network. Ask "draw a demo" or "ارسم" without a selection to see an outline and its partitions
+  drawn in two steps on MIZAN-DEMO. Release builds leave it out.
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.
@@ -980,28 +1989,113 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   when the request is clear it acts. The question is a plain text answer: the turn ends
   (`StopReason::EndTurn`, `AgentEvent::Done`), the question stays in the history and the next
   message is the answer (`agent.rs` test `a_question_ends_the_turn_cleanly...`). The fixed prompt
-  stays under 700 words (a test).
-- Measuring a drawn thing is by handle (find_entities / get_entity, then `measure_length` /
-  `measure_area`): exact for lines, arcs, circles, LWPOLYLINE and heavy POLYLINE with bulges
+  stays under 900 words (a test, excluding the index), in `prompt_en.txt` and `prompt_ar.txt`.
+  Both languages append the registry's deterministic `index_text()` under "Commands by category",
+  then the drawing facts. The stable index keeps prompt caching working.
+- Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `execute.rs` `picture`): `qiyas_capture` source picture draws a
+  sheet (`sheet`, by layout or block name; the one on screen by default; it never moves the
+  user's view) as the engineer sees it on white: model space inside a layout's viewports
+  (`Session::picture_batch_of`, `paper_views_against`, clipped to each frame), pictures and PDF
+  underlays under the lines (`plot_pictures` + `draw_picture`, at most 4096 px; one that can't
+  be drawn is named in the caption), fills, lines, text as glyphs, the take-off in violet,
+  `highlight` handles thick violet. `marks: true` puts orange numbered badges on up to 40
+  entities in view (highlighted ones first, then the largest; a block reference whole) and the
+  caption lists `#n handle kind layer "text"`. The caption also says how big a pixel is (drawing
+  units and mm) and how tall the text is (the smallest tenth and the median of each text's
+  tallest glyph, in px; letters read from about 8 px), so Mizan zooms in with `bounds` to read.
+- Window tools (`qiyas-ai/src/window.rs`, `DrawingHost::capture_screen`, `select`, `pointed`;
+  `qiyas-desktop/src/ai_window.rs`): the core asks the window and waits at most 5 s for
+  `ai_window_reply { id, value, error }`, without the session's lock. `qiyas_capture` source screen (`ai:capture
+  { id, maxSide }`: the window draws its main view and reads it back in the same task,
+  `Renderer.read`, `Viewport.capture`, `viewport/capture.ts`; the core then marks it, what the user
+  selected first), `qiyas_read` selection (`ai:pointed { id }`: the selection, the marked area, the
+  view), `qiyas_execute` select (`ai:select { handles, zoom }`: the Select tool's selection set,
+  entities drawn at the top of the sheet only; no undo step). Without a window they say so.
+  MCP clients reach them too.
+- What the user points at (`qiyas-ai/src/context.rs`, `src/ai/pointing.ts`,
+  `useAssistantWiring`): the Select tool's selection (or its one pick inside a block, with its
+  chain) shows as a chip above the composer ("Selection · 3", its kinds), × leaves it out until
+  it changes; the composer's area button starts the `mizanArea` tool (drag a box, or click
+  corners and Enter or double click; it then goes back to the tool before and opens Mizan's tab)
+  and an "Area · w × h m · n entities" chip; the canvas menu's "Ask Mizan about this" opens the
+  tab with the selection. `ai_send { text, context: { selection, region, view, picture }, images }`:
+  `Agent::run_turn_with(UserMessage)` adds to `[state]` the view on screen, the selection and the
+  region's entities (handle, kind, layer, length and area in metres, a text's words; 50 listed,
+  the rest counted by kind; totals without dimensions and block references), and when the
+  selection or region changed since the last message (`picture`) a 1000 px picture of it, marked.
+  Pictures pasted, dropped or attached (`src/ai/pictures.ts`: png, jpeg, webp, gif, at most 4, at
+  most 1600 px a side, 6 MB of base64 each) go before the words as `ContentBlock::Image`
+  (Claude: an image block; OpenAI-compatible: an `image_url` data URL) and show as thumbnails
+  in the bubble. The history keeps at most 12 pictures or 16 MB of them: past either, the
+  oldest give way to a line of text until 8 within 10 MB are left (`trim_pictures`); a
+  conversation may make 40 MB of pictures (`IMAGE_BUDGET`).
+- The panel's header has New chat (`ai.newChat`, `assistant.clear`): a new conversation, disabled
+  while Mizan works or the thread is empty.
+- Mizan never explains how Qiyas draws or fails unless a tool result shows it, and writes formulas
+  as plain text; a stray TeX formula in an answer reads as text anyway (`ai/plainMath.ts`). It
+  fixes what it drew through core commands (`edit_text`, `modify`, `delete_entities`) or writable records,
+  never by drawing it again, never hides layers to hide a mistake, and makes dimensions with
+  the core dimension commands.
+- Capture source picture draws what the engineer sees: `Session::picture_batch` (the sheet drawn afresh for the
+  picture's zoom, nothing cached, so the window's batch and curves stay) and
+  `render_png_with_text`: solid fills under the lines, the text as its glyphs from the atlas
+  (the text boxes left out). Mizan once saw no text at all and drew labels over labels.
+- Looking at a user's drawing from the command line: `cargo run -p qiyas-plot --example plot_file
+  -- <drawing> <out.pdf>` (fit on A1; `pdftoppm -png` for a picture) and `cargo run -p qiyas-ai
+  --example inspect -- <drawing> [tool[={json}] …]` (read-only tools' JSON; a picture tool writes
+  `<drawing>.<tool>.png`).
+- Mizan's file operations (`qiyas-ai/src/host.rs` behind `surface::route`): `qiyas_read` drawings
+  (tabs and recents), and `qiyas_execute` new_drawing (`units`, ask when not given), open_drawing
+  (`path`), switch_drawing (`id`), save_drawing and close_drawing (`id` optional). They run through the
+  `DrawingHost` trait (`Agent::with_host`, `mcp::serve`'s `host`), outside the session's lock,
+  implemented by `qiyas-desktop/src/drawing_host.rs` over the tabs. The assistant chose the
+  drawing, so its conversation goes on (`tabs::activate`/`add`/`close` `keep_conversation`) and the
+  turn's epoch moves to the drawing now on screen; the answer summarises it (the system prompt's
+  is the earlier one's). The window follows `drawing:shown`. The user decides what could lose work
+  or pick a new file: a path that is not an open tab, a recent drawing or written in the user's
+  message (never for MCP) is confirmed in a native dialog; one with an autosave to decide about is
+  refused (`script::open`); an untitled or repaired drawing's save is the window's Save
+  (`drawing:save`); closing unsaved changes is the window's question (`drawing:close`, keeping the
+  conversation). Without a host they answer `NO_HOST`.
+- Measuring a drawn thing is by handle (`qiyas_read` records or query, then measure for
+  numbers or `qiyas_execute` run with the take-off commands): exact for lines, arcs, circles, LWPOLYLINE and heavy POLYLINE with bulges
   (tested in DXF and DWG). Points are for points the engineer gave. A points measurement whose
   extent matches one drawn entity (within a tenth) still measures, but the answer carries `hint`
   and `candidates` (handle, kind, layer, length, area) so Mizan removes it and measures the
-  handle. `add_measurement` refuses a no-geometry item of quantity 0 (notes, analysis) unless
-  `empty_item` is true; `add_markup` is unaffected.
-- Mizan writes into the drawing (`qiyas-ai/src/execute/author.rs`, 43 tools in all): `add_text`
-  (TEXT, or MTEXT for several lines or a width; height in metres, default 2.5 mm x annotation
-  scale), `room_areas` and `label_spaces` (the smallest closed region round each room-name text
-  or seed via `Session::boundary_at`, like Hatch: `enclosed_area_m2` is what the line work
-  encloses, columns that overlap a wall are already out, `net_area_m2` also takes the islands off
-  (fountain, shaft; `subtract_islands` false keeps them); bulged edges are exact; texts that look
-  like areas are skipped so a second run does not label labels; `label_spaces` writes "NN.NN m²"
-  just under each name), `add_table` over `Command::Table` (headings + rows of strings) and
-  `edit_table_cell`, `draw` (line, polyline with bulges, rectangle, circle, arc, hatch, revcloud;
-  drawing units) and `insert_block`. Each call is one undo step through `Command::Batch`; a layer
-  that does not exist is made (white) and the current layer and colour are put back. Verified on
+  handle. The core refuses an AI or MCP item with no geometry and quantity 0 (notes, analysis)
+  unless `empty_item` is true; `add_markup` calls `Command::AddMarkup`.
+- Mizan writes into the drawing with any core command through `qiyas_execute` run or batch:
+  text (TEXT or MTEXT), tables and cells, lines, polylines with bulges, rectangles, circles,
+  arcs, hatches, clouds and block references. Sizes are drawing units; default text height is
+  2.5 mm on paper at the annotation scale. `qiyas_read` rooms and the core `LabelSpaces` command
+  find the smallest closed region round each room-name text or seed via `Session::boundary_at`,
+  like Hatch: `enclosed_area_m2` is what the line work encloses, columns that overlap a wall
+  are already out, `net_area_m2` also takes the islands off (fountain, shaft;
+  `subtract_islands` false keeps them). Bulged edges are exact; texts that look like areas are
+  skipped so a second run does not label labels. `label_spaces` writes
+  "Unapproved candidate NN.NN m²", or its Arabic wording, just under each name. Verified on
   `samples/test-plan.dwg`: living room 58.29 - 4 x 0.0025 = 58.28 enclosed, 51.211 net of the
   fountain; bedroom 22.085; kitchen 17.385 (the 0.4 m columns overlap the inset corners by
   0.05 x 0.05).
+- Offline drafting evaluation: `qiyas-ai/tests/drafting_eval.rs` runs the production Agent
+  through the three generic tools using the queued scripted provider shared with
+  `tests/surface.rs` (`tests/support/scripted.rs`). A villa and a flange exercise drafting,
+  checks, stated-intent verification and captures; a synthetic replay checks earlier Mizan
+  fault classes. This proves the specified tool sequence works, not model judgement or
+  design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
+  room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
+  for each live run.
+- Long conversations are compacted, never ended: past `COMPACT_AT` (300) messages, earlier user
+  turns go, then the current turn's oldest call-and-result pairs, down to `COMPACT_TO` (160),
+  always keeping the newest `KEEP_RECENT` (60) messages whole (`Agent::compact`). A note first
+  in the history keeps the user's earlier requests word for word and one line per step dropped
+  (the newest 80), and tells Mizan to read the drawing for what was done; a later compaction
+  merges into it. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
+  make room. It replaced a hard stop at 400 that ended a design-package run mid-task.
+- An answer cut off by its length limit before it wrote text or a call (its room went on
+  thinking: Gemini through Runware once thought 94 s and wrote nothing) is asked again with
+  twice `max_tokens`, up to `MAX_TOKENS_CAP` (64,000), the empty answer dropped; past the cap
+  the turn stops with `max_tokens` as before. Log line `RETRY`.
 - Agent log: `logs/agent.log` beside `settings.json` (mode 0600, moved to `agent.log.1` past
   5 MB). Each conversation's provider, model and address, then every user message, request,
   answer (text, calls, tokens, time), tool run (input, result) and error with the service's
@@ -1016,12 +2110,43 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   every later request fail. An assistant message with calls and no text sends `"content": ""`
   (Gemini's endpoint, Runware in front of it, refuses `null`); a tool message holds only `role`,
   `tool_call_id` and string `content`. A call's streamed `extra_content` (Gemini 3's thought
-  signature) is kept by call id in the provider and sent back on that call.
+  signature) is kept by call id in the provider and sent back on that call. Each request asks for
+  the effort (`reasoning_effort`: low, medium, high for high/xhigh/max), the answer's length
+  (`max_completion_tokens`, else `max_tokens`) and the usage (`stream_options.include_usage`); a
+  400 naming one of those (`OPTIONAL_FIELDS`) drops it, sends again, and leaves it out for the rest
+  of the conversation. Cached and reasoning tokens are read into `Usage` and the log ("(n
+  thinking)"); reasoning accepts both `usage.completion_tokens_details.reasoning_tokens` and
+  `usage.reasoning_tokens`. Each actual request, including optional-field retries, logs
+  `sent:` with the controls present in its body. Both providers turn a missing-model reply
+  into the service and model name followed by “choose one in Settings”.
 
 ## MCP
 
-Outside AI apps can drive Qiyas through its MCP server (the same tools as the in-app assistant;
-their measurements are marked `mcp`).
+- Headless: `qiyas-cli mcp --drawing PATH [--workdir DIR]` serves the same three tools
+  over rmcp stdio, without the desktop, settings or keychain. The workdir defaults to the
+  drawing's folder; an outside drawing is copied into it. Only that drawing is opened,
+  without project sidecars or external drawing resources. PDF page 1 uses eval's uncalibrated
+  preparation. `qiyas_capture source picture` works; screen and selection return `needs_window`.
+- MCP `instructions` is exactly `registry().index_text()`, including the generated take-off
+  workflow used by Mizan. `qiyas_execute finish {answer?}` saves the drawing and headless
+  submission; stdin EOF also saves partial work. Outputs are `takeoff.json`, `measurement.json`,
+  `takeoff.xlsx` (generated BOQ and dimensions), `self-check.json`, `conflicts.json`, and
+  `end-report.json`. Each command/batch keeps its existing single undo boundary, source `mcp`.
+- Headless file paths stay in the workdir; traversal, symlinks, truth, recipes and settings
+  are refused. One server owns one drawing; start another process to open a different drawing.
+  This host does not supply desktop tabs or a project workspace.
+
+Outside AI apps can drive Qiyas through its MCP server. `tools/list` offers exactly the same
+three tools as Mizan: `qiyas_read`, `qiyas_execute` and `qiyas_capture`, using `surface::tools`.
+`mcp::tools` adds the optional `request_id` to execute: the same id and arguments return the
+first result without another change or UI event; different arguments answer `request_id_reused`.
+Each MCP connection retains its last 256 ids, including failed results; concurrent retries wait
+for the original result. Mizan can omit the id.
+`surface::route` sends window operations to the window runner, file operations to the host,
+and session operations to the shared surface runner. Measurements are marked `mcp`; undo_own
+only undoes that source's newest step. Mizan runs session operations on the blocking pool with
+cancel and epoch checks; MCP runs them synchronously. File operations move the active drawing
+and Mizan's turn epoch together.
 
 - Turn it on in Settings, MCP server. It listens on `127.0.0.1:48123/mcp` (port in Settings) and
   needs `Authorization: Bearer <token>`; a request with an `Origin` other than the server's own
@@ -1046,6 +2171,35 @@ their measurements are marked `mcp`).
 
 ## Scripts and the command line tool
 
+- Subscription evaluation: `qiyas-cli eval-agent (--case ID | --cases a,b | --set live-dev)
+  --agent codex [--agent-cmd TEMPLATE] [--model M] [--effort E] [--timeout-min N]`.
+  Defaults: `gpt-6.1-sol`, medium effort, 20 minutes per case. It never loads Qiyas provider
+  settings, keys or a budget ledger. The external client uses its existing subscription login.
+  Each case starts with a drawing copy and, when declared, clause-only `preamble.md` in a
+  fresh `.local/benchmark/runs/` directory.
+  The harness keeps agent events, MCP calls and eval-compatible scoring reports, headed
+  `AGENT ALONE (<agent>)`, with cost `subscription`. Logged access to truth, recipes, the
+  benchmark store or repository outside the run contaminates the case and excludes its score.
+  This is an event-log audit, not a complete filesystem isolation guarantee. Custom clients
+  must emit command/file-read events and use subscription authentication.
+  See `docs/2026-10-22-agent-eval.md` for the template contract and reviewer command. Do not
+  run real agent evaluations during implementation checks.
+
+- Final exam: `qiyas-cli eval-agent --holdout --i-understand-this-opens-the-holdout
+  --agent codex --model gpt-6.1-sol --effort medium --timeout-min 20`. Only the reviewer runs
+  this, deliberately once; implementation checks never open the real holdout. Without the long
+  flag it refuses. The exam verifies every published SHA-256 over `drawing.dxf || truth.json`
+  before starting any agent, restores the sealed directory's permissions, and retains verified
+  inputs in memory. Agents receive only a drawing and clause-only preamble in fresh case folders
+  under `.local/benchmark/runs/holdout-exam-<timestamp>/`. The shared scorer traces saved geometry and embedded rules;
+  the usual contamination guard still excludes contaminated cases. `report.json` includes explicit
+  north-star accuracy within ±2% over all truth items (target ≥95%), coverage (target >90%),
+  submitted-item traceability, seeded-error recall, item precision and seeded-error precision.
+  Undefined rates are null. `.local/benchmark/holdout-log.jsonl` appends an opening event before
+  accessing sealed contents and a completed/incomplete/failed event with metrics afterward; both
+  retain time, agent, model, git commit and report path. An interrupted opening remains recorded.
+  No automatic retry. Development loaders and `bench list` remain sealed/hash-only.
+
 - Command scripts (`qiyas-core/src/script.rs`, `.scr`): one command per line, its points on the
   same line or the lines after it; a line starting with `;` is a comment; blank lines are
   skipped; words in any case. Points as the window's command line: `x,y`, `@dx,dy`, `@d<angle`
@@ -1053,6 +2207,12 @@ their measurements are marked `mcp`).
   point carries across commands for `@`. Double quotes keep a name with spaces together. The
   whole file is checked before anything runs; an error is `line N: …`, and a run stops at the
   first failing step with its line.
+  Words outside the legacy script grammar fall back to `cmdline::Machine`, including
+  `LINE` / `L`, `PLINE` / `PL`, `CIRCLE` / `C`, `NEWLAYER`, `NEWLAYOUT` and `RENAMELAYOUT`.
+  Answers may follow on later lines, and the last point carries between the legacy grammar
+  and the machine. A blank line or end of file finishes a variable point sequence; `C`
+  closes a polyline. Quoted names, Arabic digits and separators work in both paths.
+  The legacy grammar has priority (`MEASURE` still takes an entity handle in scripts).
 
   | Line | Does |
   |---|---|
@@ -1075,7 +2235,9 @@ their measurements are marked `mcp`).
   | `ECHO <text>` | Prints the text in the report. |
   | `{"type":…}` | Any `Command` in its wire form, e.g. `{"type":"draw","kind":"line","a":[0,0],"b":[0,5]}`; its `path` and `…_path` fields go through the folder rule below and become absolute. |
 
-  Not in the grammar on purpose: `ME` (measure along) and UCS (points are world). Paths are
+  Script coordinates remain world coordinates: the whole file is parsed before its commands
+  run, so a UCS command does not change how later script points are read. `ME` (measure along)
+  now reaches the registry fallback; `MEASURE` retains the legacy handle-only grammar. Paths are
   relative to the script's folder (written ones, SAVEAS and EXPORT, to the batch's `--out`
   folder when given) and must stay inside the script's folder, the drawing's folder or the out
   folder. `{name}` in a path is the drawing's file name without extension and `{ext}` its
@@ -1117,8 +2279,22 @@ their measurements are marked `mcp`).
   lines with a mark each, where it stopped and the time; then the window shows a drawing an OPEN
   put on screen as a tab switch does, or reads the one on screen again (info, hidden layers,
   take-off, batch), and saves the take-off.
-- `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window, and never the settings, the
-  keychain, MCP or the AI (it depends on qiyas-core, qiyas-boq and qiyas-takeoff only).
+- `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window. Ordinary drawing commands
+  and `bench` are offline and never read provider settings or credentials. Only `eval`, with
+  explicit approval for each run, reads saved provider settings and the OS keychain itself.
+  - `bench generate`: 60 deterministic dev cases in six project types, each with 12 variants,
+    in git-ignored `.local/benchmark`; six separate holdout cases are sealed and listed by hash.
+    ResPlan conversion skips and reports invalid whole plans before writing any case, continuing
+    to later plans; `<source stem>.conversion.json` and stdout retain rejection reasons.
+  - `bench run`: recognised element mappings, three repetitions (quick set: one),
+    with scored JSON/Markdown reports. `bench score --case ID --submission FILE` accepts
+    JSON take-off/BOQ or Excel. Dev commands never enumerate or open the holdout.
+  - `eval --case ID --approve-live-run [--provider-from-settings]`: real headless Mizan,
+    OS keychain credentials, local budget reservations and token/cost accounting. Requires
+    explicit model pricing in `.local/autopilot/budget.json`; the daily default is $5.
+    Never run live evaluation without Kareem's OK for that run. Tests use a scripted provider.
+  - Schema, scoring definitions, source conversion and limitations:
+    `docs/2026-10-21-qiyas-qs-benchmark.md`.
   - `convert <in> <out> [--version 2000|2004|2007|2010|2013|2018]`: DWG or DXF by the output's
     extension, in the input's version unless given: the drawing as read and nothing else (no
     project file, no take-off embedded, the source's project never rewritten); `.bak` when the
@@ -1276,6 +2452,7 @@ their measurements are marked `mcp`).
 
 In this repo, `docs/` (write new specs, plans, checks and reports here, never in the workspace):
 
+- QS roadmap: [docs/2026-10-21-qiyas-qs-roadmap.md](docs/2026-10-21-qiyas-qs-roadmap.md)
 - Spec: `docs/superpowers/specs/2026-10-08-qiyas-design.md`
 - Plan (Phase 1a): `docs/superpowers/plans/2026-10-08-qiyas-foundation.md`
 - Plan (Phase 2, AI and BOQ): `docs/superpowers/plans/2026-10-08-qiyas-phase2-ai-boq.md`
@@ -1284,6 +2461,28 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Plan (Phase 4, output): `docs/superpowers/plans/2026-10-08-qiyas-phase4-output.md`
 - Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`,
   `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`,
-  `docs/2026-10-12-qiyas-phase4-check.md`
+  `docs/2026-10-12-qiyas-phase4-check.md`, `docs/2026-10-19-qiyas-units-mizan-check.md`
 - Deferred (Phase 3, left for later): `docs/2026-10-09-qiyas-phase3-deferred.md`
 - Deferred (Phase 4, left for later): `docs/2026-10-12-qiyas-phase4-deferred.md`
+
+## Drawing package rules (live-run corrections, 21 October 2026)
+
+- (1) `missing_center_mark` excludes circles containing a nonempty TEXT/MTEXT insertion on
+  the same sheet, regardless of layer. Grid bubbles carry `QIYAS_GRID` provenance, so removing
+  their labels or changing their layer never turns them into holes. Plain circles still need marks.
+- (3) `add_wall_openings` reports resolved sill/head in metres from the picked run (window 0.9,
+  door 0, head min(2.1, height)). `edit_wall_opening` reports retained omitted properties and
+  their physical units; removing openings has no implicit size defaults.
+- (7) Verification results include `tied_to_drawing`. Arithmetic on literal points is false;
+  entity targets and counts read the drawing. The overall `untied_checks` and `line` explicitly
+  say how many checks prove nothing about the drawing, even when their arithmetic passes.
+- (9) `opening_schedule {at, source_sheet?}` / `OPENINGSCHEDULE` builds an ACAD_TABLE on the
+  current sheet from wall systems on the source (Model by default). Rows group by kind, width,
+  and head minus sill, with physical dimensions in mm. Size marks such as D-900x2100 are
+  assigned to inserts in `QIYAS_OPENING_MARK` xdata and returned by `wall_groups`; those marks
+  can be used in plan tags. Count cells and the total use `QiyasOpeningCount` fields linked
+  to the source sheet handle. `QIYAS_OPENING_SCHEDULE` keeps the source on the table. Drawing
+  edits refresh groups, marks and counts within their undo step, including newly added sizes;
+  DWG/DXF retain the values and links. Table location and column widths stay as placed.
+  On layer 0 the generated table uses `A-ANNO-TABL`, created in the same undo step without
+  changing the current layer. Initial cells are sized from displayed quantities, not field code.

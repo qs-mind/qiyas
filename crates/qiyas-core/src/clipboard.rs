@@ -16,7 +16,6 @@ use qiyas_geom::{flatten_with, is_xref_block, Xform};
 
 use crate::blocks::Importer;
 use crate::modify::{place, place_keeping_blocks, Placing, MAX_NEW};
-use crate::session::BATCH_TOL;
 use crate::{CoreError, Session, Target, Units};
 
 /// The first line of every clipboard text Qiyas writes (a DXF comment), so paste knows it.
@@ -67,7 +66,7 @@ fn lower_left(session: &Session, handles: &[Handle]) -> Option<[f64; 2]> {
         let Some(e) = doc.get_entity(h) else {
             continue;
         };
-        let outcome = flatten_with(doc, &xrefs, e, &Xform::identity(), BATCH_TOL);
+        let outcome = flatten_with(doc, &xrefs, e, &Xform::identity(), session.batch_tol());
         for p in outcome.paths.iter().flat_map(|f| &f.path.points) {
             let l = low.get_or_insert(*p);
             l[0] = l[0].min(p[0]);
@@ -78,6 +77,12 @@ fn lower_left(session: &Session, handles: &[Handle]) -> Option<[f64; 2]> {
 }
 
 impl Session {
+    /// The automatic clipboard base is the lower left of the picked geometry.
+    pub(crate) fn clipboard_base_default(&self, targets: &[Target]) -> Result<[f64; 2], CoreError> {
+        let handles = self.sheet_targets_any(targets)?;
+        Ok(lower_left(self, &handles).unwrap_or([0.0, 0.0]))
+    }
+
     /// `Command::CopyToClipboard`: the clipboard text for the entities `targets` at the top of
     /// the sheet (locked layers too: nothing changes), taken from `base` (by default the lower
     /// left corner of what they draw), and how many entities it holds. Viewports, xref
@@ -91,7 +96,7 @@ impl Session {
         let base = match base {
             Some(b) if b.iter().all(|v| v.is_finite()) => b,
             Some(_) => return Err(invalid("The base point must have finite coordinates")),
-            None => lower_left(self, &handles).unwrap_or([0.0, 0.0]),
+            None => self.clipboard_base_default(targets)?,
         };
         let src = &self.drawing.doc;
         let mut doc = CadDocument::new();
@@ -217,6 +222,7 @@ impl Session {
             }
             shift_in(&mut self.drawing.doc, Handle::new(h), at);
         }
+        self.copied_wall_groups(&added, false)?;
         Ok(added)
     }
 
@@ -232,8 +238,7 @@ impl Session {
         if value.trim().is_empty() {
             return Err(invalid("The clipboard is empty"));
         }
-        let height = height
-            .unwrap_or_else(|| 0.0025 / self.drawing.units.to_metres() * self.annotation_scale().1);
+        let height = height.unwrap_or_else(|| self.default_text_height());
         let h = if value.contains('\n') {
             self.add_mtext(at, 0.0, height, value, None)?
         } else {

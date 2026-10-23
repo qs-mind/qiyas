@@ -3,13 +3,14 @@
 use opencadcodec::entities::Table;
 use opencadcodec::{EntityType, Vector3};
 use qiyas_geom::Xform;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::query::plain_text;
 use crate::Session;
 
 /// A table read off a sheet: a header row and data rows of plain text.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Schedule {
     pub name: String,
     /// Block of the sheet it was found on.

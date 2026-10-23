@@ -26,16 +26,40 @@ use crate::drawing::short_layer_name;
 use crate::embed::{embed_measurements, read_embedded};
 use crate::project::{self, project_path, Project};
 use crate::underlay::{rebase_links, Underlays};
-use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot, ViewRefs};
+use crate::undo::{DocChange, History, Parts, Step, TablesSnapshot, ViewDelta, ViewRefs};
 use crate::xref::{XrefInfo, XrefSet};
 use crate::{
     Boq, Command, Conflict, CoreError, Current, DimStyleInfo, Drafting, Drawing, LayerInfo,
     Outcome, Schedule, Sheet, Source, TableInfo, Takeoff, Ucs, Units,
 };
 
-/// Flatten tolerance for drawing on screen, in drawing units.
+/// Flatten tolerance for drawing on screen in a millimetre drawing: 0.05 mm. Other units use the
+/// same real size (`Session::batch_tol`), so a circle is as round in metres as in millimetres.
 pub const BATCH_TOL: f64 = 0.05;
-/// What `Session::segments_near` finds.
+
+/// `BATCH_TOL`'s real size in drawing units of `units`: 0.05 mm whatever the drawing's units.
+pub fn batch_tol_for(units: Units) -> f64 {
+    BATCH_TOL * 0.001 / units.to_metres()
+}
+
+/// Zoomed in past `batch_tol`, curves on screen are flattened within this many screen pixels
+/// (AutoCAD's automatic regen): never a visible corner on a circle, however close.
+pub const ZOOM_TOL_PX: f64 = 0.25;
+
+/// The tolerance the sheet on screen should draw curves within at `px_per_unit` screen pixels per
+/// drawing unit, and whether `current` is far enough from it to draw them again: more than twice
+/// as coarse (a corner could show), or eight times finer than needed (memory) while finer than
+/// the drawing's own `base`. The window's `curvesNeedRedraw` asks the same.
+pub fn zoom_tol(base: f64, current: f64, px_per_unit: f64) -> Option<f64> {
+    if !(px_per_unit > 0.0 && px_per_unit.is_finite()) {
+        return None;
+    }
+    let want = (ZOOM_TOL_PX / px_per_unit).min(base);
+    let coarse = current > 2.0 * want;
+    let fine = current < want / 8.0 && current < base;
+    (coarse || fine).then_some(want)
+}
+/// What `Session::segments_near_in` finds.
 pub(crate) struct Near {
     /// The entities the drawn segments there draw (handle and block chain, as `locate` takes them), once
     /// each.
@@ -52,9 +76,20 @@ const OTHER_SHEETS: usize = 2;
 /// Segments looked at past locked ones for a pick while a block is edited in place.
 const PICK_PAST_LOCKED: usize = 4096;
 
-/// Flatten tolerance for measured lengths and areas, in drawing units. Finer than `BATCH_TOL`
-/// so arcs measure close to their true length.
-pub(crate) const MEASURE_TOL: f64 = 1e-3;
+/// Flatten tolerance for measured lengths and areas: 1 µm (0.001 in a millimetre drawing), the
+/// same real size in every unit (`measure_tol_for`). Finer than `BATCH_TOL` so arcs measure close
+/// to their true length.
+pub(crate) const MEASURE_TOL_M: f64 = 1e-6;
+
+/// `MEASURE_TOL_M` in drawing units of `units`.
+pub(crate) fn measure_tol_for(units: Units) -> f64 {
+    MEASURE_TOL_M / units.to_metres()
+}
+
+/// `MEASURE_TOL_M` in the drawing units of `doc` (its header's INSUNITS).
+pub(crate) fn measure_tol_of(doc: &CadDocument) -> f64 {
+    measure_tol_for(Units::from_header(doc.header.insertion_units))
+}
 
 /// Gives every opened session its own number, so the batch version of one drawing never equals
 /// that of another opened later in the same window.
@@ -65,6 +100,8 @@ pub struct Session {
     pub drawing: Drawing,
     /// Block name of the sheet on screen, e.g. `*Model_Space`.
     pub sheet: String,
+    /// Desktop automation keeps its working sheet independently of the user view.
+    pub automation_sheet: Option<String>,
     pub visibility: Visibility,
     pub takeoff: Takeoff,
     /// The imported BOQ; `None` until one is imported.
@@ -88,6 +125,13 @@ pub struct Session {
     pub current: Current,
     /// The hidden layers kept with each layer state, by state name. Saved in the project file.
     pub(crate) state_hidden: BTreeMap<String, Vec<String>>,
+    /// The layer isolated on screen (LAYISO), with what isolating it hid; LAYUNISO puts back only
+    /// that. Not an undo step, like hiding a layer.
+    pub(crate) isolated: Option<crate::layers::Isolation>,
+    /// What the last command or transaction did to the drawing's entities (`last_change`).
+    pub(crate) last_change: crate::Change,
+    /// How many transactions are open (`crate::transaction`).
+    pub(crate) tx_depth: usize,
     /// The user coordinate system (see `crate::ucs`). Saved in the project file and the
     /// drawing; not an undo step.
     pub ucs: Ucs,
@@ -99,6 +143,12 @@ pub struct Session {
     pub(crate) recovered_from: Option<PathBuf>,
     /// Which session this is; see `NEXT_EPOCH`.
     epoch: u64,
+    /// A new drawing never saved yet (`Session::new_blank`): its path is a placeholder, Save goes
+    /// through Save As and no project file is written beside it.
+    untitled: bool,
+    /// The curve tolerance of the sheet on screen when zoomed in past `batch_tol` (`zoom_tol`);
+    /// `None` draws at `batch_tol`.
+    zoom_tol: std::cell::Cell<Option<f64>>,
     /// Counts the changes to the drawing itself (not the take-off), which is all a batch shows.
     pub(crate) document_revision: u64,
     /// `document_revision` at the last save (or the open): the drawing has unsaved changes
@@ -117,7 +167,7 @@ pub struct Session {
     others: RefCell<Vec<(String, u64, Batch)>>,
     /// Fonts, glyph atlas and glyph cache, kept across batches so the atlas pages the window
     /// holds stay valid.
-    text: RefCell<TextEngine>,
+    pub(crate) text: RefCell<TextEngine>,
     /// The pictures' (PDF underlays and raster images) image ids, PDF page sizes and problems.
     pub(crate) underlays: RefCell<Underlays>,
 }
@@ -126,6 +176,8 @@ struct Cached {
     sheet: String,
     hidden_layers: HashSet<String>,
     arabic_reversed: bool,
+    /// The curve tolerance it was flattened within (`screen_tol`).
+    tol: f64,
     batch: Batch,
     index: PickIndex,
     /// The point entities on the sheet (top level, on shown layers), for node snaps: where, and
@@ -147,8 +199,12 @@ pub struct DrawingInfo {
     pub xrefs: Vec<XrefInfo>,
     /// Block name of the sheet on screen.
     pub sheet: String,
+    /// The layout's physical paper size in millimetres, including its rotation; none on Model.
+    pub paper: Option<crate::Paper>,
     /// The layers the user has hidden, sorted.
     pub hidden_layers: Vec<String>,
+    /// The layer isolated on screen (LAYISO), if one is.
+    pub isolated_layer: Option<String>,
     /// What new entities are drawn with (`Session::current`).
     pub current: Current,
     /// The drawing's own text styles, sorted (`Session::text_styles`).
@@ -179,6 +235,8 @@ pub struct DrawingInfo {
     /// The drawing has (or had) parametric constraints: its `QIYAS-PARAM` application is
     /// registered, so the window keeps the constraint bar's list read.
     pub has_constraints: bool,
+    /// A new drawing never saved yet (`Session::is_untitled`): Save goes through Save As.
+    pub untitled: bool,
 }
 
 /// An entity by its handle and the block references it sits inside (outermost first).
@@ -188,6 +246,8 @@ pub(crate) type PointAt = ([f64; 2], u64);
 
 /// In the problems of a drawing that opens with nothing in model space.
 pub const EMPTY_MODEL: &str = "This drawing has no geometry in Model";
+/// `Session::save` on a new drawing that has no file yet.
+pub const UNTITLED: &str = "This drawing has not been saved yet: use Save As";
 
 /// Shown when some block content was too deep or too large to draw.
 const TRUNCATED: &str = "Drawing too complex, some block content not drawn";
@@ -459,25 +519,143 @@ impl Session {
         Session::open_with(path, &project_path(path), &project::file_name(path))
     }
 
+    /// Opens a self-contained benchmark drawing without reading project sidecars or external
+    /// resources. Linked drawings and pictures must be resolved before entering the benchmark.
+    pub fn open_standalone(path: &Path) -> Result<Session, CoreError> {
+        let drawing = Drawing::open(path)?;
+        if drawing
+            .doc
+            .block_records
+            .iter()
+            .any(|b| is_xref_block(&drawing.doc, &b.name))
+            || drawing.doc.objects.values().any(|o| {
+                matches!(
+                    o,
+                    opencadcodec::objects::ObjectType::ImageDefinition(_)
+                        | opencadcodec::objects::ObjectType::UnderlayDefinition(_)
+                )
+            })
+            || drawing
+                .doc
+                .entities()
+                .any(|e| matches!(e, EntityType::RasterImage(_) | EntityType::Underlay(_)))
+        {
+            return Err(CoreError::InvalidCommand(
+                "Standalone drawings cannot reference external drawings, images or underlays"
+                    .into(),
+            ));
+        }
+        let mut session = Self::from_drawing(drawing, None);
+        session.size_stock_dim_styles();
+        Ok(session)
+    }
+
+    /// Opens saved drawing knowledge without sidecars or resolving external resources.
+    /// Underlays may remain as evidence; only embedded geometry is available to measure.
+    pub fn open_embedded(path: &Path) -> Result<Session, CoreError> {
+        let drawing = Drawing::open(path)?;
+        if drawing
+            .doc
+            .block_records
+            .iter()
+            .any(|b| is_xref_block(&drawing.doc, &b.name))
+        {
+            return Err(CoreError::InvalidCommand(
+                "Embedded drawings cannot load external drawing references".into(),
+            ));
+        }
+        Ok(Self::from_drawing(drawing, None))
+    }
+
     /// `open`, with the project file at `project_file`, saved for the drawing named `name`.
     pub(crate) fn open_with(
         path: &Path,
         project_file: &Path,
         name: &str,
     ) -> Result<Session, CoreError> {
-        let mut drawing = Drawing::open(path)?;
+        let mut session = Session::from_drawing(Drawing::open(path)?, Some((project_file, name)));
+        session.size_stock_dim_styles();
+        Ok(session)
+    }
+
+    /// A new, empty drawing (`Drawing::blank`) on its model sheet, with an empty take-off and the
+    /// header's INSUNITS `insunits`. It has no file yet (Save goes through Save As,
+    /// `is_untitled`) and stands at `placeholder` until then: the app's own folder, so its
+    /// autosave has a home. Nothing to save until it changes, so closing it untouched asks nothing.
+    pub fn new_blank(placeholder: &Path, insunits: i16) -> Session {
+        let mut session = Session::from_drawing(Drawing::blank(placeholder, insunits), None);
+        session.untitled = true;
+        session.metric_template();
+        session
+    }
+
+    /// A new drawing's annotation defaults, as AutoCAD's metric templates have them in paper
+    /// millimetres, in this drawing's units, at an annotation scale of 1:100 (a building plan's):
+    /// dimension text and arrows 2.5 mm on paper, extension offset 0.625, extension 1.25, gap
+    /// 0.625, baseline spacing 3.75, text 2.5 mm x 100, linetype scale 100. So a dimension or text
+    /// drawn at once is readable, whatever the units: 0.25 m in metres, 250 in millimetres.
+    fn metric_template(&mut self) {
+        const SCALE: f64 = 100.0;
+        let mm = 0.001 / self.drawing.units.to_metres();
+        let decimals = match self.drawing.units {
+            Units::Metres => 2,
+            Units::Centimetres => 1,
+            _ => 0,
+        };
+        let doc = &mut self.drawing.doc;
+        let current = doc.header.current_dimstyle_name.clone();
+        let name = if doc.dim_styles.get(&current).is_some() {
+            current
+        } else {
+            "Standard".to_string()
+        };
+        if let Some(style) = doc.dim_styles.get_mut(&name) {
+            style.dimtxt = 2.5 * mm;
+            style.dimasz = 2.5 * mm;
+            style.dimexo = 0.625 * mm;
+            style.dimexe = 1.25 * mm;
+            style.dimgap = 0.625 * mm;
+            style.dimdli = 3.75 * mm;
+            style.dimcen = 2.5 * mm;
+            style.dimscale = 1.0;
+            style.dimdec = decimals;
+        }
+        let h = &mut doc.header;
+        h.dim_text_height = 2.5 * mm;
+        h.dim_arrow_size = 2.5 * mm;
+        h.dim_ext_line_offset = 0.625 * mm;
+        h.dim_ext_line_extension = 1.25 * mm;
+        h.dim_line_gap = 0.625 * mm;
+        h.dim_line_increment = 3.75 * mm;
+        h.dim_center_mark = 2.5 * mm;
+        h.dim_scale = 1.0;
+        h.dim_decimal_places = decimals;
+        h.text_height = 2.5 * mm * SCALE;
+        h.linetype_scale = mm * SCALE;
+        // A fresh drawing's variable dictionary always takes it.
+        let _ = self.set_annotation_scale("1:100");
+    }
+
+    /// The session over a drawing just read (or made), with the project file `project` (its path
+    /// and the drawing's name it should be saved for) when there is one to read.
+    fn from_drawing(mut drawing: Drawing, project: Option<(&Path, &str)>) -> Session {
         let sheet = drawing.sheets()[0].block.clone();
         let mut takeoff = Takeoff::default();
         let mut boq = None;
         let mut conflicts = Vec::new();
         let mut schedules = Vec::new();
         let mut arabic_reversed = false;
-        let mut drafting = Drafting::default();
+        // The grid's dots a metre apart until the drawing's project file says otherwise (1 drawing
+        // unit would be a millimetre grid, never shown, in a millimetre drawing).
+        let mut drafting = Drafting {
+            grid_spacing: 1.0 / drawing.units.to_metres(),
+            ..Drafting::default()
+        };
         let mut xref_overrides = HashMap::new();
         let mut current = Current::default();
         let mut state_hidden = BTreeMap::new();
         let mut ucs = None;
-        if project_file.exists() {
+        if let Some((project_file, name)) = project.filter(|(file, _)| file.exists()) {
             match project::load(project_file) {
                 Ok(project) => {
                     if !project.drawing.eq_ignore_ascii_case(name) {
@@ -512,17 +690,30 @@ impl Session {
                     Err(_) => format!("Project file could not be read: {e}"),
                 }),
             }
-        } else {
+        } else if project.is_some() {
             takeoff.items = read_embedded(&drawing.doc);
+        }
+        match crate::knowledge::get(&drawing.doc, crate::knowledge::Kind::Queries, "result") {
+            Ok(Some(entry)) => match serde_json::from_value(entry.data) {
+                Ok(queries) => conflicts = queries,
+                Err(e) => drawing
+                    .problems
+                    .push(format!("Queries could not be read: {e}")),
+            },
+            Err(e) => drawing
+                .problems
+                .push(format!("Queries could not be read: {e}")),
+            _ => {}
         }
         let xrefs = XrefSet::load(&drawing, &xref_overrides, MAX_XREF_DEPTH);
         let empty_model = model_is_empty(&drawing);
         let ucs = ucs
             .or_else(|| Ucs::from_header(&drawing.doc))
             .unwrap_or_default();
-        Ok(Session {
+        let mut session = Session {
             drawing,
             sheet,
+            automation_sheet: None,
             visibility: Visibility::default(),
             takeoff,
             boq,
@@ -534,11 +725,16 @@ impl Session {
             xref_overrides,
             current,
             state_hidden,
+            isolated: None,
+            last_change: crate::Change::default(),
+            tx_depth: 0,
             ucs,
             history: History::default(),
             block_edit: None,
             recovered_from: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            untitled: false,
+            zoom_tol: std::cell::Cell::new(None),
             document_revision: 0,
             saved_revision: 0,
             autosave_revision: std::cell::Cell::new(0),
@@ -547,15 +743,77 @@ impl Session {
             others: RefCell::new(Vec::new()),
             text: RefCell::new(TextEngine::new()),
             underlays: RefCell::new(Underlays::default()),
-        })
+        };
+        if session.drawing.doc.app_ids.contains(crate::walls::WALL_APP)
+            || session
+                .drawing
+                .doc
+                .app_ids
+                .contains(crate::room_objects::ROOM_APP)
+            || session
+                .drawing
+                .doc
+                .app_ids
+                .contains("QIYAS_OPENING_SCHEDULE")
+            || session.drawing.doc.app_ids.contains("QIYAS_ROOM_SCHEDULE")
+        {
+            let before = session.drawing.doc.clone();
+            if let Err(error) = session
+                .migrate_legacy_objects()
+                .and_then(|()| session.migrate_object_schedules())
+            {
+                session.drawing.doc = before;
+                session
+                    .drawing
+                    .problems
+                    .push(format!("Legacy object conversion needs review: {error}"));
+            }
+        }
+        if let Err(error) = session.validate_object_metadata() {
+            session
+                .drawing
+                .problems
+                .push(format!("Object metadata needs review: {error}"));
+        }
+        session
     }
 
     /// Saves the take-off, the BOQ, the conflicts and the schedules to the drawing's project file
-    /// and returns its path.
+    /// and returns its path. An untitled drawing has none until its first Save As: nothing is
+    /// written.
     pub fn save_project(&self) -> Result<PathBuf, CoreError> {
         let path = project_path(&self.drawing.path);
-        project::save(&path, &self.project())?;
+        if !self.untitled {
+            project::save(&path, &self.project())?;
+        }
         Ok(path)
+    }
+
+    /// The screen's flatten tolerance in this drawing's units: 0.05 mm (`batch_tol_for`).
+    pub fn batch_tol(&self) -> f64 {
+        batch_tol_for(self.drawing.units)
+    }
+
+    /// The measuring flatten tolerance in this drawing's units: 1 µm (`measure_tol_for`).
+    pub(crate) fn measure_tol(&self) -> f64 {
+        measure_tol_for(self.drawing.units)
+    }
+
+    /// What the sheet on screen flattens curves within now: `batch_tol`, or finer while zoomed
+    /// in close (`zoom_tol`).
+    pub fn screen_tol(&self) -> f64 {
+        self.zoom_tol.get().unwrap_or_else(|| self.batch_tol())
+    }
+
+    /// Makes this an untitled drawing (see `new_blank`): an untitled drawing's autosave recovered
+    /// after a crash is still one, Save going through Save As.
+    pub fn mark_untitled(&mut self) {
+        self.untitled = true;
+    }
+
+    /// A new drawing never saved yet (see `new_blank`).
+    pub fn is_untitled(&self) -> bool {
+        self.untitled
     }
 
     /// The project file's contents for the session as it is.
@@ -576,8 +834,12 @@ impl Session {
         }
     }
 
-    /// Saves the drawing over its own file; see `save_as`.
+    /// Saves the drawing over its own file; see `save_as`. Refused for an untitled drawing
+    /// (`UNTITLED`): it has no file of its own yet.
     pub fn save(&mut self) -> Result<(), CoreError> {
+        if self.untitled {
+            return Err(CoreError::InvalidCommand(UNTITLED.to_string()));
+        }
         let path = self.drawing.path.clone();
         self.save_as(&path)
     }
@@ -650,6 +912,7 @@ impl Session {
             }
         }
         self.drawing.path = path.to_path_buf();
+        self.untitled = false;
         self.save_project().map_err(|e| {
             CoreError::Unwritable(format!(
                 "Drawing saved, but the project file could not be written: {e}"
@@ -662,7 +925,7 @@ impl Session {
     /// current sheet (builds the sheet's batch when it is not cached yet).
     pub fn info(&self) -> DrawingInfo {
         let mut problems = self.drawing.problems.clone();
-        if self.empty_model {
+        if self.empty_model && !self.untitled {
             problems.push(EMPTY_MODEL.to_string());
         }
         problems.extend(self.xrefs.problems().cloned());
@@ -680,7 +943,9 @@ impl Session {
             arabic_reversed: self.arabic_reversed,
             xrefs: self.xrefs.info(&self.xref_overrides),
             sheet: self.sheet.clone(),
+            paper: self.paper(),
             hidden_layers: self.hidden_layers(),
+            isolated_layer: self.isolated.as_ref().map(|i| i.layer.clone()),
             current: self.current.clone(),
             text_styles: self.text_styles(),
             text_style: self.text_style(),
@@ -695,6 +960,7 @@ impl Session {
             viewports: self.viewports(),
             ucs: self.ucs,
             has_constraints: !self.needs_param_app(),
+            untitled: self.untitled,
         }
     }
 
@@ -741,6 +1007,26 @@ impl Session {
     }
 
     /// Shows the sheet whose block is `block` (case-insensitive).
+    /// Called while the session lock is held; the window sheet is restored on success or error.
+    pub fn with_automation_sheet<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let Some(working) = self.automation_sheet.clone() else {
+            return f(self);
+        };
+        let visible = self.sheet.clone();
+        if self.set_sheet(&working).is_err() {
+            let _ = self.set_sheet("*Model_Space");
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.automation_sheet = Some(self.sheet.clone());
+        if self.set_sheet(&visible).is_err() {
+            let _ = self.set_sheet("*Model_Space");
+        }
+        match result {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
     pub fn set_sheet(&mut self, block: &str) -> Result<(), CoreError> {
         let sheet = self
             .drawing
@@ -755,6 +1041,10 @@ impl Session {
     /// Hides or shows a layer on top of the drawing's own layer state. Names match case-insensitively.
     pub fn set_layer_hidden(&mut self, name: &str, hidden: bool) {
         let key = normalize_name(name);
+        // The user chose for this layer: un-isolating leaves it as they set it.
+        if let Some(iso) = &mut self.isolated {
+            iso.hid.retain(|n| normalize_name(n) != key);
+        }
         let layers = &mut self.visibility.hidden_layers;
         layers.retain(|n| normalize_name(n) != key);
         if hidden {
@@ -790,6 +1080,41 @@ impl Session {
         self.text.borrow().font_bytes(id)
     }
 
+    /// The sheet on screen drawn afresh for a picture at `px_per_unit` pixels per drawing unit
+    /// (Mizan's view_image): its glyphs placed for that zoom, curves within half a pixel (never
+    /// coarser than `batch_tol`), and a copy of the glyph atlas pages its quads draw from. Nothing
+    /// is kept, so the window's batch, its glyphs and its curves are left as they are.
+    pub fn picture_batch(&self, px_per_unit: f64) -> (Batch, Vec<Vec<u8>>) {
+        self.picture_batch_of(&self.sheet, px_per_unit)
+    }
+
+    /// `picture_batch` for the sheet `sheet` (block name), on screen or not: a layout's own
+    /// drawing, or model space for the viewports of one. Lines, fills and text only; the
+    /// pictures are `plot_pictures`'.
+    pub fn picture_batch_of(&self, sheet: &str, px_per_unit: f64) -> (Batch, Vec<Vec<u8>>) {
+        let px = if px_per_unit > 0.0 && px_per_unit.is_finite() {
+            px_per_unit
+        } else {
+            1.0
+        };
+        let options = TextOptions {
+            arabic_reversed: self.arabic_reversed,
+            px_per_unit: Some(px),
+        };
+        let mut text = self.text.borrow_mut();
+        let batch = build_batch_with_xrefs(
+            &self.drawing.doc,
+            &self.xref_docs(),
+            sheet,
+            &self.visibility,
+            (0.5 / px).min(self.batch_tol()),
+            &mut text,
+            options,
+        );
+        let pages = text.atlas_pages(None).map(|p| p.data.to_vec()).collect();
+        (batch, pages)
+    }
+
     /// The sheet `sheet` (block name) drawn afresh with curves flattened within `tol` drawing
     /// units, for the PDF plot (no pictures, nothing kept).
     pub fn sheet_batch_with_tol(&self, sheet: &str, tol: f64) -> Batch {
@@ -815,7 +1140,17 @@ impl Session {
     /// Arabic setting, document revision and xrefs (name, file found, when it was last changed
     /// and its size, each), cut to 53 bits so it survives a trip through a JavaScript number.
     pub fn batch_version(&self) -> u64 {
-        self.version_of(&self.sheet)
+        let version = self.version_of(&self.sheet);
+        // Finer curves for a close zoom are another batch.
+        match self.zoom_tol.get() {
+            None => version,
+            Some(tol) => {
+                let mut hash = Fnv::new();
+                hash.write(&version.to_le_bytes());
+                hash.write(&tol.to_bits().to_le_bytes());
+                hash.0 & ((1 << 53) - 1)
+            }
+        }
     }
 
     /// `batch_version` for the sheet `sheet`.
@@ -965,19 +1300,79 @@ impl Session {
                 }
                 tops.extend(reached.difference(&outside));
             }
-            if let Some(locked) = self.locked() {
-                tops.retain(|top| !locked.contains(top));
-            }
-            tops.into_iter()
-                .map(|top| Picked {
-                    top,
-                    entity: top,
-                    chain: Vec::new(),
-                    xref: None,
-                    kind: self.kind_of(top),
-                })
-                .collect()
+            self.picked_tops(tops)
         })
+    }
+
+    /// The entities a selection polygon picks on the sheet on screen, as `pick_window` does for
+    /// a box: `points` (drawing coordinates, three corners or more, either way round, concave
+    /// too) with `crossing` takes each entity with a drawn segment inside or crossing it, else
+    /// each drawn wholly inside it. Whole entities at the top of the sheet, sorted by handle.
+    pub fn pick_polygon(&self, points: &[[f64; 2]], crossing: bool) -> Vec<Picked> {
+        let mut run: crate::PointRun<true> = points.to_vec().into();
+        run.normalize(self.drawing.units, true);
+        let points = run.as_slice();
+        if points.len() < 3 || points.iter().flatten().any(|v| !v.is_finite()) {
+            return Vec::new();
+        }
+        let lo = points
+            .iter()
+            .fold([f64::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
+        let hi = points
+            .iter()
+            .fold([f64::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
+        self.with_cache(None, |cached| {
+            let batch = &cached.batch;
+            let [ox, oy] = batch.origin;
+            // In the batch's own coordinates, as its segments are.
+            let ring: Vec<[f64; 2]> = points.iter().map(|p| [p[0] - ox, p[1] - oy]).collect();
+            let segment = |i: usize| -> [f64; 4] {
+                let s = &batch.segments[4 * i..4 * i + 4];
+                [s[0], s[1], s[2], s[3]].map(f64::from)
+            };
+            let near = cached.index.within(lo, hi, usize::MAX, |_| true);
+            let mut tops = std::collections::BTreeSet::new();
+            if crossing {
+                for i in near {
+                    if touches_ring(segment(i), &ring) {
+                        tops.extend(batch.range_of(i).map(|r| r.top));
+                    }
+                }
+            } else {
+                let reached: HashSet<u64> = near
+                    .into_iter()
+                    .filter_map(|i| batch.range_of(i))
+                    .map(|r| r.top)
+                    .collect();
+                let mut outside = HashSet::new();
+                for r in batch.ranges.iter().filter(|r| reached.contains(&r.top)) {
+                    let out = (r.first..r.first + r.count)
+                        .any(|i| !inside_ring(segment(i as usize), &ring));
+                    if out {
+                        outside.insert(r.top);
+                    }
+                }
+                tops.extend(reached.difference(&outside));
+            }
+            self.picked_tops(tops)
+        })
+    }
+
+    /// `tops` as picks of whole entities at the top of the sheet, without those a block edit in
+    /// place has locked.
+    fn picked_tops(&self, mut tops: std::collections::BTreeSet<u64>) -> Vec<Picked> {
+        if let Some(locked) = self.locked() {
+            tops.retain(|top| !locked.contains(top));
+        }
+        tops.into_iter()
+            .map(|top| Picked {
+                top,
+                entity: top,
+                chain: Vec::new(),
+                xref: None,
+                kind: self.kind_of(top),
+            })
+            .collect()
     }
 
     /// The kind of the drawing's entity `handle` ("Line", "Insert"…).
@@ -1029,17 +1424,21 @@ impl Session {
         })
     }
 
-    /// The entities of the sheet on screen whose drawn segments reach into the square `radius`
-    /// around `p`, text boxes and hatch pattern lines left out; `None` when more than `max`
-    /// segments do.
-    pub(crate) fn segments_near(&self, p: [f64; 2], radius: f64, max: usize) -> Option<Near> {
-        self.with_cache(None, |cached| {
-            let batch = &cached.batch;
+    /// The entities of `sheet` whose drawn segments reach into the square `radius` around `p`,
+    /// text boxes and hatch pattern lines left out; `None` when more than `max` segments do.
+    pub(crate) fn segments_near_in(
+        &self,
+        sheet: &str,
+        p: [f64; 2],
+        radius: f64,
+        max: usize,
+    ) -> Option<Near> {
+        let near = |batch: &Batch, index: &PickIndex| {
             let lo = [p[0] - radius, p[1] - radius];
             let hi = [p[0] + radius, p[1] + radius];
             // Counted after text boxes and pattern lines go: a densely hatched room nearby
             // must not refuse a plain one. The tree walk stops at the cap all the same.
-            let found = cached.index.within(lo, hi, max + 1, |i| {
+            let found = index.within(lo, hi, max + 1, |i| {
                 batch
                     .range_of(i)
                     .is_some_and(|r| r.flags & (TEXT_BOX | PATTERN) == 0)
@@ -1070,7 +1469,12 @@ impl Session {
                 drawn,
                 whole_sheet,
             })
-        })
+        };
+        if self.sheet.eq_ignore_ascii_case(sheet) {
+            self.with_cache(None, |cached| near(&cached.batch, &cached.index))
+        } else {
+            self.with_sheet(sheet, None, |batch| near(batch, &PickIndex::new(batch)))
+        }
     }
 
     /// The entity `handle` inside the block references `chain` (outermost first; empty for an
@@ -1125,10 +1529,12 @@ impl Session {
             EntityType::Line(_)
             | EntityType::Circle(_)
             | EntityType::Arc(_)
-            | EntityType::Ellipse(_) => snap_shapes(located.doc, entity, &located.xf, MEASURE_TOL)
-                .into_iter()
-                .next()
-                .and_then(|shape| shape.pieces.into_iter().next()),
+            | EntityType::Ellipse(_) => {
+                snap_shapes(located.doc, entity, &located.xf, self.measure_tol())
+                    .into_iter()
+                    .next()
+                    .and_then(|shape| shape.pieces.into_iter().next())
+            }
             _ => None,
         };
         let radius = match &piece {
@@ -1281,7 +1687,109 @@ impl Session {
     /// drawing, records an undo step.
     /// New measurements are marked as made by `source`.
     pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
+        if self.tx_depth == 0 {
+            self.last_change = crate::Change::default();
+        }
+        let raw = serde_json::to_value(&cmd)
+            .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
+        let report = self.validate_input(&raw);
+        if !report.valid {
+            return Err(crate::input::with_warnings(
+                CoreError::InvalidCommand(report.message()),
+                &report.warnings,
+            ));
+        }
+        self.run_command(cmd, source)
+    }
+
+    pub(crate) fn run_command(
+        &mut self,
+        mut cmd: Command,
+        source: Source,
+    ) -> Result<Outcome, CoreError> {
+        cmd.normalize_runs(self.drawing.units);
+        if let Command::Check { tolerance } = cmd {
+            self.check_block_edit(&Command::Check { tolerance })?;
+            return self.run_discrepancy_check(tolerance, source);
+        }
+
+        if let Command::Batch {
+            commands,
+            layer,
+            color,
+        } = cmd
+        {
+            if self.tx_depth > 0 {
+                return Err(CoreError::InvalidCommand(
+                    "A batch can't run inside another batch".to_string(),
+                ));
+            }
+            return self.run_batch(commands, layer, color, source);
+        }
+        if let Command::LabelSpaces {
+            query,
+            layer,
+            height,
+            decimals,
+            language,
+        } = cmd
+        {
+            return self.transaction(source, "label_spaces", |s| {
+                s.label_spaces(&query, layer, height, decimals, language, source)
+            });
+        }
+        if let Command::ResolveConflict { id, status, note } = &cmd {
+            if self
+                .conflicts
+                .iter()
+                .any(|c| c.id == *id && c.query.is_some())
+            {
+                let mut conflicts = self.conflicts.clone();
+                let c = conflicts.iter_mut().find(|c| c.id == *id).expect("found");
+                c.status = *status;
+                c.note = note.clone();
+                return self.transaction(source, "resolve_conflict", |s| {
+                    s.run_as(
+                        Command::SetKnowledge {
+                            kind: crate::knowledge::Kind::Queries,
+                            name: "result".into(),
+                            data: serde_json::json!(conflicts),
+                        },
+                        source,
+                    )?;
+                    s.run_as(
+                        Command::SetConflicts {
+                            conflicts,
+                            schedules: s.schedules.clone(),
+                        },
+                        source,
+                    )
+                });
+            }
+        }
+        let label = cmd.label();
+        if self.tx_depth > 0 {
+            let batchable = crate::registry::registry()
+                .get(label.split('.').next().unwrap_or(""))
+                .is_none_or(|info| info.batchable);
+            if !batchable {
+                return Err(CoreError::InvalidCommand(format!(
+                    "{label} can't run inside a batch: run it on its own"
+                )));
+            }
+        }
         self.check_block_edit(&cmd)?;
+        // A repeated recognition apply is a read when every source already has a decision.
+        // Avoid a derivation pass, which can refresh existing object metadata and create history.
+        if let Command::Recognition(command) = &cmd {
+            if let crate::recognition::RecognitionCommand::Apply { rules } = command.as_ref() {
+                if self.test_recognition(rules)?.is_empty() {
+                    return Ok(Outcome::Recognition {
+                        result: serde_json::json!({"candidates": []}),
+                    });
+                }
+            }
+        }
         if matches!(cmd, Command::SaveLayerState { .. }) {
             self.prepare_layer_states();
         }
@@ -1295,6 +1803,7 @@ impl Session {
                 let reshape = crate::param::Reshape::of(&cmd);
                 return self.record_document_change(
                     source,
+                    &label,
                     tables || more_tables || param_tables,
                     takeoff || more_takeoff || param_takeoff,
                     |s| {
@@ -1312,15 +1821,31 @@ impl Session {
                     },
                 );
             }
+            Some(Part::ProjectFile) => return self.execute(cmd, source),
             Some(Part::Takeoff) => Step::Takeoff(self.takeoff.clone()),
             Some(Part::Boq) => Step::Boq(self.boq.clone()),
             Some(Part::Conflicts) => {
                 Step::Conflicts(self.conflicts.clone(), self.schedules.clone())
             }
         };
-        let outcome = self.execute(cmd, source)?;
+        let outcome = match self.execute(cmd, source) {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                // A command that failed half way leaves its part as it was.
+                match before {
+                    Step::Takeoff(takeoff) => self.takeoff = takeoff,
+                    Step::Boq(boq) => self.boq = boq,
+                    Step::Conflicts(conflicts, schedules) => {
+                        self.conflicts = conflicts;
+                        self.schedules = schedules;
+                    }
+                    Step::Document(_) | Step::Group(..) | Step::ProjectFile(_) => {}
+                }
+                return Err(e);
+            }
+        };
         if !matches!(outcome, Outcome::Nothing) {
-            self.history.record(before, source);
+            self.history.record(before, source, &label);
         }
         Ok(outcome)
     }
@@ -1364,15 +1889,39 @@ impl Session {
     pub(crate) fn record_document_change<T>(
         &mut self,
         source: Source,
+        label: &str,
         tables: bool,
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        self.validate_object_metadata()?;
+        let (derived_tables, derived_takeoff) = self.derived_extras();
+        let tables = tables || derived_tables;
+        let takeoff = takeoff || derived_takeoff;
+        // Object commands may allocate several drivers before a later definition is refused.
+        // Their unpublished handles and side maps must roll back too. The codec omits entities
+        // from this checkpoint; successful undo retains its monotonic-handle policy. Limit the
+        // extra structure copy to these commands, preserving ordinary large-drawing edit cost.
+        let failed_structure = matches!(
+            label,
+            "define_object_type"
+                | "redefine_object_type"
+                | "delete_object_type"
+                | "place_objects"
+                | "set_object_props"
+                | "object_schedule"
+                | "set_knowledge"
+        ) || label.starts_with("recognition.")
+            || label.starts_with("measurement.");
+        let failed_structure = failed_structure.then(|| self.drawing.doc.snapshot_structure());
         let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
         let recorder = self.drawing.doc.begin_entity_change_recording();
-        let done = f(self);
+        let done = f(self).and_then(|value| {
+            self.rederive()?;
+            Ok(value)
+        });
         self.drawing.doc.end_entity_change_recording();
         let mut change = DocChange::from_before_images(
             &self.drawing.doc,
@@ -1380,13 +1929,25 @@ impl Session {
             tables,
             takeoff,
         );
-        // Kept only when the change moved it, so undoing an unrelated step never touches it.
-        change.view = view.filter(|before| *before != self.view_refs().get());
+        // Kept only when the change moved it, and then only what it moved, so undoing a step
+        // never touches layers hidden or shown since.
+        change.view = view
+            .and_then(|before| ViewDelta::between(&before, &self.view_refs().get()))
+            .map(Box::new);
         match done {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {
                     self.drawing_changed();
-                    self.history.record(Step::Document(change), source);
+                    self.last_change.merge(crate::Change {
+                        added: change.added.iter().map(|h| h.value()).collect(),
+                        changed: change.replaced.iter().map(|(h, _)| h.value()).collect(),
+                        removed: change
+                            .removed
+                            .iter()
+                            .map(|e| e.common().handle.value())
+                            .collect(),
+                    });
+                    self.history.record(Step::Document(change), source, label);
                 }
                 Ok(done)
             }
@@ -1397,6 +1958,9 @@ impl Session {
                     state_hidden: &mut self.state_hidden,
                 };
                 change.swap(&mut self.drawing.doc, &mut self.takeoff, &mut view);
+                if let Some(structure) = failed_structure {
+                    self.drawing.doc.swap_structure(structure);
+                }
                 *self.cache.get_mut() = None;
                 Err(e)
             }
@@ -1437,6 +2001,10 @@ impl Session {
 
     /// The drawing itself changed: the batch is drawn again and its version moves on.
     pub(crate) fn drawing_changed(&mut self) {
+        if !self.drawing.doc.block_records.contains(&self.sheet) {
+            // Undoing a newly created layout can remove the sheet currently on screen.
+            self.sheet = "*Model_Space".to_string();
+        }
         self.document_revision += 1;
         self.empty_model = model_is_empty(&self.drawing);
         *self.cache.get_mut() = None;
@@ -1495,6 +2063,25 @@ impl Session {
     /// exact for lines, arcs, circles, full ellipses and (bulged) polylines under a uniform scale;
     /// otherwise the length of all its flattened paths and the area of the closed ones.
     pub(crate) fn extent(&self, doc: &CadDocument, entity: &EntityType, xf: &Xform) -> Extent {
+        let retained = crate::object_regions::retained_region(entity).is_some();
+        if retained || crate::room_objects::is_room_boundary(entity) {
+            let origin = xf.apply([0.0, 0.0]);
+            let x = xf.apply([1.0, 0.0]);
+            let y = xf.apply([0.0, 1.0]);
+            let scale = ((x[0] - origin[0]) * (y[1] - origin[1])
+                - (x[1] - origin[1]) * (y[0] - origin[0]))
+                .abs();
+            return Extent {
+                area: (if retained {
+                    crate::object_regions::retained_region_area(entity)
+                } else {
+                    crate::room_objects::room_area(entity)
+                })
+                .map(|area| area * scale),
+                length: exact_length(entity, xf),
+                self_intersecting: false,
+            };
+        }
         // A dimension measures what it says (an angle measures no length), not its lines.
         if let EntityType::Dimension(d) = entity {
             let [x0, y0] = xf.apply([0.0, 0.0]);
@@ -1515,7 +2102,7 @@ impl Session {
             };
         }
         let xrefs = self.xref_docs();
-        let paths = flatten_with(doc, &xrefs, entity, xf, MEASURE_TOL).into_paths();
+        let paths = flatten_with(doc, &xrefs, entity, xf, self.measure_tol()).into_paths();
         let closed: Vec<_> = paths.iter().filter(|p| p.closed).collect();
         let crossing: Vec<bool> = closed.iter().map(|p| p.self_intersects()).collect();
         let self_intersecting = crossing.contains(&true);
@@ -1599,15 +2186,17 @@ impl Session {
                     arabic_reversed: self.arabic_reversed,
                     px_per_unit,
                 };
-                let batch = build_batch_with_xrefs(
+                let mut batch = build_batch_with_xrefs(
                     &self.drawing.doc,
                     &self.xref_docs(),
                     sheet,
                     &self.visibility,
-                    BATCH_TOL,
+                    self.batch_tol(),
                     &mut text,
                     options,
                 );
+                batch.curve_tol = self.batch_tol();
+                batch.base_tol = batch.curve_tol;
                 others.retain(|(name, _, _)| !name.eq_ignore_ascii_case(sheet));
                 (sheet.to_string(), version, batch)
             }
@@ -1634,10 +2223,18 @@ impl Session {
     fn with_cache<R>(&self, px_per_unit: Option<f64>, f: impl FnOnce(&Cached) -> R) -> R {
         let mut cache = self.cache.borrow_mut();
         let mut text = self.text.borrow_mut();
+        // The zoom the window asks for may need the curves drawn again, finer or coarser.
+        if let Some(px) = px_per_unit {
+            let base = self.batch_tol();
+            if let Some(want) = zoom_tol(base, self.screen_tol(), px) {
+                self.zoom_tol.set((want < base).then_some(want));
+            }
+        }
         let stale = cache.as_ref().is_none_or(|c| {
             c.sheet != self.sheet
                 || c.hidden_layers != self.visibility.hidden_layers
                 || c.arabic_reversed != self.arabic_reversed
+                || c.tol != self.screen_tol()
         });
         if stale {
             // Drawn here now: no copy kept beside it.
@@ -1653,10 +2250,12 @@ impl Session {
                 &self.xref_docs(),
                 &self.sheet,
                 &self.visibility,
-                BATCH_TOL,
+                self.screen_tol(),
                 &mut text,
                 options,
             );
+            batch.curve_tol = self.screen_tol();
+            batch.base_tol = self.batch_tol();
             let (pictures, outlines) = self.underlay_placements();
             add_images(&mut batch, &pictures);
             add_pick_outlines(&mut batch, &outlines);
@@ -1680,6 +2279,7 @@ impl Session {
                 sheet: self.sheet.clone(),
                 hidden_layers: self.visibility.hidden_layers.clone(),
                 arabic_reversed: self.arabic_reversed,
+                tol: self.screen_tol(),
                 index: PickIndex::new(&batch),
                 batch,
                 points,
@@ -1723,6 +2323,72 @@ fn crosses_box([x0, y0, x1, y1]: [f64; 4], lo: [f64; 2], hi: [f64; 2]) -> bool {
         }
     }
     true
+}
+
+/// Whether `p` lies inside the polygon `ring` or on its edge (even-odd).
+fn in_ring(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
+    let mut inside = false;
+    for (k, a) in ring.iter().enumerate() {
+        let b = ring[(k + 1) % ring.len()];
+        if on_edge(p, *a, b) {
+            return true;
+        }
+        if (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Whether `p` lies on the segment from `a` to `b`, within a billionth of its length.
+fn on_edge(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = dx.hypot(dy);
+    let tol = len.max(f64::MIN_POSITIVE) * 1e-9;
+    let cross = (p[0] - a[0]) * dy - (p[1] - a[1]) * dx;
+    cross.abs() <= tol * len
+        && p[0] >= a[0].min(b[0]) - tol
+        && p[0] <= a[0].max(b[0]) + tol
+        && p[1] >= a[1].min(b[1]) - tol
+        && p[1] <= a[1].max(b[1]) + tol
+}
+
+/// The sign of the turn from `a` to `b` to `c`.
+fn turn(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Whether the segments `p`–`q` and `a`–`b` cross each other, touching ends excluded.
+fn cross_properly(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+    let (d1, d2) = (turn(a, b, p), turn(a, b, q));
+    let (d3, d4) = (turn(p, q, a), turn(p, q, b));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// Whether the segment `s` (`x0 y0 x1 y1`) lies wholly inside the polygon `ring`: both ends and
+/// its middle inside, never crossing an edge.
+fn inside_ring([x0, y0, x1, y1]: [f64; 4], ring: &[[f64; 2]]) -> bool {
+    let (p, q) = ([x0, y0], [x1, y1]);
+    in_ring(p, ring)
+        && in_ring(q, ring)
+        && in_ring([(x0 + x1) / 2.0, (y0 + y1) / 2.0], ring)
+        && !ring
+            .iter()
+            .enumerate()
+            .any(|(k, a)| cross_properly(p, q, *a, ring[(k + 1) % ring.len()]))
+}
+
+/// Whether the segment `s` touches the polygon `ring`: an end inside it, or meeting an edge.
+fn touches_ring([x0, y0, x1, y1]: [f64; 4], ring: &[[f64; 2]]) -> bool {
+    let (p, q) = ([x0, y0], [x1, y1]);
+    in_ring(p, ring)
+        || in_ring(q, ring)
+        || ring.iter().enumerate().any(|(k, a)| {
+            let b = ring[(k + 1) % ring.len()];
+            cross_properly(p, q, *a, b) || on_edge(*a, p, q) || on_edge(b, p, q)
+        })
 }
 
 /// Model space holds no entity.
@@ -1926,7 +2592,7 @@ mod tests {
             .next()
             .unwrap();
         let first = first.common().handle;
-        let err = s.record_document_change(Source::User, true, false, |s| {
+        let err = s.record_document_change(Source::User, "test", true, false, |s| {
             s.ensure_layer("NEW", Color::Index(1));
             s.drawing
                 .doc

@@ -6,18 +6,20 @@ import {
   getSettings,
   hasApiKey,
   mcpStatus,
+  measurementMethods,
   setApiKey,
   setSettings,
   type Effort,
   type McpStatus,
+  type MeasurementMethod,
   type Provider,
   type Settings,
 } from "../api";
 import { normalizeDigits } from "../tools/commandParser";
 import { useT } from "../i18n";
 import { ModalDialog } from "../ui/ModalDialog";
+import { ModelPicker } from "./ModelPicker";
 
-const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"];
 
 /** The MCP bridge next to the app, with the platform's separator and extension. */
 function bridgePath(dir: string) {
@@ -52,6 +54,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [minutes, setMinutes] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [methods, setMethods] = useState<MeasurementMethod[]>([]);
 
   useEffect(() => {
     getSettings()
@@ -63,19 +66,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     mcpStatus()
       .then(setMcp)
       .catch(() => setMcp(null));
+    measurementMethods()
+      .then(setMethods)
+      .catch((e) => setError(String(e)));
   }, []);
 
   const provider = draft?.provider;
   useEffect(() => {
     if (!provider) return;
+    let current = true;
     setKeySaved(false);
     // No keychain reads as no key; saving one then says why it can't.
     hasApiKey(provider)
-      .then(setKeySaved)
-      .catch(() => setKeySaved(false));
+      .then((saved) => { if (current) setKeySaved(saved); })
+      .catch(() => { if (current) setKeySaved(false); });
+    return () => { current = false; };
   }, [provider]);
 
   const change = (patch: Partial<Settings>) => setDraft((d) => (d ? { ...d, ...patch } : d));
+  const profile = draft?.providers[draft.provider];
+  const changeProfile = (patch: Partial<Settings["providers"][Provider]>) =>
+    setDraft((d) => d ? {
+      ...d,
+      providers: { ...d.providers, [d.provider]: { ...d.providers[d.provider], ...patch } },
+    } : d);
 
   async function save() {
     if (!draft) return;
@@ -133,32 +147,31 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <h2 id="settings-title" className="heading">
           {t("settings")}
         </h2>
-        {draft && snippets && (
+        {draft && snippets && profile && (
           <>
             <label>
               <span>{t("settings.provider")}</span>
               <select
                 value={draft.provider}
-                onChange={(e) => change({ provider: e.target.value as Provider })}
+                onChange={(e) => {
+                  change({ provider: e.target.value as Provider });
+                  setKey("");
+                }}
               >
                 <option value="anthropic">{t("settings.providerAnthropic")}</option>
                 <option value="openai_compatible">{t("settings.providerOpenai")}</option>
               </select>
             </label>
-            <label>
+            <div className="field">
               <span>{t("settings.model")}</span>
-              <input
-                dir="ltr"
-                list="settings-models"
-                value={draft.model}
-                onChange={(e) => change({ model: e.target.value })}
+              <ModelPicker
+                key={draft.provider}
+                provider={draft.provider}
+                baseUrl={profile.base_url ?? null}
+                value={profile.model}
+                onChange={(model) => changeProfile({ model })}
               />
-              <datalist id="settings-models">
-                {MODELS.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            </label>
+            </div>
             {draft.provider === "openai_compatible" && (
               <label>
                 <span>{t("settings.baseUrl")}</span>
@@ -166,8 +179,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   dir="ltr"
                   type="url"
                   placeholder="http://localhost:11434/v1"
-                  value={draft.base_url ?? ""}
-                  onChange={(e) => change({ base_url: e.target.value || null })}
+                  value={profile.base_url ?? ""}
+                  onChange={(e) => changeProfile({ base_url: e.target.value || null })}
                 />
               </label>
             )}
@@ -182,6 +195,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     {t(`effort.${x}`)}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label>
+              <span>{t("settings.autonomy")}</span>
+              <select
+                value={draft.autonomy ?? "autonomous"}
+                onChange={(e) => change({ autonomy: e.target.value as Settings["autonomy"] })}
+              >
+                <option value="per_job">{t("settings.perJob")}</option>
+                <option value="per_phase">{t("settings.perPhase")}</option>
+                <option value="autonomous">{t("settings.autonomous")}</option>
+              </select>
+            </label>
+            <label>
+              <span>{t("settings.measurementMethod")}</span>
+              <select
+                value={draft.measurement_method ?? ""}
+                onChange={(e) => change({ measurement_method: e.target.value || null })}
+              >
+                <option value="">{t("settings.geometric")}</option>
+                {draft.measurement_method && !methods.some((m) => m.name === draft.measurement_method) && (
+                  <option value={draft.measurement_method}>{draft.measurement_method} {t("settings.methodMissing")}</option>
+                )}
+                {methods.map((method) => <option key={method.name} value={method.name}>{method.title}</option>)}
               </select>
             </label>
             <label>

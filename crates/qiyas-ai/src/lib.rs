@@ -4,7 +4,8 @@
 //!
 //! The in-app assistant: Claude (`anthropic`) or any OpenAI-compatible service (`openai`) behind
 //! one `Provider` trait, the system prompt (`prompt`), and the loop that runs the model's tool
-//! calls on the shared session (`agent`).
+//! calls on the shared session (`agent`), and what the user points it at with a message: the
+//! selection, a marked region, the view, pasted pictures (`context`).
 //!
 //! The agent's log file (`log`).
 //!
@@ -12,21 +13,41 @@
 
 pub mod agent;
 pub mod anthropic;
+pub mod context;
+pub mod conversation;
+pub mod errors;
 mod execute;
+pub mod host;
 mod image;
 pub mod log;
+mod marks;
 pub mod mcp;
+pub mod models;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+pub mod surface;
 mod tools;
+pub mod window;
 
-pub use agent::{Agent, AgentEvent, AgentSettings};
+pub use agent::{Agent, AgentEvent, AgentSettings, Autonomy, MeasurementMethod};
+pub use context::{Region, RegionKind, TurnContext, UserImage, UserMessage};
+pub use conversation::{Conversation, TranscriptEntry};
 pub use execute::{execute, ToolError, ToolOutput};
-pub use image::render_png;
+pub use host::{is_host_tool, run_host, DrawingHost, Screen};
+pub use image::{render_png, render_png_with_text};
 pub use log::AgentLog;
 pub use provider::{
-    AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason, StreamEvent,
-    TurnRequest, TurnResult, Usage,
+    from_base64, AiError, ContentBlock, Message, Provider, ResultPart, Role, StopReason,
+    StreamEvent, TurnRequest, TurnResult, Usage,
 };
-pub use tools::{catalogue, ToolSpec};
+pub use surface::tools as catalogue;
+pub use tools::ToolSpec;
+pub use window::{is_window_tool, run_window};
+
+mod surface_args;
+
+mod document;
+mod history;
+
+pub use provider::RetryBackoff;

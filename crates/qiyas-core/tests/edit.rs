@@ -273,12 +273,12 @@ fn take_off_and_drawing_steps_undo_and_redo_in_order() {
     let measured = |s: &Session| s.takeoff.items.len();
 
     s.run(Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [3.0, 4.0]],
+        points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
     })
     .unwrap();
     s.run(delete(&[line])).unwrap();
     s.run(Command::MeasureArea {
-        points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+        points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]].into(),
     })
     .unwrap();
     s.run(delete(&[arc])).unwrap();
@@ -313,7 +313,7 @@ fn the_ai_undoes_only_its_own_deletion() {
     s.run_as(delete(&[line]), Source::Ai).unwrap();
     assert_eq!(s.top_step_source(), Some(Source::Ai));
     s.run(Command::MeasureDistance {
-        points: vec![[0.0, 0.0], [1.0, 0.0]],
+        points: vec![[0.0, 0.0], [1.0, 0.0]].into(),
     })
     .unwrap();
     assert!(!s.undo_if(Source::Ai), "the user's step is on top");

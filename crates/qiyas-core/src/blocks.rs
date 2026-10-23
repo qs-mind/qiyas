@@ -29,7 +29,8 @@ use crate::drawing::Drawing;
 use crate::modify::{add_fresh_to, place, Placing};
 use crate::text::mark_logical;
 use crate::undo::{DocChange, TablesSnapshot};
-use crate::{Command, CoreError, Outcome, Session, Target};
+use crate::units::insert_unit_factor;
+use crate::{Command, CoreError, NewEntity, Outcome, Session, Target};
 
 /// Characters AutoCAD refuses in a block name.
 pub(crate) const BAD_NAME_CHARS: &[char] = &[
@@ -385,6 +386,17 @@ impl<'a> Importer<'a> {
         let (layer, linetype) = (c.layer.clone(), c.linetype.clone());
         self.layer(&layer);
         self.linetype(&linetype);
+        // Wall definitions are ordinary xdata; their application must travel with a copy.
+        if e.common()
+            .extended_data
+            .get_record(crate::walls::WALL_APP)
+            .is_some()
+            && !self.dst.app_ids.contains(crate::walls::WALL_APP)
+        {
+            let mut app = opencadcodec::AppId::new(crate::walls::WALL_APP);
+            app.handle = self.dst.allocate_handle();
+            self.dst.app_ids.add(app).map_err(invalid)?;
+        }
         drop_source_handles(e.common_mut());
         match &mut e {
             EntityType::RasterImage(_) | EntityType::Underlay(_) => {
@@ -560,7 +572,7 @@ impl Session {
             &self.drawing.doc,
             &record.name,
             &qiyas_render::Visibility::default(),
-            crate::session::BATCH_TOL,
+            self.batch_tol(),
         ))
     }
 
@@ -591,6 +603,7 @@ impl Session {
             }
             Command::EditBlockInPlace { .. }
             | Command::CreateBlock { .. }
+            | Command::DefineBlock { .. }
             | Command::WriteBlock { .. }
             | Command::RedefineBlock { .. } => Err(invalid(format!(
                 "Block {} is being edited in place: save or discard the edit first (REFCLOSE)",
@@ -607,6 +620,50 @@ impl Session {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Makes a named block from record entities as one undo step, including its new layers.
+    /// Coordinates and the insertion base point are in drawing units. Returns the handles of
+    /// the definition's entities; the block is placed separately with `Command::InsertBlock`.
+    pub fn define_block(
+        &mut self,
+        name: &str,
+        base: [f64; 2],
+        entities: Vec<NewEntity>,
+    ) -> Result<Vec<u64>, CoreError> {
+        match self.run(Command::DefineBlock {
+            name: name.to_string(),
+            base,
+            entities,
+        })? {
+            Outcome::Added { handles } => Ok(handles),
+            _ => unreachable!("define_block returns its entities' handles"),
+        }
+    }
+
+    /// `Command::DefineBlock`: makes the record and its entities inside the command's existing
+    /// undo recording. Coordinates are local to the block, with `base` as its insertion base
+    /// point; the same defaults and checks apply as for `CreateEntities`.
+    pub(crate) fn define_block_entities(
+        &mut self,
+        name: &str,
+        base: [f64; 2],
+        entities: Vec<NewEntity>,
+    ) -> Result<Vec<u64>, CoreError> {
+        finite(&base)?;
+        let name = check_new_name(&self.drawing.doc, name)?;
+        if entities.is_empty() {
+            return Err(invalid("Give at least one entity"));
+        }
+        let doc = &mut self.drawing.doc;
+        let mut record = BlockRecord::new(&name);
+        record.handle = doc.allocate_handle();
+        record.block_entity_handle = doc.allocate_handle();
+        record.block_end_handle = doc.allocate_handle();
+        record.base_point = v3(base);
+        record.units = doc.header.insertion_units;
+        doc.block_records.add(record).map_err(invalid)?;
+        self.create_entities_in_block(entities, &name)
     }
 
     /// `Command::CreateBlock`: the entities `targets` leave the sheet for a new block `name`,
@@ -713,13 +770,23 @@ impl Session {
             self.register_text_app();
         }
         let name = name.trim();
+        // The drawing a block came from: its INSUNITS stand in for a block without units.
+        let mut source_units = None;
         if let (Some(path), false) = (from_path, self.drawing.doc.block_records.contains(name)) {
             let other = Drawing::open(Path::new(path))?;
             named_block(&other.doc, name)?;
             Importer::new(&other.doc, &mut self.drawing.doc).block(name)?;
+            source_units = Some(other.doc.header.insertion_units);
         }
         let doc = &self.drawing.doc;
         let record = named_block(doc, name)?;
+        // As AutoCAD's INSERT: a block drawn in other units comes in at this drawing's size (a
+        // 900 mm door from a millimetre library is 0.9 m in a metre plan, not 900 m).
+        let block_units = match record.units {
+            0 => source_units.unwrap_or(0),
+            units => units,
+        };
+        let scale = scale * insert_unit_factor(block_units, doc.header.insertion_units);
         let mut insert = Insert::new(record.name.clone(), v3(at))
             .with_uniform_scale(scale)
             .with_rotation(rotation.to_radians());
@@ -1086,6 +1153,11 @@ impl Session {
         height: f64,
     ) -> Result<u64, CoreError> {
         finite(&[at[0], at[1], height])?;
+        let height = if height == 0.0 {
+            self.default_text_height()
+        } else {
+            height
+        };
         if height <= 0.0 {
             return Err(invalid("The height must be more than 0"));
         }

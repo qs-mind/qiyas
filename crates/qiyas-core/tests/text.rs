@@ -179,10 +179,9 @@ fn bad_texts_are_refused() {
     let why = refused(&mut s, text_cmd("D1", Some("NOPE")));
     assert!(why.contains("NOPE"), "{why}");
     refused(&mut s, text_cmd("  ", None));
-    refused(&mut s, text_cmd("two\nlines", None));
     let mut flat = text_cmd("D1", None);
     if let Command::Text { height, .. } = &mut flat {
-        *height = 0.0;
+        *height = -1.0;
     }
     refused(&mut s, flat);
     refused(
@@ -360,13 +359,6 @@ fn edit_text_refuses_what_it_cannot_change() {
         .handle
         .value();
     refused(&mut s, edit(t(table), None));
-    // A single-line text takes one line.
-    let d1 = find_text(&s, "D1");
-    let mut two = edit(t(d1), None);
-    if let Command::EditText { value, .. } = &mut two {
-        *value = "a\nb".to_string();
-    }
-    refused(&mut s, two);
 }
 
 /// The schedule drawing with a dimension text override "<> DOOR" and, on a paper sheet, a

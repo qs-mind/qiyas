@@ -22,6 +22,7 @@ import { matchBounds } from "../tools/overlay";
 import { fetchPictures, parseAtlas, parseBatch, type AtlasPage, type Batch, type HeldPicture } from "../viewport/batch";
 import type { Bounds } from "../viewport/camera";
 import { refreshSheet, type HeldSheet } from "../viewport/inset";
+import { planReveal, revealFrame } from "../viewport/reveal";
 import type { ViewportHandle } from "../viewport/Viewport";
 import { MODEL, unionBounds } from "./shared";
 
@@ -39,6 +40,17 @@ type Deps = {
    *  takes this hook's state, so the root fills the ref after calling it. */
   measure: RefObject<{ cancel(): void } | null>;
 };
+
+const UCS_ICON_KEY = "qiyas.ucsIcon";
+
+/** Whether the UCS icon shows: on unless it was turned off on this computer. */
+function readUcsIcon(): boolean {
+  try {
+    return localStorage.getItem(UCS_ICON_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
 
 export function useSheets({ switchGen, viewport, run, autosave, setInfo, refreshTabs, items, measure }: Deps) {
   const [batch, setBatch] = useState<Batch | null>(null);
@@ -67,6 +79,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
   /** The drawing holds its Arabic text backwards (View tab). */
   const [arabicReversed, setArabicReversed] = useState(false);
+  /** The UCS icon on the canvas (UCSICON, View tab), kept on this computer. */
+  const [ucsIcon, setUcsIcon] = useState(readUcsIcon);
   const [sheet, setSheetBlock] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
@@ -75,6 +89,16 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   const fitIds = useRef<string[] | null>(null);
   /** The find match the next fit shows (Find next on another sheet). */
   const fitMatch = useRef<number | null>(null);
+  /** Mizan's batches are fetched at once but shown in order, after their overlay finishes. */
+  const [revealOverlay, setRevealOverlay] = useState<Float64Array | null>(null);
+  const revealEpoch = useRef(0);
+  const revealCount = useRef(0);
+  const revealTail = useRef(Promise.resolve());
+  const revealQueue = useRef<{ handles: number[] }[]>([]);
+  const completedReveal = useRef<Float64Array | null>(null);
+  const stopFrame = useRef<(() => void) | null>(null);
+  /** A later redraw or cancellation makes an earlier fetch obsolete. */
+  const drawRequest = useRef(0);
 
   // Runs after the viewport has taken the new batch (child effects run first).
   useEffect(() => {
@@ -103,33 +127,168 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     setAtlas([...atlasHeld.current.values()]);
   }
 
-  /** Draws the core's current batch. When the core says the drawing, sheet and layers are as they
-   *  were at the last draw, the batch in hand stays and only the fit (if asked) happens. A fit draws
-   *  the glyphs for the core's own guess at the zoom; otherwise for the zoom on screen. */
-  async function redraw(fit = false) {
+  /** Fetches a batch and its glyphs without putting it on screen yet. */
+  async function fetchBatch(fit = false): Promise<HeldSheet | null> {
     const gen = switchGen.current;
     // A drawing change, its undo or a save may have changed the tab's unsaved dot.
     const [version] = await Promise.all([batchVersion(), refreshTabs()]);
-    if (isStale(gen, switchGen.current)) return;
+    if (isStale(gen, switchGen.current)) return null;
     if (version === batchVersionRef.current && batchHeld.current) {
-      // Nothing to send; the effect below still fits the view once the window has rendered.
+      return { version, batch: batchHeld.current };
+    }
+    const bytes = await renderBatch(undefined, fit ? undefined : viewport.current?.pxPerUnit());
+    if (!bytes || isStale(gen, switchGen.current)) return null;
+    const next = parseBatch(bytes);
+    await syncAtlas(next);
+    if (isStale(gen, switchGen.current)) return null;
+    return { version, batch: next };
+  }
+
+  async function showBatch(next: HeldSheet, fit = false) {
+    if (next.batch === batchHeld.current) {
       if (fit) {
         fitNext.current = true;
         setFitTick((n) => n + 1);
       }
       return;
     }
-    const bytes = await renderBatch(undefined, fit ? undefined : viewport.current?.pxPerUnit());
-    if (!bytes || isStale(gen, switchGen.current)) return;
-    const next = parseBatch(bytes);
-    await syncAtlas(next);
-    if (isStale(gen, switchGen.current)) return;
-    batchVersionRef.current = version;
-    batchHeld.current = next;
+    batchVersionRef.current = next.version;
+    batchHeld.current = next.batch;
     fitNext.current = fit;
-    setBatch(next);
+    setBatch(next.batch);
+    if (fit) setFitTick((n) => n + 1);
     await syncInset();
   }
+
+  /** Redraws wait for all reserved reveals, including ones still fetching their batch. */
+  async function redraw(fit = false) {
+    const gen = switchGen.current;
+    while (revealCount.current > 0) await revealTail.current;
+    if (isStale(gen, switchGen.current)) return;
+    const request = ++drawRequest.current;
+    const epoch = revealEpoch.current;
+    const next = await fetchBatch(fit);
+    if (isStale(gen, switchGen.current) || request !== drawRequest.current) return;
+    // A tool result may have reserved a reveal while this fetch was in flight.
+    if (epoch !== revealEpoch.current || revealCount.current > 0) return redraw(fit);
+    if (next) await showBatch(next, fit);
+  }
+
+  /** Stops the animation and discards queued snapshots; the current core drawing wins. */
+  function cancelReveal(showFinal = true) {
+    if (revealCount.current === 0) return;
+    drawRequest.current += 1;
+    revealEpoch.current += 1;
+    revealCount.current = 0;
+    revealQueue.current = [];
+    completedReveal.current = null;
+    revealTail.current = Promise.resolve();
+    stopFrame.current?.();
+    stopFrame.current = null;
+    setRevealOverlay(null);
+    if (showFinal) void run(() => redraw());
+  }
+
+  /** Reserves before returning, so onMutated cannot show the new drawing early. Fetch now:
+   *  waiting for the previous animation would let later changes enter this step's batch. */
+  function queueReveal(handles: number[]) {
+    const gen = switchGen.current;
+    const epoch = revealEpoch.current;
+    const stale = () => gen !== switchGen.current || epoch !== revealEpoch.current;
+    revealCount.current += 1;
+    drawRequest.current += 1;
+    const entry = { handles };
+    revealQueue.current.push(entry);
+    const previous = revealTail.current;
+    const fetched = fetchBatch();
+    // A queued fetch can fail before the earlier animation finishes.
+    void fetched.catch(() => {});
+    revealTail.current = run(async () => {
+      try {
+        await previous;
+        const next = await fetched;
+        if (!next || stale()) return;
+        const plan = planReveal(next.batch, handles);
+        if (plan && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          await new Promise<void>((resolve) => {
+            let frame = 0;
+            let start: number | null = null;
+            const finish = () => {
+              cancelAnimationFrame(frame);
+              stopFrame.current = null;
+              resolve();
+            };
+            stopFrame.current = finish;
+            const tick = (now: number) => {
+              if (stale()) {
+                finish();
+                return;
+              }
+              start ??= now;
+              const elapsed = now - start;
+              if (elapsed >= plan.total) {
+                finish();
+                return;
+              }
+              setRevealOverlay(withCompleted(revealFrame(plan, elapsed)));
+              frame = requestAnimationFrame(tick);
+            };
+            frame = requestAnimationFrame(tick);
+          });
+        }
+        if (stale()) return;
+        // The core can run the next tool before this batch was fetched. Keep completed
+        // strokes in the overlay if showing it would expose a queued entity too early.
+        const waiting = new Set(revealQueue.current.slice(1).flatMap((job) => job.handles).map(BigInt));
+        const ranges = next.batch.ranges;
+        let includesWaiting = false;
+        for (let i = 0; i < ranges.length && !includesWaiting; i++) {
+          includesWaiting = waiting.has(ranges.top(i));
+        }
+        if (plan && includesWaiting) {
+          completedReveal.current = withCompleted(plan.segments);
+          setRevealOverlay(completedReveal.current);
+          return;
+        }
+        completedReveal.current = null;
+        setRevealOverlay(null);
+        await showBatch(next);
+      } finally {
+        if (epoch === revealEpoch.current) {
+          if (gen !== switchGen.current) cancelReveal(false);
+          else {
+            revealCount.current -= 1;
+            revealQueue.current = revealQueue.current.filter((job) => job !== entry);
+            if (revealCount.current === 0) {
+              completedReveal.current = null;
+              setRevealOverlay(null);
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function withCompleted(frame: Float64Array): Float64Array {
+    const completed = completedReveal.current;
+    if (!completed) return frame;
+    const all = new Float64Array(completed.length + frame.length);
+    all.set(completed);
+    all.set(frame, completed.length);
+    return all;
+  }
+
+  useEffect(() => {
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const changed = () => {
+      if (motion.matches) cancelReveal();
+    };
+    motion.addEventListener("change", changed);
+    return () => {
+      motion.removeEventListener("change", changed);
+      cancelReveal(false);
+    };
+  }, []);
 
   /** On a layout, fetches model space for its viewports (when the core's changed) and how each
    *  shows it; elsewhere drops it. Its glyphs are drawn for the largest viewport's zoom. */
@@ -195,16 +354,19 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   /** Draws the text again for the zoom on screen (`pxPerUnit` screen pixels per drawing unit). The
    *  lines of the batch in hand stay when the core's batch is the same one. */
   async function redrawGlyphs(pxPerUnit: number) {
-    if (!batchHeld.current || glyphsBusy.current) return;
+    if (!batchHeld.current || glyphsBusy.current || revealCount.current > 0) return;
     glyphsBusy.current = true;
     const gen = switchGen.current;
+    const epoch = revealEpoch.current;
+    const request = ++drawRequest.current;
     await run(async () => {
       const version = await batchVersion();
       const bytes = await renderBatch(undefined, pxPerUnit);
       if (!bytes || isStale(gen, switchGen.current)) return;
       let next = parseBatch(bytes);
       await syncAtlas(next);
-      if (isStale(gen, switchGen.current)) return;
+      if (isStale(gen, switchGen.current) || epoch !== revealEpoch.current ||
+          request !== drawRequest.current || revealCount.current > 0) return;
       const held = batchHeld.current;
       if (held && version === batchVersionRef.current) {
         // The same lines and fills: keep the arrays the viewport has uploaded already.
@@ -219,8 +381,19 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     glyphsBusy.current = false;
   }
 
+  /** Shows or hides the UCS icon, and keeps the choice on this computer. */
+  function chooseUcsIcon(on: boolean) {
+    setUcsIcon(on);
+    try {
+      localStorage.setItem(UCS_ICON_KEY, on ? "on" : "off");
+    } catch {
+      // Kept for this run only.
+    }
+  }
+
   /** Says whether the drawing holds its Arabic text backwards, and redraws its text. */
   async function chooseArabicReversed(on: boolean) {
+    cancelReveal(false);
     let changed = false;
     await run(async () => {
       await runCommand({ type: "set_arabic_reversed", on });
@@ -234,10 +407,13 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   /** Shows the sheet `block`, fitted to the measurements `fit` when given, else to the whole sheet. */
   const chooseSheet = (block: string, fit?: string[]) =>
     run(async () => {
+      cancelReveal(false);
       await setSheet(block);
-      setSheetBlock(block);
+      // Read back the canonical window sheet; automation restores it after every tool call.
+      const next = await drawingInfo();
+      setSheetBlock(next.sheet);
       // The layers panel's VP freeze column lists this sheet's viewports.
-      setInfo(await drawingInfo());
+      setInfo(next);
       measure.current?.cancel();
       fitIds.current = fit ?? null;
       await redraw(true);
@@ -245,6 +421,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
 
   /** Saves the view on screen as the named view `name` (a drawing change). Errors go to the menu. */
   async function saveView(name: string) {
+    cancelReveal();
     const box = viewport.current?.visible();
     if (!box) return;
     await runCommand({ type: "save_view", name, bounds: box });
@@ -253,6 +430,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
 
   /** Removes the named view `name` (a drawing change). Errors go to the menu. */
   async function deleteView(name: string) {
+    cancelReveal();
     await runCommand({ type: "delete_view", name });
     await redraw();
   }
@@ -260,6 +438,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   /** Forgets everything held about the drawing on screen: the batch, the glyph atlas, the pictures
    *  (all per drawing) and the inset; the second view showed another drawing's sheet. */
   function reset() {
+    cancelReveal(false);
+    drawRequest.current += 1;
     batchVersionRef.current = null;
     batchHeld.current = null;
     insetHeld.current = null;
@@ -274,6 +454,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
 
   /** After the last tab closed: no sheet to show. */
   function clear() {
+    cancelReveal(false);
     setBatch(null);
     setSheetBlock("");
     setHidden(new Set());
@@ -282,6 +463,9 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   return {
     batch,
     batchHeld,
+    revealOverlay,
+    queueReveal,
+    cancelReveal,
     inset,
     insetHeld,
     split,
@@ -292,6 +476,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     setRenderProgress,
     arabicReversed,
     setArabicReversed,
+    ucsIcon,
+    chooseUcsIcon,
     sheet,
     setSheetBlock,
     hidden,

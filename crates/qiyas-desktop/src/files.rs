@@ -51,6 +51,37 @@ pub(crate) fn clipboard_text(state: &AppState) -> Result<String, String> {
         .map_err(|e| format!("The clipboard could not be read: {e}"))
 }
 
+/// The clipboard's text for a paste into a text field, or None when it holds none. Pastes go
+/// through here, not the web view: WebKitGTK 2.54 on Wayland hangs and then crashes reading
+/// the clipboard (`src/shell/safePaste.ts`).
+#[tauri::command(async)]
+pub fn clipboard_read_text(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    match with_clipboard(&state, |c| c.get_text()) {
+        Ok(text) => Ok(Some(text)),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(e) => Err(format!("The clipboard could not be read: {e}")),
+    }
+}
+
+/// The clipboard's picture for a paste: width and height (u32, little-endian), then its RGBA
+/// pixels; empty when it holds none.
+#[tauri::command(async)]
+pub fn clipboard_read_image(state: State<'_, AppState>) -> Result<tauri::ipc::Response, String> {
+    match with_clipboard(&state, |c| c.get_image()) {
+        Ok(img) => {
+            let mut out = Vec::with_capacity(8 + img.bytes.len());
+            out.extend_from_slice(&(img.width as u32).to_le_bytes());
+            out.extend_from_slice(&(img.height as u32).to_le_bytes());
+            out.extend_from_slice(&img.bytes);
+            Ok(tauri::ipc::Response::new(out))
+        }
+        Err(arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure) => {
+            Ok(tauri::ipc::Response::new(Vec::new()))
+        }
+        Err(e) => Err(format!("The clipboard could not be read: {e}")),
+    }
+}
+
 /// Puts `text` on the system clipboard; the app keeps it there while it runs.
 pub(crate) fn set_clipboard_text(state: &AppState, text: &str) -> Result<(), String> {
     with_clipboard(state, |c| c.set_text(text.to_string()))
@@ -217,7 +248,12 @@ pub(crate) fn install_panic_hook<R: Runtime>(app: AppHandle<R>) {
         let app = app.clone();
         let flushed = flush_within(FLUSH_TIMEOUT, move || {
             let _flushing = flushing;
-            app.try_state::<AppState>().map(|state| flush_dirty(&state))
+            app.try_state::<AppState>().map(|state| {
+                if let Ok(run) = state.ai.try_lock() {
+                    run.save_if_available();
+                }
+                flush_dirty(&state)
+            })
         });
         let mut err = std::io::stderr();
         let _ = match flushed {
@@ -294,20 +330,52 @@ pub async fn recoverable_drawings(paths: Vec<String>) -> Result<Vec<Recoverable>
         .collect())
 }
 
+/// The untitled drawings (`tabs::untitled_path`) not open here whose autosave is still in the
+/// app's folder: Qiyas closed before their first Save As. The window asks about them at launch
+/// with the recent drawings.
+#[tauri::command]
+pub async fn untitled_autosaves(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dir = state.config_dir.join("untitled");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let open: Vec<String> = tabs::snapshot(&state)
+        .tabs
+        .into_iter()
+        .map(|t| t.path)
+        .collect();
+    let mut found: Vec<String> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sv$")))
+        .filter_map(|p| {
+            let drawing = p.with_extension("");
+            let shown = drawing.display().to_string();
+            let untitled = drawing
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("Untitled-"));
+            (untitled && !open.contains(&shown)).then_some(shown)
+        })
+        .collect();
+    found.sort();
+    Ok(found)
+}
+
 /// Opens the autosave of the drawing `path` (or, for an older copy's path, that copy) in a new
 /// tab as a new drawing with unsaved changes beside it (`Session::open_autosave`); the window
-/// then offers Save As.
+/// then offers Save As. An untitled drawing's autosave stays untitled.
 #[tauri::command]
 pub async fn recover_autosave<R: Runtime>(
     path: String,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
-    let session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
-    let info = session.info();
+    let mut session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
+    if Path::new(&path).starts_with(state.config_dir.join("untitled")) {
+        session.mark_untitled();
+    }
     new_conversation(&app, &state);
-    tabs::add(&state, session);
-    Ok(info)
+    tabs::add(&state, session)?;
+    with_session(&state, |s| Ok(s.info()))
 }
 
 /// Deletes the autosave of the drawing `path` (see `discard`).
@@ -349,14 +417,16 @@ pub async fn recover_drawing<R: Runtime>(
         return Err("This drawing is open: close its tab first to recover it from the file".into());
     }
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let recovered = Recovered {
-        info: session.info(),
-        report: session.read_report(),
-    };
+    let report = session.read_report();
     new_conversation(&app, &state);
-    tabs::add(&state, session);
+    tabs::add(&state, session)?;
     remember_recent(&state, &path);
-    Ok(recovered)
+    with_session(&state, |s| {
+        Ok(Recovered {
+            info: s.info(),
+            report,
+        })
+    })
 }
 
 /// A sheet set and its drawings as the window lists them.
@@ -450,6 +520,7 @@ pub async fn sheet_set_from_tabs(
 ) -> Result<FromTabs, String> {
     let qss = Path::new(&qss);
     let mut set = SheetSet {
+        project: None,
         name,
         drawings: Vec::new(),
     };
@@ -515,8 +586,8 @@ mod tests {
         let state = AppState::new(dir.join("config"));
         let a = write_drawing(&sample_doc(), &dir.join("a.dwg"));
         let b = write_drawing(&sample_doc(), &dir.join("b.dwg"));
-        tabs::add(&state, Session::open(&a).unwrap());
-        tabs::add(&state, Session::open(&b).unwrap());
+        tabs::add(&state, Session::open(&a).unwrap()).unwrap();
+        tabs::add(&state, Session::open(&b).unwrap()).unwrap();
         (state, a, b)
     }
 

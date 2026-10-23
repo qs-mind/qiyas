@@ -52,7 +52,7 @@ impl Drawing {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
-        let outcome = if is_dxf {
+        let mut outcome = if is_dxf {
             // Failsafe, like DWG: a partly broken DXF opens with problems instead of failing.
             let config = DxfReaderConfiguration {
                 failsafe: true,
@@ -70,6 +70,10 @@ impl Drawing {
                 "no usable drawing data found".to_string(),
             ));
         }
+        // The DXF reader drops a layout's paper orientation and millimetre units.
+        if is_dxf {
+            crate::layouts::restore_paper_settings(&mut outcome.document);
+        }
         let report = crate::ReadReport::from_stats(&outcome.stats);
         let problems = outcome
             .stats
@@ -85,6 +89,21 @@ impl Drawing {
             units,
             report,
         })
+    }
+
+    /// A new, empty drawing in memory, not yet on disk: `path` is where it stands until its first
+    /// Save As. `insunits` is the header's INSUNITS (6 metres, 5 centimetres, 4 millimetres).
+    pub fn blank(path: &Path, insunits: i16) -> Drawing {
+        let mut doc = CadDocument::new();
+        doc.header.insertion_units = insunits;
+        crate::layouts::template_paper(&mut doc, Units::from_header(insunits));
+        Drawing {
+            path: path.to_path_buf(),
+            units: Units::from_header(insunits),
+            doc,
+            problems: Vec::new(),
+            report: crate::ReadReport::default(),
+        }
     }
 
     /// Model first, then each paper layout in tab order.

@@ -15,7 +15,7 @@ use opencadcodec::tables::{
 };
 use opencadcodec::{CadDocument, EntityType, Handle};
 
-use crate::{Boq, Conflict, Current, Schedule, Source, Takeoff};
+use crate::{Boq, Conflict, Current, HistoryStep, Schedule, Source, Takeoff};
 
 /// Most undo steps kept; the oldest is dropped first.
 const MAX_STEPS: usize = 200;
@@ -23,11 +23,15 @@ const MAX_STEPS: usize = 200;
 /// The part of the session a command changed, as it was before (or after, on the redo stack).
 #[derive(Debug)]
 pub(crate) enum Step {
+    ProjectFile(crate::projects::FileChange),
     Takeoff(Takeoff),
     Boq(Option<Boq>),
     Conflicts(Vec<Conflict>, Vec<Schedule>),
     /// A change to the drawing (and to the take-off with it, for divide and measure along).
     Document(DocChange),
+    /// Several steps made as one (a batch, a transaction), held in the order they are put back
+    /// (the last one made first), and what the group did to the current drawing state.
+    Group(Vec<Step>, Option<Box<ViewDelta>>),
 }
 
 /// One drawing change, held as what puts it back: undoing removes `added`, restores `removed`
@@ -46,9 +50,114 @@ pub(crate) struct DocChange {
     pub tables: Option<Box<TablesSnapshot>>,
     /// The take-off before the change, for a command that changes it too.
     pub takeoff: Option<Takeoff>,
-    /// The session's view of the drawing's tables before the change, when the change moved it
-    /// (a renamed layer is the current or a hidden one; a layer state's hidden layers).
-    pub view: Option<ViewState>,
+    /// What the change did to the session's view of the drawing's tables, when it moved it (a
+    /// renamed layer is the current or a hidden one; a layer state's hidden layers). Only that
+    /// difference is undone, so layers hidden or shown since are left as they are.
+    pub view: Option<Box<ViewDelta>>,
+}
+
+/// What one drawing change did to the session's `ViewState`: the current state before and
+/// after, the layers it hid and showed, and each layer state's hidden layers before and after.
+/// Undo applies it backwards, redo forwards; what changed since in the same place is kept.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct ViewDelta {
+    pub current: Option<(Current, Current)>,
+    pub hidden_added: Vec<String>,
+    pub hidden_removed: Vec<String>,
+    pub state_hidden: Vec<StateHidden>,
+}
+
+/// A layer state's name, its hidden layers before and after (`None`: not there).
+pub(crate) type StateHidden = (String, Option<Vec<String>>, Option<Vec<String>>);
+
+impl ViewDelta {
+    /// The current drawing state moved from `before` to `after` (a batch that ran `SetCurrent`).
+    pub(crate) fn current_only(before: Current, after: Current) -> Option<ViewDelta> {
+        (before != after).then(|| ViewDelta {
+            current: Some((before, after)),
+            ..ViewDelta::default()
+        })
+    }
+
+    /// The difference from `before` to `after`; `None` when they are the same.
+    pub(crate) fn between(before: &ViewState, after: &ViewState) -> Option<ViewDelta> {
+        let mut delta = ViewDelta::default();
+        if before.current != after.current {
+            delta.current = Some((before.current.clone(), after.current.clone()));
+        }
+        let mut added: Vec<String> = after.hidden.difference(&before.hidden).cloned().collect();
+        let mut removed: Vec<String> = before.hidden.difference(&after.hidden).cloned().collect();
+        added.sort();
+        removed.sort();
+        delta.hidden_added = added;
+        delta.hidden_removed = removed;
+        let names: std::collections::BTreeSet<&String> = before
+            .state_hidden
+            .keys()
+            .chain(after.state_hidden.keys())
+            .collect();
+        for name in names {
+            let (b, a) = (before.state_hidden.get(name), after.state_hidden.get(name));
+            if b != a {
+                delta
+                    .state_hidden
+                    .push((name.clone(), b.cloned(), a.cloned()));
+            }
+        }
+        (delta != ViewDelta::default()).then_some(delta)
+    }
+
+    /// Takes the change back in `view` and returns the delta that does it again. A current state
+    /// or a layer state's hidden layers changed since is left as it is; the hidden layers lose
+    /// only what the change hid and get back only what it showed (see `still_hidden`).
+    fn undo(self, view: &mut ViewRefs) -> ViewDelta {
+        if let Some((before, after)) = &self.current {
+            if *view.current == *after {
+                *view.current = before.clone();
+            }
+        }
+        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        // A renamed hidden layer is hidden again under its old name only while it is still
+        // hidden under the new one: the user may have shown it since. A deleted one (nothing
+        // hidden in its place) comes back hidden.
+        let still_hidden = self.hidden_added.is_empty()
+            || self
+                .hidden_added
+                .iter()
+                .any(|name| view.hidden.iter().any(|h| same(h, name)));
+        for name in &self.hidden_added {
+            view.hidden.retain(|h| !same(h, name));
+        }
+        if still_hidden {
+            for name in &self.hidden_removed {
+                if !view.hidden.iter().any(|h| same(h, name)) {
+                    view.hidden.insert(name.clone());
+                }
+            }
+        }
+        for (state, before, after) in &self.state_hidden {
+            if view.state_hidden.get(state) == after.as_ref() {
+                match before {
+                    Some(hidden) => {
+                        view.state_hidden.insert(state.clone(), hidden.clone());
+                    }
+                    None => {
+                        view.state_hidden.remove(state);
+                    }
+                }
+            }
+        }
+        ViewDelta {
+            current: self.current.map(|(before, after)| (after, before)),
+            hidden_added: self.hidden_removed,
+            hidden_removed: self.hidden_added,
+            state_hidden: self
+                .state_hidden
+                .into_iter()
+                .map(|(state, before, after)| (state, after, before))
+                .collect(),
+        }
+    }
 }
 
 /// What the session keeps about the drawing's layers outside the drawing: the current drawing
@@ -76,15 +185,6 @@ impl ViewRefs<'_> {
             state_hidden: self.state_hidden.clone(),
         }
     }
-
-    /// Puts `state` in and returns the one it replaced.
-    fn swap(&mut self, state: ViewState) -> ViewState {
-        ViewState {
-            current: std::mem::replace(self.current, state.current),
-            hidden: std::mem::replace(self.hidden, state.hidden),
-            state_hidden: std::mem::replace(self.state_hidden, state.state_hidden),
-        }
-    }
 }
 
 /// The parts of a drawing outside its entities that commands change, with the header variables
@@ -110,18 +210,34 @@ pub(crate) struct TablesSnapshot {
 /// grow.
 #[derive(Debug, Clone, PartialEq)]
 struct HeaderBits {
+    named_objects_dict_handle: Handle,
     annotation_scale: String,
     annotation_scale_value: f64,
     dimstyle_name: String,
     dimstyle_handle: Handle,
     dim: [f64; 7],
     dim_decimal_places: i16,
+    // The variables `SetRecords` may set (`record_edit::HEADER_WRITABLE`).
+    linetype_scale: f64,
+    point_display_mode: i16,
+    point_display_size: f64,
+    text_height: f64,
+    fill_mode: bool,
+    mirror_text: bool,
+    lineweight_display: bool,
+    linear_unit_format: i16,
+    linear_unit_precision: i16,
+    angular_unit_format: i16,
+    angular_unit_precision: i16,
+    attribute_visibility: i16,
+    project_name: String,
 }
 
 impl HeaderBits {
     fn take(doc: &CadDocument) -> HeaderBits {
         let h = &doc.header;
         HeaderBits {
+            named_objects_dict_handle: h.named_objects_dict_handle,
             annotation_scale: h.current_annotation_scale.clone(),
             annotation_scale_value: h.annotation_scale_value,
             dimstyle_name: h.current_dimstyle_name.clone(),
@@ -136,11 +252,25 @@ impl HeaderBits {
                 h.dim_linear_scale,
             ],
             dim_decimal_places: h.dim_decimal_places,
+            linetype_scale: h.linetype_scale,
+            point_display_mode: h.point_display_mode,
+            point_display_size: h.point_display_size,
+            text_height: h.text_height,
+            fill_mode: h.fill_mode,
+            mirror_text: h.mirror_text,
+            lineweight_display: h.lineweight_display,
+            linear_unit_format: h.linear_unit_format,
+            linear_unit_precision: h.linear_unit_precision,
+            angular_unit_format: h.angular_unit_format,
+            angular_unit_precision: h.angular_unit_precision,
+            attribute_visibility: h.attribute_visibility,
+            project_name: h.project_name.clone(),
         }
     }
 
     fn put(self, doc: &mut CadDocument) {
         let h = &mut doc.header;
+        h.named_objects_dict_handle = self.named_objects_dict_handle;
         h.current_annotation_scale = self.annotation_scale;
         h.annotation_scale_value = self.annotation_scale_value;
         h.current_dimstyle_name = self.dimstyle_name;
@@ -155,6 +285,19 @@ impl HeaderBits {
             h.dim_linear_scale,
         ] = self.dim;
         h.dim_decimal_places = self.dim_decimal_places;
+        h.linetype_scale = self.linetype_scale;
+        h.point_display_mode = self.point_display_mode;
+        h.point_display_size = self.point_display_size;
+        h.text_height = self.text_height;
+        h.fill_mode = self.fill_mode;
+        h.mirror_text = self.mirror_text;
+        h.lineweight_display = self.lineweight_display;
+        h.linear_unit_format = self.linear_unit_format;
+        h.linear_unit_precision = self.linear_unit_precision;
+        h.angular_unit_format = self.angular_unit_format;
+        h.angular_unit_precision = self.angular_unit_precision;
+        h.attribute_visibility = self.attribute_visibility;
+        h.project_name = self.project_name;
     }
 }
 
@@ -275,7 +418,7 @@ impl DocChange {
         }
         redo.tables = self.tables.map(|t| t.swap(doc));
         redo.takeoff = self.takeoff.map(|t| std::mem::replace(takeoff, t));
-        redo.view = self.view.map(|v| view.swap(v));
+        redo.view = self.view.map(|delta| Box::new(delta.undo(view)));
         redo
     }
 }
@@ -292,10 +435,30 @@ pub(crate) struct Parts<'a> {
     pub doc_changed: &'a mut bool,
 }
 
+impl Parts<'_> {
+    /// The same parts, borrowed again for one step of a group.
+    fn reborrow(&mut self) -> Parts<'_> {
+        Parts {
+            takeoff: &mut *self.takeoff,
+            boq: &mut *self.boq,
+            conflicts: &mut *self.conflicts,
+            schedules: &mut *self.schedules,
+            doc: &mut *self.doc,
+            view: ViewRefs {
+                current: &mut *self.view.current,
+                hidden: &mut *self.view.hidden,
+                state_hidden: &mut *self.view.state_hidden,
+            },
+            doc_changed: &mut *self.doc_changed,
+        }
+    }
+}
+
 impl Step {
     /// Puts this step in place and returns what it replaced.
     fn swap(self, mut parts: Parts) -> Step {
         match self {
+            Step::ProjectFile(change) => Step::ProjectFile(change.reversed()),
             Step::Takeoff(t) => Step::Takeoff(std::mem::replace(parts.takeoff, t)),
             Step::Boq(b) => Step::Boq(std::mem::replace(parts.boq, b)),
             Step::Conflicts(c, s) => Step::Conflicts(
@@ -306,38 +469,131 @@ impl Step {
                 *parts.doc_changed = true;
                 Step::Document(change.swap(parts.doc, parts.takeoff, &mut parts.view))
             }
+            // Each step in the order held; what redoes them goes the other way round.
+            Step::Group(steps, view) => {
+                let mut back: Vec<Step> = steps
+                    .into_iter()
+                    .map(|step| step.swap(parts.reborrow()))
+                    .collect();
+                back.reverse();
+                let view = view.map(|delta| Box::new(delta.undo(&mut parts.view)));
+                Step::Group(back, view)
+            }
         }
     }
+}
+
+/// One undo or redo step: what puts it back, who made it and what it was ("draw.line",
+/// "batch").
+#[derive(Debug)]
+pub(crate) struct Entry {
+    step: Step,
+    source: Source,
+    label: String,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct History {
-    /// The state before each change, and who made the change.
-    undo: Vec<(Step, Source)>,
-    redo: Vec<(Step, Source)>,
+    /// The state before each change, who made it and what it was.
+    undo: Vec<Entry>,
+    redo: Vec<Entry>,
     /// Undo stops with this many steps left (a block being edited in place keeps the steps
     /// from before it began).
     floor: usize,
+    /// The steps of the groups open now (a batch, a transaction), innermost last: each closes
+    /// into one step of the group around it, or of the history.
+    groups: Vec<Vec<Entry>>,
+    /// Changes whenever a step reaches the undo stack, even when the stack is full.
+    revision: u64,
 }
 
 impl History {
-    /// Records the state as it was before a command by `source`. Clears what could be redone.
-    pub(crate) fn record(&mut self, before: Step, source: Source) {
+    /// Records the state as it was before a command by `source`, what the command was being
+    /// `label`. Clears what could be redone; inside a group, keeps it for the group.
+    pub(crate) fn record(&mut self, before: Step, source: Source, label: &str) {
+        let entry = Entry {
+            step: before,
+            source,
+            label: label.to_string(),
+        };
+        if let Some(group) = self.groups.last_mut() {
+            group.push(entry);
+            return;
+        }
         self.redo.clear();
-        self.push(before, source);
+        self.push(entry);
     }
 
     /// Pushes a step on the undo stack, dropping the oldest past `MAX_STEPS` (the floor drops
     /// with it).
-    fn push(&mut self, step: Step, source: Source) {
-        if push_capped(&mut self.undo, (step, source)) {
+    fn push(&mut self, entry: Entry) {
+        self.revision = self.revision.wrapping_add(1);
+        if push_capped(&mut self.undo, entry) {
             self.floor = self.floor.saturating_sub(1);
         }
+    }
+
+    /// Opens a group: the steps recorded until it closes become one.
+    pub(crate) fn begin_group(&mut self) {
+        self.groups.push(Vec::new());
+    }
+
+    /// Closes the innermost group into one step by `source` named `label`, with what it did to
+    /// the current state (`view`). Nothing is recorded when the group changed nothing; a group of
+    /// one step records that step under `label`. True when a step was recorded.
+    pub(crate) fn commit_group(
+        &mut self,
+        source: Source,
+        label: &str,
+        view: Option<Box<ViewDelta>>,
+    ) -> bool {
+        let mut steps: Vec<Step> = self
+            .groups
+            .pop()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| entry.step)
+            .collect();
+        let step = match (steps.len(), view) {
+            (0, None) => return false,
+            (1, None) => steps.pop().expect("one step"),
+            (_, view) => {
+                steps.reverse();
+                Step::Group(steps, view)
+            }
+        };
+        self.record(step, source, label);
+        true
+    }
+
+    /// Closes the innermost group by putting back every step made in it, last first: the session
+    /// is as it was when the group opened. Nothing can be redone from it.
+    pub(crate) fn abort_group(&mut self, mut parts: Parts) {
+        let entries = self.groups.pop().unwrap_or_default();
+        for entry in entries.into_iter().rev() {
+            let _redo = entry.step.swap(parts.reborrow());
+        }
+    }
+
+    /// What can be undone (oldest first) and redone (next first): each step's label and who
+    /// made it.
+    pub(crate) fn labels(&self) -> (Vec<HistoryStep>, Vec<HistoryStep>) {
+        let step = |e: &Entry| HistoryStep {
+            label: e.label.clone(),
+            source: e.source,
+        };
+        let undo = self.undo.iter().skip(self.floor).map(step).collect();
+        let redo = self.redo.iter().rev().map(step).collect();
+        (undo, redo)
     }
 
     /// How many steps can be undone, floor or not.
     pub(crate) fn undo_len(&self) -> usize {
         self.undo.len()
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Undo stops with `floor` steps left (0: never stops).
@@ -365,7 +621,7 @@ impl History {
 
     /// Who made the change that `undo` would take back.
     pub(crate) fn top_source(&self) -> Option<Source> {
-        self.undo.last().map(|(_, source)| *source)
+        self.undo.last().map(|entry| entry.source)
     }
 
     /// Puts the take-off, BOQ, conflicts or drawing back to their state before the last command.
@@ -374,20 +630,41 @@ impl History {
         if self.undo.len() <= self.floor {
             return false;
         }
-        let Some((before, source)) = self.undo.pop() else {
+        if let Some(Entry {
+            step: Step::ProjectFile(change),
+            ..
+        }) = self.undo.last()
+        {
+            if change.apply().is_err() {
+                return false;
+            }
+        }
+        let Some(entry) = self.undo.pop() else {
             return false;
         };
-        self.redo.push((before.swap(parts), source));
+        self.redo.push(Entry {
+            step: entry.step.swap(parts),
+            ..entry
+        });
         true
     }
 
     /// Redoes the last undone command. False when there is none.
     pub(crate) fn redo(&mut self, parts: Parts) -> bool {
-        let Some((after, source)) = self.redo.pop() else {
+        if let Some(Entry {
+            step: Step::ProjectFile(change),
+            ..
+        }) = self.redo.last()
+        {
+            if change.apply().is_err() {
+                return false;
+            }
+        }
+        let Some(entry) = self.redo.pop() else {
             return false;
         };
-        let step = after.swap(parts);
-        self.push(step, source);
+        let step = entry.step.swap(parts);
+        self.push(Entry { step, ..entry });
         true
     }
 
@@ -401,7 +678,7 @@ impl History {
 }
 
 /// Pushes `step`, dropping the oldest past `MAX_STEPS`; true when one was dropped.
-fn push_capped(stack: &mut Vec<(Step, Source)>, step: (Step, Source)) -> bool {
+fn push_capped(stack: &mut Vec<Entry>, step: Entry) -> bool {
     let full = stack.len() == MAX_STEPS;
     if full {
         stack.remove(0);
@@ -428,7 +705,7 @@ mod tests {
             } else {
                 Step::Document(DocChange::default())
             };
-            history.record(step, Source::User);
+            history.record(step, Source::User, "test");
         }
         let undone = std::iter::from_fn(|| {
             let parts = Parts {

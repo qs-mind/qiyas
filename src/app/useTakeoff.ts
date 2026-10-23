@@ -2,9 +2,11 @@
  *  conflicts, the inquiry info card, and what each highlights on the drawing) and its handlers
  *  (`useTakeoff`: BOQ import, compare, export, selecting rows, BOQ items and conflicts). */
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "../fileDialogs";
 import {
   boq as readBoq,
+  measurementReport,
+  type MeasurementReport,
   compare,
   conflicts as readConflicts,
   exportConflicts,
@@ -31,6 +33,7 @@ export function useTakeoffState(switchGen: RefObject<number>) {
   const [itemTotals, setItemTotals] = useState<Total[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** The drawing's imported BOQ. */
+  const [generated, setGenerated] = useState<MeasurementReport | null>(null);
   const [bill, setBill] = useState<Boq | null>(null);
   /** The BOQ item whose linked measurements are shown. */
   const [boqCode, setBoqCode] = useState<string | null>(null);
@@ -50,16 +53,18 @@ export function useTakeoffState(switchGen: RefObject<number>) {
   /** Re-reads the take-off, the BOQ and the conflicts, after anything that may have changed them. */
   async function refreshTakeoffAndBoq() {
     const gen = switchGen.current;
-    const [nextItems, nextTotals, nextBoq, nextConflicts] = await Promise.all([
+    const [nextItems, nextTotals, nextBoq, nextConflicts, nextGenerated] = await Promise.all([
       takeoff(),
       totals(),
       readBoq(),
       readConflicts(),
+      measurementReport(),
     ]);
     if (isStale(gen, switchGen.current)) return;
     setItems(nextItems);
     setItemTotals(nextTotals);
     setBill(nextBoq);
+    setGenerated(nextGenerated);
     setConflicts(nextConflicts);
     // Conflicts kept in the project file come from an earlier comparison.
     if (nextConflicts.length > 0) setCompared(true);
@@ -80,6 +85,7 @@ export function useTakeoffState(switchGen: RefObject<number>) {
     setItems([]);
     setItemTotals([]);
     setBill(null);
+    setGenerated(null);
     setConflicts([]);
   }
 
@@ -89,6 +95,7 @@ export function useTakeoffState(switchGen: RefObject<number>) {
     selectedId,
     setSelectedId,
     bill,
+    generated,
     boqCode,
     setBoqCode,
     conflicts,
@@ -112,7 +119,7 @@ export function useTakeoffState(switchGen: RefObject<number>) {
 export type TakeoffState = ReturnType<typeof useTakeoffState>;
 
 type Deps = Pick<Shell, "run" | "setNotice" | "setSideTab" | "viewport"> &
-  Pick<Sheets, "sheet" | "batch" | "chooseSheet"> &
+  Pick<Sheets, "sheet" | "batch" | "chooseSheet" | "redraw"> &
   Pick<Commands, "apply"> & {
     t: T;
     info: DrawingInfo | null;
@@ -133,6 +140,7 @@ export function useTakeoff({
   sheet,
   batch,
   chooseSheet,
+  redraw,
   takeoffState,
   apply,
 }: Deps) {
@@ -141,6 +149,7 @@ export function useTakeoff({
     selectedId,
     setSelectedId,
     bill,
+    generated,
     boqCode,
     setBoqCode,
     setConflicts,
@@ -186,6 +195,7 @@ export function useTakeoff({
         setComparing(false);
       }
       changed = true;
+      await redraw();
       setConflicts(found);
       setCompared(true);
       setSideTab("conflicts");
@@ -254,6 +264,14 @@ export function useTakeoff({
     },
     [items, sheet, batch],
   );
+
+  function showGeneratedItem(code: string): boolean {
+    const sources = generated?.items.find((item) => item.code === code)?.lines.flatMap((line) => line.sources) ?? [];
+    const target = sources.find((source) => source.sheet.toLowerCase() === sheet.toLowerCase())?.sheet ?? sources[0]?.sheet;
+    if (!target) return false;
+    showGenerated([...new Set(sources.filter((source) => source.sheet === target).map((source) => source.handle))], target);
+    return true;
+  }
   /** Selects a BOQ item: its linked measurements on this sheet light up and fill the view. */
   const selectBoq = useCallback(
     (code: string) => {
@@ -261,16 +279,30 @@ export function useTakeoff({
       setSelectedId(null);
       setAiHighlight([]);
       setConflictIds([]);
+      if (showGeneratedItem(code)) return;
       const linked = items.filter((m) => code !== "" && m.boq_code === code && onSheet(m));
       const box = unionBounds(linked, batch);
       if (box) viewport.current?.fitTo(box);
     },
-    [items, sheet, batch],
+    [items, sheet, batch, generated],
   );
   /** Shows what a conflict is about: its measurements lit up and filling the view (moving to their
    *  sheet when none is on this one); else its BOQ item in the BOQ tab; else its first sheet. */
   const showConflict = useCallback(
     (c: Conflict) => {
+      if (c.query?.clouds.length) {
+        const target = c.query.references[0]?.sheet ?? c.sheets[0];
+        const block = info?.sheets.find((s) => s.block === target || s.name === target)?.block;
+        showGenerated(c.query.clouds, block ?? target ?? sheet);
+        return;
+      }
+      const derived = generated?.items.find((item) => c.measurements.includes(`generated:${item.code}`));
+      if (derived && showGeneratedItem(derived.code)) {
+        setSelectedId(null);
+        setBoqCode(null);
+        setConflictIds([]);
+        return;
+      }
       const involved = items.filter((m) => c.measurements.includes(m.id));
       if (involved.length > 0) {
         setSelectedId(null);
@@ -293,7 +325,7 @@ export function useTakeoff({
         if (target && target.block.toLowerCase() !== sheet.toLowerCase()) chooseSheet(target.block);
       }
     },
-    [items, sheet, batch, info, selectBoq],
+    [items, sheet, batch, info, selectBoq, generated],
   );
   const resolveConflict = useCallback((cmd: ResolveCommand) => apply(cmd), []);
   const openBoqTab = useCallback(() => setSideTab("boq"), []);
@@ -311,7 +343,15 @@ export function useTakeoff({
     [],
   );
 
+  function showGenerated(handles: number[], sourceSheet: string) {
+    void run(async () => {
+      if (sourceSheet.toLowerCase() !== sheet.toLowerCase()) await chooseSheet(sourceSheet);
+      setAiHighlight(handles);
+    });
+  }
+
   return {
+    showGenerated,
     importBoqFile,
     onImportBoq,
     compareNow,

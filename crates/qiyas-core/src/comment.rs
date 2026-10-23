@@ -93,25 +93,23 @@ impl Session {
         if text.is_empty() {
             return Err(invalid("Type the comment"));
         }
-        let ring_len: f64 = (0..points.len())
-            .map(|i| {
-                let (a, b) = (points[i], points[(i + 1) % points.len()]);
-                (b[0] - a[0]).hypot(b[1] - a[1])
-            })
-            .sum();
-        let arc_len = arc_len.unwrap_or(ring_len / 32.0);
+        let arc_len = arc_len.unwrap_or_else(|| crate::draw::default_cloud_arc_len(&points));
         let mut cloud = self
             .draw_entities(DrawSpec::RevCloud {
-                points: points.clone(),
-                arc_len,
+                points: points.clone().into(),
+                arc_len: Some(arc_len),
             })?
             .remove(0);
         let [_, [max_x, max_y]] = crate::query::bounds(&points);
         // 2.5 mm on the sheet at the annotation scale, but never lost on the sheet (a plan at
         // 1:1 in metres would give 2.5 mm in the model): an 80th of what it draws, at least.
-        let paper = 0.0025 / self.drawing.units.to_metres() * self.annotation_scale().1;
+        let paper = self.default_text_height();
         let [[x0, y0], [x1, y1]] = self.sheet_bounds();
-        let height = paper.max((x1 - x0).max(y1 - y0) / 80.0);
+        let height = if self.sheet.eq_ignore_ascii_case("*Model_Space") {
+            paper.max((x1 - x0).max(y1 - y0) / 80.0)
+        } else {
+            paper
+        };
         // Beside the cloud's corner, clear of its arcs (they bulge about a quarter of their
         // length out).
         let at = [max_x + arc_len * 0.4 + height, max_y];

@@ -161,11 +161,12 @@ fn a_pick_inside_the_xref_names_it_and_the_entity_measures_in_world() {
     let sum = measure(
         &mut session,
         Command::AddMeasurement {
+            empty_item: false,
             kind: Kind::Length,
             value: None,
             unit: None,
             height: None,
-            points: Vec::new(),
+            points: Vec::new().into(),
             handles: vec![line, rect],
             chain: vec![insert],
             description: "Walls".to_string(),
@@ -510,7 +511,7 @@ fn embedding_never_writes_from_xref_handles_and_save_leaves_the_xref_alone() {
     let drawn = measure(
         &mut session,
         Command::MeasureDistance {
-            points: vec![[0.0, 0.0], [3.0, 4.0]],
+            points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
         },
     );
 
@@ -672,6 +673,8 @@ fn an_overlay_inside_an_xref_is_not_drawn_again() {
         .is_xref_overlay = true;
     write_drawing(&arch, &dir.path().join("plan-arch.dxf"));
     let mut host = CadDocument::new();
+    // In the sample's units (metres), so its arcs are drawn as finely as on their own.
+    host.header.insertion_units = 6;
     host.add_entity(line_on("A-WALL", [0.0, -10.0], [5.0, -10.0]))
         .unwrap();
     add_xref(
@@ -710,6 +713,8 @@ fn a_nested_xref_missing_beside_the_host_loads_from_its_own_drawings_folder() {
     write_drawing(&arch, &arch_dir.join("plan-arch.dxf"));
 
     let mut host = CadDocument::new();
+    // In the sample's units (metres), so its arcs are drawn as finely as on their own.
+    host.header.insertion_units = 6;
     host.add_entity(line_on("A-WALL", [0.0, -10.0], [5.0, -10.0]))
         .unwrap();
     // The host's block table also carries the nested xref, as saved drawings do.

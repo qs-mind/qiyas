@@ -1,5 +1,7 @@
 import { memo, useMemo, useRef, useState } from "react";
-import type { Boq, BoqItem, Measurement } from "../api";
+import { Explain } from "./Explain";
+import { GeneratedBoq } from "./GeneratedBoq";
+import type { MeasurementReport, Boq, BoqItem, Measurement } from "../api";
 import { useT } from "../i18n";
 import { DataGrid, type GridColumn } from "../ui/DataGrid";
 import {
@@ -15,6 +17,8 @@ import {
 
 type Props = {
   boq: Boq | null;
+  generated?: MeasurementReport | null;
+  onShowGenerated?(handles: number[], sheet: string): void;
   /** The take-off, for the measured quantities. */
   takeoff: Measurement[];
   selectedCode: string | null;
@@ -51,6 +55,8 @@ const lineSection = (l: Line) => l.item.section;
  *  (inside each section). Memoised: the app re-renders on every pointer move. */
 export const BoqPanel = memo(function BoqPanel({
   boq,
+  generated = null,
+  onShowGenerated,
   takeoff,
   selectedCode,
   onSelect,
@@ -73,16 +79,25 @@ export const BoqPanel = memo(function BoqPanel({
     setEditing(null);
   }
 
+  const quantities = useMemo(() => {
+    const derived = generated?.items ?? [];
+    const owned = new Set(derived.map((item) => item.code));
+    return [
+      ...takeoff.filter((row) => !owned.has(row.boq_code ?? "")),
+      ...derived.map((item) => ({ id: `generated:${item.code}`, boq_code: item.code, unit: item.unit, shown: item.quantity })),
+    ];
+  }, [takeoff, generated]);
+
   const lines = useMemo<Line[]>(
     () =>
       (boq?.items ?? [])
         .map((item, i) => ({ item, i }))
         .filter(({ item }) => matches(item, query))
         .map(({ item, i }) => {
-          const measured = measuredFor(item, takeoff);
+          const measured = measuredFor(item, quantities);
           return { item, i, measured, diff: difference(item, measured.sum) };
         }),
-    [boq, takeoff, query],
+    [boq, quantities, query],
   );
 
   /** What the measured cell says: the sum in the item's unit, then the sums in other units. */
@@ -218,6 +233,7 @@ export const BoqPanel = memo(function BoqPanel({
           <h2 className="heading">{t("boq")}</h2>
           {importButton}
         </div>
+        <GeneratedBoq report={generated} onShow={onShowGenerated} />
         <p className="empty">{t("boq.empty")}</p>
       </aside>
     );
@@ -232,6 +248,7 @@ export const BoqPanel = memo(function BoqPanel({
         </span>
         {importButton}
       </div>
+      <GeneratedBoq report={generated} onShow={onShowGenerated} />
       {boq.skipped_rows > 0 && (
         <p className="boq-notice" role="status">
           {t("boq.skipped", { n: boq.skipped_rows })}
@@ -255,6 +272,7 @@ export const BoqPanel = memo(function BoqPanel({
           rowKey={lineKey}
           section={lineSection}
           storageKey="boq"
+          actions={(l) => <Explain item={`boq-row:${l.i}`} />}
           // An item without a code can't be linked, so there is nothing to show for it.
           onRowClick={(l) => onSelect(l.item.code)}
           isDisabled={(l) => l.item.code === ""}

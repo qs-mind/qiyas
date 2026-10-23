@@ -8,8 +8,7 @@ const TOKEN = "0123456789abcdef0123456789abcdef";
 
 const settings: Settings = {
   provider: "anthropic",
-  model: "claude-opus-5-5",
-  base_url: null,
+  providers: { anthropic: { model: "claude-opus-5-5" }, openai_compatible: { model: "", base_url: null } },
   effort: "high",
   mcp_enabled: false,
   mcp_port: 48123,
@@ -27,6 +26,8 @@ const api = vi.hoisted(() => ({
   deleteApiKey: vi.fn(),
   appDir: vi.fn(),
   mcpStatus: vi.fn(),
+  aiModels: vi.fn(),
+  measurementMethods: vi.fn(),
 }));
 
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
@@ -55,6 +56,17 @@ function setup(hasKey = false) {
   api.setSettings.mockResolvedValue(undefined);
   api.setApiKey.mockResolvedValue(undefined);
   api.deleteApiKey.mockResolvedValue(undefined);
+  api.measurementMethods.mockResolvedValue([
+    { name: "local-test", title: "Local test rules", based_on: "", source_note: "Test only", rules_loaded: false },
+  ]);
+  api.aiModels.mockResolvedValue({
+    models: [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+    ],
+    from_service: true,
+    error: null,
+  });
   render(<SettingsDialog onClose={() => {}} />);
 }
 
@@ -62,7 +74,7 @@ test("settings dialog shows its fields; base URL only for OpenAI-compatible", as
   setup();
   const provider = (await screen.findByLabelText("Provider")) as HTMLSelectElement;
   expect(provider.value).toBe("anthropic");
-  expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("claude-opus-5-5");
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("claude-opus-5-5");
   expect((screen.getByLabelText("Effort") as HTMLSelectElement).value).toBe("high");
   expect((screen.getByLabelText("API key") as HTMLInputElement).type).toBe("password");
   expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe("48123");
@@ -80,6 +92,49 @@ test("a saved key shows the badge and can be removed", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
   expect(api.deleteApiKey).toHaveBeenCalledWith("anthropic");
   await vi.waitFor(() => expect(screen.queryByText("Saved")).toBeNull());
+});
+
+test("switching providers keeps each profile and never transfers a typed key", async () => {
+  setup();
+  const provider = await screen.findByLabelText("Provider");
+  // The select mounts with only the saved model while the provider list is loading.
+  await screen.findByRole("option", { name: "Claude Sonnet 5.5 — claude-sonnet-5-5" });
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "claude-sonnet-5-5" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "typed-for-anthropic" } });
+  fireEvent.change(provider, { target: { value: "openai_compatible" } });
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("");
+  expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+  fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://example.test/v1" } });
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "\u0000other" } });
+  fireEvent.change(screen.getByLabelText("Model id"), { target: { value: "google:gemini@3.8-flash" } });
+  fireEvent.change(provider, { target: { value: "anthropic" } });
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("claude-sonnet-5-5");
+  fireEvent.change(provider, { target: { value: "openai_compatible" } });
+  expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("https://example.test/v1");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({
+    ...settings,
+    provider: "openai_compatible",
+    providers: {
+      anthropic: { model: "claude-sonnet-5-5" },
+      openai_compatible: { model: "google:gemini@3.8-flash", base_url: "https://example.test/v1" },
+    },
+  }));
+  expect(api.setApiKey).not.toHaveBeenCalled();
+});
+
+test("approval and measurement settings keep the selected values on save", async () => {
+  setup();
+  const autonomy = await screen.findByLabelText("Plan approval");
+  expect((autonomy as HTMLSelectElement).value).toBe("autonomous");
+  await screen.findByRole("option", { name: "Local test rules" });
+  expect((screen.getByLabelText("Method of measurement") as HTMLSelectElement).value).toBe("");
+  fireEvent.change(autonomy, { target: { value: "per_phase" } });
+  fireEvent.change(screen.getByLabelText("Method of measurement"), { target: { value: "local-test" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({
+    ...settings, autonomy: "per_phase", measurement_method: "local-test",
+  }));
 });
 
 test("save sends the settings and a new key, never reading a key back", async () => {

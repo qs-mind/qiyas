@@ -10,6 +10,7 @@ use opencadcodec::entities::{CellStyle, Dimension, EntityCommon};
 use opencadcodec::types::Transform;
 use opencadcodec::{EntityType, Handle, LineWeight, Vector3};
 use qiyas_geom::{dimscale, object_to_world, set_dimtxt, DimLook};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,7 +30,7 @@ use crate::{CoreError, Session, Target};
 /// and `insert_rotation` (degrees) of a block reference, its attributes following; `dim_style` a dimension style of
 /// the drawing; `viewport_scale` (above 0) and `viewport_centre` (`[x, y]` in model space) of a
 /// paper-space viewport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityProp {
     Layer,
@@ -54,7 +55,7 @@ pub enum EntityProp {
 
 /// What `Command::MatchProperties` copies. Text style and height go text to text, dimension
 /// style dimension to dimension, hatch pattern hatch to hatch; the rest to anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchProp {
     Layer,

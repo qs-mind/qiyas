@@ -4,11 +4,14 @@ import { EMPTY, reduce, startNewOffered, undoableCard, type Action, type Transcr
 
 const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
 
-const call = (id: string, name = "measure_area", mutating = true): AgentEvent => ({
+const call = (id: string, label = "measure_area", mutating = true): AgentEvent => ({
   type: "tool_call",
   id,
-  name,
-  input: { handle: 7 },
+  name: mutating ? "qiyas_execute" : "qiyas_read",
+  label,
+  input: mutating
+    ? { op: "run", args: JSON.stringify({ command: { type: label, handle: 7 } }) }
+    : { op: label, args: "{}" },
   mutating,
 });
 
@@ -34,6 +37,34 @@ test("items keep the order they arrive in", () => {
   expect(t.items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
 });
 
+test("plan updates stay above the answer and earlier turns keep their checklist", () => {
+  const pending = { id: "walls", title: "Draw walls", status: "pending" as const };
+  const active = { ...pending, status: "active" as const };
+  const done = { ...pending, status: "done" as const };
+  const first = run([
+    { type: "user", text: "Draw the plan" },
+    { type: "text", text: "First I will check the sizes." },
+    { type: "plan", phases: [pending] },
+    { type: "plan", phases: [active] },
+    { type: "text", text: " Then draw." },
+    { type: "plan", phases: [done] },
+    { type: "done", usage: {} },
+  ]);
+  expect(first.items).toEqual([
+    { kind: "user", text: "Draw the plan" },
+    { kind: "plan", phases: [done] },
+    { kind: "assistant", text: "First I will check the sizes. Then draw.", finished: true },
+  ]);
+  const second = run([
+    { type: "user", text: "Now add labels" },
+    { type: "plan", phases: [{ id: "labels", title: "Room labels", status: "active" }] },
+  ], first);
+  expect(second.items.filter((item) => item.kind === "plan")).toHaveLength(2);
+  expect(second.items[1]).toEqual(first.items[1]);
+  expect(undoableCard(second)).toBeNull();
+  expect(run([{ type: "clear" }], second)).toEqual(EMPTY);
+});
+
 test("text deltas join into one streamed message that finishes at the next item", () => {
   const t = run([{ type: "text", text: "Hel" }, { type: "text", text: "lo " }, { type: "text", text: "there" }]);
   expect(t.items).toEqual([{ kind: "assistant", text: "Hello there", finished: false }]);
@@ -45,7 +76,9 @@ test("text deltas join into one streamed message that finishes at the next item"
 
 test("a tool card runs, then is done with its summary, handles and ui", () => {
   const running = run([call("a")]);
-  expect(running.items[0]).toMatchObject({ kind: "tool", id: "a", status: "running", mutating: true });
+  expect(running.items[0]).toMatchObject({
+    kind: "tool", id: "a", name: "qiyas_execute", label: "measure_area", status: "running", mutating: true,
+  });
   const ui = { action: "zoom", bounds: [[0, 0], [1, 1]] as [[number, number], [number, number]] };
   const done = run([result("a", { ui })], running);
   expect(done.items[0]).toMatchObject({
@@ -59,7 +92,7 @@ test("a tool card runs, then is done with its summary, handles and ui", () => {
 
 test("a failed tool shows as an error, and the right card of several is updated", () => {
   const t = run([
-    call("a", "list_layers", false),
+    call("a", "records", false),
     call("b"),
     result("b", { is_error: true, summary: "Not closed", handles: [] }),
     result("a", { summary: "3 found", handles: [] }),
@@ -119,7 +152,7 @@ test("unsend takes back the last user message only", () => {
 });
 
 test("the undoable card is the newest change not undone; a stale undo is kept on the card", () => {
-  const t = run([call("a"), result("a"), call("b", "list_layers", false), result("b"), call("c"), result("c")]);
+  const t = run([call("a"), result("a"), call("b", "records", false), result("b"), call("c"), result("c")]);
   expect(undoableCard(t)?.id).toBe("c");
   const afterUndo = run([{ type: "undone", id: "c" }], t);
   expect(undoableCard(afterUndo)?.id).toBe("a");
@@ -127,4 +160,37 @@ test("the undoable card is the newest change not undone; a stale undo is kept on
   const stale = run([{ type: "undo_stale", id: "c" }], t);
   expect(stale.items.at(-1)).toMatchObject({ id: "c", stale: true, undone: false });
   expect(undoableCard(run([call("d"), result("d", { is_error: true })], t))?.id).toBe("c");
+});
+
+test("saved events replay through the live reducer and leave old Undo steps finished", async () => {
+  const { replay } = await import("./messages");
+  const entries: import("../api").TranscriptEntry[] = [
+    { type: "user", text: "Measure this", pointed: ["Selection · 1"], images: ["[picture removed]"] },
+    ...[
+      { type: "thinking", text: "Read first" },
+      { type: "plan", phases: [{ id: "measure", title: "Measure", status: "active" }] },
+      call("saved"), result("saved"),
+      { type: "text", text: "Measured " }, { type: "text", text: "12 m2." },
+      { type: "done", usage: {} },
+    ].map((event) => ({ type: "event" as const, event: event as AgentEvent })),
+  ];
+  const live = run(entries.map((entry) => entry.type === "event" ? entry.event : entry));
+  const saved = replay(entries);
+  expect(saved.items).toEqual(live.items.map((item) => item.kind === "tool" ? { ...item, restored: true } : item));
+  expect(undoableCard(live)?.id).toBe("saved");
+  expect(undoableCard(saved)).toBeNull();
+});
+
+test("an approval event restores the current checklist and finishes streaming text", () => {
+  const phases = [{ id: "check", title: "Check", status: "pending" as const }];
+  const transcript = run([
+    { type: "user", text: "Draw" },
+    { type: "text", text: "Here is the plan." },
+    { type: "awaiting_approval", plan: { phases } },
+  ]);
+  expect(transcript.items).toEqual([
+    { kind: "user", text: "Draw" },
+    { kind: "plan", phases, awaitingApproval: true },
+    { kind: "assistant", text: "Here is the plan.", finished: true },
+  ]);
 });

@@ -12,6 +12,7 @@ use opencadcodec::entities::{AttachmentPoint, EntityCommon};
 use opencadcodec::xdata::{ExtendedDataRecord, XDataValue};
 use opencadcodec::{AppId, EntityType, Handle, MText, Text, Vector3};
 use qiyas_geom::LOGICAL_TEXT_APP;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::field::{cell_fields, has_fields, set_text_field, text_field};
@@ -22,7 +23,7 @@ use crate::{CoreError, Session, Target};
 /// Where find and replace looks: the sheet on screen, or every sheet of the drawing (model and
 /// the paper layouts). Never inside block definitions or xrefs; attributes of block references
 /// on those sheets are searched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TextScope {
     Sheet,
@@ -232,16 +233,6 @@ fn check_value(value: &str) -> Result<(), CoreError> {
     }
 }
 
-fn check_one_line(value: &str) -> Result<(), CoreError> {
-    check_value(value)?;
-    if value.contains(['\n', '\r']) {
-        return Err(invalid(
-            "A single-line text takes one line: use MText for more",
-        ));
-    }
-    Ok(())
-}
-
 impl Session {
     /// True when the drawing has no `LOGICAL_TEXT_APP` application yet: writing or editing a
     /// text adds it to the drawing's tables.
@@ -306,11 +297,27 @@ impl Session {
         style: Option<&str>,
     ) -> Result<u64, CoreError> {
         let at = check_point(at)?;
+        let height = if height == 0.0 {
+            self.default_text_height()
+        } else {
+            height
+        };
         check_height(height)?;
         if !rotation.is_finite() {
             return Err(invalid("The rotation must be a number"));
         }
-        check_one_line(&value)?;
+        let value = value.replace("\\n", "\n");
+        check_value(&value)?;
+        if value.contains(['\n', '\r']) {
+            // The top of the first line: one height up along the text's own rotation.
+            let (sin, cos) = rotation.to_radians().sin_cos();
+            let top = check_point([at.x - sin * height, at.y + cos * height])?;
+            let mut text = self.mtext_entity(top, 0.0, height, &value, style)?;
+            if let EntityType::MText(t) = &mut text {
+                t.rotation = rotation.to_radians();
+            }
+            return Ok(self.add_styled(vec![text])?[0]);
+        }
         let style = self.style_named(style)?;
         let (shown, field) = self.with_fields(value);
         let mut text = Text::with_value(shown, at).with_height(height);
@@ -318,7 +325,11 @@ impl Session {
         text.style = style;
         self.register_text_app();
         mark_logical(&mut text.common);
-        set_text_field(&mut text.common, field.as_deref());
+        set_text_field(
+            &mut text.common,
+            field.as_deref(),
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         Ok(self.add_styled(vec![EntityType::Text(text)])?[0])
     }
 
@@ -333,12 +344,18 @@ impl Session {
         style: Option<&str>,
     ) -> Result<u64, CoreError> {
         let at = check_point(at)?;
+        let height = if height == 0.0 {
+            self.default_text_height()
+        } else {
+            height
+        };
         check_height(height)?;
         if !(width >= 0.0 && width.is_finite()) {
             return Err(invalid("The width must be 0 or more"));
         }
-        check_value(value)?;
-        let text = self.mtext_entity(at, width, height, value, style)?;
+        let value = value.replace("\\n", "\n");
+        check_value(&value)?;
+        let text = self.mtext_entity(at, width, height, &value, style)?;
         Ok(self.add_styled(vec![text])?[0])
     }
 
@@ -359,7 +376,11 @@ impl Session {
         text.style = style;
         self.register_text_app();
         mark_logical(&mut text.common);
-        set_text_field(&mut text.common, field.as_deref());
+        set_text_field(
+            &mut text.common,
+            field.as_deref(),
+            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+        );
         Ok(EntityType::MText(text))
     }
 
@@ -371,15 +392,13 @@ impl Session {
         value: &str,
         tag: Option<&str>,
     ) -> Result<(), CoreError> {
+        let value = value.replace("\\n", "\n");
+        let value = value.as_str();
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
         let entity = self.drawing.doc.get_entity(h).expect("a sheet target");
         // Check first, so a refused edit changes nothing.
         let attribute = match (entity, tag) {
-            (EntityType::Text(_), None) => {
-                check_one_line(value)?;
-                None
-            }
-            (EntityType::MText(_), None) => {
+            (EntityType::Text(_) | EntityType::MText(_), None) => {
                 check_value(value)?;
                 None
             }
@@ -413,16 +432,33 @@ impl Session {
         } else {
             (value.to_string(), None)
         };
-        match self.drawing.doc.get_entity_mut(h).expect("a sheet target") {
+        let field_app = crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP);
+        let entity = self.drawing.doc.get_entity_mut(h).expect("a sheet target");
+        match entity {
+            EntityType::Text(t) if value.contains(['\n', '\r']) => {
+                let mut at = t.insertion_point;
+                at.y += t.height;
+                let mut text = MText::with_value(escape_mtext(&shown), at).with_height(t.height);
+                text.common = t.common.clone();
+                text.common.raw_record = None;
+                text.style.clone_from(&t.style);
+                text.rotation = t.rotation;
+                text.normal = t.normal;
+                text.attachment_point = AttachmentPoint::TopLeft;
+                text.rectangle_width = 0.0;
+                mark_logical(&mut text.common);
+                set_text_field(&mut text.common, field.as_deref(), field_app);
+                *entity = EntityType::MText(text);
+            }
             EntityType::Text(t) => {
                 t.value = shown;
                 mark_logical(&mut t.common);
-                set_text_field(&mut t.common, field.as_deref());
+                set_text_field(&mut t.common, field.as_deref(), field_app);
             }
             EntityType::MText(t) => {
                 t.value = escape_mtext(&shown);
                 mark_logical(&mut t.common);
-                set_text_field(&mut t.common, field.as_deref());
+                set_text_field(&mut t.common, field.as_deref(), field_app);
             }
             EntityType::Insert(insert) => {
                 let a = &mut insert.attributes[attribute.expect("checked above")];

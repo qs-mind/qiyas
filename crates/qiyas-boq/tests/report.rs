@@ -3,6 +3,7 @@ use qiyas_core::{Conflict, ConflictKind, ConflictStatus};
 
 fn conflict(id: &str, kind: ConflictKind, status: ConflictStatus) -> Conflict {
     Conflict {
+        query: None,
         id: id.to_string(),
         kind,
         boq_code: Some("A.1".to_string()),

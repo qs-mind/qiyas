@@ -5,37 +5,47 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import {
   aiCancel,
   aiClear,
+  aiResume,
   aiSend,
   aiSetLanguage,
   aiStatus,
   type AgentEvent,
+  type AiContext,
   type AiDone,
+  type AiImage,
   type AiStatus,
   type AiUi,
 } from "../api";
 import type { Lang } from "../i18n";
-import { EMPTY, reduce, type Transcript } from "./messages";
+import { EMPTY, reduce, type Attached, type Transcript } from "./messages";
+
+/** What goes with a message besides its words: what the user points at, the pictures they
+ *  attached, and how the transcript shows them. */
+export type SendExtras = { context?: AiContext; images?: AiImage[]; shown?: Attached };
 
 type Options = {
   lang: Lang;
-  /** A tool changed the take-off (`tool` is its name): refresh it and redraw. */
-  onMutated(tool: string): void;
+  /** A tool changed the drawing or take-off: refresh it and redraw. */
+  onMutated(label: string): void;
   /** A tool asks the window to show something (a sheet, a zoom, other layers). */
   onUi(ui: AiUi): void;
-  /** Sending failed for want of a key or an address: open the settings. */
+  /** Sending needs a key, service address or model: open the settings. */
   onNeedSettings(): void;
 };
 
 export type Assistant = {
   transcript: Transcript;
   busy: boolean;
-  /** "busy", "no_api_key", "no_base_url", or a message. */
+  /** "busy", "no_api_key", "no_base_url", "no_model", or a message. */
   error: string | null;
   status: AiStatus | null;
+  /** A finished turn or reset has updated the saved conversation index. */
+  savedVersion: number;
   /** Resolves false when the message was not sent (the composer keeps it). */
-  send(text: string): Promise<boolean>;
+  send(text: string, extras?: SendExtras): Promise<boolean>;
   cancel(): void;
   clear(): void;
+  resume(id: string): Promise<void>;
   markUndone(id: string): void;
   markUndoStale(id: string): void;
   refreshStatus(): void;
@@ -46,10 +56,11 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [savedVersion, setSavedVersion] = useState(0);
   // The listeners are set up once; they call the latest callbacks through this.
   const callbacks = useRef({ onMutated, onUi, onNeedSettings });
   callbacks.current = { onMutated, onUi, onNeedSettings };
-  /** The turn's tool calls that change the take-off: their names, by id. */
+  /** The turn's tool calls that change the drawing or take-off: their labels, by id. */
   const mutating = useRef(new Map<string, string>());
 
   const refreshStatus = useCallback(() => {
@@ -68,11 +79,14 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       });
     on<AgentEvent>("ai:event", (event) => {
       dispatch(event);
-      if (event.type === "tool_call" && event.mutating) mutating.current.set(event.id, event.name);
+      if (event.type === "tool_call" && event.mutating) {
+        mutating.current.set(event.id, event.label ?? event.name);
+      }
       if (event.type === "tool_result" && !event.is_error) {
         const tool = mutating.current.get(event.id);
-        if (tool) callbacks.current.onMutated(tool);
+        // Reserve a reveal before the mutation's redraw can fetch the changed drawing.
         if (event.ui) callbacks.current.onUi(event.ui);
+        if (tool) callbacks.current.onMutated(tool);
       }
     });
     on<AiDone>("ai:done", ({ error }) => {
@@ -81,10 +95,12 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       if (error) setError(error);
       mutating.current.clear();
       refreshStatus();
+      setSavedVersion((value) => value + 1);
     });
     on<null>("ai:cleared", () => {
       dispatch({ type: "clear" });
       setError(null);
+      setSavedVersion((value) => value + 1);
     });
     refreshStatus();
     return () => {
@@ -98,13 +114,13 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
     aiSetLanguage(lang).catch((e) => setError(String(e)));
   }, [lang]);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, extras: SendExtras = {}) => {
     setError(null);
     // Before the call: the turn's first events may arrive before it returns.
-    dispatch({ type: "user", text });
+    dispatch({ type: "user", text, ...extras.shown });
     setBusy(true);
     try {
-      await aiSend(text);
+      await aiSend(text, extras.context, extras.images, extras.shown?.pointed);
       return true;
     } catch (e) {
       const why = String(e);
@@ -112,7 +128,7 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
       // "busy" means a turn is still running; keep showing it as busy.
       if (why !== "busy") setBusy(false);
       setError(why);
-      if (why === "no_api_key" || why === "no_base_url") callbacks.current.onNeedSettings();
+      if (why === "no_api_key" || why === "no_base_url" || why === "no_model") callbacks.current.onNeedSettings();
       return false;
     }
   }, []);
@@ -130,9 +146,18 @@ export function useAssistant({ lang, onMutated, onUi, onNeedSettings }: Options)
   const markUndone = useCallback((id: string) => dispatch({ type: "undone", id }), []);
   const markUndoStale = useCallback((id: string) => dispatch({ type: "undo_stale", id }), []);
 
+  const resume = useCallback(async (id: string) => {
+    const saved = await aiResume(id);
+    dispatch({ type: "restore", entries: saved.transcript });
+    setBusy(false);
+    setError(null);
+    mutating.current.clear();
+    refreshStatus();
+  }, [refreshStatus]);
+
   // One object per change, so memoised panels skip the app's pointer-move renders.
   return useMemo(
-    () => ({ transcript, busy, error, status, send, cancel, clear, markUndone, markUndoStale, refreshStatus }),
-    [transcript, busy, error, status, send, cancel, clear, markUndone, markUndoStale, refreshStatus],
+    () => ({ transcript, busy, error, status, savedVersion, send, cancel, clear, resume, markUndone, markUndoStale, refreshStatus }),
+    [transcript, busy, error, status, savedVersion, send, cancel, clear, resume, markUndone, markUndoStale, refreshStatus],
   );
 }

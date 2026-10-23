@@ -193,7 +193,7 @@ fn a_table_needs_cells_and_sizes() {
         data,
     };
     assert!(s.run(bad(0, 2, 1.0, 1.0, vec![])).is_err());
-    assert!(s.run(bad(2, 2, 0.0, 1.0, vec![])).is_err());
+    assert!(s.run(bad(2, 2, -1.0, 1.0, vec![])).is_err());
     assert!(s.run(bad(2, 2, 1.0, -1.0, vec![])).is_err());
     assert!(s
         .run(bad(1, 1, 1.0, 1.0, vec![vec!["a".into(), "b".into()]]))
@@ -816,4 +816,44 @@ fn find_and_replace_leaves_fields_alone_and_says_so() {
     }
     assert_eq!(text_of(&s, text), "m2 12.000");
     assert_eq!(texts(&table(&s, h)), [["sqm note", "12.000 m2"]]);
+}
+
+/// A cell whose text wraps makes its row taller, as AutoCAD's tables do: a schedule's "Main
+/// Entrance Door" in a 2.4 m column once ran over the row under it. Short rows keep their height.
+#[test]
+fn a_row_grows_to_hold_its_wrapped_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("t.dwg"), 6);
+    let Outcome::Added { handles } = s
+        .run(Command::Table {
+            at: [0.0, 0.0],
+            rows: 2,
+            cols: 2,
+            col_width: 2.4,
+            row_height: 0.5,
+            data: vec![
+                vec![
+                    "D1".into(),
+                    "Main Entrance Door, solid oak, 1.20 x 2.20 m".into(),
+                ],
+                vec!["D2".into(), "Flush".into()],
+            ],
+        })
+        .unwrap()
+    else {
+        panic!("a table");
+    };
+    let Some(EntityType::Table(table)) = s.drawing.doc.get_entity(Handle::new(handles[0])) else {
+        panic!("a table");
+    };
+    assert!(
+        table.rows[0].height > 0.5 * 2.0,
+        "the long text's row: {}",
+        table.rows[0].height
+    );
+    assert!(
+        (table.rows[1].height - 0.5).abs() < 1e-9,
+        "a short row keeps 0.5: {}",
+        table.rows[1].height
+    );
 }

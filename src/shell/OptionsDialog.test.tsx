@@ -6,8 +6,7 @@ import { OptionsDialog } from "./OptionsDialog";
 
 const settings: Settings = {
   provider: "anthropic",
-  model: "claude-opus-5-5",
-  base_url: null,
+  providers: { anthropic: { model: "claude-opus-5-5" }, openai_compatible: { model: "", base_url: null } },
   effort: "high",
   mcp_enabled: false,
   mcp_port: 48123,

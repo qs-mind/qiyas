@@ -66,7 +66,7 @@ test("typing lists the matching commands; ↓ and Enter run one, Tab fills it in
   const { onAction, input, type, key } = setup();
   type("lay");
   const names = () => screen.getAllByRole("option").map((o) => o.firstChild?.textContent);
-  expect(names()).toEqual(["LAYALL", "LAYER", "LAYISO", "LAYOFF", "LAYON", "LAYSTATE", "LAYTRANS"]);
+  expect(names()).toEqual(["LAYALL", "LAYER", "LAYISO", "LAYOFF", "LAYON", "LAYSTATE", "LAYTRANS", "LAYUNISO"]);
   expect(input.getAttribute("aria-expanded")).toBe("true");
   key("ArrowDown");
   key("ArrowDown");

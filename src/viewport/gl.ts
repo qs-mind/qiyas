@@ -55,6 +55,9 @@ export type Renderer = {
   setInset(batch: Batch | null, views: PaperView[]): void;
   /** Draws the view with `look`'s colours (`palette`: the theme's, or the user's). */
   draw(camera: Camera, look: Palette): void;
+  /** The canvas's pixels as last drawn, rows from the bottom (WebGL's order). Call it in the same
+   *  task as `draw`: the browser clears the canvas once it has shown it. */
+  read(): { width: number; height: number; rgba: Uint8Array };
   dispose(): void;
 };
 
@@ -973,6 +976,13 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         thick(() => gl.drawArrays(gl.LINES, 0, relative.length / 2));
       }
       gl.bindVertexArray(null);
+    },
+
+    read() {
+      const { width, height } = canvas;
+      const rgba = new Uint8Array(width * height * 4);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+      return { width, height, rgba };
     },
 
     dispose() {

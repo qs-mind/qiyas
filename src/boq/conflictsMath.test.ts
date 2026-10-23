@@ -27,6 +27,9 @@ test("counts per kind list every kind; open counts only open ones", () => {
     schedule_vs_plan: 0,
     drawing_vs_drawing: 0,
     unit_doubt: 1,
+    duplicate_item: 0,
+    relation_mismatch: 0,
+    document_mismatch: 0,
   });
   expect(openCount(list)).toBe(2);
 });

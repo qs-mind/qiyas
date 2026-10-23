@@ -721,6 +721,18 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* The layer isolated (LAYISO) and the way back, under the panel's heading. */
+.layers-isolated {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--accent-soft);
+  border-radius: 4px;
+}
 .layers-head {
   display: flex;
   align-items: center;
@@ -2446,15 +2458,18 @@ span.grid-sort {
   gap: 6px;
   padding: 6px 8px 2px;
 }
-.model-badge {
-  padding: 0 6px;
-  font-size: 11px;
-  color: var(--muted);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.assistant-head .new-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.assistant-head .new-chat svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 /* The thread and the button that jumps to its end, over its bottom edge. */
 .assistant-thread {
@@ -2715,6 +2730,71 @@ span.grid-sort {
 }
 .composer-buttons button {
   border-color: var(--rule);
+}
+.composer-buttons button.icon svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* What goes with the next message to Mizan: the selection, a marked area, pictures. */
+.composer-chips,
+.msg-attached {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.msg-attached {
+  margin-block-end: 4px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding-block: 2px;
+  padding-inline: 8px 4px;
+  font-size: 12px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+.msg-attached .chip {
+  padding-inline-end: 8px;
+  background: var(--bg);
+}
+.chip-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-remove {
+  min-width: 0;
+  padding: 0 4px;
+  line-height: 1;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+.chip.picture {
+  padding: 2px;
+  border-radius: 6px;
+}
+.thumb {
+  display: block;
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.composer-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Read by screen readers only. */
@@ -3517,3 +3597,47 @@ span.grid-sort {
     opacity: 1;
   }
 }
+
+/* The AI model list in the settings: a filter for long lists, the list with its refresh button,
+   an id field for "Other…", and why the built-in list shows. */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.model-row {
+  display: flex;
+  gap: 4px;
+}
+.model-row select {
+  flex: 1;
+  min-width: 0;
+}
+.model-picker .note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.recognition-panel { padding: 12px; overflow: auto; }
+.recognition-panel article { border-block-end: 1px solid var(--border); padding-block: 12px; }
+.recognition-panel p { margin-block: 6px; overflow-wrap: anywhere; }
+.recognition-panel label { display: block; margin-block: 6px; }
+.recognition-panel label input:not([type="checkbox"]) { display: block; width: 100%; }
+.recognition-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.generated-boq { padding: 10px; overflow: auto; max-height: 55vh; border-bottom: 1px solid var(--border); }
+.generated-boq h3 { margin: 0 0 8px; }
+.generated-boq details { margin-block: 6px; }
+.generated-boq li { margin-block: 8px; overflow-wrap: anywhere; }
+.generated-boq button { margin: 3px; }
+
+.projects-panel { padding: var(--space-3, 12px); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.projects-panel form, .projects-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; }
+.projects-panel label { display: flex; flex-direction: column; gap: 4px; }
+.projects-list { list-style: none; margin: 0; padding: 0; }
+.projects-list li { padding-block: 8px; border-block-end: 1px solid var(--rule); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.projects-list li > bdi { flex: 1; overflow-wrap: anywhere; }
+.projects-list li p { width: 100%; margin: 0; }
+.projects-list button[aria-pressed="true"] { color: var(--accent); }
+.projects-panel p { overflow-wrap: anywhere; }

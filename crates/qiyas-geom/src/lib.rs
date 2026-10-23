@@ -8,6 +8,7 @@ mod path;
 mod shapes;
 mod table;
 mod transform;
+pub mod walls;
 
 pub use dimension::{
     clear_dimpost, dimension_entities, dimension_text, dimpost, dimscale, dimtxt, format_measure,
@@ -22,7 +23,11 @@ pub use flatten::{
     MAX_XREF_DEPTH,
 };
 pub use paint::{FlatFill, Paint};
-pub use path::Path;
+pub use path::{tol_near, Path, SAME_POINT};
 pub use shapes::{snap_shapes, SnapShape};
-pub use table::{merge_owners, table_block, table_cell_at, table_entities, table_xform};
+pub use table::{fit_rows, merge_owners, table_block, table_cell_at, table_entities, table_xform};
 pub use transform::Xform;
+
+#[cfg(test)]
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

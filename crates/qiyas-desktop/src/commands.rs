@@ -4,13 +4,14 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::{Arc, MutexGuard, PoisonError};
 
+use qiyas_ai::conversation::{Conversation, TranscriptEntry};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent, AgentLog};
 use qiyas_core::{
     Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, NamedView,
-    Outcome, Picked, Session, Snap, Source, Total,
+    Outcome, Picked, Reported, Session, Snap, Source, Total,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -33,6 +34,9 @@ pub(crate) fn with_session<R>(
     // A panic in an earlier command leaves the session as it was; keep using it.
     let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
     let session = guard.as_mut().ok_or("No drawing is open")?;
+    session
+        .automation_sheet
+        .get_or_insert_with(|| session.sheet.clone());
     f(session).map_err(|e| e.to_string())
 }
 
@@ -45,18 +49,42 @@ pub async fn open_drawing<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
     if let Some(id) = tabs::find_path(&state, Path::new(&path)) {
-        tabs::activate(&app, &state, id)?;
+        tabs::activate(&app, &state, id, false)?;
         remember_recent(&state, &path);
         return with_session(&state, |s| Ok(s.info()));
     }
     // Read the file before taking the lock, so a slow open doesn't block other commands.
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let info = session.info();
     // Stop a running turn first, so it can't run another tool on the new drawing.
     new_conversation(&app, &state);
-    tabs::add(&state, session);
+    tabs::add(&state, session)?;
     remember_recent(&state, &path);
-    Ok(info)
+    with_session(&state, |s| Ok(s.info()))
+}
+
+/// The header's INSUNITS for a new drawing's units: "m", "cm" or "mm".
+pub(crate) fn insunits_of(units: &str) -> Result<i16, String> {
+    match units {
+        "m" => Ok(6),
+        "cm" => Ok(5),
+        "mm" => Ok(4),
+        other => Err(format!("Units must be m, cm or mm, not {other}")),
+    }
+}
+
+/// A new, empty drawing in `units` ("m", "cm" or "mm") in a new tab, untitled until its first
+/// Save As (`tabs::untitled_path`); the assistant starts a new conversation about it. Not a
+/// recent drawing until it is saved.
+#[tauri::command]
+pub async fn new_drawing<R: Runtime>(
+    units: String,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<DrawingInfo, String> {
+    let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(&units)?);
+    new_conversation(&app, &state);
+    tabs::add(&state, session)?;
+    with_session(&state, |s| Ok(s.info()))
 }
 
 /// Puts `path` first in the recent list and writes the settings; a failed write is only logged.
@@ -139,6 +167,14 @@ pub async fn drawing_info(state: State<'_, AppState>) -> Result<DrawingInfo, Str
 #[tauri::command]
 pub async fn set_sheet(block: String, state: State<'_, AppState>) -> Result<(), String> {
     with_session(&state, |s| s.set_sheet(&block))
+}
+
+pub(crate) fn window_sheet_guard(state: &AppState) -> Result<MutexGuard<'_, AiRun>, String> {
+    let turn = ai_run(state);
+    if turn.busy() {
+        return Err("Mizan owns the sheet during its turn; wait until the turn finishes".into());
+    }
+    Ok(turn)
 }
 
 #[tauri::command]
@@ -278,6 +314,17 @@ pub async fn pick_window(
     })
 }
 
+/// The entities a selection polygon `points` (drawing coordinates) picks: wholly inside it, or
+/// with `crossing` touching it (see `Session::pick_polygon`).
+#[tauri::command]
+pub async fn pick_polygon(
+    points: Vec<[f64; 2]>,
+    crossing: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<Picked>, String> {
+    with_session(&state, |s| Ok(s.pick_polygon(&points, crossing)))
+}
+
 /// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;
 /// `from_x`, `from_y` is the previous point, for perpendicular snaps. None while snaps are off.
 #[tauri::command]
@@ -339,34 +386,34 @@ pub async fn table_cell_at(
 /// Runs one command on the command bus; see `qiyas_core::Command`. A paste without text takes
 /// the system clipboard's; a copy's text goes onto the system clipboard (and comes back empty).
 #[tauri::command]
-pub async fn run_command(mut cmd: Command, state: State<'_, AppState>) -> Result<Outcome, String> {
-    if let Command::PasteFromClipboard {
-        text: text @ None, ..
-    } = &mut cmd
-    {
-        *text = Some(files::clipboard_text(&state)?);
+pub async fn run_command(
+    mut cmd: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<Reported, String> {
+    let parsed = qiyas_core::registry::parse_command(cmd.clone())?;
+    if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
+        cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
     }
-    match with_session(&state, |s| s.run(cmd))? {
-        Outcome::Clipboard { text, count } => {
-            files::set_clipboard_text(&state, &text)?;
-            Ok(Outcome::Clipboard {
-                text: String::new(),
-                count,
-            })
-        }
-        outcome => Ok(outcome),
+    let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
+    qiyas_boq::deliverables::complete(&outcome.outcome)?;
+    if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
+        files::set_clipboard_text(&state, text)?;
+        text.clear();
     }
+    Ok(outcome)
 }
 
 /// Undoes the last take-off change; false when there was none.
 #[tauri::command]
 pub async fn undo(state: State<'_, AppState>) -> Result<bool, String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.undo()))
 }
 
 /// Redoes the last undone take-off change; false when there was none.
 #[tauri::command]
 pub async fn redo(state: State<'_, AppState>) -> Result<bool, String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.redo()))
 }
 
@@ -398,6 +445,7 @@ pub async fn save_drawing(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result<(), String> {
     with_session(&state, |s| s.save_as(Path::new(&path)))?;
+    ai_run(&state).drawing_saved_as(Path::new(&path).to_path_buf());
     remember_recent(&state, &path);
     Ok(())
 }
@@ -406,14 +454,28 @@ pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result
 #[tauri::command]
 pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<(), String> {
     // Copy the take-off out, so writing the file doesn't hold the lock.
-    let (items, totals, title) = with_session(&state, |s| {
+    let (items, totals, title, report, queries) = with_session(&state, |s| {
         let title = match s.drawing.path.file_name() {
             Some(name) => format!("{} take-off", name.to_string_lossy()),
             None => "Take-off".to_string(),
         };
-        Ok((s.takeoff.items.clone(), s.takeoff.totals(), title))
+        Ok((
+            s.takeoff.items.clone(),
+            s.takeoff.totals(),
+            title,
+            s.measurement_report()?,
+            s.conflicts.clone(),
+        ))
     })?;
-    qiyas_boq::export_takeoff(Path::new(&path), &items, &totals, &title).map_err(|e| e.to_string())
+    qiyas_boq::export_takeoff_with_queries(
+        Path::new(&path),
+        &items,
+        &totals,
+        &title,
+        &report,
+        &queries,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Writes a table of extracted data (`Command::ExtractData`) to an Excel workbook at `path`, one
@@ -443,6 +505,26 @@ pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq,
 #[tauri::command]
 pub async fn boq(state: State<'_, AppState>) -> Result<Option<Boq>, String> {
     with_session(&state, |s| Ok(s.boq.clone()))
+}
+
+#[tauri::command]
+pub async fn explain_item(
+    item: String,
+    project: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if let Some(path) = project {
+        return qiyas_core::trust::explain_project(&path, &item).map_err(|e| e.to_string());
+    }
+    with_session(&state, |s| s.explain(&item))
+}
+
+/// The live generated BOQ and traceable dimension sheets, separate from the imported BOQ.
+#[tauri::command]
+pub async fn measurement_report(
+    state: State<'_, AppState>,
+) -> Result<qiyas_core::measurement::MeasurementReport, String> {
+    with_session(&state, |s| s.measurement_report())
 }
 
 /// Compares the BOQ and the take-off with the schedules and block counts of every sheet and keeps
@@ -512,8 +594,25 @@ pub async fn set_settings<R: Runtime>(
         settings.recents = cached.recents.clone();
         settings.tool_palette = cached.tool_palette.clone();
         settings.last_update_check = cached.last_update_check;
-        settings::save(&state.config_dir, &settings)
-            .map_err(|e| format!("The settings could not be saved: {e}"))?;
+        if cached.measurement_method != settings.measurement_method {
+            let method = crate::methods::load_at(
+                &crate::methods::qiyas_dir()?,
+                settings.measurement_method.as_deref(),
+            )?;
+            let mut active = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut parked = state.parked.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut sessions: Vec<_> = active
+                .iter_mut()
+                .chain(parked.iter_mut().map(|p| &mut p.session))
+                .collect();
+            crate::methods::apply_all(&mut sessions, method.as_ref(), || {
+                settings::save(&state.config_dir, &settings).map_err(qiyas_core::CoreError::from)
+            })
+            .map_err(|e| e.to_string())?;
+        } else {
+            settings::save(&state.config_dir, &settings)
+                .map_err(|e| format!("The settings could not be saved: {e}"))?;
+        }
         let changed = ai::answerer_changed(&cached, &settings);
         let mcp_changed = mcp::needs_restart(&cached, &settings);
         *cached = settings;
@@ -525,6 +624,7 @@ pub async fn set_settings<R: Runtime>(
     if mcp_changed {
         mcp::restart(&app);
     }
+    let _ = app.emit("measurement:changed", ());
     Ok(())
 }
 
@@ -535,6 +635,59 @@ async fn keychain<R: Send + 'static>(
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// The models the provider offers, for the settings' list: `provider` and `base_url` as chosen in
+/// the dialog (the saved ones when left out). The key is read from the keychain and never sent
+/// to the window. When the service can't be asked, the built-in list with why.
+#[tauri::command]
+pub async fn ai_models(
+    provider: Option<String>,
+    base_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<qiyas_ai::models::ModelList, String> {
+    use qiyas_ai::models::{model_list, ModelSource};
+    let settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let anthropic = match provider.as_deref() {
+        Some(p) => p == "anthropic",
+        None => settings.provider == settings::Provider::Anthropic,
+    };
+    let name = if anthropic {
+        settings::Provider::Anthropic.name()
+    } else {
+        settings::Provider::OpenaiCompatible.name()
+    };
+    let key = keychain(move || secrets::get_api_key(name))
+        .await
+        .ok()
+        .flatten();
+    if anthropic {
+        return Ok(model_list(ModelSource::Anthropic, key.as_deref()).await);
+    }
+    let base = if provider.is_some() {
+        base_url
+    } else {
+        base_url.or(settings.providers.openai_compatible.base_url)
+    }
+    .filter(|b| !b.trim().is_empty());
+    match base {
+        Some(base_url) => Ok(model_list(
+            ModelSource::OpenAiCompatible {
+                base_url: &base_url,
+            },
+            key.as_deref(),
+        )
+        .await),
+        None => Ok(qiyas_ai::models::ModelList {
+            models: Vec::new(),
+            from_service: false,
+            error: Some("no_base_url".into()),
+        }),
+    }
 }
 
 /// Stores the provider's API key in the OS keychain. The key never comes back to the window. The
@@ -589,11 +742,11 @@ pub async fn mcp_status(state: State<'_, AppState>) -> Result<McpStatus, String>
 
 // ---- The in-app assistant ----
 
-fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
+pub(crate) fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
     state.ai.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Forgets the assistant's conversation (cancelling a running turn) and tells the window, which
+/// Saves and resets the assistant's conversation (cancelling a running turn), then tells the window, which
 /// clears its transcript on `ai:cleared`.
 pub(crate) fn new_conversation<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     ai_run(state).new_conversation();
@@ -606,25 +759,54 @@ struct AiDone {
     error: Option<String>,
 }
 
-/// Sends `text` to the assistant and returns at once; the turn runs in the background and sends
-/// each `AgentEvent` as `ai:event`, then `ai:done`. Fails with "busy" while a turn runs, and with
-/// "no_api_key" or "no_base_url" when the settings can't reach a provider.
+/// Sends `text` to the assistant, with what the user points at (`context`: the selection, a
+/// marked region, the view) and the pictures they attached (`images`), and returns at once; the
+/// turn runs in the background and sends each `AgentEvent` as `ai:event`, then `ai:done`. Fails
+/// with "busy" while a turn runs, and with "no_api_key" or "no_base_url" when the settings can't
+/// reach a provider.
 #[tauri::command]
 pub async fn ai_send<R: Runtime>(
     text: String,
+    pointed: Option<Vec<String>>,
+    context: Option<qiyas_ai::TurnContext>,
+    images: Option<Vec<qiyas_ai::UserImage>>,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if text.trim().is_empty() {
+    let images = images.unwrap_or_default();
+    if text.trim().is_empty() && images.is_empty() {
         return Err("The message is empty".into());
     }
+    if images.len() > qiyas_ai::context::MAX_USER_IMAGES {
+        return Err(format!(
+            "At most {} pictures in one message",
+            qiyas_ai::context::MAX_USER_IMAGES
+        ));
+    }
+    if let Some(why) = images.iter().find_map(qiyas_ai::UserImage::refused) {
+        return Err(why);
+    }
+    let message = qiyas_ai::UserMessage {
+        text,
+        pointed: pointed.unwrap_or_default(),
+        context: context.unwrap_or_default(),
+        images,
+    };
     let (kept, generation) = ai_run(&state).reserve()?;
     // Gives the claim back on every way out before the turn starts, a panic included.
     let mut claim = Claim {
         state: &state,
         generation,
         armed: true,
+        kept: None,
     };
+    // Start this job on the sheet the user was viewing; later browsing is independent.
+    {
+        let mut session = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(session) = session.as_mut() {
+            session.automation_sheet = Some(session.sheet.clone());
+        }
+    }
     let language = ai_run(&state).language();
     let settings = state
         .settings
@@ -633,14 +815,17 @@ pub async fn ai_send<R: Runtime>(
         .clone();
     let mut agent = match kept {
         Some(agent) => agent,
-        None => new_agent(&state, &settings, language).await?,
+        // Its file tools run on the app's tabs.
+        None => new_agent(&state, &settings, language, None)
+            .await?
+            .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() })),
     };
     // Effort may have changed since the last message.
     agent.set_settings(ai::agent_settings(&settings, language));
     let turn = ai_run(&state).start(agent, generation);
     // `start` settles the claim either way.
     claim.armed = false;
-    tauri::async_runtime::spawn(supervise(app, turn?, text));
+    tauri::async_runtime::spawn(supervise(app, turn?, message));
     Ok(())
 }
 
@@ -649,27 +834,35 @@ struct Claim<'a> {
     state: &'a AppState,
     generation: u64,
     armed: bool,
+    kept: Option<Agent>,
 }
 
 impl Drop for Claim<'_> {
     fn drop(&mut self) {
         if self.armed {
-            ai_run(self.state).release(None, self.generation);
+            ai_run(self.state).release(self.kept.take(), self.generation);
         }
     }
 }
 
 /// A new agent for the settings' provider, with its key from the keychain (or the mock).
-async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Result<Agent, String> {
+async fn new_agent(
+    state: &AppState,
+    settings: &Settings,
+    language: Lang,
+    conversation: Option<Conversation>,
+) -> Result<Agent, String> {
     #[cfg(test)]
     let test_provider = ai_run(state).test_provider.clone();
     #[cfg(test)]
     if let Some(make) = test_provider {
-        return Ok(Agent::new(
-            make(),
-            state.session.clone(),
-            ai::agent_settings(settings, language),
-        ));
+        let settings = ai::agent_settings(settings, language);
+        return Ok(match conversation {
+            Some(conversation) => {
+                Agent::resume(conversation, make(), state.session.clone(), settings)
+            }
+            None => Agent::new(make(), state.session.clone(), settings),
+        });
     }
     let (provider, name) = match ai::mock_provider(&state.session) {
         Some(mock) => (mock, "mock"),
@@ -689,27 +882,35 @@ async fn new_agent(state: &AppState, settings: &Settings, language: Lang) -> Res
         "NEW CONVERSATION",
         &ai::conversation_entry(name, settings, language),
     );
-    Ok(Agent::new(
-        provider,
-        state.session.clone(),
-        ai::agent_settings(settings, language),
-    )
-    .with_log(log))
+    let settings = ai::agent_settings(settings, language);
+    let agent = match conversation {
+        Some(conversation) => {
+            Agent::resume(conversation, provider, state.session.clone(), settings)
+        }
+        None => Agent::new(provider, state.session.clone(), settings),
+    };
+    Ok(agent.with_log(log))
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current.
 /// Runs the turn on its own task and always ends it with `ai:done`: if the task panics, the
 /// conversation is dropped and the error is `CRASHED`.
-async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
+async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, message: qiyas_ai::UserMessage) {
     let generation = turn.generation;
-    let task = tauri::async_runtime::spawn(run_turn(app.clone(), turn, text));
+    let task = tauri::async_runtime::spawn(run_turn(app.clone(), turn, message));
     let error = match task.await {
         Ok((agent, result)) => {
             ai_run(&app.state::<AppState>()).finish(agent, generation);
             result.err().map(|e| e.to_string())
         }
         Err(_) => {
-            ai_run(&app.state::<AppState>()).crashed();
+            let state = app.state::<AppState>();
+            let mut run = ai_run(&state);
+            if run.generation() == generation {
+                run.crashed();
+            } else {
+                run.release(None, generation);
+            }
             Some(ai::CRASHED.to_string())
         }
     };
@@ -721,7 +922,7 @@ async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, text: String) {
 async fn run_turn<R: Runtime>(
     app: AppHandle<R>,
     turn: Turn,
-    text: String,
+    message: qiyas_ai::UserMessage,
 ) -> (Agent, Result<(), qiyas_ai::AiError>) {
     let Turn {
         mut agent,
@@ -730,15 +931,46 @@ async fn run_turn<R: Runtime>(
     } = turn;
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     let forward = async {
-        while let Some(event) = rx.recv().await {
+        let mut first = true;
+        let mut opening_saved = false;
+        let mut opening = tokio::time::interval(std::time::Duration::from_millis(25));
+        loop {
+            let event = tokio::select! {
+                event = rx.recv() => {
+                    let Some(event) = event else { break };
+                    event
+                }
+                _ = opening.tick(), if !opening_saved => {
+                    let state = app.state::<AppState>();
+                    let run = ai_run(&state);
+                    if run.generation() != generation {
+                        opening_saved = true;
+                    } else if run.conversation_id().is_some_and(|id| !id.is_empty()) {
+                        // The first request may wait on the network without emitting anything.
+                        // Keep its user message recoverable if the process exits at that point.
+                        run.save_logged();
+                        opening_saved = true;
+                    }
+                    continue;
+                }
+            };
             let state = app.state::<AppState>();
-            if ai_run(&state).generation() == generation {
+            let run = ai_run(&state);
+            if run.generation() == generation {
+                // Persist the opening message and each completed step, including during a long
+                // turn. Text deltas stay in the shared checkpoint until the next step or reset.
+                if first || !matches!(event, AgentEvent::Text { .. } | AgentEvent::Thinking { .. })
+                {
+                    run.save_logged();
+                    opening_saved = true;
+                }
+                first = false;
                 let _ = app.emit("ai:event", &event);
             }
         }
     };
     // The agent drops the sender when the turn ends, which ends `forward`.
-    let (result, ()) = tokio::join!(agent.run_turn(text, tx, cancel), forward);
+    let (result, ()) = tokio::join!(agent.run_turn_with(message, tx, cancel), forward);
     (agent, result)
 }
 
@@ -746,6 +978,7 @@ async fn run_turn<R: Runtime>(
 /// False when the user (or nothing) changed it since.
 #[tauri::command]
 pub async fn ai_undo(state: State<'_, AppState>) -> Result<bool, String> {
+    let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.undo_if(qiyas_core::Source::Ai)))
 }
 
@@ -763,6 +996,117 @@ pub async fn ai_clear<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     new_conversation(&app, &state);
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ConversationSummary {
+    #[serde(flatten)]
+    summary: crate::conversations::Summary,
+    drawing_exists: bool,
+}
+
+/// A small index only: conversation bodies are loaded when the user chooses Continue.
+#[tauri::command]
+pub async fn ai_conversations(
+    drawing: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ConversationSummary>, String> {
+    // Serialize store access with finish/reset/delete so the index cannot lose a concurrent save.
+    let _run = ai_run(&state);
+    crate::conversations::Store::new(&state.config_dir)
+        .list(drawing.as_deref().map(Path::new))
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(|summary| ConversationSummary {
+                    drawing_exists: summary.drawing.as_ref().is_some_and(|path| path.is_file()),
+                    summary,
+                })
+                .collect()
+        })
+}
+
+#[derive(Serialize)]
+pub struct ResumedConversation {
+    transcript: Vec<TranscriptEntry>,
+    drawing: Option<std::path::PathBuf>,
+}
+
+/// The window first activates or opens the drawing through the usual autosave-aware path.
+#[tauri::command]
+pub async fn ai_resume<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<ResumedConversation, String> {
+    let (kept, generation, language, conversation) = {
+        let mut run = ai_run(&state);
+        if run.busy() {
+            return Err("busy".into());
+        }
+        run.save()?;
+        let conversation = crate::conversations::Store::new(&state.config_dir).load(&id)?;
+        let (kept, generation) = run.reserve()?;
+        (kept, generation, run.language(), conversation)
+    };
+    let mut claim = Claim {
+        state: &state,
+        generation,
+        armed: true,
+        kept,
+    };
+    let response = ResumedConversation {
+        transcript: conversation.transcript.clone(),
+        drawing: conversation.drawing.clone(),
+    };
+    let settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let agent = new_agent(&state, &settings, language, Some(conversation))
+        .await?
+        .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() }));
+    let mut run = ai_run(&state);
+    if run.generation() != generation {
+        return Err(ai::RESTARTED.into());
+    }
+    run.new_conversation();
+    run.resume(agent);
+    claim.armed = false;
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn ai_delete_conversation<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut run = ai_run(&state);
+    if run.conversation_id().as_deref() == Some(&id) {
+        if run.busy() {
+            return Err("busy".into());
+        }
+        run.new_conversation();
+        let _ = app.emit("ai:cleared", ());
+    }
+    crate::conversations::Store::new(&state.config_dir).delete(&id)
+}
+
+#[tauri::command]
+pub async fn ai_delete_conversations<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut run = ai_run(&state);
+    if run.busy() {
+        return Err("busy".into());
+    }
+    run.new_conversation();
+    crate::conversations::Store::new(&state.config_dir).delete_all()?;
+    let _ = app.emit("ai:cleared", ());
     Ok(())
 }
 
@@ -832,7 +1176,11 @@ pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
             settings.provider.name()
         }
         .to_string(),
-        model: if mock { "mock".into() } else { settings.model },
+        model: if mock {
+            "mock".into()
+        } else {
+            settings.profile().model.clone()
+        },
         has_key,
         busy: run.busy(),
         message_count: run.message_count(),
@@ -854,12 +1202,105 @@ mod tests {
 
     use super::*;
 
+    /// Give the timeout its own clock, so blocked IPC or Tauri workers cannot stop it.
+    fn ai_test(name: &'static str, test: impl FnOnce() + Send + 'static) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(60),
+                    tauri::async_runtime::spawn_blocking(test),
+                )
+                .await
+                .unwrap_or_else(|_| panic!("{name} timed out after 60 seconds"))
+                .unwrap_or_else(|error| panic!("{name} failed: {error}"));
+            });
+    }
+
     struct Ipc {
         _dir: tempfile::TempDir,
         _app: App<MockRuntime>,
         webview: WebviewWindow<MockRuntime>,
         /// (event name, JSON payload) as the window would get them.
         events: Receiver<(String, Value)>,
+    }
+
+    #[test]
+    fn window_browsing_preserves_the_assistants_sheet() {
+        ai_test("window_browsing", || {
+            let ipc = Ipc::open();
+            let state = ipc._app.state::<AppState>();
+            let layout = with_session(&state, |s| {
+                Ok(s.info()
+                    .sheets
+                    .into_iter()
+                    .find(|s| !s.is_model)
+                    .unwrap()
+                    .block)
+            })
+            .unwrap();
+            let (agent, generation) = ai_run(&state).reserve().unwrap();
+            with_session(&state, |s| {
+                s.automation_sheet = Some(layout.clone());
+                Ok(())
+            })
+            .unwrap();
+            for (name, input) in [
+                ("set_sheet", json!({"block":"*Model_Space"})),
+                (
+                    "run_command",
+                    json!({"cmd":{"type":"set_sheet","block":"*Model_Space"}}),
+                ),
+                (
+                    "run_command",
+                    json!({"cmd":{"type":"batch","commands":[{"type":"set_sheet","block":"*Model_Space"}]}}),
+                ),
+            ] {
+                ipc.call(name, input).unwrap();
+            }
+            for name in ["undo", "redo", "ai_undo"] {
+                assert!(ipc.call(name, json!({})).is_err());
+            }
+            with_session(&state, |s| {
+                let before = s.history_steps().0.len();
+                let result = qiyas_ai::surface::run_session(
+                    s,
+                    "qiyas_execute",
+                    "run",
+                    &json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[10,0]}}),
+                    Source::Ai,
+                )
+                .unwrap();
+                let qiyas_ai::ToolOutput::Json(value) = result else {
+                    panic!("json")
+                };
+                assert_eq!(value["ui"]["sheet"], layout);
+                assert_eq!(s.sheet, "*Model_Space");
+                assert_eq!(s.automation_sheet.as_deref(), Some(layout.as_str()));
+                let handle = value["added"][0].as_u64().unwrap();
+                assert!(s
+                    .drawing
+                    .entities_in(&layout)
+                    .any(|e| e.common().handle.value() == handle));
+                assert_eq!(s.history_steps().0.len(), before + 1);
+                assert!(qiyas_ai::surface::run_session(
+                    s,
+                    "qiyas_execute",
+                    "run",
+                    &json!({"command":{"type":"set_sheet","block":"missing"}}),
+                    Source::Ai
+                )
+                .is_err());
+                assert_eq!(s.sheet, "*Model_Space");
+                Ok(())
+            })
+            .unwrap();
+            ipc.bytes("render_batch", json!({}));
+            ipc.bytes("sheet_batch", json!({"sheet":layout}));
+            ai_run(&state).release(agent, generation);
+        });
     }
 
     impl Ipc {
@@ -871,6 +1312,7 @@ mod tests {
             let app = mock_builder()
                 .invoke_handler(tauri::generate_handler![
                     open_drawing,
+                    new_drawing,
                     drawing_info,
                     recents,
                     clear_recents,
@@ -883,6 +1325,7 @@ mod tests {
                     takeoff,
                     run_command,
                     undo,
+                    redo,
                     boq,
                     compare,
                     conflicts,
@@ -891,6 +1334,10 @@ mod tests {
                     ai_send,
                     ai_cancel,
                     ai_clear,
+                    ai_conversations,
+                    ai_resume,
+                    ai_delete_conversation,
+                    ai_delete_conversations,
                     ai_status,
                     ai_log,
                     get_settings,
@@ -900,6 +1347,7 @@ mod tests {
                     get_drafting,
                     set_drafting,
                     render_batch,
+                    set_sheet,
                     crate::pdf::pdf_page_count,
                     crate::pdf::pdf_thumbnails,
                     crate::pdf::attach_pdf,
@@ -926,7 +1374,9 @@ mod tests {
                     crate::files::sheet_set_open,
                     crate::files::sheet_set_save,
                     crate::files::sheet_set_entry,
-                    crate::files::sheet_set_from_tabs
+                    crate::files::sheet_set_from_tabs,
+                    crate::projects::project_command,
+                    crate::projects::project_history
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
@@ -1080,6 +1530,76 @@ mod tests {
     }
 
     #[test]
+    fn project_ipc_runs_exports_and_preserves_undo_and_unsaved_members() {
+        const NAME: &str =
+            "commands::tests::project_ipc_runs_exports_and_preserves_undo_and_unsaved_members";
+        if std::env::var("QIYAS_PROJECT_IPC_CHILD").as_deref() != Ok(NAME) {
+            let home = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture"])
+                .env("QIYAS_PROJECT_IPC_CHILD", NAME)
+                .env("QIYAS_HOME", home.path())
+                .status()
+                .unwrap();
+            assert!(result.success());
+            return;
+        }
+        let ipc = Ipc::open();
+        let drawing = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+        let command = |value: Value| ipc.call("project_command", json!({"command":value}));
+        let created =
+            command(json!({"type":"project","kind":"create","name":"IPC project"})).unwrap();
+        let path = created["result"]["path"].clone();
+        assert!(path.is_string(), "{created}");
+        assert_eq!(created["result"]["active_project"], path);
+        command(json!({"type":"project","kind":"add_drawing","path":path,"drawing":drawing}))
+            .unwrap();
+        let listed = command(json!({"type":"project","kind":"list"})).unwrap();
+        assert_eq!(listed["result"]["projects"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["result"]["active_project"], path);
+        ipc.call(
+            "run_command",
+            json!({"cmd":{"type":"draw","kind":"line","a":[0,0],"b":[5,5]}}),
+        )
+        .unwrap();
+        let rejected = command(json!({"type":"project","kind":"run","path":path})).unwrap_err();
+        assert!(rejected.as_str().unwrap().contains("Save"), "{rejected}");
+        ipc.call("save_drawing", json!({})).unwrap();
+        let run = command(json!({"type":"project","kind":"run","path":path})).unwrap();
+        assert!(matches!(
+            run["result"]["set"]["project"]["drawings"][0]["status"].as_str(),
+            Some("ok" | "warning")
+        ));
+        assert!(std::path::Path::new(run["outputs"]["workbook"].as_str().unwrap()).is_file());
+        assert!(std::path::Path::new(run["outputs"]["morning_report"].as_str().unwrap()).is_file());
+        assert_eq!(
+            ipc.call("project_history", json!({"redo":false})).unwrap(),
+            true
+        );
+        let undone = command(json!({"type":"project","kind":"open","path":path})).unwrap();
+        assert!(undone["result"]["set"]["project"]["drawings"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            undone["result"]["set"]["drawings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            ipc.call("project_history", json!({"redo":true})).unwrap(),
+            true
+        );
+        let redone = command(json!({"type":"project","kind":"open","path":path})).unwrap();
+        assert_eq!(
+            redone["result"]["set"]["project"],
+            run["result"]["set"]["project"]
+        );
+    }
+
+    #[test]
     fn closing_without_saving_deletes_the_autosave() {
         let ipc = Ipc::open();
         let path = ipc.call("drawing_info", json!({})).unwrap()["path"]
@@ -1186,62 +1706,185 @@ mod tests {
 
     #[test]
     fn a_turn_streams_its_events_and_measures_on_the_session() {
-        let ipc = Ipc::open();
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
-            .unwrap();
-        assert_eq!(
-            ipc.call("ai_send", json!({ "text": "And again" })),
-            Err(json!("busy")),
-            "one turn at a time"
+        ai_test(
+            "a_turn_streams_its_events_and_measures_on_the_session",
+            || {
+                let ipc = Ipc::open();
+                ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                    .unwrap();
+                assert_eq!(
+                    ipc.call("ai_send", json!({ "text": "And again" })),
+                    Err(json!("busy")),
+                    "one turn at a time"
+                );
+                let (events, done) = ipc.turn();
+                assert_eq!(done, json!({ "error": null }));
+
+                let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+                let first_call = kinds.iter().position(|k| *k == "tool_call").unwrap();
+                assert!(kinds[..first_call].iter().all(|k| *k == "text"));
+                assert_eq!(kinds[first_call + 1], "tool_result");
+                assert_eq!(kinds.last(), Some(&"done"));
+                let call = &events[first_call];
+                assert_eq!(call["name"], "qiyas_execute");
+                assert_eq!(call["label"], "measure_entity");
+                assert_eq!(call["mutating"], true);
+                let result = &events[first_call + 1];
+                assert_eq!(result["is_error"], false, "{result}");
+                assert_eq!(result["handles"].as_array().unwrap().len(), 1);
+
+                let items = ipc.call("takeoff", json!({})).unwrap();
+                assert_eq!(items[0]["source"], "ai");
+
+                let status = ipc.call("ai_status", json!({})).unwrap();
+                assert_eq!(status["provider"], "mock");
+                assert_eq!(status["busy"], false);
+                assert_eq!(status["message_count"], 4);
+
+                ipc.call("ai_clear", json!({})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                let status = ipc.call("ai_status", json!({})).unwrap();
+                assert_eq!(status["message_count"], 0);
+            },
         );
-        let (events, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": null }));
-
-        let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
-        let first_call = kinds.iter().position(|k| *k == "tool_call").unwrap();
-        assert!(kinds[..first_call].iter().all(|k| *k == "text"));
-        assert_eq!(kinds[first_call + 1], "tool_result");
-        assert_eq!(kinds.last(), Some(&"done"));
-        let call = &events[first_call];
-        assert_eq!(call["name"], "measure_area");
-        assert_eq!(call["mutating"], true);
-        let result = &events[first_call + 1];
-        assert_eq!(result["is_error"], false, "{result}");
-        assert_eq!(result["handles"].as_array().unwrap().len(), 1);
-
-        let items = ipc.call("takeoff", json!({})).unwrap();
-        assert_eq!(items[0]["source"], "ai");
-
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["provider"], "mock");
-        assert_eq!(status["busy"], false);
-        assert_eq!(status["message_count"], 4);
-
-        ipc.call("ai_clear", json!({})).unwrap();
-        assert_eq!(ipc.next().0, "ai:cleared");
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["message_count"], 0);
     }
 
     #[test]
     fn the_agent_log_tells_the_turn() {
-        let ipc = Ipc::open();
-        assert_eq!(ipc.call("ai_log", json!({})).unwrap()["text"], "");
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+        ai_test("the_agent_log_tells_the_turn", || {
+            let ipc = Ipc::open();
+            assert_eq!(ipc.call("ai_log", json!({})).unwrap()["text"], "");
+            ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                .unwrap();
+            ipc.turn();
+            let log = ipc.call("ai_log", json!({})).unwrap();
+            assert!(log["path"].as_str().unwrap().ends_with("agent.log"));
+            let text = log["text"].as_str().unwrap();
+            for part in [
+                "NEW CONVERSATION\n    provider: mock",
+                "USER\n    Measure the wall",
+                "REQUEST 1",
+                "TOOL qiyas_execute (",
+                "DONE",
+            ] {
+                assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
+            }
+        });
+    }
+
+    #[test]
+    fn conversations_survive_clear_resume_and_deletion() {
+        ai_test("conversations_survive_clear_resume_and_deletion", || {
+            let ipc = Ipc::open();
+            let drawing = ipc.call("drawing_info", json!({})).unwrap()["path"].clone();
+            ipc.call(
+                "ai_send",
+                json!({ "text": "Measure the wall", "pointed": ["Selection · 2"] }),
+            )
             .unwrap();
-        ipc.turn();
-        let log = ipc.call("ai_log", json!({})).unwrap();
-        assert!(log["path"].as_str().unwrap().ends_with("agent.log"));
-        let text = log["text"].as_str().unwrap();
-        for part in [
-            "NEW CONVERSATION\n    provider: mock",
-            "USER\n    Measure the wall",
-            "REQUEST 1",
-            "TOOL measure_area (",
-            "DONE",
-        ] {
-            assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
-        }
+            let (live_events, done) = ipc.turn();
+            assert!(done["error"].is_null(), "{done}");
+            let list = ipc
+                .call("ai_conversations", json!({ "drawing": drawing }))
+                .unwrap();
+            assert_eq!(list.as_array().unwrap().len(), 1);
+            assert_eq!(list[0]["title"], "Measure the wall");
+            assert_eq!(list[0]["turns"], 1);
+            let id = list[0]["id"].clone();
+            // The reset must save before dropping the agent, even if the prior copy is gone.
+            let saved_file = ipc
+                ._dir
+                .path()
+                .join("config/conversations")
+                .join(format!("{}.json", id.as_str().unwrap()));
+            std::fs::remove_file(&saved_file).unwrap();
+            ipc.call("ai_clear", json!({})).unwrap();
+            assert_eq!(ipc.next().0, "ai:cleared");
+            assert!(saved_file.is_file());
+            let saved = ipc.call("ai_conversations", json!({})).unwrap();
+            assert_eq!(saved[0]["id"], id);
+            let resumed = ipc.call("ai_resume", json!({ "id": id })).unwrap();
+            assert_eq!(resumed["drawing"], drawing);
+            let transcript = resumed["transcript"].as_array().unwrap();
+            assert_eq!(transcript[0]["text"], "Measure the wall");
+            assert_eq!(transcript[0]["pointed"], json!(["Selection · 2"]));
+            assert!(transcript
+                .iter()
+                .any(|entry| entry["event"] == *live_events.last().unwrap()));
+            assert!(
+                ipc.call("ai_status", json!({})).unwrap()["message_count"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+            ipc.call("ai_delete_conversation", json!({ "id": id }))
+                .unwrap();
+            assert_eq!(ipc.next().0, "ai:cleared");
+            assert_eq!(ipc.call("ai_conversations", json!({})).unwrap(), json!([]));
+            ipc.call("ai_clear", json!({})).unwrap();
+            assert_eq!(ipc.next().0, "ai:cleared");
+            assert_eq!(
+                ipc.call("ai_conversations", json!({})).unwrap(),
+                json!([]),
+                "a deleted active chat must not return on reset"
+            );
+        });
+    }
+
+    #[test]
+    fn resume_is_refused_while_a_turn_is_reserved() {
+        ai_test("resume_is_refused_while_a_turn_is_reserved", || {
+            let ipc = Ipc::open();
+            let state = ipc.webview.state::<AppState>();
+            let (agent, generation) = ai_run(&state).reserve().unwrap();
+            assert_eq!(
+                ipc.call("ai_resume", json!({ "id": "missing" })),
+                Err(json!("busy"))
+            );
+            ai_run(&state).release(agent, generation);
+        });
+    }
+
+    #[test]
+    fn an_untitled_conversation_follows_save_as_before_another_turn() {
+        ai_test(
+            "an_untitled_conversation_follows_save_as_before_another_turn",
+            || {
+                let ipc = Ipc::open();
+                let untitled = ipc.call("new_drawing", json!({ "units": "m" })).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                ipc.call("ai_send", json!({ "text": "Hello" })).unwrap();
+                ipc.turn();
+                let list = ipc.call("ai_conversations", json!({})).unwrap();
+                let id = list[0]["id"].clone();
+                assert_eq!(list[0]["drawing"], untitled["path"]);
+                assert_eq!(
+                    ipc.call("ai_conversations", json!({ "drawing": untitled["path"] }))
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                let path = ipc._dir.path().join("named.dxf");
+                ipc.call("save_drawing_as", json!({ "path": path }))
+                    .unwrap();
+                let list = ipc
+                    .call("ai_conversations", json!({ "drawing": path }))
+                    .unwrap();
+                assert_eq!(list.as_array().unwrap().len(), 1);
+                assert_eq!(list[0]["id"], id);
+                ipc.call("ai_clear", json!({})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                assert_eq!(
+                    ipc.call("ai_resume", json!({ "id": id })).unwrap()["drawing"],
+                    json!(path)
+                );
+                ipc.call("ai_delete_conversations", json!({})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                assert_eq!(ipc.call("ai_conversations", json!({})).unwrap(), json!([]));
+            },
+        );
     }
 
     /// Panics in its first turn (counted across the providers it makes), then answers "ok".
@@ -1267,49 +1910,66 @@ mod tests {
 
     #[test]
     fn a_panicking_turn_ends_with_an_error_and_frees_the_assistant() {
-        let ipc = Ipc::open();
-        let calls = Arc::new(AtomicUsize::new(0));
-        {
-            let state = ipc.webview.state::<AppState>();
-            let calls = calls.clone();
-            ai_run(&state).test_provider =
-                Some(Arc::new(move || Box::new(PanicsFirst(calls.clone()))));
-        }
-        ipc.call("ai_send", json!({ "text": "Measure" })).unwrap();
-        let (_, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": "crashed" }));
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["busy"], false);
-        assert_eq!(status["message_count"], 0, "the conversation was dropped");
+        ai_test(
+            "a_panicking_turn_ends_with_an_error_and_frees_the_assistant",
+            || {
+                let ipc = Ipc::open();
+                let calls = Arc::new(AtomicUsize::new(0));
+                {
+                    let state = ipc.webview.state::<AppState>();
+                    let calls = calls.clone();
+                    ai_run(&state).test_provider =
+                        Some(Arc::new(move || Box::new(PanicsFirst(calls.clone()))));
+                }
+                ipc.call("ai_send", json!({ "text": "Measure" })).unwrap();
+                let (_, done) = ipc.turn();
+                assert_eq!(done, json!({ "error": "crashed" }));
+                let status = ipc.call("ai_status", json!({})).unwrap();
+                assert_eq!(status["busy"], false);
+                assert_eq!(status["message_count"], 0, "the conversation was dropped");
+                let saved = ipc.call("ai_conversations", json!({})).unwrap();
+                assert_eq!(
+                    saved.as_array().unwrap().len(),
+                    1,
+                    "the last checkpoint survives a panicking turn"
+                );
+                assert_eq!(saved[0]["title"], "Measure");
 
-        ipc.call("ai_send", json!({ "text": "Again" })).unwrap();
-        let (events, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": null }));
-        assert_eq!(events.last().unwrap()["type"], "done");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+                ipc.call("ai_send", json!({ "text": "Again" })).unwrap();
+                let (events, done) = ipc.turn();
+                assert_eq!(done, json!({ "error": null }));
+                assert_eq!(events.last().unwrap()["type"], "done");
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+            },
+        );
     }
 
     #[test]
     fn ai_undo_takes_back_only_the_assistants_newest_change() {
-        let ipc = Ipc::open();
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
-            .unwrap();
-        ipc.turn();
-        // The user measures after the assistant.
-        let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [1.0, 0.0]] });
-        ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
-        assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(false)));
-        assert_eq!(
-            ipc.call("takeoff", json!({}))
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            2
+        ai_test(
+            "ai_undo_takes_back_only_the_assistants_newest_change",
+            || {
+                let ipc = Ipc::open();
+                ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                    .unwrap();
+                ipc.turn();
+                // The user measures after the assistant.
+                let cmd = json!({ "type": "measure_distance", "points": [[0.0, 0.0], [1.0, 0.0]] });
+                ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+                assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(false)));
+                assert_eq!(
+                    ipc.call("takeoff", json!({}))
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    2
+                );
+                assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
+                assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
+                assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
+            },
         );
-        assert_eq!(ipc.call("undo", json!({})), Ok(json!(true)));
-        assert_eq!(ipc.call("ai_undo", json!({})), Ok(json!(true)));
-        assert_eq!(ipc.call("takeoff", json!({})), Ok(json!([])));
     }
 
     #[test]
@@ -1393,18 +2053,20 @@ mod tests {
 
     #[test]
     fn a_cancelled_turn_says_so_and_ends() {
-        let ipc = Ipc::open();
-        ipc.call("ai_send", json!({ "text": "Measure the wall" }))
-            .unwrap();
-        ipc.call("ai_cancel", json!({})).unwrap();
-        let (events, done) = ipc.turn();
-        assert_eq!(done, json!({ "error": null }));
-        assert_eq!(
-            events.last(),
-            Some(&json!({ "type": "stopped", "reason": "cancelled" }))
-        );
-        let status = ipc.call("ai_status", json!({})).unwrap();
-        assert_eq!(status["busy"], false);
+        ai_test("a_cancelled_turn_says_so_and_ends", || {
+            let ipc = Ipc::open();
+            ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                .unwrap();
+            ipc.call("ai_cancel", json!({})).unwrap();
+            let (events, done) = ipc.turn();
+            assert_eq!(done, json!({ "error": null }));
+            assert_eq!(
+                events.last(),
+                Some(&json!({ "type": "stopped", "reason": "cancelled" }))
+            );
+            let status = ipc.call("ai_status", json!({})).unwrap();
+            assert_eq!(status["busy"], false);
+        });
     }
 
     /// Calls `mcp_status` until `done` holds for it, for up to 5 s.

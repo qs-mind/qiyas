@@ -13,9 +13,11 @@ export const isPrimaryGroup = (g: RibbonGroup) => g.buttons.length > 0 && g.butt
  *  looked up from it in the alias table, so it is always one the command line really takes. A
  *  command with none (Select, Export conflicts, Views...) has no line. */
 export const COMMAND_LINE: Record<string, [name: string, option?: string]> = {
+  new: ["NEW"],
   open: ["OPEN"],
   save: ["SAVE"],
   saveAs: ["SAVEAS"],
+  ucsIcon: ["UCSICON"],
   undo: ["UNDO"],
   redo: ["REDO"],
   distance: ["DIST"],

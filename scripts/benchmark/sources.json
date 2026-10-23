@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "research": ".local/research/reports/QS benchmark sources and methods.md",
+  "checksum_note": "The report and its research notes publish no file checksums. Fetch resolves pinned Git blobs, Git LFS SHA-256 or Zenodo checksums from publisher metadata, verifies them, and records local SHA-256. No checksum is invented.",
+  "sources": [
+    {
+      "id": "buildingsmart-clinic",
+      "name": "Medical-Dental Clinic",
+      "license": "CC-BY-4.0",
+      "url": "https://github.com/buildingsmart-community/Community-Sample-Test-Files/tree/main/IFC%202.3.0.1%20(IFC%202x3)/Medical-Dental%20Clinic",
+      "repository": "buildingsmart-community/Community-Sample-Test-Files",
+      "directory": "IFC 2.3.0.1 (IFC 2x3)/Medical-Dental Clinic",
+      "attribution": "Original authors; buildingSMART International, Medical-Dental Clinic Test Files (2020). See the downloaded project README for the original credits.",
+      "sha256": null
+    },
+    {
+      "id": "buildingsmart-duplex",
+      "name": "Duplex Apartment",
+      "license": "CC-BY-4.0",
+      "url": "https://github.com/buildingsmart-community/Community-Sample-Test-Files/tree/main/IFC%202.3.0.1%20(IFC%202x3)/Duplex%20Apartment",
+      "repository": "buildingsmart-community/Community-Sample-Test-Files",
+      "directory": "IFC 2.3.0.1 (IFC 2x3)/Duplex Apartment",
+      "attribution": "BSI (2020), Duplex Apartment Test Files, buildingSMART International; originally hosted by NIBS. See the downloaded project README.",
+      "sha256": null
+    },
+    {
+      "id": "resplan",
+      "name": "ResPlan",
+      "license": "CC-BY-4.0",
+      "url": "https://github.com/m-agour/ResPlan",
+      "repository": "m-agour/ResPlan",
+      "attribution": "ResPlan dataset authors, ResPlan (2025), https://arxiv.org/abs/2508.14006v1. Data CC BY 4.0; repository code MIT.",
+      "sha256": null
+    },
+    {
+      "id": "swiss-dwellings",
+      "name": "Swiss Dwellings v1.0.0",
+      "license": "CC-BY-4.0",
+      "url": "https://zenodo.org/records/7070952",
+      "metadata_url": "https://zenodo.org/api/records/7070952",
+      "filename": "geometries.csv",
+      "attribution": "Archilyse, Swiss Dwellings v1.0.0 (2022), https://zenodo.org/records/7070952. Geometry truth describes the dataset; source-plan apartment areas may differ by up to 5% (median 1.2%).",
+      "sha256": null
+    }
+  ],
+  "restricted_candidates": [
+    {"id": "undp-gaza", "url": "https://procurement-notices.undp.org/view_notice.cfm?notice_id=69511", "status": "permission_required", "reason": "Personal non-commercial terms; do not download."},
+    {"id": "undp-rafah", "url": "https://procurement-notices.undp.org/view_notice.cfm?notice_id=8567", "status": "permission_required", "reason": "Personal non-commercial terms; do not download."},
+    {"id": "undp-school", "url": "https://procurement-notices.undp.org/view_file.cfm?doc_id=7530", "status": "permission_required", "reason": "Personal non-commercial terms; do not download."},
+    {"id": "tennessee-dot", "url": "https://www.tn.gov/tdot/tdot-construction-division/bid-lettings/2026-bid-lettings/november-6--2026-letting.html", "status": "permission_required", "reason": "Reuse terms unverified; do not download."},
+    {"id": "kenya-bwayi", "url": "https://ngcdf.go.ke/wp-content/uploads/2024/02/TENDER-DOCUMENT-St.-Pauls-Bwayi-Secondary-School-PDF.pdf", "status": "permission_required", "reason": "No licence stated; do not download."},
+    {"id": "schependomlaan", "url": "https://github.com/buildingsmart-community/Community-Sample-Test-Files/tree/main/IFC%202.3.0.1%20(IFC%202x3)/Schependomlaan", "status": "permission_required", "reason": "Academic-only project README conflicts with repository CC BY 4.0; do not download."},
+    {"id": "noncommercial-plan-datasets", "status": "excluded", "reason": "FloorPlanCAD, ArchCAD, CubiCasa5k and RPLAN have non-commercial or research-only terms; never fetched by this script."}
+  ]
+}

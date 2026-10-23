@@ -69,8 +69,8 @@ fn error(text: &str, dir: &Path, drawing: Option<&Path>) -> (usize, String) {
 
 fn points(action: &Action) -> &[[f64; 2]] {
     match action {
-        Action::Command(Command::MeasureDistance { points })
-        | Action::Command(Command::MeasureArea { points }) => points,
+        Action::Command(Command::MeasureDistance { points }) => points,
+        Action::Command(Command::MeasureArea { points }) => points,
         other => panic!("expected a measure, got {other:?}"),
     }
 }
@@ -153,6 +153,101 @@ fn a_relative_point_needs_a_point_before_it() {
     // The last point carries across commands.
     let script = parsed("DI 1,1 2,2\nDI @1,0 @0,1", dir.path(), None);
     assert_eq!(points(&script.steps[1].action), [[3.0, 2.0], [3.0, 3.0]]);
+}
+
+#[test]
+fn registry_words_share_points_with_the_legacy_grammar() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "DI 0,0 2,3\nL @١،٠ @٢<٩٠\nDI @1,0 @0,1\nPLINE 0,0 10,0 C",
+        dir.path(),
+        None,
+    );
+    let Action::Command(command) = &script.steps[1].action else {
+        panic!("a registry command");
+    };
+    let command = serde_json::to_value(command).unwrap();
+    assert_eq!(command["type"], "draw");
+    assert_eq!(command["kind"], "line");
+    assert_eq!(command["a"], serde_json::json!([3.0, 3.0]));
+    assert_eq!(command["b"], serde_json::json!([3.0, 5.0]));
+    assert_eq!(points(&script.steps[2].action), [[4.0, 5.0], [4.0, 6.0]]);
+    let Action::Command(command) = &script.steps[3].action else {
+        panic!("a polyline");
+    };
+    let command = serde_json::to_value(command).unwrap();
+    assert_eq!(command["kind"], "polyline");
+    assert_eq!(command["closed"], true);
+}
+
+#[test]
+fn json_and_typed_script_lines_keep_omissions_and_report_input_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+        dir.path(),
+        None,
+    );
+    for step in &script.steps {
+        assert!(step.input.as_ref().unwrap().get("height").is_none());
+        assert!(matches!(step.action, Action::Command(Command::Text { .. })));
+    }
+    assert_eq!(script.steps[0].input.as_ref().unwrap()["typo"], true);
+    let session = Session::new_blank(&dir.path().join("input-notes.dxf"), 6);
+    let run = script::run(&script, Some(session), &mut Stub::default()).unwrap();
+    assert!(run.steps[0].text.contains("/typo"), "{}", run.steps[0].text);
+    for step in run.steps {
+        assert!(step.text.contains("height=0.25 m"), "{}", step.text);
+        assert!(step.text.contains("rotation=0"), "{}", step.text);
+    }
+}
+
+#[test]
+fn registry_prompts_consume_following_lines_and_report_bad_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "LINE\n; first point\n١٫٥،٢\n@٣،٤\nCIRCLE\n0,0\n٢",
+        dir.path(),
+        None,
+    );
+    assert_eq!(
+        script.steps.iter().map(|s| s.line).collect::<Vec<_>>(),
+        [1, 5]
+    );
+    let Action::Command(command) = &script.steps[0].action else {
+        panic!("a line");
+    };
+    let command = serde_json::to_value(command).unwrap();
+    assert_eq!(command["a"], serde_json::json!([1.5, 2.0]));
+    assert_eq!(command["b"], serde_json::json!([4.5, 6.0]));
+    assert_eq!(error("LINE\n0,0\nbad", dir.path(), None).0, 3);
+    assert!(parse("COUNT DOOR\nLINE 0,0", dir.path(), None).is_err());
+}
+
+#[test]
+fn new_registry_words_work_without_script_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = parsed(
+        "NEWLAYER \"Typed layer\"\nRENAMELAYOUT \"Old sheet\" \"New sheet\"",
+        dir.path(),
+        None,
+    );
+    assert!(matches!(
+        &script.steps[0].action,
+        Action::Command(Command::NewLayer { name }) if name == "Typed layer"
+    ));
+    assert!(matches!(
+        &script.steps[1].action,
+        Action::Command(Command::RenameLayout { from, to })
+            if from == "Old sheet" && to == "New sheet"
+    ));
+    let script = parsed("WBLOCK DOOR blocks/door.dwg", dir.path(), None);
+    assert!(matches!(
+        &script.steps[0].action,
+        Action::Command(Command::WriteBlock { path, .. })
+            if Path::new(path) == dir.path().join("blocks/door.dwg")
+    ));
+    assert!(parse("WBLOCK DOOR ../outside.dwg", dir.path(), None).is_err());
 }
 
 #[test]
@@ -490,7 +585,7 @@ fn json_lines_follow_the_folder_rule_for_their_paths() {
         )
     };
     let script = parsed(&batch("door.dwg"), &scripts, Some(&drawing));
-    let Action::Command(Command::Batch { commands }) = &script.steps[0].action else {
+    let Action::Command(Command::Batch { commands, .. }) = &script.steps[0].action else {
         panic!("{:?}", script.steps[0].action)
     };
     let inner = serde_json::to_value(&commands[0]).unwrap();

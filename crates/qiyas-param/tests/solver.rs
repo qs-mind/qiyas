@@ -87,6 +87,7 @@ fn review_focus_4_a_rectangle_stays_a_rectangle_when_its_width_changes() {
     if let Constraint::Distance { value, .. } = &mut s.constraints[8] {
         *value = 6.0;
     }
+    let reference = performance::reference();
     let t = Instant::now();
     solve(&mut s, &[a]).unwrap();
     let took = t.elapsed();
@@ -97,7 +98,7 @@ fn review_focus_4_a_rectangle_stays_a_rectangle_when_its_width_changes() {
         "height {c:?}"
     );
     assert!(same(c[0], before[0]), "the pinned corner moved: {c:?}");
-    assert!(took.as_millis() < 50, "solved in {took:?}");
+    performance::assert_relative(took, reference, 0.125, "rectangle solve");
 }
 
 #[test]
@@ -300,3 +301,6 @@ fn corners_of(s: &Sketch, lines: &[usize]) -> Vec<[f64; 2]> {
         .map(|&l| s.points[s.line_ends(l).unwrap().0])
         .collect()
 }
+
+#[path = "../../../tests/support/performance.rs"]
+mod performance;

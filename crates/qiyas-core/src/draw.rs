@@ -17,15 +17,17 @@ use opencadcodec::{
 use opencadkernel::geom2d::{bounded_faces, Curve, Line as KernelLine, NurbsCurve, Tolerance};
 use qiyas_geom::{flatten, flatten_within, snap_shapes, Paint, Xform};
 use qiyas_render::layer_shown_with;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::session::{locate, Near, MEASURE_TOL};
+use crate::session::{locate, Near};
 use crate::{CoreError, Session};
 
 /// The drawing state new entities take: their layer, colour, linetype and lineweight. Saved in
 /// the project file; changing it is not an undo step (it is how the window draws, not the
 /// drawing).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct Current {
     /// A layer of the drawing itself (not an xref's), as the drawing spells it.
@@ -74,9 +76,10 @@ pub(crate) fn parse_color(text: &str) -> Option<Color> {
 
 /// A hatch's fill. Angles are degrees, counter-clockwise; scale multiplies the pattern's own
 /// sizes (millimetres, as in `acadiso.pat`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HatchPattern {
+    #[default]
     Solid,
     /// 45 degree lines 3.175 apart.
     Ansi31,
@@ -86,48 +89,62 @@ pub enum HatchPattern {
     /// `angle` degrees and scaled by `scale`.
     Custom {
         name: String,
+        /// Default: no additional rotation, in degrees.
+        #[serde(default)]
         angle: f64,
+        /// Default: the pattern's original millimetre sizes, multiplied by 1.
+        #[serde(default = "pattern_scale_default")]
         scale: f64,
     },
 }
 
 /// What `Command::Draw` adds, in drawing coordinates. Angles are degrees, counter-clockwise from
 /// +X. Each adds one entity (a trace one per segment); `Outcome::Added` lists their handles.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawSpec {
-    Line {
-        a: [f64; 2],
-        b: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "line", "a": [0, 0], "b": [5, 0]}))]
+    #[schemars(extend("x-words" = ["LINE", "L"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "a", "prompt": "First point"}, {"field": "b", "prompt": "Next point"}])))]
+    Line { a: [f64; 2], b: [f64; 2] },
     /// A lightweight polyline; `bulges` (one per point, or none for straight segments) bends the
     /// segment starting at each point (tan of a quarter of its included angle, positive
     /// counter-clockwise).
+    #[schemars(example = json!({"kind": "polyline", "points": [[0, 0], [6, 0], [6, 4], [0, 4]], "closed": true}))]
+    #[schemars(example = json!({"kind": "polyline", "points": [[0, 0], [4, 0], [4, 2]], "bulges": [0, 1, 0]}))]
+    #[schemars(extend("x-words" = ["PLINE", "PL"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point or [Close]", "close": "closed"}])))]
     Polyline {
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun,
         #[serde(default)]
         bulges: Vec<f64>,
         #[serde(default)]
         closed: bool,
     },
     /// A closed polyline with corners `a` and `b`.
-    Rectangle {
-        a: [f64; 2],
-        b: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "rectangle", "a": [0, 0], "b": [5, 4]}))]
+    #[schemars(extend("x-words" = ["RECTANG", "REC"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "a", "prompt": "First corner"}, {"field": "b", "prompt": "Other corner"}])))]
+    Rectangle { a: [f64; 2], b: [f64; 2] },
     /// A regular polygon (3 to 1024 sides) with a flat bottom edge: its corners on the circle of
     /// `radius` when `inscribed`, its sides touching it otherwise.
+    #[schemars(example = json!({"kind": "polygon", "centre": [0, 0], "sides": 6, "radius": 2, "inscribed": true}))]
+    #[schemars(extend("x-words" = ["POLYGON", "POL"]))]
+    #[schemars(extend("x-prompts" = json!(["sides", "centre", "radius", {"field": "inscribed", "default": true, "options": {"I": true, "C": false}, "prompt": "Inscribed or Circumscribed [I/C]"}])))]
     Polygon {
         centre: [f64; 2],
         sides: u32,
         radius: f64,
+        /// Conventional polygon construction: inscribed in its radius circle when omitted.
+        #[serde(default = "inscribed_default")]
         inscribed: bool,
     },
-    Circle {
-        centre: [f64; 2],
-        radius: f64,
-    },
+    #[schemars(example = json!({"kind": "circle", "centre": [2, 2], "radius": 0.5}))]
+    #[schemars(extend("x-words" = ["CIRCLE", "C"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "centre", "prompt": "Centre point"}, {"field": "radius", "prompt": "Radius"}])))]
+    Circle { centre: [f64; 2], radius: f64 },
     /// Counter-clockwise from `start` to `end` (degrees).
+    #[schemars(example = json!({"kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}))]
     Arc {
         centre: [f64; 2],
         radius: f64,
@@ -135,6 +152,9 @@ pub enum DrawSpec {
         end: f64,
     },
     /// The arc from `a` through `b` to `c`.
+    #[schemars(example = json!({"kind": "three_point_arc", "a": [0, 0], "b": [1, 1], "c": [2, 0]}))]
+    #[schemars(extend("x-words" = ["ARC", "A"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "a", "prompt": "Start point"}, {"field": "b", "prompt": "Second point"}, {"field": "c", "prompt": "End point"}])))]
     ThreePointArc {
         a: [f64; 2],
         b: [f64; 2],
@@ -142,86 +162,130 @@ pub enum DrawSpec {
     },
     /// A full ellipse: `major` is the major semi-axis (from the centre to its end), `ratio` the
     /// minor axis over the major (above 0, at most 1).
+    #[schemars(example = json!({"kind": "ellipse", "centre": [0, 0], "major": [3, 0], "ratio": 0.5}))]
+    #[schemars(extend("x-words" = ["ELLIPSE", "EL"]))]
+    #[schemars(extend("x-prompts" = json!(["centre", {"field": "major", "direction": true}, "ratio"])))]
     Ellipse {
         centre: [f64; 2],
         major: [f64; 2],
         ratio: f64,
     },
     /// The cubic through `fit_points` (2 or more).
-    Spline {
-        fit_points: Vec<[f64; 2]>,
-    },
-    Point {
-        p: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "spline", "fit_points": [[0, 0], [2, 1], [4, 0], [6, 1]]}))]
+    #[schemars(extend("x-words" = ["SPLINE", "SPL"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "fit_points", "min": 2, "prompt": "Next fit point"}])))]
+    Spline { fit_points: crate::PointRun },
+    #[schemars(example = json!({"kind": "point", "p": [3, 4]}))]
+    #[schemars(extend("x-words" = ["POINT", "PO"]))]
+    Point { p: [f64; 2] },
     /// A filled ring: `inner` and `outer` are diameters (`inner` 0 for a dot), as AutoCAD asks.
+    #[schemars(example = json!({"kind": "donut", "centre": [0, 0], "inner": 0.1, "outer": 0.2}))]
+    #[schemars(extend("x-words" = ["DONUT", "DO"]))]
+    #[schemars(extend("x-prompts" = json!(["inner", "outer", "centre"])))]
     Donut {
         centre: [f64; 2],
         inner: f64,
         outer: f64,
     },
     /// A half-infinite line from `origin` along `dir`.
-    Ray {
-        origin: [f64; 2],
-        dir: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "ray", "origin": [0, 0], "dir": [1, 1]}))]
+    #[schemars(extend("x-words" = ["RAY"]))]
+    #[schemars(extend("x-prompts" = json!(["origin", {"field": "dir", "relative_to": "origin", "prompt": "Through point"}])))]
+    Ray { origin: [f64; 2], dir: [f64; 2] },
     /// An infinite construction line through `origin` along `dir`.
     #[serde(rename = "xline")]
-    XLine {
-        origin: [f64; 2],
-        dir: [f64; 2],
-    },
+    #[schemars(example = json!({"kind": "xline", "origin": [0, 0], "dir": [0, 1]}))]
+    #[schemars(extend("x-words" = ["XLINE", "XL"]))]
+    #[schemars(extend("x-prompts" = json!(["origin", {"field": "dir", "relative_to": "origin", "prompt": "Through point"}])))]
+    XLine { origin: [f64; 2], dir: [f64; 2] },
     /// A revision cloud around the polygon `points`: arcs about `arc_len` long bulging outward.
     #[serde(rename = "revcloud")]
+    #[schemars(example = json!({"kind": "revcloud", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "arc_len": 0.5}))]
+    #[schemars(extend("x-words" = ["REVCLOUD"]))]
     RevCloud {
-        points: Vec<[f64; 2]>,
-        arc_len: f64,
+        points: crate::PointRun<true>,
+        /// Default: one thirty-second of the closed outline's length, in drawing units.
+        #[serde(default)]
+        arc_len: Option<f64>,
     },
     /// Covers the polygon `points` with the background colour.
-    Wipeout {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(example = json!({"kind": "wipeout", "points": [[0, 0], [2, 0], [2, 1], [0, 1]]}))]
+    #[schemars(extend("x-words" = ["WIPEOUT"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "prompt": "Next corner"}])))]
+    Wipeout { points: crate::PointRun<true> },
     /// A hatch inside the closed entities `boundary_handles` (on the sheet; islands inside the
     /// outer one stay empty) or inside the ring `points`: one of the two.
+    #[schemars(example = json!({"kind": "hatch", "boundary_handles": [1234], "pattern": "solid"}))]
+    #[schemars(example = json!({"kind": "hatch", "points": [[0, 0], [5, 0], [5, 4], [0, 4]], "pattern": {"custom": {"name": "ANSI31", "angle": 0, "scale": 25}}}))]
+    #[schemars(extend("x-words" = ["HATCH", "H"]))]
     Hatch {
         #[serde(default)]
         boundary_handles: Vec<u64>,
         #[serde(default)]
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun<true>,
         /// With `points`: islands inside the ring, left empty (as `Boundary::Ring` gives them).
+        /// A return-to-start vertex is dropped and each island is closed.
         #[serde(default)]
-        holes: Vec<Vec<[f64; 2]>>,
+        holes: Vec<crate::PointRun<true>>,
         /// With `points`: per ring (the ring first, then each island) the bulge of the edge from
         /// each point to the next, as `Boundary::Ring` gives them; missing ones are straight.
         #[serde(default)]
         bulges: Vec<Vec<f64>>,
+        /// Conventional fill when omitted: solid.
+        #[serde(default)]
         pattern: HatchPattern,
     },
     /// A filled triangle or quadrilateral (AutoCAD's SOLID), its corners in AutoCAD's order: the
     /// outline runs first, second, fourth, third.
     #[serde(rename = "solid2d")]
-    Solid2D {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(example = json!({"kind": "solid2d", "points": [[0, 0], [1, 0], [0, 1], [1, 1]]}))]
+    #[schemars(extend("x-words" = ["SOLID", "SO"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 3, "max": 4, "prompt": "Next corner"}])))]
+    Solid2D { points: crate::PointRun<true> },
     /// A wide line: one TRACE quad `width` wide per segment.
-    Trace {
-        points: Vec<[f64; 2]>,
-        width: f64,
-    },
+    #[schemars(example = json!({"kind": "trace", "points": [[0, 0], [5, 0]], "width": 0.2}))]
+    #[schemars(extend("x-words" = ["TRACE"]))]
+    #[schemars(extend("x-prompts" = json!(["width", {"field": "points", "min": 2, "prompt": "Next point"}])))]
+    Trace { points: crate::PointRun, width: f64 },
     /// A multiline in the drawing's multiline style `style` ("Standard" when left out), its
-    /// offsets times `scale` (1 when left out).
+    /// offsets times `scale` (20 mm converted to drawing units when left out).
     #[serde(rename = "mline")]
+    #[schemars(example = json!({"kind": "mline", "points": [[0, 0], [5, 0], [5, 4]]}))]
+    #[schemars(extend("x-words" = ["MLINE", "ML"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
     MLine {
-        points: Vec<[f64; 2]>,
+        points: crate::PointRun,
         #[serde(default)]
         style: Option<String>,
         #[serde(default)]
         scale: Option<f64>,
     },
     /// Freehand: an open polyline through `points`.
-    Sketch {
-        points: Vec<[f64; 2]>,
-    },
+    #[schemars(example = json!({"kind": "sketch", "points": [[0, 0], [0.2, 0.1], [0.4, 0.05]]}))]
+    #[schemars(extend("x-words" = ["SKETCH"]))]
+    #[schemars(extend("x-prompts" = json!([{"field": "points", "min": 2, "prompt": "Next point"}])))]
+    Sketch { points: crate::PointRun },
+}
+
+fn inscribed_default() -> bool {
+    true
+}
+
+fn pattern_scale_default() -> f64 {
+    1.0
+}
+
+pub(crate) fn default_cloud_arc_len(points: &[[f64; 2]]) -> f64 {
+    if points.is_empty() {
+        return 0.0;
+    }
+    (0..points.len())
+        .map(|index| {
+            let (a, b) = (points[index], points[(index + 1) % points.len()]);
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum::<f64>()
+        / 32.0
 }
 
 /// One line family of a hatch pattern as `acadiso.pat` writes it: angle (degrees), origin, the
@@ -498,7 +562,8 @@ impl Session {
     }
 
     /// The entities `spec` describes, unstyled and not yet in the drawing.
-    pub(crate) fn draw_entities(&self, spec: DrawSpec) -> Result<Vec<EntityType>, CoreError> {
+    pub(crate) fn draw_entities(&self, mut spec: DrawSpec) -> Result<Vec<EntityType>, CoreError> {
+        spec.normalize_runs(self.drawing.units);
         let one = |e: EntityType| Ok(vec![e]);
         match spec {
             DrawSpec::Line { a, b } => {
@@ -665,13 +730,15 @@ impl Session {
             }
             DrawSpec::RevCloud { points, arc_len } => {
                 check_ring(&points, "revision cloud")?;
+                let arc_len = arc_len.unwrap_or_else(|| default_cloud_arc_len(&points));
                 positive(arc_len, "arc length")?;
-                one(EntityType::LwPolyline(rev_cloud(points, arc_len)?))
+                one(EntityType::LwPolyline(rev_cloud(points.into(), arc_len)?))
             }
             DrawSpec::Wipeout { mut points } => {
                 check_ring(&points, "wipeout")?;
                 // A polygonal boundary is kept closed: the first point again at the end.
-                points.push(points[0]);
+                let first = points[0];
+                points.push(first);
                 let vertices: Vec<Vector2> =
                     points.iter().map(|p| Vector2::new(p[0], p[1])).collect();
                 one(EntityType::Wipeout(Wipeout::polygonal(&vertices, 0.0)))
@@ -744,7 +811,9 @@ impl Session {
                 if points.len() < 2 {
                     return Err(invalid("A multiline needs 2 points or more"));
                 }
-                let scale = positive(scale.unwrap_or(1.0), "scale")?;
+                // AutoCAD's CMLSCALE 20 in a millimetre drawing: 20 mm whatever the units.
+                let scale = scale.unwrap_or(0.02 / self.drawing.units.to_metres());
+                let scale = positive(scale, "scale")?;
                 one(EntityType::MLine(self.mline(
                     &points,
                     style.as_deref().unwrap_or("Standard"),
@@ -767,7 +836,7 @@ impl Session {
         &self,
         handles: &[u64],
         points: &[[f64; 2]],
-        holes: &[Vec<[f64; 2]>],
+        holes: &[crate::PointRun<true>],
         bulges: &[Vec<f64>],
         pattern: HatchPattern,
     ) -> Result<Hatch, CoreError> {
@@ -862,8 +931,13 @@ impl Session {
                 Some(path)
             }
             _ => {
-                let paths = flatten(&self.drawing.doc, entity, &Xform::identity(), MEASURE_TOL)
-                    .into_paths();
+                let paths = flatten(
+                    &self.drawing.doc,
+                    entity,
+                    &Xform::identity(),
+                    self.measure_tol(),
+                )
+                .into_paths();
                 let ring = paths
                     .into_iter()
                     .find(|p| p.closed && p.points.len() >= 3)?;
@@ -922,12 +996,21 @@ impl Session {
 
     /// `boundary_at` with at most `max` segments in the box looked at.
     pub fn boundary_at_most(&self, p: [f64; 2], start: f64, max: usize) -> Boundary {
+        self.boundary_in_at_most(&self.sheet, p, start, max)
+    }
+
+    /// `boundary_at` on a named sheet, without changing the sheet on screen.
+    pub(crate) fn boundary_at_in(&self, sheet: &str, p: [f64; 2], start: f64) -> Boundary {
+        self.boundary_in_at_most(sheet, p, start, BOUNDARY_SEGMENTS)
+    }
+
+    fn boundary_in_at_most(&self, sheet: &str, p: [f64; 2], start: f64, max: usize) -> Boundary {
         if !(p.iter().all(|v| v.is_finite()) && start > 0.0 && start.is_finite()) {
             return Boundary::None;
         }
         let mut radius = start;
         loop {
-            let Some(near) = self.segments_near(p, radius, max) else {
+            let Some(near) = self.segments_near_in(sheet, p, radius, max) else {
                 return Boundary::TooDense;
             };
             let lo = [p[0] - radius, p[1] - radius];
@@ -939,7 +1022,7 @@ impl Session {
                 return Boundary::TooDense;
             }
             if let Some(found) = region_around(&segments, p, radius, lo, hi) {
-                return with_bulges(found, &rounds);
+                return with_bulges(found, &rounds, self.measure_tol());
             }
             // The box held every segment there is: nothing further can close a region.
             if near.whole_sheet {
@@ -951,7 +1034,7 @@ impl Session {
 }
 
 impl Session {
-    /// The line work of `near`'s entities flattened again at `MEASURE_TOL` in drawing
+    /// The line work of `near`'s entities flattened again at the measuring tolerance (`measure_tol`) in drawing
     /// coordinates, as the sheet draws them (multiline elements, rays across the box, no texts,
     /// pattern lines or hidden layers): the segments reaching into the box `lo hi`, and the
     /// circles and arcs among the entities' true shapes. An entity inside an arrayed block
@@ -966,6 +1049,20 @@ impl Session {
         };
         let across = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
         for (i, (handle, chain)) in near.sources.iter().enumerate() {
+            // Retained geometry and its drawing parts describe an enclosure; neither may
+            // keep a deleted source edge closed during the next derivation.
+            if doc.get_entity(Handle::new(*handle)).is_some_and(|entity| {
+                crate::object_regions::retained_region(entity).is_some()
+                    || crate::room_objects::is_room_boundary(entity)
+                    || crate::xdata::read_json::<crate::objects::ObjectPart>(
+                        entity.common(),
+                        crate::objects::PART_APP,
+                    )
+                    .and_then(|part| doc.get_entity(Handle::new(part.owner)))
+                    .is_some_and(|owner| crate::object_regions::retained_region(owner).is_some())
+            }) {
+                continue;
+            }
             let arrayed = chain.iter().any(|&h| {
                 matches!(doc.get_entity(Handle::new(h)),
                     Some(EntityType::Insert(r)) if r.row_count > 1 || r.column_count > 1)
@@ -984,7 +1081,7 @@ impl Session {
                 &xrefs,
                 located.entity,
                 &located.xf,
-                MEASURE_TOL,
+                self.measure_tol(),
                 &mut budget,
             );
             for f in flat.paths {
@@ -1041,7 +1138,7 @@ impl Session {
                     _ => {}
                 }
             }
-            let shapes = snap_shapes(located.doc, located.entity, &located.xf, MEASURE_TOL);
+            let shapes = snap_shapes(located.doc, located.entity, &located.xf, self.measure_tol());
             for piece in shapes.iter().filter(|s| s.exact).flat_map(|s| &s.pieces) {
                 match piece {
                     Curve::Circle(c) => rounds.push(Round {
@@ -1074,13 +1171,13 @@ struct Round {
 
 /// `found` with each edge that is a chord of a drawn circle or arc turned back into that arc:
 /// its bulge (zero for a straight edge), per ring, the ring first.
-fn with_bulges(found: Boundary, rounds: &[Round]) -> Boundary {
+fn with_bulges(found: Boundary, rounds: &[Round], tol: f64) -> Boundary {
     let Boundary::Ring { ring, holes, .. } = found else {
         return found;
     };
-    // Chords are within `MEASURE_TOL` of their arc; points where a line crosses one sit on the
-    // chord, as far off the circle at most.
-    let near = 1.5 * MEASURE_TOL;
+    // Chords are within `tol` (the measuring tolerance) of their arc; points where a line crosses
+    // one sit on the chord, as far off the circle at most.
+    let near = 1.5 * tol;
     let bulge = |a: [f64; 2], b: [f64; 2]| -> f64 {
         for r in rounds {
             let on =

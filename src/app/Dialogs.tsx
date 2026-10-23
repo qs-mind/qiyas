@@ -2,7 +2,7 @@
  *  layers, blocks, dimensions, tables, fields, drafting, settings, About) and the file ones after
  *  the status bar (recovery, RECOVER's report, the sheet set manager). Each renders only while
  *  its hook says it is open, in the same place among the window's children as before. */
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../fileDialogs";
 import {
   blocks as readBlocks,
   calibrate,
@@ -26,8 +26,9 @@ import { useT } from "../i18n";
 import { About } from "../shell/About";
 import { AliasEditor } from "../shell/AliasEditor";
 import { AuditDialog } from "../shell/AuditDialog";
+import { NewDrawingDialog } from "../shell/NewDrawingDialog";
 import { AttachImageDialog, defaultImageWidth } from "../shell/AttachImageDialog";
-import { AttachPdfDialog, CalibrateDialog } from "../shell/AttachPdfDialog";
+import { AttachPdfDialog, CalibrateDialog, metresPerUnit } from "../shell/AttachPdfDialog";
 import { AttDefDialog, AttributeManager, AttributesDialog, CreateBlockDialog } from "../shell/BlockDialogs";
 import { BlockPalette } from "../shell/BlockPalette";
 import { CustomizeUi } from "../shell/CustomizeUi";
@@ -46,7 +47,6 @@ import { PlotDialog } from "../shell/PlotDialog";
 import { PlotStyleEditor } from "../shell/PlotStyleEditor";
 import { PurgeDialog } from "../shell/PurgeDialog";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
-import { laterOpens } from "../shell/recoveryQueue";
 import { ScriptResultDialog } from "../shell/ScriptResultDialog";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { SheetSetManager } from "../shell/SheetSetManager";
@@ -223,7 +223,7 @@ export function Dialogs({
       {attachImageOpen && info && (
         <AttachImageDialog
           units={info.units}
-          defaultWidth={defaultImageWidth(batch?.bounds ?? null)}
+          defaultWidth={defaultImageWidth(batch?.bounds ?? null, metresPerUnit(info.units))}
           picked={pickedInsert}
           picking={pending?.kind === "insert" && pending.of === "image"}
           chooseFile={async () => {
@@ -666,11 +666,10 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
   const t = useT();
   const {
     recovery,
-    setRecoveries,
     recoverFrom,
     discardFrom,
     openAnyway,
-    openPath,
+    dismissRecovery,
     recoverReport,
     setRecoverReport,
     scriptRun,
@@ -681,10 +680,14 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
     setSheetSetShown,
     sheetSetApi,
     openAll,
+    newOpen,
+    setNewOpen,
+    newDrawing,
   } = drawings;
 
   return (
     <>
+      {newOpen && <NewDrawingDialog onCreate={newDrawing} onClose={() => setNewOpen(false)} />}
       {recovery && (
         <RecoveryDialog
           key={recovery.id}
@@ -693,9 +696,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
           onDiscard={(drawing, copy) => discardFrom(recovery, drawing, copy)}
           onOpen={(drawing) => openAnyway(recovery, drawing)}
           onClose={() => {
-            const then = laterOpens(recovery);
-            setRecoveries((q) => q.filter((r) => r.id !== recovery.id));
-            if (then) openPath(then, false);
+            dismissRecovery(recovery);
           }}
         />
       )}

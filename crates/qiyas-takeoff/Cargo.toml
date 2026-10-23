@@ -8,3 +8,7 @@ rust-version.workspace = true
 [dependencies]
 qiyas-core = { path = "../qiyas-core" }
 time.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
