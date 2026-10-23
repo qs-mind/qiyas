@@ -319,6 +319,7 @@ test("named methods remain available without files and local choices have Arabic
     document.documentElement.lang = "en";
     document.documentElement.dir = "ltr";
   }
+});
 
 test("subscription choices never ask for an API key or fetch API models", async () => {
   setup();
