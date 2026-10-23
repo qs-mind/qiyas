@@ -13,6 +13,8 @@
 
 pub mod agent;
 pub mod anthropic;
+pub mod chatgpt_plan;
+pub mod claude_code;
 pub mod context;
 pub mod conversation;
 pub mod errors;

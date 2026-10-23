@@ -20,6 +20,16 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
+    /// A local agent owns its tool loop and must never be restarted automatically.
+    fn owns_turn(&self) -> bool {
+        false
+    }
+
+    fn set_host(&mut self, _host: std::sync::Arc<dyn crate::DrawingHost>) {}
+
+    /// Original user words, before drawing context is appended. Only these name allowed files.
+    fn begin_turn(&self, _user_text: &str) {}
+
     /// Current request/cost limits, supplied by a metered host without changing the system.
     fn budget_notice(&self) -> Option<String> {
         None
@@ -153,6 +163,8 @@ pub enum ResultPart {
 /// What arrives while a turn streams.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// A local agent has already performed this activity through Qiyas's MCP server.
+    Activity(Box<crate::AgentEvent>),
     /// The optional fields in an actual HTTP request, including retries after a refusal.
     RequestSent(String),
     /// A bounded wait, visible in the log and window. Failed partial text is discarded.
@@ -227,6 +239,12 @@ pub struct TurnResult {
 /// Errors from a provider. None of them ever holds the API key.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AiError {
+    /// A scrubbed eligibility/consent refusal from OpenAI, shown in its own words.
+    #[error("ChatGPT: {0}")]
+    ChatgptDenied(String),
+    /// A fixed translated subscription error. Never includes child stderr or credentials.
+    #[error("{0}")]
+    Subscription(&'static str),
     #[error("{service} has no model {model}: choose one in Settings")]
     ModelNotFound { service: String, model: String },
     #[error("The API key was refused. Check it in Settings.")]
@@ -286,6 +304,7 @@ impl AiError {
             AiError::Timeout(m) => AiError::Timeout(scrub(&m, secret)),
             AiError::Network(m) => AiError::Network(scrub(&m, secret)),
             AiError::Stream(m) => AiError::Stream(scrub(&m, secret)),
+            AiError::ChatgptDenied(m) => AiError::ChatgptDenied(scrub(&m, secret)),
             other => other,
         }
     }
@@ -395,7 +414,7 @@ pub(crate) async fn send_with_retry(
 }
 
 /// Keep the full scrubbed reply for classification; only the support log clips it.
-fn response_error(status: u16, answer: &str, body: &Value, secret: &str) -> AiError {
+pub(crate) fn response_error(status: u16, answer: &str, body: &Value, secret: &str) -> AiError {
     let answer = scrub(answer, secret);
     let error = AiError::Api {
         status,

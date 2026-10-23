@@ -41,6 +41,10 @@ export function uiError(error: unknown, lang: Lang = typeof document !== "undefi
   // Stable provider codes take precedence over the legacy diagnostic text patterns.
   try {
     const value = JSON.parse(raw);
+    // SIWC eligibility comes from OpenAI; its pages list different eligible plans.
+    if (value?.code === "ai.error.chatgpt_denied" && typeof value.message === "string") {
+      return value.message;
+    }
     if (typeof value?.code === "string" && value.code.startsWith("ai.error.") && value.code in en) {
       return translate(lang, value.code);
     }

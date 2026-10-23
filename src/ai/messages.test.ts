@@ -206,3 +206,9 @@ test("a retried stream removes the incomplete answer and keeps the completed too
     { kind: "assistant", text: "The complete answer", finished: false },
   ]);
 });
+
+
+test("local agent status stays a plain notice in the transcript", () => {
+  const state = reduce(EMPTY, { type: "provider_status", code: "ai.claudeConnected" });
+  expect(state.items).toEqual([{ kind: "provider_status", code: "ai.claudeConnected" }]);
+});

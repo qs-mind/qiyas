@@ -26,7 +26,7 @@ pub struct EvalAgentArgs {
     pub cases: Vec<String>,
     #[arg(long, value_parser = ["live-dev"])]
     pub set: Option<String>,
-    #[arg(long, default_value = "codex")]
+    #[arg(long, default_value = "codex", value_parser = agent_name)]
     pub agent: String,
     /// Shell template; placeholders are shell-quoted arguments, not raw shell fragments.
     #[arg(long)]
@@ -39,6 +39,16 @@ pub struct EvalAgentArgs {
     pub timeout_min: u32,
     #[arg(long, default_value = ".local/benchmark")]
     pub root: PathBuf,
+}
+
+const CLAUDE_EVAL_REFUSED: &str = "Claude subscriptions are for individual Mizan messages, not benchmarks or evaluations. Use ChatGPT, Codex or an API key for benchmarks.";
+
+fn agent_name(value: &str) -> Result<String, String> {
+    if value.eq_ignore_ascii_case("claude") {
+        Err(CLAUDE_EVAL_REFUSED.into())
+    } else {
+        Ok(value.into())
+    }
 }
 
 fn folder(root: &Path, prefix: &str) -> Result<PathBuf, String> {
@@ -54,6 +64,9 @@ fn folder(root: &Path, prefix: &str) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
+    if args.agent.eq_ignore_ascii_case("claude") {
+        return Err(CLAUDE_EVAL_REFUSED.into());
+    }
     if args.holdout && !args.i_understand_this_opens_the_holdout {
         return Err("The holdout is sealed. Opening it requires --i-understand-this-opens-the-holdout and is logged.".into());
     }
@@ -93,6 +106,33 @@ pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let combined = folder(&root, "eval-agent-set")?;
     run_cases(args, &root, &inputs, &combined)
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::*;
+
+    #[test]
+    fn claude_evaluation_is_refused_before_files_or_custom_commands() {
+        for name in ["claude", "CLAUDE", "Claude"] {
+            assert_eq!(agent_name(name).unwrap_err(), CLAUDE_EVAL_REFUSED);
+            let args = EvalAgentArgs {
+                holdout: true,
+                i_understand_this_opens_the_holdout: false,
+                case: None,
+                cases: Vec::new(),
+                set: None,
+                agent: name.into(),
+                agent_cmd: Some("must-never-execute".into()),
+                model: String::new(),
+                effort: String::new(),
+                timeout_min: 1,
+                root: PathBuf::from("/must-not-be-read"),
+            };
+            assert_eq!(run(&args).unwrap_err(), CLAUDE_EVAL_REFUSED);
+        }
+        assert_eq!(agent_name("codex").unwrap(), "codex");
+    }
 }
 
 struct CaseInput {

@@ -5,6 +5,14 @@ listed in `THIRD-PARTY.md` (every Rust crate and JavaScript package, with its ve
 licence; written by `scripts/third-party.sh`). This folder ships in every installer as
 `licenses/`, beside the app.
 
+Goal S also uses three already-listed Rust dependencies directly: `libc` (MIT OR
+Apache-2.0) for child-process signals, `ring` (Apache-2.0 AND ISC) for PKCE randomness,
+hashing and ID-token signatures, and `url` (MIT OR Apache-2.0) for OAuth encoding.
+No Claude Code binary, SDK or adapter is bundled. The fake CLI and generated OIDC signing
+key under `crates/qiyas-ai/tests/fixtures/` are test-only Apache-2.0 fixtures, not account
+credentials. The third-party inventory was regenerated; these dependencies were already
+present and its entries did not change.
+
 ## Licence texts here
 
 - `opencadcodec-MPL-2.0.txt`, `opencadkernel-MPL-2.0.txt`: the Mozilla Public License 2.0 (it

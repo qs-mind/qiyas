@@ -21,7 +21,10 @@ pub fn use_native_store() -> Result<(), String> {
 }
 
 fn entry(provider: &str) -> Result<Entry, String> {
-    if Provider::from_name(provider).is_none() {
+    if !matches!(
+        Provider::from_name(provider),
+        Some(Provider::Anthropic | Provider::OpenaiCompatible)
+    ) {
         return Err(format!("Unknown provider \"{provider}\""));
     }
     Entry::new(SERVICE, provider).map_err(describe)
@@ -74,11 +77,14 @@ pub fn address(settings: &crate::settings::Settings, provider: &str) -> Result<S
                 .as_deref()
                 .ok_or("Save the service address first")?,
         ),
-        None => Err("Unknown provider".into()),
+        _ => Err("This provider does not use an API key".into()),
     }
 }
 fn scoped(provider: &str, base: &str) -> Result<Entry, String> {
-    if Provider::from_name(provider).is_none() {
+    if !matches!(
+        Provider::from_name(provider),
+        Some(Provider::Anthropic | Provider::OpenaiCompatible)
+    ) {
         return Err("Unknown provider".into());
     }
     let base = qiyas_ai::endpoint::normalize(base)?;

@@ -106,6 +106,9 @@ impl Default for AgentSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    ProviderStatus {
+        code: String,
+    },
     Retrying {
         seconds: u64,
         code: String,
@@ -406,6 +409,7 @@ impl Agent {
 
     /// The agent with the app's drawings behind its file tools (`crate::host`).
     pub fn with_host(mut self, host: Arc<dyn DrawingHost>) -> Agent {
+        self.provider.set_host(host.clone());
         self.host = Some(host);
         self
     }
@@ -505,6 +509,10 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
         cancel: CancellationToken,
     ) -> Result<(), AiError> {
+        // A native CLI owns its tool loop. Never silently bypass Qiyas's phase approvals.
+        if self.provider.owns_turn() && self.settings.autonomy != Autonomy::Autonomous {
+            return Err(AiError::Subscription("claude_approval"));
+        }
         let UserMessage {
             text: user_text,
             context: pointed,
@@ -550,6 +558,7 @@ impl Agent {
         }
         let system = self.system.clone().unwrap_or_default();
         self.turn_text = user_text.clone();
+        self.provider.begin_turn(&user_text);
         let mut content = vec![ContentBlock::Text { text: state }];
         if std::mem::take(&mut self.resumed) {
             content.push(ContentBlock::Text { text: "[resumed] This conversation continues after a pause; the drawing may have changed: read it before acting.".into() });
@@ -640,7 +649,10 @@ impl Agent {
                         }
                         _ => e.to_string(),
                     });
-                    if e.code() == "context_too_long" && !context_retried {
+                    if !self.provider.owns_turn()
+                        && e.code() == "context_too_long"
+                        && !context_retried
+                    {
                         context_retried = true;
                         if self.make_context_room() {
                             self.log("COMPACTED (context limit)", || {
@@ -712,7 +724,9 @@ impl Agent {
                 // through Runware once thought for 94 s and wrote nothing). Nothing ran, so the
                 // same request goes again with twice the room; the cut-off answer is dropped.
                 StopReason::MaxTokens
-                    if says_nothing(&turn.content) && max_tokens < MAX_TOKENS_CAP =>
+                    if !self.provider.owns_turn()
+                        && says_nothing(&turn.content)
+                        && max_tokens < MAX_TOKENS_CAP =>
                 {
                     max_tokens = (max_tokens.max(1) * 2).min(MAX_TOKENS_CAP);
                     self.log("RETRY", || {
@@ -877,6 +891,7 @@ impl Agent {
             let mut streamed = false;
             while let Some(e) = rx.recv().await {
                 let event = match e {
+                    StreamEvent::Activity(event) => *event,
                     StreamEvent::RequestSent(fields) => {
                         reported = true;
                         self.log(&format!("REQUEST {request_number}; sent: {fields}"), || {
@@ -1621,7 +1636,9 @@ impl Agent {
     /// goes after what it holds, so tool results stay first and roles keep alternating.
     fn push_user(&mut self, content: Vec<ContentBlock>) {
         match self.history.last_mut() {
-            Some(last) if last.role == Role::User => last.content.extend(content),
+            Some(last) if last.role == Role::User && !self.provider.owns_turn() => {
+                last.content.extend(content)
+            }
             _ => self.history.push(Message::user(content)),
         }
     }
@@ -1964,6 +1981,60 @@ mod tests {
     struct Recording {
         requests: Arc<Mutex<Vec<TurnRequest>>>,
         state: Arc<Mutex<Value>>,
+    }
+
+    #[tokio::test]
+    async fn a_local_agent_is_not_retried_or_sent_the_cancelled_request_again() {
+        struct LocalAgent(Arc<Mutex<Vec<TurnRequest>>>);
+        impl Provider for LocalAgent {
+            fn owns_turn(&self) -> bool {
+                true
+            }
+            fn stream_turn<'a>(
+                &'a self,
+                req: TurnRequest,
+                _sink: Sink<'a>,
+            ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+                self.0.lock().unwrap().push(req);
+                Box::pin(async {
+                    Ok(TurnResult {
+                        content: Vec::new(),
+                        stop_reason: StopReason::MaxTokens,
+                        usage: Usage::default(),
+                    })
+                })
+            }
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            Box::new(LocalAgent(requests.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        record_turn(&mut agent, "Previous unfinished request").await;
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        record_turn(&mut agent, "New independent request").await;
+        {
+            let recorded = requests.lock().unwrap();
+            assert_eq!(recorded.len(), 2);
+            let newest = serde_json::to_string(recorded[1].messages.last().unwrap()).unwrap();
+            assert!(newest.contains("New independent request"));
+            assert!(!newest.contains("Previous unfinished request"));
+        }
+        for autonomy in [Autonomy::PerJob, Autonomy::PerPhase] {
+            agent.settings.autonomy = autonomy;
+            let (tx, _rx) = mpsc::channel(10);
+            let error = agent
+                .run_turn("Wait for approval".into(), tx, CancellationToken::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "claude_approval");
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                2,
+                "no native process starts"
+            );
+        }
     }
 
     impl Provider for Recording {
