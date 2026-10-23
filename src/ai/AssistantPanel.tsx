@@ -1,12 +1,14 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { aiAttachPdf, aiLog, type AiLog, type PdfAttachment } from "../api";
+import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
+import { uiError, userError } from "../i18n/errors";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { aiAttachPdf, type PdfAttachment } from "../api";
 import type { Pointing } from "../app/useAssistantWiring";
-import { useT } from "../i18n";
+import { translate, useLanguage, useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
-import { startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
+import { recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
 import { ToolCard } from "./ToolCard";
 import type { Assistant } from "./useAssistant";
@@ -42,6 +44,8 @@ export const AssistantPanel = memo(function AssistantPanel({
   read = readPicture,
 }: Props) {
   const t = useT();
+  const { lang } = useLanguage();
+  const chatLang = contentLanguage([...assistant.transcript.items].reverse().find((item) => item.kind === "user")?.text ?? "", lang);
   const { transcript, busy, error } = assistant;
   const [attaching, setAttaching] = useState(false);
   const unavailable = busy || !!history?.pending || attaching;
@@ -67,13 +71,13 @@ export const AssistantPanel = memo(function AssistantPanel({
       setAttaching(true);
       setPictureError(null);
       try {
-        if (documents.length + pdfs.length > MAX_PICTURES) throw new Error(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
+        if (documents.length + pdfs.length > MAX_PICTURES) throw userError(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
         for (const file of pdfs) {
-          if (file.size > 20 * 1024 * 1024) throw new Error(t("ai.pdfTooLarge"));
+          if (file.size > 20 * 1024 * 1024) throw userError(t("ai.pdfTooLarge"));
           const attachment = await aiAttachPdf(file.name, Array.from(new Uint8Array(await file.arrayBuffer())));
           setDocuments((now) => [...now, attachment]);
         }
-      } catch (error) { setPictureError(String(error)); }
+      } catch (error) { setPictureError(uiError(error)); }
       finally { setAttaching(false); }
     }
     const wanted = files.filter(isPicture);
@@ -86,23 +90,6 @@ export const AssistantPanel = memo(function AssistantPanel({
     if (ok.length < results.length) setPictureError(t("ai.pictureFailed"));
     setPictures((now) => [...now, ...ok].slice(0, MAX_PICTURES));
   }
-
-  // The agent log, in place of the conversation while it is shown.
-  const [showLog, setShowLog] = useState(false);
-  const [agentLog, setAgentLog] = useState<AiLog | null>(null);
-  const logText = useRef<HTMLPreElement>(null);
-  const loadLog = useCallback(() => {
-    aiLog()
-      .then(setAgentLog)
-      .catch((e) => setAgentLog({ path: "", text: String(e) }));
-  }, []);
-  // Read again at each new step of a turn and when it ends.
-  useEffect(() => {
-    if (showLog) loadLog();
-  }, [showLog, busy, transcript.items.length, loadLog]);
-  useEffect(() => {
-    logText.current?.scrollTo?.({ top: logText.current.scrollHeight });
-  }, [agentLog]);
 
   // The newest message stays in view while the reader is at the bottom; scrolled up, they are left
   // where they are and a button offers the way back.
@@ -147,7 +134,7 @@ export const AssistantPanel = memo(function AssistantPanel({
     if (reason === "max_tokens") return t("ai.maxTokens");
     const steps = /^stopped after (\d+) steps$/.exec(reason);
     if (steps) return t("ai.steps", { n: steps[1] });
-    return `${t("ai.stopped")}: ${reason}`;
+    return uiError(reason, lang);
   }
 
   function errorText(e: string) {
@@ -159,19 +146,19 @@ export const AssistantPanel = memo(function AssistantPanel({
     if (missingModel) return t("ai.modelNotFound", { service: missingModel[1], model: missingModel[2] });
     if (e === "restarted") return t("ai.restarted");
     if (e === "crashed") return t("ai.crashed");
-    return e;
+    return uiError(e, lang);
   }
 
   function show(item: Item, i: number): ReactNode {
     switch (item.kind) {
       case "plan":
-        return <PlanChecklist key={i} phases={item.phases}
+        return <PlanChecklist key={i} phases={item.phases} language={chatLang}
           onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
-            ? () => { void assistant.send("Approved, continue."); } : undefined}
+            ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;
       case "user":
         return (
-          <div key={i} className="msg user" dir="auto">
+          <div key={i} className="msg user" lang={contentLanguage(item.text, lang)} dir={contentLanguage(item.text, lang) === "ar" ? "rtl" : "ltr"}>
             {((item.pointed?.length ?? 0) > 0 || (item.images?.length ?? 0) > 0) && (
               <div className="msg-attached">
                 {item.pointed?.map((label) => (
@@ -186,7 +173,8 @@ export const AssistantPanel = memo(function AssistantPanel({
                 ))}
               </div>
             )}
-            {item.text}
+            {messageFiles(item.text).map((file, k) => <span key={k} className="chip"><bdi>{file.name}</bdi> · {t("ai.pdfPageCount", { n: file.pages })}</span>)}
+            {isolateRuns(chatText(item.text))}
           </div>
         );
       case "assistant":
@@ -196,12 +184,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           </div>
         );
       case "thinking":
-        return (
-          <details key={i} className="msg thinking">
-            <summary>{t("ai.thinking")}</summary>
-            <p dir="auto">{item.text}</p>
-          </details>
-        );
+        return null;
       case "tool": {
         if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
@@ -210,6 +193,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           <ToolCard
             key={i}
             card={item}
+            recovering={recoveringCard(transcript.items, i, busy)}
             onShow={canShow ? () => onShow(item) : undefined}
             onUndo={canUndo ? () => onUndo(item) : undefined}
           />
@@ -219,8 +203,8 @@ export const AssistantPanel = memo(function AssistantPanel({
         return (
           <div key={i} className="msg notice refused" role="note">
             <strong className="heading">{t("ai.refused")}</strong>
-            {item.text && <p dir="auto">{item.text}</p>}
-            {item.category && <span className="category">{item.category}</span>}
+            {item.text && <Markdown text={item.text} />}
+            {item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
           </div>
         );
       case "stopped":
@@ -249,9 +233,6 @@ export const AssistantPanel = memo(function AssistantPanel({
           {t("ai.newChat")}
         </button>
         {history && <ConversationHistory history={history} disabled={busy} />}
-        <button type="button" aria-pressed={showLog} onClick={() => setShowLog((on) => !on)}>
-          {t("ai.log")}
-        </button>
         <button
           type="button"
           className="icon gear"
@@ -270,22 +251,7 @@ export const AssistantPanel = memo(function AssistantPanel({
       <p className="sr-only" role="status" aria-live="polite">
         {announce}
       </p>
-      {history?.error && <p className="msg notice" role="alert">{history.error}</p>}
-      {showLog ? (
-        <div className="agent-log">
-          <div className="agent-log-bar">
-            <span className="agent-log-path" dir="ltr" title={agentLog?.path}>
-              {agentLog?.path}
-            </span>
-            <button type="button" className="link" onClick={loadLog}>
-              {t("ai.logRefresh")}
-            </button>
-          </div>
-          <pre className="agent-log-text" dir="ltr" ref={logText} tabIndex={0} aria-label={t("ai.log")}>
-            {agentLog === null ? "" : agentLog.text || t("ai.logEmpty")}
-          </pre>
-        </div>
-      ) : (
+      {history?.error && <p className="msg notice" role="alert">{uiError(history.error, lang)}</p>}
         <div className="assistant-thread">
         <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
           {empty ? (
@@ -335,15 +301,10 @@ export const AssistantPanel = memo(function AssistantPanel({
           </button>
         )}
         </div>
-      )}
       {error && (
         <div className="error" role="alert">
           {errorText(error)}
-          {!showLog && (
-            <button type="button" className="link" onClick={() => setShowLog(true)}>
-              {t("ai.showLog")}
-            </button>
-          )}
+          <button type="button" className="link" onClick={onSettings}>{t("support.details")}</button>
         </div>
       )}
       <form

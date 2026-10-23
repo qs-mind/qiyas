@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** ALIASEDIT: the user's command line aliases, alias to command, as a table (`settings.json`
  *  `aliases`, over the built-in ones). An alias is one word; a command is a command's name with
  *  words after it if wanted (`LAYOFF A-WALL`). */
@@ -42,7 +43,7 @@ export function AliasEditor({ onSaved, onClose }: { onSaved(aliases: Record<stri
         setDraft(s);
         setRows(Object.entries(s.aliases ?? {}).map(([alias, command]) => ({ alias, command })));
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
     commandWords().then((items) => setWords(registryNames(items ?? []))).catch(() => {});
     return () => opener?.focus();
   }, []);
@@ -62,7 +63,7 @@ export function AliasEditor({ onSaved, onClose }: { onSaved(aliases: Record<stri
       onSaved(aliases);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

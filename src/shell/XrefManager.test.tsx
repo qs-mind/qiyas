@@ -81,5 +81,5 @@ test("a failed reload is shown and the dialog stays", async () => {
   );
   expect(screen.getByText("This drawing has no external references.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Reload" }));
-  expect((await screen.findByRole("alert")).textContent).toBe("disk gone");
+  expect((await screen.findByRole("alert")).textContent).toBe("The file could not be written. Check the folder and available space.");
 });

@@ -2,7 +2,7 @@ import { hotkeysCoreFeature, selectionFeature, syncDataLoaderFeature } from "@he
 import { useTree } from "@headless-tree/react";
 import { memo, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { LayerInfo, LayerProp, ViewportInfo } from "../api";
-import { useT } from "../i18n";
+import { useLanguage, useT } from "../i18n";
 import type { Theme } from "../viewport/gl";
 import { buildLayerTree, ROOT, type LayerNode } from "./layerGroups";
 import { LINEWEIGHTS, weightLabel } from "./lineweights";
@@ -154,9 +154,9 @@ function storedCollapsed(): string[] {
  *  it; not an xref's layer, `XREF|LAYER`) and its properties. A layer of the drawing itself opens
  *  its properties under its row (on, frozen, locked, plot, colour, linetype, lineweight, rename,
  *  delete); on a paper sheet with viewports a VP freeze column freezes a layer in the viewport
- *  chosen. A long list is grouped by its names' prefix (A-, S-, E-...) and by xref (`layerGroups`);
+ *  chosen. Folders are optional, grouping names by prefix and by xref (`layerGroups`);
  *  Headless Tree gives the keyboard: the arrows, Home and End move between rows, Right and Left
- *  open and close a group, a click or Shift/Ctrl select, Enter or a double click makes a layer
+ *  open and close a group (reversed in Arabic), a click selects, Enter or a double click makes a layer
  *  current. The foot adds a layer and opens layer states and the translator.
  *  Memoised: the app re-renders on every pointer move (cursor in the status bar). */
 export const LayersPanel = memo(function LayersPanel({
@@ -183,9 +183,14 @@ export const LayersPanel = memo(function LayersPanel({
 }: Props) {
   const t = useT();
   const [open, setOpen] = useState<string | null>(null);
+  const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [fresh, setFresh] = useState("");
   const [chosenVp, setChosenVp] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(storedCollapsed);
+  const { lang } = useLanguage();
+  const [folders, setFolders] = useState(() => {
+    try { return localStorage.getItem("qiyas.layers.folders") === "true"; } catch { return false; }
+  });
   const viewport = viewports.find((v) => v.handle === chosenVp) ?? viewports[0] ?? null;
   const addLayer = () => {
     const name = fresh.trim();
@@ -194,7 +199,7 @@ export const LayersPanel = memo(function LayersPanel({
     setFresh("");
   };
 
-  const tree = useMemo(() => buildLayerTree(layers), [layers]);
+  const tree = useMemo(() => buildLayerTree(layers, folders), [layers, folders]);
   // Kept the same array while nothing changed: the tree takes a new one for a change of state.
   const expanded = useMemo(() => tree.groups.filter((g) => !collapsed.includes(g)), [tree, collapsed]);
   const instance = useTree<LayerNode>({
@@ -205,7 +210,8 @@ export const LayersPanel = memo(function LayersPanel({
       getItem: (id) => tree.nodes[id],
       getChildren: (id) => (tree.nodes[id] as { children?: string[] }).children ?? [],
     },
-    state: { expandedItems: expanded },
+    state: { expandedItems: expanded, selectedItems },
+    setSelectedItems: (update) => setSelectedItems((before) => (typeof update === "function" ? update(before) : update).slice(-1)),
     setExpandedItems: (update) => {
       const next = typeof update === "function" ? update(expanded) : update;
       const folded = tree.groups.filter((g) => !next.includes(g));
@@ -216,7 +222,14 @@ export const LayersPanel = memo(function LayersPanel({
         // Not remembered; the group is folded for this session.
       }
     },
-    hotkeys: MOVE_KEYS,
+    hotkeys: {
+      ...MOVE_KEYS,
+      selectUpwards: { hotkey: "Shift+ArrowUp", isEnabled: () => false },
+      selectDownwards: { hotkey: "Shift+ArrowDown", isEnabled: () => false },
+      selectAll: { hotkey: "Control+a", isEnabled: () => false },
+      expandOrDown: { hotkey: lang === "ar" ? "ArrowLeft" : "ArrowRight", isEnabled: outsideProps },
+      collapseOrUp: { hotkey: lang === "ar" ? "ArrowRight" : "ArrowLeft", isEnabled: outsideProps },
+    },
     features: [syncDataLoaderFeature, selectionFeature, hotkeysCoreFeature],
   });
   // The tree is told when the layers (or which groups are open) change under it.
@@ -260,6 +273,7 @@ export const LayersPanel = memo(function LayersPanel({
       <div className={expandedProps ? "layer-node open" : "layer-node"} role="none" key={item.getId()}>
         <div
           {...item.getProps()}
+          onFocus={() => item.setFocused()}
           className={visible ? "layer-row" : "layer-row dim"}
           style={{ "--level": item.getItemMeta().level } as CSSProperties}
           onDoubleClick={makeCurrent}
@@ -359,16 +373,18 @@ export const LayersPanel = memo(function LayersPanel({
       <div
         {...item.getProps()}
         key={item.getId()}
+        onFocus={() => item.setFocused()}
         className="layer-row layer-group"
         style={{ "--level": item.getItemMeta().level } as CSSProperties}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true" className={isOpen ? "chevron open" : "chevron"}>
           <path d="M6 4l4 4-4 4" />
         </svg>
-        <span className="name" title={node.name}>
+        <svg className="folder" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h5l1.5 2h6.5v7h-13Z" /></svg>
+        <span className="name" title={t("layer.folder", { name: node.name })}>
           <bdi>{node.name}</bdi>
         </span>
-        <span className="layer-count">{node.children.length}</span>
+        <span className="layer-count">{t("layer.count", { n: node.children.length })}</span>
       </div>
     );
   }
@@ -381,6 +397,12 @@ export const LayersPanel = memo(function LayersPanel({
           {t("showAll")}
         </button>
       </div>
+      <label className="layer-folders">
+        <input type="checkbox" checked={folders} onChange={(e) => {
+          setFolders(e.target.checked);
+          try { localStorage.setItem("qiyas.layers.folders", String(e.target.checked)); } catch { /* Session only. */ }
+        }} />{t("layer.folders")}
+      </label>
       {isolated && (
         <p className="layers-isolated" role="status">
           <span>
@@ -405,7 +427,7 @@ export const LayersPanel = memo(function LayersPanel({
           </select>
         </label>
       )}
-      <div {...instance.getContainerProps(t("layers"))} className="layer-tree">
+      <div {...instance.getContainerProps(t("layers"))} className="layer-tree" aria-multiselectable="false">
         {instance.getItems().map((item) => {
           const node = item.getItemData();
           return node.kind === "group" ? groupRow(item, node) : layerRow(item, node.layer);

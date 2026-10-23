@@ -51,7 +51,13 @@ test("History defaults to this drawing, switches to all drawings, deletes a row 
   await waitFor(() => expect(screen.queryByText("Chat one")).toBeNull());
   expect(api.remove).toHaveBeenCalledWith("one");
   fireEvent.click(screen.getByRole("button", { name: "Delete all conversations" }));
-  await waitFor(() => expect(screen.getByText("No saved conversations.")).toBeTruthy());
+  expect(api.removeAll).not.toHaveBeenCalled();
+  await screen.findByRole("dialog");
+  fireEvent.click(screen.getByRole("button", { name: "Delete all conversations" }));
+  await waitFor(() => expect(api.removeAll).toHaveBeenCalledOnce());
+  await waitFor(() => expect((screen.getByRole("button", { name: "History" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  await screen.findByText("No saved conversations.");
   expect(api.removeAll).toHaveBeenCalledOnce();
 });
 

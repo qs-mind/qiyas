@@ -13,12 +13,12 @@ test("one read exposes citations and highlights the source", async () => {
   const shown = vi.fn(); window.addEventListener(EXPLAIN_EVIDENCE, shown);
   const rowClick = vi.fn();
   render(<div onClick={rowClick}><Explain item="generated:A" /></div>);
-  fireEvent.click(screen.getByRole("button", { name: /How did you get this number/ }));
+  fireEvent.click(screen.getByRole("button", { name: /How was this measured/ }));
   await screen.findByText("Test source / Q1");
   expect(explainItem).toHaveBeenCalledExactlyOnceWith("generated:A", undefined);
   expect(screen.getByText(/75%/)).toBeTruthy();
   expect((shown.mock.calls[0][0] as CustomEvent).detail).toEqual(evidence);
-  fireEvent.click(screen.getByRole("button", { name: /Show evidence/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Show on drawing/ }));
   expect(rowClick).not.toHaveBeenCalled();
   window.removeEventListener(EXPLAIN_EVIDENCE, shown);
 });
@@ -27,10 +27,10 @@ test("Arabic project explanation shows drawings and highlights only when asked",
   vi.mocked(explainItem).mockResolvedValue({ ...result, contributions: [{explanation:result}] });
   const shown = vi.fn(); window.addEventListener(EXPLAIN_EVIDENCE, shown);
   render(<LanguageProvider><Explain item="project:0" project="Test.qss" /></LanguageProvider>);
-  fireEvent.click(screen.getByRole("button", { name: /كيف حسبت/ }));
+  fireEvent.click(screen.getByRole("button", { name: /كيف قِيست/ }));
   await screen.findByText("Test source / Q1");
   expect(shown).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: /إظهار الأدلة/ }));
+  fireEvent.click(screen.getByRole("button", { name: /إظهار على الرسم/ }));
   await waitFor(() => expect(shown).toHaveBeenCalledTimes(1));
   expect(explainItem).toHaveBeenCalledExactlyOnceWith("project:0", "Test.qss");
   window.removeEventListener(EXPLAIN_EVIDENCE, shown);

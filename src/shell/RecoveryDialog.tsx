@@ -1,3 +1,5 @@
+import { entityKind } from "../i18n/entityKind";
+import { uiError } from "../i18n/errors";
 import { useState, type ReactNode } from "react";
 import type { ReadReport, Recoverable } from "../api";
 import { useLanguage, useT } from "../i18n";
@@ -66,7 +68,7 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
       await f();
     } catch (e) {
       const held = refusedBy(String(e));
-      setError(held ? t("recovery.refused", held) : String(e));
+      setError(held ? t("recovery.refused", held) : uiError(e));
     } finally {
       setBusy(false);
     }
@@ -208,7 +210,7 @@ export function RecoverReportDialog({
           <tbody>
             {report.dropped.map((d) => (
               <tr key={d.kind}>
-                <td>{d.kind}</td>
+                <td>{entityKind(d.kind, t)}</td>
                 <td>{d.count}</td>
               </tr>
             ))}

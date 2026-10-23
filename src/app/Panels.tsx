@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { ProjectsPanel } from "../shell/ProjectsPanel";
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
@@ -310,7 +311,7 @@ export function WorkArea({
             ucs={info.ucs}
             ucsIcon={ucsIcon}
             syncAtlas={syncAtlas}
-            onError={(e) => setError(String(e))}
+            onError={(e) => setError(uiError(e))}
             onClose={() => setSplit(false)}
           />
         )}

@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { ParameterInfo } from "../api";
 import { useT } from "../i18n";
@@ -44,7 +45,7 @@ export function ParametersManager({ parameters, precision, onSet, onDelete, onCl
       await onSet(p.name, typed.trim());
       setDrafts(({ [p.name]: _, ...rest }) => rest);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

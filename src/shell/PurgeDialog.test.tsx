@@ -76,7 +76,7 @@ test("nothing to purge says so; a core error is shown", async () => {
   render(<PurgeDialog look={async () => purged(report())} apply={apply} onClose={() => {}} />);
   await screen.findByRole("group", { name: "Blocks (2)" });
   fireEvent.click(screen.getByRole("button", { name: "Purge" }));
-  expect((await screen.findByRole("alert")).textContent).toBe("No drawing is open");
+  expect((await screen.findByRole("alert")).textContent).toBe("Open a drawing first.");
 });
 
 test("Escape closes the dialog and the keys typed in it are not the drawing's shortcuts", async () => {

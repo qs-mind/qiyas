@@ -185,7 +185,7 @@ test("the MCP status line says whether the server listens", async () => {
   render(<SettingsDialog onClose={() => {}} />);
   expect(await screen.findByRole("status")).toHaveProperty(
     "textContent",
-    "The MCP server could not start on 127.0.0.1:48123: Address in use",
+    "That didn’t work. Technical details are available in Settings.",
   );
 });
 

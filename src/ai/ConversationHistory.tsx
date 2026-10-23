@@ -1,3 +1,5 @@
+import { ModalDialog } from "../ui/ModalDialog";
+import { uiError } from "../i18n/errors";
 import { Popover } from "@base-ui/react/popover";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -35,7 +37,7 @@ export function useConversationHistory({ drawing, busy, empty, savedVersion = 0,
       const saved = await aiConversations();
       if (request === generation.current) setChats(saved);
     } catch (e) {
-      if (request === generation.current) setError(String(e));
+      if (request === generation.current) setError(uiError(e));
     }
   }
   useEffect(() => {
@@ -54,7 +56,7 @@ export function useConversationHistory({ drawing, busy, empty, savedVersion = 0,
         if (await prepare(chat)) await resume(chat.id);
         await refresh();
       } catch (e) {
-        setError(String(e));
+        setError(uiError(e));
       } finally {
         setPending(false);
       }
@@ -68,7 +70,7 @@ export function useConversationHistory({ drawing, busy, empty, savedVersion = 0,
         else await aiDeleteConversations();
         await refresh();
       } catch (e) {
-        setError(String(e));
+        setError(uiError(e));
       } finally {
         setPending(false);
       }
@@ -81,9 +83,10 @@ export function ConversationHistory({ history, disabled }: { history: Conversati
   const { lang } = useLanguage();
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const chats = history.chats.filter((chat) => all || chat.drawing === history.drawing);
   const unavailable = disabled || history.pending;
-  return <Popover.Root open={open} onOpenChange={setOpen} modal={false}>
+  return <><Popover.Root open={open} onOpenChange={setOpen} modal={false}>
     <Popover.Trigger className="chat-history-trigger" disabled={unavailable}>
       <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 4.5V8l2.5 1.5" /></svg>
       {t("ai.history")}
@@ -104,16 +107,24 @@ export function ConversationHistory({ history, disabled }: { history: Conversati
               }}>
                 <strong dir="auto">{chat.title}</strong>
                 <span dir="auto">{chat.drawing?.split(/[\\/]/).pop() ?? t("ai.untitledDrawing")}</span>
-                <time dateTime={new Date(chat.updated).toISOString()}>{new Date(chat.updated).toLocaleString(lang, { dateStyle: "medium", timeStyle: "short" })}</time>
+                <time dateTime={new Date(chat.updated).toISOString()}>{new Date(chat.updated).toLocaleString(lang === "ar" ? "ar-EG-u-nu-latn" : "en", { dateStyle: "medium", timeStyle: "short" })}</time>
               </button>
               <button type="button" className="chat-history-delete" disabled={unavailable}
                 aria-label={t("ai.deleteChat", { title: chat.title })} onClick={() => { void history.remove(chat.id); }}>×</button>
             </li>)}
           </ul>}
           <button type="button" className="chat-history-delete-all" disabled={unavailable || history.chats.length === 0}
-            onClick={() => { void history.remove(); }}>{t("ai.deleteAllChats")}</button>
+            onClick={() => { setOpen(false); setConfirmDelete(true); }}>{t("ai.deleteAllChats")}</button>
         </Popover.Popup>
       </Popover.Positioner>
     </Popover.Portal>
-  </Popover.Root>;
+  </Popover.Root>
+  {confirmDelete && <ModalDialog labelledBy="delete-chats-title" onClose={() => setConfirmDelete(false)}>
+    <h2 id="delete-chats-title">{t("ai.deleteChatsConfirm", { n: history.chats.length })}</h2>
+    <p>{t("ai.deleteChatsWarning")}</p>
+    <div className="buttons">
+      <button type="button" onClick={() => setConfirmDelete(false)}>{t("text.cancel")}</button>
+      <button type="button" disabled={unavailable} onClick={() => { setConfirmDelete(false); void history.remove(); }}>{t("ai.deleteAllChats")}</button>
+    </div>
+  </ModalDialog>}</>;
 }

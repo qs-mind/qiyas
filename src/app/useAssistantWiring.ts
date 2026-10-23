@@ -284,7 +284,7 @@ export function useAssistantWiring({
 
   const size = region ? regionBounds(region) : null;
   const toMetres = metresPerUnit(info?.units ?? "unknown");
-  const kinds = kindsLabel(attached, measure.kinds);
+  const kinds = kindsLabel(attached, measure.kinds, t);
   const pointing: Pointing = useMemo(
     () => ({
       selection: attached.length > 0 ? { count: attached.length, kinds } : null,

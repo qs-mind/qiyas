@@ -112,7 +112,7 @@ test("a custom scale is drawing units per point, and a failure stays in the dial
   });
   fireEvent.click(screen.getByRole("button", { name: "Attach" }));
   expect((await screen.findByRole("alert")).textContent).toBe(
-    "PDF support is not installed: run scripts/pdfium.sh",
+    "PDF support is unavailable in this installation. Contact support.",
   );
   expect(onAttach).toHaveBeenCalledWith(expect.objectContaining({ scale: 0.5, mode: "underlay" }));
   expect(props.onClose).not.toHaveBeenCalled();
@@ -145,7 +145,7 @@ test("a PDF that can't be read says why", async () => {
     }),
   });
   fireEvent.click(screen.getByRole("button", { name: "Choose…" }));
-  expect((await screen.findByRole("alert")).textContent).toBe("This PDF can't be opened: bad header");
+  expect((await screen.findByRole("alert")).textContent).toBe("The file could not be read. Choose another file or a backup.");
 });
 
 test("calibration asks for the real distance in metres and gives drawing units", async () => {

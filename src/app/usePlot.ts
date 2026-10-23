@@ -1,3 +1,4 @@
+import { uiError, userError, UserFacingError } from "../i18n/errors";
 /** Plotting: the Plot dialog (the sheet on screen, its page setup and the drawing's plot style,
  *  kept per drawing in the window's storage: the project file has no place for them yet), the
  *  plot window's two clicks in the drawing, plot to PDF, print, quick print, print all layouts,
@@ -84,12 +85,13 @@ const ERRORS: [string, string][] = [
 ];
 
 export function plotError(t: T, e: unknown): string {
+  if (e instanceof UserFacingError) return e.message;
   const said = String(e);
   for (const [text, key] of ERRORS) {
     if (said === text) return t(key);
-    if (text.endsWith(": ") && said.startsWith(text)) return t(key, { why: said.slice(text.length) });
+    if (text.endsWith(": ") && said.startsWith(text)) return t(key, { why: uiError(said.slice(text.length)) });
   }
-  return said;
+  return uiError(said);
 }
 
 /** The core's print messages the window says in its own words; others as the core said them. */
@@ -177,7 +179,7 @@ export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, se
 
   /** Plots to `path`, the Save dialog's choice; errors in the window's words for the dialog. */
   async function plotToPdf(job: PlotJob, path: string) {
-    const out = await plotPdfTo(job, path).catch((e) => Promise.reject(plotError(t, e)));
+    const out = await plotPdfTo(job, path).catch((e) => Promise.reject(userError(plotError(t, e))));
     setError(null);
     setNotice(
       out.skipped.length > 0
@@ -187,7 +189,7 @@ export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, se
   }
 
   async function print(job: PlotJob, printer: string | null) {
-    const said = await plotAndPrint(job, printer).catch((e) => Promise.reject(plotError(t, e)));
+    const said = await plotAndPrint(job, printer).catch((e) => Promise.reject(userError(plotError(t, e))));
     setError(null);
     setNotice(printedNotice(t, said, printer));
   }
@@ -215,7 +217,7 @@ export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, se
     printingNow.current = true;
     const gen = switchGen.current;
     const stillHere = () => {
-      if (isStale(gen, switchGen.current)) throw t("plot.stoppedSwitch");
+      if (isStale(gen, switchGen.current)) throw userError(t("plot.stoppedSwitch"));
     };
     try {
       await run(async () => {
@@ -224,7 +226,7 @@ export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, se
           await work(stillHere);
         } catch (e) {
           setNotice(null);
-          throw plotError(t, e);
+          throw userError(plotError(t, e));
         }
       });
     } finally {
@@ -292,7 +294,7 @@ export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, se
         }
       }
       if (failed.length > 0) {
-        throw t("plot.printAllFailed", { n: failed.length, total: layouts.length, errors: failed.join("; ") });
+        throw userError(t("plot.printAllFailed", { n: failed.length, total: layouts.length, errors: failed.join("; ") }));
       }
       setNotice(t("plot.printedAll", { n: layouts.length, said: printedNotice(t, said, printer) }));
     });

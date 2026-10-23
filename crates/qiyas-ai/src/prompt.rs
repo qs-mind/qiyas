@@ -524,3 +524,27 @@ mod tests {
 #[cfg(test)]
 #[path = "prompt_tests_ar.rs"]
 mod tests_ar;
+
+#[cfg(test)]
+mod plain_answer_tests {
+    #[test]
+    fn both_languages_keep_internal_names_and_paths_out_of_answers() {
+        let en = include_str!("prompt_en.txt");
+        let ar = include_str!("prompt_ar.txt");
+        for phrase in [
+            "Never name tools, commands, operations, handles, internal block names or fields",
+            "without paths",
+            "Arabic answers use Arabic",
+        ] {
+            assert!(en.contains(phrase), "{phrase}");
+        }
+        for phrase in [
+            "لا تذكر أسماء الأدوات",
+            "البلوكات الداخلية أو الحقول",
+            "لا تعرض مسارات الملفات",
+            "اكتب بالعربية",
+        ] {
+            assert!(ar.contains(phrase), "{phrase}");
+        }
+    }
+}

@@ -200,7 +200,7 @@ test("in Arabic the grid mirrors: the edge's right arrow narrows a column, the l
       </LanguageProvider>,
     );
     const widths = () => (document.querySelector(".grid-inner") as HTMLElement).style.getPropertyValue("--cols");
-    const edge = screen.getByRole("separator", { name: "تغيير عرض العمود Qty" });
+    const edge = screen.getByRole("separator", { name: "تغيير عرض العمود \u2068Qty\u2069" });
     fireEvent.keyDown(edge, { key: "ArrowRight" });
     expect(widths()).toBe("60px minmax(140px, 1fr) 54px 50px");
     fireEvent.keyDown(edge, { key: "ArrowLeft" });

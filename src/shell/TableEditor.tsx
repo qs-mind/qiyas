@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Command, TableInfo } from "../api";
 import { useT } from "../i18n";
@@ -46,6 +47,8 @@ export function TableEditor(props: EditorProps) {
   const t = useT();
   const dialog = useRef<HTMLDialogElement>(null);
   const stepping = useRef(false);
+  const extending = useRef(false);
+  const pending = useRef<Promise<boolean> | null>(null);
   const merged = useMemo(() => mergedCells(table), [table]);
   const [anchor, setAnchor] = useState<Cell>(props.cell);
   const [end, setEnd] = useState<Cell>(props.cell);
@@ -108,13 +111,25 @@ export function TableEditor(props: EditorProps) {
   const isMerged = rowSpan > 1 || colSpan > 1;
   const isField = (cell: Cell) => table.fields.some(([r, c]) => r === cell[0] && c === cell[1]);
 
-  async function run(cmd: Command) {
-    setError(null);
-    try {
-      await props.onRun(cmd);
-    } catch (e) {
-      setError(String(e));
-    }
+  function run(cmd: Command): Promise<boolean> {
+    const execute = async () => {
+      setError(null);
+      try {
+        await props.onRun(cmd);
+        return true;
+      } catch (e) {
+        setError(uiError(e));
+        return false;
+      }
+    };
+    // A blur saves the cell before the following merge/row/column click. Wait for that save;
+    // if it failed, keep the draft and the error instead of reshaping the table underneath it.
+    const job = pending.current
+      ? pending.current.then((ok) => !ok && cmd.type !== "edit_cell" ? false : execute())
+      : execute();
+    pending.current = job;
+    void job.then(() => { if (pending.current === job) pending.current = null; });
+    return job;
   }
 
   function commit(cell: Cell) {
@@ -122,7 +137,9 @@ export function TableEditor(props: EditorProps) {
     const value = drafts[k];
     if (value === undefined || value === table.cells[cell[0]][cell[1]] || sent.current[k] === value) return;
     sent.current[k] = value;
-    run({ type: "edit_cell", target, row: cell[0], col: cell[1], text: value });
+    void run({ type: "edit_cell", target, row: cell[0], col: cell[1], text: value }).then((ok) => {
+      if (!ok && sent.current[k] === value) delete sent.current[k];
+    });
   }
 
   function choose(cell: Cell, e?: MouseEvent) {
@@ -152,6 +169,7 @@ export function TableEditor(props: EditorProps) {
       <h2 id="table-editor-title" className="heading">
         {t("table.editTitle")}
       </h2>
+      <p>{t("table.rangeHint")}</p>
       <div className="table-grid">
         <table role="grid" dir="ltr">
           <tbody>
@@ -180,10 +198,21 @@ export function TableEditor(props: EditorProps) {
                         onChange={(e) => setDrafts({ ...drafts, [key(cell)]: e.target.value })}
                         onMouseDown={(e) => e.shiftKey && choose(cell, e)}
                         onClick={(e) => e.shiftKey && choose(cell, e)}
-                        onFocus={() => choose(cell)}
+                        data-cell={key(cell)}
+                        onFocus={() => { if (!extending.current) choose(cell); }}
                         onBlur={() => commit(cell)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") {
+                          if (e.shiftKey && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+                            e.preventDefault();
+                            const next: Cell = [
+                              Math.max(0, Math.min(rows - 1, end[0] + (e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0))),
+                              Math.max(0, Math.min(cols - 1, end[1] + (e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0))),
+                            ];
+                            setEnd(next);
+                            extending.current = true;
+                            dialog.current?.querySelector<HTMLInputElement>(`[data-cell="${key(merged.owner(next))}"]`)?.focus();
+                            extending.current = false;
+                          } else if (e.key === "Enter") {
                             e.preventDefault();
                             commit(cell);
                           }
@@ -301,7 +330,7 @@ export function NewTableDialog(props: {
       await props.onSubmit(table);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

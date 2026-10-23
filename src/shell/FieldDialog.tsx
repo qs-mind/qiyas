@@ -1,3 +1,5 @@
+import { entityKind } from "../i18n/entityKind";
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { FieldKind } from "../api";
 import { useT } from "../i18n";
@@ -87,7 +89,7 @@ export function FieldDialog(props: Props) {
       await props.onSubmit(field);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }
@@ -131,7 +133,7 @@ export function FieldDialog(props: Props) {
           <div className="field-target">
             <span>
               {target
-                ? t("insertField.object", { kind: target.kind, handle: target.handle.toString(16).toUpperCase() })
+                ? t("insertField.object", { kind: entityKind(target.kind, t) })
                 : t("insertField.noObject")}
             </span>
             <button type="button" onClick={props.onPick}>

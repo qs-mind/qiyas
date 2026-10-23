@@ -88,7 +88,7 @@ test("a failed answer keeps the prompt usable and is not included in the repeate
   enter("WIDGET");
   await screen.findByRole("combobox", { name: "Number:" });
   enter("bad");
-  await screen.findByText("Error: Enter a number");
+  await screen.findByText("Check the values you entered, then try again.");
   enter("2");
   await screen.findByRole("combobox", { name: "Command:" });
   enter("");

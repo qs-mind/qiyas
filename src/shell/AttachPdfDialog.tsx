@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { AttachMode, Units } from "../api";
 import { useT } from "../i18n";
@@ -146,7 +147,7 @@ export function AttachPdfDialog(props: Props) {
           return next;
         });
       })
-      .catch((e) => pathRef.current === path && setError(String(e)));
+      .catch((e) => pathRef.current === path && setError(uiError(e)));
   }, [path, count, first]);
 
   useEffect(() => {
@@ -155,7 +156,7 @@ export function AttachPdfDialog(props: Props) {
     propsRef.current
       .pageSize(path, page)
       .then((s) => !gone && setSize(s))
-      .catch((e) => !gone && setError(String(e)));
+      .catch((e) => !gone && setError(uiError(e)));
     return () => {
       gone = true;
     };
@@ -174,7 +175,7 @@ export function AttachPdfDialog(props: Props) {
       setThumbs(new Map());
       setSize(null);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -196,7 +197,7 @@ export function AttachPdfDialog(props: Props) {
       await props.onAttach({ path, page, at: point, scale, mode });
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }
@@ -424,7 +425,7 @@ export function CalibrateDialog({ points, units, onCalibrate, onClose }: Calibra
       await onCalibrate(metres / perUnit);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

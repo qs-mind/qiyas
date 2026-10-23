@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** PURGE: a dry run lists, by kind, what nothing in the drawing uses; the kinds ticked are then
  *  taken out as one undo step, and the dialog says what went. The window does not open it while a
  *  block is edited in place (`useOptions`); an error from the core is shown. */
@@ -39,7 +40,7 @@ export function PurgeDialog({ look, apply, onUndo, onClose }: Props) {
         setFound(r);
         if (r) setTicked(new Set(PURGE_KINDS.filter((k) => r[k].length > 0 || (k === "groups" && r.group_members > 0))));
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
   }, []);
 
   async function purge() {
@@ -48,7 +49,7 @@ export function PurgeDialog({ look, apply, onUndo, onClose }: Props) {
       setGone(reportOf(await apply({ type: "purge", kinds: PURGE_KINDS.filter((k) => ticked.has(k)), dry_run: false })));
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

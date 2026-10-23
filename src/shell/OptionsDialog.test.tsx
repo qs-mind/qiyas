@@ -137,6 +137,6 @@ test("the core's refusal is shown and the dialog stays open", async () => {
   const { onClose } = await setup();
   api.setSettings.mockRejectedValue("The background colour \"#12\" must be written #rrggbb");
   save();
-  expect((await screen.findByRole("alert")).textContent).toBe("The background colour \"#12\" must be written #rrggbb");
+  expect((await screen.findByRole("alert")).textContent).toBe("Check the values you entered, then try again.");
   expect(onClose).not.toHaveBeenCalled();
 });

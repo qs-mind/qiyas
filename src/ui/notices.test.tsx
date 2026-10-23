@@ -98,7 +98,7 @@ test("the shell says one notice at a time, null takes it away, and an error goes
   // The same error again shows again.
   await act(async () => result.current.run(async () => Promise.reject("It failed")));
   await advance(400);
-  expect(shown()).toEqual(["It failed"]);
+  expect(shown()).toEqual(["That didn’t work. Technical details are available in Settings."]);
 });
 
 test("a notice about something still going on stays, with the dots, until the next one takes its place", async () => {

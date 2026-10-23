@@ -187,10 +187,10 @@ test("area basis and bounded count remain visible, including legacy rows", () =>
     totals={[]} selectedId={null} onSelect={() => {}} onRemove={() => {}}
     onRename={() => {}} boq={null} onLink={() => {}}
   />);
-  expect(screen.getByText("Existing boundary · Gross")).toBeTruthy();
-  expect(screen.getByText("Wall face · Wall face basis")).toBeTruthy();
-  expect(screen.getByText("Area source unspecified · Basis unspecified")).toBeTruthy();
-  expect(screen.getByText("Top-level insert records; incomplete visible count")).toBeTruthy();
+  expect(screen.getByText("Gross")).toBeTruthy();
+  expect(screen.getByText("Wall face basis")).toBeTruthy();
+  expect(screen.queryByText("Area source unspecified · Basis unspecified")).toBeNull();
+  expect(screen.getByText("Count may miss nested blocks")).toBeTruthy();
 });
 
 
@@ -208,11 +208,11 @@ test.each(["en", "ar"])("full names and quantity limits remain separate in %s", 
   const name = screen.getByRole("button", { name: description });
   const limit = name.parentElement!.querySelector("small")!;
   expect(limit.textContent).toBe(lang === "en"
-    ? "Top-level insert records; incomplete visible count"
-    : "إدراجات عليا؛ ليس عدًا مرئيًا شاملًا");
-  expect(screen.getByText(lang === "en"
+    ? "Count may miss nested blocks"
+    : "قد لا يشمل العدّ البلوكات المتداخلة");
+  expect(screen.queryByText(lang === "en"
     ? "Area source unspecified · Basis unspecified"
-    : "مصدر المساحة غير محدد · أساس غير محدد")).toBeTruthy();
+    : "مصدر المساحة غير محدد · أساس غير محدد")).toBeNull();
   expect(name.closest(".grid-row")!.getAttribute("data-index")).toBe("0");
   localStorage.removeItem("qiyas.lang");
 });

@@ -289,7 +289,7 @@ test("a failed recovery says why and keeps the dialog", async () => {
     </LanguageProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Recover" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not be read"));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("The file could not be read. Choose another file or a backup."));
 });
 
 test("a refused Discard (the drawing was opened elsewhere meanwhile) says why and keeps the row", async () => {
@@ -339,7 +339,7 @@ test("Recover's report lists what the reader dropped, by kind", () => {
   expect(text).toContain("402");
   expect(text).toContain("28");
   const rows = screen.getAllByRole("row");
-  expect(rows.map((r) => r.textContent)).toContain("LINE3");
+  expect(rows.map((r) => r.textContent)).toContain("Line3");
 });
 
 test("Escape is Later when nothing is working", () => {

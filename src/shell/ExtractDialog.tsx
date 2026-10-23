@@ -1,3 +1,5 @@
+import { entityKind } from "../i18n/entityKind";
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { EntityFilter, Field } from "../api";
 import { useT } from "../i18n";
@@ -115,7 +117,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
     try {
       setTable({ columns, rows: await onRun(filters, chosen, setProgress) });
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }
@@ -127,7 +129,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
       await navigator.clipboard.writeText(toTsv(table.columns, table.rows));
       setCopied(true);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -137,7 +139,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
     try {
       await onExport(table.columns, table.rows);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -185,7 +187,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
                 <option value="">{t("extract.anyKind")}</option>
                 {KINDS.map((k) => (
                   <option key={k} value={k}>
-                    {k}
+                    {entityKind(k, t)}
                   </option>
                 ))}
               </select>

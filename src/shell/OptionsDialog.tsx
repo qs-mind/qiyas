@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** OPTIONS: how values show with no drawing open, the snap aperture and pick box, the canvas's
  *  colours and the keyboard shortcuts, kept in `settings.json` (the core checks them again). The
  *  autosave interval stays the Settings dialog's: shown here with a way there. */
@@ -72,7 +73,7 @@ export function OptionsDialog({
         setPickPx(String(s.pick_box_px ?? 6));
         setShortcuts({ ...(s.shortcuts ?? {}) });
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
     return () => opener?.focus();
   }, []);
 
@@ -126,7 +127,7 @@ export function OptionsDialog({
       onSaved(next);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

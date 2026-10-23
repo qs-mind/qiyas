@@ -1744,16 +1744,19 @@ export type PlanPhase = {
 };
 
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
+export type Activity = { category: string; effect: string };
+
 export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "plan"; phases: PlanPhase[] }
   | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
-  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean }
+  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null }
   | {
       type: "tool_result";
       id: string;
       summary: string;
+      count?: number | null;
       handles: number[];
       ui: AiUi | null;
       is_error: boolean;

@@ -52,4 +52,5 @@ mod history;
 
 pub use provider::RetryBackoff;
 
+pub mod activity;
 pub mod endpoint;

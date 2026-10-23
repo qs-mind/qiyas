@@ -107,10 +107,10 @@ export const TakeoffPanel = memo(function TakeoffPanel({
                 <bdi>{m.description}</bdi>
               </button>
             )}
-            {(m.kind === "area" || m.kind === "volume") && (
-              <small>{t(`takeoff.origin.${m.area_origin ?? "unspecified"}`)} · {t(`takeoff.basis.${m.measurement_basis ?? "unspecified"}`)}</small>
+            {(m.kind === "area" || m.kind === "volume") && m.measurement_basis && m.measurement_basis !== "unspecified" && (
+              <small>{t(`takeoff.basis.${m.measurement_basis}`)}</small>
             )}
-            {m.kind === "count" && <small title={m.note}>{t(m.count_scope ? "takeoff.insertScope" : "takeoff.unknownScope")}</small>}
+            {m.kind === "count" && <small>{t(m.count_scope ? "takeoff.insertScope" : "takeoff.unknownScope")}</small>}
             {m.self_intersecting && (
               <span className="warn-icon" role="img" aria-label={t("selfCrossing")} title={t("selfCrossing")}>
                 <svg viewBox="0 0 16 16" aria-hidden="true">

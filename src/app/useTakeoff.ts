@@ -1,3 +1,4 @@
+import { uiError, userError } from "../i18n/errors";
 /** The side panel: its state (`useTakeoffState`: the take-off rows and totals, the BOQ, the
  *  conflicts, the inquiry info card, and what each highlights on the drawing) and its handlers
  *  (`useTakeoff`: BOQ import, compare, export, selecting rows, BOQ items and conflicts). */
@@ -216,7 +217,7 @@ export function useTakeoff({
     if (!path) return;
     await run(async () => {
       await exportConflicts(path).catch((e) => {
-        throw t("export.failed", { error: String(e) });
+        throw userError(t("export.failed", { error: uiError(e) }));
       });
       setNotice(t("export.done", { path }));
     });

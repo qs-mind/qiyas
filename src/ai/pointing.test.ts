@@ -19,7 +19,7 @@ describe("pointing", () => {
 
   it("names the kinds, most first", () => {
     const sel = [5, 6, 7].map((handle) => ({ handle, chain: [] }));
-    expect(kindsLabel(sel, { 5: "Insert", 6: "LwPolyline", 7: "LwPolyline" })).toBe("2 LwPolyline, 1 Insert");
+    expect(kindsLabel(sel, { 5: "Insert", 6: "LwPolyline", 7: "LwPolyline" })).toBe("2 Polyline, 1 Block");
     expect(kindsLabel(sel, {})).toBe("");
   });
 

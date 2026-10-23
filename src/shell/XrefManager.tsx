@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { XrefInfo } from "../api";
 import { useT } from "../i18n";
@@ -35,7 +36,7 @@ export function XrefManager({ xrefs, onReload, onLocate, onClear, onClose }: Pro
     try {
       await work();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

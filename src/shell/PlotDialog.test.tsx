@@ -300,7 +300,7 @@ test("a remembered plot style that can't be read says why, and plots without it"
   });
   await loaded();
   expect(screen.getByRole("alert").textContent).toBe(
-    "The plot style gone.ctb can't be read: Can't read /styles/gone.ctb: No such file",
+    "The plot style gone.ctb can't be read: The file could not be read. Choose another file or a backup.",
   );
   expect(combo("Plot style").value).toBe("");
   fireEvent.click(plotButton());

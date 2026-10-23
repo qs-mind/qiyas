@@ -204,13 +204,13 @@ test("Plot to PDF goes where the Save dialog said, and says where and how many p
 
   // The core's known errors in the window's words, for the dialog.
   core.answers.plot_pdf_to = () => Promise.reject("Nothing to plot: the area is empty");
-  await expect(result.current.plotToPdf(job, "/d/plan.pdf")).rejects.toBe("plot.err.nothing");
+  await expect(result.current.plotToPdf(job, "/d/plan.pdf")).rejects.toMatchObject({ message: "plot.err.nothing" });
 });
 
-test("the core's plot errors in the window's words; others as the core said them", () => {
+test("the core's plot errors in the window's words; unknown errors in plain words", () => {
   expect(plotError(t, "The area does not fit the paper")).toBe("plot.err.noFit");
-  expect(plotError(t, "Can't write the PDF: Permission denied")).toBe('plot.err.write {"why":"Permission denied"}');
-  expect(plotError(t, "lp: printer is stopped")).toBe("lp: printer is stopped");
+  expect(plotError(t, "Can't write the PDF: Permission denied")).toBe('plot.err.write {"why":"This item cannot be changed here. Check that it is unlocked."}');
+  expect(plotError(t, "lp: printer is stopped")).toBe("That didn’t work. Technical details are available in Settings.");
 });
 
 test("Print says where the job went in the window's own words", async () => {

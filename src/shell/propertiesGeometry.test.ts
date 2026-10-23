@@ -216,7 +216,7 @@ test("several entities: count, kinds, summed length and area, and what they shar
   const rows = selectionRows(sum, "metres", 2, t);
   expect(rows.map((r) => [r.key, r.text])).toEqual([
     ["count", "6"],
-    ["kinds", "Line ×2, Dimension ×1, Hatch ×1, Insert ×1, LwPolyline ×1"],
+    ["kinds", "Line ×2, Dimension ×1, Fill ×1, Block ×1, Polyline ×1"],
     ["totalLength", "29.00 m"],
     ["totalArea", "20.00 m²"],
   ]);

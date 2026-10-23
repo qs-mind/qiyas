@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
 import { toleranceFrame } from "../tools/dimTools";
@@ -42,7 +43,7 @@ export function ToleranceDialog({ onSubmit, onClose }: Props) {
       await onSubmit(toleranceFrame(symbol, value, datums));
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }
