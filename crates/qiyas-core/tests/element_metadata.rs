@@ -85,3 +85,45 @@ fn metadata_uses_insert_origin_and_owned_label_not_symbol_bounds() {
     assert_eq!(metadata.position, [40.0, 50.0]);
     assert_eq!(metadata.label.as_deref(), Some("Named element"));
 }
+
+#[test]
+fn pdf_labels_use_nearest_enclosed_text_but_equal_distances_stay_ambiguous() {
+    let mut s = Session::new_blank(Path::new("unused.dxf"), 6);
+    let h = add(
+        &mut s,
+        json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[10,10]}),
+    );
+    let app = qiyas_core::xdata::register(&mut s.drawing.doc, qiyas_core::recognition::SOURCE_APP);
+    let entity = s
+        .drawing
+        .doc
+        .get_entity_mut(opencadcodec::Handle::from(h))
+        .unwrap();
+    qiyas_core::xdata::write_text(
+        entity.common_mut(),
+        qiyas_core::recognition::SOURCE_APP,
+        app,
+        Some("page 1"),
+    );
+    add(
+        &mut s,
+        json!({"type":"text","at":[4,5],"height":0.1,"value":"Nearest room"}),
+    );
+    add(
+        &mut s,
+        json!({"type":"text","at":[1,1],"height":0.1,"value":"Remote note"}),
+    );
+    add(
+        &mut s,
+        json!({"type":"text","at":[11,5],"height":0.1,"value":"Outside"}),
+    );
+    assert_eq!(
+        s.drawing.element_metadata(h).unwrap().label.as_deref(),
+        Some("Nearest room")
+    );
+    add(
+        &mut s,
+        json!({"type":"text","at":[6,5],"height":0.1,"value":"Equally near"}),
+    );
+    assert!(s.drawing.element_metadata(h).unwrap().label.is_none());
+}

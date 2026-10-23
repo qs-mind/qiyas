@@ -504,3 +504,155 @@ Files touched:
 - `crates/qiyas-cli/src/headless.rs`
 
 Logs, snapshots, audit data and replay outputs above remain local-only.
+
+## Eleventh free run: raster calibration and PDF correspondence (23 October 2026)
+
+Source: `.local/benchmark/runs/eval-agent-set-20261022T234438437979749-1494095/report.json`.
+The six saved cases originally matched 39/50 items (78% coverage), with all 39 passing
+quantity tolerance; the scan matched 0/9. No agent evaluation was run for this fix.
+
+Raster vision now refines the bar centreline and transverse tick centres using integrated
+antialiased ink coverage. Both tick halves must agree with one unambiguous peak; missing
+or competing ticks retain the supplied anchors with a warning. Multiple supplied references
+are refined independently; the longest verified span sets scale. `dimensions` accepts
+verbatim dimension strings and endpoints, including explicit metric/imperial units or a
+caller-declared conversion for bare numbers. Independent scales are compared, with the
+maximum discrepancy included in reported residual uncertainty. Unresolved dimension text
+is reported. Residual uncertainty above 0.5% caps candidate confidence at 0.5; evidence
+retains the calibrated anchors and uncertainty after acceptance. This does not claim that
+an unverified reference's uncertainty is an upper bound on its error.
+
+`recognition.vision.texts` carries spatial text from vision/OCR; the PDF text layer is also
+collected automatically. Closed regions retain the nearest enclosed verbatim label on their
+driver, independently of the object type's declared properties. PDF metadata likewise uses
+the nearest enclosed text. Equal-distance alternatives remain ambiguous; ordinary CAD text
+keeps its existing unique-label rule. Saved drivers retain their labels for export and replay.
+There is no bundled OCR engine or automatic transcription of image-only text: the vision
+caller supplies it, as the workflow and command schema now request.
+
+After `description_position`, the PDF-only `pdf_position` tier requires the same kind and
+unit and a position within max(0.5 m, 3% of the geometry-derived diagonal). One candidate
+matches directly. Multiple candidates can use the existing word tie-break only when they
+occupy the same position; otherwise they remain unmatched. Quantities never choose a match.
+The existing description tolerance and numerical scoring tolerances are unchanged.
+
+`bench calibrate-scans --output FILE [--agent-report REPORT]` is an offline benchmark audit.
+It runs production calibration on every generated scan using its existing prepared input
+anchors, then opens generated geometry to measure the scale error. Its optional saved-report
+path additionally audits the retained agent calibration input against the saved source PDF.
+Neither the production calibration function nor prediction receives truth. Cases, recipes,
+truth, saved quantities and original agent artefacts are not rewritten.
+
+Regression coverage includes sub-pixel and vertical ticks, ambiguous/missing ticks, longest
+span selection, conflicting dimension text, confidence reduction, label persistence through
+acceptance/save, nearest/enclosed PDF labels, submission labels without a `name` property,
+PDF-only position matching, kind/unit/location constraints, and quantity-independent ties.
+
+Files touched:
+
+- `CLAUDE.md`
+- `docs/2026-10-22-agent-eval-fixes.md`
+- `crates/qiyas-ai/src/takeoff_workflow.txt`
+- `crates/qiyas-cli/src/bench/calibration.rs`
+- `crates/qiyas-cli/src/bench/mod.rs`
+- `crates/qiyas-cli/src/bench/score.rs`
+- `crates/qiyas-cli/src/bench/tests.rs`
+- `crates/qiyas-core/src/element_metadata.rs`
+- `crates/qiyas-core/src/recognition.rs`
+- `crates/qiyas-core/src/recognition/raster_calibration.rs`
+- `crates/qiyas-core/src/recognition/vision.rs`
+- `crates/qiyas-core/tests/element_metadata.rs`
+- `crates/qiyas-core/tests/recognition.rs`
+- `crates/qiyas-pdf/src/calibration.rs`
+- `crates/qiyas-pdf/src/lib.rs`
+
+Logs, source-report snapshot and original-artifact hashes are under
+`.local/agent-eleventh-fixes/`. No helper agents, new crates, key/settings access,
+staging, commits or pushes were used. Cargo commands run sequentially with four build jobs.
+
+### Eleventh-run saved replay
+
+`bench rescore-agent` completed with exit 0. Output:
+`.local/benchmark/runs/rescore-eleventh-scanned-fixes/report.json`.
+
+| Metric | Overall before → after | Scan before → after |
+|---|---:|---:|
+| Matched coverage | 39/50 (78%) → 46/50 (92%) | 0/9 → 7/9 (77.78%) |
+| Passing quantities | 39/50 → 41/50 | 0/9 → 2/9 |
+| Matched accuracy | 100% → 89.13% | undefined → 28.57% |
+| Item precision | 48.15% → 58.97% | 0% → 46.67% |
+| Extras | 42 → 32 | 18 → 8 |
+
+The other five cases retain their original matches and passing quantities: apartment 8/9,
+office 8/8, warehouse 8/8, MEP 8/8 and external 7/8. All seven new scan matches use
+`pdf_position`. Count and provisional allowance pass their existing tolerances; the five
+other matched quantities retain errors of 2.20–4.73%. Bedroom and bathroom positions are
+0.533 m and 0.529 m away, outside the required tolerance, and remain unmatched. No tolerance
+was extended to recover them. Matching the complete count aggregate consumes its four
+components, accounting for three fewer independently scored submissions without removing
+any saved rows.
+
+All 152 replayed submission rows retain their original quantities, dimension lines, citations,
+source objects, bases and rule IDs. SHA-256 checks confirm 26 original report/drawing/source/
+measurement/event artefacts are unchanged. Audit: `.local/agent-eleventh-fixes/replay-audit.json`.
+The lower matched accuracy exposes previously unmatched errors; it is not a new agent result
+or evidence that old measured quantities were corrected.
+
+### Calibration audit
+
+All 60 generated scanned variants are included, including failed refinements; no outlier is
+excluded. The baseline is the existing prepared calibration anchors passed through the old
+unrefined scale calculation, not 60 new agent observations.
+
+| Across all 60 scans | Before | After |
+|---|---:|---:|
+| Median absolute length error | 0.565684% | 0.289864% |
+| Cases below 0.5% | 29/60 | 43/60 |
+| Maximum absolute length error | 3027.389469% | 3027.389469% |
+
+37 spans refine successfully; every one has error below 0.5% (maximum 0.435725%).
+23 supplied references cannot be verified and are retained with warnings and reduced
+confidence. Six older prepared references have errors above 75%, including two above 2700%;
+their endpoints are misplaced or their spans are far too short. The product does not use
+known generated geometry to repair these references. Readable references/dimension evidence
+must be supplied for them. The requested median target is met; calibration is not universally
+solved for arbitrary bad input anchors.
+
+The saved eleventh-run agent input is audited separately: its length error falls from
+**2.084051% to 0.006269%**. Refined tick centres span 38.308105 page points instead of the
+agent's 39.125911. Residual uncertainty is still 0.922921%, so confidence is reduced: a short
+single reference is not independent evidence of sub-percent certainty. This audit changes
+neither the saved drawing nor its quantities. Complete inputs/results for all 60 scans and
+the saved agent are in `.local/agent-eleventh-fixes/calibration-final.json`.
+
+### Eleventh-run verification
+
+Each requested command was invoked once, with no simultaneous Cargo commands or helper
+agents. The full test command's failure and targeted recovery are reported separately.
+
+| Check | Actual result |
+|---|---|
+| `cargo fmt --all` | Passed, exit 0. |
+| `CARGO_BUILD_JOBS=4 cargo clippy --offline --workspace --all-targets -- -D warnings` | Passed, exit 0. The only later Rust change corrects the new persistence test's save API; production source is unchanged. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-core -p qiyas-cli -p qiyas-pdf` | Exit 101: 619 passed, one new persistence fixture failed because it called a nonexistent `save` command. Compilation completed in 10m 04s. |
+| Targeted recognition recovery | The first recovery had eight passes and the fixture failed because a new unsaved session needs Save As. Corrected to `save_as(&drawing)`; the final targeted persistence test passed. No assertion was removed or relaxed. |
+| Remaining already-built core/PDF test binaries | All 30 binaries passed: 239 tests, zero failures/ignored. Together with the corrected persistence test and original passing tests, all 859 distinct core/CLI/PDF test cases are verified. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-core -p qiyas-pdf --doc` | Passed, exit 0; both crates have zero doc tests. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-ai --lib --test surface` | Exit 101: 73 library tests passed; `models::tests::an_unreachable_service_falls_back_to_the_builtin_list` failed on sandbox localhost binding with `PermissionDenied`. Cargo stopped before surface. |
+| Newly built surface executable, directly | Passed, exit 0: all 54 tests. |
+| Final direct rustfmt check of the corrected test, and `git diff --check` | Passed. |
+| Calibration audit and saved rescore | Both completed with exit 0; results above. |
+
+The only remaining test failure requires localhost binding outside this sandbox. The requested
+full core/CLI/PDF command itself did not pass; the sequential recovery establishes its remaining
+test results without repeating that command. The two setup corrections affect only the new test,
+which now verifies the real save/reopen path with every original assertion intact.
+
+The final `./target/debug/qiyas-cli bench run --set quick --mode autonomy` ran once,
+last, and completed with exit 0 in 165.47 seconds. All 120 cases completed. Coverage is
+19.50% (716/3,672), precision 98.76% (716/725), with nine extras; all 716 matches pass
+quantity tolerance. These headline item metrics equal the previous quick result. The PDF
+subset has 29 matches, all passing, and no extras. Comparison found all 36 seeded errors
+with nine false positives. This is the shared-rule engine diagnostic, not an agent evaluation.
+
+Quick report_directory: `.local/benchmark/runs/baseline-autonomy-20261023T002825336674420-3`.

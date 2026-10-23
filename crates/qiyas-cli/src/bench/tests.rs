@@ -859,8 +859,15 @@ fn pdf_position_matching_uses_geometry_extent_never_quantity_and_keeps_ambiguity
         Some("description_position")
     );
     submission.items[0].position = Some([1.4, 2.0]);
+    assert_eq!(
+        score::score(&truth, &submission, None).items[0]
+            .matched_by
+            .as_deref(),
+        Some("pdf_position")
+    );
+    submission.items[0].position = Some([1.6, 2.0]);
     assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
-    submission.items[0].diagonal_m = Some(25.0);
+    submission.items[0].diagonal_m = Some(35.0);
     assert_eq!(score::score(&truth, &submission, None).metrics.matched, 1);
     submission.items.push(proposed);
     submission.items[1].quantity = 20.0;
@@ -949,4 +956,97 @@ fn same_object_candidates_are_told_apart_by_words_never_quantity() {
         score::score(&truth(vec![gold]), &tie, None).metrics.matched,
         0
     );
+}
+
+#[test]
+fn pdf_position_fallback_requires_kind_unit_location_and_unique_words() {
+    let mut gold = item("gold", "volume", 100.0, "geometry");
+    gold.description = "Material volume".into();
+    gold.source_objects.clear();
+    gold.position = Some([4.0, 8.0]);
+    let mut observed = gold.clone();
+    observed.id = "observed_volume".into();
+    observed.description = "Labelled room boundaries".into();
+    observed.position = Some([4.42, 8.0]);
+    observed.quantity = 987.0;
+    let mut truth = truth(vec![gold]);
+    let mut submission = Submission {
+        items: vec![observed.clone()],
+        ..Default::default()
+    };
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    truth.drawing = "scan.PDF".into();
+    let result = score::score(&truth, &submission, None);
+    assert_eq!(result.items[0].matched_by.as_deref(), Some("pdf_position"));
+    assert_eq!(result.metrics.passed, 0);
+    submission.items[0].unit = "m2".into();
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    submission.items[0] = observed.clone();
+    submission.items[0].kind = "area".into();
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    submission.items[0] = observed.clone();
+    submission.items[0].position = None;
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    submission.items[0] = observed.clone();
+    let mut other = observed.clone();
+    other.id = "allowance".into();
+    other.quantity = 100.0;
+    submission.items.push(other.clone());
+    // Same-position recipes can be distinguished by their words, even with wrong quantities.
+    let result = score::score(&truth, &submission, None);
+    assert_eq!(result.metrics.matched, 1);
+    assert_eq!(result.items[0].submitted, Some(987.0));
+    submission.items[1].id = observed.id.clone();
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+    // Words cannot choose between two different nearby elements.
+    submission.items[1] = other;
+    submission.items[1].position = Some([4.3, 8.0]);
+    assert_eq!(score::score(&truth, &submission, None).metrics.matched, 0);
+}
+
+#[test]
+fn vision_submission_carries_enclosed_room_text_without_declared_name_property() {
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = qiyas_pdf::fixtures::write_wall(dir.path());
+    let mut session = Session::new_blank(&dir.path().join("vision.dxf"), 6);
+    let command = |session: &mut Session, value: Value| {
+        serde_json::to_value(session.run_input(&value, Source::User).unwrap()).unwrap()
+    };
+    command(
+        &mut session,
+        json!({"type":"define_object_type","definition":{"name":"Space","geometry":"region","category":"test"}}),
+    );
+    let result = command(
+        &mut session,
+        json!({"type":"recognition","kind":"vision","spec":{
+            "path":pdf,"page":1,"calibration":{"a":[20,20],"b":[120,20],"distance_m":1},"snap_radius_m":0.001,
+            "texts":[{"at":[70,45],"text":"Room Z"},{"at":[70,80],"text":"Outside label"}],
+            "hints":[{"object_type":"Space","points":[[20,20],[120,20],[120,70],[20,70]],"confidence":0.99}]
+        }}),
+    );
+    let handle = result["result"]["candidates"][0]["handle"]
+        .as_u64()
+        .unwrap();
+    command(
+        &mut session,
+        json!({"type":"recognition","kind":"review","handle":handle,"decision":"accepted"}),
+    );
+    let citation = json!({"source":"page 1","clause":"Enclosed region"});
+    command(
+        &mut session,
+        json!({"type":"measurement","kind":"set_method","scope":"project","method":{
+            "name":"Areas","title":"Areas","based_on":"drawing","source_note":"page 1",
+            "rules":[{"id":"area","element_type":"Space","kind":"area","unit":"m2","basis":"geometric","citation":citation,
+            "terms":[{"label":"Labelled room boundaries","operation":"add","factors":["geometry.area"],"citation":citation}]}]
+        }}),
+    );
+    let submission = submission::from_session(&session).unwrap();
+    assert_eq!(submission.items.len(), 1);
+    assert_eq!(submission.items[0].description, "Room Z");
+    assert_eq!(submission.items[0].confidence, Some(0.5));
+    assert!((submission.items[0].quantity - 0.5).abs() < 1e-6);
+    assert!(submission.items[0].source_objects[0].starts_with("pdf:"));
 }

@@ -158,6 +158,7 @@ fn match_item(
         "handles_category",
         "handles_any",
         "description_position",
+        "pdf_position",
     ] {
         let candidates: Vec<_> = submitted
             .iter()
@@ -176,6 +177,23 @@ fn match_item(
                                         basis_category(&s.basis) == basis_category(&gold.basis)
                                     }
                                     _ => s.unit == gold.unit,
+                                }
+                        }
+                        "pdf_position" => {
+                            pdf && s.kind == gold.kind
+                                && s.unit == gold.unit
+                                && match (s.position, gold.position) {
+                                    (Some(a), Some(b)) => {
+                                        (a[0] - b[0]).hypot(a[1] - b[1])
+                                            <= 0.5_f64.max(
+                                                0.03 * gold
+                                                    .diagonal_m
+                                                    .or(s.diagonal_m)
+                                                    .filter(|d| d.is_finite() && *d >= 0.0)
+                                                    .unwrap_or(0.0),
+                                            )
+                                    }
+                                    _ => false,
                                 }
                         }
                         _ => {
@@ -222,7 +240,9 @@ fn match_item(
             // Several items on the same objects (a base volume and its allowance): pick the one
             // whose own words (id, basis, description) share the most words with the gold item's,
             // when exactly one leads. Never the quantity; a tie stays unmatched.
-            if mode.starts_with("handles") {
+            if mode.starts_with("handles")
+                || (mode == "pdf_position" && same_position(submitted, &candidates))
+            {
                 if let Some(i) = closest_by_words(gold, submitted, &candidates) {
                     return Some((i, mode));
                 }
@@ -231,6 +251,17 @@ fn match_item(
         }
     }
     None
+}
+
+fn same_position(submitted: &[Item], candidates: &[usize]) -> bool {
+    let Some(first) = submitted[candidates[0]].position else {
+        return false;
+    };
+    candidates.iter().all(|i| {
+        submitted[*i]
+            .position
+            .is_some_and(|p| (p[0] - first[0]).hypot(p[1] - first[1]) <= 1e-6)
+    })
 }
 
 pub fn tolerance(item: &Item) -> f64 {

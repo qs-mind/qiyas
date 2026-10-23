@@ -634,7 +634,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   missing measurement artefacts remain empty. This command never starts an agent or provider.
 - Submissions and saved replay use drawing-owned element metadata: centroid/insertion point
   converted to metres (PDF drivers already contain calibration), and verbatim element labels
-  with rule text as fallback. Multiple enclosed texts are ambiguous. BOQ totals use the unweighted
+  with rule text as fallback. PDF regions use the nearest enclosed text; equally near labels
+  remain ambiguous. Vision/OCR spatial texts are retained on the source driver. BOQ totals use the unweighted
   centre of their distinct source elements; PDF evidence never claims original CAD handles.
 - Open paths use their half-length point; regions use area centroids and blocks use insertion
   points. `bench regenerate-positions` updates only generated development truth position arrays,
@@ -643,7 +644,17 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `sources/qiyas-generator/position-provenance.jsonl`. Holdout contents are never opened.
 - PDF `description_position` matching uses max(0.25 m, 2% of the element's geometry-derived
   diagonal); CAD retains 0.05 m. Quantity values never select matches and ambiguity remains
-  unmatched. Position metadata and diagonals come from drawing geometry, not quantities.
+  unmatched. A subsequent PDF-only `pdf_position` tier requires kind/unit and distance within
+  max(0.5 m, 3% of the geometry diagonal). Only candidates at the same position can use the
+  existing word tie-break; different nearby elements remain ambiguous. Position metadata and
+  diagonals come from drawing geometry, not quantities.
+- Raster vision refines supplied tick anchors using sub-pixel ink coverage, selects the longest
+  verified span and cross-checks supplied dimension strings/endpoints. Its result and evidence
+  report residual uncertainty; above 0.5%, candidate confidence is capped at 0.5. Supply
+  `calibration_spans`, `dimensions` and verbatim spatial `texts` from vision/OCR; PDF text is
+  collected automatically. Missing ticks or independent dimensions are reported explicitly.
+  `bench calibrate-scans --output FILE` audits all generated scans against their geometry only
+  after production calibration, without agents or changes to cases.
 - `bench regenerate-scans` refreshes only existing generated scanned-PDF variants using their
   saved seeds, adds a 4% margin and reframes prepared vision recipes. Other variants and saved
   agent artefacts remain untouched. No model calls are involved.

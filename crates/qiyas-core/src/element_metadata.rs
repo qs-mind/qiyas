@@ -4,6 +4,8 @@ use qiyas_geom::{flatten, Path, Xform};
 
 use crate::{objects, Drawing};
 
+pub(crate) const REGION_TEXT_APP: &str = "QIYAS_REGION_TEXT";
+
 pub struct ElementMetadata {
     /// World drawing coordinates. PDF drivers already include calibration and insertion.
     pub position: [f64; 2],
@@ -55,6 +57,7 @@ impl Drawing {
             .filter_map(text)
             .collect::<Vec<_>>();
         let label = unique(owned)
+            .or_else(|| crate::xdata::read_text(entity.common(), REGION_TEXT_APP))
             .or_else(|| text(entity).map(|(_, text)| text))
             .or_else(|| {
                 let object = objects::instance(entity)?;
@@ -92,13 +95,18 @@ impl Drawing {
                             .into_iter()
                             .map(|r| (r.at, r.text)),
                     );
-                unique(
-                    labels
-                        .filter(|(at, _)| {
-                            rings.iter().filter(|p| inside(*at, &p.points)).count() % 2 == 1
-                        })
-                        .collect(),
-                )
+                let enclosed = labels
+                    .filter(|(at, _)| {
+                        rings.iter().filter(|p| inside(*at, &p.points)).count() % 2 == 1
+                    })
+                    .collect();
+                if crate::xdata::read_text(entity.common(), crate::recognition::SOURCE_APP)
+                    .is_some()
+                {
+                    nearest_label(position, enclosed)
+                } else {
+                    unique(enclosed)
+                }
             });
         let mut lo = position;
         let mut hi = position;
@@ -142,7 +150,22 @@ fn unique(labels: Vec<([f64; 2], String)>) -> Option<String> {
     }
 }
 
-fn inside(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
+/// Select the nearest enclosed text. Equal-distance alternatives remain ambiguous.
+pub(crate) fn nearest_label(at: [f64; 2], mut labels: Vec<([f64; 2], String)>) -> Option<String> {
+    let distance = |p: [f64; 2]| (p[0] - at[0]).hypot(p[1] - at[1]);
+    labels.sort_by(|a, b| distance(a.0).total_cmp(&distance(b.0)));
+    labels.dedup();
+    let first = labels.first()?;
+    if labels
+        .get(1)
+        .is_some_and(|second| (distance(first.0) - distance(second.0)).abs() < 1e-9)
+    {
+        return None;
+    }
+    Some(first.1.clone())
+}
+
+pub(crate) fn inside(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
     let mut result = false;
     for (a, b) in ring
         .iter()

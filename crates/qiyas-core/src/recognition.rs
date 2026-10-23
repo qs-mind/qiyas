@@ -18,6 +18,8 @@ use crate::objects::{GeometryKind, ObjectPlacement, ObjectType};
 use crate::{CoreError, EntityFilter, EntityRow, Session, Target};
 
 pub use schedule::{GridSource, ScheduleSpec};
+mod raster_calibration;
+pub use raster_calibration::{calibrate_raster, RasterCalibration, VisionDimension};
 pub use vision::{Calibration, VisionSpec};
 pub const APP: &str = "QIYAS_RECOGNITION";
 pub const SOURCE_APP: &str = "QIYAS_SOURCE";
@@ -261,7 +263,9 @@ pub enum RecognitionCommand {
         rule: TextCalibration,
     },
     /// Snap vision hints from a calibrated PDF page to existing geometry or raster ink.
-    /// Points use displayed page points, bottom-left origin. Unsnapped hints require review.
+    /// Points use displayed page points, bottom-left origin. Supply all visible calibrated spans,
+    /// dimension strings with endpoints, and verbatim spatial texts from vision/OCR. The longest
+    /// verified span sets scale; residual uncertainty above 0.5% lowers confidence.
     #[schemars(extend("x-needs" = "pdf"))]
     #[schemars(example = json!({"kind":"vision","spec":{"path":"drawing.pdf","page":1,"calibration":{"a":[0,0],"b":[100,0],"distance_m":1},"snap_radius_m":0.01,"hints":[{"object_type":"Run","points":[[20,20],[120,20]],"confidence":0.8}]}}))]
     Vision { spec: Box<VisionSpec> },

@@ -1,5 +1,6 @@
 //! Local development benchmark. Enumeration is rooted in `cases`, never `holdout`.
 mod baseline;
+mod calibration;
 mod checks;
 mod general;
 pub mod generate;
@@ -54,6 +55,14 @@ pub struct BenchArgs {
 
 #[derive(Subcommand)]
 pub enum BenchCommand {
+    /// Audit raster scale against generated geometry; no agent calls or changed cases.
+    CalibrateScans {
+        #[arg(long)]
+        output: PathBuf,
+        /// Also audit calibration inputs retained in a saved agent set, without replaying it.
+        #[arg(long)]
+        agent_report: Option<PathBuf>,
+    },
     /// Rebuild submissions from saved measurements and recognition evidence, without an agent.
     RescoreAgent {
         #[arg(long)]
@@ -127,6 +136,10 @@ pub enum BenchCommand {
 pub fn run(args: &BenchArgs) -> Result<Value, String> {
     refuse_holdout_path(&args.root)?;
     match &args.command {
+        BenchCommand::CalibrateScans {
+            output,
+            agent_report,
+        } => calibration::scans(&args.root, output, agent_report.as_deref()),
         BenchCommand::RescoreAgent { report, output } => rescore::agent(&args.root, report, output),
         BenchCommand::Projects { mode, set, rescore } => {
             if let Some(folder) = rescore {

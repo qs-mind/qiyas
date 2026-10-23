@@ -472,3 +472,53 @@ fn correcting_type_replaces_inapplicable_properties_and_refits_source_geometry()
     assert!(s.objects(&Default::default()).unwrap().is_empty());
     assert_eq!(s.recognition_queue(None).unwrap()[0].unresolved, ["width"]);
 }
+
+#[test]
+fn vision_retains_nearest_enclosed_text_and_calibration_uncertainty_after_save() {
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = qiyas_pdf::fixtures::write_wall(dir.path());
+    let drawing = dir.path().join("labels.dxf");
+    let mut s = Session::new_blank(&drawing, 6);
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{"name":"Space","category":"test","geometry":"region"}}),
+    );
+    let result = run(
+        &mut s,
+        json!({"type":"recognition","kind":"vision","spec":{
+            "path":pdf,"page":1,"calibration":{"a":[20,20],"b":[120,20],"distance_m":1},"snap_radius_m":0.001,
+            "texts":[{"at":[70,45],"text":"Studio 12"},{"at":[22,22],"text":"Remote note"},{"at":[70,80],"text":"Outside"}],
+            "hints":[{"object_type":"Space","points":[[20,20],[120,20],[120,70],[20,70]],"confidence":0.99}]
+        }}),
+    );
+    assert!(
+        result["result"]["calibration"]["uncertainty_percent"]
+            .as_f64()
+            .unwrap()
+            > 0.5
+    );
+    let candidate = &result["result"]["candidates"][0];
+    assert_eq!(candidate["confidence"], 0.5);
+    let handle = candidate["handle"].as_u64().unwrap();
+    assert_eq!(
+        s.drawing.element_metadata(handle).unwrap().label.as_deref(),
+        Some("Studio 12")
+    );
+    run(
+        &mut s,
+        json!({"type":"recognition","kind":"review","handle":handle,"decision":"accepted"}),
+    );
+    assert_eq!(
+        s.drawing.element_metadata(handle).unwrap().label.as_deref(),
+        Some("Studio 12")
+    );
+    s.save_as(&drawing).unwrap();
+    let saved = qiyas_core::Drawing::open(&drawing).unwrap();
+    assert_eq!(
+        saved.element_metadata(handle).unwrap().label.as_deref(),
+        Some("Studio 12")
+    );
+}
