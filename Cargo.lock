@@ -2840,6 +2840,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "lopdf"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfffda0fe1ab0157e1a13c14bebd3f28671f2fccb7922f0722ec53926e6922d3"
+dependencies = [
+ "aes",
+ "bitflags 2.13.2",
+ "brotli-decompressor 5.0.3",
+ "cbc",
+ "ecb",
+ "encoding_rs",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap 2.14.2",
+ "itoa",
+ "log",
+ "md-5",
+ "nom 8.0.0",
+ "rand",
+ "rangemap",
+ "sha2 0.11.0",
+ "stringprep",
+ "thiserror 2.0.21",
+ "weezl 0.2.1",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3810,7 +3837,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "getrandom 0.4.3",
- "lopdf",
+ "lopdf 0.44.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4089,7 +4116,7 @@ version = "0.0.1"
 dependencies = [
  "flate2",
  "libc",
- "lopdf",
+ "lopdf 0.45.0",
  "opencadcodec",
  "qiyas-core",
  "qiyas-geom",
