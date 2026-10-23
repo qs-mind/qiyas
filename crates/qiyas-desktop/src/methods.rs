@@ -1,11 +1,12 @@
-//! Local user-supplied measurement methods, validated by the core engine.
+//! Optional local rules supplement any method name selected by the QS.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use qiyas_ai::MeasurementMethod;
-use qiyas_core::measurement::{MeasurementCommand, MethodScope, RuleSet};
-use qiyas_core::{Command, CoreError, Session, Source};
+pub use qiyas_core::measurement::load_method_at as load_at;
+use qiyas_core::measurement::RuleSet;
+use qiyas_core::{CoreError, Session, Source};
 use serde::Serialize;
 
 #[cfg(test)]
@@ -95,46 +96,8 @@ pub fn selected(name: Option<&str>) -> MeasurementMethod {
     }
 }
 
-pub fn load_at(home: &Path, name: Option<&str>) -> Result<Option<RuleSet>, String> {
-    let Some(name) = name else {
-        return Ok(None);
-    };
-    let mut found = None;
-    for entry in fs::read_dir(home.join("methods")).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().is_none_or(|e| e != "json") || !path.is_file() {
-            continue;
-        }
-        let bytes = fs::read(path).map_err(|e| e.to_string())?;
-        let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if value["name"] != name {
-            continue;
-        }
-        let method: RuleSet = serde_json::from_value(value).map_err(|e| e.to_string())?;
-        method.validate().map_err(|e| e.to_string())?;
-        if found.replace(method).is_some() {
-            return Err(format!("More than one measurement method is named {name}"));
-        }
-    }
-    found
-        .map(Some)
-        .ok_or_else(|| format!("Measurement method {name} is missing from methods/*.json"))
-}
-
 pub fn apply(s: &mut Session, method: Option<&RuleSet>) -> Result<(), CoreError> {
-    if s.measurement_selection()?.settings.as_ref() == method {
-        return Ok(());
-    }
-    s.run(Command::Measurement(Box::new(
-        MeasurementCommand::SetMethod {
-            scope: MethodScope::Settings,
-            method: method.cloned().map(Box::new),
-        },
-    )))?;
-    Ok(())
+    s.apply_settings_method(method)
 }
 
 /// Nested transactions preserve every drawing and its history if validation or saving fails.
@@ -245,7 +208,10 @@ mod tests {
         assert_eq!(b.measurement_report().unwrap().items[0].unit, "m");
         assert!(a.undo());
         assert_eq!(a.measurement_report().unwrap().items[0].unit, "m2");
-        assert!(load_at(dir.path(), Some("absent")).is_err());
+        assert_eq!(
+            load_at(dir.path(), Some("absent")).unwrap(),
+            Some(RuleSet::named("absent"))
+        );
     }
 
     #[test]

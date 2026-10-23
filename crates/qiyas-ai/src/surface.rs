@@ -767,7 +767,12 @@ fn run_working_session(
         (READ, "document") => json(crate::document::read(args)?),
         (CAPTURE, "document") => crate::document::capture(args),
         (READ, "digest") => {
-            json(session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?)
+            let mut digest =
+                session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?;
+            let selected = crate::MeasurementMethod::for_session(session, method)?;
+            digest["measurement_method"]["name"] = json!(selected.name);
+            digest["measurement_method"]["rules_loaded"] = json!(selected.rules_loaded);
+            json(digest)
         }
         (READ, "takeoff_kit") => {
             let mut kit = qiyas_core::takeoff_kit::kit();
@@ -785,6 +790,34 @@ fn run_working_session(
                 }
             }
             bind(&mut kit["batch"], &digest["example_names"]);
+            let selected = crate::MeasurementMethod::for_session(session, method)?;
+            if selected.name.is_some() {
+                kit["measurement_method"] = selected.state();
+            }
+            let selection = session.measurement_selection()?;
+            let scope = if selection.project.is_some() {
+                "project"
+            } else {
+                "settings"
+            };
+            if let Some(name) = &selected.name {
+                kit["measurement_method"]["scope"] = json!(scope);
+                let commands = kit["batch"]["commands"].as_array_mut().expect("kit batch");
+                if selected.rules_loaded {
+                    // Existing rules may be large. Reuse them without resending or replacing them.
+                    commands.retain(|command| {
+                        !(command["type"] == "measurement" && command["kind"] == "set_method")
+                    });
+                } else {
+                    for command in commands {
+                        if command["type"] == "measurement" && command["kind"] == "set_method" {
+                            command["scope"] = json!(scope);
+                            command["method"] =
+                                json!(qiyas_core::measurement::RuleSet::named(name));
+                        }
+                    }
+                }
+            }
             finish_kit(&mut kit);
             json(kit)
         }
@@ -803,23 +836,14 @@ fn run_working_session(
         }
         (READ, "state") => {
             let mut value = state(session);
-            value["measurement_method"] = json!(method);
-            if qiyas_core::knowledge::get(
-                &session.drawing.doc,
-                qiyas_core::knowledge::Kind::Measurement,
-                "selection",
-            )?
-            .is_some()
-            {
-                let selection = session.measurement_selection()?;
-                let effective = selection.effective();
-                value["measurement_method"] = json!({"name":effective.map(|m| &m.name),"rules_loaded":effective.is_some_and(|m| !m.rules.is_empty())});
-                value["measurement_scope"] = json!(if selection.project.is_some() {
-                    "project"
-                } else {
-                    "settings"
-                });
-            }
+            value["measurement_method"] =
+                crate::MeasurementMethod::for_session(session, method)?.state();
+            let selection = session.measurement_selection()?;
+            value["measurement_scope"] = json!(if selection.project.is_some() {
+                "project"
+            } else {
+                "settings"
+            });
             json(value)
         }
         (READ, "capabilities") => json(capabilities()),

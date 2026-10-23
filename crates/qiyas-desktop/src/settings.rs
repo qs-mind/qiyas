@@ -138,7 +138,7 @@ pub struct Settings {
     pub effort: String,
     /// When Mizan waits for approval of its plan.
     pub autonomy: qiyas_ai::Autonomy,
-    /// The name of a local measurement rule set; none means geometric quantities.
+    /// The selected measurement method name; local rules are optional. None means geometric quantities.
     pub measurement_method: Option<String>,
     pub mcp_enabled: bool,
     pub mcp_port: u16,

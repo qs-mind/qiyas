@@ -476,8 +476,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Lines retain expressions, operands, inclusion decisions, method/clause/source and handle/sheet/
   assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
   withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
-- Settings validates local method files and applies changes transactionally to open tabs. Opening
-  a tab applies the selected method. Project `.qss` runs apply their method override to every member before deriving quantities. The BOQ panel exposes the
+- Settings selects method names: POMI (RICS), NRM2 (RICS), SMM7, CESMM4, local practice in
+  Egypt/KSA/UAE, Other (free text), or None (geometric quantities). Labels are English/Arabic;
+  saved `measurement_method` is the name string (null for None). Optional `methods/*.json`
+  files remain extra name choices. Files are matched by their declared name, not filename.
+  Missing files produce a name-only selection with no bundled rules. Invalid matching files
+  and duplicate names still fail validation. Settings applies changes transactionally to tabs.
+  Opening a tab preserves drawing-authored rules for the same name; project override wins. Project `.qss` runs apply their method override to every member before deriving quantities. The BOQ panel exposes the
   generated items and dimension source links; the take-off export adds bilingual BOQ, dimension
   and review worksheets. Comparison adapts generated quantities without replacing the imported BOQ.
 - `recognition.pdf_text` calibrates vectors from a label regex and a ticked scale bar. General
@@ -503,8 +508,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   take-off workflow from command/kind `x-takeoff-step` schema metadata. The three tools remain.
 - `takeoff_workflow.txt` guides digest/picture, batched type/rule authoring, recognition, Settings
   method (project override wins), mappings, self-check and repairs by handle. No case names,
-  trade lists, standards text, thresholds or rates are supplied. Missing methods may be authored
-  as explicitly cited geometric data; selected standards must not be silently replaced.
+  trade lists, standards text, thresholds or rates are supplied. A named method without rules
+  tells Mizan to write rules from its knowledge in its own words, with clause references, through
+  `measurement.set_method` at the selected scope. It must apply the method's units, deductions,
+  conventions and descriptions and disclose uncertain rules/references in its end report.
+  It must not copy standard text or invent clauses. None uses cited geometric quantities.
+  Agent opening state and shared MCP state/digest/kit use drawing knowledge first. A pending
+  named kit batch has an empty rule set to fill; a loaded kit omits method replacement and
+  instructs reuse. No geometric example is relabelled as a standard rule.
 - `qiyas_read takeoff_check {offset?,expectations?}` reports per-layer and per-block explanation,
   closed-region coverage, unexplained handles, unmapped tables, unmatched schedule rules,
   uncertainties and verify results. It reads only. These are evidence shares, not truth coverage.
@@ -524,7 +535,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   cover the next request only: UTF-8 input bytes plus protocol/image allowance and output cap;
   actual usage settles the ledger. Unknown usage retains the reservation and stops the case.
   Unused case allocations carry forward; the total and daily caps both apply. Selected Settings
-  method files are applied to the isolated evaluation drawing. No case recipes are supplied.
+  method names and optional files are applied to the isolated evaluation drawing. No case recipes are supplied.
 - Frozen sets live in `.local/benchmark/sets/`. `live-dev` selects the first lexical clean case
   in apartment, office, warehouse, MEP and external, plus the first lexical PDF case. `quick`
   round-robins project-type × variant strata, SHA-256 case-ID order within each, up to 120 cases.
@@ -1914,13 +1925,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   tells Mizan to read the drawing before acting. Old tool cards cannot undo earlier sessions.
   Pictures and thumbnails become `[picture removed]` on disk; keys are never included.
 - Settings include `autonomy` (`autonomous`, the default; `per_job`; `per_phase`) and
-  `measurement_method` (a local rule set name, or null for geometric quantities). Multi-phase
+  `measurement_method` (a selected standard/local/custom name, or null for geometric quantities). Multi-phase
   plans wait for approval per the selected mode; Approve sends `Approved, continue.`, while
   Change focuses the composer. In autonomous mode, unfixed errors are reported without an approval pause.
 - `qiyas-core/src/data_home.rs::qiyas_dir()` (re-exported by desktop methods) is the Qiyas data home: release builds use
   `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
   `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
-  on first use. Settings lists local `methods/*.json`; no measurement rules ship with Qiyas.
+  on first use. Settings offers named methods and local `methods/*.json` as extra choices; no measurement rules ship with Qiyas.
   Version 1 validates `{name, title, based_on, source_note, rules: []}` and the cited rule
   contents through the Phase 18 engine (an omitted version means 1). Mizan's live state reports the name and whether a nonempty rule set was loaded;
   without rules, quantities are geometric and answers say so.
@@ -2715,3 +2726,21 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
 - Approval remains in the room/take-off report. Plan wording stays `Area 19.31 m²` /
   `المساحة ١٩٫٣١ م²`, with Arabic digits and decimal separator. No new dependencies or licence changes.
 - Evidence and exact check results: `docs/2026-10-23-qiyas-goal-G.md`.
+## Goal M: measurement by name (23 October 2026)
+
+- `mcp`, `eval` and `eval-agent` accept `--method "POMI (RICS)"` (or any method name).
+  Eval overrides the saved choice for that run. External agents receive the same name through
+  the generated MCP configuration and request; custom runner templates also have `{method}`.
+  Headless MCP does not load app settings or credentials. Local method rules are optional.
+- Rules authored with `measurement.set_method` remain drawing knowledge through save/reopen.
+  Reapplying the same name-only Settings selection does not erase them or add an undo step.
+  Clearing Settings leaves an explicit project override in force.
+- Generated items retain their method and rule citations through dimension lines. The standard
+  take-off workbook now shows Method and Source / clause on its BOQ sheet too. Default BOQ
+  deliverables show both columns; dimension deliverables show Method beside their citations.
+  Citation objects render as source / clause instead of empty reference text. Custom layouts
+  keep their chosen columns; lossless records retain the complete trace.
+- Offline tests use visibly invented clause markers and geometric transport fixtures, never
+  a published standard's rules. They check plumbing and persistence, not model knowledge or
+  correctness of any standard interpretation. No paid provider is used. Evidence and real
+  check results are in `docs/2026-10-23-qiyas-goal-M.md`.

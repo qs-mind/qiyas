@@ -22,6 +22,9 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Args)]
 pub struct EvalArgs {
+    /// Method name for this run. Rules are optional; Mizan authors missing rules.
+    #[arg(long)]
+    pub method: Option<String>,
     /// A development case id; holdout cases are never opened by this command.
     #[arg(long)]
     pub case: Option<String>,
@@ -661,7 +664,7 @@ impl SavedProvider {
             autonomy: Autonomy::Autonomous,
             measurement_method: qiyas_ai::MeasurementMethod {
                 name: self.method.clone(),
-                rules_loaded: self.method.is_some(),
+                rules_loaded: false,
             },
         }
     }
@@ -919,8 +922,11 @@ fn run_case(args: &EvalArgs, case: &str, max_cost: Option<f64>) -> Result<Value,
     fs::create_dir_all(local.join("autopilot")).map_err(|e| e.to_string())?;
     let autopilot = crate::bench::safe_file(local, Path::new("autopilot"))?;
     let budget = Budget::load(&autopilot)?;
-    let saved = saved_provider()?;
-    apply_selected_method(&saved, &mut session)?;
+    let mut saved = saved_provider()?;
+    if args.method.is_some() {
+        saved.method.clone_from(&args.method);
+    }
+    apply_selected_method(saved.method.as_deref(), &mut session)?;
     let session = Arc::new(Mutex::new(Some(session)));
     let identity = format!("{}:{}", saved.name, saved.model);
     let prices = budget.prices.get(&identity).cloned().ok_or_else(|| format!("No prices for {identity}; set its input/output/cache-read/cache-write rates per million tokens in {} before a billable run", autopilot.join("budget.json").display()))?;
@@ -1219,6 +1225,7 @@ mod tests {
     #[test]
     fn no_approval_stops_before_settings_keychain_or_files() {
         let args = EvalArgs {
+            method: None,
             case: Some("anything".into()),
             cases: Vec::new(),
             set: None,
@@ -1236,6 +1243,7 @@ mod tests {
     #[test]
     fn approved_eval_still_refuses_a_holdout_root_before_io() {
         let args = EvalArgs {
+            method: None,
             case: Some("anything".into()),
             cases: Vec::new(),
             set: None,
@@ -1538,32 +1546,17 @@ fn step(path: &Option<PathBuf>, value: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-fn apply_selected_method(saved: &SavedProvider, session: &mut Session) -> Result<(), String> {
-    let Some(name) = &saved.method else {
-        return Ok(());
-    };
-    if Path::new(name).components().count() != 1 || name.contains(['/', '\\']) || name == ".." {
-        return Err("Invalid selected method name".into());
-    }
-    let home = std::env::var_os("QIYAS_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if cfg!(debug_assertions) {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.local/qiyas-home")
-            } else {
-                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".qiyas")
-            }
-        });
-    let method: qiyas_core::measurement::RuleSet =
-        read_json(&home.join("methods").join(format!("{name}.json")))?;
-    method.validate().map_err(|e| e.to_string())?;
+pub(crate) fn apply_selected_method(
+    name: Option<&str>,
+    session: &mut Session,
+) -> Result<(), String> {
+    // Omitted CLI choices retain drawing knowledge. An explicit name never becomes a path.
+    let Some(name) = name else { return Ok(()) };
+    let home = qiyas_core::data_home::qiyas_dir()?;
+    let method = qiyas_core::measurement::load_method_at(&home, Some(name))?;
     session
-        .run_input(
-            &json!({"type":"measurement","kind":"set_method","scope":"settings","method":method}),
-            qiyas_core::Source::Ai,
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .apply_settings_method(method.as_ref())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1572,5 +1565,5 @@ mod workflow_tests;
 
 /// The same plain request is used by Mizan and external agents.
 pub(crate) fn task_request(preparation: &str) -> String {
-    format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest and takeoff_kit, one picture if needed, then ONE batch adapted from the kit to define types/rules, apply recognition, set method/mappings and report the generated BOQ. Never validate stubs or fetch individual schemas already in the kit. Aim for a first generated BOQ within 8 requests. Run takeoff_check with verify expectations, fix returned errors by handle, then end. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use evidence from the drawing and visible documents only. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}")
+    format!("Take off this drawing to my selected measurement method, autonomously. Follow the take-off workflow: digest and takeoff_kit, one picture if needed, then ONE batch adapted from the kit to define types/rules, apply recognition, set method/mappings and report the generated BOQ. Never validate stubs or fetch individual schemas already in the kit. Aim for a first generated BOQ within 8 requests. Run takeoff_check with verify expectations, fix returned errors by handle, then end. Do not export raw geometry candidates or manual take-off rows as BOQ items. Use drawing/document evidence for scope. For named standards, follow state/kit to author cited rules from your knowledge. Work until checks pass or the budget is nearly exhausted; finish with low-confidence items and limitations. Human review is optional. The harness saves your generated BOQ and drawing.\n\n{preparation}")
 }

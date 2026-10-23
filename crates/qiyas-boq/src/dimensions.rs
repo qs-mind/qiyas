@@ -27,6 +27,8 @@ pub(crate) fn write_contents(
             "Trade",
             "Mapping source",
             "Coverage",
+            "Method",
+            "Source / clause",
         ],
         &bold,
     )?;
@@ -56,6 +58,16 @@ pub(crate) fn write_contents(
             item.coverage
                 .iter()
                 .map(|n| format!("{} [{} / {}]", n.text, n.citation.source, n.citation.clause))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )?;
+        sheet.write_string(row, 9, item.methods())?;
+        sheet.write_string(
+            row,
+            10,
+            item.rule_citations()
+                .iter()
+                .map(|c| format!("{} / {}", c.source, c.clause))
                 .collect::<Vec<_>>()
                 .join("; "),
         )?;

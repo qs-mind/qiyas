@@ -1,5 +1,7 @@
 //! Measurement methods are user data. This engine supplies arithmetic, provenance and grouping.
 mod evaluate;
+mod methods;
+pub use methods::load_method_at;
 
 use std::collections::BTreeSet;
 
@@ -256,6 +258,28 @@ pub struct GeneratedItem {
     pub coverage: Vec<CoverageNote>,
     pub lines: Vec<DimensionLine>,
 }
+impl GeneratedItem {
+    pub fn methods(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| line.method.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    pub fn rule_citations(&self) -> Vec<Citation> {
+        let mut citations = Vec::new();
+        for citation in self.lines.iter().flat_map(|line| &line.citations) {
+            if !citations.contains(citation) {
+                citations.push(citation.clone());
+            }
+        }
+        citations
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementReport {
     #[serde(default)]
@@ -317,6 +341,18 @@ fn deductions(values: &[Deduction]) -> Result<(), CoreError> {
     Ok(())
 }
 impl RuleSet {
+    /// A name selected by the QS. Mizan supplies the rules later; no standard is bundled.
+    pub fn named(name: &str) -> Self {
+        Self {
+            version: 1,
+            name: name.into(),
+            title: name.into(),
+            based_on: name.into(),
+            source_note: String::new(),
+            rules: Vec::new(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), CoreError> {
         if self.version != 1 {
             return Err(invalid("Unsupported measurement rule set version"));

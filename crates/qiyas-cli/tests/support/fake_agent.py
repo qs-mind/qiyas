@@ -5,12 +5,17 @@ import subprocess
 import sys
 
 cli, drawing, workdir = sys.argv[1:4]
+extra = sys.argv[4:]
+method = None
+if extra[:1] == ["--method"]:
+    method = extra[1]
+    extra = extra[2:]
 # Before MCP starts, only the permitted case inputs and runner logs may be present.
 assert {path.name for path in Path(workdir).iterdir()} <= {
     Path(drawing).name, "preamble.md", "agent-events.jsonl", "agent-stderr.log",
 }
 server = subprocess.Popen(
-    [cli, "mcp", "--drawing", drawing, "--workdir", workdir],
+    [cli, "mcp", "--drawing", drawing, "--workdir", workdir] + (["--method", method] if method else []),
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
 )
 sequence = 0
@@ -45,6 +50,9 @@ server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initia
 server.stdin.flush()
 tool("qiyas_read", "digest", {})
 kit = tool("qiyas_read", "takeoff_kit", {})
+if method:
+    assert kit["measurement_method"]["name"] == method
+    assert "Write rules from your knowledge" in kit["measurement_method"]["instruction"]
 batch = kit["batch"]
 for command in batch["commands"]:
     kind = command.get("kind")
@@ -54,6 +62,15 @@ for command in batch["commands"]:
     elif kind == "define":
         command["rule"]["match"] = {"entity_type": "LwPolyline", "closed_region": True}
     elif kind == "set_method":
+        if method:
+            # Synthetic transport fixture only; no rule of any standard is supplied.
+            import copy
+            rule = copy.deepcopy(kit["commands"]["measurement.set_method"]["example"]["method"]["rules"][0])
+            cite = {"source": method, "clause": method + " clause TEST-ONLY (not a standard clause)"}
+            rule["citation"] = cite
+            rule["terms"][0]["citation"] = cite
+            command["method"]["source_note"] = "Synthetic transport test only; not standard guidance"
+            command["method"]["rules"] = [rule]
         rule = command["method"]["rules"][0]
         rule["unit"] = "m2"
         rule["kind"] = "area"
@@ -61,13 +78,15 @@ for command in batch["commands"]:
     elif kind == "set_mappings":
         command["mappings"][0]["unit"] = "m2"
         command["mappings"][0]["code"] = "surface-{id}"
+        if method:
+            command["mappings"][0]["citation"] = cite
 tool("qiyas_execute", "batch", batch)
 tool("qiyas_execute", "finish", {"answer": "Offline geometric BOQ; other scope unresolved."})
 server.stdin.close()
 assert server.wait(timeout=15) == 0
-if len(sys.argv) > 4:
+if extra:
     # Only this deliberate negative test reads a test truth file, after the protocol run.
-    path = sys.argv[4]
+    path = extra[0]
     print(json.dumps({"type": "tool_use", "name": "Read", "input": {"file_path": path}}))
     with open(path, encoding="utf-8") as truth_file:
         truth_file.read()

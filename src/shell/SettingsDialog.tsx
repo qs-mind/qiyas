@@ -24,6 +24,11 @@ import { ModalDialog } from "../ui/ModalDialog";
 import { ModelPicker } from "./ModelPicker";
 
 
+// Names only. Rules are authored by Mizan and stored with each drawing.
+const STANDARD_METHODS = ["POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4"];
+const LOCAL_METHODS = ["Egypt", "KSA", "UAE"];
+const OTHER_METHOD = "\u0000other";
+
 /** The MCP bridge next to the app, with the platform's separator and extension. */
 function bridgePath(dir: string) {
   return dir.includes("\\") ? `${dir}\\qiyas-mcp.exe` : `${dir}/qiyas-mcp`;
@@ -59,6 +64,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [minutes, setMinutes] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [otherMethod, setOtherMethod] = useState(false);
   const [methods, setMethods] = useState<MeasurementMethod[]>([]);
 
   useEffect(() => {
@@ -76,6 +82,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .catch((e) => setError(uiError(e)));
   }, []);
 
+  const methodNames = [...STANDARD_METHODS, ...LOCAL_METHODS.map((country) => `Local practice – ${country}`), ...methods.map((method) => method.name)];
+  const customMethod = otherMethod || !!(draft?.measurement_method && !methodNames.includes(draft.measurement_method));
   const provider = draft?.provider;
   useEffect(() => {
     if (!provider) return;
@@ -227,16 +235,24 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <label>
               <span>{t("settings.measurementMethod")}</span>
               <select
-                value={draft.measurement_method ?? ""}
-                onChange={(e) => change({ measurement_method: e.target.value || null })}
+                value={customMethod ? OTHER_METHOD : draft.measurement_method ?? ""}
+                onChange={(e) => {
+                  setOtherMethod(e.target.value === OTHER_METHOD);
+                  change({ measurement_method: e.target.value === OTHER_METHOD ? "" : e.target.value || null });
+                }}
               >
                 <option value="">{t("settings.geometric")}</option>
-                {draft.measurement_method && !methods.some((m) => m.name === draft.measurement_method) && (
-                  <option value={draft.measurement_method}>{draft.measurement_method} {t("settings.methodMissing")}</option>
-                )}
-                {methods.map((method) => <option key={method.name} value={method.name}>{method.title}</option>)}
+                {STANDARD_METHODS.map((name) => <option key={name} value={name}>{name}</option>)}
+                {LOCAL_METHODS.map((country) => <option key={country} value={`Local practice – ${country}`}>{t(`settings.method${country}`)}</option>)}
+                {methods.filter((method) => !STANDARD_METHODS.includes(method.name) && !LOCAL_METHODS.some((country) => method.name === `Local practice – ${country}`)).map((method) => <option key={method.name} value={method.name}>{method.name}</option>)}
+                <option value={OTHER_METHOD}>{t("settings.methodOther")}</option>
               </select>
             </label>
+            {customMethod && <label>
+              <span>{t("settings.methodName")}</span>
+              <input dir="auto" value={draft.measurement_method ?? ""} placeholder="ARM4, MMHW"
+                onChange={(e) => change({ measurement_method: e.target.value })} />
+            </label>}
             <label>
               <span>{t("settings.autosave")}</span>
               <input

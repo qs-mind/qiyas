@@ -132,7 +132,7 @@ pub fn kit() -> Value {
         )
     })
     .collect();
-    json!({"measurement_rules":"Declare kind: count/length/area/volume; basis: geometric or rule:<cited note name>. named_handles are in scope: measure them and apply their note's factors. Exclusions: Exclude <handle>: <reason> (note <handle>) in takeoff_check.end_report and final answer. Counts are whole numbers. Fix takeoff_check errors before finishing.","complete":true,"project":project,"revision":revision,"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
+    json!({"measurement_rules":"kind: count/length/area/volume; basis: geometric or rule:<cited note name>. Measure named_handles with their note's factors. Exclusions in takeoff_check.end_report and final answer: Exclude <handle>: <reason> (note <handle>). Counts are whole numbers. Fix takeoff_check errors.","complete":true,"project":project,"revision":revision,"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
 }
 
 /// Return exactly the kit entry for covered commands, including the auxiliary paths.

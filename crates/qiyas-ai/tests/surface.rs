@@ -1127,7 +1127,9 @@ fn state_read_reports_method_name_and_whether_rules_are_loaded() {
         };
         assert_eq!(
             state["measurement_method"],
-            json!({"name":"office-method","rules_loaded":loaded})
+            json!({
+                "name":"office-method", "rules_loaded":loaded, "instruction":method.instruction()
+            })
         );
     }
 }
@@ -2363,5 +2365,220 @@ async fn new_layout_warnings_are_visible_until_repaired() {
             "The model must see what needs fixing"
         );
         assert!(serialized.contains("layout_findings"));
+    }
+}
+
+#[test]
+fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_them() {
+    let (_dir, mut session) = sample();
+    let selected = qiyas_ai::MeasurementMethod {
+        name: Some("POMI (RICS)".into()),
+        rules_loaded: false,
+    };
+    for op in ["state", "digest", "takeoff_kit"] {
+        let ToolOutput::Json(value) = surface::run_session_with_method(
+            &mut session,
+            READ,
+            op,
+            &json!({}),
+            Source::Ai,
+            &selected,
+        )
+        .unwrap() else {
+            panic!("JSON")
+        };
+        let method = &value["measurement_method"];
+        assert_eq!(method["name"], "POMI (RICS)");
+        assert_eq!(method["rules_loaded"], false);
+        if op != "digest" {
+            assert!(method["instruction"]
+                .as_str()
+                .unwrap()
+                .contains("Write rules from your knowledge"));
+            assert!(method["instruction"]
+                .as_str()
+                .unwrap()
+                .contains("<standard> clause <n>"));
+        }
+        if op == "takeoff_kit" {
+            assert!(
+                serde_json::to_vec(&value).unwrap().len() <= qiyas_core::takeoff_kit::MAX_BYTES
+            );
+            let command = value["batch"]["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["kind"] == "set_method")
+                .unwrap();
+            assert_eq!(
+                command["method"]["name"],
+                selected.name.as_ref().unwrap().as_str()
+            );
+            assert_eq!(command["method"]["rules"], json!([]));
+            assert_eq!(command["scope"], "settings");
+        }
+    }
+}
+
+#[tokio::test]
+async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_quantity() {
+    let (_dir, mut session) = sample();
+    let name = "POMI (RICS)";
+    session
+        .apply_settings_method(Some(&qiyas_core::measurement::RuleSet::named(name)))
+        .unwrap();
+    fn author_from_kit(request: &TurnRequest) -> (&'static str, Value) {
+        let kit = request
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|block| {
+                if let ContentBlock::ToolResult {
+                    content, is_error, ..
+                } = block
+                {
+                    assert!(!is_error);
+                    content.iter().find_map(|part| match part {
+                        ResultPart::Text(text) => serde_json::from_str::<Value>(text)
+                            .ok()
+                            .filter(|v| v["batch"]["commands"].is_array()),
+                        _ => None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .next()
+            .expect("kit from conversation");
+        assert!(kit["measurement_method"]["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("Write rules from your knowledge"));
+        let mut batch = kit["batch"].clone();
+        // This exercises transport with invented geometry and a visibly fictitious reference.
+        // It neither asserts nor supplies any rule of the named standard.
+        let name = kit["measurement_method"]["name"].as_str().unwrap();
+        let citation = json!({"source":name,"clause":format!("{name} clause TEST-ONLY (not a standard clause)")});
+        for command in batch["commands"].as_array_mut().unwrap() {
+            if command["kind"] == "set_method" {
+                let mut rule = kit["commands"]["measurement.set_method"]["example"]["method"]
+                    ["rules"][0]
+                    .clone();
+                rule["citation"] = citation.clone();
+                rule["terms"][0]["citation"] = citation.clone();
+                command["method"]["rules"] = json!([rule]);
+                command["method"]["source_note"] =
+                    json!("Synthetic transport test only; not standard guidance");
+            } else if command["kind"] == "set_mappings" {
+                command["mappings"][0]["citation"] = citation.clone();
+            }
+        }
+        (EXECUTE, json!({"op":"batch","args":batch}))
+    }
+    let citation =
+        json!({"source":name,"clause":format!("{name} clause TEST-ONLY (not a standard clause)")});
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(Mutex::new(Some(session)));
+    let mut agent = Agent::new(
+        Box::new(Script::steps(
+            vec![
+                (READ, json!({"op":"state","args":{}})).into(),
+                (READ, json!({"op":"takeoff_kit","args":{}})).into(),
+                scripted::ScriptCall::FromHistory(author_from_kit),
+                (
+                    READ,
+                    json!({"op":"run","args":{"command":{"type":"measurement","kind":"report"}}}),
+                )
+                    .into(),
+                (READ, json!({"op":"takeoff_check","args":{}})).into(),
+            ],
+            requests.clone(),
+        )),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    let events = events_for(
+        &mut agent,
+        "Take off this drawing using the selected method",
+    )
+    .await;
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Done { .. })),
+        "{events:?}"
+    );
+    let requests = requests.lock().unwrap();
+    assert!(format!("{:?}", requests[0].messages)
+        .contains("Measurement method: POMI (RICS); rules loaded: false"));
+    assert!(format!("{:?}", requests[0].messages).contains("Write rules from your knowledge"));
+    let mut guard = session.lock().unwrap();
+    let session = guard.as_mut().unwrap();
+    let report = serde_json::to_value(session.measurement_report().unwrap()).unwrap();
+    assert!(!report["items"].as_array().unwrap().is_empty());
+    for quantity in report["quantities"].as_array().unwrap() {
+        assert_eq!(quantity["method"], name);
+        assert_eq!(quantity["citation"], citation);
+    }
+    for item in report["items"].as_array().unwrap() {
+        assert_eq!(item["mapping_citations"], json!([citation]));
+        assert!(!item["lines"].as_array().unwrap().is_empty());
+        for line in item["lines"].as_array().unwrap() {
+            assert_eq!(line["method"], name);
+            assert!(line["citations"].as_array().unwrap().contains(&citation));
+        }
+    }
+    let before = session.measurement_selection().unwrap();
+    let kit = call(session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    assert_eq!(kit["measurement_method"]["rules_loaded"], true);
+    assert!(!kit["batch"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["kind"] == "set_method"));
+    session
+        .apply_settings_method(Some(&qiyas_core::measurement::RuleSet::named(name)))
+        .unwrap();
+    assert_eq!(session.measurement_selection().unwrap(), before);
+}
+
+#[test]
+fn project_method_overrides_the_settings_name_in_state_and_kit() {
+    let (_dir, mut session) = sample();
+    call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"measurement","kind":"set_method","scope":"project",
+            "method":qiyas_core::measurement::RuleSet::named("Client override")
+        }}}),
+    )
+    .unwrap();
+    let selected = qiyas_ai::MeasurementMethod {
+        name: Some("POMI (RICS)".into()),
+        rules_loaded: false,
+    };
+    for op in ["state", "takeoff_kit"] {
+        let ToolOutput::Json(value) = surface::run_session_with_method(
+            &mut session,
+            READ,
+            op,
+            &json!({}),
+            Source::Ai,
+            &selected,
+        )
+        .unwrap() else {
+            panic!("JSON")
+        };
+        assert_eq!(value["measurement_method"]["name"], "Client override");
+        if op == "takeoff_kit" {
+            assert_eq!(value["measurement_method"]["scope"], "project");
+            let command = value["batch"]["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["kind"] == "set_method")
+                .unwrap();
+            assert_eq!(command["scope"], "project");
+            assert_eq!(command["method"]["name"], "Client override");
+        }
     }
 }
