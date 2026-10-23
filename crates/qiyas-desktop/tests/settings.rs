@@ -73,19 +73,27 @@ fn round_trip() {
 #[test]
 fn approval_modes_and_measurement_method_round_trip() {
     let dir = tempfile::tempdir().unwrap();
-    for autonomy in [
-        qiyas_ai::Autonomy::PerJob,
-        qiyas_ai::Autonomy::PerPhase,
-        qiyas_ai::Autonomy::Autonomous,
+    for method in [
+        None,
+        Some("local-test"),
+        Some("POMI (RICS)"),
+        Some("Client's own / ARM4"),
+        Some("طريقة العميل"),
     ] {
-        let s = Settings {
-            autonomy,
-            measurement_method: Some("local-test".into()),
-            ..Settings::default()
-        };
-        assert_eq!(settings::validate(&s), Ok(()));
-        settings::save(dir.path(), &s).unwrap();
-        assert_eq!(settings::load(dir.path()), s);
+        for autonomy in [
+            qiyas_ai::Autonomy::PerJob,
+            qiyas_ai::Autonomy::PerPhase,
+            qiyas_ai::Autonomy::Autonomous,
+        ] {
+            let s = Settings {
+                autonomy,
+                measurement_method: method.map(str::to_owned),
+                ..Settings::default()
+            };
+            assert_eq!(settings::validate(&s), Ok(()));
+            settings::save(dir.path(), &s).unwrap();
+            assert_eq!(settings::load(dir.path()), s);
+        }
     }
     assert!(serde_json::from_str::<Settings>(r#"{"autonomy":"unknown"}"#).is_err());
     let s = Settings {

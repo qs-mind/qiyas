@@ -13,6 +13,9 @@ use serde_json::{json, Value};
 
 #[derive(Args)]
 pub struct McpArgs {
+    /// Method name for this run. Rules are optional; Mizan authors missing rules.
+    #[arg(long)]
+    pub method: Option<String>,
     #[arg(long)]
     pub drawing: PathBuf,
     #[arg(long)]
@@ -192,7 +195,7 @@ pub fn run(args: &McpArgs) -> crate::Done {
     if source != local {
         fs::copy(&source, &local).map_err(|e| e.to_string())?;
     }
-    let (session, note) = if local
+    let (mut session, note) = if local
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
     {
@@ -204,6 +207,7 @@ pub fn run(args: &McpArgs) -> crate::Done {
             String::new(),
         )
     };
+    crate::eval::apply_selected_method(args.method.as_deref(), &mut session)?;
     let session = Arc::new(Mutex::new(Some(session)));
     let host = Arc::new(Host {
         session: session.clone(),

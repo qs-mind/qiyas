@@ -369,6 +369,12 @@ fn reference(v: &Value, language: Language) -> String {
             .collect::<Vec<_>>()
             .join("; "),
         Value::Object(o) => {
+            if let (Some(source), Some(clause)) = (
+                o.get("source").and_then(Value::as_str),
+                o.get("clause").and_then(Value::as_str),
+            ) {
+                return format!("{source} / {clause}");
+            }
             let sheet = o.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = if sheet == "*Model_Space" {
                 if language == Language::Ar {
@@ -505,6 +511,8 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
             .map(|i| {
                 let mut v = json!(i);
                 v["drawing"] = json!(drawing);
+                v["method"] = json!(i.methods());
+                v["citations"] = json!(i.rule_citations());
                 v
             })
             .collect();

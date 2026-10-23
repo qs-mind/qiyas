@@ -88,6 +88,42 @@ pub struct MeasurementMethod {
     pub rules_loaded: bool,
 }
 
+impl MeasurementMethod {
+    /// Drawing knowledge is authoritative, including a project override or an explicit clear.
+    pub fn for_session(session: &Session, fallback: &Self) -> Result<Self, qiyas_core::CoreError> {
+        if qiyas_core::knowledge::get(
+            &session.drawing.doc,
+            qiyas_core::knowledge::Kind::Measurement,
+            "selection",
+        )?
+        .is_none()
+        {
+            return Ok(fallback.clone());
+        }
+        let selection = session.measurement_selection()?;
+        Ok(Self {
+            name: selection.effective().map(|method| method.name.clone()),
+            rules_loaded: selection
+                .effective()
+                .is_some_and(|method| !method.rules.is_empty()),
+        })
+    }
+
+    pub fn instruction(&self) -> &'static str {
+        if self.name.is_none() {
+            "No method selected. Use cited geometric quantities."
+        } else if self.rules_loaded {
+            "Reuse the drawing's cited method rules. Preserve the project override."
+        } else {
+            "Write rules from your knowledge in your own words, with <standard> clause <n> citations. Save via measurement.set_method for reuse. List uncertain rules/references in the end report."
+        }
+    }
+
+    pub fn state(&self) -> Value {
+        serde_json::json!({"name":self.name,"rules_loaded":self.rules_loaded,"instruction":self.instruction()})
+    }
+}
+
 impl Default for AgentSettings {
     fn default() -> Self {
         AgentSettings {
@@ -1428,19 +1464,23 @@ impl Agent {
             });
             let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
             let mut text = state_block(lang, &state);
+            let method = guard.as_ref().map_or_else(
+                || Ok(settings.measurement_method.clone()),
+                |session| MeasurementMethod::for_session(session, &settings.measurement_method),
+            ).map_err(|e| e.to_string())?;
             text.push_str(&format!(
                 "Measurement method: {}; rules loaded: {}.\nApproval mode: {}.\n",
-                settings
-                    .measurement_method
-                    .name
+                method.name
                     .as_deref()
                     .unwrap_or("None (geometric quantities)"),
-                settings.measurement_method.rules_loaded,
+                method.rules_loaded,
                 serde_json::to_value(settings.autonomy)
                     .unwrap_or_default()
                     .as_str()
                     .unwrap_or("autonomous")
             ));
+            text.push_str(method.instruction());
+            text.push('\n');
             let mut picture = None;
             if let Some(session) = guard.as_ref() {
                 if let Some(working) = &session.automation_sheet {

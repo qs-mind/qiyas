@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Settings } from "../api";
+import { LanguageProvider } from "../i18n";
 import { mcpSnippets, SettingsDialog } from "./SettingsDialog";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
@@ -128,7 +129,7 @@ test("approval and measurement settings keep the selected values on save", async
   setup();
   const autonomy = await screen.findByLabelText("Plan approval");
   expect((autonomy as HTMLSelectElement).value).toBe("autonomous");
-  await screen.findByRole("option", { name: "Local test rules" });
+  await screen.findByRole("option", { name: "local-test" });
   expect((screen.getByLabelText("Method of measurement") as HTMLSelectElement).value).toBe("");
   fireEvent.change(autonomy, { target: { value: "per_phase" } });
   fireEvent.change(screen.getByLabelText("Method of measurement"), { target: { value: "local-test" } });
@@ -261,4 +262,58 @@ test("token rotation is only a draft until Save and survives settings readback",
   api.getSettings.mockResolvedValue({ ...settings, mcp_token: rotated });
   render(<SettingsDialog onClose={() => {}} />);
   expect((await screen.findByLabelText("Token") as HTMLInputElement).value).toBe(rotated);
+});
+
+
+test("method choices contain names plus local files without requiring rules", async () => {
+  setup();
+  const select = await screen.findByLabelText("Method of measurement") as HTMLSelectElement;
+  await screen.findByRole("option", { name: "local-test" });
+  expect(Array.from(select.options).map((option) => option.text)).toEqual([
+    "None (geometric quantities)", "POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4",
+    "Local practice – Egypt", "Local practice – KSA", "Local practice – UAE", "local-test", "Other…",
+  ]);
+  fireEvent.change(select, { target: { value: "POMI (RICS)" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ ...settings, measurement_method: "POMI (RICS)" }));
+});
+
+test("Other saves free text and restores it when Settings reopens", async () => {
+  setup();
+  fireEvent.change(await screen.findByLabelText("Method of measurement"), { target: { value: "\u0000other" } });
+  fireEvent.change(screen.getByLabelText("Method name"), { target: { value: "Client's method / ARM4" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const saved = { ...settings, measurement_method: "Client's method / ARM4" };
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith(saved));
+  cleanup();
+  api.getSettings.mockResolvedValue(saved);
+  render(<SettingsDialog onClose={() => {}} />);
+  expect(await screen.findByLabelText("Method name")).toHaveProperty("value", saved.measurement_method);
+  fireEvent.change(screen.getByLabelText("Method of measurement"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenLastCalledWith({ ...settings, measurement_method: null }));
+});
+
+
+test("named methods remain available without files and local choices have Arabic labels", async () => {
+  setup();
+  cleanup();
+  api.measurementMethods.mockResolvedValue([]);
+  localStorage.setItem("qiyas.lang", "ar");
+  try {
+    render(<LanguageProvider><SettingsDialog onClose={() => {}} /></LanguageProvider>);
+    const select = await screen.findByLabelText("طريقة القياس") as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.text)).toEqual([
+      "بلا طريقة (كميات هندسية)", "POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4",
+      "الممارسة المحلية – مصر", "الممارسة المحلية – السعودية", "الممارسة المحلية – الإمارات", "أخرى…",
+    ]);
+    fireEvent.change(select, { target: { value: "Local practice – Egypt" } });
+    expect(select.value).toBe("Local practice – Egypt");
+    fireEvent.change(select, { target: { value: "\u0000other" } });
+    expect(screen.getByLabelText("اسم طريقة القياس")).toBeTruthy();
+  } finally {
+    localStorage.removeItem("qiyas.lang");
+    document.documentElement.lang = "en";
+    document.documentElement.dir = "ltr";
+  }
 });
