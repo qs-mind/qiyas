@@ -410,9 +410,88 @@ impl Session {
                 }
                 handles.push(handle);
             }
+            // Every grid part carries provenance, including axes and text. Layer names and
+            // later formatting changes do not determine whether geometry bounds a room.
+            for handle in &handles {
+                if let Some(entity) = self.drawing.doc.get_entity_mut(Handle::new(*handle)) {
+                    let mut record = opencadcodec::xdata::ExtendedDataRecord::new(GRID_APP);
+                    record.add_value(opencadcodec::xdata::XDataValue::String("grid".into()));
+                    entity.common_mut().extended_data.upsert_record(record);
+                    entity.common_mut().raw_record = None;
+                }
+            }
             Ok(handles)
         })();
         self.current = current;
         added
+    }
+}
+
+impl Session {
+    /// Earlier grids stamped only their bubbles. Recover connected axes and centred letters
+    /// from that provenance, without guessing from a layer name or from ordinary circles.
+    pub(crate) fn migrate_grid_provenance(&mut self) {
+        let Some(app) = self.drawing.doc.app_ids.get(GRID_APP) else {
+            return;
+        };
+        let app_handle = app.handle.value();
+        let tolerance = self.measure_tol();
+        let circles: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter_map(|entity| {
+                let EntityType::Circle(c) = entity else {
+                    return None;
+                };
+                crate::draw::room_boundary::is_grid(entity).then_some((
+                    c.common.owner_handle,
+                    [c.center.x, c.center.y],
+                    c.radius,
+                ))
+            })
+            .collect();
+        if circles.is_empty() {
+            return;
+        }
+        let close = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) <= tolerance;
+        let handles: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter(|entity| {
+                if crate::draw::room_boundary::is_grid(entity) {
+                    return false;
+                }
+                let owner = entity.common().owner_handle;
+                match entity {
+                    EntityType::Line(line) => {
+                        let a = [line.start.x, line.start.y];
+                        let b = [line.end.x, line.end.y];
+                        let Ok(direction) = unit(sub(b, a)) else {
+                            return false;
+                        };
+                        let at_start = circles.iter().any(|(sheet, c, r)| {
+                            *sheet == owner && close(*c, along(a, direction, -*r))
+                        });
+                        let at_end = circles.iter().any(|(sheet, c, r)| {
+                            *sheet == owner && close(*c, along(b, direction, *r))
+                        });
+                        at_start && at_end
+                    }
+                    EntityType::Text(text) => circles.iter().any(|(sheet, c, _)| {
+                        *sheet == owner
+                            && close(*c, [text.insertion_point.x, text.insertion_point.y])
+                    }),
+                    _ => false,
+                }
+            })
+            .map(|e| e.common().handle)
+            .collect();
+        for handle in handles {
+            if let Some(entity) = self.drawing.doc.get_entity_mut(handle) {
+                crate::xdata::write_text(entity.common_mut(), GRID_APP, app_handle, Some("grid"));
+            }
+        }
     }
 }

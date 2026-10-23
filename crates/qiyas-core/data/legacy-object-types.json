@@ -75,11 +75,11 @@
       },
       "label_en": {
         "kind": "text",
-        "default": "Unapproved candidate {area} m²"
+        "default": "Area {area} m²"
       },
       "label_ar": {
         "kind": "text",
-        "default": "مساحة مرشحة غير معتمدة {area} م²"
+        "default": "المساحة {area} م²"
       }
     },
     "geometry": "region",

@@ -58,7 +58,7 @@ fn room_label_schedule_and_takeoff_follow_edits_and_undo_in_every_unit() {
     for units in [4, 5, 6, 1] {
         let (_dir, mut s, outline, label, boundary) = setup(units);
         let u = 1.0 / s.drawing.units.to_metres();
-        assert_eq!(text(&s, label), "Unapproved candidate 12.00 m²");
+        assert_eq!(text(&s, label), "Area 12.00 m²");
         let before = s.history_steps().0.len();
         let schedule = add(&mut s, json!({"type":"room_schedule", "at":[8.0*u,8.0*u]}));
         assert_eq!(s.history_steps().0.len(), before + 1);
@@ -92,7 +92,7 @@ fn room_label_schedule_and_takeoff_follow_edits_and_undo_in_every_unit() {
             json!({"type":"modify","kind":"scale","targets":[{"handle":outline}],"base":[0,0],"factor":2}),
         );
         assert_eq!(s.history_steps().0.len(), before + 1);
-        assert_eq!(text(&s, label), "Unapproved candidate 48.00 m²");
+        assert_eq!(text(&s, label), "Area 48.00 m²");
         assert_eq!(cell(&s, schedule, 1), "48.00");
         assert_eq!(cell(&s, schedule, 2), "48.00");
         assert!(s
@@ -101,7 +101,7 @@ fn room_label_schedule_and_takeoff_follow_edits_and_undo_in_every_unit() {
             .iter()
             .all(|m| (m.shown - 48.0).abs() < 1e-8));
         assert!(s.undo());
-        assert_eq!(text(&s, label), "Unapproved candidate 12.00 m²");
+        assert_eq!(text(&s, label), "Area 12.00 m²");
         assert_eq!(cell(&s, schedule, 2), "12.00");
         assert!(s
             .takeoff
@@ -109,7 +109,7 @@ fn room_label_schedule_and_takeoff_follow_edits_and_undo_in_every_unit() {
             .iter()
             .all(|m| (m.shown - 12.0).abs() < 1e-8));
         assert!(s.redo());
-        assert_eq!(text(&s, label), "Unapproved candidate 48.00 m²");
+        assert_eq!(text(&s, label), "Area 48.00 m²");
     }
 }
 
@@ -121,7 +121,7 @@ fn room_fields_and_islands_survive_dwg_and_dxf_without_the_project_file() {
             &mut s,
             json!({"type":"draw", "kind":"rectangle", "a":[2,1], "b":[3,2]}),
         );
-        assert_eq!(text(&s, label), "Unapproved candidate 11.00 m²");
+        assert_eq!(text(&s, label), "Area 11.00 m²");
         let schedule = add(&mut s, json!({"type":"room_schedule", "at":[8,8]}));
         let path = dir.path().join(format!("roundtrip.{ext}"));
         s.save_as(&path).unwrap();
@@ -146,13 +146,13 @@ fn room_fields_and_islands_survive_dwg_and_dxf_without_the_project_file() {
             &mut reopened,
             json!({"type":"modify", "kind":"scale", "targets":[{"handle":outline}], "base":[0,0], "factor":2}),
         );
-        assert_eq!(text(&reopened, label), "Unapproved candidate 47.00 m²");
+        assert_eq!(text(&reopened, label), "Area 47.00 m²");
         assert_eq!(cell(&reopened, schedule, 2), "47.00");
         add(
             &mut reopened,
             json!({"type":"draw", "kind":"rectangle", "a":[5,1], "b":[6,2]}),
         );
-        assert_eq!(text(&reopened, label), "Unapproved candidate 46.00 m²");
+        assert_eq!(text(&reopened, label), "Area 46.00 m²");
         assert_eq!(cell(&reopened, schedule, 2), "46.00");
         reopened.save_as(&path).unwrap();
         let project = path.with_extension("qiyas");
@@ -190,7 +190,7 @@ fn construction_checks_stale_label_schedule_and_takeoff_quantities() {
     );
     run(
         &mut s,
-        json!({"type":"edit_text", "target":{"handle":label}, "value":"Unapproved candidate 13.00 m²"}),
+        json!({"type":"edit_text", "target":{"handle":label}, "value":"Area 13.00 m²"}),
     );
     run(
         &mut s,
@@ -227,8 +227,43 @@ fn opening_the_enclosure_invalidates_the_room_instead_of_measuring_its_old_bound
         &mut s,
         json!({"type":"delete_entities", "targets":[{"handle":outline}]}),
     );
-    assert_eq!(text(&s, label), "Unapproved candidate #### m²");
-    assert!(s.takeoff.items[0].note.contains("stale"));
+    assert_eq!(text(&s, label), "Area #### m²");
+    assert!(s.takeoff.items[0].note.contains("unavailable"));
+    assert!(!s.takeoff.items[0].available());
+    assert!(s.takeoff.totals().is_empty());
+    qiyas_core::knowledge::put(
+        &mut s.drawing.doc,
+        qiyas_core::knowledge::Kind::Revisions,
+        "result",
+        &json!({"items":[{"code":"ROOM","description_en":"Room","description_ar":"Room","unit":"m2","a_quantity":12.0,"b_quantity":12.0,"delta":0.0,"elements":[]}],"comparison":{"sheets":[],"tolerance":0.001},"from_path":"a.dxf","to_path":"b.dxf","clouds":[],"warnings":[]}),
+    ).unwrap();
+    let variation = s.variation().unwrap().unwrap();
+    assert!(variation.items.is_empty());
+    assert!(variation
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("unavailable")));
+    let record = serde_json::to_value(&s.takeoff.items[0]).unwrap();
+    assert!(record["shown"].is_null());
+    assert!(record["value"].is_null());
+    let restored: qiyas_core::Measurement = serde_json::from_value(record).unwrap();
+    assert!(!restored.available());
+    let path = s.drawing.path.clone();
+    s.save_as_headless(&path).unwrap();
+    let reopened = Session::open(&path).unwrap();
+    assert!(!reopened.takeoff.items[0].available());
+    assert!(reopened.takeoff.totals().is_empty());
+    for extension in ["dwg", "dxf"] {
+        let path = path.with_extension(extension);
+        s.save_as_headless(&path).unwrap();
+        let project = path.with_extension("qiyas");
+        if project.exists() {
+            std::fs::remove_file(project).unwrap();
+        }
+        let standalone = Session::open(&path).unwrap();
+        assert!(!standalone.takeoff.items[0].available());
+        assert!(standalone.takeoff.totals().is_empty());
+    }
     assert!(s
         .run_input(
             &json!({"type":"measure_room", "label":{"handle":label}}),
@@ -242,7 +277,7 @@ fn opening_the_enclosure_invalidates_the_room_instead_of_measuring_its_old_bound
     });
     assert_eq!(report.counts.get("room_area_mismatch"), Some(&2));
     assert!(s.undo());
-    assert_eq!(text(&s, label), "Unapproved candidate 12.00 m²");
+    assert_eq!(text(&s, label), "Area 12.00 m²");
 }
 
 #[test]
@@ -277,7 +312,7 @@ fn joined_wall_edits_retrace_the_room_and_update_its_schedule() {
         panic!("room")
     };
     let label = report.rooms[0].label_handle.unwrap();
-    assert_eq!(text(&s, label), "Unapproved candidate 22.04 m²");
+    assert_eq!(text(&s, label), "Area 22.04 m²");
     let schedule = add(&mut s, json!({"type":"room_schedule", "at":[10,8]}));
     run(
         &mut s,
@@ -289,10 +324,10 @@ fn joined_wall_edits_retrace_the_room_and_update_its_schedule() {
         json!({"type":"walls", "thickness":0.2, "runs":[{"points":[[3,0],[3,4]]}]}),
     );
     assert_eq!(s.history_steps().0.len(), before + 1);
-    assert_eq!(text(&s, label), "Unapproved candidate 10.64 m²");
+    assert_eq!(text(&s, label), "Area 10.64 m²");
     assert_eq!(cell(&s, schedule, 2), "10.64");
     assert!((s.takeoff.items[0].shown - 10.64).abs() < 1e-8);
     assert!(s.undo());
-    assert_eq!(text(&s, label), "Unapproved candidate 22.04 m²");
+    assert_eq!(text(&s, label), "Area 22.04 m²");
     assert_eq!(cell(&s, schedule, 2), "22.04");
 }

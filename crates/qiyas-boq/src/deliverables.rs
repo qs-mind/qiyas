@@ -77,7 +77,12 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
             for (c, v) in row.cells.iter().enumerate() {
                 let format = if row.heading { &bold } else { &base };
                 if let Some(n) = v.as_f64() {
-                    sheet.write_number_with_format(r as u32, c as u16, n, format)?;
+                    sheet.write_number_with_format(
+                        r as u32,
+                        c as u16,
+                        n,
+                        &format.clone().set_num_format("0.############"),
+                    )?;
                 } else {
                     sheet.write_string_with_format(
                         r as u32,

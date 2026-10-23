@@ -207,7 +207,7 @@ fn legacy_room_uses_shared_drawing_recipe_and_quantity_fields() {
     near(hatch_area(&session, driver), 11.0);
     assert_eq!(
         session.entity_info(label, &[]).unwrap().text.as_deref(),
-        Some("Unapproved candidate 22.00 m²")
+        Some("Area 22.00 m²")
     );
     assert!(session
         .drawing
@@ -217,7 +217,7 @@ fn legacy_room_uses_shared_drawing_recipe_and_quantity_fields() {
     assert!(session.undo());
     assert_eq!(
         session.entity_info(label, &[]).unwrap().text.as_deref(),
-        Some("Unapproved candidate 11.00 m²")
+        Some("Area 11.00 m²")
     );
 }
 

@@ -548,6 +548,29 @@ impl Session {
         knowledge::get(&self.drawing.doc, Kind::Revisions, "result")?
             .map(|e| serde_json::from_value(e.data).map_err(|e| invalid(e.to_string())))
             .transpose()
+            .map(|report| report.map(|report| self.available_variation(report)))
+    }
+    fn available_variation(&self, mut report: VariationReport) -> VariationReport {
+        let broken: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter_map(|entity| {
+                crate::object_regions::retained_region(entity)
+                    .filter(|region| !region.valid)
+                    .map(|_| format!("{:X}", entity.common().handle.value()))
+            })
+            .collect();
+        if !broken.is_empty() {
+            // A missing quantity is not zero and must not become a removal delta.
+            report.items.clear();
+            report.warnings.push(format!(
+                "Variation quantities unavailable: {} broken room enclosures ({})",
+                broken.len(),
+                broken.join(", ")
+            ));
+        }
+        report
     }
     pub(crate) fn variation_report(
         &mut self,
@@ -565,6 +588,7 @@ impl Session {
         report.to_path = self.drawing.path.to_string_lossy().into();
         report.warnings = base.warnings;
         report.warnings.extend(current.warnings);
+        report = self.available_variation(report);
         let layer = layer
             .or(
                 knowledge::get(&self.drawing.doc, Kind::Revisions, "cloud_layer")?

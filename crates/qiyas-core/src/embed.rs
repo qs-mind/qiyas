@@ -9,7 +9,8 @@
 //! adds a 9th value, `String(chain)`: the block-reference handles, outermost first, as decimal
 //! numbers joined by commas; its 8th value is then `String("")` for a length, area or count. Readers
 //! take legacy records of 7, 8 or 9 values. New records pad to 9 and append a tenth
-//! JSON string with area_origin, measurement_basis, count_scope, note and source.
+//! JSON string with area_origin, measurement_basis, count_scope, note, source, validity and
+//! an optional retained-room handle. Unavailable quantities use invisible record-only points.
 //! Counts without locations use an invisible record-only point, never a counted location. Missing metadata
 //! stays unspecified, never certified net. A count writes one point per counted
 //! reference, each with the whole count's record. A volume is drawn like an area, on
@@ -98,6 +99,12 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
     // Shapes are worked out first: they read the document that is then added to.
     let mut shapes: Vec<(EntityType, &Measurement)> = Vec::new();
     for m in items {
+        if !m.available() {
+            let mut point = Point::new();
+            point.common.invisible = true;
+            shapes.push((EntityType::Point(point), m));
+            continue;
+        }
         match m.kind {
             Kind::Length | Kind::Area | Kind::Volume | Kind::Item => {
                 for points in shape_paths(doc, m) {
@@ -143,14 +150,25 @@ pub fn embed_measurements(doc: &mut CadDocument, items: &[Measurement]) {
         }
     }
     for (mut entity, m) in shapes {
+        let room_boundary = m.handles.first().copied().filter(|h| {
+            m.handles.len() == 1
+                && m.chain.is_empty()
+                && m.xref.is_none()
+                && doc
+                    .get_entity(Handle::new(*h))
+                    .and_then(crate::object_regions::retained_region)
+                    .is_some()
+        });
         let owner = doc.block_records.get(&m.sheet).map(|b| b.handle);
         let common = entity.common_mut();
         common.layer = layer_for(m).to_string();
         if let Some(owner) = owner {
             common.owner_handle = owner;
         }
-        let record_only = m.kind == Kind::Count && common.invisible;
-        common.extended_data.add_record(record(m, record_only));
+        let record_only = common.invisible;
+        common
+            .extended_data
+            .add_record(record(m, record_only, room_boundary));
         doc.add_entity(entity)
             .expect("a new entity is always added");
     }
@@ -186,12 +204,12 @@ fn shape_paths(doc: &CadDocument, m: &Measurement) -> Vec<Vec<[f64; 2]>> {
         .collect()
 }
 
-fn record(m: &Measurement, record_only: bool) -> ExtendedDataRecord {
+fn record(m: &Measurement, record_only: bool, room_boundary: Option<u64>) -> ExtendedDataRecord {
     let mut record = ExtendedDataRecord::new(APP);
     for value in [
         XDataValue::String(m.id.clone()),
         XDataValue::String(kind_name(m.kind).to_string()),
-        XDataValue::Real(m.value),
+        XDataValue::Real(if m.available() { m.value } else { 0.0 }),
         XDataValue::String(m.description.clone()),
         XDataValue::String(m.layer.clone()),
         XDataValue::String(m.sheet.clone()),
@@ -222,6 +240,8 @@ fn record(m: &Measurement, record_only: bool) -> ExtendedDataRecord {
             "note": m.note,
             "source": m.source,
             "record_only": record_only,
+            "quantity_valid": m.available(),
+            "room_boundary": room_boundary,
         })
         .to_string(),
     ));
@@ -378,6 +398,14 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
         m.measurement_basis =
             serde_json::from_value(meta.get("measurement_basis")?.clone()).ok()?;
         m.count_scope = serde_json::from_value(meta.get("count_scope")?.clone()).ok()?;
+        if meta.get("quantity_valid").and_then(|v| v.as_bool()) == Some(false) {
+            m.quantity_valid = false;
+            m.value = f64::NAN;
+            m.shown = f64::NAN;
+        }
+        if let Some(handle) = meta.get("room_boundary").and_then(|v| v.as_u64()) {
+            m.handles = vec![handle];
+        }
         if let Some(note) = meta.get("note") {
             m.note = serde_json::from_value(note.clone()).ok()?;
         }

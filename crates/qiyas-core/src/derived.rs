@@ -9,6 +9,7 @@ fn objects(s: &mut Session) -> Result<(), CoreError> {
     if s.has_object_regions() {
         // Enclosures follow the regenerated source geometry, then their own recipes follow
         // the new regions. Both passes remain inside the command's existing undo snapshot.
+        s.sync_legacy_wall_tags()?;
         s.park();
         s.refresh_object_regions()?;
         s.sync_legacy_room_regions()?;

@@ -43,7 +43,7 @@ pub fn compare(inputs: &CompareInputs, default_tol: f64, previous: &[Conflict]) 
         .takeoff
         .items
         .iter()
-        .filter(|m| is_quantity(m))
+        .filter(|m| m.available() && is_quantity(m))
         .collect();
     if let Some(boq) = inputs.boq {
         boq_items(

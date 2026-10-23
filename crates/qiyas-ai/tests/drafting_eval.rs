@@ -493,7 +493,7 @@ async fn villa_ground_floor_through_mizans_three_tools() {
                 near(&json!(text.height), 0.25);
                 names += 1;
             }
-            EntityType::Text(text) if text.value.starts_with("Unapproved candidate") => {
+            EntityType::Text(text) if text.value.starts_with("Area ") => {
                 assert_eq!(text.common.layer, "A-ANNO-TEXT");
             }
             _ => {}

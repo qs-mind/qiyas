@@ -94,15 +94,20 @@ pub const INSERT_COUNT_LIMITATIONS: &str = "Not a complete visible count or proj
 /// for counts, the item's own unit for items); `shown` is the same quantity in `unit`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Measurement {
+    /// False when the source enclosure is unavailable. Unavailable values serialize as null.
+    #[serde(default = "valid_quantity")]
+    pub quantity_valid: bool,
     /// Unscored manual measurements retain 0.5; generated adapters copy derived confidence.
     #[serde(default = "crate::trust::unscored")]
     pub confidence: f64,
     /// UUID v4.
     pub id: String,
     pub kind: Kind,
+    #[serde(deserialize_with = "read_quantity")]
     pub value: f64,
     /// "m", "m2", "m3", "pcs", or an item's own unit.
     pub unit: String,
+    #[serde(deserialize_with = "read_quantity")]
     pub shown: f64,
     pub description: String,
     /// The measured entity's layer; empty for shapes the user drew.
@@ -149,7 +154,17 @@ pub struct Measurement {
     pub count_scope: Option<String>,
 }
 
+fn valid_quantity() -> bool {
+    true
+}
+fn read_quantity<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(d)?.unwrap_or(f64::NAN))
+}
 impl Measurement {
+    pub fn available(&self) -> bool {
+        self.quantity_valid && self.value.is_finite() && self.shown.is_finite()
+    }
+
     /// A new user measurement made now, converted to metres with `units`. The caller
     /// fills in handles, points, block name, the self-intersection flag, a volume's height
     /// and an item's unit (left empty here).
@@ -163,6 +178,7 @@ impl Measurement {
     ) -> Measurement {
         let (unit, shown) = in_metres(kind, value, units);
         Measurement {
+            quantity_valid: true,
             confidence: crate::trust::unscored(),
             id: uuid::Uuid::new_v4().to_string(),
             kind,
@@ -239,7 +255,7 @@ impl Takeoff {
     /// One total per kind and unit, in order of first appearance; sums the `shown` values.
     pub fn totals(&self) -> Vec<Total> {
         let mut totals: Vec<Total> = Vec::new();
-        for m in &self.items {
+        for m in self.items.iter().filter(|m| m.available()) {
             match totals
                 .iter_mut()
                 .find(|t| t.kind == m.kind && t.unit == m.unit)

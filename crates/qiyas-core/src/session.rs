@@ -769,6 +769,22 @@ impl Session {
                     .push(format!("Legacy object conversion needs review: {error}"));
             }
         }
+        session.migrate_grid_provenance();
+        // Reopening cannot make yesterday's broken enclosure a usable quantity again.
+        if session.has_object_regions() {
+            if let Err(error) = session
+                .refresh_object_regions()
+                .and_then(|()| session.sync_legacy_room_regions())
+                .and_then(|()| session.refresh_object_schedules())
+                .and_then(|()| session.refresh_measurement())
+                .and_then(|()| session.follow_fields())
+            {
+                session
+                    .drawing
+                    .problems
+                    .push(format!("Room quantities need review: {error}"));
+            }
+        }
         if let Err(error) = session.validate_object_metadata() {
             session
                 .drawing

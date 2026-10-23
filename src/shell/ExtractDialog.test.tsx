@@ -53,6 +53,7 @@ test("Run emits one filter per layer chosen and the fields, then shows the table
       { ...base, layer: "A-WINDOW" },
     ],
     ["block_name", { attribute: "MARK" }],
+    expect.any(Function),
   );
   const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
   expect(headers).toEqual(["Block", "MARK"]);
@@ -74,6 +75,7 @@ test("with no layer chosen one filter covers every layer; no field, no run", asy
   expect(props.onRun).toHaveBeenCalledWith(
     [{ kind: null, block_name: null, text_contains: null, limit: 5000 }],
     ["kind", "layer", "block_name", "text", "length", "area"],
+    expect.any(Function),
   );
   for (const name of ["Type", "Layer", "Block", "Text", "Length (m)", "Area (m²)"]) {
     fireEvent.click(screen.getByRole("checkbox", { name }));

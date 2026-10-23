@@ -266,6 +266,15 @@ fn valid_token(token: &str) -> bool {
 
 /// Checks settings coming from the window before they are kept.
 pub fn validate(s: &Settings) -> Result<(), String> {
+    if let Some(base) = s
+        .providers
+        .openai_compatible
+        .base_url
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        qiyas_ai::endpoint::normalize(base)?;
+    }
     if s.measurement_method
         .as_ref()
         .is_some_and(|name| name.trim().is_empty())

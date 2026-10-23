@@ -88,7 +88,8 @@ impl Provider for OpenAiCompatible {
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
             let extras = self.extras.lock().map(|m| m.clone()).unwrap_or_default();
-            let url = format!("{}/chat/completions", self.base_url);
+            let base = crate::endpoint::normalize(&self.base_url).map_err(AiError::Network)?;
+            let url = format!("{base}/chat/completions");
             let secret = self.api_key.as_deref().unwrap_or("");
             // A 400 that names one of the optional fields drops it, and the request goes again
             // once per field.

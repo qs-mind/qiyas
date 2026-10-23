@@ -310,10 +310,28 @@ impl Session {
         let mut at = 0;
         for (a, b) in code_spans(template) {
             out.push_str(&template[at..a]);
-            out.push_str(&self.field_value(&template[a..b], sheet));
+            let value = self.field_value(&template[a..b], sheet);
+            if template.contains("المساحة") || template.contains("مساحة مرشحة") {
+                out.extend(value.chars().map(|c| match c {
+                    '0'..='9' => char::from_u32('٠' as u32 + c as u32 - '0' as u32).unwrap(),
+                    '.' => '٫',
+                    _ => c,
+                }));
+            } else {
+                out.push_str(&value);
+            }
             at = b;
         }
         out.push_str(&template[at..]);
+        // Saved Qiyas room fields keep their binding while adopting the approved plan wording.
+        if has_object_fields(template) {
+            if let Some(rest) = out.strip_prefix("Unapproved candidate ") {
+                return format!("Area {rest}");
+            }
+            if let Some(rest) = out.strip_prefix("مساحة مرشحة غير معتمدة ") {
+                return format!("المساحة {rest}");
+            }
+        }
         out
     }
 
@@ -618,6 +636,21 @@ mod tests {
         ));
         // An unclosed code is left as it is.
         assert!(code_spans("50%<\\AcVar Date").is_empty());
+    }
+
+    #[test]
+    fn legacy_room_fields_adopt_plan_wording_without_losing_the_binding() {
+        let session = Session::new_blank(std::path::Path::new("legacy-label.dxf"), 6);
+        for (old, current) in [
+            ("Unapproved candidate", "Area"),
+            ("مساحة مرشحة غير معتمدة", "المساحة"),
+        ] {
+            let template = format!(r#"{old} %<\AcVar QiyasRoomArea "DEAD" 2>% m²"#);
+            assert_eq!(
+                session.evaluate_fields(&template, Handle::new(0)),
+                format!("{current} #### m²")
+            );
+        }
     }
 
     #[test]

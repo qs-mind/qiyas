@@ -138,7 +138,9 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
       )}
       {list && !list.from_service && (
         <p className="note" role="status">
-          {list.error === "no_base_url"
+          {list.error === "save_address_first"
+            ? t("settings.saveAddressFirst")
+            : list.error === "no_base_url"
             ? t("settings.modelNoBaseUrl")
             : models.length > 0
               ? t("settings.modelBuiltin", { why: list.error ?? "" })

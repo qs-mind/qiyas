@@ -18,10 +18,10 @@
     "at": [0, 0],
     "filter": {"category": "room"},
     "columns": ["name", "net_floor_area"],
-    "headers": ["Room", "Candidate area (m2)"],
+    "headers": ["Room", "Area (m²)"],
     "templates": {"name": "{if(name == '', 'Room ', '')}{if(name == '', id_hex, name)}"},
     "decimals": {"net_floor_area": 2},
-    "totals": {"name": "Total candidate area", "net_floor_area": ""},
+    "totals": {"name": "Total area", "net_floor_area": ""},
     "default_layer": "A-ANNO-TABL",
     "preserve_overrides": true
   }

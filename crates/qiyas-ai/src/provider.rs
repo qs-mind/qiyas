@@ -345,11 +345,12 @@ pub(crate) fn http_client() -> reqwest::Client {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(30))
         // No byte for this long means the connection is dead (the API pings while it thinks).
         .read_timeout(Duration::from_secs(300))
         .build()
-        .unwrap_or_default()
+        .expect("valid provider HTTP client configuration")
 }
 
 /// Sends the request built by `make`, retrying busy/rate-limit replies for up to two minutes, and maps failures to

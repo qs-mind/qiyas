@@ -335,6 +335,7 @@ pub fn build_provider(s: &Settings, key: Option<String>) -> Result<Box<dyn Provi
                 .map(str::trim)
                 .filter(|u| !u.is_empty())
                 .ok_or("no_base_url")?;
+            qiyas_ai::endpoint::normalize(url)?;
             if s.profile().model.trim().is_empty() {
                 return Err("no_model".into());
             }

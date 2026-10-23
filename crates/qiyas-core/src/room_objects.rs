@@ -116,6 +116,7 @@ impl Session {
                     handle,
                     &RetainedRegion {
                         seed: room.seed,
+                        boundary_layers: Default::default(),
                         subtract_islands: room.subtract_islands,
                         holes: room.holes,
                         hole_bulges: room.hole_bulges,
@@ -228,6 +229,7 @@ impl Session {
         seed: [f64; 2],
         boundary: &Boundary,
         subtract_islands: bool,
+        policy: &crate::object_regions::BoundaryLayers,
     ) -> Result<u64, CoreError> {
         let Boundary::Ring {
             ring,
@@ -238,8 +240,15 @@ impl Session {
             return Err(invalid("The room seed is not inside a closed drawn region"));
         };
         if let Some((h, old)) = self.room_at(&self.sheet, seed) {
-            if old.subtract_islands != subtract_islands {
-                return Err(invalid("This room already has an island policy; use its existing boundary consistently"));
+            if old.subtract_islands != subtract_islands
+                || self
+                    .drawing
+                    .doc
+                    .get_entity(Handle::new(h))
+                    .and_then(retained_region)
+                    .is_some_and(|r| r.boundary_layers != *policy)
+            {
+                return Err(invalid("This room already has a boundary or island policy; use its existing policy consistently"));
             }
             return Ok(h);
         }
@@ -283,6 +292,10 @@ impl Session {
             &room,
         );
         self.migrate_legacy_rooms()?;
+        let mut region = retained_region(self.drawing.doc.get_entity(h).expect("new room"))
+            .expect("migrated room");
+        region.boundary_layers = policy.clone();
+        self.stamp_retained_region(h.value(), &region)?;
         Ok(h.value())
     }
 
@@ -326,7 +339,9 @@ impl Session {
                     .map(str::to_owned)
             })
         {
-            return Ok(template);
+            return Ok(template
+                .replace("Unapproved candidate", "Area")
+                .replace("مساحة مرشحة غير معتمدة", "المساحة"));
         }
         // Older stored definitions lack the annotation defaults; the alias reads the same
         // compatibility data rather than introducing a second rendering rule.
@@ -345,6 +360,7 @@ impl Session {
         source_sheet: Option<String>,
         labels: &[Target],
         decimals: usize,
+        language: Option<crate::rooms::LabelLanguage>,
     ) -> Result<u64, CoreError> {
         if decimals > 6 {
             return Err(invalid("decimals is 0 to 6"));
@@ -371,6 +387,10 @@ impl Session {
             ));
         }
         let mut spec = crate::object_schedules::legacy_recipe("room")?;
+        if language == Some(crate::rooms::LabelLanguage::Ar) {
+            spec.headers = vec!["الغرفة".into(), "المساحة (م²)".into()];
+            spec.totals.insert("name".into(), "إجمالي المساحة".into());
+        }
         spec.at = at;
         spec.ids = Some(rooms.clone());
         spec.decimals.insert("net_floor_area".into(), decimals);
@@ -424,6 +444,7 @@ impl Session {
         &mut self,
         label: Option<Target>,
         point: Option<[f64; 2]>,
+        policy: &crate::object_regions::BoundaryLayers,
     ) -> Result<Measurement, CoreError> {
         let boundary = match (label, point) {
             (Some(label), None) => self.room_from_label(&label)?,
@@ -431,8 +452,8 @@ impl Session {
                 if let Some((h, _)) = self.room_at(&self.sheet, point) {
                     h
                 } else {
-                    let boundary = self.boundary_at(point, 1.0 / self.drawing.units.to_metres());
-                    self.keep_room(None, point, &boundary, true)?
+                    let boundary = self.room_boundary_in(&self.sheet, point, policy);
+                    self.keep_room(None, point, &boundary, true, policy)?
                 }
             }
             _ => {
@@ -446,6 +467,13 @@ impl Session {
             .doc
             .get_entity(Handle::new(boundary))
             .ok_or_else(|| invalid("The room boundary no longer exists"))?;
+        if (!policy.boundary_layers.is_empty() || !policy.exclude_layers.is_empty())
+            && retained_region(entity).is_some_and(|region| region.boundary_layers != *policy)
+        {
+            return Err(invalid(
+                "The selected room has a different saved boundary policy",
+            ));
+        }
         let room = room_object(entity)
             .ok_or_else(|| invalid("The selected boundary is not a retained room"))?;
         let area = room_area(entity).ok_or_else(|| {

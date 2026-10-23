@@ -127,7 +127,7 @@ export const TakeoffPanel = memo(function TakeoffPanel({
         size: 64,
         align: "end",
         sortValue: (m) => m.shown,
-        cell: (m) => qty(m.shown, m.kind, precision),
+        cell: (m) => m.shown === null ? t("takeoff.unavailable") : qty(m.shown, m.kind, precision),
       },
       {
         id: "unit",

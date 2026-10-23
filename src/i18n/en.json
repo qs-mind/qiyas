@@ -1591,5 +1591,8 @@
   "querySeverity.error": "Error",
   "conflictKind.duplicate_item": "Duplicate item",
   "conflictKind.relation_mismatch": "Element relation",
-  "conflictKind.document_mismatch": "Document vs drawing"
+  "conflictKind.document_mismatch": "Document vs drawing",
+  "extract.progress": "Reading all matches: {count} rows loaded…",
+  "takeoff.unavailable": "Unavailable",
+  "settings.saveAddressFirst": "Save this service address before loading models. The saved key belongs to its saved address."
 }

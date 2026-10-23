@@ -1245,7 +1245,7 @@ fn label_spaces_writes_unapproved_candidate_areas_under_names_and_a_schedule_fol
     let label = living["label_handle"].as_u64().unwrap();
     let info = s.entity_info(label, &[]).unwrap();
     assert_eq!(info.layer_short, "A-AREA");
-    assert_eq!(info.text.as_deref(), Some("Unapproved candidate 51.21 m²"));
+    assert_eq!(info.text.as_deref(), Some("Area 51.21 m²"));
     // Under the name: same start, lower down.
     let name_row = names["rows"]
         .as_array()
@@ -1376,10 +1376,10 @@ fn a_batch_is_one_step_and_fails_whole() {
 #[test]
 fn candidate_labels_follow_request_language_without_net_approval() {
     for (name, language, expected) in [
-        ("LIVING", Some("ar"), "مساحة مرشحة غير معتمدة 51.21 م²"),
-        ("غرفة", Some("en"), "Unapproved candidate 51.21 m²"),
-        ("غرفة", None, "مساحة مرشحة غير معتمدة 51.21 م²"),
-        ("LIVING", None, "Unapproved candidate 51.21 m²"),
+        ("LIVING", Some("ar"), "المساحة ٥١٫٢١ م²"),
+        ("غرفة", Some("en"), "Area 51.21 m²"),
+        ("غرفة", None, "المساحة ٥١٫٢١ م²"),
+        ("LIVING", None, "Area 51.21 m²"),
     ] {
         let (_dir, mut s) = test_plan();
         let texts = read(&mut s, "query", json!({"kind": "texts"})).unwrap();

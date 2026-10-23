@@ -12,9 +12,33 @@ fn subtract_islands() -> bool {
     true
 }
 
+/// Explicit enclosure layers for imported drawings. Empty includes every geometric layer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BoundaryLayers {
+    #[serde(default)]
+    pub boundary_layers: Vec<String>,
+    #[serde(default)]
+    pub exclude_layers: Vec<String>,
+}
+impl BoundaryLayers {
+    pub(crate) fn accepts(&self, layer: &str) -> bool {
+        (self.boundary_layers.is_empty()
+            || self
+                .boundary_layers
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(layer)))
+            && !self
+                .exclude_layers
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(layer))
+    }
+}
+
 /// Follow the closed drawing geometry surrounding a point, including its island policy.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RegionSource {
+    #[serde(default, flatten)]
+    pub boundary_layers: BoundaryLayers,
     pub seed: [f64; 2],
     #[serde(default = "subtract_islands")]
     pub subtract_islands: bool,
@@ -22,6 +46,8 @@ pub struct RegionSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RetainedRegion {
+    #[serde(default, flatten)]
+    pub boundary_layers: BoundaryLayers,
     pub seed: [f64; 2],
     pub subtract_islands: bool,
     pub holes: Vec<Vec<[f64; 2]>>,
@@ -216,6 +242,7 @@ impl Session {
             handle,
             &RetainedRegion {
                 seed: source.seed,
+                boundary_layers: source.boundary_layers,
                 subtract_islands: source.subtract_islands,
                 holes: Vec::new(),
                 hole_bulges: Vec::new(),
@@ -264,7 +291,7 @@ impl Session {
         let app = self.object_app(REGION_APP)?;
         for (handle, mut region, sheet) in regions {
             region.app_handle = app;
-            match self.boundary_at_in(&sheet, region.seed, 1.0 / self.drawing.units.to_metres()) {
+            match self.room_boundary_in(&sheet, region.seed, &region.boundary_layers) {
                 Boundary::Ring {
                     ring,
                     holes,
@@ -319,14 +346,17 @@ impl Session {
             .collect();
         for (index, area) in quantities {
             let row = &mut self.takeoff.items[index];
+            row.quantity_valid = area.is_some();
             if let Some(area) = area {
                 row.value = area;
                 row.shown = area * self.drawing.units.to_metres().powi(2);
                 row.note =
                     "Unapproved candidate region area; linked to the retained boundary".into();
             } else {
+                row.value = f64::NAN;
+                row.shown = f64::NAN;
                 row.note =
-                    "Region enclosure is no longer closed; quantity is stale and must not be used"
+                    "Region enclosure is no longer closed; quantity unavailable and excluded from totals"
                         .into();
             }
         }

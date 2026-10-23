@@ -586,6 +586,14 @@ pub async fn set_settings<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     settings::validate(&settings)?;
+    let old = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if old.providers.openai_compatible.base_url != settings.providers.openai_compatible.base_url {
+        keychain(move || secrets::migrate(&old)).await?;
+    }
     let (changed, mcp_changed) = {
         let mut cached = state
             .settings
@@ -661,33 +669,32 @@ pub async fn ai_models(
     } else {
         settings::Provider::OpenaiCompatible.name()
     };
-    let key = keychain(move || secrets::get_api_key(name))
+    let requested = match secrets::discovery_address(
+        &settings,
+        name,
+        if anthropic { None } else { base_url.as_deref() },
+    ) {
+        Ok(base) => base,
+        Err(error) => {
+            return Ok(qiyas_ai::models::ModelList {
+                models: Vec::new(),
+                from_service: false,
+                error: Some(error),
+            })
+        }
+    };
+    let key = keychain(move || secrets::get_saved(&settings, name))
         .await
         .ok()
         .flatten();
-    if anthropic {
-        return Ok(model_list(ModelSource::Anthropic, key.as_deref()).await);
-    }
-    let base = if provider.is_some() {
-        base_url
+    let source = if anthropic {
+        ModelSource::Anthropic
     } else {
-        base_url.or(settings.providers.openai_compatible.base_url)
-    }
-    .filter(|b| !b.trim().is_empty());
-    match base {
-        Some(base_url) => Ok(model_list(
-            ModelSource::OpenAiCompatible {
-                base_url: &base_url,
-            },
-            key.as_deref(),
-        )
-        .await),
-        None => Ok(qiyas_ai::models::ModelList {
-            models: Vec::new(),
-            from_service: false,
-            error: Some("no_base_url".into()),
-        }),
-    }
+        ModelSource::OpenAiCompatible {
+            base_url: &requested,
+        }
+    };
+    Ok(model_list(source, key.as_deref()).await)
 }
 
 /// Stores the provider's API key in the OS keychain. The key never comes back to the window. The
@@ -699,14 +706,29 @@ pub async fn set_api_key<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    keychain(move || secrets::set_api_key(&provider, &key)).await?;
+    let saved = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let base = secrets::address(&saved, &provider)?;
+    keychain(move || {
+        secrets::migrate(&saved)?;
+        secrets::set_at(&provider, &base, &key)
+    })
+    .await?;
     new_conversation(&app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn has_api_key(provider: String) -> Result<bool, String> {
-    keychain(move || Ok(secrets::get_api_key(&provider)?.is_some())).await
+pub async fn has_api_key(provider: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    keychain(move || Ok(secrets::get_saved(&saved, &provider)?.is_some())).await
 }
 
 #[tauri::command]
@@ -715,7 +737,17 @@ pub async fn delete_api_key<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    keychain(move || secrets::delete_api_key(&provider)).await?;
+    let saved = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let base = secrets::address(&saved, &provider)?;
+    keychain(move || {
+        secrets::migrate(&saved)?;
+        secrets::delete_at(&provider, &base)
+    })
+    .await?;
     new_conversation(&app, &state);
     Ok(())
 }
@@ -868,7 +900,8 @@ async fn new_agent(
         Some(mock) => (mock, "mock"),
         None => {
             let name = settings.provider.name();
-            let key = match keychain(move || secrets::get_api_key(name)).await {
+            let saved = settings.clone();
+            let key = match keychain(move || secrets::get_saved(&saved, name)).await {
                 Ok(key) => key,
                 // A local OpenAI-compatible server needs no key, so no keychain is fine.
                 Err(_) if settings.provider == settings::Provider::OpenaiCompatible => None,
@@ -1164,7 +1197,8 @@ pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
         true
     } else {
         let name = settings.provider.name();
-        keychain(move || secrets::get_api_key(name))
+        let saved = settings.clone();
+        keychain(move || secrets::get_saved(&saved, name))
             .await
             .is_ok_and(|key| key.is_some())
     };

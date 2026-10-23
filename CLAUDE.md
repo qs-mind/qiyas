@@ -725,7 +725,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   and replaces its Comment clouds in one undo step. Its cloud layer is data, retained in
   knowledge `revisions/cloud_layer` (default VARIATION). Carry is also one undo step.
   Take-off exports include bilingual Variation and lossless chunked records; the drawing
-  retains the report and clouds through DWG/DXF. No rates or domain rules were added.
+  retains the report and clouds through DWG/DXF. If any retained room enclosure is broken,
+  variation quantities are unavailable with a count and handles, including cached reports; an
+  unknown quantity must never become a zero/removal delta. No rates or domain rules were added.
 - The three commands have command-line words and generic-tool access. The take-off kit
   contains revision examples within its existing byte budget; the workflow index describes
   open B → carry A → re-take-off → variation/clouds → export.
@@ -793,7 +795,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
 - PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
   and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
-  Excel/PDF include lossless report records. Client-template exports preserve the original
+  Visible Excel/PDF cells format counts as integers and quantities to the method precision
+  (three decimals for geometric quantities). References show sheet, element kind/mark and short
+  handles; drawing cells show filenames. Full precision, paths and structured provenance remain
+  in the lossless report records. Excel/PDF include lossless report records. Client-template exports preserve the original
   workbook's package and change only mapped quantity cells, leaving rates and amounts untouched.
 - `qiyas-cli export <drawing|project.qss> --kind boq --format excel --path boq.xlsx`
   accepts `--language en|ar` and `--layout name`. `project run` adds `--deliverables all`
@@ -1691,29 +1696,44 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 ## Inquiry
 
 - `Command::Rooms { query }` (`qiyas-core/src/rooms.rs`) reads rooms round name texts or seed
-  points, using the same closed boundaries as Hatch. `enclosed_area_m2` is the drawn area;
+  points, using a room-specific enclosure policy independent of Hatch and layer visibility. `enclosed_area_m2` is the drawn area;
   `net_area_m2` and `candidate_area_m2` take islands off unless `subtract_islands` is false.
+  Room boundaries exclude text/mtext/attributes, dimensions, leaders, tables, points, hatches,
+  wipeouts, rays and xlines, every part carrying QIYAS_GRID provenance, opening object symbols,
+  and QIYAS measurement overlays (saved derived geometry cannot become its own enclosure).
+  Qiyas walls supply joined faces without opening cuts: a doorway closes at the internal wall face.
+  `boundary_layers` and `exclude_layers` on room queries, seed measurements, region sources and
+  recognition selectors select foreign enclosure geometry explicitly. Retained regions persist
+  that policy. Other drawn geometry is eligible when no inclusion list is given. Hatch is unchanged.
+  Grid axes and letters now carry provenance as well as bubbles; grid letters never seed rooms.
+  Older grids recover axis and letter provenance from stamped bubbles when opened.
   These are unapproved candidate areas. `LabelSpaces { query, layer, height, decimals,
-  language }` writes "Unapproved candidate … m²" under each name, or its Arabic wording.
+  language }` writes "Area 19.31 m²" or "المساحة ١٩٫٣١ م²" (Arabic digits and decimal separator).
   The label sits 1.6 name heights below the name, or at the seed point. An explicit `height`
   is in metres; otherwise it uses the name's height, or the default text height for a seed.
   Both return `Outcome::Rooms`; labelling is one transaction named `label_spaces`.
   Labels now contain live `QiyasRoomArea` fields. `LabelSpaces` retains each closed outer ring
   as a polyline on non-plotting `A-ROOM-BOUNDARY`, with its seed, name, exact bulges and islands
   in `QIYAS_ROOM` xdata. The report includes `boundary_handle`. This is a durable room object
-  through DWG/DXF; it keeps the existing "Unapproved candidate" wording and approval status.
+  through DWG/DXF; approval remains in metadata and the take-off report, never on the plan.
+  Old label wording remains recognisable; saved live fields display the new wording on refresh. Room schedule headers are "Area (m²)" or, with
+  `language: "ar"`, "المساحة (م²)".
   Changed generated boundaries invalidate the codec's whole `raw_record` and graphics cache;
   changed room metadata also invalidates only its own application's raw DWG EED blob, preserving
   other applications' data. Tests save, reopen, edit, save and reopen again, checking the retained
   area before any command can refresh it.
-  Repeated labels reuse the room; conflicting island policies are refused. Every drawing edit
+  Repeated labels reuse the room; conflicting boundary or island policies are refused. Every drawing edit
   retraces rooms from their seeds, excluding retained boundaries from the search, then updates
   labels, schedules and linked take-off inside the same undo step. A broken enclosure shows
-  `####`; its take-off is explicitly stale, and the construction check reports it.
-- `RoomSchedule { at, source_sheet?, labels?, decimals? }` (`ROOMSCHEDULE`) builds a drawing
+  `####`; its take-off has `quantity_valid: false` and null `value`/`shown`, is listed as
+  unavailable, and is excluded from totals, comparisons and exports. Reopening refreshes region
+  quantities; undo restores validity with the source geometry. Invalid embedded measurements use
+  invisible records retaining validity and the room binding, including without a project sidecar.
+  Reports count and list unavailable rows.
+- `RoomSchedule { at, source_sheet?, labels?, decimals?, language? }` (`ROOMSCHEDULE`) builds a drawing
   table from retained rooms, with per-room area fields and a total field. Source defaults to
   Model; the table goes on the current sheet, using `A-ANNO-TABL` when the current layer is 0.
-  `MeasureRoom { label? , point? }` (`MEASUREROOM`) accepts exactly one live label/boundary
+  `MeasureRoom { label? , point?, boundary_layers?, exclude_layers? }` (`MEASUREROOM`) accepts exactly one live label/boundary
   target or a seed. It measures the same net boundary in square metres, retaining a newly found
   seed region when needed; all quantities remain unapproved candidates. Both commands are one
   undo step. Construction rule `room_area_mismatch` compares linked labels, schedule cells and
@@ -1731,7 +1751,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   facts in an Info card at the top of the right panel), Divide (click, then the number of parts),
   Measure along (click, then the step in metres), ID point (snapped coordinates in metres), and
   Extract data (filter by layers, type, block, text; pick fields and attribute tags; copy as TSV
-  or export one "Data" sheet to Excel). Its Take-off group exports the take-off, imports a BOQ,
+  or export one "Data" sheet to Excel). Extraction reads every 5,000-row page, reports loaded
+  row counts, and refuses partial results after a failed page. Its Take-off group exports the take-off, imports a BOQ,
   compares and exports the conflicts.
 - Divide and measure along place point entities on layer `QIYAS-POINT` by true arc length and
   count them in the take-off; points and count are one undo step (a drawing change: Save asks).
@@ -1973,7 +1994,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   missing model with the service and model name and direct the user to Settings, in English
   or Arabic in the window.
 - The API key is never in a file: it lives in the OS keychain (service `qiyas`, account = the
-  provider name), is set only in the Settings dialog, and is never sent back to the window.
+  provider plus normalized complete base URL, including path), is set only in the Settings dialog,
+  and is never sent back to the window. Legacy entries migrate only to their saved address before
+  that address changes. Draft model discovery requires saving the address first; it never reads
+  a saved key for a different destination. Remote endpoints require HTTPS; HTTP is accepted only
+  for loopback. Malformed endpoints are rejected before credentials are fetched, and HTTP
+  redirects are disabled for provider requests.
   Agents never read or type a real key; the founder pastes it himself.
 - `QIYAS_AI_MOCK=1` with a debug build (`pnpm tauri dev`) uses a canned provider: it says a
   sentence, measures the first polyline on layer A-WALL and answers; with a selection in the
@@ -2068,12 +2094,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   text (TEXT or MTEXT), tables and cells, lines, polylines with bulges, rectangles, circles,
   arcs, hatches, clouds and block references. Sizes are drawing units; default text height is
   2.5 mm on paper at the annotation scale. `qiyas_read` rooms and the core `LabelSpaces` command
-  find the smallest closed region round each room-name text or seed via `Session::boundary_at`,
-  like Hatch: `enclosed_area_m2` is what the line work encloses, columns that overlap a wall
+  find the smallest closed region round each room-name text or seed via `Session::room_boundary_in`
+  with the enclosure policy above: `enclosed_area_m2` is what the line work encloses, columns that overlap a wall
   are already out, `net_area_m2` also takes the islands off (fountain, shaft;
   `subtract_islands` false keeps them). Bulged edges are exact; texts that look like areas are
   skipped so a second run does not label labels. `label_spaces` writes
-  "Unapproved candidate NN.NN m²", or its Arabic wording, just under each name. Verified on
+  "Area NN.NN m²", or "المساحة … م²" with Arabic digits, just under each name. Verified on
   `samples/test-plan.dwg`: living room 58.29 - 4 x 0.0025 = 58.28 enclosed, 51.211 net of the
   fountain; bedroom 22.085; kitchen 17.385 (the 0.4 m columns overlap the inset corners by
   0.05 x 0.05).

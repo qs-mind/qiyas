@@ -1276,7 +1276,7 @@ pub enum Command {
     #[schemars(example = json!({"type": "rooms", "query": {"text_layer": "A-ROOM-NAME"}}))]
     #[schemars(example = json!({"type": "rooms", "query": {"seeds": [{"name": "KITCHEN", "point": [12.5, 4.0]}]}}))]
     Rooms { query: crate::rooms::RoomsQuery },
-    /// Writes each room's unapproved candidate area ("Unapproved candidate 58.28 m²", or in
+    /// Writes each room's unapproved candidate area ("Area 58.28 m²", or in
     /// Arabic) as a text just under its name, or at its seed: on `layer` (made when missing; the
     /// current layer by default), `height` metres tall (the name's height by default), to
     /// `decimals` places (2), in `language` (the name's). One undo step. `Outcome::Rooms` with
@@ -1284,7 +1284,7 @@ pub enum Command {
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
     LabelSpaces {
-        query: crate::rooms::RoomsQuery,
+        query: Box<crate::rooms::RoomsQuery>,
         #[serde(default)]
         layer: Option<String>,
         #[serde(default)]
@@ -1302,6 +1302,8 @@ pub enum Command {
     RoomSchedule {
         at: [f64; 2],
         #[serde(default)]
+        language: Option<crate::rooms::LabelLanguage>,
+        #[serde(default)]
         source_sheet: Option<String>,
         #[serde(default)]
         labels: Vec<Target>,
@@ -1314,6 +1316,8 @@ pub enum Command {
     #[schemars(extend("x-category" = "takeoff", "x-words" = ["MEASUREROOM"]))]
     #[schemars(example = json!({"type":"measure_room", "point":[2,3]}))]
     MeasureRoom {
+        #[serde(default, flatten)]
+        boundary_layers: crate::object_regions::BoundaryLayers,
         #[serde(default)]
         label: Option<Target>,
         #[serde(default)]
@@ -2764,15 +2768,26 @@ impl Session {
                 self.set_parameter(&name, &expression)?;
                 return Ok(Outcome::Changed);
             }
-            Command::MeasureRoom { label, point } => self.measure_room(label, point)?,
+            Command::MeasureRoom {
+                label,
+                point,
+                boundary_layers,
+            } => self.measure_room(label, point, &boundary_layers)?,
             Command::RoomSchedule {
+                language,
                 at,
                 source_sheet,
                 labels,
                 decimals,
             } => {
                 return Ok(Outcome::Added {
-                    handles: vec![self.room_schedule(at, source_sheet, &labels, decimals)?],
+                    handles: vec![self.room_schedule(
+                        at,
+                        source_sheet,
+                        &labels,
+                        decimals,
+                        language,
+                    )?],
                 });
             }
             Command::Rooms { query } => {

@@ -1,3 +1,4 @@
+import { extractAll } from "./extractRows";
 /** Drawings as files: the open drawings' tabs, the project autosave switch, and opening, showing,
  *  switching, closing, saving, recovering and exporting them (`useDrawings`). */
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -732,13 +733,8 @@ export function useDrawings({
   }
 
   /** Extract data: runs each filter on the sheet shown and gathers the rows. */
-  async function extractRows(filters: EntityFilter[], fields: Field[]): Promise<string[][]> {
-    const rows: string[][] = [];
-    for (const filter of filters) {
-      const outcome = await runCommand({ type: "extract_data", filter, fields });
-      if (outcome.type === "table") rows.push(...outcome.rows);
-    }
-    return rows;
+  async function extractRows(filters: EntityFilter[], fields: Field[], progress?: (rows: number) => void): Promise<string[][]> {
+    return extractAll(filters, fields, (filter, fields) => runCommand({ type: "extract_data", filter, fields }), progress);
   }
 
   /** Asks where to save the extracted table, next to the drawing by default, and writes it. */

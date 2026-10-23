@@ -320,7 +320,7 @@ fn label_spaces_has_one_named_step_and_can_run_inside_a_batch() {
     let handle = report.rooms[0].label_handle.unwrap();
     assert!(matches!(
         entity(&session, handle),
-        EntityType::Text(t) if t.value == "Unapproved candidate 12.00 m²"
+        EntityType::Text(t) if t.value == "Area 12.00 m²"
     ));
     let history = session.history_steps().0;
     assert_eq!(history.len(), before + 1);

@@ -391,6 +391,23 @@ impl Session {
     pub fn measurement_report(&self) -> Result<MeasurementReport, CoreError> {
         let mut report: MeasurementReport = read(self, "result")?;
         report.variation = self.variation()?;
+        let unavailable: Vec<_> = self
+            .takeoff
+            .items
+            .iter()
+            .filter(|m| !m.available())
+            .collect();
+        if !unavailable.is_empty() {
+            report.warnings.push(format!(
+                "{} unavailable quantities excluded from totals",
+                unavailable.len()
+            ));
+            report.warnings.extend(
+                unavailable
+                    .iter()
+                    .map(|m| format!("{}: {}", m.description, m.note)),
+            );
+        }
         report.items.sort_by(|a, b| {
             a.confidence
                 .total_cmp(&b.confidence)

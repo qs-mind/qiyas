@@ -1045,7 +1045,7 @@ impl Session {
                 instance: object,
                 category: definition.category,
                 sheet,
-                facts,
+                facts: if valid { facts } else { BTreeMap::new() },
                 quantities,
                 valid,
             });

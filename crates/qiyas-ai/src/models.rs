@@ -95,7 +95,8 @@ pub async fn list_models(
             Ok(models)
         }
         ModelSource::OpenAiCompatible { base_url } => {
-            let url = format!("{}/models", base_url.trim().trim_end_matches('/'));
+            let base = crate::endpoint::normalize(base_url).map_err(AiError::Network)?;
+            let url = format!("{base}/models");
             let response = send(
                 || {
                     let r = client.get(&url).timeout(TIMEOUT);

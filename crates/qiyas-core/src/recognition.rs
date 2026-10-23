@@ -81,6 +81,9 @@ pub struct Selector {
     pub colour: Option<u32>,
     /// Positive closed area on the entity, or a region enclosing its text insertion.
     pub closed_region: Option<bool>,
+    /// Enclosure sources selected from drawing evidence, independent of text layers.
+    pub boundary_layers: Vec<String>,
+    pub exclude_layers: Vec<String>,
     /// A correction can deliberately be scoped to specific evidence, without generalising it.
     pub handles: Vec<u64>,
 }
@@ -443,7 +446,14 @@ impl Session {
         }
         if let Some(closed) = selector.closed_region {
             let enclosed = if matches!(e, EntityType::Text(_) | EntityType::MText(_)) {
-                self.recognition_region(row).is_some()
+                self.recognition_region(
+                    row,
+                    &crate::object_regions::BoundaryLayers {
+                        boundary_layers: selector.boundary_layers.clone(),
+                        exclude_layers: selector.exclude_layers.clone(),
+                    },
+                )
+                .is_some()
             } else {
                 row.area.is_some_and(|a| a > 0.0)
             };
@@ -453,18 +463,17 @@ impl Session {
         }
         Ok(true)
     }
-    fn recognition_region(&self, row: &EntityRow) -> Option<(Vec<[f64; 2]>, [f64; 2])> {
+    fn recognition_region(
+        &self,
+        row: &EntityRow,
+        policy: &crate::object_regions::BoundaryLayers,
+    ) -> Option<(Vec<[f64; 2]>, [f64; 2])> {
         if !matches!(row.kind.as_str(), "Text" | "MText") {
             return None;
         }
         let entity = self.drawing.doc.get_entity(Handle::new(row.handle))?;
         let seed = position(entity, row);
-        let start = (row.bounds[1][0] - row.bounds[0][0])
-            .abs()
-            .max((row.bounds[1][1] - row.bounds[0][1]).abs())
-            .max(self.measure_tol())
-            * 4.0;
-        match self.boundary_at(seed, start) {
+        match self.room_boundary_in(&self.sheet, seed, policy) {
             crate::Boundary::Ring { ring, .. } => Some((ring, seed)),
             _ => None,
         }
@@ -474,6 +483,7 @@ impl Session {
         candidate: &mut Candidate,
         row: &EntityRow,
         definition: &ObjectType,
+        policy: &crate::object_regions::BoundaryLayers,
     ) -> Result<(), CoreError> {
         let e = self
             .drawing
@@ -492,10 +502,11 @@ impl Session {
                 if matches!(e, EntityType::Text(_) | EntityType::MText(_))
                     || !row.area.is_some_and(|a| a > 0.0) =>
             {
-                if let Some((ring, seed)) = self.recognition_region(row) {
+                if let Some((ring, seed)) = self.recognition_region(row, policy) {
                     candidate.placement.driver = None;
                     candidate.placement.points = ring;
                     candidate.placement.region = Some(crate::object_regions::RegionSource {
+                        boundary_layers: policy.clone(),
                         seed,
                         subtract_islands: true,
                     });
@@ -597,7 +608,15 @@ impl Session {
             if let Err(error) = definition.properties(&candidate.placement.props) {
                 candidate.issues.push(error.to_string());
             }
-            self.fit_recognition_geometry(&mut candidate, row, &definition)?;
+            self.fit_recognition_geometry(
+                &mut candidate,
+                row,
+                &definition,
+                &crate::object_regions::BoundaryLayers {
+                    boundary_layers: rule.selector.boundary_layers.clone(),
+                    exclude_layers: rule.selector.exclude_layers.clone(),
+                },
+            )?;
             if candidate.issues.is_empty() && candidate.confidence >= rule.review_below {
                 candidate.state = ReviewState::Accepted;
             }
@@ -876,7 +895,13 @@ impl Session {
                         .find(|r| r.handle == handle)
                         .ok_or_else(|| invalid("Recognition source is not on the current sheet"))?;
                     candidate.issues.clear();
-                    self.fit_recognition_geometry(&mut candidate, &row, &definition)?;
+                    let policy = candidate
+                        .placement
+                        .region
+                        .as_ref()
+                        .map(|r| r.boundary_layers.clone())
+                        .unwrap_or_default();
+                    self.fit_recognition_geometry(&mut candidate, &row, &definition, &policy)?;
                     if decision == ReviewState::Accepted && !candidate.issues.is_empty() {
                         return Err(invalid(candidate.issues.join("; ")));
                     }

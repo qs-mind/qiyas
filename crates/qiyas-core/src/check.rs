@@ -887,11 +887,10 @@ impl Session {
                     .any(|w| layer.contains(w))
                     || size_label(text).is_some())
         };
-        let start = 3.0 / to_m;
         for row in texts.iter().filter(|r| roomish(r)).take(MAX_ROOMS) {
             let text = row.text.as_deref().unwrap_or("");
             let at = centre(row.bounds);
-            match self.boundary_at_in(sheet, at, start) {
+            match self.room_boundary_in(sheet, at, &Default::default()) {
                 Boundary::Ring { ring, .. } => {
                     let Some((w, h)) = size_label(text) else {
                         continue;

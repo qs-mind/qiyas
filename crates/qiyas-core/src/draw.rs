@@ -2,6 +2,8 @@
 //! state (`Session::current`: layer, colour, linetype, lineweight), and the hatch boundary around
 //! a picked point.
 
+pub(crate) mod room_boundary;
+
 use std::f64::consts::{PI, TAU};
 
 use opencadcodec::entities::{
@@ -997,11 +999,6 @@ impl Session {
     /// `boundary_at` with at most `max` segments in the box looked at.
     pub fn boundary_at_most(&self, p: [f64; 2], start: f64, max: usize) -> Boundary {
         self.boundary_in_at_most(&self.sheet, p, start, max)
-    }
-
-    /// `boundary_at` on a named sheet, without changing the sheet on screen.
-    pub(crate) fn boundary_at_in(&self, sheet: &str, p: [f64; 2], start: f64) -> Boundary {
-        self.boundary_in_at_most(sheet, p, start, BOUNDARY_SEGMENTS)
     }
 
     fn boundary_in_at_most(&self, sheet: &str, p: [f64; 2], start: f64, max: usize) -> Boundary {
