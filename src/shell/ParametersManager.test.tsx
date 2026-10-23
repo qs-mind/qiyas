@@ -60,7 +60,7 @@ test("a refusal (a circle) stays in the dialog", async () => {
   });
   fireEvent.change(field("d2"), { target: { value: "d1 - 1" } });
   fireEvent.blur(field("d2"));
-  expect((await screen.findByRole("alert")).textContent).toContain("circle");
+  expect((await screen.findByRole("alert")).textContent).toContain("That didn’t work. Technical details are available in Settings.");
 });
 
 test("a parameter that can't be worked out says why and can be set again or deleted", async () => {

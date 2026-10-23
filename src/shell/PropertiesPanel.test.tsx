@@ -38,14 +38,13 @@ const rows = () =>
     d.querySelector("dd")!.textContent,
   ]);
 
-test("a block reference shows its handle, colour, weight and attributes", () => {
+test("a block reference shows its plain type, colour, weight and attributes", () => {
   render(<PropertiesPanel entity={door} units="metres" precision={3} sheet="Model" />);
   expect(rows()).toEqual([
-    ["Handle", "2A"],
-    ["Type", "Insert"],
+    ["Type", "Block"],
     ["Layer", "A-DOOR"],
     ["Colour", "ACI 4"],
-    ["Linetype", "ByLayer"],
+    ["Linetype", "From layer"],
     ["Lineweight", "0.35 mm"],
     ["Sheet", "Model"],
     ["Block", "DOOR"],
@@ -70,8 +69,8 @@ test("sizes are in metres with the precision, ByBlock and texts read out", () =>
   };
   render(<PropertiesPanel entity={arc} units="millimetres" precision={2} sheet="Model" />);
   const got = Object.fromEntries(rows());
-  expect(got.Colour).toBe("ByBlock");
-  expect(got.Lineweight).toBe("ByLayer");
+  expect(got.Colour).toBe("From block");
+  expect(got.Lineweight).toBe("From layer");
   expect(got.Length).toBe("6.28 m");
   expect(got.Radius).toBe("2.00 m");
   expect(got.Inside).toBe("PLAN › DOOR");
@@ -213,7 +212,7 @@ test("with nothing picked the palette edits what new entities are drawn with", (
       onSetCurrent={onSetCurrent}
     />,
   );
-  expect(screen.getByText("New entities")).toBeTruthy();
+  expect(screen.getByText("Next drawn items")).toBeTruthy();
   fireEvent.change(field("Layer"), { target: { value: "A-WALL" } });
   expect(onSetCurrent).toHaveBeenLastCalledWith({ ...current, layer: "A-WALL" });
   enter("Colour", "#ff0000");
@@ -341,7 +340,7 @@ test("several entities show the count, the sums and what they share", () => {
   ]);
   const got = Object.fromEntries(rows());
   expect(got.Selected).toBe("3");
-  expect(got.Types).toBe("Line ×2, LwPolyline ×1");
+  expect(got.Types).toBe("Line ×2, Polyline ×1");
   expect(got["Total length"]).toBe("29.00 m");
   expect(got["Total area"]).toBe("12.00 m²");
   // The layers differ, the colour does not.

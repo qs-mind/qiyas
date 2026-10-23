@@ -23,9 +23,9 @@ test("lists and runs a project without an open drawing, exposing output location
   const run = await screen.findByRole("button", { name: "Run take-off" });
   await waitFor(() => expect((run as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(run);
-  await screen.findByText("/out/project.xlsx");
+  await screen.findByText("project.xlsx");
   expect(command).toHaveBeenCalledWith({ kind: "run", path: project.path });
-  expect(screen.getByText("/out/morning-report.md")).toBeTruthy();
+  expect(screen.getByText("morning-report.md")).toBeTruthy();
 });
 test("Arabic project controls and run errors remain visible", async () => {
   setup(); localStorage.setItem("qiyas.lang", "ar");
@@ -35,7 +35,7 @@ test("Arabic project controls and run errors remain visible", async () => {
   await waitFor(() => expect((run as HTMLButtonElement).disabled).toBe(false));
   command.mockRejectedValueOnce(new Error("Unreadable drawing"));
   fireEvent.click(run);
-  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Error: Unreadable drawing");
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "تعذّرت قراءة الملف. اختر ملفًا آخر أو نسخة احتياطية.");
   await waitFor(() => expect((run as HTMLButtonElement).disabled).toBe(false));
 });
 test("project history refreshes the saved project", async () => {

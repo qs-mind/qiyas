@@ -3,7 +3,7 @@ import type { LayerInfo } from "../api";
 import { buildLayerTree, groupKey, ROOT } from "./layerGroups";
 
 const layer = (name: string): LayerInfo => ({ name, color: [255, 0, 0], off: false, frozen: false, locked: false });
-const many = (names: string[]) => buildLayerTree(names.map(layer));
+const many = (names: string[]) => buildLayerTree(names.map(layer), true);
 
 describe("groupKey", () => {
   test("a discipline prefix is one or two letters and a hyphen, in capitals", () => {
@@ -56,4 +56,12 @@ describe("buildLayerTree", () => {
     // An xref's layer never joins the drawing's own A- group.
     expect((tree.nodes["group:A-"] as { children: string[] }).children).toHaveLength(4);
   });
+});
+
+// The twelfth layer used to change the layout without the user's choice.
+test("any number of layers stays flat until folders are requested", () => {
+  const layers = Array.from({ length: 100 }, (_, i) => layer(`A-${i}`));
+  const tree = buildLayerTree(layers);
+  expect(tree.groups).toEqual([]);
+  expect(tree.root).toHaveLength(100);
 });

@@ -33,7 +33,7 @@ test("arabic problem count reads right for any number", () => {
     wrapper: LanguageProvider,
   });
   act(() => result.current.language.setLang("ar"));
-  expect(result.current.t("recovered", { n: 2 })).toBe("تمت الاستعادة مع مشكلات: 2");
+  expect(result.current.t("recovered", { n: 2 })).toBe("تمت الاستعادة مع مشكلات: \u20682\u2069");
 });
 
 test("the arabic Measure tab is not the app's own name", () => {

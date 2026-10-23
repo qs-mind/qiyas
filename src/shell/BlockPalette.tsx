@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { BlockInfo } from "../api";
 import { useT } from "../i18n";
@@ -41,7 +42,7 @@ export function BlockPalette({ load, thumbnail, onInsert, onWrite, onAddToPalett
           }
         }
       },
-      (e) => !gone && setError(String(e)),
+      (e) => !gone && setError(uiError(e)),
     );
     return () => {
       gone = true;

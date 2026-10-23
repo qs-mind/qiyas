@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { BlockInfo } from "../api";
 import { useT } from "../i18n";
@@ -38,7 +39,7 @@ export function DesignCenter({ choose, list, has, onInsert, onRedefine, onClose 
     try {
       await work();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

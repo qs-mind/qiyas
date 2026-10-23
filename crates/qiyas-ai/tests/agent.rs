@@ -992,7 +992,7 @@ async fn openai_compatible_streams_text_and_tool_calls() {
         result.unwrap();
         assert_eq!(texts(&events), ["Let me look.", "Three layers."]);
         assert!(events.iter().any(|e| matches!(e,
-            AgentEvent::ToolCall { id, name, input, mutating, label }
+            AgentEvent::ToolCall { id, name, input, mutating, label, .. }
                 if id == "call_1" && name == "qiyas_read" && *input == json!({"op":"query","args":{"kind":"layers","offset":0}})
                     && !mutating && label.as_deref() == Some("query"))));
 
@@ -1997,4 +1997,75 @@ async fn openai_compatible_drops_a_refused_field_and_asks_again() {
     .expect(
         "test openai_compatible_drops_a_refused_field_and_asks_again timed out after 60 seconds",
     );
+}
+
+/// Exercise presentation events through the real agent/session loop without a local HTTP port.
+#[tokio::test]
+async fn activity_metadata_and_counts_follow_the_real_edit_without_network() {
+    struct Scripted(AtomicBool);
+    impl Provider for Scripted {
+        fn stream_turn<'a>(
+            &'a self,
+            _: TurnRequest,
+            _: qiyas_ai::provider::Sink<'a>,
+        ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, AiError>> {
+            let first = !self.0.swap(true, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(qiyas_ai::TurnResult {
+                    content: if first {
+                        vec![qiyas_ai::ContentBlock::ToolUse {
+                            id: "activity-edit".into(),
+                            name: "qiyas_execute".into(),
+                            input: json!({"op":"run", "args":{"command":{
+                                "type":"draw", "kind":"line", "a":[0,0], "b":[1,0]
+                            }}}),
+                        }]
+                    } else {
+                        vec![qiyas_ai::ContentBlock::Text {
+                            text: "تم رسم الخط.".into(),
+                        }]
+                    },
+                    stop_reason: if first {
+                        qiyas_ai::StopReason::ToolUse
+                    } else {
+                        qiyas_ai::StopReason::EndTurn
+                    },
+                    usage: Default::default(),
+                })
+            })
+        }
+    }
+    let (_dir, session) = sample();
+    let entities = || {
+        session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .drawing
+            .doc
+            .entities_in_block("*Model_Space")
+            .count()
+    };
+    let before = entities();
+    let mut agent = Agent::new(
+        Box::new(Scripted(AtomicBool::new(false))),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "ارسم خطًا").await;
+    result.unwrap();
+    assert_eq!(
+        entities(),
+        before + 1,
+        "read back the actual drawing change"
+    );
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolCall { id, activity: Some(activity), .. }
+        if id == "activity-edit" && activity.category == "draw" && activity.effect == "edit"
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolResult { id, count: Some(1), is_error: false, .. }
+        if id == "activity-edit"
+    )));
 }

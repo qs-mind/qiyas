@@ -49,11 +49,17 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
 export const useLanguage = () => useContext(LanguageContext);
 
+export function translate(lang: Lang, key: string, vars?: Record<string, string | number>) {
+  const text = STRINGS[lang][key] ?? key;
+  return vars ? text.replace(/\{(\w+)\}/g, (m, name: string) => {
+    const value = String(vars[name] ?? m);
+    // Isolate substituted names, numbers and paths from the surrounding Arabic sentence.
+    return lang === "ar" && /[A-Za-z0-9]/.test(value) ? `\u2068${value}\u2069` : value;
+  }) : text;
+}
+
 /** Translates `key` in the current language, filling `{name}` from `vars`; an unknown key is returned as is. */
 export function useT() {
   const { lang } = useLanguage();
-  return (key: string, vars?: Record<string, string | number>) => {
-    const text = STRINGS[lang][key] ?? key;
-    return vars ? text.replace(/\{(\w+)\}/g, (m, name: string) => String(vars[name] ?? m)) : text;
-  };
+  return (key: string, vars?: Record<string, string | number>) => translate(lang, key, vars);
 }

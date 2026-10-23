@@ -50,9 +50,11 @@ test("each line run shows with its mark and what it did; the failing line says w
   expect(rows[0].textContent).toContain("DOOR count = 3 pcs");
   expect(within(rows[3]).getByRole("img", { name: "Failed" })).toBeTruthy();
   expect(rows[3].textContent).toContain("No entity FFFF");
-  // The script's words and the messages take their own direction in either language.
-  expect(within(rows[3]).getByText("MEASURE FFFF").getAttribute("dir")).toBe("auto");
-  expect(within(rows[3]).getByText("No entity FFFF").getAttribute("dir")).toBe("auto");
+  // Diagnostic words are available only by opening the details, in their own direction.
+  const details = rows[3].querySelector("details")!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector("pre")?.getAttribute("dir")).toBe("auto");
+  expect(rows[3].querySelector("td > span[dir]")?.textContent).not.toContain("FFFF");
   // The file name is isolated inside the title.
   expect(screen.getByRole("heading").querySelector("bdi")?.textContent).toBe("count.scr");
 

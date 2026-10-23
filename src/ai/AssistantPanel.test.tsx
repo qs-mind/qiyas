@@ -1,3 +1,4 @@
+import { SupportLog } from "../shell/SupportLog";
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -17,6 +18,7 @@ const card: ToolCardItem = {
   id: "t1",
   name: "qiyas_execute",
   label: "measure_area",
+  activity: { category: "takeoff", effect: "edit" },
   input: { op: "run", args: JSON.stringify({ command: { type: "measure_area", handle: 7 } }) },
   status: "done",
   summary: "12.000 m2: wall",
@@ -92,8 +94,9 @@ test("the checklist translates all states into Arabic and follows the page direc
     expect(screen.getByRole("region", { name: ar["ai.plan"] })).toBeTruthy();
     for (const key of ["ai.plan.pending", "ai.plan.active", "ai.plan.done", "ai.plan.skipped"] as const) expect(screen.getByText(ar[key])).toBeTruthy();
     expect(document.documentElement.dir).toBe("rtl");
-    expect(screen.getByText(ar["ai.reviewDrawingErrors"])).toBeTruthy();
-    expect(screen.getByText(`${ar["ai.reviewDrawingErrors"]}: rule:[7]`)).toBeTruthy();
+    expect(screen.getAllByText(ar["ai.reviewDrawingErrors"])).toHaveLength(2);
+    expect(document.querySelector(".mizan-plan details")?.hasAttribute("open")).toBe(false);
+    expect(document.querySelector(".mizan-plan pre")?.textContent).toBe("Review drawing errors: rule:[7]");
   } finally {
     localStorage.removeItem("qiyas.lang");
     document.documentElement.dir = "ltr";
@@ -124,30 +127,31 @@ test("a transcript shows messages, Markdown and a tool card with Show and Undo",
     ],
   });
   expect(screen.getByText("Measure the wall")).toBeTruthy();
-  expect(screen.getByText("now").tagName).toBe("STRONG");
-  expect(screen.getByText("ai").tagName).toBe("CODE");
+  expect(screen.getByText("now").closest("strong")).toBeTruthy();
+  expect(screen.getByText("ai").closest("code")).toBeTruthy();
   // Markup in the model's text stays text.
-  expect(screen.getByText(/two/).textContent).toBe("two <b>x</b>");
+  expect(screen.getByText(/two/).closest("li")?.textContent).toBe("two <b>x</b>");
   expect(document.querySelector(".msg b")).toBeNull();
-  expect(screen.getByText("Measure area")).toBeTruthy();
-  expect(screen.getByText("12.000 m2: wall")).toBeTruthy();
+  expect(screen.getByText("Updated measurements.")).toBeTruthy();
+  expect(document.querySelector(".technical-details pre")?.textContent).toContain("12.000 m2: wall");
+  expect(document.querySelector(".technical-details")?.hasAttribute("open")).toBe(false);
   fireEvent.click(screen.getByText("Show"));
   expect(onShow).toHaveBeenCalledWith(card);
   fireEvent.click(screen.getByText("Undo"));
   expect(onUndo).toHaveBeenCalledWith(card);
 });
 
-test("tool cards translate command labels and make unknown labels readable", () => {
+test("tool cards translate registry categories and effects without exposing command labels", () => {
   setup({
     items: [
-      { ...card, id: "line", label: "draw.line" },
-      { ...card, id: "ellipse", label: "draw.ellipse" },
-      { ...card, id: "read", name: "qiyas_read", label: null, mutating: false },
+      { ...card, id: "line", label: "draw.line", activity: { category: "draw", effect: "edit" } },
+      { ...card, id: "ellipse", label: "draw.ellipse", activity: { category: "draw", effect: "edit" } },
+      { ...card, id: "read", name: "qiyas_read", label: null, activity: { category: "drawing", effect: "read" }, mutating: false },
     ],
   });
-  expect(screen.getByText("Draw line")).toBeTruthy();
-  expect(screen.getByText("Draw · ellipse")).toBeTruthy();
-  expect(screen.getByText("Read drawing")).toBeTruthy();
+  expect(screen.getAllByText("Updated the drawing.")).toHaveLength(2);
+  expect(screen.getByText("Read the drawing.")).toBeTruthy();
+  expect(document.querySelector(".tool-card")?.getAttribute("title")).toBeNull();
 });
 
 test("Undo is only offered on the newest change, and not while busy", () => {
@@ -181,7 +185,7 @@ test("after an undo the card before it can be undone; a stale card says why", ()
 
 test("a crash says so and offers a new conversation; the status line announces the end", () => {
   const { assistant } = setup({ items: [{ kind: "user", text: "hi" }] }, false, "crashed");
-  expect(screen.getByRole("alert").textContent).toBe("Mizan crashed; start a new conversation.Show log");
+  expect(screen.getByRole("alert").textContent).toBe("Mizan crashed; start a new conversation.Technical details (for support)");
   fireEvent.click(screen.getByText("Start a new conversation"));
   expect(assistant.clear).toHaveBeenCalled();
   expect(screen.getByRole("status").textContent).toBe("");
@@ -207,23 +211,16 @@ test("a refusal shows its card and a button for a new conversation", () => {
   expect(assistant.clear).toHaveBeenCalled();
 });
 
-test("Log shows the agent log in place of the conversation; an error offers it", async () => {
-  aiLog.mockResolvedValue({ path: "/cfg/logs/agent.log", text: "12:00  ERROR\n    The AI service answered 400" });
-  setup(EMPTY, false, "The AI service answered 400: The request was rejected");
-  fireEvent.click(screen.getByText("Show log"));
-  await waitFor(() => expect(screen.getByText(/ERROR/)).toBeTruthy());
-  expect(screen.getByText("/cfg/logs/agent.log")).toBeTruthy();
-  expect(screen.queryByText("Show log")).toBeNull();
-  expect(screen.getByText("Log").getAttribute("aria-pressed")).toBe("true");
-  fireEvent.click(screen.getByText("Log"));
-  expect(screen.getAllByRole("listitem")).toHaveLength(3);
-});
-
-test("an empty log says so", async () => {
-  aiLog.mockResolvedValue({ path: "/cfg/logs/agent.log", text: "" });
-  setup();
-  fireEvent.click(screen.getByText("Log"));
-  await waitFor(() => expect(screen.getByText("Nothing in the log yet. Send Mizan a message.")).toBeTruthy());
+test("Log is outside the chat header and support details load on demand", async () => {
+  aiLog.mockResolvedValue({ path: "/cfg/logs/agent.log", text: "12:00 ERROR: diagnostic" });
+  setup(EMPTY, false, "The AI service answered 400: raw diagnostic");
+  expect(screen.queryByRole("button", { name: "Log" })).toBeNull();
+  expect(screen.getByRole("alert").textContent).not.toContain("raw diagnostic");
+  render(<SupportLog />);
+  const details = document.querySelector(".support-log") as HTMLDetailsElement;
+  details.open = true;
+  fireEvent(details, new Event("toggle"));
+  await waitFor(() => expect(screen.getByLabelText("Log").textContent).toContain("diagnostic"));
 });
 
 /** The assistant the panel is given, with what a test changes. */
@@ -334,7 +331,7 @@ test("Mizan's answers render headings, rules, nested lists and tables, and links
   expect(table.querySelector("td:last-child")?.textContent).toBe("12.00 m");
   expect(md.textContent).not.toContain("|");
   expect(md.querySelector("a")).toBeNull();
-  expect(md.querySelector(".md-link")?.getAttribute("title")).toBe("https://example.com");
+  expect(md.querySelector(".md-link")?.getAttribute("title")).toBeNull();
 });
 
 function pointingSetup(more: Partial<import("../app/useAssistantWiring").Pointing> = {}) {

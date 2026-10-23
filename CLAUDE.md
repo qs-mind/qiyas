@@ -96,13 +96,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   and Enter work on rows, and the row buttons (`actions`) show on hover or focus. Row heights are
   fixed (27 px; the conflicts' reason wraps to two lines at 40). `--row-hover` and `--row-current`
   are solid colours, because the row buttons sit on them.
-- `@headless-tree/react`: the layers panel is a tree (`LayersPanel.tsx`, `layerGroups.ts`): a drawing
-  with 12 layers or more is grouped by discipline prefix (`A-`, `S-`, `E-`) and by xref (`PLAN|…`), a
-  prefix or xref with one layer stays at the top. The library's movement keys (arrows, Home, End) are
-  off while the focus is in a layer's properties (`isEnabled`), so a drop-down keeps its arrows; a
-  click selects, Enter or a double click makes a layer current, the folded groups are kept in
-  `qiyas.layers.collapsed`. Eye (and the current layer's pencil) stay on the row; isolate, make
-  current and properties show over the end of the name on hover or focus.
+- `@headless-tree/react`: the Layers panel starts as a flat list, regardless of its length.
+  "Show folders" is an explicit, remembered choice (`qiyas.layers.folders`, false by default).
+  Folders follow name prefixes and external drawings, with a folder icon and a labelled layer
+  count; no discipline list is hard-coded. Collapsed folders remain in `qiyas.layers.collapsed`.
+  Rows reserve space for actions, do not select text, and allow one selected row. The footer
+  wraps and the left column cannot scroll sideways. Arrow keys follow the UI direction: Left
+  opens a folder in Arabic, Right opens it in English. Property controls keep their own keys.
 - `cmdk`: the command line's suggestions (`CommandLine.tsx`). The chosen row is the line's own
   (`active`), not cmdk's: nothing is chosen until the arrows choose, so Enter runs what was typed; a
   hidden first row takes cmdk's start. A command shows its shortest alias as a `<kbd>`; an alias whose
@@ -1188,7 +1188,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   take-off), 3 decimals; UTC date; `####` when the entity is gone. Not worked out on open. Find
   and replace leaves field texts and field cells as they are and counts them in `skipped`.
 - Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
-  click on a table: `TableEditor`, a grid in the drawing's column order, Shift+click to merge),
+  click on a table: `TableEditor`, a grid in the drawing's column order; Shift+click or
+  Shift+Arrow selects a range to merge). A failed cell write keeps its draft and clears the
+  sent marker so Enter retries it unchanged; an in-flight duplicate is still suppressed.
+  Row, column and merge edits wait for pending saves; a failed save cancels that queued structural
+  edit and leaves the draft intact.
   Field (click, then `FieldDialog`; area and length pick their entity; also from the table
   editor into a cell), Update fields. Command line TABLE (TB), TABLEDIT, FIELD, UPDATEFIELD.
 
@@ -1298,7 +1302,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   fill). Tests: `qiyas-core/tests/entity_geometry.rs`.
 - Window: the Layers panel (a tree; see the UI kit) opens a layer's properties under its row (on, frozen, locked, plot,
   colour, linetype, lineweight, rename, delete), adds layers, and opens Layer states… (LAYSTATE,
-  LAS) and Translate layers… (LAYTRANS, `LayerTranslator`); the properties palette edits the
+  LAS) and Match layer names (LAYTRANS, `LayerTranslator`); the properties palette edits the
   picked host entity in place (xref and block content stay read-only) and, with nothing picked,
   what new entities are drawn with. Home tab, Layers group; command line LAYER (LA: the panel),
   LAYSTATE (LAS), LAYTRANS, VPLAYER (the VP freeze column), GROUP (G: pick, Enter, name),
@@ -1953,9 +1957,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - Each user message allows 40 calls, raised to 120 after a call changes the drawing. When 10
   or fewer remain, each result includes `budget: "N calls left"`. At most 10 destructive
   commands per message, counted from registry metadata in run and every batch step. A tool
-  card carries its command label (`draw.line`), batch or operation; the window translates
-  `command.<label>` when present, otherwise makes the label readable. Execute calls are
-  mutating except plan, select and view.
+  card carries registry category/effect metadata (`qiyas-ai/src/activity.rs`) and an optional
+  structured result count. The window builds a short translated sentence from these fields;
+  it never humanises internal command names. Legacy cards use generic read/edit wording.
+  Command labels, input JSON and full summaries appear only in collapsed Technical details
+  and the Log. A recovered failure says "Fixing a problem…" within its own user turn.
+  Execute calls remain mutating except plan, select and view; execution is unchanged.
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
   `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and
@@ -2102,8 +2109,9 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   whole answer, and for a 4xx the request sent (`provider::request_for_log`: compact JSON,
   pictures as `<image>`, tools as their names, the system prompt as its length, scrubbed of the
   key first, then its LAST 4,000 characters after a `…` when longer); other texts clipped at
-  4,000 characters, never the key. The panel's Log button shows
-  its newest 256 KB (`ai_log`); an error offers "Show log".
+  4,000 characters, never the key. Settings → Technical details (for support) reads the newest
+  256 KB (`ai_log`) on demand and includes the window's last 50 diagnostic failures. The chat
+  header has no Log button; errors link to Settings. Raw Thinking is hidden in the thread.
 - OpenAI-compatible streams: Gemini (also behind Runware) sends parallel calls whole, all at
   index 0 or with none, so a new id, or a second name, starts a new call (`openai.rs`, `slot`).
   Input that was not valid JSON goes back as `{}`, as for Claude, so one bad call can't make
@@ -2443,10 +2451,10 @@ and Mizan's turn epoch together.
   (normal dependencies on Linux, Windows and macOS) and the window's JavaScript packages with
   version and licence; `scripts/third-party.sh` writes it (offline, from the lock file and
   `node_modules`): run it after a dependency changes and before a release, and commit it.
-- The Thmanyah font files are built into the app by Vite when they are in `src/fonts/thmanyah/`:
-  installers built locally embed Thmanyah, while installers built on GitHub use the system's
-  Arabic font, because the Thmanyah files are not on the runners. Which to ship (and whether
-  the Thmanyah licence allows embedding it) is the founder's decision.
+- The founder approved embedding Thmanyah in GitHub installers on 23 October. The release
+  workflow unseals the existing private font archive and verifies all three weights. Official
+  builds fail if its secret is absent; forks explicitly report their system-font fallback.
+  Never read or print the secret or commit the unsealed fonts. Vite embeds the local fonts.
 
 ## Where the plans live
 
@@ -2486,3 +2494,31 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
   DWG/DXF retain the values and links. Table location and column widths stay as placed.
   On layer 0 the generated table uses `A-ANNO-TABL`, created in the same undo step without
   changing the current layer. Initial cells are sized from displayed quantities, not field code.
+
+## Goal F: window language and layout (23 October 2026)
+
+- Arabic glyphs use Thmanyah first in every UI and monospace stack. Its Unicode-range faces
+  leave Latin text in Instrument Sans or monospace. Inputs, selects and textareas inherit the
+  font. All heading levels, legends and tabs enable swash, regardless of UI language.
+- Chat language is inferred from prose after ignoring code, layer identifiers and attachment
+  metadata. List items and table cells each follow their own prose direction. Latin
+  words and quantities are isolated with `bdi`; Arabic translation substitutions use Unicode
+  isolation. The UI keeps Western digits. See the glossary in the Goal F report.
+- PDF transport metadata is rendered as file-name/page chips, including restored conversations.
+  Paths are reduced to file names in chat. Approval buttons and the posted approval sentence
+  follow the chat language. Both system prompts forbid tool/command/field/handle names in
+  answers, and require brief surveying language. This is a generation rule, not a claim that
+  every live provider has been evaluated.
+- Caught backend errors go through `src/i18n/errors.ts`: known failures get a plain translated
+  reason; unknown failures get a translated fallback with support guidance. Raw errors stay
+  in the support buffer. `userError` preserves an already translated message across catches.
+  Assistant control-flow codes remain internal and are translated at their display boundary.
+- `entityKind` supplies plain English/Arabic labels across properties, selections, extraction,
+  recovery and fields. User views omit handles; evidence actions say Show on drawing with a
+  count. Explanation and generated-quantity panels show readable quantities and citations;
+  formulas containing internal fields, definitions and diagnostic notes sit under Technical
+  details. Script results show plain status with command/output details folded. Project outputs show file names. Take-off rows omit unspecified source/basis filler
+  and explain count limitations in plain words. No quantity, command or check rule changed.
+- Delete all conversations opens a confirmation naming the count; Cancel or Escape preserves
+  the saved chats. Single-conversation deletion is unchanged.
+- Report and evidence: `docs/2026-10-23-qiyas-goal-F.md`. No new dependencies or licence changes.

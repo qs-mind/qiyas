@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** AUDIT: what in the drawing points at something it does not have (and, listed only, empty
  *  blocks and unused layers), by kind and name; Fix makes the safe repairs as one undo step and
  *  says how many. The window opens neither while a block is edited in place (`useOptions`); an
@@ -31,7 +32,7 @@ export function AuditDialog({ look, apply, onClose }: Props) {
   useEffect(() => {
     look({ type: "audit", fix: false })
       .then((o) => setReport(reportOf(o)))
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
   }, []);
 
   async function fix() {
@@ -40,7 +41,7 @@ export function AuditDialog({ look, apply, onClose }: Props) {
       setReport(reportOf(await apply({ type: "audit", fix: true })));
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

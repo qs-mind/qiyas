@@ -1,3 +1,5 @@
+import { uiError } from "../i18n/errors";
+import { SupportLog } from "./SupportLog";
 import { useEffect, useState } from "react";
 import {
   appDir,
@@ -59,7 +61,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     getSettings()
       .then(setDraft)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
     appDir()
       .then(setDir)
       .catch(() => setDir(""));
@@ -68,7 +70,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .catch(() => setMcp(null));
     measurementMethods()
       .then(setMethods)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
   }, []);
 
   const provider = draft?.provider;
@@ -109,7 +111,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       if (key.trim()) await setApiKey(draft.provider, key);
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -120,7 +122,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       setKeySaved(false);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -129,7 +131,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       await navigator.clipboard.writeText(text);
       setCopied(name);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -267,7 +269,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <p className="status" role="status">
                   {mcp.listening
                     ? t("settings.mcpListening", { addr: mcp.addr ?? "" })
-                    : (mcp.error ?? t("settings.mcpStopped"))}
+                    : (mcp.error ? uiError(mcp.error) : t("settings.mcpStopped"))}
                 </p>
               )}
               <label>
@@ -307,6 +309,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </fieldset>
           </>
         )}
+        <SupportLog />
         {error && (
           <p className="error" role="alert">
             {error}

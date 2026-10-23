@@ -1,3 +1,4 @@
+import { uiError, userError } from "../i18n/errors";
 /** Drawings as files: the open drawings' tabs, the project autosave switch, and opening, showing,
  *  switching, closing, saving, recovering and exporting them (`useDrawings`). */
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -97,7 +98,7 @@ export function useAutosave(t: T, setError: (error: string | null) => void) {
       await saveProject();
     } catch (e) {
       autosaveOff.current = true;
-      setError(t("project.autosaveOff", { error: String(e) }));
+      setError(t("project.autosaveOff", { error: uiError(e) }));
     }
   }
 
@@ -246,7 +247,7 @@ export function useDrawings({
           if (!(await leaveRef.current())) event.preventDefault();
         } catch (e) {
           event.preventDefault();
-          setError(t("save.failed", { error: String(e) }));
+          setError(t("save.failed", { error: uiError(e) }));
         }
       })
       .then((unlisten) => (gone ? unlisten() : (off = unlisten)))
@@ -282,7 +283,7 @@ export function useDrawings({
             .then((done) => {
               if (done.failed.length > 0) setError(t("autosave.failed", { error: done.failed.join("; ") }));
             })
-            .catch((e) => setError(t("autosave.failed", { error: String(e) })));
+            .catch((e) => setError(t("autosave.failed", { error: uiError(e) })));
         }, minutes * 60_000);
       })
       .catch(() => {});
@@ -613,7 +614,7 @@ export function useDrawings({
       try {
         if (tab.dirty && (!(await activate(tab.id, keepConversation)) || !(await leaveOpenDrawing()))) return;
       } catch (e) {
-        setError(t("save.failed", { error: String(e) }));
+        setError(t("save.failed", { error: uiError(e) }));
         return;
       }
       await run(async () => {
@@ -639,7 +640,7 @@ export function useDrawings({
       let next: DrawingInfo | null = null;
       try {
         await write().catch((e) => {
-          throw t("save.failed", { error: String(e) });
+          throw userError(t("save.failed", { error: uiError(e) }));
         });
       } finally {
         // Even a failed save may have written the drawing and moved to its new path.
@@ -725,7 +726,7 @@ export function useDrawings({
     if (!path) return;
     await run(async () => {
       await exportTakeoff(path).catch((e) => {
-        throw t("export.failed", { error: String(e) });
+        throw userError(t("export.failed", { error: uiError(e) }));
       });
       setNotice(t("export.done", { path }));
     });
@@ -750,7 +751,7 @@ export function useDrawings({
     });
     if (!path) return;
     await exportTable(path, columns, rows).catch((e) => {
-      throw t("export.failed", { error: String(e) });
+      throw userError(t("export.failed", { error: uiError(e) }));
     });
     setNotice(t("extract.done", { path }));
   }

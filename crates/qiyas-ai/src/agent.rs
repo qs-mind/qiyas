@@ -123,15 +123,21 @@ pub enum AgentEvent {
         id: String,
         name: String,
         input: Value,
-        /// The command or operation shown on the tool card.
+        /// The command or operation kept in the card's technical details.
         label: Option<String>,
+        /// Translatable presentation metadata, absent in older saved conversations.
+        #[serde(default)]
+        activity: Option<crate::activity::Activity>,
         /// An execute operation other than planning, selecting or viewing.
         mutating: bool,
     },
     ToolResult {
         id: String,
-        /// One line for the user.
+        /// Diagnostic summary for the card's technical details and the log.
         summary: String,
+        /// A count from the structured result, never from its English summary.
+        #[serde(default)]
+        count: Option<u64>,
         /// Entities the result is about, to highlight.
         handles: Vec<u64>,
         /// What the window should do (`show_sheet`, `zoom`, `redraw`, ...), from the tool.
@@ -879,6 +885,7 @@ impl Agent {
                     input: input.clone(),
                     label: surface::label(name, input),
                     mutating: surface::mutating(name, input),
+                    activity: Some(crate::activity::describe(name, input)),
                 },
             )
             .await;
@@ -1258,6 +1265,7 @@ impl Agent {
                 let event = AgentEvent::ToolResult {
                     id: id.to_string(),
                     summary: caption.clone(),
+                    count: None,
                     handles: Vec::new(),
                     ui: None,
                     is_error: false,
@@ -1512,6 +1520,7 @@ fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
     let event = AgentEvent::ToolResult {
         id: id.to_string(),
         summary: summary(value),
+        count: crate::activity::count(value),
         handles: handles(value),
         ui: value.get("ui").cloned(),
         is_error: false,
@@ -1785,6 +1794,7 @@ fn error_event(id: &str, why: &str) -> AgentEvent {
     AgentEvent::ToolResult {
         id: id.to_string(),
         summary: crate::errors::message(why),
+        count: None,
         handles: Vec::new(),
         ui: None,
         is_error: true,

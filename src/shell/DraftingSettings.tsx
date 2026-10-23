@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Drafting, SnapKind } from "../api";
 import { useT } from "../i18n";
@@ -44,7 +45,7 @@ export function DraftingSettings({ drafting, onSave, onClose }: Props) {
       await onSave(draft);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

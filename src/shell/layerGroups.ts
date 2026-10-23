@@ -1,11 +1,6 @@
-/** The layers panel's tree: a drawing with many layers is grouped by the discipline prefix its
- *  names share (`A-` for A-WALL, A-DOOR; `S-`, `E-`...) or, for an xref's layers, by the xref
- *  (`PLAN|A-DOOR` is under PLAN). A short list stays flat, and so does a layer with no group of
- *  two. Pure, so it is tested on its own. */
+/** Layers stay flat until the user requests folders. Folder names come from shared name
+ *  prefixes or external drawing names; no drawing or discipline list is hard-coded. */
 import type { LayerInfo } from "../api";
-
-/** Fewer layers than this read better as one list. */
-export const GROUP_FROM = 12;
 
 export type LayerNode =
   | { id: string; kind: "layer"; name: string; layer: LayerInfo }
@@ -33,11 +28,11 @@ export function groupKey(name: string): string | null {
   return prefix ? `${prefix[1].toUpperCase()}-` : null;
 }
 
-export function buildLayerTree(layers: LayerInfo[]): LayerTree {
+export function buildLayerTree(layers: LayerInfo[], folders = false): LayerTree {
   const nodes: LayerTree["nodes"] = {};
   const root: string[] = [];
   const groups: string[] = [];
-  const keys = layers.map((l) => (layers.length >= GROUP_FROM ? groupKey(l.name) : null));
+  const keys = layers.map((l) => (folders ? groupKey(l.name) : null));
   const size = new Map<string, number>();
   for (const key of keys) if (key !== null) size.set(key, (size.get(key) ?? 0) + 1);
   layers.forEach((layer, i) => {

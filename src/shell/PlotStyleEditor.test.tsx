@@ -179,7 +179,7 @@ test("a file that can't be read, or saved, says why", async () => {
     }),
   });
   fireEvent.click(button("Open…"));
-  expect((await screen.findByRole("alert")).textContent).toBe("Not a CTB or STB plot style file");
+  expect((await screen.findByRole("alert")).textContent).toBe("The file could not be read. Choose another file or a backup.");
   expect(screen.queryByRole("table")).toBeNull();
 
   vi.mocked(props.load).mockImplementation(async () => CTB);
@@ -190,7 +190,7 @@ test("a file that can't be read, or saved, says why", async () => {
   await screen.findByRole("table");
   expect(screen.queryByRole("alert")).toBeNull();
   fireEvent.click(button("Save"));
-  expect((await screen.findByRole("alert")).textContent).toBe("Can't write /styles/mono.ctb: Permission denied");
+  expect((await screen.findByRole("alert")).textContent).toBe("This item cannot be changed here. Check that it is unlocked.");
 });
 
 test("Close closes", () => {

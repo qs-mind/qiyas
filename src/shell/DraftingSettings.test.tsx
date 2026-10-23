@@ -67,7 +67,7 @@ test("a refused save stays open and says why", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
-    "The grid spacing must be above 0",
+    "Check the values you entered, then try again.",
   );
   expect(onClose).not.toHaveBeenCalled();
 });

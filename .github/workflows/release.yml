@@ -197,12 +197,20 @@ jobs:
           save-if: false
       - run: pnpm install --frozen-lockfile
       # Thmanyah is built into the app: the sealed copy in the repo is unlocked with the
-      # THMANYAH_FONTS_KEY secret. Without the secret (forks) the system Arabic font is used.
+      # THMANYAH_FONTS_KEY secret. Official installers must contain all three weights.
       - name: Thmanyah font
         env:
           THMANYAH_FONTS_KEY: ${{ secrets.THMANYAH_FONTS_KEY }}
         run: |
-          if [[ -n "$THMANYAH_FONTS_KEY" ]]; then scripts/fonts.sh; else echo "::notice::No THMANYAH_FONTS_KEY: building with the system Arabic font."; fi
+          if [[ -n "$THMANYAH_FONTS_KEY" ]]; then
+            scripts/fonts.sh
+            for weight in Regular Medium Bold; do test -s "src/fonts/thmanyah/thmanyahsans-$weight.otf"; done
+          elif [[ "${{ github.repository }}" == "qs-mind/qiyas" && -n "${{ needs.prepare.outputs.tag }}" ]]; then
+            echo "::error::Official installers require the Thmanyah font secret."
+            exit 1
+          else
+            echo "::notice::Fork or unsigned dry run without Thmanyah: using the system Arabic font."
+          fi
       - run: scripts/pdfium.sh
       - run: scripts/build-sidecar.sh ${{ matrix.target }}
       - id: args

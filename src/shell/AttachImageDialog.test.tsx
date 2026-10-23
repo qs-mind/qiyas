@@ -82,7 +82,7 @@ test("a width of 0 can't be attached, and an unreadable file says why", async ()
     }),
   });
   fireEvent.click(screen.getByRole("button", { name: "Choose…" }));
-  expect((await screen.findByRole("alert")).textContent).toContain("bad header");
+  expect((await screen.findByRole("alert")).textContent).toContain("The file could not be read. Choose another file or a backup.");
   expect((screen.getByRole("button", { name: "Attach" }) as HTMLButtonElement).disabled).toBe(true);
   expect(props.onAttach).not.toHaveBeenCalled();
   cleanup();
@@ -132,7 +132,7 @@ test("a refused setting is shown and can be tried again", async () => {
   const contrast = screen.getByRole("slider", { name: /Contrast/ });
   fireEvent.change(contrast, { target: { value: "80" } });
   fireEvent.pointerUp(contrast);
-  expect((await screen.findByRole("alert")).textContent).toContain("0 to 100");
+  expect((await screen.findByRole("alert")).textContent).toContain("Check the values you entered, then try again.");
   fireEvent.blur(contrast);
   await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(2));
 });

@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** The AI model, chosen from what the provider offers: Anthropic's Models API, or an
  *  OpenAI-compatible service's `/models` (read in the core, with the key from the keychain). A
  *  filter narrows a long list (OpenRouter offers hundreds); "Other…" takes an id the list lacks;
@@ -40,7 +41,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
       const next = await load(provider, baseUrl);
       if (n === asked.current) setList(next);
     } catch (e) {
-      if (n === asked.current) setList({ models: [], from_service: false, error: String(e) });
+      if (n === asked.current) setList({ models: [], from_service: false, error: uiError(e) });
     } finally {
       if (n === asked.current) setLoading(false);
     }
@@ -141,8 +142,8 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
           {list.error === "no_base_url"
             ? t("settings.modelNoBaseUrl")
             : models.length > 0
-              ? t("settings.modelBuiltin", { why: list.error ?? "" })
-              : t("settings.modelNone", { why: list.error ?? "" })}
+              ? t("settings.modelBuiltin", { why: list.error ? uiError(list.error) : "" })
+              : t("settings.modelNone", { why: list.error ? uiError(list.error) : "" })}
         </p>
       )}
       {list?.from_service && value && !known && (

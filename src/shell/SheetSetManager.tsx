@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { SheetSet, SheetSetView } from "../api";
 import { useT } from "../i18n";
@@ -56,7 +57,7 @@ export function SheetSetManager({ api, onOpenAll, onClose }: Props) {
     try {
       await f();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

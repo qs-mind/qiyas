@@ -210,7 +210,7 @@ test("queries show severity, question and cited drawing evidence without an impo
   const props = renderPanel({ conflicts: [query], hasBoq: false });
   expect(screen.getByText("Confirm the missing type?")).toBeTruthy();
   expect(screen.getByText("Error")).toBeTruthy();
-  expect(screen.getByText("Model / A/1 (2A)")).toBeTruthy();
+  expect(screen.getByText("Model / A/1")).toBeTruthy();
   expect(screen.getByTitle("spec.pdf: Table 2")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Show" }));
   expect(props.onShow).toHaveBeenCalledWith(query);

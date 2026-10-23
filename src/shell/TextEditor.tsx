@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
 
@@ -131,7 +132,7 @@ export function TextDialog(props: DialogProps) {
       await onSubmit({ value, style, height: h });
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

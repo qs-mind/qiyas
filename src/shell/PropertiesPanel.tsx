@@ -1,3 +1,4 @@
+import { entityKind } from "../i18n/entityKind";
 import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Current, EntityInfo, EntityProp, Units } from "../api";
 import { useT } from "../i18n";
@@ -64,12 +65,13 @@ function Field({ label, value, onCommit, dir = "ltr" }: { label: string; value: 
 
 /** "ByLayer" and "ByBlock" first, then `names` (and `value` when it is none of them). */
 function Choice({ label, value, names, onPick }: { label: string; value: string; names: string[]; onPick(v: string): void }) {
+  const t = useT();
   const all = names.includes(value) ? names : [value, ...names];
   return (
     <select aria-label={label} value={value} onChange={(e) => onPick(e.target.value)}>
       {all.map((n) => (
         <option key={n} value={n}>
-          {n}
+          {n === "ByLayer" ? t("props.byLayer") : n === "ByBlock" ? t("props.byBlock") : n}
         </option>
       ))}
     </select>
@@ -330,8 +332,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     row("props.sheet", sheet, true);
     for (const r of selectionRows(sum, units, precision, t)) into(selected)(r.label, <Value row={r} />, r.prose);
   } else if (entity && editable && onSet) {
-    row("props.handle", entity.handle.toString(16).toUpperCase());
-    row("props.kind", entity.kind);
+    row("props.kind", entityKind(entity.kind, t));
     row("props.layer", <Choice label={t("props.layer")} value={entity.layer} names={layers} onPick={(v) => onSet("layer", v)} />);
     row(
       "props.color",
@@ -345,8 +346,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     row("props.sheet", sheet, true);
     geometryOf(entity, true);
   } else if (entity) {
-    row("props.handle", entity.handle.toString(16).toUpperCase());
-    row("props.kind", entity.kind);
+    row("props.kind", entityKind(entity.kind, t));
     row("props.layer", <span title={entity.layer}>{entity.layer_short}</span>, true);
     row("props.color", <>{swatch(entity.color_rgb)}{byName(entity.color)}</>);
     row("props.linetype", byName(entity.linetype), true);

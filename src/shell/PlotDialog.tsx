@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Paper, PlotJob, PlotScale, PlotStyle, Sheet, Units } from "../api";
 import { useT } from "../i18n";
@@ -306,7 +307,7 @@ export function PlotDialog(props: Props) {
           setScaleChoice("fit");
         }
       })
-      .catch((e) => live && setError(String(e)));
+      .catch((e) => live && setError(uiError(e)));
     props
       .printers()
       .then((found) => {
@@ -324,7 +325,7 @@ export function PlotDialog(props: Props) {
         .catch((e) => {
           if (!live) return;
           setStylePath(null);
-          setError(t("plot.styleUnreadable", { name: baseName(remembered), error: String(e) }));
+          setError(t("plot.styleUnreadable", { name: baseName(remembered), error: uiError(e) }));
         })
         .finally(() => live && setStyleBusy(false));
     }
@@ -370,7 +371,7 @@ export function PlotDialog(props: Props) {
       setStyle(loaded);
       setStylePath(path);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setStyleBusy(false);
     }
@@ -394,7 +395,7 @@ export function PlotDialog(props: Props) {
       props.onKeep(chosen, stylePath);
       props.onClose();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

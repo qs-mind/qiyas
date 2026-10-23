@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** CUI: the ribbon's tabs, groups and buttons as a tree, to hide, show and reorder (up and down
  *  among their own), from the core's default (`get_default_ribbon`) and the saved layout
  *  (`settings.json` `ribbon`); "Reset to default" saves none, so the window's default is drawn. */
@@ -36,7 +37,7 @@ export function CustomizeUi({ onSaved, onClose }: { onSaved(ribbon: RibbonLayout
         setAll(core);
         setTree(editTree(core, s.ribbon ?? null));
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
     return () => opener?.focus();
   }, []);
 
@@ -58,7 +59,7 @@ export function CustomizeUi({ onSaved, onClose }: { onSaved(ribbon: RibbonLayout
       onSaved(layout);
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

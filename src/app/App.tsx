@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** The window: the composition root. It calls the hooks in an order that keeps their effects
  *  where they were (shell, sheets' fit, the tool, the assistant, the drawings, the command line,
  *  the selection) and hands their results to the top bar, the dialogs and the panels. Hooks
@@ -201,7 +202,7 @@ export default function App() {
       },
       hatchScale: () => 0.025 / metresPerUnit(info?.units ?? "unknown"),
       undo: () => history(undo),
-      onError: (e) => setError(String(e)),
+      onError: (e) => setError(uiError(e)),
       placeText,
       editText: (handle, at) => run(() => openTextEdit(handle, at)),
       dimText: setDimText,
@@ -370,7 +371,7 @@ export default function App() {
         options={options}
         parametric={parametric}
         onCommandLine={(line) => {
-          void startCommand(line).catch((error) => shell.setError(String(error)));
+          void startCommand(line).catch((error) => shell.setError(uiError(error)));
         }}
       />
       <Dialogs

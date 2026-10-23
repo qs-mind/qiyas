@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** The layers panel and what goes with it: hiding and isolating layers, their properties, layer
  *  states and the translator, groups, and what new entities are drawn with. */
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
@@ -117,13 +118,13 @@ export function useLayers({
         else done.delete(l.name);
       }
     } catch (e) {
-      failure = String(e);
+      failure = uiError(e);
     }
     setHidden(done);
     try {
       await redraw();
     } catch (e) {
-      failure ??= String(e);
+      failure ??= uiError(e);
     }
     setError(failure);
     layerBusy.current = false;
@@ -154,7 +155,7 @@ export function useLayers({
       await syncInfo();
       await redraw();
     } catch (e) {
-      failure = String(e);
+      failure = uiError(e);
     }
     setError(failure);
     layerBusy.current = false;
@@ -178,7 +179,7 @@ export function useLayers({
       try {
         await runCommand({ type: "unisolate_layers" });
       } catch (e) {
-        setError(String(e));
+        setError(uiError(e));
       }
     }
     await applyHidden(new Set());

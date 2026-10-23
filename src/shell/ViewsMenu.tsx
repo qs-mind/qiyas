@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import type { NamedView } from "../api";
 import { useT } from "../i18n";
@@ -54,7 +55,7 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey, tip }: Props) {
       setName("");
       menu.setOpen(false);
     } catch (err) {
-      setError(String(err));
+      setError(uiError(err));
     }
   }
 
@@ -63,7 +64,7 @@ export function ViewsMenu({ load, onGo, onSave, onDelete, onKey, tip }: Props) {
       await onDelete(view);
       setList(await load());
     } catch (err) {
-      setError(String(err));
+      setError(uiError(err));
     }
   }
 

@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { ImageDisplay, Units } from "../api";
 import { useT } from "../i18n";
@@ -78,7 +79,7 @@ export function AttachImageDialog(props: Props) {
       setPath(chosen);
       setPixels(size);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -95,7 +96,7 @@ export function AttachImageDialog(props: Props) {
       await props.onAttach({ path, at: point, width: w });
       dialog.current?.close();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }
@@ -223,7 +224,7 @@ export function ImageDisplayPanel({ value, onCommit, onClose }: DisplayProps) {
       await onCommit(next);
     } catch (e) {
       committed.current = was;
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

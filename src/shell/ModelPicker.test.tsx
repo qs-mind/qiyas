@@ -62,7 +62,7 @@ test("an empty profile asks for a model without silently choosing the first", as
 test("falls back to the built-in list and says why", async () => {
   setup({ models: claude.models, from_service: false, error: "The API key was refused" });
   await settle();
-  expect(screen.getByRole("status").textContent).toContain("The API key was refused");
+  expect(screen.getByRole("status").textContent).toContain("The service refused the key. Check it in Settings.");
 });
 
 test("a long list gets a filter", async () => {

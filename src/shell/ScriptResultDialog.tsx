@@ -1,16 +1,15 @@
 import { useEffect, useRef } from "react";
 import type { ScriptResult } from "../api";
 import { useT } from "../i18n";
+import { uiError } from "../i18n/errors";
+import { TechnicalDetails } from "./TechnicalDetails";
 
 /** How long a run took: milliseconds under a second, else seconds to a tenth. */
 function took(ms: number, t: ReturnType<typeof useT>): string {
   return ms < 1000 ? t("script.tookMs", { n: ms }) : t("script.tookS", { n: (ms / 1000).toFixed(1) });
 }
 
-/** What Run script did (SCRIPT): each line run with a mark for done or failed and what it did or
- *  why it failed, where it stopped (or that a line didn't read and nothing ran), and how long it
- *  took. The script's words and the messages take their own direction (`dir="auto"`), so English
- *  commands read left to right and Arabic ECHO text right to left in either language. */
+/** Script line numbers and plain results; commands and raw output stay in support details. */
 export function ScriptResultDialog({
   path,
   result,
@@ -55,7 +54,6 @@ export function ScriptResultDialog({
           <thead>
             <tr>
               <th>{t("script.line")}</th>
-              <th>{t("script.command")}</th>
               <th>{t("script.result")}</th>
             </tr>
           </thead>
@@ -64,13 +62,11 @@ export function ScriptResultDialog({
               <tr key={i} className={l.ok ? undefined : "failed"}>
                 <td>{l.line_no}</td>
                 <td>
-                  <code dir="auto">{l.text}</code>
-                </td>
-                <td>
                   <span role="img" aria-label={t(l.ok ? "script.ok" : "script.error")}>
                     {l.ok ? "✓" : "✗"}
                   </span>{" "}
-                  <span dir="auto">{l.message}</span>
+                  <span dir="auto">{l.ok ? t("script.ok") : uiError(l.message)}</span>
+                  <TechnicalDetails><pre dir="auto">{l.text}{"\n"}{l.message}</pre></TechnicalDetails>
                 </td>
               </tr>
             ))}

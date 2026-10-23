@@ -1,3 +1,4 @@
+import { entityKind } from "../i18n/entityKind";
 /** What the user points Mizan at: the select tool's selection, or an area they marked. Pure
  *  helpers for the chips above the composer and the context sent with a message. */
 import type { AiRegion, EntityTarget } from "../api";
@@ -14,7 +15,7 @@ export function pointedTargets(picks: number[], picked: EntityTarget | null): En
 }
 
 /** The kinds in a selection, most first: "2 LwPolyline, 1 Insert" (unknown kinds left out). */
-export function kindsLabel(selection: EntityTarget[], kinds: Record<number, string>): string {
+export function kindsLabel(selection: EntityTarget[], kinds: Record<number, string>, t?: (key: string) => string): string {
   const counts = new Map<string, number>();
   for (const { handle, chain } of selection) {
     const kind = kinds[chain.length > 0 ? chain[0] : handle];
@@ -22,7 +23,7 @@ export function kindsLabel(selection: EntityTarget[], kinds: Record<number, stri
   }
   return [...counts]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([kind, n]) => `${n} ${kind}`)
+    .map(([kind, n]) => `${n} ${entityKind(kind, t)}`)
     .join(", ");
 }
 
