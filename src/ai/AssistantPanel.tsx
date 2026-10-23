@@ -150,6 +150,9 @@ export const AssistantPanel = memo(function AssistantPanel({
   }
 
   function show(item: Item, i: number): ReactNode {
+    if (item.kind === "retrying") return <p key={i} className="msg notice" role="status">
+      {item.code === "ai.error.context_retry" ? t(item.code) : t("ai.error.retrying", { seconds: item.seconds })}
+    </p>;
     switch (item.kind) {
       case "plan":
         return <PlanChecklist key={i} phases={item.phases} language={chatLang}

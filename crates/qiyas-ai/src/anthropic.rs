@@ -64,34 +64,52 @@ impl Provider for Anthropic {
             // header value can only be refused.
             let mut key = HeaderValue::from_str(&self.api_key).map_err(|_| AiError::Auth)?;
             key.set_sensitive(true);
-            sink(StreamEvent::RequestSent(crate::provider::sent_fields(
-                &body,
-            )));
-            let response = send_with_retry(
-                || {
-                    let request = self
-                        .client
-                        .post(&self.url)
-                        .header("x-api-key", key.clone())
-                        .header("anthropic-version", VERSION)
-                        .json(&body);
-                    if self.strict_budget {
-                        request
-                    } else {
-                        request.header("anthropic-beta", BETA)
-                    }
-                },
-                &self.api_key,
-                &body,
-                !self.strict_budget,
-            )
-            .await
-            .map_err(|e| e.for_model("Anthropic", &req.model))?;
-            let mut turn = Turn::default();
-            read_events(response, |e| turn.on_event(&e.data, sink))
+            let started = tokio::time::Instant::now();
+            let mut backoff = crate::provider::RetryBackoff::default();
+            loop {
+                let response = send_with_retry(
+                    || {
+                        let request = self
+                            .client
+                            .post(&self.url)
+                            .header("x-api-key", key.clone())
+                            .header("anthropic-version", VERSION)
+                            .json(&body);
+                        if self.strict_budget {
+                            request
+                        } else {
+                            request.header("anthropic-beta", BETA)
+                        }
+                    },
+                    &self.api_key,
+                    &body,
+                    !self.strict_budget,
+                    sink,
+                )
                 .await
-                .map_err(|e| e.scrubbed(&self.api_key).for_model("Anthropic", &req.model))?;
-            Ok(turn.finish())
+                .map_err(|e| e.for_model("Anthropic", &req.model))?;
+                let mut turn = Turn::default();
+                if let Err(error) = read_events(response, |e| turn.on_event(&e.data, sink)).await {
+                    let error = error
+                        .scrubbed(&self.api_key)
+                        .for_model("Anthropic", &req.model);
+                    // A retry clears any text/thinking shown from this unfinished response.
+                    if crate::provider::retry_stream(
+                        &error,
+                        !self.strict_budget,
+                        &mut backoff,
+                        started,
+                        sink,
+                        true,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                return Ok(turn.finish());
+            }
         })
     }
 }
@@ -119,6 +137,9 @@ pub fn request_body(req: &TurnRequest) -> Value {
         // conversation reads the one before it.
         "cache_control": { "type": "ephemeral" },
     });
+    if req.effort == "none" {
+        body.as_object_mut().unwrap().remove("output_config");
+    }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
     }

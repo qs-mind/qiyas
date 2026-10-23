@@ -1360,11 +1360,11 @@ export const exportConflicts = (path: string) => invoke<void>("export_conflicts"
 /** Who answers the in-app assistant. */
 export type Provider = "anthropic" | "openai_compatible";
 
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
 /** A provider keeps its model and service address when another provider is chosen. */
-export type ProviderProfile = { model: string; base_url?: string | null };
+export type ProviderProfile = { effort?: Effort | null; model: string; base_url?: string | null };
 
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
@@ -1747,6 +1747,7 @@ export type PlanPhase = {
 export type Activity = { category: string; effect: string };
 
 export type AgentEvent =
+  | { type: "retrying"; seconds: number; code: string; discard_partial: boolean }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "plan"; phases: PlanPhase[] }
@@ -1853,8 +1854,8 @@ export type ModelList = { models: ModelInfo[]; from_service: boolean; error: str
 
 /** The models `provider` offers at `base_url` (the saved ones when left out); the key stays in
  *  the core. */
-export const aiModels = (provider?: Provider, baseUrl?: string | null) =>
-  invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null });
+export const aiModels = (provider?: Provider, baseUrl?: string | null, typedKey?: string) =>
+  invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null, typedKey: typedKey || null });
 
 /** The agent log: where the file is and its newest part (empty before the first conversation). */
 export type AiLog = { path: string; text: string };

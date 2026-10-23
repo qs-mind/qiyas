@@ -652,6 +652,7 @@ async fn keychain<R: Send + 'static>(
 pub async fn ai_models(
     provider: Option<String>,
     base_url: Option<String>,
+    typed_key: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<qiyas_ai::models::ModelList, String> {
     use qiyas_ai::models::{model_list, ModelSource};
@@ -669,11 +670,23 @@ pub async fn ai_models(
     } else {
         settings::Provider::OpenaiCompatible.name()
     };
-    let requested = match secrets::discovery_address(
-        &settings,
-        name,
-        if anthropic { None } else { base_url.as_deref() },
-    ) {
+    // A draft key is explicit and never saved here. Without one, Goal A's saved-address
+    // check runs before any keychain read. Never pair a saved key with a draft destination.
+    let typed_key = typed_key.filter(|key| !key.trim().is_empty());
+    let requested = if typed_key.is_some() {
+        if anthropic {
+            Ok("https://api.anthropic.com/v1".into())
+        } else {
+            qiyas_ai::endpoint::normalize(base_url.as_deref().unwrap_or(""))
+        }
+    } else {
+        secrets::discovery_address(
+            &settings,
+            name,
+            if anthropic { None } else { base_url.as_deref() },
+        )
+    };
+    let requested = match requested {
         Ok(base) => base,
         Err(error) => {
             return Ok(qiyas_ai::models::ModelList {
@@ -683,10 +696,10 @@ pub async fn ai_models(
             })
         }
     };
-    let key = keychain(move || secrets::get_saved(&settings, name))
-        .await
-        .ok()
-        .flatten();
+    let key = match typed_key {
+        Some(key) => Some(key),
+        None => keychain(move || secrets::get_saved(&settings, name)).await?,
+    };
     let source = if anthropic {
         ModelSource::Anthropic
     } else {
@@ -934,7 +947,7 @@ async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, message: qiyas_ai:
     let error = match task.await {
         Ok((agent, result)) => {
             ai_run(&app.state::<AppState>()).finish(agent, generation);
-            result.err().map(|e| e.to_string())
+            result.err().map(|e| e.for_window())
         }
         Err(_) => {
             let state = app.state::<AppState>();
@@ -991,8 +1004,16 @@ async fn run_turn<R: Runtime>(
             let run = ai_run(&state);
             if run.generation() == generation {
                 // Persist the opening message and each completed step, including during a long
-                // turn. Text deltas stay in the shared checkpoint until the next step or reset.
-                if first || !matches!(event, AgentEvent::Text { .. } | AgentEvent::Thinking { .. })
+                // turn. Text deltas reach the checkpoint at the end of their response.
+                if first
+                    || matches!(
+                        event,
+                        AgentEvent::ToolResult { .. }
+                            | AgentEvent::Done { .. }
+                            | AgentEvent::Stopped { .. }
+                            | AgentEvent::AwaitingApproval { .. }
+                            | AgentEvent::Refused { .. }
+                    )
                 {
                     run.save_logged();
                     opening_saved = true;

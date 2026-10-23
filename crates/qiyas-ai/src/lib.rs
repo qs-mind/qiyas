@@ -54,3 +54,5 @@ pub use provider::RetryBackoff;
 
 pub mod activity;
 pub mod endpoint;
+
+pub mod provider_error;

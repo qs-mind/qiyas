@@ -878,16 +878,16 @@ async fn api_key_absent_from_logs_and_errors() {
         let mock = serve(move |n| match n {
             0 => Reply::Status(401, vec![], r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#.into()),
             1 => Reply::Status(400, vec![], echo.clone()),
-            // 429 twice: both are retried with backoff, and the third reply (a 500) decides.
-            2 | 3 => Reply::Status(429, vec![("retry-after", "0")], "{}".into()),
-            4 => Reply::Status(500, vec![], format!("internal {KEY}")),
+            // Scrubbing is independent of retry policy; retry behaviour is tested below.
+            2 => Reply::Status(429, vec![("retry-after", "0")], "{}".into()),
+            3 => Reply::Status(500, vec![], format!("internal {KEY}")),
             _ => Reply::Sse(vec![
                 message_start(),
                 json!({"type":"error","error":{"type":"overloaded_error","message":format!("echo {KEY}")}}),
             ]),
         })
         .await;
-        let provider = mock.anthropic();
+        let provider = mock.anthropic().with_strict_budget();
         let req = TurnRequest {
             system: "s".into(),
             messages: vec![qiyas_ai::Message::user(vec![
@@ -913,12 +913,12 @@ async fn api_key_absent_from_logs_and_errors() {
             matches!(&errors[1], AiError::Api { status: 400, message, .. } if message.contains("bad key"))
         );
         assert!(
-            matches!(&errors[2], AiError::Api { status: 500, message, .. } if !message.contains(KEY)),
+            matches!(&errors[3], AiError::Api { status: 500, message, .. } if !message.contains(KEY)),
             "{:?}",
             errors[2]
         );
-        assert_eq!(mock.requests().len(), 7, "both 429s are retried");
-        assert!(matches!(&errors[3], AiError::Stream(m) if m.contains("overloaded_error")));
+        assert_eq!(mock.requests().len(), 5, "metered requests never retry without a reservation");
+        assert!(matches!(&errors[2], AiError::RateLimited { .. }));
         assert!(matches!(&errors[4], AiError::Stream(m) if m.contains("overloaded_error")));
 
         // Nothing reachable: a network error.
@@ -926,7 +926,7 @@ async fn api_key_absent_from_logs_and_errors() {
         let dead = format!("http://{}/v1/messages", closed.local_addr().unwrap());
         drop(closed);
         let mut sink = |_: StreamEvent| {};
-        let e = Anthropic::with_url(KEY.into(), dead)
+        let e = Anthropic::with_url(KEY.into(), dead).with_strict_budget()
             .stream_turn(req.clone(), &mut sink)
             .await
             .unwrap_err();
@@ -935,7 +935,7 @@ async fn api_key_absent_from_logs_and_errors() {
 
         // The OpenAI-compatible client too.
         let mut sink = |_: StreamEvent| {};
-        let e = OpenAiCompatible::new(&mock.base, Some(KEY.into()))
+        let e = OpenAiCompatible::new(&mock.base, Some(KEY.into())).with_strict_budget()
             .stream_turn(req.clone(), &mut sink)
             .await
             .unwrap_err();
@@ -2068,4 +2068,243 @@ async fn activity_metadata_and_counts_follow_the_real_edit_without_network() {
         AgentEvent::ToolResult { id, count: Some(1), is_error: false, .. }
         if id == "activity-edit"
     )));
+}
+
+// Goal E uses real HTTP/SSE adapters and the production agent, with no paid calls.
+#[tokio::test]
+async fn billing_is_immediate_and_drawing_errors_never_add_a_takeoff_report() {
+    for status in [400, 402, 403, 429] {
+        let mock = serve(move |_| {
+            Reply::Status(
+                status,
+                vec![],
+                json!({"error":{"code":"insufficient_quota","message":"Insufficient credits"}})
+                    .to_string(),
+            )
+        })
+        .await;
+        let (_dir, session) = sample();
+        let mut agent = Agent::new(
+            Box::new(OpenAiCompatible::new(&mock.base, None)),
+            session,
+            AgentSettings::default(),
+        );
+        let (result, events) =
+            tokio::time::timeout(Duration::from_secs(2), turn(&mut agent, "ارسم خطًا"))
+                .await
+                .unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), "billing");
+        assert_eq!(mock.requests().len(), 1);
+        assert!(
+            texts(&events).is_empty(),
+            "A provider failure must not invent an end report"
+        );
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Retrying { .. })));
+        let payload: Value = serde_json::from_str(&error.for_window()).unwrap();
+        assert_eq!(payload["code"], "ai.error.billing");
+        assert!(payload["message_ar"].as_str().unwrap().contains("رصيد"));
+    }
+}
+
+#[tokio::test]
+async fn all_server_failures_retry_with_a_visible_wait_and_identical_request() {
+    for status in [500, 502, 503, 504, 529] {
+        let mock = serve(move |n| {
+            if n == 0 {
+                Reply::Status(status, vec![], "temporary service problem".into())
+            } else {
+                text_turn(&["Ready."])
+            }
+        })
+        .await;
+        let (_dir, session) = sample();
+        let mut agent = Agent::new(
+            Box::new(mock.anthropic()),
+            session,
+            AgentSettings::default(),
+        );
+        let (result, events) = turn(&mut agent, "What is on the screen?").await;
+        result.unwrap();
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Retrying { seconds: 5, code, .. } if code == "ai.error.service_error")));
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].body, requests[1].body);
+        assert_eq!(texts(&events), ["Ready."]);
+    }
+}
+
+#[tokio::test]
+async fn mid_stream_overload_discards_partial_text_and_keeps_a_retry_log() {
+    for anthropic in [true, false] {
+        let mock = serve(move |n| {
+            if anthropic {
+                if n == 0 { Reply::Sse(vec![
+                    message_start(),
+                    json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Unfinished"}}),
+                    json!({"type":"error","error":{"type":"overloaded_error","message":"try later"}}),
+                ]) } else { text_turn(&["Complete."]) }
+            } else if n == 0 { Reply::Data(vec![
+                json!({"choices":[{"delta":{"content":"Unfinished"}}]}).to_string(),
+                json!({"error":{"type":"server_error","message":"try later"}}).to_string(),
+            ]) } else { Reply::Data(vec![
+                json!({"choices":[{"delta":{"content":"Complete."},"finish_reason":"stop"}]}).to_string(),
+                "[DONE]".into(),
+            ]) }
+        }).await;
+        let (dir, session) = sample();
+        let provider: Box<dyn Provider> = if anthropic {
+            Box::new(mock.anthropic())
+        } else {
+            Box::new(OpenAiCompatible::new(&mock.base, None))
+        };
+        let log = qiyas_ai::AgentLog::new(dir.path().join("retry.log"));
+        let mut agent =
+            Agent::new(provider, session, AgentSettings::default()).with_log(log.clone());
+        let (result, events) = turn(&mut agent, "Continue the drawing.").await;
+        result.unwrap();
+        assert_eq!(mock.requests().len(), 2);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::Retrying {
+                discard_partial: true,
+                ..
+            }
+        )));
+        let saved = serde_json::to_string(&agent.snapshot().transcript).unwrap();
+        assert!(!saved.contains("Unfinished"));
+        assert!(saved.contains("Complete."));
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        assert!(text.contains("RETRY") && text.contains("Unfinished"));
+    }
+}
+
+#[tokio::test]
+async fn invalid_output_value_keeps_the_cap_and_does_not_retry() {
+    let mock = serve(|_| Reply::Status(400, vec![], json!({"error":{"message":"Invalid max_completion_tokens value, the valid range is [1, 8192]"}}).to_string())).await;
+    let provider = OpenAiCompatible::new(&mock.base, None);
+    let req = TurnRequest {
+        system: "s".into(),
+        messages: vec![],
+        tools: vec![],
+        model: "local".into(),
+        effort: "none".into(),
+        max_tokens: 16000,
+    };
+    for _ in 0..2 {
+        let error = provider
+            .stream_turn(req.clone(), &mut |_| {})
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "output_limit");
+    }
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|r| r.body["max_completion_tokens"] == 16000));
+    assert!(requests
+        .iter()
+        .all(|r| r.body.get("reasoning_effort").is_none()));
+    assert!(!provider
+        .save_state()
+        .to_string()
+        .contains("max_completion_tokens"));
+}
+
+#[tokio::test]
+async fn partial_usage_chunks_retain_prior_counts_through_the_http_adapter() {
+    let mock = serve(|_| Reply::Data(vec![
+        json!({"choices":[{"delta":{"content":"Done"}}],"usage":{"prompt_tokens":1000,"prompt_tokens_details":{"cached_tokens":800},"completion_tokens":60}}).to_string(),
+        json!({"choices":[],"usage":{"completion_tokens":90,"reasoning_tokens":71}}).to_string(),
+        json!({"choices":[],"usage":{"prompt_tokens_details":{"cached_tokens":900}}}).to_string(),
+        json!({"choices":[{"delta":{},"finish_reason":"stop"}]}).to_string(),
+        "[DONE]".into(),
+    ])).await;
+    let req = TurnRequest {
+        system: "s".into(),
+        messages: vec![],
+        tools: vec![],
+        model: "local".into(),
+        effort: "low".into(),
+        max_tokens: 1000,
+    };
+    let result = OpenAiCompatible::new(&mock.base, None)
+        .stream_turn(req, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(result.usage.input_tokens, 100);
+    assert_eq!(result.usage.cache_read_input_tokens, 900);
+    assert_eq!(result.usage.output_tokens, 90);
+    assert_eq!(result.usage.reasoning_tokens, 71);
+}
+
+#[tokio::test]
+async fn provider_failure_after_a_real_drawing_edit_preserves_work_without_a_takeoff_report() {
+    struct EditThenFail(AtomicBool);
+    impl Provider for EditThenFail {
+        fn stream_turn<'a>(
+            &'a self,
+            _: TurnRequest,
+            _: qiyas_ai::provider::Sink<'a>,
+        ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, AiError>> {
+            let first = !self.0.swap(true, Ordering::SeqCst);
+            Box::pin(async move {
+                if first {
+                    Ok(qiyas_ai::TurnResult {
+                        content: vec![qiyas_ai::ContentBlock::ToolUse {
+                            id: "retained-edit".into(),
+                            name: "qiyas_execute".into(),
+                            input: json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[20,20],"b":[23,20]}}}),
+                        }],
+                        stop_reason: qiyas_ai::StopReason::ToolUse,
+                        usage: Default::default(),
+                    })
+                } else {
+                    Err(AiError::Api {
+                        status: 429,
+                        message: "insufficient_quota".into(),
+                        body: String::new(),
+                        request: None,
+                    })
+                }
+            })
+        }
+    }
+    let (_dir, session) = sample();
+    let count = || {
+        session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .drawing
+            .doc
+            .entities_in_block("*Model_Space")
+            .count()
+    };
+    let before = count();
+    let mut agent = Agent::new(
+        Box::new(EditThenFail(AtomicBool::new(false))),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    let (result, events) = turn(&mut agent, "ارسم خطًا بطول ثلاثة أمتار").await;
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), "billing");
+    assert_eq!(count(), before + 1);
+    assert!(texts(&events).is_empty());
+    assert!(events.iter().any(
+        |e| matches!(e, AgentEvent::ToolResult { id, is_error: false, .. } if id == "retained-edit")
+    ));
+    if let Ok(dir) = std::env::var("QIYAS_GOAL_E_EVIDENCE") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("provider-error-after-edit.json"), serde_json::to_vec_pretty(&json!({
+            "events":events,"error":error.public_error(),"entities_before":before,"entities_after":count(),"transcript":agent.snapshot().transcript,
+        })).unwrap()).unwrap();
+    }
 }

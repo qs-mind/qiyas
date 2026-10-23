@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::provider::{http_client, send, AiError};
+use crate::provider::{http_client, send_with_retry, AiError};
 
 /// Anthropic's Models API.
 pub const MODELS_URL: &str = "https://api.anthropic.com/v1/models";
@@ -72,7 +72,7 @@ pub async fn list_models(
                 if let Some(id) = &after {
                     url.push_str(&format!("&after_id={id}"));
                 }
-                let response = send(
+                let response = send_with_retry(
                     || {
                         client
                             .get(&url)
@@ -82,6 +82,8 @@ pub async fn list_models(
                     },
                     secret,
                     &Value::Null,
+                    false,
+                    &mut |_| {},
                 )
                 .await?;
                 let page = read_json(response, secret).await?;
@@ -97,7 +99,7 @@ pub async fn list_models(
         ModelSource::OpenAiCompatible { base_url } => {
             let base = crate::endpoint::normalize(base_url).map_err(AiError::Network)?;
             let url = format!("{base}/models");
-            let response = send(
+            let response = send_with_retry(
                 || {
                     let r = client.get(&url).timeout(TIMEOUT);
                     match key {
@@ -107,6 +109,8 @@ pub async fn list_models(
                 },
                 secret,
                 &Value::Null,
+                false,
+                &mut |_| {},
             )
             .await?;
             Ok(parse_openai_models(&read_json(response, secret).await?))
@@ -129,6 +133,9 @@ pub fn parse_anthropic_page(page: &Value) -> (Vec<ModelInfo>, Option<String>) {
         .into_iter()
         .flatten()
         .filter_map(|m| {
+            if !supports_assistant(m) {
+                return None;
+            }
             let id = m["id"].as_str()?.to_string();
             let label = m["display_name"].as_str().unwrap_or(&id).to_string();
             Some(ModelInfo { id, label })
@@ -150,6 +157,9 @@ pub fn parse_openai_models(answer: &Value) -> Vec<ModelInfo> {
         .into_iter()
         .flatten()
         .filter_map(|m| {
+            if !supports_assistant(m) {
+                return None;
+            }
             let id = m["id"].as_str()?.to_string();
             let label = m["name"].as_str().unwrap_or(&id).to_string();
             Some(ModelInfo { id, label })
@@ -158,6 +168,33 @@ pub fn parse_openai_models(answer: &Value) -> Vec<ModelInfo> {
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
     models
+}
+
+/// A missing capability is unknown; an explicit refusal is never offered to Mizan.
+/// OpenRouter and compatible servers describe both input modalities and tool parameters.
+fn supports_assistant(model: &Value) -> bool {
+    for key in ["tools", "tool_calling", "function_calling", "vision"] {
+        let cap = &model["capabilities"][key];
+        if cap.as_bool() == Some(false) || cap["supported"].as_bool() == Some(false) {
+            return false;
+        }
+    }
+    for path in ["/architecture/input_modalities", "/input_modalities"] {
+        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
+            if !modalities.iter().any(|m| m == "image") {
+                return false;
+            }
+        }
+    }
+    if let Some(parameters) = model["supported_parameters"].as_array() {
+        if !parameters
+            .iter()
+            .any(|p| p == "tools" || p == "tool_choice")
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// What the settings show: the service's list, or the built-in one with why.
@@ -172,20 +209,15 @@ pub struct ModelList {
 /// `list_models`, or the built-in list with the error when the service can't be asked.
 pub async fn model_list(source: ModelSource<'_>, key: Option<&str>) -> ModelList {
     match list_models(source, key).await {
-        Ok(models) if !models.is_empty() => ModelList {
+        Ok(models) => ModelList {
             models,
             from_service: true,
             error: None,
         },
-        Ok(_) => ModelList {
-            models: builtin_models(source),
-            from_service: false,
-            error: Some("The service listed no models".into()),
-        },
         Err(e) => ModelList {
             models: builtin_models(source),
             from_service: false,
-            error: Some(e.to_string()),
+            error: Some(e.for_window()),
         },
     }
 }
@@ -241,6 +273,22 @@ mod tests {
         assert_eq!(ids[0], "claude-opus-5-5");
         assert!(ids.contains(&"claude-haiku-5-5".to_string()));
         assert!(builtin_models(ModelSource::OpenAiCompatible { base_url: "x" }).is_empty());
+    }
+
+    #[test]
+    fn explicit_missing_tools_or_vision_are_not_offered() {
+        let models = parse_openai_models(&json!({"data":[
+            {"id":"image-only","supported_parameters":[],"architecture":{"input_modalities":["text","image"]}},
+            {"id":"text-only","supported_parameters":["tools"],"architecture":{"input_modalities":["text"]}},
+            {"id":"no-vision","capabilities":{"vision":false}},
+            {"id":"no-tools","capabilities":{"tool_calling":{"supported":false}}},
+            {"id":"unknown"},
+            {"id":"suitable","supported_parameters":["tools"],"architecture":{"input_modalities":["text","image"]}}
+        ]}));
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["suitable", "unknown"]
+        );
     }
 
     #[tokio::test]

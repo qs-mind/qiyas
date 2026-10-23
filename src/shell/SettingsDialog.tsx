@@ -2,6 +2,7 @@ import { uiError } from "../i18n/errors";
 import { SupportLog } from "./SupportLog";
 import { useEffect, useState } from "react";
 import {
+  aiModels,
   appDir,
   deleteApiKey,
   EFFORTS,
@@ -46,6 +47,8 @@ export function mcpSnippets(dir: string, token: string) {
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
   const [draft, setDraft] = useState<Settings | null>(null);
+  const [savedAddress, setSavedAddress] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [dir, setDir] = useState("");
   /** A key is in the keychain for the chosen provider. */
   const [keySaved, setKeySaved] = useState(false);
@@ -60,7 +63,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     getSettings()
-      .then(setDraft)
+      .then((s) => { setDraft(s); setSavedAddress(s.providers.openai_compatible.base_url ?? null); })
       .catch((e) => setError(uiError(e)));
     appDir()
       .then(setDir)
@@ -87,6 +90,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const change = (patch: Partial<Settings>) => setDraft((d) => (d ? { ...d, ...patch } : d));
   const profile = draft?.providers[draft.provider];
+  const keySavedHere = keySaved && (draft?.provider === "anthropic" || (profile?.base_url ?? null) === savedAddress);
   const changeProfile = (patch: Partial<Settings["providers"][Provider]>) =>
     setDraft((d) => d ? {
       ...d,
@@ -106,13 +110,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       }
       if (n !== (draft.autosave_minutes ?? 5)) next = { ...draft, autosave_minutes: n };
     }
+    setSaving(true);
     try {
+      const profile = next.providers[next.provider];
+      if (profile.model.trim()) {
+        const list = await aiModels(next.provider, profile.base_url ?? null, key || undefined);
+        if (list.from_service && !list.models.some((model) => model.id === profile.model)) {
+          setError(t("ai.error.model_not_found"));
+          return;
+        }
+      }
       await setSettings(next);
       if (key.trim()) await setApiKey(draft.provider, key);
       onClose();
     } catch (e) {
       setError(uiError(e));
-    }
+    } finally { setSaving(false); }
   }
 
   async function removeKey() {
@@ -171,6 +184,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 provider={draft.provider}
                 baseUrl={profile.base_url ?? null}
                 value={profile.model}
+                typedKey={key}
                 onChange={(model) => changeProfile({ model })}
               />
             </div>
@@ -182,17 +196,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   type="url"
                   placeholder="http://localhost:11434/v1"
                   value={profile.base_url ?? ""}
-                  onChange={(e) => changeProfile({ base_url: e.target.value || null })}
+                  onChange={(e) => { changeProfile({ base_url: e.target.value || null }); setKey(""); }}
                 />
               </label>
             )}
             <label>
               <span>{t("settings.effort")}</span>
               <select
-                value={draft.effort}
-                onChange={(e) => change({ effort: e.target.value as Effort })}
+                value={profile.effort ?? (draft.provider === "anthropic" ? "medium" : "low")}
+                onChange={(e) => changeProfile({ effort: e.target.value as Effort })}
               >
-                {EFFORTS.map((x) => (
+                {EFFORTS.filter((x) => draft.provider === "anthropic" || !["xhigh", "max"].includes(x)).map((x) => (
                   <option key={x} value={x}>
                     {t(`effort.${x}`)}
                   </option>
@@ -235,7 +249,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="field">
               <span>
                 <label htmlFor="settings-key">{t("settings.apiKey")}</label>
-                {keySaved && <span className="badge">{t("settings.saved")}</span>}
+                {keySavedHere && <span className="badge">{t("settings.saved")}</span>}
               </span>
               <span className="row">
                 <input
@@ -243,11 +257,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   dir="ltr"
                   type="password"
                   autoComplete="off"
-                  placeholder={keySaved ? "••••••••" : ""}
+                  placeholder={keySavedHere ? "••••••••" : ""}
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                 />
-                {keySaved && (
+                {keySavedHere && (
                   <button type="button" onClick={removeKey}>
                     {t("settings.remove")}
                   </button>
@@ -287,6 +301,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <label htmlFor="settings-token">{t("settings.token")}</label>
                 <span className="row">
                   <input id="settings-token" dir="ltr" readOnly value={draft.mcp_token} />
+                  <button type="button" onClick={() => {
+                    const bytes = crypto.getRandomValues(new Uint8Array(16));
+                    change({ mcp_token: Array.from(bytes, (n) => n.toString(16).padStart(2, "0")).join("") });
+                  }}>{t("settings.rotateToken")}</button>
                   <button type="button" onClick={() => copy("token", draft.mcp_token)}>
                     {copied === "token" ? t("settings.copied") : t("settings.copy")}
                   </button>
@@ -319,7 +337,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <button type="button" onClick={onClose}>
             {t("settings.cancel")}
           </button>
-          <button type="submit" className="primary" disabled={!draft}>
+          <button type="submit" className="primary" disabled={!draft || saving}>
             {t("settings.save")}
           </button>
         </div>

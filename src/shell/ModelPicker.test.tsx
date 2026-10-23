@@ -38,12 +38,12 @@ test("lists the provider's models and chooses one", async () => {
   expect(onChange).toHaveBeenCalledWith("claude-fable-5-1");
 });
 
-test("keeps a saved model the service no longer lists, and Other takes a typed id", async () => {
+test("puts an unlisted model in the custom field, without offering it as a service model", async () => {
   const { onChange } = setup(claude, "claude-old-1");
   await settle();
   const select = screen.getByLabelText("Model") as HTMLSelectElement;
-  expect(select.value).toBe("claude-old-1");
-  expect(select.options[0].textContent).toContain("(saved)");
+  expect(select.value).toBe("\u0000other");
+  expect([...select.options].some((o) => o.value === "claude-old-1")).toBe(false);
   expect(screen.getByRole("status").textContent).toContain("does not list claude-old-1");
   fireEvent.change(select, { target: { value: "\u0000other" } });
   const id = screen.getByLabelText("Model id") as HTMLInputElement;
