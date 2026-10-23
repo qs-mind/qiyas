@@ -6,6 +6,28 @@ use opencadcodec::Handle;
 use std::collections::{BTreeMap, BTreeSet};
 
 impl Session {
+    pub(crate) fn refuse_generated_edit(
+        &self,
+        handles: &[Handle],
+        geometry: bool,
+    ) -> Result<(), CoreError> {
+        for &handle in handles {
+            let Some(entity) = self.drawing.doc.get_entity(handle) else {
+                continue;
+            };
+            if let Some(part) = crate::xdata::read_json::<ObjectPart>(entity.common(), PART_APP) {
+                return Err(CoreError::InvalidCommand(format!(
+                    "Entity {} is the {} of object {}. Change the owner's properties with set_object_props; generated parts cannot be edited directly.",
+                    handle.value(), part.role, part.owner)));
+            }
+            if geometry && (crate::object_regions::retained_region(entity).is_some()) {
+                return Err(CoreError::InvalidCommand(format!(
+                    "Room boundary {} follows its enclosing walls. Edit the walls, or measure a room at a new point; its vertices cannot be edited directly.", handle.value())));
+            }
+        }
+        Ok(())
+    }
+
     /// Shared union graphics describe all members. Before erasing their current owner,
     /// transfer them to a surviving driver so regeneration can remap their measurements.
     pub(crate) fn transfer_union_parts_before_erase(

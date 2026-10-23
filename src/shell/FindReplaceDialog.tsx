@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { TextMatch, TextScope } from "../api";
 import { useT } from "../i18n";
@@ -52,7 +53,7 @@ export function FindReplaceDialog({ onFind, onReplaceAll, onShow, onClose }: Pro
     try {
       await work();
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }

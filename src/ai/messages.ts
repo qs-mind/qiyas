@@ -1,5 +1,5 @@
 /** The assistant's transcript, built from the agent's events by a pure reducer. */
-import type { AgentEvent, AiUi, PlanPhase, TranscriptEntry } from "../api";
+import type { Activity, AgentEvent, AiUi, PlanPhase, TranscriptEntry } from "../api";
 
 export type ToolStatus = "running" | "done" | "error";
 
@@ -10,6 +10,8 @@ export type ToolCardItem = {
   /** The command or operation shown on the card. */
   label?: string | null;
   input: unknown;
+  activity?: Activity | null;
+  count?: number | null;
   status: ToolStatus;
   /** One line from the tool's result; empty while it runs. */
   summary: string;
@@ -31,11 +33,13 @@ export type ToolCardItem = {
 export type Attached = { pointed?: string[]; images?: string[] };
 
 export type Item =
+  | { kind: "provider_status"; code: string }
   | ({ kind: "user"; text: string } & Attached)
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
   | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean }
+  | { kind: "retrying"; seconds: number; code: string }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
   | { kind: "stopped"; reason: string };
@@ -99,6 +103,17 @@ export function reduce(state: Transcript, action: Action): Transcript {
         i === plan && item.kind === "plan" ? { ...item, awaitingApproval: true } : item,
       ) };
     }
+    case "provider_status":
+      return { items: [...finishText(items), { kind: "provider_status", code: action.code }] };
+    case "retrying": {
+      let kept = items;
+      if (action.discard_partial) {
+        let end = kept.length;
+        while (end > 0 && ["assistant", "thinking"].includes(kept[end - 1].kind)) end--;
+        kept = kept.slice(0, end);
+      }
+      return { items: [...kept, { kind: "retrying", seconds: action.seconds, code: action.code }] };
+    }
     case "text":
       if (last?.kind === "assistant" && !last.finished) {
         return { items: [...items.slice(0, -1), { ...last, text: last.text + action.text }] };
@@ -121,6 +136,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
             name: action.name,
             label: action.label,
             input: action.input,
+            activity: action.activity,
             status: "running",
             summary: "",
             handles: [],
@@ -137,6 +153,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
           ...card,
           status: action.is_error ? "error" : "done",
           summary: action.summary,
+          count: action.count,
           handles: action.handles,
           ui: action.ui,
         })),
@@ -191,4 +208,12 @@ export function replay(entries: TranscriptEntry[]): Transcript {
 export function startNewOffered(t: Transcript): boolean {
   const last = t.items.at(-1);
   return last?.kind === "refused" || (last?.kind === "stopped" && last.reason === TOO_LONG);
+}
+
+/** Recovery belongs to this user turn; a later unrelated request cannot recover an older step. */
+export function recoveringCard(items: Item[], index: number, busy: boolean): boolean {
+  const rest = items.slice(index + 1);
+  const nextTurn = rest.findIndex((item) => item.kind === "user");
+  return (busy && nextTurn < 0) || (nextTurn < 0 ? rest : rest.slice(0, nextTurn))
+    .some((item) => item.kind === "tool" && item.status === "done");
 }

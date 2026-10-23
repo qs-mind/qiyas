@@ -6,13 +6,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use clap::Args;
-use qiyas_ai::host::DrawingHost;
+use qiyas_ai::{host::DrawingHost, judgement::Job};
 use qiyas_core::Session;
 use rmcp::ServiceExt;
 use serde_json::{json, Value};
 
 #[derive(Args)]
 pub struct McpArgs {
+    /// Method name for this run. Rules are optional; Mizan authors missing rules.
+    #[arg(long)]
+    pub method: Option<String>,
     #[arg(long)]
     pub drawing: PathBuf,
     #[arg(long)]
@@ -45,6 +48,7 @@ struct Host {
     note: String,
     answer: Mutex<String>,
     calls: Mutex<usize>,
+    job: Mutex<Job>,
 }
 
 impl Host {
@@ -97,6 +101,9 @@ impl DrawingHost for Host {
         writeln!(log, "{}", json!({"tool":name,"input":input})).map_err(|e| e.to_string())?;
         *self.calls.lock().map_err(|e| e.to_string())? += 1;
         self.check_paths(input)?;
+        if Job::observes(name, input) {
+            *self.job.lock().map_err(|e| e.to_string())? = Job::Takeoff;
+        }
         if name == qiyas_ai::surface::EXECUTE && input["op"] == "type" {
             let args = qiyas_ai::surface::args_of(input)?;
             if let Some(line) = args["line"].as_str() {
@@ -137,7 +144,22 @@ impl DrawingHost for Host {
         self.list()
     }
     fn save(&self) -> Result<Value, String> {
-        self.finish("")
+        let mut guard = self.session.lock().map_err(|e| e.to_string())?;
+        let session = guard.as_mut().ok_or("No drawing")?;
+        let drawing = confined(&self.root, &session.drawing.path)?;
+        for path in [
+            drawing.with_extension("qiyas"),
+            PathBuf::from(format!("{}.bak", drawing.display())),
+            PathBuf::from(format!("{}.tmp", drawing.display())),
+            PathBuf::from(format!("{}.qlock", drawing.display())),
+            PathBuf::from(format!("{}.tmp", drawing.with_extension("qiyas").display())),
+        ] {
+            confined(&self.root, &path)?;
+        }
+        session
+            .save_as_headless(&drawing)
+            .map_err(|e| e.to_string())?;
+        Ok(json!({"saved":drawing}))
     }
     fn close(&self, id: Option<u32>) -> Result<Value, String> {
         if id.is_some_and(|id| id != 1) {
@@ -146,31 +168,65 @@ impl DrawingHost for Host {
         self.finish("")
     }
     fn finish(&self, answer: &str) -> Result<Value, String> {
+        for name in [
+            "takeoff.xlsx",
+            "takeoff.json",
+            "measurement.json",
+            "self-check.json",
+            "conflicts.json",
+            "end-report.json",
+        ] {
+            confined(&self.root, Path::new(name))?;
+        }
         if !answer.is_empty() {
             *self.answer.lock().map_err(|e| e.to_string())? = answer.into();
         }
-        let mut guard = self.session.lock().map_err(|e| e.to_string())?;
-        let session = guard.as_mut().ok_or("No drawing")?;
-        let drawing = confined(&self.root, &session.drawing.path)?;
-        let submission = crate::eval::save_artifacts(
-            session,
-            &self.root,
-            &drawing,
-            self.started.elapsed().as_millis(),
-        )?;
-        let count = crate::bench::submission::from_session(session)?.items.len();
+        let guard = self.session.lock().map_err(|e| e.to_string())?;
+        let session = guard.as_ref().ok_or("No drawing")?;
         let answer = self.answer.lock().map_err(|e| e.to_string())?.clone();
-        let self_check = session
-            .takeoff_check_with_report(0, &[], &answer)
-            .map_err(|e| e.to_string())?;
-        crate::bench::write_json(&self.root.join("self-check.json"), &self_check)?;
-        let report = json!({"status":if count == 0 {"failed: done with 0 submitted items"} else {"done"},
+        let takeoff = *self.job.lock().map_err(|e| e.to_string())? == Job::Takeoff;
+        let mut report = json!({"status":"done", "job":if takeoff {"takeoff"} else {"drawing"},
             "answer":answer,"preparation":self.note,
             "tool_calls":*self.calls.lock().map_err(|e|e.to_string())?,
-            "facts":{"submitted_items":count,"measurement":session.measurement_report().map_err(|e|e.to_string())?,
-                "self_check":self_check}});
+            "elapsed_ms": self.started.elapsed().as_millis(),
+            "saved_by_finish":false});
+        if takeoff {
+            let measurement = session.measurement_report().map_err(|e| e.to_string())?;
+            qiyas_boq::export_takeoff_with_queries(
+                &self.root.join("takeoff.xlsx"),
+                &[],
+                &[],
+                "Qiyas take-off",
+                &measurement,
+                &session.conflicts,
+            )
+            .map_err(|e| e.to_string())?;
+            crate::bench::write_json(&self.root.join("measurement.json"), &measurement)?;
+            crate::bench::write_json(&self.root.join("conflicts.json"), &session.conflicts)?;
+            let submission = crate::bench::submission::from_session(session)?;
+            let count = submission.items.len();
+            let self_check = session
+                .takeoff_check_with_report(0, &[], &answer)
+                .map_err(|e| e.to_string())?;
+            crate::bench::write_json(
+                &self.root.join("takeoff.json"),
+                &json!({"items":submission.items,"warnings":submission.warnings}),
+            )?;
+            crate::bench::write_json(&self.root.join("self-check.json"), &self_check)?;
+            report["status"] = json!(if count == 0 {
+                "incomplete: no supported quantities"
+            } else {
+                "done"
+            });
+            report["facts"] = json!({"submitted_items":count,"measurement":session.measurement_report().map_err(|e|e.to_string())?,"self_check":self_check});
+        } else {
+            report["facts"] =
+                json!({"drawing_check":session.check_drawing_all(&Default::default())});
+        }
         crate::bench::write_json(&self.root.join("end-report.json"), &report)?;
-        Ok(json!({"saved":drawing,"submission":submission,"end_report":report}))
+        Ok(
+            json!({"completed":true,"message":"Completion recorded. This action does not save the drawing.","end_report":report}),
+        )
     }
 }
 
@@ -192,7 +248,7 @@ pub fn run(args: &McpArgs) -> crate::Done {
     if source != local {
         fs::copy(&source, &local).map_err(|e| e.to_string())?;
     }
-    let (session, note) = if local
+    let (mut session, note) = if local
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
     {
@@ -204,6 +260,7 @@ pub fn run(args: &McpArgs) -> crate::Done {
             String::new(),
         )
     };
+    crate::eval::apply_selected_method(args.method.as_deref(), &mut session)?;
     let session = Arc::new(Mutex::new(Some(session)));
     let host = Arc::new(Host {
         session: session.clone(),
@@ -212,6 +269,7 @@ pub fn run(args: &McpArgs) -> crate::Done {
         note,
         answer: Mutex::new(String::new()),
         calls: Mutex::new(0),
+        job: Mutex::new(Job::Drawing),
     });
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -231,6 +289,7 @@ pub fn run(args: &McpArgs) -> crate::Done {
         Ok::<_, String>(())
     });
     // EOF, including a client that never initialized successfully, still retains partial work.
+    host.save()?;
     host.finish("")?;
     let exit_path = confined(&host.root, Path::new("mcp-exit.json"))?;
     crate::bench::write_json(

@@ -231,3 +231,54 @@ fn report_layout_is_undoable_and_paths_are_confined() {
     qiyas_boq::deliverables::complete(&result.outcome).unwrap();
     assert!(dir.path().join("out.pdf").exists());
 }
+
+#[test]
+fn visible_variation_is_readable_and_records_remain_lossless() {
+    for language in [Language::En, Language::Ar] {
+        let report = deliverables::Report {
+            kind: Kind::Variation,
+            language,
+            layout: deliverables::default_layout(Kind::Variation),
+            warnings: vec![],
+            rows: vec![
+                json!({"drawing":"/private/source/flat.dxf","code":"L","description":"Length","unit":"m","a_quantity":0.0,"b_quantity":1.3200000000000005,"delta":1.3200000000000005,"elements":[{"sheet":"*Model_Space","kind":"added","b_handles":[98]}]}),
+                json!({"drawing":"/private/source/flat.dxf","code":"P","description":"Method precision","unit":"m","a_quantity":0.0,"b_quantity":1.326,"delta":1.326,"elements":[],"presentation_decimals":2}),
+            ],
+        };
+        let table = report.table().unwrap();
+        let visible = table
+            .iter()
+            .flat_map(|r| &r.cells)
+            .map(deliverables::display)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(visible.contains("flat.dxf"));
+        assert!(visible.contains("1.32"));
+        assert!(visible.contains("1.33"));
+        assert!(!visible.contains("1.326"));
+        assert!(visible.contains("98"));
+        assert!(!visible.contains("/private"));
+        assert!(!visible.contains("b_handles"));
+        assert!(!visible.contains("000000000000"));
+        let dir = tempfile::tempdir().unwrap();
+        for format in [Format::Excel, Format::Pdf] {
+            let path = dir.path().join(if format == Format::Excel {
+                "readable.xlsx"
+            } else {
+                "readable.pdf"
+            });
+            qiyas_boq::deliverables::write(&Export {
+                path: path.clone(),
+                format,
+                report: report.clone(),
+            })
+            .unwrap();
+            let recovered = if format == Format::Excel {
+                qiyas_boq::deliverables::read_excel(&path).unwrap()
+            } else {
+                qiyas_plot::report::read(&path).unwrap()
+            };
+            assert_eq!(recovered, report);
+        }
+    }
+}

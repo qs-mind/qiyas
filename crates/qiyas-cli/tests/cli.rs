@@ -317,7 +317,7 @@ fn run_reports_defaults_and_unknown_fields_for_json_and_typed_commands() {
     let script = dir.path().join("input-notes.scr");
     std::fs::write(
         &script,
-        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\"}\nTEXT 2,0 Door\n",
     )
     .unwrap();
     let text = ok(cli(&["run", s(&script), s(&dwg)]));
@@ -327,7 +327,14 @@ fn run_reports_defaults_and_unknown_fields_for_json_and_typed_commands() {
         assert!(line.contains("/height=0.25 m"), "{line}");
         assert!(line.contains("/rotation=0"), "{line}");
     }
-    assert!(lines[0].contains("/typo"), "{text}");
+    // An unknown field on an edit is refused (Goal B), naming the field, and nothing runs.
+    std::fs::write(
+        &script,
+        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\n",
+    )
+    .unwrap();
+    let err = failed(cli(&["run", s(&script), s(&dwg)]));
+    assert!(err.contains("line 1") && err.contains("/typo"), "{err}");
 }
 
 #[test]
@@ -393,9 +400,12 @@ fn run_errors_name_the_script_and_line_and_nothing_runs() {
     assert!(err.contains("line 1") && err.contains("outside"), "{err}");
 
     // A step that fails stops the run on its line.
-    std::fs::write(&script, "COUNT DOOR\nMEASURE FFFF\n").unwrap();
+    std::fs::write(&script, "COUNT DOOR\nMEASURE 0xFFFF\n").unwrap();
     let err = failed(cli(&["run", s(&script), s(&dwg), "--json"]));
-    assert!(err.ends_with("line 2: No entity with handle FFFF"), "{err}");
+    assert!(
+        err.ends_with("line 2: No entity with handle 65535"),
+        "{err}"
+    );
 
     // The script must OPEN a drawing when none is given.
     std::fs::write(&script, "COUNT DOOR\n").unwrap();

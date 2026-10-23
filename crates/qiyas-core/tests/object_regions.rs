@@ -82,6 +82,33 @@ fn hatch_area(session: &Session, driver: u64) -> f64 {
 }
 
 #[test]
+fn moving_a_retained_room_with_an_unrelated_entity_is_refused_atomically() {
+    for units in [4, 5, 6, 1] {
+        let (_directory, mut session, _outline, _island, driver) = setup(units);
+        let k = 1.0 / session.drawing.units.to_metres();
+        let line = add(
+            &mut session,
+            json!({"type":"draw","kind":"line","a":[8.0*k,0],"b":[9.0*k,0]}),
+        );
+        let before = session.drawing.doc.entities().cloned().collect::<Vec<_>>();
+        let history = session.history_steps();
+        let error = session
+            .run_input(
+                &json!({"type":"modify","kind":"move","targets":[driver,line],"delta":[0.1*k,0]}),
+                Source::User,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("overridden"), "{error}");
+        assert_eq!(session.history_steps(), history);
+        assert_eq!(
+            session.drawing.doc.entities().cloned().collect::<Vec<_>>(),
+            before
+        );
+    }
+}
+
+#[test]
 fn arbitrary_region_type_follows_islands_and_source_edits_through_undo_and_files() {
     for units in [6, 4] {
         let (directory, mut session, outline, _island, driver) = setup(units);
@@ -207,7 +234,7 @@ fn legacy_room_uses_shared_drawing_recipe_and_quantity_fields() {
     near(hatch_area(&session, driver), 11.0);
     assert_eq!(
         session.entity_info(label, &[]).unwrap().text.as_deref(),
-        Some("Unapproved candidate 22.00 m²")
+        Some("Area 22.00 m²")
     );
     assert!(session
         .drawing
@@ -217,7 +244,7 @@ fn legacy_room_uses_shared_drawing_recipe_and_quantity_fields() {
     assert!(session.undo());
     assert_eq!(
         session.entity_info(label, &[]).unwrap().text.as_deref(),
-        Some("Unapproved candidate 11.00 m²")
+        Some("Area 11.00 m²")
     );
 }
 
@@ -348,9 +375,20 @@ fn curved_island_metadata_is_exact_and_accepts_two_bulged_vertices() {
     invalid_region["app_handle"] = json!(app + 17);
     qiyas_core::xdata::write_json(common, "QIYAS_OBJECT_REGION", app, &invalid_region).unwrap();
     common.extended_data.raw_dwg_eed.push((app, vec![1, 2, 3]));
+    // A retained boundary cannot be moved on its own. Refresh imported metadata through
+    // a boundary-source edit instead; unrelated layer edits do not retrace regions.
+    let history = session.history_steps();
+    let error = session
+        .run_input(
+            &json!({"type":"modify","kind":"move","targets":[{"handle":driver}],"delta":[0.1,0]}),
+            Source::User,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("enclosing walls"));
+    assert_eq!(session.history_steps(), history);
     run(
         &mut session,
-        json!({"type":"modify","kind":"move","targets":[{"handle":driver}],"delta":[0.1,0]}),
+        json!({"type":"draw","kind":"line","a":[100,100],"b":[101,100]}),
     );
     let common = session
         .drawing

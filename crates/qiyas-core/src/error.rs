@@ -11,7 +11,7 @@ pub enum CoreError {
     Io(#[from] std::io::Error),
     #[error("No sheet named {0}")]
     NoSuchSheet(String),
-    #[error("No entity with handle {0:X}")]
+    #[error("No entity with handle {0}")]
     NoSuchEntity(u64),
     #[error("{0}")]
     InvalidCommand(String),

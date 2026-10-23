@@ -275,14 +275,17 @@ fn a_point_is_painted_at_its_place_and_never_measured() {
     let point = EntityType::Point(Point::at(Vector3::new(3.0, 4.0, 0.0)));
     let paths = painted(&doc, &point);
     assert_eq!(paths.len(), 1);
-    assert_eq!(paths[0].paint, Paint::Point { size: 0.0 });
+    assert_eq!(paths[0].paint, Paint::Point { size: 0.0, mode: 0 });
     assert_eq!(paths[0].path.points, [[3.0, 4.0]]);
     assert!(flatten(&doc, &point, &Xform::identity(), 1e-3)
         .into_paths()
         .is_empty());
     // The drawing's PDSIZE, when positive, is its size.
     doc.header.point_display_size = 0.5;
-    assert_eq!(painted(&doc, &point)[0].paint, Paint::Point { size: 0.5 });
+    assert_eq!(
+        painted(&doc, &point)[0].paint,
+        Paint::Point { size: 0.5, mode: 0 }
+    );
 }
 
 /// The spline through four fit points, as the draw command stores it: the cubic's control

@@ -1,0 +1,12 @@
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "kid": "qiyas-test-only",
+      "use": "sig",
+      "alg": "RS256",
+      "n": "yGaCMK3RdAX-sLXEzbkVtkTYShI0EWO2lRoaaeHXnoOaL60m4GQIpbBb2kG_Wq_pXYR9n_BmDl9WlLFCO4yYSXMmiyeaTN8Hq98zz33xiwx2PJIQrxSzCTEiEeZ79N1zP4B2tQfG2Hy4B_-nmBlxnCwIFQMpe54Kofxp5WybTMFU5QA1bAkVXjXQyLWEJbmdbwc10Ajmd0m2S-d2mSK2BNQW7IWRyuVzmgHjsq3sb2UcmIOvCBi6BT5Xgu57wi-L0kFdk1jnVaWSuEeZTihLEgtVuMJH_t-pARc8P_jj315rEmjyh7Toc7GcQD5lRUuG5ofO-FRjzZ1MDgQE2YOGIw",
+      "e": "AQAB"
+    }
+  ]
+}

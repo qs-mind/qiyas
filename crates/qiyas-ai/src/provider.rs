@@ -20,6 +20,16 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
+    /// A local agent owns its tool loop and must never be restarted automatically.
+    fn owns_turn(&self) -> bool {
+        false
+    }
+
+    fn set_host(&mut self, _host: std::sync::Arc<dyn crate::DrawingHost>) {}
+
+    /// Original user words, before drawing context is appended. Only these name allowed files.
+    fn begin_turn(&self, _user_text: &str) {}
+
     /// Current request/cost limits, supplied by a metered host without changing the system.
     fn budget_notice(&self) -> Option<String> {
         None
@@ -153,8 +163,17 @@ pub enum ResultPart {
 /// What arrives while a turn streams.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// A local agent has already performed this activity through Qiyas's MCP server.
+    Activity(Box<crate::AgentEvent>),
     /// The optional fields in an actual HTTP request, including retries after a refusal.
     RequestSent(String),
+    /// A bounded wait, visible in the log and window. Failed partial text is discarded.
+    Retrying {
+        seconds: u64,
+        code: String,
+        diagnostic: String,
+        discard_partial: bool,
+    },
     TextDelta(String),
     ToolUseStart {
         id: String,
@@ -220,13 +239,19 @@ pub struct TurnResult {
 /// Errors from a provider. None of them ever holds the API key.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AiError {
+    /// A scrubbed eligibility/consent refusal from OpenAI, shown in its own words.
+    #[error("ChatGPT: {0}")]
+    ChatgptDenied(String),
+    /// A fixed translated subscription error. Never includes child stderr or credentials.
+    #[error("{0}")]
+    Subscription(&'static str),
     #[error("{service} has no model {model}: choose one in Settings")]
     ModelNotFound { service: String, model: String },
     #[error("The API key was refused. Check it in Settings.")]
     Auth,
     #[error("The AI service is busy or the rate limit was reached; try again shortly")]
     RateLimited { retry_after: Option<u64> },
-    /// `body` is the service's whole answer (scrubbed, clipped), for the log. `request` is, for
+    /// `body` is the service's whole scrubbed answer, classified before log clipping. `request` is, for
     /// a 4xx, the JSON that was sent as `request_for_log` writes it, so the log shows what the
     /// service refused.
     #[error("The AI service answered {status}: {message}")]
@@ -238,6 +263,8 @@ pub enum AiError {
     },
     #[error("Could not reach the AI service: {0}")]
     Network(String),
+    #[error("The AI service took too long to answer: {0}")]
+    Timeout(String),
     /// The stream broke off or carried an error event.
     #[error("The AI service's answer broke off: {0}")]
     Stream(String),
@@ -249,27 +276,7 @@ pub enum AiError {
 impl AiError {
     /// Give both providers the same actionable model selection error.
     pub(crate) fn for_model(self, service: &str, model: &str) -> AiError {
-        let missing = match &self {
-            AiError::Api { status, body, .. } => {
-                let value: Value = serde_json::from_str(body).unwrap_or_default();
-                let error = if value.is_array() {
-                    &value[0]["error"]
-                } else {
-                    &value["error"]
-                };
-                *status == 404
-                    || ["type", "code"].iter().any(|key| {
-                        matches!(
-                            error[*key].as_str(),
-                            Some("model_not_found" | "not_found_error" | "model_not_found_error")
-                        )
-                    })
-            }
-            AiError::Stream(message) => {
-                message.contains("model_not_found") || message.contains("not_found_error")
-            }
-            _ => false,
-        };
+        let missing = self.code() == "model_not_found";
         if missing {
             AiError::ModelNotFound {
                 service: service.into(),
@@ -294,8 +301,10 @@ impl AiError {
                 body: scrub(&body, secret),
                 request: request.map(|r| scrub(&r, secret)),
             },
+            AiError::Timeout(m) => AiError::Timeout(scrub(&m, secret)),
             AiError::Network(m) => AiError::Network(scrub(&m, secret)),
             AiError::Stream(m) => AiError::Stream(scrub(&m, secret)),
+            AiError::ChatgptDenied(m) => AiError::ChatgptDenied(scrub(&m, secret)),
             other => other,
         }
     }
@@ -345,73 +354,105 @@ pub(crate) fn http_client() -> reqwest::Client {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(30))
         // No byte for this long means the connection is dead (the API pings while it thinks).
         .read_timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(600))
         .build()
-        .unwrap_or_default()
+        .expect("valid provider HTTP client configuration")
 }
 
-/// Sends the request built by `make`, retrying busy/rate-limit replies for up to two minutes, and maps failures to
-/// `AiError`. `make` is called again for the retry. `body` is the JSON `make` sends, kept in a
-/// 4xx error for the log (the key is a header, never in it).
-pub(crate) async fn send(
-    make: impl Fn() -> reqwest::RequestBuilder,
-    secret: &str,
-    body: &Value,
-) -> Result<reqwest::Response, AiError> {
-    send_with_retry(make, secret, body, true).await
-}
-
-/// Budgeted evaluations reserve one request, so they must disable the automatic retry.
+/// Sends one request. The complete error body is classified before deciding to retry.
 pub(crate) async fn send_with_retry(
     make: impl Fn() -> reqwest::RequestBuilder,
     secret: &str,
     body: &Value,
     allow_retry: bool,
+    sink: Sink<'_>,
 ) -> Result<reqwest::Response, AiError> {
     let mut backoff = RetryBackoff::default();
     let started = tokio::time::Instant::now();
     loop {
-        let response = make()
-            .send()
-            .await
-            .map_err(|e| network(e).scrubbed(secret))?;
-        let status = response.status().as_u16();
-        if response.status().is_success() {
-            return Ok(response);
-        }
-        if matches!(status, 429 | 503 | 529) {
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| retry_after_seconds(v, chrono::Utc::now()));
-            let delay = allow_retry
-                .then(|| backoff.next_delay(retry_after, started.elapsed()))
-                .flatten();
-            let Some(delay) = delay else {
+        sink(StreamEvent::RequestSent(sent_fields(body)));
+        let (error, retry_after) = match make().send().await {
+            Ok(response) if response.status().is_success() => return Ok(response),
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| retry_after_seconds(v, chrono::Utc::now()));
+                let error = match response.text().await {
+                    Ok(answer) => response_error(status, &answer, body, secret),
+                    Err(error) => network(error).scrubbed(secret),
+                };
+                (error, retry_after)
+            }
+            Err(e) => (network(e).scrubbed(secret), None),
+        };
+        let delay = (allow_retry && error.retryable())
+            .then(|| backoff.next_delay(retry_after, started.elapsed()))
+            .flatten();
+        let Some(delay) = delay else {
+            // Metered hosts reserve their own rate-limit retries. Quota/billing errors
+            // retain their classification and must never enter that path.
+            if matches!(error, AiError::Api { status: 429, .. }) && error.code() == "rate_limited" {
                 return Err(AiError::RateLimited { retry_after });
-            };
-            drop(response);
-            tokio::time::sleep(delay).await;
-            continue;
-        }
-        if status == 401 {
-            return Err(AiError::Auth);
-        }
-        // Scrubbed before `error_message` may cut the body short, so no part of the key is left.
-        let answer = scrub(&response.text().await.unwrap_or_default(), secret);
-        let request = (400..500)
-            .contains(&status)
-            .then(|| request_for_log(body, secret));
-        return Err(AiError::Api {
-            status,
-            message: error_message(&answer),
-            body: crate::log::clip(&answer),
-            request,
+            }
+            return Err(error);
+        };
+        sink(StreamEvent::Retrying {
+            seconds: delay.as_secs(),
+            code: format!("ai.error.{}", error.code()),
+            diagnostic: error.to_string(),
+            discard_partial: false,
         });
+        tokio::time::sleep(delay).await;
     }
+}
+
+/// Keep the full scrubbed reply for classification; only the support log clips it.
+pub(crate) fn response_error(status: u16, answer: &str, body: &Value, secret: &str) -> AiError {
+    let answer = scrub(answer, secret);
+    let error = AiError::Api {
+        status,
+        message: error_message(&answer),
+        body: answer,
+        request: (400..500)
+            .contains(&status)
+            .then(|| request_for_log(body, secret)),
+    };
+    if error.code() == "auth" {
+        AiError::Auth
+    } else {
+        error
+    }
+}
+
+/// No tool executes until a complete answer is received, so a failed stream can be retried.
+/// Metered hosts disable this: every request needs its own reservation.
+pub(crate) async fn retry_stream(
+    error: &AiError,
+    allow_retry: bool,
+    backoff: &mut RetryBackoff,
+    started: tokio::time::Instant,
+    sink: Sink<'_>,
+    discard_partial: bool,
+) -> bool {
+    let delay = (allow_retry && error.retryable())
+        .then(|| backoff.next_delay(None, started.elapsed()))
+        .flatten();
+    let Some(delay) = delay else { return false };
+    sink(StreamEvent::Retrying {
+        seconds: delay.as_secs(),
+        code: format!("ai.error.{}", error.code()),
+        diagnostic: error.to_string(),
+        discard_partial,
+    });
+    tokio::time::sleep(delay).await;
+    true
 }
 
 fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
@@ -529,7 +570,20 @@ pub(crate) fn scrub(text: &str, secret: &str) -> String {
 }
 
 pub(crate) fn network(e: reqwest::Error) -> AiError {
-    AiError::Network(e.without_url().to_string())
+    let timeout = e.is_timeout();
+    let error = e.without_url();
+    let mut detail = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        // Sources name DNS, TLS and connection failures; request URLs are removed above.
+        detail.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    if timeout {
+        AiError::Timeout(detail)
+    } else {
+        AiError::Network(detail)
+    }
 }
 
 /// `error.message` from an error body (Gemini sends `[{"error": ...}]`), or the start of the
@@ -594,7 +648,10 @@ pub(crate) async fn read_events(
     mut on_event: impl FnMut(SseEvent) -> Result<bool, AiError>,
 ) -> Result<(), AiError> {
     let mut reader = SseReader::default();
-    while let Some(chunk) = response.chunk().await.map_err(network)? {
+    while let Some(chunk) = response.chunk().await.map_err(|e| match network(e) {
+        AiError::Network(message) => AiError::Stream(message),
+        other => other,
+    })? {
         reader.push(&chunk);
         while let Some(event) = reader.next_event() {
             if on_event(event)? {
@@ -611,6 +668,18 @@ pub(crate) async fn read_events(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn quota_codes_after_long_metadata_are_not_lost_before_retry_classification() {
+        let answer = format!(
+            r#"{{"metadata":"{}","error":{{"code":"insufficient_quota"}}}}"#,
+            "x".repeat(crate::log::MAX_TEXT + 100)
+        );
+        let error = response_error(429, &answer, &Value::Null, "");
+        assert_eq!(error.code(), "billing");
+        assert!(!error.retryable());
+        assert!(error.for_window().contains("ai.error.billing"));
+    }
 
     #[test]
     fn the_logged_request_hides_pictures_tools_and_the_system_prompt() {
@@ -701,7 +770,7 @@ mod tests {
     fn missing_models_name_the_service_and_settings_for_both_providers() {
         for service in ["Anthropic", "api.example.test"] {
             for (status, body) in [
-                (404, "{}"),
+                (404, r#"{"error":{"message":"Model not found"}}"#),
                 (400, r#"{"error":{"code":"model_not_found"}}"#),
                 (400, r#"{"error":{"type":"not_found_error"}}"#),
             ] {

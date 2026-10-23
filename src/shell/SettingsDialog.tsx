@@ -1,5 +1,8 @@
+import { uiError } from "../i18n/errors";
+import { SupportLog } from "./SupportLog";
 import { useEffect, useState } from "react";
 import {
+  aiModels,
   appDir,
   deleteApiKey,
   EFFORTS,
@@ -13,13 +16,20 @@ import {
   type McpStatus,
   type MeasurementMethod,
   type Provider,
+  type ProviderProfile,
   type Settings,
 } from "../api";
 import { normalizeDigits } from "../tools/commandParser";
 import { useT } from "../i18n";
 import { ModalDialog } from "../ui/ModalDialog";
 import { ModelPicker } from "./ModelPicker";
+import { SubscriptionSettings } from "./SubscriptionSettings";
 
+
+// Names only. Rules are authored by Mizan and stored with each drawing.
+const STANDARD_METHODS = ["POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4"];
+const LOCAL_METHODS = ["Egypt", "KSA", "UAE"];
+const OTHER_METHOD = "\u0000other";
 
 /** The MCP bridge next to the app, with the platform's separator and extension. */
 function bridgePath(dir: string) {
@@ -44,6 +54,8 @@ export function mcpSnippets(dir: string, token: string) {
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
   const [draft, setDraft] = useState<Settings | null>(null);
+  const [savedAddress, setSavedAddress] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [dir, setDir] = useState("");
   /** A key is in the keychain for the chosen provider. */
   const [keySaved, setKeySaved] = useState(false);
@@ -54,12 +66,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [minutes, setMinutes] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [otherMethod, setOtherMethod] = useState(false);
   const [methods, setMethods] = useState<MeasurementMethod[]>([]);
 
   useEffect(() => {
     getSettings()
-      .then(setDraft)
-      .catch((e) => setError(String(e)));
+      .then((s) => { setDraft(s); setSavedAddress(s.providers.openai_compatible.base_url ?? null); })
+      .catch((e) => setError(uiError(e)));
     appDir()
       .then(setDir)
       .catch(() => setDir(""));
@@ -68,12 +81,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .catch(() => setMcp(null));
     measurementMethods()
       .then(setMethods)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(uiError(e)));
   }, []);
 
+  const methodNames = [...STANDARD_METHODS, ...LOCAL_METHODS.map((country) => `Local practice – ${country}`), ...methods.map((method) => method.name)];
+  const customMethod = otherMethod || !!(draft?.measurement_method && !methodNames.includes(draft.measurement_method));
   const provider = draft?.provider;
   useEffect(() => {
-    if (!provider) return;
+    if (!provider || provider === "chatgpt_plan" || provider === "claude_code") return;
     let current = true;
     setKeySaved(false);
     // No keychain reads as no key; saving one then says why it can't.
@@ -84,11 +99,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, [provider]);
 
   const change = (patch: Partial<Settings>) => setDraft((d) => (d ? { ...d, ...patch } : d));
-  const profile = draft?.providers[draft.provider];
-  const changeProfile = (patch: Partial<Settings["providers"][Provider]>) =>
+  const subscription = provider === "chatgpt_plan" || provider === "claude_code";
+  const profile = draft ? (draft.providers[draft.provider] ?? { model: "" }) : undefined;
+  const keySavedHere = keySaved && (draft?.provider === "anthropic" || (profile?.base_url ?? null) === savedAddress);
+  const changeProfile = (patch: Partial<ProviderProfile>) =>
     setDraft((d) => d ? {
       ...d,
-      providers: { ...d.providers, [d.provider]: { ...d.providers[d.provider], ...patch } },
+      providers: { ...d.providers, [d.provider]: { model: "", ...d.providers[d.provider], ...patch } },
     } : d);
 
   async function save() {
@@ -104,13 +121,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       }
       if (n !== (draft.autosave_minutes ?? 5)) next = { ...draft, autosave_minutes: n };
     }
+    setSaving(true);
     try {
+      const profile = next.providers[next.provider] ?? { model: "" };
+      if (!subscription && profile.model.trim()) {
+        const list = await aiModels(next.provider, profile.base_url ?? null, key || undefined);
+        if (list.from_service && !list.models.some((model) => model.id === profile.model)) {
+          setError(t("ai.error.model_not_found"));
+          return;
+        }
+      }
       await setSettings(next);
-      if (key.trim()) await setApiKey(draft.provider, key);
+      if (!subscription && key.trim()) await setApiKey(draft.provider, key);
       onClose();
     } catch (e) {
-      setError(String(e));
-    }
+      setError(uiError(e));
+    } finally { setSaving(false); }
   }
 
   async function removeKey() {
@@ -120,7 +146,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       setKeySaved(false);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -129,7 +155,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       await navigator.clipboard.writeText(text);
       setCopied(name);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -160,18 +186,25 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               >
                 <option value="anthropic">{t("settings.providerAnthropic")}</option>
                 <option value="openai_compatible">{t("settings.providerOpenai")}</option>
+                <option value="chatgpt_plan">{t("settings.providerChatgpt")}</option>
+                <option value="claude_code">{t("settings.providerClaudeCode")}</option>
               </select>
             </label>
-            <div className="field">
+            <p>{t(`settings.providerDescription.${draft.provider}`)}</p>
+            {subscription && <SubscriptionSettings provider={draft.provider} model={profile.model} onModel={(model) => changeProfile({ model })} executable={draft.claude_executable ?? ""} onExecutable={(claude_executable) => change({ claude_executable })} />}
+            {draft.provider !== "chatgpt_plan" && <div className="field">
               <span>{t("settings.model")}</span>
-              <ModelPicker
+              {subscription ? <input aria-label={t("settings.model")} dir="ltr" value={profile.model}
+                placeholder={t("settings.claudeDefaultModel")}
+                onChange={(e) => changeProfile({ model: e.target.value })} /> : <ModelPicker
                 key={draft.provider}
                 provider={draft.provider}
                 baseUrl={profile.base_url ?? null}
                 value={profile.model}
+                typedKey={key}
                 onChange={(model) => changeProfile({ model })}
-              />
-            </div>
+              />}
+            </div>}
             {draft.provider === "openai_compatible" && (
               <label>
                 <span>{t("settings.baseUrl")}</span>
@@ -180,23 +213,23 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   type="url"
                   placeholder="http://localhost:11434/v1"
                   value={profile.base_url ?? ""}
-                  onChange={(e) => changeProfile({ base_url: e.target.value || null })}
+                  onChange={(e) => { changeProfile({ base_url: e.target.value || null }); setKey(""); }}
                 />
               </label>
             )}
-            <label>
+            {!subscription && <label>
               <span>{t("settings.effort")}</span>
               <select
-                value={draft.effort}
-                onChange={(e) => change({ effort: e.target.value as Effort })}
+                value={profile.effort ?? (draft.provider === "anthropic" ? "medium" : "low")}
+                onChange={(e) => changeProfile({ effort: e.target.value as Effort })}
               >
-                {EFFORTS.map((x) => (
+                {EFFORTS.filter((x) => draft.provider === "anthropic" || !["xhigh", "max"].includes(x)).map((x) => (
                   <option key={x} value={x}>
                     {t(`effort.${x}`)}
                   </option>
                 ))}
               </select>
-            </label>
+            </label>}
             <label>
               <span>{t("settings.autonomy")}</span>
               <select
@@ -211,16 +244,24 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <label>
               <span>{t("settings.measurementMethod")}</span>
               <select
-                value={draft.measurement_method ?? ""}
-                onChange={(e) => change({ measurement_method: e.target.value || null })}
+                value={customMethod ? OTHER_METHOD : draft.measurement_method ?? ""}
+                onChange={(e) => {
+                  setOtherMethod(e.target.value === OTHER_METHOD);
+                  change({ measurement_method: e.target.value === OTHER_METHOD ? "" : e.target.value || null });
+                }}
               >
                 <option value="">{t("settings.geometric")}</option>
-                {draft.measurement_method && !methods.some((m) => m.name === draft.measurement_method) && (
-                  <option value={draft.measurement_method}>{draft.measurement_method} {t("settings.methodMissing")}</option>
-                )}
-                {methods.map((method) => <option key={method.name} value={method.name}>{method.title}</option>)}
+                {STANDARD_METHODS.map((name) => <option key={name} value={name}>{name}</option>)}
+                {LOCAL_METHODS.map((country) => <option key={country} value={`Local practice – ${country}`}>{t(`settings.method${country}`)}</option>)}
+                {methods.filter((method) => !STANDARD_METHODS.includes(method.name) && !LOCAL_METHODS.some((country) => method.name === `Local practice – ${country}`)).map((method) => <option key={method.name} value={method.name}>{method.name}</option>)}
+                <option value={OTHER_METHOD}>{t("settings.methodOther")}</option>
               </select>
             </label>
+            {customMethod && <label>
+              <span>{t("settings.methodName")}</span>
+              <input dir="auto" value={draft.measurement_method ?? ""} placeholder="ARM4, MMHW"
+                onChange={(e) => change({ measurement_method: e.target.value })} />
+            </label>}
             <label>
               <span>{t("settings.autosave")}</span>
               <input
@@ -230,10 +271,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 onChange={(e) => setMinutes(e.target.value)}
               />
             </label>
-            <div className="field">
+            {!subscription && <div className="field">
               <span>
                 <label htmlFor="settings-key">{t("settings.apiKey")}</label>
-                {keySaved && <span className="badge">{t("settings.saved")}</span>}
+                {keySavedHere && <span className="badge">{t("settings.saved")}</span>}
               </span>
               <span className="row">
                 <input
@@ -241,17 +282,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   dir="ltr"
                   type="password"
                   autoComplete="off"
-                  placeholder={keySaved ? "••••••••" : ""}
+                  placeholder={keySavedHere ? "••••••••" : ""}
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                 />
-                {keySaved && (
+                {keySavedHere && (
                   <button type="button" onClick={removeKey}>
                     {t("settings.remove")}
                   </button>
                 )}
               </span>
-            </div>
+            </div>}
 
             <fieldset>
               <legend className="heading">{t("settings.mcp")}</legend>
@@ -267,7 +308,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <p className="status" role="status">
                   {mcp.listening
                     ? t("settings.mcpListening", { addr: mcp.addr ?? "" })
-                    : (mcp.error ?? t("settings.mcpStopped"))}
+                    : (mcp.error ? uiError(mcp.error) : t("settings.mcpStopped"))}
                 </p>
               )}
               <label>
@@ -285,6 +326,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <label htmlFor="settings-token">{t("settings.token")}</label>
                 <span className="row">
                   <input id="settings-token" dir="ltr" readOnly value={draft.mcp_token} />
+                  <button type="button" onClick={() => {
+                    const bytes = crypto.getRandomValues(new Uint8Array(16));
+                    change({ mcp_token: Array.from(bytes, (n) => n.toString(16).padStart(2, "0")).join("") });
+                  }}>{t("settings.rotateToken")}</button>
                   <button type="button" onClick={() => copy("token", draft.mcp_token)}>
                     {copied === "token" ? t("settings.copied") : t("settings.copy")}
                   </button>
@@ -307,6 +352,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </fieldset>
           </>
         )}
+        <SupportLog />
         {error && (
           <p className="error" role="alert">
             {error}
@@ -316,7 +362,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <button type="button" onClick={onClose}>
             {t("settings.cancel")}
           </button>
-          <button type="submit" className="primary" disabled={!draft}>
+          <button type="submit" className="primary" disabled={!draft || saving}>
             {t("settings.save")}
           </button>
         </div>

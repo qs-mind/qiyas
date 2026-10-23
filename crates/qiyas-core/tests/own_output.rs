@@ -262,6 +262,8 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     } else if name.starts_with("recognition.") {
         let unit = 1.0 / session.drawing.units.to_metres();
         if name == "recognition.pdf_text" {
+            // The imported source has 1.7 mm labels at 1:100; its readable sheet is 1:50.
+            added_by(session, json!({"type":"annotation_scale","name":"1:50"}));
             example["path"] = json!(qiyas_pdf::fixtures::write_text_scale(
                 session.drawing.path.parent().unwrap(),
             ));
@@ -364,6 +366,20 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
         } else {
             result.inserts
         };
+    } else if name == "auto_place" {
+        handles = added_by(
+            session,
+            json!({"type":"text","at":[0,5],"height":0.25,"value":"Label"}),
+        );
+    } else if name == "object_tags" {
+        added_by(
+            session,
+            json!({"type":"define_object_type","definition":{"name":"Tag target","category":"Example","geometry":"point","properties":{"mark":{"kind":"text","default":"A1"}}}}),
+        );
+        handles = added_by(
+            session,
+            json!({"type":"place_objects","objects":[{"type":"Tag target","points":[[0,0]]}]}),
+        );
     } else if name == "edit_text" {
         handles = added_by(
             session,
@@ -756,7 +772,11 @@ fn registry_drawing_examples_pass_the_general_check_in_every_unit() {
                 }
             }
         }
-        println!("units {units}: {example_count} examples, {} commands/kinds executed, {} produced geometry", executed.len(), produced.len());
+        println!(
+            "units {units}: {example_count} examples, {} commands/kinds executed, {} produced geometry",
+            executed.len(),
+            produced.len()
+        );
         for info in registry().commands().iter().filter(|c| {
             c.effect == Effect::Edit
                 && (c.category == "draw"

@@ -17,7 +17,7 @@ const FILE: &str = "settings.json";
 /// Drawings kept in the Open menu's recent list.
 pub const MAX_RECENTS: usize = 10;
 
-pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub const EFFORTS: [&str; 6] = ["none", "low", "medium", "high", "xhigh", "max"];
 
 /// Buttons the tool palette keeps at most.
 pub const MAX_PALETTE: usize = 100;
@@ -74,6 +74,8 @@ pub enum Provider {
     #[default]
     Anthropic,
     OpenaiCompatible,
+    ChatgptPlan,
+    ClaudeCode,
 }
 
 impl Provider {
@@ -82,19 +84,28 @@ impl Provider {
         match self {
             Provider::Anthropic => "anthropic",
             Provider::OpenaiCompatible => "openai_compatible",
+            Provider::ChatgptPlan => "chatgpt_plan",
+            Provider::ClaudeCode => "claude_code",
         }
     }
 
     pub fn from_name(name: &str) -> Option<Provider> {
-        [Provider::Anthropic, Provider::OpenaiCompatible]
-            .into_iter()
-            .find(|p| p.name() == name)
+        [
+            Provider::Anthropic,
+            Provider::OpenaiCompatible,
+            Provider::ChatgptPlan,
+            Provider::ClaudeCode,
+        ]
+        .into_iter()
+        .find(|p| p.name() == name)
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct ProviderProfile {
+    /// Independent effort for this provider; absent profiles use the provider default.
+    pub effort: Option<String>,
     /// Used exactly as typed.
     pub model: String,
     /// Only OpenAI-compatible services use an address.
@@ -104,6 +115,7 @@ pub struct ProviderProfile {
 
 fn anthropic_profile() -> ProviderProfile {
     ProviderProfile {
+        effort: None,
         model: "claude-opus-5-5".into(),
         base_url: None,
     }
@@ -114,6 +126,8 @@ fn anthropic_profile() -> ProviderProfile {
 pub struct ProviderProfiles {
     pub anthropic: ProviderProfile,
     pub openai_compatible: ProviderProfile,
+    pub chatgpt_plan: ProviderProfile,
+    pub claude_code: ProviderProfile,
 }
 
 impl Default for ProviderProfiles {
@@ -121,6 +135,8 @@ impl Default for ProviderProfiles {
         Self {
             anthropic: anthropic_profile(),
             openai_compatible: ProviderProfile::default(),
+            chatgpt_plan: ProviderProfile::default(),
+            claude_code: ProviderProfile::default(),
         }
     }
 }
@@ -129,13 +145,15 @@ impl Default for ProviderProfiles {
 #[serde(default)]
 pub struct Settings {
     pub provider: Provider,
+    /// Empty uses the user-installed command on PATH; never downloaded by Qiyas.
+    pub claude_executable: Option<String>,
     /// Each provider keeps its own model and address when the chosen provider changes.
     pub providers: ProviderProfiles,
-    /// One of `EFFORTS`.
+    /// Legacy effort, migrated into the selected profile when loading older settings.
     pub effort: String,
     /// When Mizan waits for approval of its plan.
     pub autonomy: qiyas_ai::Autonomy,
-    /// The name of a local measurement rule set; none means geometric quantities.
+    /// The selected measurement method name; local rules are optional. None means geometric quantities.
     pub measurement_method: Option<String>,
     pub mcp_enabled: bool,
     pub mcp_port: u16,
@@ -189,10 +207,23 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn effective_effort(&self) -> &str {
+        self.profile()
+            .effort
+            .as_deref()
+            .unwrap_or(match self.provider {
+                Provider::Anthropic => "medium",
+                Provider::OpenaiCompatible => "low",
+                Provider::ChatgptPlan | Provider::ClaudeCode => "none",
+            })
+    }
+
     pub fn profile(&self) -> &ProviderProfile {
         match self.provider {
             Provider::Anthropic => &self.providers.anthropic,
             Provider::OpenaiCompatible => &self.providers.openai_compatible,
+            Provider::ChatgptPlan => &self.providers.chatgpt_plan,
+            Provider::ClaudeCode => &self.providers.claude_code,
         }
     }
 
@@ -200,6 +231,8 @@ impl Settings {
         match self.provider {
             Provider::Anthropic => &mut self.providers.anthropic,
             Provider::OpenaiCompatible => &mut self.providers.openai_compatible,
+            Provider::ChatgptPlan => &mut self.providers.chatgpt_plan,
+            Provider::ClaudeCode => &mut self.providers.claude_code,
         }
     }
 
@@ -217,8 +250,9 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             provider: Provider::Anthropic,
+            claude_executable: None,
             providers: ProviderProfiles::default(),
-            effort: "high".into(),
+            effort: "medium".into(),
             autonomy: qiyas_ai::Autonomy::default(),
             measurement_method: None,
             mcp_enabled: false,
@@ -266,6 +300,15 @@ fn valid_token(token: &str) -> bool {
 
 /// Checks settings coming from the window before they are kept.
 pub fn validate(s: &Settings) -> Result<(), String> {
+    if let Some(base) = s
+        .providers
+        .openai_compatible
+        .base_url
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        qiyas_ai::endpoint::normalize(base)?;
+    }
     if s.measurement_method
         .as_ref()
         .is_some_and(|name| name.trim().is_empty())
@@ -279,11 +322,22 @@ pub fn validate(s: &Settings) -> Result<(), String> {
         ));
     }
     if !EFFORTS.contains(&s.effort.as_str()) {
-        return Err(format!(
-            "Unknown effort \"{}\": use one of {}",
-            s.effort,
-            EFFORTS.join(", ")
-        ));
+        return Err(format!("Unknown effort: {}", s.effort));
+    }
+    for (provider, profile) in [
+        (Provider::Anthropic, &s.providers.anthropic),
+        (Provider::OpenaiCompatible, &s.providers.openai_compatible),
+    ] {
+        if let Some(effort) = &profile.effort {
+            let allowed = if provider == Provider::Anthropic {
+                &EFFORTS[..]
+            } else {
+                &EFFORTS[..4]
+            };
+            if !allowed.contains(&effort.as_str()) {
+                return Err("Choose a supported effort for this provider".into());
+            }
+        }
     }
     if s.provider == Provider::Anthropic && s.profile().model.trim().is_empty() {
         return Err("The model is empty".into());
@@ -518,6 +572,36 @@ fn read_settings(text: &str) -> Result<(Settings, bool), serde_json::Error> {
                     serde_json::Value::Object(profile)
                 });
             }
+        }
+    }
+    if let Some(legacy) = value["effort"].as_str().map(str::to_string) {
+        let provider = value["provider"]
+            .as_str()
+            .unwrap_or("anthropic")
+            .to_string();
+        if value["providers"][&provider]
+            .as_object()
+            .is_none_or(|p| !p.contains_key("effort"))
+        {
+            if value["providers"].is_null() {
+                value["providers"] = serde_json::json!({});
+            }
+            if value["providers"][&provider].is_null() {
+                value["providers"][&provider] = serde_json::to_value(if provider == "anthropic" {
+                    anthropic_profile()
+                } else {
+                    ProviderProfile::default()
+                })
+                .expect("provider profile");
+            }
+            let effort =
+                if provider == "openai_compatible" && matches!(legacy.as_str(), "xhigh" | "max") {
+                    "high".into()
+                } else {
+                    legacy
+                };
+            value["providers"][&provider]["effort"] = serde_json::json!(effort);
+            migrated = true;
         }
     }
     serde_json::from_value(value).map(|settings| (settings, migrated))

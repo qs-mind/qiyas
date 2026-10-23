@@ -65,7 +65,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 13px/1.4 "Instrument Sans", system-ui, sans-serif;
+  font: 13px/1.4 "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
 }
 
 :root[dir="rtl"] body,
@@ -73,7 +73,7 @@ body {
   font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
 }
 
-:root[dir="rtl"] :is(h1, h2, .heading) {
+:is(h1, h2, h3, h4, h5, h6, legend, .heading, [role="tab"]) {
   font-feature-settings: "swsh";
 }
 
@@ -2046,7 +2046,7 @@ span.grid-sort {
 .settings pre {
   margin: 0;
   padding: 6px 8px;
-  font: 12px/1.4 ui-monospace, monospace;
+  font: 12px/1.4 "Thmanyah Sans", ui-monospace, monospace;
   white-space: pre-wrap;
   word-break: break-all;
   background: var(--panel);
@@ -2543,7 +2543,7 @@ span.grid-sort {
   overflow: auto;
   margin: 0;
   padding: 6px 10px 10px;
-  font: 11px/1.45 ui-monospace, monospace;
+  font: 11px/1.45 "Thmanyah Sans", ui-monospace, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
@@ -2584,7 +2584,7 @@ span.grid-sort {
   padding-inline-start: 18px;
 }
 .msg code {
-  font: 12px ui-monospace, monospace;
+  font: 12px "Thmanyah Sans", ui-monospace, monospace;
   padding: 0 3px;
   background: var(--hover);
   border-radius: 3px;
@@ -3160,7 +3160,7 @@ span.grid-sort {
 .command-input input {
   flex: 1;
   min-width: 0;
-  font: 12px/1.4 ui-monospace, monospace;
+  font: 12px/1.4 "Thmanyah Sans", ui-monospace, monospace;
   color: var(--fg);
   /* Part of the prompt's line, not a second bar: a box only on hover and while typing. */
   background: transparent;
@@ -3208,7 +3208,7 @@ span.grid-sort {
   gap: 16px;
   padding: 1px 8px;
   border-radius: 4px;
-  font-family: ui-monospace, monospace;
+  font-family: "Thmanyah Sans", ui-monospace, monospace;
   cursor: pointer;
 }
 .cmd-item[data-selected="true"],
@@ -3641,3 +3641,24 @@ span.grid-sort {
 .projects-list li p { width: 100%; margin: 0; }
 .projects-list button[aria-pressed="true"] { color: var(--accent); }
 .projects-panel p { overflow-wrap: anywhere; }
+
+/* Arabic glyphs keep their own font in controls, code and mixed-language content. */
+input, select, textarea { font: inherit; }
+code, kbd, .chip, .md strong { unicode-bidi: isolate; }
+.left, .layer-tree { overflow-x: hidden; }
+.layers, .layer-new, .layers-foot { min-width: 0; max-width: 100%; }
+.layer-row { user-select: none; }
+.layer-more { position: static; padding-inline: 0; }
+.layer-new { flex-wrap: wrap; }
+.layer-new input { width: 0; flex-basis: 90px; }
+.layer-new button { flex-shrink: 0; }
+.layer-props { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+.layer-folders { display: flex; gap: 6px; padding: 0 10px 6px; align-items: center; }
+.layer-group { border-top: 1px solid var(--rule); margin-top: 4px; }
+.layer-group .folder { width: 14px; height: 14px; fill: none; stroke: currentColor; flex: none; }
+.layer-count { white-space: nowrap; }
+.technical-details { font-size: 12px; color: var(--muted); min-width: 0; }
+.technical-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+.tool-card.error { border-color: var(--rule); background: transparent; color: var(--muted); }
+.tool-card.error .tool-state { color: var(--muted); }
+.support-log { margin-block: 12px; }

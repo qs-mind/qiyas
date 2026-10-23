@@ -338,6 +338,7 @@ struct Mark {
     at: [f64; 2],
     /// Across, in drawing units; 0 sizes it from the sheet.
     size: f64,
+    mode: i16,
     rgb: u32,
     top: u64,
     entity: u64,
@@ -496,10 +497,11 @@ fn build(
                     });
                     continue;
                 }
-                Paint::Point { size } => {
+                Paint::Point { size, mode } => {
                     marks.push(Mark {
                         at: flat.path.points[0],
                         size: *size,
+                        mode: *mode,
                         rgb,
                         top,
                         entity: flat.entity,
@@ -653,16 +655,59 @@ const POINT_SHARE: f64 = 0.01;
 /// `size` across or `side * POINT_SHARE` without one, after the segments already there.
 fn add_marks(batch: &mut Batch, absolute: &mut Vec<[f64; 4]>, marks: &[Mark], side: f64) {
     for m in marks {
-        let half = if m.size > 0.0 {
+        let size = if m.size > 0.0 {
             m.size
+        } else if m.size < 0.0 {
+            side * -m.size / 100.0
         } else {
             side * POINT_SHARE
-        } / 2.0;
+        };
+        let half = size / 2.0;
         let [x, y] = m.at;
         let first = absolute.len() as u32;
-        absolute.push([x - half, y, x + half, y]);
-        absolute.push([x, y - half, x, y + half]);
-        batch.colors.extend([m.rgb, m.rgb]);
+        match m.mode & 15 {
+            1 => {}
+            2 => {
+                absolute.extend([[x - half, y, x + half, y], [x, y - half, x, y + half]]);
+            }
+            3 => {
+                absolute.extend([
+                    [x - half, y - half, x + half, y + half],
+                    [x - half, y + half, x + half, y - half],
+                ]);
+            }
+            4 => {
+                absolute.push([x, y, x, y + half]);
+            }
+            _ => {
+                let dot = side * 0.0002;
+                absolute.push([x - dot, y, x + dot, y]);
+            }
+        }
+        if m.mode & 32 != 0 {
+            for i in 0..32 {
+                let a = i as f64 * std::f64::consts::TAU / 32.0;
+                let b = (i + 1) as f64 * std::f64::consts::TAU / 32.0;
+                absolute.push([
+                    x + half * a.cos(),
+                    y + half * a.sin(),
+                    x + half * b.cos(),
+                    y + half * b.sin(),
+                ]);
+            }
+        }
+        if m.mode & 64 != 0 {
+            absolute.extend([
+                [x - half, y - half, x + half, y - half],
+                [x + half, y - half, x + half, y + half],
+                [x + half, y + half, x - half, y + half],
+                [x - half, y + half, x - half, y - half],
+            ]);
+        }
+        let count = absolute.len() as u32 - first;
+        batch
+            .colors
+            .extend(std::iter::repeat_n(m.rgb, count as usize));
         extend_ranges(
             &mut batch.ranges,
             Range {
@@ -670,7 +715,7 @@ fn add_marks(batch: &mut Batch, absolute: &mut Vec<[f64; 4]>, marks: &[Mark], si
                 entity: m.entity,
                 chain: m.chain,
                 first,
-                count: 2,
+                count,
                 flags: 0,
             },
         );

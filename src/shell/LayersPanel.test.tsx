@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { LayerInfo } from "../api";
 import { LayersPanel } from "./LayersPanel";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.clear(); });
 
 const layer = (name: string, frozen = false): LayerInfo => ({
   name,
@@ -198,7 +198,7 @@ test("new layer, layer states and the translator from the panel's foot", () => {
   expect(onNewLayer).toHaveBeenCalledWith("S-COLS");
   fireEvent.click(screen.getByRole("button", { name: "Layer states…" }));
   expect(onLayerStates).toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Translate layers…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Match layer names" }));
   expect(onTranslate).toHaveBeenCalled();
 });
 
@@ -258,6 +258,7 @@ test("a short list is a flat tree of layers, each a row with its level and posit
 
 test("a long list groups its layers by prefix: the groups are open, the layers under them one level in", () => {
   render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  if (!(screen.getByRole("checkbox", { name: "Show folders" }) as HTMLInputElement).checked) fireEvent.click(screen.getByRole("checkbox", { name: "Show folders" }));
   expect(screen.getAllByRole("treeitem").map((r) => r.getAttribute("aria-label"))).toEqual([
     "0", "A-", "A-DOOR", "A-ROOM", "A-WALL", "A-WINDOW", "COMMENTS", "E-", "E-LIGHT", "E-POWER", "S-", "S-COLUMN", "S-BEAM", "S-SLAB", "Z-TEMP",
   ]);
@@ -271,6 +272,7 @@ test("a long list groups its layers by prefix: the groups are open, the layers u
 
 test("the arrows, Home and End move between rows; Right opens a group and Left closes it", async () => {
   render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  if (!(screen.getByRole("checkbox", { name: "Show folders" }) as HTMLInputElement).checked) fireEvent.click(screen.getByRole("checkbox", { name: "Show folders" }));
   const rows = () => screen.getAllByRole("treeitem");
   // One row is the tab stop.
   expect(rows().filter((r) => r.tabIndex === 0)).toHaveLength(1);
@@ -311,11 +313,13 @@ test("the arrows, Home and End move between rows; Right opens a group and Left c
 test("a folded group stays folded: it is remembered on this computer", async () => {
   localStorage.clear();
   const first = render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  if (!(screen.getByRole("checkbox", { name: "Show folders" }) as HTMLInputElement).checked) fireEvent.click(screen.getByRole("checkbox", { name: "Show folders" }));
   fireEvent.click(rowOf("S-"));
   await settle();
   expect(rowOf("S-").getAttribute("aria-expanded")).toBe("false");
   first.unmount();
   render(<LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  if (!(screen.getByRole("checkbox", { name: "Show folders" }) as HTMLInputElement).checked) fireEvent.click(screen.getByRole("checkbox", { name: "Show folders" }));
   expect(rowOf("S-").getAttribute("aria-expanded")).toBe("false");
   expect(rowOf("A-").getAttribute("aria-expanded")).toBe("true");
   localStorage.clear();
@@ -392,4 +396,26 @@ test("nothing isolated shows no isolation line", () => {
     <LayersPanel layers={[layer("A-WALL")]} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />,
   );
   expect(screen.queryByText(/Isolated/)).toBeNull();
+});
+
+test("folders are an explicit choice and Arabic reverses the expand and collapse arrows", async () => {
+  localStorage.clear();
+  localStorage.setItem("qiyas.lang", "ar");
+  const { LanguageProvider } = await import("../i18n");
+  render(<LanguageProvider><LayersPanel layers={many()} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} /></LanguageProvider>);
+  expect(screen.getAllByRole("treeitem")).toHaveLength(NAMES.length);
+  expect(rowOf("A-")).toBeUndefined();
+  fireEvent.click(screen.getByRole("checkbox", { name: "عرض المجلدات" }));
+  await settle();
+  rowOf("A-").focus();
+  await settle();
+  press(rowOf("A-"), "ArrowRight");
+  await settle();
+  expect(rowOf("A-").getAttribute("aria-expanded")).toBe("false");
+  press(rowOf("A-"), "ArrowLeft");
+  await settle();
+  expect(rowOf("A-").getAttribute("aria-expanded")).toBe("true");
+  expect(localStorage.getItem("qiyas.layers.folders")).toBe("true");
+  document.documentElement.lang = "en";
+  document.documentElement.dir = "ltr";
 });

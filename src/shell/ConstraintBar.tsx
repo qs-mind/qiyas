@@ -51,7 +51,7 @@ export function ConstraintBar({ constraints, onDelete, onHover, onHide }: Props)
   return (
     <div className="constraint-bar" role="toolbar" aria-label={t("param.bar")}>
       {byEntity(constraints).map(([handle, list]) => (
-        <span key={handle} className="constraint-group" role="group" aria-label={t("param.entity", { handle: handle.toString(16).toUpperCase() })}>
+        <span key={handle} className="constraint-group" role="group" aria-label={t("param.entity")}>
           {list.map((c) => {
             const label = c.name
               ? t("param.glyphNamed", { kind: t(`param.kind.${c.kind}`), name: c.name })

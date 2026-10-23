@@ -96,6 +96,15 @@
         "total": false
       },
       {
+        "field": "method",
+        "heading": {
+          "en": "Method",
+          "ar": "طريقة القياس"
+        },
+        "width": 2,
+        "total": false
+      },
+      {
         "field": "citations",
         "heading": {
           "en": "Citations",
@@ -160,6 +169,24 @@
         },
         "width": 1,
         "total": true
+      },
+      {
+        "field": "method",
+        "heading": {
+          "en": "Method",
+          "ar": "طريقة القياس"
+        },
+        "width": 2,
+        "total": false
+      },
+      {
+        "field": "citations",
+        "heading": {
+          "en": "Source / clause",
+          "ar": "المصدر / البند"
+        },
+        "width": 3,
+        "total": false
       }
     ],
     "sections": [],

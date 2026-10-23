@@ -65,7 +65,7 @@ test("a clean drawing says so and offers no fix; a core error is shown", async (
     />,
   );
   fireEvent.click(await screen.findByRole("button", { name: "Fix" }));
-  expect((await screen.findByRole("alert")).textContent).toBe("No drawing is open");
+  expect((await screen.findByRole("alert")).textContent).toBe("Open a drawing first.");
 });
 
 test("only listed problems (an empty block): nothing to fix", async () => {

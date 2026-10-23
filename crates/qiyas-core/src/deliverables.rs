@@ -280,7 +280,7 @@ impl Report {
                     .layout
                     .group_by
                     .iter()
-                    .map(|f| display(&row[f]))
+                    .map(|f| display(&present(&row[f], f, row, self.language)))
                     .collect();
                 // Never add quantities expressed in different units.
                 if self.layout.columns.iter().any(|c| c.total) {
@@ -305,18 +305,20 @@ impl Report {
                     });
                 }
                 let mut totals = vec![0.; self.layout.columns.len()];
+                let mut total_decimals = vec![0; self.layout.columns.len()];
                 for row in rows {
                     let mut cells = vec![];
                     for (i, c) in self.layout.columns.iter().enumerate() {
                         let value = row
                             .get(&c.field)
                             .ok_or_else(|| invalid(format!("Unknown report field: {}", c.field)))?;
-                        if c.total {
+                        if c.total && !value.is_null() {
+                            total_decimals[i] = total_decimals[i].max(precision(row, &c.field));
                             totals[i] += value.as_f64().ok_or_else(|| {
                                 invalid("Only computed numeric columns can be totalled")
                             })?;
                         }
-                        cells.push(value.clone());
+                        cells.push(present(value, &c.field, row, self.language));
                     }
                     result.push(TableRow {
                         cells,
@@ -334,7 +336,14 @@ impl Report {
                             .columns
                             .iter()
                             .zip(totals)
-                            .map(|(c, n)| if c.total { json!(n) } else { Value::Null })
+                            .zip(total_decimals)
+                            .map(|((c, n), decimals)| {
+                                if c.total {
+                                    rounded(n, decimals)
+                                } else {
+                                    Value::Null
+                                }
+                            })
                             .collect(),
                         heading: true,
                     });
@@ -344,13 +353,144 @@ impl Report {
         Ok(result)
     }
 }
+fn rounded(n: f64, decimals: usize) -> Value {
+    // Formatting and parsing avoids binary tails in the visible sheet; records stay untouched.
+    serde_json::from_str(&format!("{n:.decimals$}")).unwrap_or(Value::Null)
+}
+fn filename(s: &str) -> &str {
+    s.rsplit(['/', '\\']).next().unwrap_or(s)
+}
+fn reference(v: &Value, language: Language) -> String {
+    match v {
+        Value::Array(a) => a
+            .iter()
+            .map(|v| reference(v, language))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("; "),
+        Value::Object(o) => {
+            if let (Some(source), Some(clause)) = (
+                o.get("source").and_then(Value::as_str),
+                o.get("clause").and_then(Value::as_str),
+            ) {
+                return format!("{source} / {clause}");
+            }
+            let sheet = o.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = if sheet == "*Model_Space" {
+                if language == Language::Ar {
+                    "النموذج"
+                } else {
+                    "Model"
+                }
+            } else {
+                sheet
+            };
+            let label = ["mark", "label", "name", "kind"]
+                .iter()
+                .find_map(|k| o.get(*k).and_then(Value::as_str))
+                .unwrap_or("");
+            let handles = ["handle", "a_handles", "b_handles"]
+                .iter()
+                .filter_map(|k| o.get(*k))
+                .map(display)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+            [sheet.to_string(), label.to_string(), handles]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        }
+        _ => display(v),
+    }
+}
+fn precision(row: &Value, field: &str) -> usize {
+    let count = matches!(row["unit"].as_str(), Some("pcs" | "count" | "nr"))
+        && matches!(
+            field,
+            "quantity" | "a_quantity" | "b_quantity" | "delta" | "value" | "squaring"
+        );
+    if count {
+        0
+    } else {
+        row["presentation_decimals"].as_u64().unwrap_or(3).min(12) as usize
+    }
+}
+fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
+    let decimals = precision(row, field);
+    if let Some(n) = v.as_f64() {
+        return rounded(n, decimals);
+    }
+    if matches!(field, "drawing" | "path" | "file" | "source_path") {
+        return json!(filename(v.as_str().unwrap_or_default()));
+    }
+    if matches!(field, "elements" | "sources" | "references" | "reference") && !v.is_string() {
+        return json!(reference(v, language));
+    }
+    if field == "factors" {
+        return json!(v
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|v| v
+                .as_f64()
+                .map(|n| display(&rounded(n, decimals)))
+                .unwrap_or_else(|| display(v)))
+            .collect::<Vec<_>>()
+            .join(" × "));
+    }
+    if field == "expression" {
+        let mut output = String::new();
+        let mut number = String::new();
+        for c in v
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .chain(std::iter::once(' '))
+        {
+            if c.is_ascii_digit() || c == '.' {
+                number.push(c);
+            } else {
+                if !number.is_empty() {
+                    output.push_str(
+                        &number
+                            .parse::<f64>()
+                            .map(|n| display(&rounded(n, decimals)))
+                            .unwrap_or_else(|_| number.clone()),
+                    );
+                    number.clear();
+                }
+                output.push(c);
+            }
+        }
+        return json!(output.trim());
+    }
+    if v.is_object() || v.is_array() {
+        return json!(reference(v, language));
+    }
+    v.clone()
+}
 pub fn display(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
         Value::String(s) => s.clone(),
-        _ => v.to_string(),
+        Value::Array(a) => a.iter().map(display).collect::<Vec<_>>().join(", "),
+        Value::Object(_) => reference(v, Language::En),
+        Value::Number(n) => n
+            .as_f64()
+            .map(|n| {
+                if n.fract() == 0.0 {
+                    format!("{n:.0}")
+                } else {
+                    n.to_string()
+                }
+            })
+            .unwrap_or_default(),
+        Value::Bool(b) => b.to_string(),
     }
 }
+
 fn localized(rows: &mut [Value], language: Language) {
     for row in rows {
         for name in ["description", "reason"] {
@@ -371,6 +511,8 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
             .map(|i| {
                 let mut v = json!(i);
                 v["drawing"] = json!(drawing);
+                v["method"] = json!(i.methods());
+                v["citations"] = json!(i.rule_citations());
                 v
             })
             .collect();
@@ -387,9 +529,14 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
                     .sources
                     .iter()
                     .map(|s| format!(
-                        "{drawing} / {:X} / {} / {}",
+                        "{} / {} / {} / {}",
+                        filename(drawing),
                         s.handle,
-                        s.sheet,
+                        if s.sheet == "*Model_Space" {
+                            "Model"
+                        } else {
+                            &s.sheet
+                        },
                         s.grid.as_deref().unwrap_or("?")
                     ))
                     .collect::<Vec<_>>()
@@ -455,6 +602,33 @@ pub fn drawing(
                 .collect()
         }
     };
+    for row in &mut rows {
+        let precision = measured.selection.effective().and_then(|method| {
+            let item = measured
+                .items
+                .iter()
+                .find(|i| row["code"].as_str() == Some(i.code.as_str()))?;
+            method
+                .rules
+                .iter()
+                .filter(|rule| {
+                    measured.quantities.iter().any(|q| {
+                        q.rule == rule.id
+                            && q.unit == item.unit
+                            && item
+                                .lines
+                                .iter()
+                                .flat_map(|l| &l.sources)
+                                .any(|r| r.handle == q.object)
+                    })
+                })
+                .filter_map(|r| r.rounding.as_ref().map(|r| r.decimals))
+                .max()
+        });
+        if let Some(precision) = precision {
+            row["presentation_decimals"] = json!(precision);
+        }
+    }
     localized(&mut rows, language);
     Ok(Report {
         kind,
@@ -513,6 +687,30 @@ pub fn project(
             })
             .collect(),
     };
+    for row in &mut rows {
+        // Project contributions retain the rules used by each drawing's measurement run.
+        let decimals = p
+            .boq
+            .iter()
+            .filter(|item| row["code"].as_str() == Some(item.item.code.as_str()))
+            .flat_map(|item| &item.contributions)
+            .filter(|contribution| {
+                row["drawing"]
+                    .as_str()
+                    .is_none_or(|drawing| drawing.is_empty() || drawing == contribution.drawing)
+            })
+            .flat_map(|contribution| {
+                contribution.explanation["measurement_rules"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|rule| rule["rounding"]["decimals"].as_u64())
+            .max();
+        if let Some(decimals) = decimals {
+            row["presentation_decimals"] = json!(decimals);
+        }
+    }
     localized(&mut rows, language);
     let mut warnings = p.warnings.clone();
     for d in &p.drawings {

@@ -310,10 +310,28 @@ impl Session {
         let mut at = 0;
         for (a, b) in code_spans(template) {
             out.push_str(&template[at..a]);
-            out.push_str(&self.field_value(&template[a..b], sheet));
+            let value = self.field_value(&template[a..b], sheet);
+            if template.contains("المساحة") || template.contains("مساحة مرشحة") {
+                out.extend(value.chars().map(|c| match c {
+                    '0'..='9' => char::from_u32('٠' as u32 + c as u32 - '0' as u32).unwrap(),
+                    '.' => '٫',
+                    _ => c,
+                }));
+            } else {
+                out.push_str(&value);
+            }
             at = b;
         }
         out.push_str(&template[at..]);
+        // Saved Qiyas room fields keep their binding while adopting the approved plan wording.
+        if has_object_fields(template) {
+            if let Some(rest) = out.strip_prefix("Unapproved candidate ") {
+                return format!("Area {rest}");
+            }
+            if let Some(rest) = out.strip_prefix("مساحة مرشحة غير معتمدة ") {
+                return format!("المساحة {rest}");
+            }
+        }
         out
     }
 
@@ -391,10 +409,35 @@ impl Session {
     /// (or outside the block edited in place) is worked out too: the lock stops the user, not
     /// the field (as AutoCAD). How many texts and tables changed.
     pub(crate) fn update_fields(&mut self, objects_only: bool) -> Result<usize, CoreError> {
+        self.update_fields_scoped(objects_only, None, true)
+    }
+    fn update_fields_scoped(
+        &mut self,
+        objects_only: bool,
+        dirty: Option<&std::collections::BTreeSet<u64>>,
+        counts: bool,
+    ) -> Result<usize, CoreError> {
         if self.needs_field_app() {
             return Ok(0);
         }
-        let wanted = |code: &str| !objects_only || has_object_fields(code);
+        let wanted = |code: &str, holder: u64| {
+            (!objects_only || has_object_fields(code))
+                && dirty.is_none_or(|dirty| {
+                    dirty.contains(&holder)
+                        || code_spans(code)
+                            .iter()
+                            .any(|(a, b)| match parse_code(&code[*a..*b]) {
+                                Code::Area(h) | Code::Length(h) => dirty.contains(&h),
+                                Code::Sum { handles, .. }
+                                | Code::RoomArea { handles, .. }
+                                | Code::ObjectValue(handles, ..) => {
+                                    handles.iter().any(|h| dirty.contains(h))
+                                }
+                                Code::Count(_) | Code::OpeningCount(..) => counts,
+                                _ => false,
+                            })
+                })
+        };
         let holders: Vec<Handle> = self
             .drawing
             .doc
@@ -408,7 +451,7 @@ impl Session {
             let sheet = e.common().owner_handle;
             match e {
                 EntityType::Text(t) => {
-                    let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
+                    let Some(code) = text_field(&t.common).filter(|c| wanted(c, h.value())) else {
                         continue;
                     };
                     let value = self.evaluate_fields(&code, sheet);
@@ -421,7 +464,7 @@ impl Session {
                     }
                 }
                 EntityType::MText(t) => {
-                    let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
+                    let Some(code) = text_field(&t.common).filter(|c| wanted(c, h.value())) else {
                         continue;
                     };
                     let value = escape_mtext(&self.evaluate_fields(&code, sheet));
@@ -437,7 +480,7 @@ impl Session {
                     let mut table = t.clone();
                     let mut any = false;
                     for (r, c, code) in cell_fields(t) {
-                        if !wanted(&code) {
+                        if !wanted(&code, h.value()) {
                             continue;
                         }
                         let value = escape_mtext(&self.evaluate_fields(&code, sheet));
@@ -462,7 +505,17 @@ impl Session {
     /// After a modify, an edit or an erase: the fields reading an entity are worked out again,
     /// in the same step.
     pub(crate) fn follow_fields(&mut self) -> Result<(), CoreError> {
+        self.refresh_object_tags()?;
         self.update_fields(true).map(|_| ())
+    }
+    pub(crate) fn follow_fields_scoped(
+        &mut self,
+        dirty: Option<&std::collections::BTreeSet<u64>>,
+        counts: bool,
+    ) -> Result<(), CoreError> {
+        // Linked object tags follow their objects in the scoped pass too (Goals C and G).
+        self.refresh_object_tags()?;
+        self.update_fields_scoped(true, dirty, counts).map(|_| ())
     }
 
     /// Follows replaced wall entities, retaining sums when one measured hatch splits.
@@ -479,6 +532,19 @@ impl Session {
             for (a, b) in code_spans(text) {
                 out.push_str(&text[at..a]);
                 let original = &text[a..b];
+                if let Code::ObjectValue(ids, name, decimals) = parse_code(original) {
+                    let mut replaced = std::collections::BTreeSet::new();
+                    for id in ids {
+                        replaced.extend(mapping.get(&id).cloned().unwrap_or_else(|| vec![id]));
+                    }
+                    out.push_str(&crate::object_schedules::object_value_code(
+                        &replaced.into_iter().collect::<Vec<_>>(),
+                        &name,
+                        decimals,
+                    ));
+                    at = b;
+                    continue;
+                }
                 let selection = match parse_code(original) {
                     Code::Area(h) => Some((vec![h], true)),
                     Code::Length(h) => Some((vec![h], false)),
@@ -556,7 +622,9 @@ impl Session {
                 }
             }
         }
-        self.follow_fields()
+        self.remap_object_tags(mapping)?;
+        // Evaluate after geometry and schedules finish, in the shared derivation pass.
+        Ok(())
     }
 
     /// True when following fields may draw a table's block again: a table holds a field reading
@@ -618,6 +686,21 @@ mod tests {
         ));
         // An unclosed code is left as it is.
         assert!(code_spans("50%<\\AcVar Date").is_empty());
+    }
+
+    #[test]
+    fn legacy_room_fields_adopt_plan_wording_without_losing_the_binding() {
+        let session = Session::new_blank(std::path::Path::new("legacy-label.dxf"), 6);
+        for (old, current) in [
+            ("Unapproved candidate", "Area"),
+            ("مساحة مرشحة غير معتمدة", "المساحة"),
+        ] {
+            let template = format!(r#"{old} %<\AcVar QiyasRoomArea "DEAD" 2>% m²"#);
+            assert_eq!(
+                session.evaluate_fields(&template, Handle::new(0)),
+                format!("{current} #### m²")
+            );
+        }
     }
 
     #[test]

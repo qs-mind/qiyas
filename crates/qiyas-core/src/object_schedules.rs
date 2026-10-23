@@ -69,7 +69,9 @@ fn template(record: &ObjectRecord, text: &str) -> Result<String, CoreError> {
         let expr = Expr::parse(expression).map_err(|e| invalid(e.to_string()))?;
         let value = expr.eval_with(&|name: &str| {
             if name == "id_hex" {
-                Some(ExprValue::Text(format!("{:X}", record.instance.id)))
+                // Keep older stored recipes readable, using the same decimal handle that
+                // records and commands expose.
+                Some(ExprValue::Text(record.instance.id.to_string()))
             } else {
                 record_value(record, name).and_then(typed)
             }
@@ -114,6 +116,16 @@ impl Session {
         record: &ObjectRecord,
         name: &str,
     ) -> Result<Option<Value>, CoreError> {
+        if name == "mark" {
+            if let Some(value) = record
+                .instance
+                .props
+                .get(name)
+                .filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+            {
+                return Ok(Some(value.clone()));
+            }
+        }
         if let Some(text) = spec.templates.get(name) {
             return template(record, text).map(|s| Some(Value::String(s)));
         }
@@ -442,6 +454,12 @@ impl Session {
     }
 
     pub(crate) fn refresh_object_schedules(&mut self) -> Result<(), CoreError> {
+        self.refresh_object_schedules_scoped(None)
+    }
+    pub(crate) fn refresh_object_schedules_scoped(
+        &mut self,
+        only: Option<&std::collections::BTreeSet<u64>>,
+    ) -> Result<(), CoreError> {
         if !self.drawing.doc.app_ids.contains(SCHEDULE_APP) {
             return Ok(());
         }
@@ -458,6 +476,9 @@ impl Session {
             })
             .collect();
         for (mut table, spec) in tables {
+            if only.is_some_and(|ids| !ids.contains(&table.common.handle.value())) {
+                continue;
+            }
             let data = self.object_schedule_data(&spec)?;
             let previous = crate::xdata::read_json::<Rendered>(&table.common, STATE_APP);
             let Some(prototype) = table.rows.get(1).cloned() else {

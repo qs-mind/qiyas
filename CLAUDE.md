@@ -96,13 +96,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   and Enter work on rows, and the row buttons (`actions`) show on hover or focus. Row heights are
   fixed (27 px; the conflicts' reason wraps to two lines at 40). `--row-hover` and `--row-current`
   are solid colours, because the row buttons sit on them.
-- `@headless-tree/react`: the layers panel is a tree (`LayersPanel.tsx`, `layerGroups.ts`): a drawing
-  with 12 layers or more is grouped by discipline prefix (`A-`, `S-`, `E-`) and by xref (`PLAN|…`), a
-  prefix or xref with one layer stays at the top. The library's movement keys (arrows, Home, End) are
-  off while the focus is in a layer's properties (`isEnabled`), so a drop-down keeps its arrows; a
-  click selects, Enter or a double click makes a layer current, the folded groups are kept in
-  `qiyas.layers.collapsed`. Eye (and the current layer's pencil) stay on the row; isolate, make
-  current and properties show over the end of the name on hover or focus.
+- `@headless-tree/react`: the Layers panel starts as a flat list, regardless of its length.
+  "Show folders" is an explicit, remembered choice (`qiyas.layers.folders`, false by default).
+  Folders follow name prefixes and external drawings, with a folder icon and a labelled layer
+  count; no discipline list is hard-coded. Collapsed folders remain in `qiyas.layers.collapsed`.
+  Rows reserve space for actions, do not select text, and allow one selected row. The footer
+  wraps and the left column cannot scroll sideways. Arrow keys follow the UI direction: Left
+  opens a folder in Arabic, Right opens it in English. Property controls keep their own keys.
 - `cmdk`: the command line's suggestions (`CommandLine.tsx`). The chosen row is the line's own
   (`active`), not cmdk's: nothing is chosen until the arrows choose, so Enter runs what was typed; a
   hidden first row takes cmdk's start. A command shows its shortest alias as a `<kbd>`; an alias whose
@@ -144,7 +144,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `rustls-webpki`, `untrusted`; 0BSD, a BSD: `tslib`; Zlib: `foldhash`; BSL-1.0: `clipboard-win`, `error-code` on
   Windows, through `arboard`, the system clipboard, MIT OR Apache-2.0, with its Wayland
   data-control feature). No code copied from Open CAD Studio (GPL).
-- Thmanyah font files are never committed. `scripts/fonts.sh` copies them from `~/Downloads/Thmanyah-Font-Family/thmanyah typeface` into the git-ignored `src/fonts/thmanyah/`. Instrument Sans (OFL) is committed. The viewport draws drawing text with Noto Sans and Noto Sans Arabic (OFL, unhinted Regular, with their licences in `crates/qiyas-render/fonts/`), behind the drawing's own TrueType font when the computer has it.
+- Thmanyah font files are never committed in readable form (founder's ruling, 23 Oct 2026: the whole of Qiyas stays in this one repo, and installers built on GitHub include Thmanyah). Only `assets/fonts/thmanyah-sans.sealed` is committed: the three Sans weights the window uses, AES-256-GCM sealed by `scripts/fonts-seal.mjs`. Its key is the repository secret `THMANYAH_FONTS_KEY` and, on the founder's computer, `~/.config/qs-mind/thmanyah-fonts.key` (keep a backup; to re-seal, run `node scripts/fonts-seal.mjs seal <key file>`). The release workflow unseals it before building. Locally `scripts/fonts.sh` copies them from `~/Downloads/Thmanyah-Font-Family/thmanyah typeface` into the git-ignored `src/fonts/thmanyah/`. Instrument Sans (OFL) is committed. The viewport draws drawing text with Noto Sans and Noto Sans Arabic (OFL, unhinted Regular, with their licences in `crates/qiyas-render/fonts/`), behind the drawing's own TrueType font when the computer has it.
 - English text says "Qiyas" and "QS Mind"; Arabic text says "قياس" and "كيو إس مايند". Arabic uses Thmanyah Sans; headings use `font-feature-settings: "swsh"`.
 - Measured values are stored in drawing units and displayed in metres, square metres and pieces. Unit factor comes from the drawing header (`insertion_units`): 1 = inches, 2 = feet, 4 = mm, 5 = cm, 6 = m, 0 or unknown = treat as mm and show a warning in the status bar.
 - Every mutating command is undoable. Undo and redo stacks live in `qiyas-core`.
@@ -193,7 +193,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   refuses a word owned by two commands. `x-prompts` overrides argument order or prompt text.
 - `validation.rs` checks raw inputs against those schemas before execution, collecting missing
   fields, wrong types, enums, constants and bounds together with JSON pointers. Unknown fields
-  are returned as warnings. The existing serde path error, schema and example remain available.
+  on edits are errors; read commands return warnings. The existing serde path error, schema and example remain available.
   `Session::run_input(&Value, Source)` is the JSON execution boundary: it validates the raw
   input, deserializes a plain `Command`, resolves omitted defaults, then executes. Its separate
   `Reported` struct holds `outcome: Outcome`, `defaults_used: [{field, value, unit}]` and
@@ -224,9 +224,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   an xref's entities carry `xref` and `chain` and are read-only), layers, linetypes, text and dim
   styles, blocks, layouts, viewports, groups, views, header, layer states, xrefs, take-off, BOQ,
   conflicts, schedules, comments, constraints, parameters; filters handles, names, type, layer,
-  sheet, bounds and `where` (eq, ne, lt, le, gt, ge, contains, exists on a JSON pointer into
-  `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) under 12 KB
-  (`MAX_BYTES`, `truncated`); arrays past 100 items say how many they left out.
+  sheet, bounds and `where` (eq, ne, in, not_in, lt, le, gt, ge, contains, exists on a summary
+  name or a JSON pointer into `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) with a 12 KB budget for records and warnings, excluding the page envelope
+  (`MAX_BYTES`, `truncated`; one oversized record can exceed the budget); arrays past 100 items say how many they left out.
 - `qiyas-core/src/record_edit.rs`: `Command::SetRecords { collection, updates: [{key, path,
   value, expected}] }`: serialise, set the JSON pointer, read back with `serde_path_to_error` (the
   error names the field), `entity_from_record` puts back what serde skips (and a block
@@ -249,7 +249,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `via` where refused, the shapes of the named types (enums as their variants: `Color` is
   `"ByLayer" | … | {"Index": …} | {"Rgb": {…}}`), whether the type can be created, and that
   angles are radians there. Traced once off the types' serde (`serde-reflection`, MIT OR
-  Apache-2.0: repeated passes until every enum variant is seen, about 12 ms) and kept as JSON.
+  Apache-2.0), explicitly seeding the codec's nested enums before tracing record roots. Dimension
+  paths retain their variant, e.g. `/Linear/base/text_middle_point`, matching its record data.
 - `record_input_schema` caches those traced types as input schemas too. Creation and block
   definition check all supplied data fields before merging the entity defaults. Record edits
   stage each replacement without mutation, including sequential `expected` values, and collect
@@ -391,7 +392,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   lines clipped to the boundary (range flag `PATTERN`, never part of a hatch boundary, left out
   when denser than 20,000 lines); rays and xlines run across the sheet without growing its
   bounds; multilines draw their element lines but measure along their centre line (the drawn
-  points); points draw as a cross (PDSIZE, or 1% of the sheet). Splines flatten from control
+  points); points obey PDMODE (dot, hidden, plus, cross, tick, circle and square combinations) and PDSIZE (drawing size, or a percentage of sheet size). Splines flatten from control
   points and knots (the curve through the fit points when there are none). Measuring sees
   outlines only (`FlattenOutcome::into_paths`).
 
@@ -476,8 +477,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Lines retain expressions, operands, inclusion decisions, method/clause/source and handle/sheet/
   assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
   withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
-- Settings validates local method files and applies changes transactionally to open tabs. Opening
-  a tab applies the selected method. Project `.qss` runs apply their method override to every member before deriving quantities. The BOQ panel exposes the
+- Settings selects method names: POMI (RICS), NRM2 (RICS), SMM7, CESMM4, local practice in
+  Egypt/KSA/UAE, Other (free text), or None (geometric quantities). Labels are English/Arabic;
+  saved `measurement_method` is the name string (null for None). Optional `methods/*.json`
+  files remain extra name choices. Files are matched by their declared name, not filename.
+  Missing files produce a name-only selection with no bundled rules. Invalid matching files
+  and duplicate names still fail validation. Settings applies changes transactionally to tabs.
+  Opening a tab preserves drawing-authored rules for the same name; project override wins. Project `.qss` runs apply their method override to every member before deriving quantities. The BOQ panel exposes the
   generated items and dimension source links; the take-off export adds bilingual BOQ, dimension
   and review worksheets. Comparison adapts generated quantities without replacing the imported BOQ.
 - `recognition.pdf_text` calibrates vectors from a label regex and a ticked scale bar. General
@@ -501,10 +507,16 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Text clusters are geometric hints, not semantic assertions about a legend or a room.
 - `commands {names:[...]}` fetches several schemas in one call. The registry index generates its
   take-off workflow from command/kind `x-takeoff-step` schema metadata. The three tools remain.
-- `takeoff_workflow.txt` guides digest/picture, batched type/rule authoring, recognition, Settings
+- `takeoff_workflow.txt` and its Arabic counterpart guide digest/picture for quantity jobs, batched type/rule authoring, recognition, Settings
   method (project override wins), mappings, self-check and repairs by handle. No case names,
-  trade lists, standards text, thresholds or rates are supplied. Missing methods may be authored
-  as explicitly cited geometric data; selected standards must not be silently replaced.
+  trade lists, standards text, thresholds or rates are supplied. A named method without rules
+  tells Mizan to write rules from its knowledge in its own words, with clause references, through
+  `measurement.set_method` at the selected scope. It must apply the method's units, deductions,
+  conventions and descriptions and disclose uncertain rules/references in its end report.
+  It must not copy standard text or invent clauses. None uses cited geometric quantities.
+  Agent opening state and shared MCP state/digest/kit use drawing knowledge first. A pending
+  named kit batch has an empty rule set to fill; a loaded kit omits method replacement and
+  instructs reuse. No geometric example is relabelled as a standard rule.
 - `qiyas_read takeoff_check {offset?,expectations?}` reports per-layer and per-block explanation,
   closed-region coverage, unexplained handles, unmapped tables, unmatched schedule rules,
   uncertainties and verify results. It reads only. These are evidence shares, not truth coverage.
@@ -524,7 +536,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   cover the next request only: UTF-8 input bytes plus protocol/image allowance and output cap;
   actual usage settles the ledger. Unknown usage retains the reservation and stops the case.
   Unused case allocations carry forward; the total and daily caps both apply. Selected Settings
-  method files are applied to the isolated evaluation drawing. No case recipes are supplied.
+  method names and optional files are applied to the isolated evaluation drawing. No case recipes are supplied.
 - Frozen sets live in `.local/benchmark/sets/`. `live-dev` selects the first lexical clean case
   in apartment, office, warehouse, MEP and external, plus the first lexical PDF case. `quick`
   round-robins project-type × variant strata, SHA-256 case-ID order within each, up to 120 cases.
@@ -546,11 +558,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - MIZAN ALONE remains the priority. No paid eval is part of implementation. The first six-case
   run exposed expensive repeated history, invalid authored definitions and a PDF-only capture
   failure; its 22% coverage is the live baseline, not a target achieved by engine diagnostics.
-- `qiyas-ai/src/history.rs` keeps the newest three tool results whole and summarizes older
-  results once, retaining handles, ids, names, decisions and error codes. The first digest and
-  system prompt remain unchanged for caching; tool ids, arguments and signatures stay paired.
+- `qiyas-ai/src/history.rs` keeps the newest twenty tool results whole and summarizes older
+  results once, retaining handles, ids, names, decisions and error codes. Identical successful
+  reads keep their newest full result rather than duplicate evidence; changed values stay separate. The first digest and the latest successful command/schema lookups remain whole.
+  Pictures follow their separate retention limit. The system prompt stays unchanged; tool ids, arguments and signatures stay paired.
   The older message-count compactor remains the final guard for long conversations.
-- Records default to summaries without null/empty fields, with 12 KB pages; digest previews and capture captions
+- Records default to summaries without null/empty fields, with a 12 KB record-and-warning budget (page envelope excluded; a single oversized record is allowed); digest previews and capture captions
   are compact. PDF digest entries expose real source paths/pages and document capture arguments.
   Picture framing includes PDF/raster bounds, even without vector geometry. Relative document
   paths resolve beside the active drawing. Scans use calibrated `recognition.vision` hints and
@@ -564,7 +577,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   contain complete recipes and citations. Recognition and mapping should be published together,
   then extended, so partial work remains measurable if a cap interrupts the run.
 - The provider exposes current budget notices to the agent. At 80% of requests or cost used,
-  or when fewer than two conservative reservations fit, it tells Mizan to stop exploring,
+  or when fewer than two conservative reservations fit, it tells Mizan to stop exploring in a quantity job,
   finish mappings and write the end report. Hard stops report retained quantities locally.
 - Eval always writes `end-report.json` and logs it in both logs, retaining the actual answer,
   measurement report, submission count and self-check. `done` with zero submitted items becomes
@@ -725,7 +738,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   and replaces its Comment clouds in one undo step. Its cloud layer is data, retained in
   knowledge `revisions/cloud_layer` (default VARIATION). Carry is also one undo step.
   Take-off exports include bilingual Variation and lossless chunked records; the drawing
-  retains the report and clouds through DWG/DXF. No rates or domain rules were added.
+  retains the report and clouds through DWG/DXF. If any retained room enclosure is broken,
+  variation quantities are unavailable with a count and handles, including cached reports; an
+  unknown quantity must never become a zero/removal delta. No rates or domain rules were added.
 - The three commands have command-line words and generic-tool access. The take-off kit
   contains revision examples within its existing byte budget; the workflow index describes
   open B → carry A → re-take-off → variation/clouds → export.
@@ -793,7 +808,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
 - PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
   and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
-  Excel/PDF include lossless report records. Client-template exports preserve the original
+  Visible Excel/PDF cells format counts as integers and quantities to the method precision
+  (three decimals for geometric quantities). References show sheet, element kind/mark and short
+  handles; drawing cells show filenames. Full precision, paths and structured provenance remain
+  in the lossless report records. Excel/PDF include lossless report records. Client-template exports preserve the original
   workbook's package and change only mapped quantity cells, leaving rates and amounts untouched.
 - `qiyas-cli export <drawing|project.qss> --kind boq --format excel --path boq.xlsx`
   accepts `--language en|ar` and `--layout name`. `project run` adds `--deliverables all`
@@ -920,14 +938,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `add_wall_openings {centreline, openings: [{at, width, kind, swing?, sill?, head?}]}` adds
   doors/windows to the run named by its centreline handle. `remove_wall_openings {inserts}`
   closes the cuts named by opening insert handles. `edit_wall_opening {insert, at?, width?,
-  kind?, swing?, sill?, head?}` moves or resizes an opening or changes its properties. Each
-  rebuilds the group in one undo step. `delete_entities` refuses wall opening inserts and
+  kind?, swing?, sill?, head?, mark?}` moves or resizes an opening or changes its properties.
+  Geometry changes rebuild the group in one undo step; an empty edit does not rebuild. `delete_entities` refuses wall opening inserts and
   names `remove_wall_openings`, so erasing a symbol cannot leave an unexplained hole.
 - `wall_groups {width?}` is a read command, reachable with `qiyas_read run`. It reports each
   group on the sheet, its layers, and runs with centreline handle, length, thickness, height,
   justification and opening insert handles/properties. With `width`, each run includes
   `free_ranges` of opening-centre `at` values. Both ends are accepted by the same geometry
-  checks used by the mutating commands. Read it again after a rebuild to get current handles.
+  checks used by the mutating commands. Surviving runs and openings retain their handles.
 - Openings must fit a straight segment clear of corners, junctions and other openings.
   Refusals name the junction and offer the fitting ranges (or say none fit). A door defaults
   to left swing, sill 0 and head `min(2.1, run height)`; a window defaults to sill 0.9 m and
@@ -1188,7 +1206,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   take-off), 3 decimals; UTC date; `####` when the entity is gone. Not worked out on open. Find
   and replace leaves field texts and field cells as they are and counts them in `skipped`.
 - Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
-  click on a table: `TableEditor`, a grid in the drawing's column order, Shift+click to merge),
+  click on a table: `TableEditor`, a grid in the drawing's column order; Shift+click or
+  Shift+Arrow selects a range to merge). A failed cell write keeps its draft and clears the
+  sent marker so Enter retries it unchanged; an in-flight duplicate is still suppressed.
+  Row, column and merge edits wait for pending saves; a failed save cancels that queued structural
+  edit and leaves the draft intact.
   Field (click, then `FieldDialog`; area and length pick their entity; also from the table
   editor into a cell), Update fields. Command line TABLE (TB), TABLEDIT, FIELD, UPDATEFIELD.
 
@@ -1298,7 +1320,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   fill). Tests: `qiyas-core/tests/entity_geometry.rs`.
 - Window: the Layers panel (a tree; see the UI kit) opens a layer's properties under its row (on, frozen, locked, plot,
   colour, linetype, lineweight, rename, delete), adds layers, and opens Layer states… (LAYSTATE,
-  LAS) and Translate layers… (LAYTRANS, `LayerTranslator`); the properties palette edits the
+  LAS) and Match layer names (LAYTRANS, `LayerTranslator`); the properties palette edits the
   picked host entity in place (xref and block content stay read-only) and, with nothing picked,
   what new entities are drawn with. Home tab, Layers group; command line LAYER (LA: the panel),
   LAYSTATE (LAS), LAYTRANS, VPLAYER (the VP freeze column), GROUP (G: pick, Enter, name),
@@ -1634,7 +1656,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Lines are paper millimetres: the plot style's lineweight, else the entity's with `lineweights`
   (ByLayer and ByBlock resolved as inside blocks, Default 0.25 mm), else the thinnest line. White
   plots black. Layers set not to plot are left out, and Defpoints never plots (an xref's
-  either). Linetypes plot continuous, as the screen draws them.
+  either). Simple dash, gap and dot linetypes plot as they appear on screen; patterns resolve ByLayer and ByBlock and apply entity and global linetype scales. Complex linetype text/shapes and viewport-specific PSLTSCALE remain unsupported.
 - Text is real PDF text: each font used becomes an embedded TrueType subset (`subsetter`, Type0,
   Identity-H) with a ToUnicode map from the shaped text (`LaidText::text`, `Session::font_bytes`).
   The map keeps the first characters seen per glyph, and Noto Sans Arabic draws letters that
@@ -1691,29 +1713,47 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 ## Inquiry
 
 - `Command::Rooms { query }` (`qiyas-core/src/rooms.rs`) reads rooms round name texts or seed
-  points, using the same closed boundaries as Hatch. `enclosed_area_m2` is the drawn area;
+  points, using a room-specific enclosure policy independent of Hatch and layer visibility. `enclosed_area_m2` is the drawn area;
   `net_area_m2` and `candidate_area_m2` take islands off unless `subtract_islands` is false.
+  Room boundaries exclude text/mtext/attributes, dimensions, leaders, tables, points, hatches,
+  wipeouts, rays and xlines, every part carrying QIYAS_GRID provenance, opening object symbols,
+  and QIYAS measurement overlays (saved derived geometry cannot become its own enclosure).
+  Qiyas walls supply joined faces without opening cuts: a doorway closes at the internal wall face.
+  `boundary_layers` and `exclude_layers` on room queries, seed measurements, region sources and
+  recognition selectors select foreign enclosure geometry explicitly. Retained regions persist
+  that policy. Other drawn geometry is eligible when no inclusion list is given. Hatch is unchanged.
+  Grid axes and letters now carry provenance as well as bubbles; grid letters never seed rooms.
+  Older grids recover axis and letter provenance from stamped bubbles when opened.
   These are unapproved candidate areas. `LabelSpaces { query, layer, height, decimals,
-  language }` writes "Unapproved candidate … m²" under each name, or its Arabic wording.
-  The label sits 1.6 name heights below the name, or at the seed point. An explicit `height`
-  is in metres; otherwise it uses the name's height, or the default text height for a seed.
+  language }` writes "Area 19.31 m²" or "المساحة ١٩٫٣١ م²" (Arabic digits and decimal separator).
+  Labels prefer the space below the name or near the seed, then search inside the room and wrap
+  at the same height when necessary. Default height is 70% of the name height, at least 2.5 mm
+  on paper; an explicit `height` is in metres. Values and units stay together when wrapping.
+  The report says `placement: inside|wrapped`. A room too small for readable text returns a
+  clear error and rolls back, so the caller can choose a larger scale or an external linked note.
   Both return `Outcome::Rooms`; labelling is one transaction named `label_spaces`.
   Labels now contain live `QiyasRoomArea` fields. `LabelSpaces` retains each closed outer ring
   as a polyline on non-plotting `A-ROOM-BOUNDARY`, with its seed, name, exact bulges and islands
   in `QIYAS_ROOM` xdata. The report includes `boundary_handle`. This is a durable room object
-  through DWG/DXF; it keeps the existing "Unapproved candidate" wording and approval status.
+  through DWG/DXF; approval remains in metadata and the take-off report, never on the plan.
+  Old label wording remains recognisable; saved live fields display the new wording on refresh. Room schedule headers are "Area (m²)" or, with
+  `language: "ar"`, "المساحة (م²)".
   Changed generated boundaries invalidate the codec's whole `raw_record` and graphics cache;
   changed room metadata also invalidates only its own application's raw DWG EED blob, preserving
   other applications' data. Tests save, reopen, edit, save and reopen again, checking the retained
   area before any command can refresh it.
-  Repeated labels reuse the room; conflicting island policies are refused. Every drawing edit
+  Repeated labels reuse the room; conflicting boundary or island policies are refused. Every drawing edit
   retraces rooms from their seeds, excluding retained boundaries from the search, then updates
   labels, schedules and linked take-off inside the same undo step. A broken enclosure shows
-  `####`; its take-off is explicitly stale, and the construction check reports it.
-- `RoomSchedule { at, source_sheet?, labels?, decimals? }` (`ROOMSCHEDULE`) builds a drawing
+  `####`; its take-off has `quantity_valid: false` and null `value`/`shown`, is listed as
+  unavailable, and is excluded from totals, comparisons and exports. Reopening refreshes region
+  quantities; undo restores validity with the source geometry. Invalid embedded measurements use
+  invisible records retaining validity and the room binding, including without a project sidecar.
+  Reports count and list unavailable rows.
+- `RoomSchedule { at, source_sheet?, labels?, decimals?, language? }` (`ROOMSCHEDULE`) builds a drawing
   table from retained rooms, with per-room area fields and a total field. Source defaults to
   Model; the table goes on the current sheet, using `A-ANNO-TABL` when the current layer is 0.
-  `MeasureRoom { label? , point? }` (`MEASUREROOM`) accepts exactly one live label/boundary
+  `MeasureRoom { label? , point?, boundary_layers?, exclude_layers? }` (`MEASUREROOM`) accepts exactly one live label/boundary
   target or a seed. It measures the same net boundary in square metres, retaining a newly found
   seed region when needed; all quantities remain unapproved candidates. Both commands are one
   undo step. Construction rule `room_area_mismatch` compares linked labels, schedule cells and
@@ -1731,7 +1771,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   facts in an Info card at the top of the right panel), Divide (click, then the number of parts),
   Measure along (click, then the step in metres), ID point (snapped coordinates in metres), and
   Extract data (filter by layers, type, block, text; pick fields and attribute tags; copy as TSV
-  or export one "Data" sheet to Excel). Its Take-off group exports the take-off, imports a BOQ,
+  or export one "Data" sheet to Excel). Extraction reads every 5,000-row page, reports loaded
+  row counts, and refuses partial results after a failed page. Its Take-off group exports the take-off, imports a BOQ,
   compares and exports the conflicts.
 - Divide and measure along place point entities on layer `QIYAS-POINT` by true arc length and
   count them in the take-off; points and count are one undo step (a drawing change: Save asks).
@@ -1743,8 +1784,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `qiyas-core/src/check.rs`: `Command::CheckDrawing { scope }` (`Session::check_drawing`)
   checks the current sheet, or `scope.sheet`. Optional `handles` and `rules` keep only the
   findings requested. `scope.packs` selects `general` and/or `construction`. Empty selects
-  general, plus construction when the drawing has take-off rows or a layer suggesting rooms,
-  spaces or areas. An explicit `["general"]` keeps construction rules off.
+  general, plus construction when the drawing has retained rooms, take-off rows or enclosure
+  geometry. Explicit rule requests run independently of inference; an explicit `["general"]`
+  keeps construction rules off. Room candidates never depend on English layer fragments.
+  Unknown rule or pack names are validation errors; the schemas list every allowed name.
   It reads without changing the drawing or undo history.
 - Rules find short or overshooting ends, duplicates, overlaps, tiny segments, open
   rooms, room-size text that differs, text collisions and poor paper height, layer 0, explicit
@@ -1774,7 +1817,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   wall loops, junctions, openings near ends and corners, and small curves. No error or warning
   is accepted; informational notes are allowed.
 - `Outcome::Checked` gives each finding's rule, pack, severity, handles, place and message,
-  counts by rule and a short summary. At most 200 findings are listed.
+  counts by rule and a short summary. At most 200 findings are listed; every text and room
+  candidate is inspected. `checked_rules`, `complete` and `not_checked` disclose coverage.
+  Nested geometry limits, unsupported multileaders/viewports and dense room tracing make the
+  report explicitly incomplete. `check_drawing_all` also removes the findings display limit.
 
 ## Verify
 
@@ -1861,6 +1907,60 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## AI assistant and settings
 
+- Goal S adds `claude_code` and `chatgpt_plan` Settings profiles alongside the unchanged
+  API-key profiles. Claude Code uses the user's installed executable on PATH or their selected
+  absolute path; an empty model lets Claude Code choose. Sign-in stays in the user's terminal:
+  run `claude`, then `/login`. Settings checks are explicit, not polled. Runtime help must
+  document strict MCP, permission mode and settings/tool isolation, or the turn is refused.
+- Claude Code owns one `-p` process per user message. It gets only Qiyas's three MCP tools,
+  no built-in tools, no inherited provider credentials/endpoint overrides, and an empty
+  `<Qiyas data home>/claude-work` directory. User/project settings and hooks are excluded.
+  Qiyas never reads Claude credentials, runs an SDK/ACP adapter, or scripts a login. Cancel
+  sends SIGINT, then SIGTERM after five seconds; a process permit stays held until reaping.
+  This cancellation implementation is Unix-only; other platforms refuse this provider.
+  It currently requires Work autonomously: per-job/per-phase approvals are refused before
+  starting a turn, because Qiyas cannot yet enforce those pauses inside the CLI's tool loop.
+- The private MCP connection attributes changes to Mizan, preserving Undo, and uses the
+  original user message for named-file authority. Claude stream events become ordinary
+  activity cards and translated status/errors. Authentication, limits, billing and account
+  holds stop immediately. Qiyas never retries this provider, including its usual context
+  and output-limit retries. `eval-agent --agent claude` is refused even with `--agent-cmd`.
+  Benchmarks must use ChatGPT, Codex or an API key, never this Claude provider.
+- ChatGPT Settings enables **Continue with ChatGPT** (Arabic: **المتابعة باستخدام ChatGPT**),
+  an account picker, Sign out, a model list and the ChatGPT per-app limits link. The exact
+  SIWC wire specification was supplied by the reviewer on 23 October 2026; do not substitute
+  backend-api endpoints or API-key billing for plan usage. OAuth uses PKCE/state/nonce,
+  `http://127.0.0.1:<port>/auth/callback`, first registration with `dynamic_agent_client`
+  and `agent_name_hint=Qiyas`, then the callback's issued `oaiapp_...` client ID.
+- The OS keychain entry `qiyas` / `chatgpt-plan` contains the entire ChatGPT vault: stable
+  `urn:uuid:...` host ID, separate account registrations, active account and tokens. Sign-out
+  removes only the active account's tokens after attempting discovery-based revocation;
+  the host ID and issued client IDs survive. OAuth tokens, subjects and issued client IDs never reach files,
+  Settings, conversation state, logs or the frontend. UI account IDs are random local IDs.
+- ChatGPT validates ID-token signature against discovery JWKS, issuer, issued-client audience,
+  expiry and nonce. Missing `chatgpt.tokens.use.direct` keeps sign-in but blocks inference and
+  model discovery. Refresh is serialized, rotates tokens/scopes atomically and retains saved
+  credentials on temporary failures. Blocking keychain work owns the account lock even if its
+  waiter is cancelled; a started rotation finishes and saves before sign-out can revoke it.
+  Queued requests are cancelled before they can use another account. Terminal refresh failure
+  clears only tokens and starts one OAuth recovery using the saved registration; a mismatched account is refused.
+- ChatGPT lists only models with `visibility=list`, displaying `display_name` and sending
+  `slug`. Account changes clear the model list and cancel requests. Responses use `store:false`
+  and `stream:true`; only `response.completed` succeeds. Incomplete/broken streams stop.
+  SIWC errors use their own English/Arabic classification: limits pause requests until the
+  user explicitly resumes, temporary failures use bounded backoff, and unsupported features
+  remove the named optional field before retrying a changed body, with a visible notice.
+  An admission 401 never starts an OAuth loop or erases credentials. Sign-out cancels requests,
+  retries transient revocation failures, clears local tokens and reports unconfirmed revocation.
+  This provider is only for Mizan's own requests, never a general proxy or MCP token relay.
+- ChatGPT mock HTTP/loopback tests are explicitly marked as requiring a socket-capable runner.
+  Run the named ignored `chatgpt_plan::` tests there; no real sign-in or service calls belong
+  in automated checks. The original Claude fake-process and credential sentinel checks remain.
+- The public documentation was verified by the reviewer on 23 October 2026 and supplied in
+  the task; no further fetch was attempted after the founder's instruction. See
+  `docs/2026-10-23-qiyas-subscriptions.md` for policy and release gates, and
+  `docs/2026-10-23-qiyas-goal-s.md` for actual tests and remaining work.
+
 - Agent session access always runs on a blocking worker, including turn-opening state, drawing
   paths/epochs and drawing checks. Snapshot/checkpoint/resume use cached metadata returned by
   those workers. The first mutation's error baseline is captured under the same session lock,
@@ -1881,13 +1981,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   tells Mizan to read the drawing before acting. Old tool cards cannot undo earlier sessions.
   Pictures and thumbnails become `[picture removed]` on disk; keys are never included.
 - Settings include `autonomy` (`autonomous`, the default; `per_job`; `per_phase`) and
-  `measurement_method` (a local rule set name, or null for geometric quantities). Multi-phase
+  `measurement_method` (a selected standard/local/custom name, or null for geometric quantities). Multi-phase
   plans wait for approval per the selected mode; Approve sends `Approved, continue.`, while
   Change focuses the composer. In autonomous mode, unfixed errors are reported without an approval pause.
 - `qiyas-core/src/data_home.rs::qiyas_dir()` (re-exported by desktop methods) is the Qiyas data home: release builds use
   `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
   `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
-  on first use. Settings lists local `methods/*.json`; no measurement rules ship with Qiyas.
+  on first use. Settings offers named methods and local `methods/*.json` as extra choices; no measurement rules ship with Qiyas.
   Version 1 validates `{name, title, based_on, source_note, rules: []}` and the cited rule
   contents through the Phase 18 engine (an omitted version means 1). Mizan's live state reports the name and whether a nonempty rule set was loaded;
   without rules, quantities are geometric and answers say so.
@@ -1936,8 +2036,8 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   schema and example; unknown names suggest close matches. Changed geometry comes with a
   drawing check. The loop discovers a command, acts, checks and fixes by handle.
 - Before execution, the core checks all fields together against the command registry: missing
-  fields, wrong values and ranges are errors with JSON pointers; unknown fields are visible
-  warnings. Results include `defaults_used` with each field, value and unit. Errors preserve
+  fields, wrong values and ranges are errors with JSON pointers; unknown fields are warnings
+  on reads and errors on edits. Results include `defaults_used` with each field, value and unit. Errors preserve
   the serde field message, schema and example; unknown names still suggest close matches.
   All automation errors carry `code` beside `message`; `capabilities.error_codes` lists them.
 - `qiyas_read validate {command}` or `{commands}` checks inputs without changing the drawing,
@@ -1953,27 +2053,37 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - Each user message allows 40 calls, raised to 120 after a call changes the drawing. When 10
   or fewer remain, each result includes `budget: "N calls left"`. At most 10 destructive
   commands per message, counted from registry metadata in run and every batch step. A tool
-  card carries its command label (`draw.line`), batch or operation; the window translates
-  `command.<label>` when present, otherwise makes the label readable. Execute calls are
-  mutating except plan, select and view.
+  card carries registry category/effect metadata (`qiyas-ai/src/activity.rs`) and an optional
+  structured result count. The window builds a short translated sentence from these fields;
+  it never humanises internal command names. Legacy cards use generic read/edit wording.
+  Command labels, input JSON and full summaries appear only in collapsed Technical details
+  and the Log. A recovered failure says "Fixing a problem…" within its own user turn.
+  Execute calls remain mutating except plan, select and view; execution is unchanged.
 - Settings live in `settings.json` in the app's config folder (Linux:
-  `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
-  `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and
-  `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), effort,
+  `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic`,
+  `openai_compatible`, `claude_code` or `chatgpt_plan`; subscription status above), `providers.anthropic.model` (default `claude-opus-5-5`) and
+  `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), per-profile effort,
   MCP on/off, port and token, language, theme. Loading an old flat model and base URL moves them
   into the selected provider's profile and writes the new shape; the other provider keeps its
   defaults. Switching providers in Settings switches the edited profile and clears any unsaved
   key text. The model is chosen from a list (`src/shell/ModelPicker.tsx`, IPC
   `ai_models`, `qiyas-ai/src/models.rs`): Anthropic's Models API (`GET /v1/models`, paged with
-  `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with the key from the
-  keychain; the saved model stays listed, a filter shows past 12 models, "Other…" takes a typed id,
+  `after_id`) or an OpenAI-compatible service's `GET {base_url}/models`, with a key explicitly typed for that address or its saved, address-bound
+  keychain entry; a filter shows past 12 models, "Other…" takes a typed id,
   and when the service can't be asked Claude's built-in list shows (`CLAUDE_MODELS`) with why.
-  A service list missing the saved model shows a warning without blocking Save; an empty
+  A readable service list missing the typed/saved model blocks Save; models explicitly lacking
+  tools or image input are hidden. Missing capability metadata stays unknown (no paid probe). An empty
   compatible profile can be saved, but sending asks for a model. Both providers explain a
-  missing model with the service and model name and direct the user to Settings, in English
-  or Arabic in the window.
+  missing model with a stable error code and direct the user to Settings, in English
+  or Arabic in the window. The support log keeps the service and model details.
 - The API key is never in a file: it lives in the OS keychain (service `qiyas`, account = the
-  provider name), is set only in the Settings dialog, and is never sent back to the window.
+  provider plus normalized complete base URL, including path), is set only in the Settings dialog,
+  and is never sent back to the window. Legacy entries migrate only to their saved address before
+  that address changes. Draft model discovery can use a key explicitly typed for that address; without one it requires
+  saving the address first. It never reads
+  a saved key for a different destination. Remote endpoints require HTTPS; HTTP is accepted only
+  for loopback. Malformed endpoints are rejected before credentials are fetched, and HTTP
+  redirects are disabled for provider requests.
   Agents never read or type a real key; the founder pastes it himself.
 - `QIYAS_AI_MOCK=1` with a debug build (`pnpm tauri dev`) uses a canned provider: it says a
   sentence, measures the first polyline on layer A-WALL and answers; with a selection in the
@@ -2068,12 +2178,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   text (TEXT or MTEXT), tables and cells, lines, polylines with bulges, rectangles, circles,
   arcs, hatches, clouds and block references. Sizes are drawing units; default text height is
   2.5 mm on paper at the annotation scale. `qiyas_read` rooms and the core `LabelSpaces` command
-  find the smallest closed region round each room-name text or seed via `Session::boundary_at`,
-  like Hatch: `enclosed_area_m2` is what the line work encloses, columns that overlap a wall
+  find the smallest closed region round each room-name text or seed via `Session::room_boundary_in`
+  with the enclosure policy above: `enclosed_area_m2` is what the line work encloses, columns that overlap a wall
   are already out, `net_area_m2` also takes the islands off (fountain, shaft;
   `subtract_islands` false keeps them). Bulged edges are exact; texts that look like areas are
   skipped so a second run does not label labels. `label_spaces` writes
-  "Unapproved candidate NN.NN m²", or its Arabic wording, just under each name. Verified on
+  "Area NN.NN m²", or "المساحة … م²" with Arabic digits, just under each name. Verified on
   `samples/test-plan.dwg`: living room 58.29 - 4 x 0.0025 = 58.28 enclosed, 51.211 net of the
   fountain; bedroom 22.085; kitchen 17.385 (the 0.4 m columns overlap the inset corners by
   0.05 x 0.05).
@@ -2085,12 +2195,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
   room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
   for each live run.
-- Long conversations are compacted, never ended: past `COMPACT_AT` (300) messages, earlier user
-  turns go, then the current turn's oldest call-and-result pairs, down to `COMPACT_TO` (160),
-  always keeping the newest `KEEP_RECENT` (60) messages whole (`Agent::compact`). A note first
-  in the history keeps the user's earlier requests word for word and one line per step dropped
-  (the newest 80), and tells Mizan to read the drawing for what was done; a later compaction
-  merges into it. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
+- Past `COMPACT_AT` (300), compaction retains the newest 160 messages, rounding out to a
+  complete call/result boundary, plus a first user note. It does not discard all earlier turns.
+  The note preserves every user request block, including merged interrupted requests and long
+  briefs, without clipping. Requests are JSON-escaped reversibly. The newest 80 removed call
+  summaries distinguish successful returns, failures and incomplete calls; success is not
+  described as verified work. Discovered contracts survive in a separate memory block. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
   make room. It replaced a hard stop at 400 that ended a design-package run mid-task.
 - An answer cut off by its length limit before it wrote text or a call (its room went on
   thinking: Gemini through Runware once thought 94 s and wrote nothing) is asked again with
@@ -2102,8 +2212,9 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   whole answer, and for a 4xx the request sent (`provider::request_for_log`: compact JSON,
   pictures as `<image>`, tools as their names, the system prompt as its length, scrubbed of the
   key first, then its LAST 4,000 characters after a `…` when longer); other texts clipped at
-  4,000 characters, never the key. The panel's Log button shows
-  its newest 256 KB (`ai_log`); an error offers "Show log".
+  4,000 characters, never the key. Settings → Technical details (for support) reads the newest
+  256 KB (`ai_log`) on demand and includes the window's last 50 diagnostic failures. The chat
+  header has no Log button; errors link to Settings. Raw Thinking is hidden in the thread.
 - OpenAI-compatible streams: Gemini (also behind Runware) sends parallel calls whole, all at
   index 0 or with none, so a new id, or a second name, starts a new call (`openai.rs`, `slot`).
   Input that was not valid JSON goes back as `{}`, as for Claude, so one bad call can't make
@@ -2113,8 +2224,10 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   signature) is kept by call id in the provider and sent back on that call. Each request asks for
   the effort (`reasoning_effort`: low, medium, high for high/xhigh/max), the answer's length
   (`max_completion_tokens`, else `max_tokens`) and the usage (`stream_options.include_usage`); a
-  400 naming one of those (`OPTIONAL_FIELDS`) drops it, sends again, and leaves it out for the rest
-  of the conversation. Cached and reasoning tokens are read into `Usage` and the log ("(n
+  400 explicitly refusing an unsupported parameter can drop that parameter and retry. Output
+  caps always remain: an unsupported `max_completion_tokens` switches to `max_tokens`; a range
+  error or refusal of both names stops with `ai.error.output_limit`. Cap-name choices are not
+  restored across conversations. Cached and reasoning tokens are read into `Usage` and the log ("(n
   thinking)"); reasoning accepts both `usage.completion_tokens_details.reasoning_tokens` and
   `usage.reasoning_tokens`. Each actual request, including optional-field retries, logs
   `sent:` with the controls present in its body. Both providers turn a missing-model reply
@@ -2127,11 +2240,13 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   drawing's folder; an outside drawing is copied into it. Only that drawing is opened,
   without project sidecars or external drawing resources. PDF page 1 uses eval's uncalibrated
   preparation. `qiyas_capture source picture` works; screen and selection return `needs_window`.
-- MCP `instructions` is exactly `registry().index_text()`, including the generated take-off
-  workflow used by Mizan. `qiyas_execute finish {answer?}` saves the drawing and headless
-  submission; stdin EOF also saves partial work. Outputs are `takeoff.json`, `measurement.json`,
-  `takeoff.xlsx` (generated BOQ and dimensions), `self-check.json`, `conflicts.json`, and
-  `end-report.json`. Each command/batch keeps its existing single undo boundary, source `mcp`.
+- MCP instructions give neutral task rules and the command categories. Quantity workflow is
+  read from `workflow {language: "en"|"ar"}` only when needed. `finish {answer?}` records
+  completion and reports without saving the drawing; `save_drawing` is explicit. Stdin EOF
+  still saves partial work in the run folder. Drawing completion has no requirement for BOQ
+  rows and writes a drawing check in `end-report.json`. Quantity jobs additionally write
+  `takeoff.json`, `measurement.json`, `takeoff.xlsx`, `self-check.json` and `conflicts.json`.
+  Each command/batch keeps its existing single undo boundary, source `mcp`.
 - Headless file paths stay in the workdir; traversal, symlinks, truth, recipes and settings
   are refused. One server owns one drawing; start another process to open a different drawing.
   This host does not supply desktop tabs or a project workspace.
@@ -2227,7 +2342,7 @@ and Mizan's turn epoch together.
   | `COUNT <block>` | `CountBlock` on the sheet (the counts go in the batch report). |
   | `DI` / `DIST p1 p2` | `MeasureDistance`; exactly 2 points. |
   | `AA` / `AREA p1 p2 p3…` | `MeasureArea`; 3 points or more; a blank line or the end of the file ends them. |
-  | `MEASURE <handle hex>` | `MeasureEntity` of the drawing's own entity. |
+  | `MEASURE <decimal handle or 0x…>` | `MeasureEntity` of the drawing's own entity. |
   | `EXPORT [xlsx path]` | The take-off to Excel; bare, `{name}.{ext}.xlsx`. |
   | `IMPORTBOQ <xlsx path>` | BOQ from Excel, then `SetBoq`. |
   | `COMPARE` | `compare_session`, default tolerance. |
@@ -2443,10 +2558,10 @@ and Mizan's turn epoch together.
   (normal dependencies on Linux, Windows and macOS) and the window's JavaScript packages with
   version and licence; `scripts/third-party.sh` writes it (offline, from the lock file and
   `node_modules`): run it after a dependency changes and before a release, and commit it.
-- The Thmanyah font files are built into the app by Vite when they are in `src/fonts/thmanyah/`:
-  installers built locally embed Thmanyah, while installers built on GitHub use the system's
-  Arabic font, because the Thmanyah files are not on the runners. Which to ship (and whether
-  the Thmanyah licence allows embedding it) is the founder's decision.
+- The founder approved embedding Thmanyah in GitHub installers on 23 October. The release
+  workflow unseals the existing private font archive and verifies all three weights. Official
+  builds fail if its secret is absent; forks explicitly report their system-font fallback.
+  Never read or print the secret or commit the unsealed fonts. Vite embeds the local fonts.
 
 ## Where the plans live
 
@@ -2477,12 +2592,296 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
   entity targets and counts read the drawing. The overall `untied_checks` and `line` explicitly
   say how many checks prove nothing about the drawing, even when their arithmetic passes.
 - (9) `opening_schedule {at, source_sheet?}` / `OPENINGSCHEDULE` builds an ACAD_TABLE on the
-  current sheet from wall systems on the source (Model by default). Rows group by kind, width,
-  and head minus sill, with physical dimensions in mm. Size marks such as D-900x2100 are
-  assigned to inserts in `QIYAS_OPENING_MARK` xdata and returned by `wall_groups`; those marks
+  current sheet from wall systems on the source (Model by default). Rows group by explicit ID,
+  falling back to a size mark from kind, width and head minus sill, with dimensions in mm.
+  Display marks such as D1 or D-900x2100 are assigned to inserts in `QIYAS_OPENING_MARK` xdata and returned by `wall_groups`; those marks
   can be used in plan tags. Count cells and the total use `QiyasOpeningCount` fields linked
   to the source sheet handle. `QIYAS_OPENING_SCHEDULE` keeps the source on the table. Drawing
   edits refresh groups, marks and counts within their undo step, including newly added sizes;
   DWG/DXF retain the values and links. Table location and column widths stay as placed.
   On layer 0 the generated table uses `A-ANNO-TABL`, created in the same undo step without
   changing the current layer. Initial cells are sized from displayed quantities, not field code.
+
+## Goal F: window language and layout (23 October 2026)
+
+- Arabic glyphs use Thmanyah first in every UI and monospace stack. Its Unicode-range faces
+  leave Latin text in Instrument Sans or monospace. Inputs, selects and textareas inherit the
+  font. All heading levels, legends and tabs enable swash, regardless of UI language.
+- Chat language is inferred from prose after ignoring code, layer identifiers and attachment
+  metadata. List items and table cells each follow their own prose direction. Latin
+  words and quantities are isolated with `bdi`; Arabic translation substitutions use Unicode
+  isolation. The UI keeps Western digits. See the glossary in the Goal F report.
+- PDF transport metadata is rendered as file-name/page chips, including restored conversations.
+  Paths are reduced to file names in chat. Approval buttons and the posted approval sentence
+  follow the chat language. Both system prompts forbid tool/command/field/handle names in
+  answers, and require brief surveying language. This is a generation rule, not a claim that
+  every live provider has been evaluated.
+- Caught backend errors go through `src/i18n/errors.ts`: known failures get a plain translated
+  reason; unknown failures get a translated fallback with support guidance. Raw errors stay
+  in the support buffer. `userError` preserves an already translated message across catches.
+  Assistant control-flow codes remain internal and are translated at their display boundary.
+- `entityKind` supplies plain English/Arabic labels across properties, selections, extraction,
+  recovery and fields. User views omit handles; evidence actions say Show on drawing with a
+  count. Explanation and generated-quantity panels show readable quantities and citations;
+  formulas containing internal fields, definitions and diagnostic notes sit under Technical
+  details. Script results show plain status with command/output details folded. Project outputs show file names. Take-off rows omit unspecified source/basis filler
+  and explain count limitations in plain words. No quantity, command or check rule changed.
+- Delete all conversations opens a confirmation naming the count; Cancel or Escape preserves
+  the saved chats. Single-conversation deletion is unchanged.
+- Report and evidence: `docs/2026-10-23-qiyas-goal-F.md`. No new dependencies or licence changes.
+
+## Honest commands and stable handles (Goal B, 23 October 2026)
+
+- Drawing edits keep the requested field changes before derivation and verify them after
+  object geometry, hosted positions, schedules, measurement and linked fields finish. An
+  overridden field cancels the whole command and names the responsible update. Entity
+  fields refresh only in the final derivation pass, after object geometry and schedules.
+  Computed closed outlines and hatch boundaries compare by their full edges, arcs and widths, allowing a different
+  starting vertex or direction and floating-point round-off. Ordinary vertex order stays
+  significant. Hosted angles compare modulo a full turn.
+  Entity comparisons ignore raw drawing caches. Unchanged entities and unchanged take-off snapshots
+  do not enter the change list or create undo steps; a no-op retains redo. Unchanged table
+  cells also skip rebuilding their display blocks.
+  If an edit changes no entity, drawing table or take-off value, derivations are skipped too;
+  this includes empty edits after reopening a DWG or DXF. Explicit `update_fields` still refreshes.
+  Unchanged take-off, BOQ and conflict edits likewise report no change and retain redo.
+- Opening `mark` is an explicit ID. Automatic size marks remain display defaults and never
+  replace that property. Opening schedules group by the explicit ID when present.
+  `edit_wall_opening` accepts `mark`; an empty edit keeps its handles and makes no undo step.
+  Old size marks written into the property by previous versions remain automatic; explicit
+  edits carry an ID-source marker.
+- Moving a hosted opening along its wall updates the position property named by its host-cut
+  recipe, in metres. A perpendicular move is refused. Copy an opening with its host, or use
+  `add_wall_openings`; copying it alone is refused before creating overlapping geometry.
+- Generated parts cannot receive raw record, text or vertex edits. Their owner is named in
+  the refusal. Whole-object transforms and erase through a part selection act on its owner.
+  Colour, linetype and lineweight through `set_property` apply to the owner and
+  its generated graphics. A part's direct layer or shape edit is refused. Retained room boundaries
+  follow enclosing walls; direct vertex, shape and transform edits are refused.
+- Live schedules refuse row/column/merge changes. Cells are editable only for a recipe that
+  explicitly preserves overrides. Change the source objects or create the desired schedule.
+- Layer renames and merges update persisted layer references in object instances, types,
+  schedules, wall metadata and drawing knowledge, including layer-property defaults and
+  choices. `plan.layer_properties` binds editable
+  text properties to role layers; `plan.host_layer_property` binds a hosted driver's layer
+  to its host's property. Wall layer properties use these data bindings and actually apply.
+  Role-layer edits on a joined wall update every run because the outlines and hatch are shared.
+  Placement role layers initialise their bound properties; conflicting explicit values are
+  refused. Unchanged generated graphics reserve their handles before changed graphics match.
+- Wall rebuilds reuse surviving driver and member handles and retain presentation properties.
+  Surviving centrelines retain their constraints. Joined groups give shared graphics to
+  the smallest surviving driver handle, matching the object engine even when run order differs.
+  Selected-object schedules and linked object fields follow replacement maps. Within a
+  transaction, literal handles and bound `$step` results follow single replacements; ambiguous
+  replacements produce a clear refusal. The MCP boundary resolves them before validation.
+- Command handles are decimal. Decimal strings and explicit `0x` hexadecimal strings are
+  accepted at the JSON boundary, including object record keys. Target objects also accept
+  a bare handle. MCP record, entity and measurement reads accept the same handle strings;
+  operation shortcuts normalize them before their argument validation, including captures.
+  Script `MEASURE` takes decimal, or explicit `0x` hexadecimal, matching the
+  command boundary. DWG field codes keep their required hexadecimal storage syntax.
+  Older schedule templates using `id_hex` remain readable but display decimal handles.
+  Properties, constraints, field target labels, recognition results and BOQ evidence also
+  display decimal handles. DWG field-code construction keeps its hexadecimal encoding.
+  Display tests that expected `2A` for handle 42 now expect `42`; field-code tests still
+  require the DWG hexadecimal form.
+- Unknown fields on editing, file, session and view commands are errors. Read commands retain
+  their warnings. Tests that previously required ignored edit fields now require refusal and
+  unchanged state; default-value coverage remains on valid inputs.
+
+## Goal E: providers and clear errors (23 October 2026)
+
+- Provider failures return stable `ai.error.*` codes with plain English `message` and Arabic
+  `message_ar`. `AiError::for_window` serializes this envelope in the existing `ai:done.error`
+  string; model-list failures use the same envelope. `src/i18n/errors.ts` recognizes the code
+  before legacy text patterns. Both languages live in `src/i18n/en.json` and `ar.json`; Rust
+  includes those catalogs. Raw, scrubbed diagnostics remain in the support log.
+- Billing/credit/quota failures never retry, even when delivered as 400/403/429/5xx or a stream
+  error. Classification sees the complete scrubbed response, before support-log clipping. Temporary 429, 5xx, connection failures and interrupted/overloaded streams use bounded
+  backoff. Each wait logs `RETRY`, the reason, wait and available partial text, and emits
+  `retrying {seconds, code, discard_partial}`. Unfinished text is removed before a repeated
+  response; no tool from an unfinished response executes. The existing retry after an answer
+  uses all its room thinking also emits the notice. Cancellation interrupts the wait.
+  Strict-budget providers disable automatic retries; model discovery does too. HTTP requests
+  now have a 10-minute total deadline in addition to connect/read timeouts.
+- A context-limit refusal gets at most one smaller request. Large tool-result text and pictures
+  are shortened, with explicit reread markers and intact call/result pairing and user words.
+  If no space can be made, or the retry fails, the translated error asks for a new chat. Normal
+  compaction, prompts and drafting workflow are unchanged. A provider error never emits a
+  take-off end report into a drawing chat; it leaves the already completed work in place.
+- Model discovery accepts a draft key only for the explicitly typed address, after endpoint
+  validation. Editing that address clears the draft key. Without a draft key, Goal A's saved
+  address check still happens before keychain access. Discovery refreshes after typing a key.
+  Save checks a typed model against a readable filtered list. Unknown capability metadata is
+  kept; explicit lack of tools or vision is hidden. No model invocation tests run on Save.
+- Profiles keep independent effort: new Anthropic profiles default to medium, compatible ones
+  to low. None omits the effort field (the service default); compatible services show only
+  none/low/medium/high. Old global effort migrates only into the selected profile; old
+  compatible xhigh/max becomes its previous effective value, high. Headless eval reads the
+  selected profile too. Changing effort applies to the next message without clearing the chat.
+  The legacy top-level effort remains for old-file compatibility.
+- Streaming tokens append in memory without copying the full conversation. Checkpoints are
+  made at response/step boundaries, including errors and cancellation. Desktop progress saves
+  occur on the opening message and completed steps. The existing AI lock still serializes
+  file writes with conversation reset/deletion, avoiding stale or overlapping writes.
+  Final conversation saves retain the existing recovery contract.
+- Partial compatible-provider usage objects update only the supplied counters, including
+  cached/reasoning tokens and DeepSeek cache aliases. Output limits are never dropped merely
+  because a value error names the field.
+- Settings offers **Replace token on Save**. It generates 16 random bytes locally, updates the
+  displayed setup snippets, and only Save persists it and restarts MCP. Cancel keeps the old
+  token. Existing MCP address/origin restrictions remain in place.
+- Evidence and remaining sandbox restrictions: `docs/2026-10-23-qiyas-goal-E.md`. No new
+  dependencies, paid calls, commits or pushes.
+
+Headless take-off evaluation keeps its own brief stopped-run summary when a request/cost cap or
+provider error arrives before a completed answer. That report belongs to the evaluation host;
+it is not appended to desktop drawing chats. The existing budget-stop report test remains intact.
+
+
+## Goal G: drawing quality and honest checks (23 October 2026)
+
+- `ink.rs` builds a spatial index of plotted geometry with top-level ownership. It flattens
+  tables, dimensions, blocks, attributes, leaders and hatches, excludes non-plotting/hidden
+  layers, and shapes text through the same `TextEngine` as the viewport. Query bounds also use
+  shaped text. Checks use full oriented footprints, including text edges, solid fill interiors
+  and table cells. Text is also checked against its own cell borders or symbol geometry; the reserved table
+  footprint itself is excluded from these internal checks. Dimension extension-line connections
+  and arrows touching measured geometry are allowed.
+- Added `annotation_overlap`, `annotation_over_grid`, `label_outside_room` and
+  `object_tag_mismatch`. The minimum readable text height is 2.5 mm on paper. Annotation
+  warnings introduced in a Mizan phase join its existing error gate. Automatic results report
+  `layout_findings` and coverage; the English/Arabic prompts add only a short repair note.
+- Registry `free_space {size:[w,h] | entity, near?, side?:any|right|below, clearance_mm?,
+  sheet?, within?}` reads without changing drawing/history. Size and coordinates are drawing
+  units; clearance is paper mm (default 2.5). It returns up to eight ranked top-left positions,
+  bounds, deltas, current collisions, and occupied plotted bounds. A finite candidate search
+  can return no position; that does not prove that none exists. Incomplete source geometry is
+  refused rather than treated as empty space.
+- Registry `auto_place {targets, near?, side?, clearance_mm?}` places tables and labels in
+  available space in one undo step. Live room labels stay inside their own region, wrapping
+  when necessary. Linear/aligned dimensions retain measured endpoints and search both sides
+  for a clear dimension line, including extension lines against grid bubbles and annotations.
+  Explicit dimension creation coordinates stay literal: use the helper to resolve findings.
+  Failed placement rolls back. `room_schedule` and `opening_schedule` accept omitted `at`,
+  placing beyond the annotated extents with 10 mm paper clearance. Explicit `at` is top-left.
+- Registry `object_tags {targets, property, height?}` labels any text/number object property,
+  including door/window `mark`, at 2.5 mm paper height by default. Tags store the object's
+  persistent identity, follow its position/property through edits, undo and DWG/DXF, and reuse
+  existing tags. Rebuilt source handles follow the existing field-remapping pass. They use the
+  same free-space search. Manual offsets are retained when the
+  source moves. Missing sources or divergent tag text are findings. Opening schedules supply
+  their marks; custom mark policy remains Goal B's work.
+- The legacy door recipe uses `host_width / 2` for the hinge's normal offset: the face on the
+  swing side. No object or wall engine logic changed. New linetype painting leaves measured
+  paths continuous and applies dash phase across path vertices. Screen/capture/PDF share it.
+  Hatch/room boundary tracing uses `flatten_continuous_within`, including block arrays: printed
+  gaps never open or divide the underlying CAD geometry.
+  Imported PDMODE 1 points draw nothing; PDMODE 0 is a dot. Positive PDSIZE is a drawing-unit
+  size; negative PDSIZE is a percentage of the sheet extent (not a zoom-dependent viewport size).
+- Dimension generation accepts the rendered text width for gaps and leader landings, so radius
+  and ordinate text no longer rely on a character-count estimate.
+- Approval remains in the room/take-off report. Plan wording stays `Area 19.31 m²` /
+  `المساحة ١٩٫٣١ م²`, with Arabic digits and decimal separator. No new dependencies or licence changes.
+- Evidence and exact check results: `docs/2026-10-23-qiyas-goal-G.md`.
+## Goal M: measurement by name (23 October 2026)
+
+- `mcp`, `eval` and `eval-agent` accept `--method "POMI (RICS)"` (or any method name).
+  Eval overrides the saved choice for that run. External agents receive the same name through
+  the generated MCP configuration and request; custom runner templates also have `{method}`.
+  Headless MCP does not load app settings or credentials. Local method rules are optional.
+- Rules authored with `measurement.set_method` remain drawing knowledge through save/reopen.
+  Reapplying the same name-only Settings selection does not erase them or add an undo step.
+  Clearing Settings leaves an explicit project override in force.
+- Generated items retain their method and rule citations through dimension lines. The standard
+  take-off workbook now shows Method and Source / clause on its BOQ sheet too. Default BOQ
+  deliverables show both columns; dimension deliverables show Method beside their citations.
+  Citation objects render as source / clause instead of empty reference text. Custom layouts
+  keep their chosen columns; lossless records retain the complete trace.
+- Offline tests use visibly invented clause markers and geometric transport fixtures, never
+  a published standard's rules. They check plumbing and persistence, not model knowledge or
+  correctness of any standard interpretation. No paid provider is used. Evidence and real
+  check results are in `docs/2026-10-23-qiyas-goal-M.md`.
+
+## Goal D: Mizan's judgement (23 October 2026)
+
+- Drawing chats receive no injected take-off workflow or BOQ completion notice. Job scope comes
+  from the request and operations used, not drawing names or layer conventions. Continuations
+  retain their scope; a fresh drawing request resets it. Measuring a handle for a numeric read
+  does not start a take-off. Actual quantity commands and `takeoff_kit` do. The stable system
+  prompt and neutral command index stay cached. Old saved prompts with an unconditional
+  quantity workflow are rebuilt on resume; their tied provider signatures are dropped, while
+  requests and tool results remain. Both fixed prompts remain below 900 words.
+- Workflow and budget guidance follow the chat language. The separate workflow read accepts a
+  language; the kit keeps its existing size bound. Prior injected workflow guidance is removed
+  at the next turn, then supplied only for the current job in the current chat language.
+  Mizan supplies the chat language itself. Drawing budget notices ask for requested checks
+  and remaining work. Confidence and interrupted take-off reports run only for quantity jobs and follow the chat language.
+- `finish` never calls Save, opens Save As, or reports a saved drawing. The default desktop host
+  records completion only. Explicit Save and headless EOF retention remain separate operations.
+- An identical failed or ineffective edit can execute twice; the third is refused with a plain
+  explanation. Reads between attempts do not reset the guard. Successful edits permit another
+  attempt in changed state. MCP retries with the same request ID still return the cached result.
+  Core edit results expose `no_change` from the committed undo revision, including table edits.
+- `redo_own` and typed `REDO` restore the original next redo step only when the caller owns it;
+  typed `UNDO`/`U` use `undo_own`. Handles and the original transaction are preserved. Sheet
+  authority, drawing epoch, and ordinary undo safety still apply.
+- `qiyas_read panel_state {}` reads through the existing window request/reply channel
+  (`ai:panels` / `ai_window_reply`). It returns visible panel folds, the active side tab,
+  current layer, flat/folder mode, expanded groups, selected layer rows, open layer properties,
+  drawing selection and open dialog labels. It uses rendered React state, including choices
+  not saved to storage. It changes nothing and needs no drawing. Headless replies `needs_window`
+  with a plain no-window explanation. A screen capture shows the drawing canvas only.
+- New warnings as well as errors on touched geometry prevent a clean completion. The baseline
+  uses the full check, including findings beyond the display cap. Autonomous work gets up to two
+  correction requests after a premature final answer, then stops as incomplete if findings remain.
+  Phase completion is refused while new findings remain. Existing approval modes retain their
+  pause behavior. Both prompts require readable labels, clear placement, picture review and
+  correction of warnings. Questions about panels authorize explanation, not unsolicited edits.
+- Scripted-provider tests and headless evidence are documented in
+  `docs/2026-10-23-qiyas-goal-D.md`. No paid calls or new dependencies.
+
+## Goal C: reliable inputs and incremental updates (23 October 2026)
+
+- Record `fields` and `where.path` accept summary names, including `layer`, `length`, `area`,
+  `text`, `key` and `type`; `handle` aliases the key. Bare raw-data keys also work. Existing
+  JSON pointers keep their data meaning and can fall back to summary paths such as `/length`.
+  A malformed path or a path absent from every record is an error naming available fields.
+  On mixed records a missing projected property is omitted and named in page `warnings`;
+  an explicit null stays null. An empty scope reports that paths could not be checked.
+  `exists` can deliberately test an absent path. Missing properties never satisfy `ne` or
+  `not_in`. `in`/`not_in` need arrays and match text without case; ordered comparisons require
+  two numbers or two strings. Record lengths, areas and bounds remain in drawing units.
+- Text queries accept `bounds` (the same box as `within`) and a case-insensitive `layer`.
+  Returned text rows include the effective layer, with layer 0 inherited inside blocks and
+  the external drawing prefix. Supplying both bounds names is refused as a duplicate.
+- JSON `set_layer` accepts several named properties in one undo step: color, linetype,
+  lineweight, on, frozen, locked and plot. The existing prop/value form remains valid; mixing
+  the two forms is refused. The wire normalizer maps the shorthand to the native properties
+  operation. Colors accept the existing ACI/hex notation, layer color indices 1–255, and
+  red/yellow/green/cyan/blue/magenta/white. Named colors work in other color commands too.
+  `delete_entities {handles}` aliases targets and uses the same handle normalization and
+  protection rules. Supplying handles and targets together is refused.
+- `qiyas_execute run {command, layer?, color?}` uses the existing atomic batch context,
+  including making a missing layer and restoring the current drawing properties afterwards.
+  Its wrapped batch outcome reports the actual entity changes. Read-only run stays read-only.
+- `commands {name}` discovers surface operations such as query and finish as well as core
+  commands. Qualified names (`qiyas_read.query`, `qiyas_execute.run`, `qiyas_capture.picture`)
+  select the exact operation when names overlap. Operation results include schema and example.
+  Scalar enum unions list every allowed value in validation errors. Record schemas seed nested
+  codec enum variants, so valid text alignments are accepted. Record documentation and
+  capabilities say 20 records by default, 200 maximum, and a 12,000-byte budget for records
+  and warnings, excluding the page envelope; a single oversized record can exceed it. The generic surface has its separate result byte limit.
+- Derivation compares immutable entity snapshots and source definitions from before the edit.
+  Object refresh follows hosts, union groups and block references; retained regions follow their
+  sheet/enclosure sources; schedules follow their selected objects; linked fields follow their
+  referenced entities and counts. New or edited take-off rows refresh retained-region validity
+  and metadata without retracing unchanged enclosures. Definition/lookup changes conservatively
+  refresh dependents.
+  Generated label defaults use the driver's own sheet, so switching the viewed sheet cannot resize them.
+  Full derivation establishes a consistent state when opening or reloading linked drawings
+  and remains the differential-test reference. No persistent derivation cache can go stale after undo or rollback.
+  Legacy wall migration preserves the role/index of already converted parts with the same
+  owner, so editing a copied wall does not rewrite its source group's metadata.
+  Goal B's requested-field checks and final net change reports remain in force.
+- Evidence, timings, checks and limitations: `docs/2026-10-23-qiyas-goal-C.md`.

@@ -1,7 +1,8 @@
 //! The agent loop: stream a turn, run the tools the model asks for on the shared session, send
 //! the results back, and repeat until the model ends its turn.
 
-use std::collections::BTreeSet;
+use crate::judgement::{self, Job};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
@@ -88,6 +89,42 @@ pub struct MeasurementMethod {
     pub rules_loaded: bool,
 }
 
+impl MeasurementMethod {
+    /// Drawing knowledge is authoritative, including a project override or an explicit clear.
+    pub fn for_session(session: &Session, fallback: &Self) -> Result<Self, qiyas_core::CoreError> {
+        if qiyas_core::knowledge::get(
+            &session.drawing.doc,
+            qiyas_core::knowledge::Kind::Measurement,
+            "selection",
+        )?
+        .is_none()
+        {
+            return Ok(fallback.clone());
+        }
+        let selection = session.measurement_selection()?;
+        Ok(Self {
+            name: selection.effective().map(|method| method.name.clone()),
+            rules_loaded: selection
+                .effective()
+                .is_some_and(|method| !method.rules.is_empty()),
+        })
+    }
+
+    pub fn instruction(&self) -> &'static str {
+        if self.name.is_none() {
+            "No method selected. Use cited geometric quantities."
+        } else if self.rules_loaded {
+            "Reuse the drawing's cited method rules. Preserve the project override."
+        } else {
+            "Write rules from your knowledge in your own words, with <standard> clause <n> citations. Save via measurement.set_method for reuse. List uncertain rules/references in the end report."
+        }
+    }
+
+    pub fn state(&self) -> Value {
+        serde_json::json!({"name":self.name,"rules_loaded":self.rules_loaded,"instruction":self.instruction()})
+    }
+}
+
 impl Default for AgentSettings {
     fn default() -> Self {
         AgentSettings {
@@ -106,6 +143,14 @@ impl Default for AgentSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    ProviderStatus {
+        code: String,
+    },
+    Retrying {
+        seconds: u64,
+        code: String,
+        discard_partial: bool,
+    },
     Text {
         text: String,
     },
@@ -123,15 +168,21 @@ pub enum AgentEvent {
         id: String,
         name: String,
         input: Value,
-        /// The command or operation shown on the tool card.
+        /// The command or operation kept in the card's technical details.
         label: Option<String>,
+        /// Translatable presentation metadata, absent in older saved conversations.
+        #[serde(default)]
+        activity: Option<crate::activity::Activity>,
         /// An execute operation other than planning, selecting or viewing.
         mutating: bool,
     },
     ToolResult {
         id: String,
-        /// One line for the user.
+        /// Diagnostic summary for the card's technical details and the log.
         summary: String,
+        /// A count from the structured result, never from its English summary.
+        #[serde(default)]
+        count: Option<u64>,
         /// Entities the result is about, to highlight.
         handles: Vec<u64>,
         /// What the window should do (`show_sheet`, `zoom`, `redraw`, ...), from the tool.
@@ -161,6 +212,8 @@ pub struct Agent {
     host: Option<Arc<dyn DrawingHost>>,
     /// The user's message of the turn running: a path written in it counts as named by the user.
     turn_text: String,
+    job: Job,
+    chat_language: Lang,
     settings: AgentSettings,
     /// Built at the first turn and kept, byte for byte, until `clear()`.
     system: Option<String>,
@@ -201,6 +254,7 @@ struct TurnCounts {
     plan_seen: bool,
     approved: bool,
     awaiting: Option<surface::Plan>,
+    ineffective: BTreeMap<String, usize>,
 }
 
 impl TurnCounts {
@@ -234,6 +288,8 @@ impl Agent {
             session,
             host: None,
             turn_text: String::new(),
+            job: Job::Drawing,
+            chat_language: settings.language,
             settings,
             system: None,
             history: Vec::new(),
@@ -310,7 +366,16 @@ impl Agent {
         session: Arc<Mutex<Option<Session>>>,
         settings: AgentSettings,
     ) -> Self {
-        if conv.provider == settings.provider && conv.model == settings.model {
+        // Old saved prompts injected the quantity workflow into every drawing chat. Rebuild
+        // those prompts and discard their tied provider signatures, as for a model change.
+        let old_workflow = conv
+            .system
+            .as_ref()
+            .is_some_and(|s| s.contains("\nTake-off workflow:"));
+        if old_workflow {
+            conv.system = None;
+        }
+        if !old_workflow && conv.provider == settings.provider && conv.model == settings.model {
             provider.restore_state(conv.provider_state);
         } else {
             for message in &mut conv.history {
@@ -353,6 +418,34 @@ impl Agent {
         agent.created = conv.created;
         agent.system = conv.system;
         agent.history = conv.history;
+        let mut pending = BTreeMap::new();
+        for entry in &conv.transcript {
+            match entry {
+                TranscriptEntry::User { text, .. } => agent.job = Job::request(text, agent.job),
+                TranscriptEntry::Event {
+                    event:
+                        AgentEvent::ToolCall {
+                            id, name, input, ..
+                        },
+                } => {
+                    pending.insert(id.as_str(), (name, input));
+                }
+                TranscriptEntry::Event {
+                    event:
+                        AgentEvent::ToolResult {
+                            id,
+                            is_error: false,
+                            ..
+                        },
+                } if pending
+                    .get(id.as_str())
+                    .is_some_and(|(name, input)| Job::observes(name, input)) =>
+                {
+                    agent.job = Job::Takeoff;
+                }
+                _ => {}
+            }
+        }
         agent.image_bytes = conv.image_bytes;
         agent.transcript = Mutex::new(conv.transcript);
         agent.resumed = true;
@@ -386,12 +479,16 @@ impl Agent {
                 event: event.clone(),
             },
         );
-        self.update_checkpoint();
+        // Text deltas append in place. Copy the full conversation only at a step boundary.
+        if !matches!(event, AgentEvent::Text { .. } | AgentEvent::Thinking { .. }) {
+            self.update_checkpoint();
+        }
         let _ = events.send(event).await;
     }
 
     /// The agent with the app's drawings behind its file tools (`crate::host`).
     pub fn with_host(mut self, host: Arc<dyn DrawingHost>) -> Agent {
+        self.provider.set_host(host.clone());
         self.host = Some(host);
         self
     }
@@ -422,6 +519,7 @@ impl Agent {
     /// Starts a new conversation: the next turn builds a new system prompt.
     pub fn clear(&mut self) {
         self.history.clear();
+        self.job = Job::Drawing;
         self.system = None;
         self.image_bytes = 0;
         self.id.clear();
@@ -491,6 +589,10 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
         cancel: CancellationToken,
     ) -> Result<(), AiError> {
+        // A native CLI owns its tool loop. Never silently bypass Qiyas's phase approvals.
+        if self.provider.owns_turn() && self.settings.autonomy != Autonomy::Autonomous {
+            return Err(AiError::Subscription("claude_approval"));
+        }
         let UserMessage {
             text: user_text,
             context: pointed,
@@ -535,7 +637,18 @@ impl Agent {
             self.system = system;
         }
         let system = self.system.clone().unwrap_or_default();
+        self.job = Job::request(&user_text, self.job);
+        self.chat_language = judgement::language(&user_text, self.settings.language);
+        // Guidance belongs to this job and language; preserve the user's actual requests.
+        for message in &mut self.history {
+            message.content.retain(|block| {
+                !matches!(block, ContentBlock::Text { text }
+                if text == crate::prompt::takeoff_workflow(Lang::En)
+                    || text == crate::prompt::takeoff_workflow(Lang::Ar))
+            });
+        }
         self.turn_text = user_text.clone();
+        self.provider.begin_turn(&user_text);
         let mut content = vec![ContentBlock::Text { text: state }];
         if std::mem::take(&mut self.resumed) {
             content.push(ContentBlock::Text { text: "[resumed] This conversation continues after a pause; the drawing may have changed: read it before acting.".into() });
@@ -573,11 +686,17 @@ impl Agent {
         self.update_checkpoint();
         let tools = catalogue();
         let mut counts = TurnCounts {
-            approved: self.turn_text.trim() == "Approved, continue.",
+            approved: matches!(
+                self.turn_text.trim(),
+                "Approved, continue." | "موافق، تابع." | "موافق، أكمل."
+            ),
             ..TurnCounts::default()
         };
+        let mut workflow_sent = false;
+        let mut correction_requests = 0;
         let mut usage = Usage::default();
         let mut requests = 0;
+        let mut context_retried = false;
         // Grows when an answer spends all its room thinking (see `MAX_TOKENS_CAP`).
         let mut max_tokens = self.settings.max_tokens;
         loop {
@@ -590,10 +709,24 @@ impl Agent {
                 return self.stop(&events, TOO_LONG).await;
             }
             let mut messages = self.history.clone();
-            let notice = self.provider.budget_notice().or_else(|| {
-                (counts.calls * 5 >= counts.limit() * 4).then(||
-                    "[finish now] 80% of tool budget used. Finish BOQ mappings from accepted recognised elements, read measurement.report, and write the end report with remaining uncertainties. Stop exploring.".into())
-            });
+            if self.job == Job::Takeoff && !workflow_sent {
+                let workflow = ContentBlock::Text {
+                    text: crate::prompt::takeoff_workflow(self.chat_language).into(),
+                };
+                if let Some(last) = self.history.last_mut() {
+                    last.content.push(workflow.clone());
+                }
+                if let Some(last) = messages.last_mut() {
+                    last.content.push(workflow);
+                }
+                workflow_sent = true;
+            }
+            let provider_notice = self.provider.budget_notice();
+            let near_limit = counts.calls * 5 >= counts.limit() * 4
+                || provider_notice
+                    .as_ref()
+                    .is_some_and(|n| n.contains("[finish now]"));
+            let notice = near_limit.then(|| self.job.budget(self.chat_language).to_string());
             if let (Some(last), Some(text)) = (messages.last_mut(), notice) {
                 last.content.push(ContentBlock::Text { text });
             }
@@ -616,7 +749,8 @@ impl Agent {
                 Err(e) => {
                     self.log("ERROR", || match &e {
                         AiError::Api { body, request, .. } => {
-                            let mut text = format!("{e}\nThe service's answer: {body}");
+                            let mut text =
+                                format!("{e}\nThe service's answer: {}", crate::log::clip(body));
                             if let Some(request) = request {
                                 text.push_str(&format!("\nThe request: {request}"));
                             }
@@ -624,7 +758,30 @@ impl Agent {
                         }
                         _ => e.to_string(),
                     });
-                    self.report_interrupted(&events, &e.to_string()).await;
+                    if !self.provider.owns_turn()
+                        && e.code() == "context_too_long"
+                        && !context_retried
+                    {
+                        context_retried = true;
+                        if self.make_context_room() {
+                            self.log("COMPACTED (context limit)", || {
+                                "Large results and older pictures shortened; retrying once".into()
+                            });
+                            self.emit(
+                                &events,
+                                AgentEvent::Retrying {
+                                    seconds: 0,
+                                    code: "ai.error.context_retry".into(),
+                                    discard_partial: false,
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                    }
+                    // Provider errors are displayed once by the window, in its language.
+                    // A failed drawing request must never produce a take-off end report.
+                    self.update_checkpoint();
                     return Err(e);
                 }
             };
@@ -676,12 +833,23 @@ impl Agent {
                 // through Runware once thought for 94 s and wrote nothing). Nothing ran, so the
                 // same request goes again with twice the room; the cut-off answer is dropped.
                 StopReason::MaxTokens
-                    if says_nothing(&turn.content) && max_tokens < MAX_TOKENS_CAP =>
+                    if !self.provider.owns_turn()
+                        && says_nothing(&turn.content)
+                        && max_tokens < MAX_TOKENS_CAP =>
                 {
                     max_tokens = (max_tokens.max(1) * 2).min(MAX_TOKENS_CAP);
                     self.log("RETRY", || {
                         format!("the answer was cut off before it said anything; asking again with max_tokens {max_tokens}")
                     });
+                    self.emit(
+                        &events,
+                        AgentEvent::Retrying {
+                            seconds: 0,
+                            code: "ai.error.output_limit".into(),
+                            discard_partial: true,
+                        },
+                    )
+                    .await;
                 }
                 reason => {
                     let assistant = Message::assistant(turn.content);
@@ -706,22 +874,33 @@ impl Agent {
                             };
                             if !errors.is_empty() && self.settings.autonomy != Autonomy::Autonomous
                             {
-                                let plan = Self::error_approval_plan(self.approval_plan(), &errors);
+                                let plan = Self::error_approval_plan(
+                                    self.approval_plan(),
+                                    &errors,
+                                    self.chat_language,
+                                );
                                 self.emit(&events, AgentEvent::AwaitingApproval { plan })
                                     .await;
                             } else {
                                 if !errors.is_empty() {
-                                    let text = format!(
-                                        "\nUnresolved drawing checks: {}. Review is optional.",
-                                        errors.iter().cloned().collect::<Vec<_>>().join("; ")
-                                    );
-                                    if let Some(last) = self.history.last_mut() {
-                                        last.content
-                                            .push(ContentBlock::Text { text: text.clone() });
+                                    if correction_requests < 2 && counts.calls < counts.limit() {
+                                        correction_requests += 1;
+                                        self.push_user(vec![ContentBlock::Text {text: format!(
+                                            "[drawing check] Work is not complete. Fix the new errors and warnings before finishing; read the affected objects and check again. Findings: {}",
+                                            errors.iter().cloned().collect::<Vec<_>>().join("; "))}]);
+                                        continue;
                                     }
-                                    self.emit(&events, AgentEvent::Text { text }).await;
+                                    let text = match self.chat_language {
+                                        Lang::En => "The drawing still has issues from my changes. I could not finish correcting them; the work is incomplete.",
+                                        Lang::Ar => "ما زالت هناك مشكلات نتجت عن تعديلاتي على الرسم. لم أتمكن من تصحيحها كلها؛ العمل غير مكتمل.",
+                                    };
+                                    self.emit(&events, AgentEvent::Text { text: text.into() })
+                                        .await;
+                                    return self.stop(&events, "drawing_checks_unresolved").await;
                                 }
-                                self.report_confidence(&events).await;
+                                if self.job == Job::Takeoff {
+                                    self.report_confidence(&events).await;
+                                }
                                 self.emit(&events, AgentEvent::Done { usage }).await;
                             }
                             Ok(())
@@ -774,7 +953,11 @@ impl Agent {
                 .map(|i| format!("{}: {:.0}%", i.code, i.confidence * 100.))
                 .collect::<Vec<_>>()
                 .join("; ");
-            let text = format!("\nConfidence report (lowest first): {items}. Bands: low {}, medium {}, high {}. Review is optional.", summary.low, summary.medium, summary.high);
+            let text = if self.chat_language == Lang::Ar {
+                format!("\nالثقة في الكميات، من الأقل: {items}. منخفضة: {}، متوسطة: {}، عالية: {}. المراجعة اختيارية.", summary.low, summary.medium, summary.high)
+            } else {
+                format!("\nConfidence report (lowest first): {items}. Bands: low {}, medium {}, high {}. Review is optional.", summary.low, summary.medium, summary.high)
+            };
             self.emit(events, AgentEvent::Text { text }).await;
         }
     }
@@ -782,21 +965,36 @@ impl Agent {
     /// A hard cap may leave no paid request for a final answer. Report the persisted state
     /// locally; never fabricate measurements or discard an already generated BOQ.
     async fn report_interrupted(&self, events: &mpsc::Sender<AgentEvent>, reason: &str) {
+        if self.job != Job::Takeoff {
+            return;
+        }
         self.report_confidence(events).await;
         let session = self.session.clone();
+        let arabic = self.chat_language == Lang::Ar;
         let report = tokio::task::spawn_blocking(move || {
             let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             let s = guard.as_ref()?;
             let report = s.measurement_report().ok()?;
             let recognised = s.recognition_evidence().ok()?.iter()
                 .filter(|c| c.state == qiyas_core::recognition::ReviewState::Accepted).count();
-            Some(format!("{} generated BOQ items retained from {recognised} accepted recognised elements. {} Unmapped or uncertain scope remains incomplete; no quantities were invented.",
-                report.items.len(), report.warnings.join("; ")))
-        }).await.ok().flatten().unwrap_or_else(|| "The take-off is incomplete; no further provider request was made.".into());
+            Some(if arabic {
+                format!("احتُفظ بـ {} بند كميات من {recognised} عنصر مقبول. توجد {} ملاحظة للمراجعة. النطاق غير المرتبط أو غير المؤكد لم يكتمل؛ لم تُختلق كميات.", report.items.len(), report.warnings.len())
+            } else {
+                format!("{} generated BOQ items retained from {recognised} accepted recognised elements. {} Unmapped or uncertain scope remains incomplete; no quantities were invented.", report.items.len(), report.warnings.join("; "))
+            })
+        }).await.ok().flatten().unwrap_or_else(|| if arabic {
+            "الحصر غير مكتمل؛ لم يُرسل طلب آخر إلى خدمة المساعد.".into()
+        } else {
+            "The take-off is incomplete; no further provider request was made.".into()
+        });
         self.emit(
             events,
             AgentEvent::Text {
-                text: format!("\nEnd report: {reason}. {report}"),
+                text: if arabic {
+                    format!("\nملخص العمل المتوقف: {report}")
+                } else {
+                    format!("\nEnd report: {reason}. {report}")
+                },
             },
         )
         .await;
@@ -828,8 +1026,11 @@ impl Agent {
         };
         let forward = async {
             let mut reported = false;
+            let mut partial = String::new();
+            let mut streamed = false;
             while let Some(e) = rx.recv().await {
                 let event = match e {
+                    StreamEvent::Activity(event) => *event,
                     StreamEvent::RequestSent(fields) => {
                         reported = true;
                         self.log(&format!("REQUEST {request_number}; sent: {fields}"), || {
@@ -837,8 +1038,38 @@ impl Agent {
                         });
                         continue;
                     }
-                    StreamEvent::TextDelta(text) => AgentEvent::Text { text },
-                    StreamEvent::Thinking(text) => AgentEvent::Thinking { text },
+                    StreamEvent::Retrying {
+                        seconds,
+                        code,
+                        diagnostic,
+                        discard_partial,
+                    } => {
+                        self.log("RETRY", || {
+                            format!(
+                                "{code}; {diagnostic}; waiting {seconds} s; partial answer: {}",
+                                crate::log::clip(&partial)
+                            )
+                        });
+                        let discard_partial = discard_partial && streamed;
+                        partial.clear();
+                        streamed = false;
+                        AgentEvent::Retrying {
+                            seconds,
+                            code,
+                            discard_partial,
+                        }
+                    }
+                    StreamEvent::TextDelta(text) => {
+                        streamed = true;
+                        if partial.len() < crate::log::MAX_TEXT {
+                            partial.push_str(&text);
+                        }
+                        AgentEvent::Text { text }
+                    }
+                    StreamEvent::Thinking(text) => {
+                        streamed = true;
+                        AgentEvent::Thinking { text }
+                    }
                     _ => continue,
                 };
                 self.emit(events, event).await;
@@ -850,10 +1081,12 @@ impl Agent {
                 );
             }
         };
-        tokio::select! {
+        let result = tokio::select! {
             (result, ()) = async { tokio::join!(turn, forward) } => Some(result),
             () = cancel.cancelled() => None,
-        }
+        };
+        self.update_checkpoint();
+        result
     }
 
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
@@ -879,12 +1112,26 @@ impl Agent {
                     input: input.clone(),
                     label: surface::label(name, input),
                     mutating: surface::mutating(name, input),
+                    activity: Some(crate::activity::describe(name, input)),
                 },
             )
             .await;
             let started = Instant::now();
             // Every answered call counts, bad input included.
-            let (mut block, event) = if let Some(why) = stopped.as_deref() {
+            let fingerprint = edit_fingerprint(name, input);
+            let repeated = fingerprint
+                .as_ref()
+                .is_some_and(|key| counts.ineffective.get(key).copied().unwrap_or(0) >= 2);
+            let (mut block, mut event) = if let Some(why) = stopped.as_deref() {
+                (error_result(id, why), error_event(id, why))
+            } else if repeated {
+                let why = match self.chat_language {
+                    Lang::En => "I stopped repeating this edit because two attempts made no change. The requested change is still incomplete.",
+                    Lang::Ar => "توقفت عن تكرار هذا التعديل لأن محاولتين لم تغيّرا شيئًا. التعديل المطلوب لم يكتمل.",
+                };
+                stopped = Some("repeated_ineffective_edit".into());
+                self.emit(events, AgentEvent::Text { text: why.into() })
+                    .await;
                 (error_result(id, why), error_event(id, why))
             } else if counts.awaiting.is_some() {
                 let why = "Not run: waiting for the user's approval.";
@@ -958,6 +1205,16 @@ impl Agent {
                     }
                 }
             };
+            if let Some(key) = fingerprint {
+                if ineffective(&block) {
+                    *counts.ineffective.entry(key).or_default() += 1;
+                } else {
+                    counts.ineffective.clear();
+                }
+            }
+            if !is_error(&block) && Job::observes(name, input) {
+                self.job = Job::Takeoff;
+            }
             let left = counts.limit().saturating_sub(counts.calls);
             if left <= 10 {
                 add_budget(&mut block, left);
@@ -992,12 +1249,26 @@ impl Agent {
                     } else {
                         BTreeSet::new()
                     };
+                    if !errors.is_empty() && self.settings.autonomy == Autonomy::Autonomous {
+                        let why = format!("Fix the new drawing errors and warnings before completing this phase: {}", errors.iter().cloned().collect::<Vec<_>>().join("; "));
+                        block = error_result(id, &why);
+                        event = error_event(id, &why);
+                        if let Some(last) = self.history.last_mut() {
+                            last.content.push(block);
+                        }
+                        self.emit(events, event).await;
+                        continue;
+                    }
                     let first = !counts.plan_seen;
                     counts.plan_seen = true;
                     if stopped.is_some() {
                         counts.awaiting = None;
                     } else if !errors.is_empty() && self.settings.autonomy != Autonomy::Autonomous {
-                        counts.awaiting = Some(Self::error_approval_plan(plan.clone(), &errors));
+                        counts.awaiting = Some(Self::error_approval_plan(
+                            plan.clone(),
+                            &errors,
+                            self.chat_language,
+                        ));
                     } else if self.settings.autonomy != Autonomy::Autonomous
                         && ((first && plan.phases.len() >= 2 && !counts.approved)
                             || (self.settings.autonomy == Autonomy::PerPhase && completed))
@@ -1061,13 +1332,11 @@ impl Agent {
         Ok(errors)
     }
 
-    fn error_approval_plan(mut plan: surface::Plan, errors: &BTreeSet<String>) -> surface::Plan {
-        let errors = errors
-            .iter()
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
+    fn error_approval_plan(
+        mut plan: surface::Plan,
+        errors: &BTreeSet<String>,
+        lang: Lang,
+    ) -> surface::Plan {
         for phase in &mut plan.phases {
             if phase.status == surface::PlanStatus::Active {
                 phase.status = surface::PlanStatus::Pending;
@@ -1075,7 +1344,11 @@ impl Agent {
         }
         plan.phases.push(surface::PlanPhase {
             id: "drawing-check-review".into(),
-            title: clip_to(&format!("Review drawing errors: {errors}"), 159),
+            title: if lang == Lang::Ar {
+                format!("تصحيح مشكلات الرسم ({})", errors.len())
+            } else {
+                format!("Fix drawing issues ({})", errors.len())
+            },
             status: surface::PlanStatus::Active,
         });
         plan
@@ -1100,7 +1373,12 @@ impl Agent {
         self.plan.clone().unwrap_or_else(|| surface::Plan {
             phases: vec![surface::PlanPhase {
                 id: "drawing-check".into(),
-                title: "Review drawing check errors".into(),
+                title: if self.chat_language == Lang::Ar {
+                    "تصحيح مشكلات الرسم"
+                } else {
+                    "Fix drawing issues"
+                }
+                .into(),
                 status: surface::PlanStatus::Active,
             }],
         })
@@ -1258,6 +1536,7 @@ impl Agent {
                 let event = AgentEvent::ToolResult {
                     id: id.to_string(),
                     summary: caption.clone(),
+                    count: None,
                     handles: Vec::new(),
                     ui: None,
                     is_error: false,
@@ -1347,19 +1626,23 @@ impl Agent {
             });
             let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
             let mut text = state_block(lang, &state);
+            let method = guard.as_ref().map_or_else(
+                || Ok(settings.measurement_method.clone()),
+                |session| MeasurementMethod::for_session(session, &settings.measurement_method),
+            ).map_err(|e| e.to_string())?;
             text.push_str(&format!(
                 "Measurement method: {}; rules loaded: {}.\nApproval mode: {}.\n",
-                settings
-                    .measurement_method
-                    .name
+                method.name
                     .as_deref()
                     .unwrap_or("None (geometric quantities)"),
-                settings.measurement_method.rules_loaded,
+                method.rules_loaded,
                 serde_json::to_value(settings.autonomy)
                     .unwrap_or_default()
                     .as_str()
                     .unwrap_or("autonomous")
             ));
+            text.push_str(method.instruction());
+            text.push('\n');
             let mut picture = None;
             if let Some(session) = guard.as_ref() {
                 if let Some(working) = &session.automation_sheet {
@@ -1435,62 +1718,86 @@ impl Agent {
         });
     }
 
-    /// Makes room in a long conversation instead of ending it. Past `COMPACT_AT` messages,
-    /// earlier user turns are dropped, then the oldest steps of the current turn (a call and
-    /// its results, as a pair, so every result still follows its call and roles alternate),
-    /// always keeping the newest `KEEP_RECENT` messages whole. What went is kept as a note at
-    /// the start: the user's earlier requests word for word, and one line per step dropped.
-    /// The drawing itself holds what those steps did; the note says to read it.
+    /// A context refusal gets one smaller request. User words, tool ids and result pairing
+    /// stay intact. The ordinary history policy belongs to the conversation workflow.
+    fn make_context_room(&mut self) -> bool {
+        let mut changed = false;
+        for message in &mut self.history {
+            for block in &mut message.content {
+                match block {
+                    ContentBlock::ToolResult { content, .. } => {
+                        for part in content {
+                            match part {
+                                ResultPart::Png(_) => {
+                                    *part = ResultPart::Text(
+                                        "[Picture removed to make room. Capture again if needed.]"
+                                            .into(),
+                                    );
+                                    changed = true;
+                                }
+                                ResultPart::Text(text) if text.len() > 1000 => {
+                                    *text = format!("{} [Result shortened to make room. Read the drawing for full details.]", text.chars().take(400).collect::<String>());
+                                    changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    ContentBlock::Image { .. } => {
+                        *block = ContentBlock::Text {
+                            text: "[Picture removed to make room. Ask for it again if needed.]"
+                                .into(),
+                        };
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        changed
+    }
+
+    /// Keep the newest 160 messages and complete call/result pairs. Older requests survive
+    /// word for word in a memory note, alongside outcomes and discovered command contracts.
     fn compact(&mut self) {
         if self.history.len() <= COMPACT_AT {
             return;
         }
         let before = self.history.len();
+        let contracts = crate::history::contracts(&self.history);
         let (mut requests, mut steps) = take_note(&mut self.history);
-        // Earlier turns: everything before the current turn's own message.
-        let starts: Vec<usize> = (0..self.history.len())
-            .filter(|&i| starts_turn(&self.history[i]))
-            .collect();
-        if let Some(&last) = starts.last() {
-            for &i in &starts {
-                if i < last {
-                    if let Some(words) = user_words(&self.history[i]) {
-                        requests.push(words);
-                    }
-                }
-            }
-            for message in &self.history[..last] {
-                steps.extend(step_lines(message));
-            }
-            self.history.drain(..last);
-            // Results answering calls that went with the earlier turn go too.
-            self.history[0]
-                .content
-                .retain(|b| !matches!(b, ContentBlock::ToolResult { .. }));
+        let mut cut = self.history.len().saturating_sub(COMPACT_TO);
+        // Never orphan tool results or cut the tail below the promised recent window.
+        while cut > 0
+            && (self.history[cut].role != Role::Assistant
+                || self.history[cut - 1].role != Role::User)
+        {
+            cut -= 1;
         }
-        // The current turn's oldest steps, pair by pair.
-        while self.history.len() > COMPACT_TO {
-            let Some(j) = (1..self.history.len().saturating_sub(KEEP_RECENT + 1)).find(|&j| {
-                self.history[j].role == Role::Assistant
-                    && self.history[j + 1].role == Role::User
-                    && !starts_turn(&self.history[j + 1])
-            }) else {
-                break;
-            };
-            steps.extend(step_lines(&self.history[j]));
-            self.history.drain(j..j + 2);
-        }
-        if self.history.len() == before {
+        if cut == 0 {
             return;
         }
-        let note = compaction_note(&requests, &steps);
-        self.history[0]
-            .content
-            .insert(0, ContentBlock::Text { text: note });
-        let after = self.history.len();
+        for message in &self.history[..cut] {
+            requests.extend(user_words(message));
+        }
+        steps.extend(step_lines(&self.history[..cut]));
+        self.history.drain(..cut);
+        let mut note = vec![ContentBlock::Text {
+            text: compaction_note(&requests, &steps),
+        }];
+        if !contracts.is_empty() {
+            note.push(ContentBlock::Text {
+                text: format!(
+                    "[known contracts]\n{}",
+                    serde_json::to_string(&contracts).unwrap()
+                ),
+            });
+        }
+        self.history.insert(0, Message::user(note));
         self.log("COMPACTED", || {
             format!(
-                "{before} messages became {after}; {} steps noted",
+                "{before} messages became {}; {} steps noted",
+                self.history.len(),
                 steps.len()
             )
         });
@@ -1501,10 +1808,52 @@ impl Agent {
     /// goes after what it holds, so tool results stay first and roles keep alternating.
     fn push_user(&mut self, content: Vec<ContentBlock>) {
         match self.history.last_mut() {
-            Some(last) if last.role == Role::User => last.content.extend(content),
+            Some(last) if last.role == Role::User && !self.provider.owns_turn() => {
+                last.content.extend(content)
+            }
             _ => self.history.push(Message::user(content)),
         }
     }
+}
+
+pub(crate) fn edit_fingerprint(name: &str, input: &Value) -> Option<String> {
+    if !surface::mutating(name, input) {
+        return None;
+    }
+    if crate::activity::describe(name, input).effect != "edit" {
+        return None;
+    }
+    let args = surface::args_of(input).ok()?;
+    let op = input["op"].as_str()?;
+    let mut command = match op {
+        "run" => match &args["command"] {
+            Value::String(text) => serde_json::from_str(text).ok()?,
+            other => other.clone(),
+        },
+        "batch" | "set_records" | "create_entities" => {
+            let mut c = args;
+            c["type"] = serde_json::json!(op);
+            c
+        }
+        _ => serde_json::json!({"op":op,"args":args}),
+    };
+    qiyas_core::registry::canonicalize(&mut command);
+    Some(command.to_string())
+}
+
+fn ineffective(block: &ContentBlock) -> bool {
+    if is_error(block) {
+        return true;
+    }
+    let ContentBlock::ToolResult { content, .. } = block else {
+        return false;
+    };
+    content.iter().any(|part| match part {
+        ResultPart::Text(text) => {
+            serde_json::from_str::<Value>(text).is_ok_and(|v| v["no_change"] == true)
+        }
+        _ => false,
+    })
 }
 
 /// A tool's JSON answer: the block for the model and the event for the window.
@@ -1512,6 +1861,7 @@ fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
     let event = AgentEvent::ToolResult {
         id: id.to_string(),
         summary: summary(value),
+        count: crate::activity::count(value),
         handles: handles(value),
         ui: value.get("ui").cloned(),
         is_error: false,
@@ -1568,47 +1918,52 @@ fn says_nothing(content: &[ContentBlock]) -> bool {
     })
 }
 
-/// Whether a message is the start of a user turn: the user's own words or pictures, not only
-/// results of calls.
-fn starts_turn(message: &Message) -> bool {
-    message.role == Role::User
-        && message
-            .content
-            .iter()
-            .any(|b| !matches!(b, ContentBlock::ToolResult { .. }))
-}
-
-/// The user's own words in a turn's message (its last text that is not the `[state]` block or
-/// a picture's caption), clipped.
-fn user_words(message: &Message) -> Option<String> {
-    message.content.iter().rev().find_map(|b| match b {
-        ContentBlock::Text { text } if !text.starts_with('[') && !text.trim().is_empty() => {
-            Some(clip_to(text, 2_000))
-        }
-        _ => None,
-    })
-}
-
-/// `text` cut to at most `max` characters, with an ellipsis when cut.
-fn clip_to(text: &str, max: usize) -> String {
-    match text.char_indices().nth(max) {
-        Some((at, _)) => format!("{}…", &text[..at]),
-        None => text.to_string(),
-    }
-}
-
-/// One line per call in an assistant message: the tool, its operation and the command type.
-fn step_lines(message: &Message) -> Vec<String> {
-    if message.role != Role::Assistant {
+/// Every user request and correction, without clipping generated state or picture captions in.
+fn user_words(message: &Message) -> Vec<String> {
+    if message.role != Role::User {
         return Vec::new();
     }
     message
-        .tool_uses()
-        .map(|(_, name, input)| {
-            let args = match &input["args"] {
-                Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
-                other => other.clone(),
-            };
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text }
+                if !text.starts_with("[state]")
+                    && !text.starts_with("[resumed]")
+                    && !text.starts_with("[picture of")
+                    && !text.starts_with("[known contracts]")
+                    && !text.starts_with("[drawing check]")
+                    && !text.starts_with(COMPACTED)
+                    && !text.trim().is_empty()
+                    && text != crate::prompt::TAKEOFF_WORKFLOW
+                    && text != crate::prompt::takeoff_workflow(Lang::Ar) =>
+            {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One line per call in an assistant message: the tool, its operation and the command type.
+fn step_lines(messages: &[Message]) -> Vec<String> {
+    let results: BTreeMap<_, _> = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } => Some((tool_use_id.as_str(), *is_error)),
+            _ => None,
+        })
+        .collect();
+    messages
+        .iter()
+        .flat_map(Message::tool_uses)
+        .map(|(id, name, input)| {
+            let args = surface::args_of(input).unwrap_or_default();
             let what = args["command"]["type"]
                 .as_str()
                 .or_else(|| args["commands"].as_array().map(|_| "several commands"))
@@ -1618,7 +1973,12 @@ fn step_lines(message: &Message) -> Vec<String> {
                 .as_str()
                 .or(input["source"].as_str())
                 .unwrap_or("");
-            format!("{name} {op} {what}").trim_end().to_string()
+            let status = match results.get(id) {
+                Some(false) => "returned successfully; read back to verify",
+                Some(true) => "failed",
+                None => "not completed",
+            };
+            format!("{name} {op} {what}: {status}")
         })
         .collect()
 }
@@ -1637,10 +1997,10 @@ fn take_note(history: &mut [Message]) -> (Vec<String>, Vec<String>) {
     let (mut requests, mut steps) = (Vec::new(), Vec::new());
     let mut in_steps = false;
     for line in text.lines().skip(1) {
-        if line == "Steps already done:" {
+        if matches!(line, "Steps and outcomes:" | "Steps already done:") {
             in_steps = true;
         } else if let Some(r) = line.strip_prefix("Request: ") {
-            requests.push(r.replace("\\n", "\n"));
+            requests.push(serde_json::from_str(r).unwrap_or_else(|_| r.replace("\\n", "\n")));
         } else if let Some(step) = line.strip_prefix("- ") {
             if in_steps {
                 steps.push(step.to_string());
@@ -1660,9 +2020,9 @@ fn compaction_note(requests: &[String], steps: &[String]) -> String {
          instead of relying on memory, and carry on with the user's latest request.\n"
     );
     for r in requests {
-        note.push_str(&format!("Request: {}\n", r.replace('\n', "\\n")));
+        note.push_str(&format!("Request: {}\n", serde_json::to_string(r).unwrap()));
     }
-    note.push_str("Steps already done:\n");
+    note.push_str("Steps and outcomes:\n");
     let skip = steps.len().saturating_sub(80);
     if skip > 0 {
         note.push_str(&format!("- ({skip} earlier steps)\n"));
@@ -1704,14 +2064,17 @@ fn check_turn(
 
 /// Stable error identities allow a phase to repair its own changes before asking for review.
 fn drawing_errors(session: &Session, handles: &[u64]) -> BTreeSet<String> {
-    let report = session.check_drawing_all(&qiyas_core::check::CheckScope {
-        handles: handles.to_vec(),
-        ..Default::default()
-    });
+    let report = session.check_drawing_all(&qiyas_core::check::CheckScope::default());
     report
         .findings
         .into_iter()
-        .filter(|f| f.severity == qiyas_core::check::Severity::Error)
+        .filter(|f| handles.is_empty() || f.handles.iter().any(|h| handles.contains(h)))
+        .filter(|f| {
+            matches!(
+                f.severity,
+                qiyas_core::check::Severity::Error | qiyas_core::check::Severity::Warning
+            )
+        })
         .map(|mut f| {
             f.handles.sort_unstable();
             format!("{}:{}:{:?}", report.sheet, f.rule, f.handles)
@@ -1785,6 +2148,7 @@ fn error_event(id: &str, why: &str) -> AgentEvent {
     AgentEvent::ToolResult {
         id: id.to_string(),
         summary: crate::errors::message(why),
+        count: None,
         handles: Vec::new(),
         ui: None,
         is_error: true,
@@ -1842,6 +2206,60 @@ mod tests {
     struct Recording {
         requests: Arc<Mutex<Vec<TurnRequest>>>,
         state: Arc<Mutex<Value>>,
+    }
+
+    #[tokio::test]
+    async fn a_local_agent_is_not_retried_or_sent_the_cancelled_request_again() {
+        struct LocalAgent(Arc<Mutex<Vec<TurnRequest>>>);
+        impl Provider for LocalAgent {
+            fn owns_turn(&self) -> bool {
+                true
+            }
+            fn stream_turn<'a>(
+                &'a self,
+                req: TurnRequest,
+                _sink: Sink<'a>,
+            ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+                self.0.lock().unwrap().push(req);
+                Box::pin(async {
+                    Ok(TurnResult {
+                        content: Vec::new(),
+                        stop_reason: StopReason::MaxTokens,
+                        usage: Usage::default(),
+                    })
+                })
+            }
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            Box::new(LocalAgent(requests.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        record_turn(&mut agent, "Previous unfinished request").await;
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        record_turn(&mut agent, "New independent request").await;
+        {
+            let recorded = requests.lock().unwrap();
+            assert_eq!(recorded.len(), 2);
+            let newest = serde_json::to_string(recorded[1].messages.last().unwrap()).unwrap();
+            assert!(newest.contains("New independent request"));
+            assert!(!newest.contains("Previous unfinished request"));
+        }
+        for autonomy in [Autonomy::PerJob, Autonomy::PerPhase] {
+            agent.settings.autonomy = autonomy;
+            let (tx, _rx) = mpsc::channel(10);
+            let error = agent
+                .run_turn("Wait for approval".into(), tx, CancellationToken::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "claude_approval");
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                2,
+                "no native process starts"
+            );
+        }
     }
 
     impl Provider for Recording {
@@ -2219,7 +2637,7 @@ mod tests {
             "the request is sent, not refused"
         );
         assert!(
-            agent.history.len() <= COMPACT_TO + 2,
+            agent.history.len() <= COMPACT_TO + 4,
             "{}",
             agent.history.len()
         );
@@ -2233,7 +2651,7 @@ mod tests {
             agent.history.iter().any(|m| {
                 m.content
                     .iter()
-                    .any(|b| matches!(b, ContentBlock::Text { text } if text == words))
+                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains(words)))
             })
         };
         assert!(
@@ -2283,7 +2701,275 @@ mod tests {
         assert_eq!(note.matches(COMPACTED).count(), 1, "one note, merged");
         assert!(note.contains("earlier steps)"), "{note}");
         assert!(agent.history.iter().any(|m| m.content.iter().any(
-            |b| matches!(b, ContentBlock::Text { text } if text == "Draw the whole package")
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("Draw the whole package"))
         )));
+    }
+    #[test]
+    fn compaction_keeps_160_recent_messages_all_requests_and_failed_outcomes() {
+        let mut agent = Agent::new(
+            Box::new(Counting(Arc::new(AtomicUsize::new(0)))),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        let brief = format!(
+            "[Important] {}\nKeep millimetres; do not save. Literal \\n stays literal.",
+            "Long requirement ".repeat(400)
+        );
+        agent.history.push(Message::user(vec![
+            ContentBlock::Text {
+                text: brief.clone(),
+            },
+            ContentBlock::Text {
+                text: "Correction: keep the original layer.".into(),
+            },
+        ]));
+        for i in 0..150 {
+            step(&mut agent.history, i);
+        }
+        if let ContentBlock::ToolResult { is_error, .. } = &mut agent.history[2].content[0] {
+            *is_error = true;
+        }
+        agent.history.push(text(Role::Assistant, "Earlier answer"));
+        agent
+            .history
+            .push(text(Role::User, "Continue the same work"));
+        let recent = agent.history[agent.history.len() - COMPACT_TO..].to_vec();
+        agent.compact();
+        assert!(agent.history.len() >= COMPACT_TO);
+        assert_eq!(&agent.history[agent.history.len() - COMPACT_TO..], &recent);
+        assert_well_formed(&agent.history);
+        let (requests, steps) = take_note(&mut agent.history);
+        assert!(requests.contains(&brief));
+        assert!(requests.contains(&"Correction: keep the original layer.".into()));
+        assert!(steps[0].ends_with("failed"), "{steps:?}");
+    }
+
+    #[tokio::test]
+    async fn legacy_quantity_prompt_is_removed_on_resume_without_losing_user_requests() {
+        let mut first = Agent::new(
+            Box::<Recording>::default(),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        record_turn(&mut first, "Draw a bracket").await;
+        let mut saved = first.snapshot();
+        saved.system = Some("Old rules\nTake-off workflow:\nAlways finish BOQ".into());
+        saved
+            .history
+            .last_mut()
+            .unwrap()
+            .content
+            .push(ContentBlock::Thinking {
+                thinking: "old".into(),
+                signature: "old signature".into(),
+            });
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut resumed = Agent::resume(
+            saved,
+            Box::new(Recording {
+                requests: requests.clone(),
+                ..Default::default()
+            }),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        record_turn(&mut resumed, "Continue").await;
+        let requests = requests.lock().unwrap();
+        assert!(!requests[0].system.contains("Take-off workflow:"));
+        let messages = serde_json::to_string(&requests[0].messages).unwrap();
+        assert!(messages.contains("Draw a bracket"));
+        assert!(!messages.contains("old signature"));
+    }
+    #[test]
+    fn loop_guard_matches_object_and_encoded_command_aliases() {
+        let object = serde_json::json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,1]}}});
+        let encoded = serde_json::json!({"op":"run","args":serde_json::json!({"command":serde_json::json!({"type":"draw.line","a":[0,0],"b":[1,1]}).to_string()}).to_string()});
+        assert_eq!(
+            edit_fingerprint(crate::surface::EXECUTE, &object),
+            edit_fingerprint(crate::surface::EXECUTE, &encoded)
+        );
+        assert!(edit_fingerprint(crate::surface::EXECUTE, &object).is_some());
+    }
+}
+
+#[cfg(test)]
+mod provider_failure_tests {
+    use super::*;
+    use crate::provider::{BoxFuture, Sink, TurnResult};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct ContextProvider(Arc<AtomicUsize>);
+    impl Provider for ContextProvider {
+        fn stream_turn<'a>(
+            &'a self,
+            req: TurnRequest,
+            _: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            let attempt = self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if attempt == 0 {
+                    Err(AiError::Api {
+                        status: 400,
+                        message: "context_length_exceeded".into(),
+                        body: String::new(),
+                        request: None,
+                    })
+                } else {
+                    assert!(serde_json::to_string(&req.messages).unwrap().len() < 15_000);
+                    assert!(req
+                        .messages
+                        .iter()
+                        .any(|m| m.tool_uses().any(|(id, _, _)| id == "earlier")));
+                    Ok(TurnResult {
+                        content: vec![],
+                        stop_reason: StopReason::EndTurn,
+                        usage: Usage::default(),
+                    })
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn context_refusal_shortens_large_results_once_without_losing_call_pairing() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut agent = Agent::new(
+            Box::new(ContextProvider(attempts.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        agent.history = vec![
+            Message::user(vec![ContentBlock::Text {
+                text: "Keep my drawing unchanged.".into(),
+            }]),
+            Message::assistant(vec![ContentBlock::ToolUse {
+                id: "earlier".into(),
+                name: "qiyas_read".into(),
+                input: serde_json::json!({"op":"records"}),
+            }]),
+            Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: "earlier".into(),
+                content: vec![ResultPart::Text("evidence ".repeat(5000))],
+                is_error: false,
+            }]),
+        ];
+        let (tx, mut rx) = mpsc::channel(100);
+        agent
+            .run_turn("Continue".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let mut retry = false;
+        while let Ok(event) = rx.try_recv() {
+            retry |= matches!(event, AgentEvent::Retrying { code, .. } if code == "ai.error.context_retry");
+        }
+        assert!(retry);
+        assert!(serde_json::to_string(agent.history())
+            .unwrap()
+            .contains("Keep my drawing unchanged."));
+    }
+
+    struct ThinkingLimit(Arc<AtomicUsize>);
+    impl Provider for ThinkingLimit {
+        fn stream_turn<'a>(
+            &'a self,
+            req: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            let attempt = self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if attempt == 0 {
+                    sink(StreamEvent::Thinking("unfinished thinking".into()));
+                    Ok(TurnResult {
+                        content: vec![ContentBlock::Thinking {
+                            thinking: "unfinished thinking".into(),
+                            signature: String::new(),
+                        }],
+                        stop_reason: StopReason::MaxTokens,
+                        usage: Usage::default(),
+                    })
+                } else {
+                    assert_eq!(req.max_tokens, 200);
+                    Ok(TurnResult {
+                        content: vec![],
+                        stop_reason: StopReason::EndTurn,
+                        usage: Usage::default(),
+                    })
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_after_only_thinking_is_visible_and_discards_the_unfinished_thought() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut agent = Agent::new(
+            Box::new(ThinkingLimit(attempts.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings {
+                max_tokens: 100,
+                ..AgentSettings::default()
+            },
+        );
+        let (tx, mut rx) = mpsc::channel(100);
+        agent
+            .run_turn("Continue".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let mut retry = false;
+        while let Ok(event) = rx.try_recv() {
+            retry |= matches!(event, AgentEvent::Retrying { code, discard_partial: true, .. } if code == "ai.error.output_limit");
+        }
+        assert!(retry);
+        assert!(!serde_json::to_string(&agent.transcript)
+            .unwrap()
+            .contains("unfinished thinking"));
+    }
+
+    struct Tokens(Arc<AtomicUsize>);
+    impl Provider for Tokens {
+        fn save_state(&self) -> Value {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Value::Null
+        }
+        fn stream_turn<'a>(
+            &'a self,
+            _: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            Box::pin(async move {
+                for _ in 0..1000 {
+                    sink(StreamEvent::TextDelta("word ".into()));
+                }
+                Ok(TurnResult {
+                    content: vec![ContentBlock::Text {
+                        text: "word ".repeat(1000),
+                    }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage::default(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_thousand_tokens_do_not_make_a_thousand_full_checkpoints() {
+        let saves = Arc::new(AtomicUsize::new(0));
+        let checkpoint = Arc::new(Mutex::new(None));
+        let mut agent = Agent::new(
+            Box::new(Tokens(saves.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        )
+        .with_checkpoint(checkpoint.clone());
+        let (tx, _rx) = mpsc::channel(2000);
+        agent
+            .run_turn("Tell me".into(), tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(saves.load(Ordering::SeqCst) < 10);
+        let saved = checkpoint.lock().unwrap();
+        assert!(saved.as_ref().unwrap().transcript.iter().any(|entry| matches!(entry, TranscriptEntry::Event { event: AgentEvent::Text { text } } if text == &"word ".repeat(1000))));
     }
 }

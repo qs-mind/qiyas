@@ -104,7 +104,7 @@ test("an update found is installed only on a click; the download shows its progr
   // A failed install says why and offers Install again.
   await act(async () => fail("signature does not match"));
   expect(screen.getByRole("alert").textContent).toBe(
-    "The update could not be installed: signature does not match",
+    "The update could not be installed: The update could not be verified. Download it again.",
   );
   expect((screen.getByRole("button", { name: "Install and restart" }) as HTMLButtonElement).disabled).toBe(false);
 });
@@ -133,7 +133,7 @@ test("unsaved drawings stop the install; a failed check says why", async () => {
 
   api.checkUpdate.mockRejectedValue("error sending request");
   await click("Check for updates");
-  expect(screen.getByRole("alert").textContent).toBe("The update check failed: error sending request");
+  expect(screen.getByRole("alert").textContent).toBe("The update check failed: That didn’t work. Technical details are available in Settings.");
 });
 
 test("closing the box during the download stops it", async () => {
@@ -174,6 +174,6 @@ test("in Arabic", async () => {
   api.checkUpdate.mockResolvedValue({ status: "available", version: "0.2.0", notes: null });
   show("ar");
   await click("البحث عن تحديثات");
-  expect(screen.getByRole("status").textContent).toBe("تحديث متاح: 0.2.0");
+  expect(screen.getByRole("status").textContent).toBe("تحديث متاح: \u20680.2.0\u2069");
   expect(screen.getByRole("button", { name: "التثبيت وإعادة التشغيل" })).toBeTruthy();
 });

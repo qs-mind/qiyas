@@ -150,10 +150,27 @@ impl Session {
     }
 
     /// The table `target` at the top of the sheet on screen.
-    fn table_target(&self, target: &Target) -> Result<(Handle, Table), CoreError> {
+    fn table_target(&self, target: &Target, cell_edit: bool) -> Result<(Handle, Table), CoreError> {
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
         match self.drawing.doc.get_entity(h) {
-            Some(EntityType::Table(t)) => Ok((h, t.clone())),
+            Some(EntityType::Table(t)) => {
+                let schedule = crate::xdata::read_json::<crate::objects::ObjectSchedule>(
+                    &t.common,
+                    crate::objects::SCHEDULE_APP,
+                );
+                if schedule
+                    .as_ref()
+                    .is_some_and(|s| !cell_edit || !s.preserve_overrides)
+                    || (schedule.is_none()
+                        && t.common
+                            .extended_data
+                            .get_record(crate::opening_schedule::SCHEDULE_APP)
+                            .is_some())
+                {
+                    return Err(invalid("This is a live schedule. Change its source objects with set_object_props or create a schedule with the required columns; its generated cells and rows cannot be edited directly."));
+                }
+                Ok((h, t.clone()))
+            }
             _ => Err(invalid("Pick a table")),
         }
     }
@@ -340,7 +357,16 @@ impl Session {
 
     /// Puts the changed table `t` back as `h` and draws its block again.
     fn store_table(&mut self, h: Handle, t: Table) -> Result<(), CoreError> {
-        *self.drawing.doc.get_entity_mut(h).expect("a sheet target") = EntityType::Table(t);
+        let entity = EntityType::Table(t);
+        if self
+            .drawing
+            .doc
+            .get_entity(h)
+            .is_some_and(|before| crate::net_effect::same_entity(before, &entity))
+        {
+            return Ok(());
+        }
+        *self.drawing.doc.get_entity_mut(h).expect("a sheet target") = entity;
         self.rebuild_table(h)
     }
 
@@ -353,7 +379,7 @@ impl Session {
         col: usize,
         text: &str,
     ) -> Result<(), CoreError> {
-        let (h, mut t) = self.table_target(target)?;
+        let (h, mut t) = self.table_target(target, true)?;
         if row >= t.rows.len() || col >= t.columns.len() {
             return Err(invalid(format!(
                 "The table has no cell {},{}",
@@ -372,7 +398,7 @@ impl Session {
     /// `Command::InsertRow`: a new row before row `at` (`at` = the row count: after the last), as
     /// tall as its neighbour and styled as it.
     pub(crate) fn insert_row(&mut self, target: &Target, at: usize) -> Result<(), CoreError> {
-        let (h, mut t) = self.table_target(target)?;
+        let (h, mut t) = self.table_target(target, false)?;
         if at > t.rows.len() {
             return Err(invalid("There is no such row"));
         }
@@ -398,7 +424,7 @@ impl Session {
 
     /// `Command::InsertCol`: a new column before column `at`, as wide as its neighbour.
     pub(crate) fn insert_col(&mut self, target: &Target, at: usize) -> Result<(), CoreError> {
-        let (h, mut t) = self.table_target(target)?;
+        let (h, mut t) = self.table_target(target, false)?;
         if at > t.columns.len() {
             return Err(invalid("There is no such column"));
         }
@@ -426,7 +452,7 @@ impl Session {
 
     /// `Command::DeleteRow`: removes row `row`; a table keeps one row at least.
     pub(crate) fn delete_row(&mut self, target: &Target, row: usize) -> Result<(), CoreError> {
-        let (h, mut t) = self.table_target(target)?;
+        let (h, mut t) = self.table_target(target, false)?;
         if row >= t.rows.len() {
             return Err(invalid("There is no such row"));
         }
@@ -449,7 +475,7 @@ impl Session {
 
     /// `Command::DeleteCol`: removes column `col`; a table keeps one column at least.
     pub(crate) fn delete_col(&mut self, target: &Target, col: usize) -> Result<(), CoreError> {
-        let (h, mut t) = self.table_target(target)?;
+        let (h, mut t) = self.table_target(target, false)?;
         if col >= t.columns.len() {
             return Err(invalid("There is no such column"));
         }
@@ -479,7 +505,7 @@ impl Session {
         first: [usize; 2],
         last: [usize; 2],
     ) -> Result<(), CoreError> {
-        let (h, mut t) = self.table_target(target)?;
+        let (h, mut t) = self.table_target(target, false)?;
         let (rows, cols) = (t.rows.len(), t.columns.len());
         if first[0].max(last[0]) >= rows || first[1].max(last[1]) >= cols {
             return Err(invalid("The table has no such cells"));

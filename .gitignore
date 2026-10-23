@@ -1,7 +1,7 @@
 target/
 node_modules/
 dist/
-src/fonts/thmanyah/
+src/fonts/thmanyah
 *.qiyas.bak
 crates/*/gen/schemas/
 samples/*.qiyas

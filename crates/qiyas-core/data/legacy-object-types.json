@@ -55,7 +55,12 @@
       "hatch": true,
       "centreline": true,
       "centreline_driver": true,
-      "band_justification": "justification"
+      "band_justification": "justification",
+      "layer_properties": {
+        "outline": "outline_layer",
+        "hatch": "hatch_layer",
+        "centreline": "centreline_layer"
+      }
     },
     "quantities": {
       "run_length": "length",
@@ -75,11 +80,11 @@
       },
       "label_en": {
         "kind": "text",
-        "default": "Unapproved candidate {area} m²"
+        "default": "Area {area} m²"
       },
       "label_ar": {
         "kind": "text",
-        "default": "مساحة مرشحة غير معتمدة {area} م²"
+        "default": "المساحة {area} م²"
       }
     },
     "geometry": "region",
@@ -147,7 +152,7 @@
       "width": "width",
       "at": "distance",
       "offset_along": "if(swing == 'right', width / 2, -width / 2)",
-      "offset_normal": "-host_width / 2",
+      "offset_normal": "host_width / 2",
       "mirror": "swing == 'right'"
     },
     "quantities": {
@@ -178,7 +183,8 @@
           "end": 90
         }
       ],
-      "symbols_in_driver": true
+      "symbols_in_driver": true,
+      "host_layer_property": "doors_layer"
     },
     "property_bindings": {
       "host_width": "host.band_width"
@@ -272,7 +278,8 @@
           ]
         }
       ],
-      "symbols_in_driver": true
+      "symbols_in_driver": true,
+      "host_layer_property": "windows_layer"
     },
     "property_bindings": {
       "host_width": "host.band_width"

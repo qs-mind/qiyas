@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -89,7 +90,7 @@ export function About({ theme, onClose }: { theme: Theme; onClose: () => void })
     if (text === UNSAVED_DRAWINGS) return t("about.update.unsaved");
     if (text === NO_UPDATE) return t("about.update.checkAgain");
     if (text === UPDATE_BUSY) return t("about.update.busy");
-    return t(key, { error: text });
+    return t(key, { error: uiError(text) });
   }
 
   async function check() {

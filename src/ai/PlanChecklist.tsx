@@ -1,22 +1,21 @@
 import type { PlanPhase } from "../api";
-import { useT } from "../i18n";
+import { translate, useT, type Lang } from "../i18n";
 import "./plan.css";
 
 const MARK = { pending: "○", active: "●", done: "✓", skipped: "–" };
 
 /** The latest phase snapshot for one turn, kept above that turn's answer. */
-export function PlanChecklist({ phases, onApprove, onChange }: {
+export function PlanChecklist({ phases, onApprove, onChange, language }: {
   phases: PlanPhase[];
+  language?: Lang;
   onApprove?(): void;
   onChange?(): void;
 }) {
-  const t = useT();
+  const uiT = useT();
+  const t = language ? (key: string) => translate(language, key) : uiT;
   function title(phase: PlanPhase) {
     if (phase.id === "drawing-check") return t("ai.reviewDrawingErrors");
-    if (phase.id === "drawing-check-review") {
-      const details = phase.title.replace(/^Review drawing errors:\s*/, "");
-      return `${t("ai.reviewDrawingErrors")}: ${details}`;
-    }
+    if (phase.id === "drawing-check-review") return t("ai.reviewDrawingErrors");
     return phase.title;
   }
   return (
@@ -27,6 +26,7 @@ export function PlanChecklist({ phases, onApprove, onChange }: {
           <li key={phase.id} data-status={phase.status} aria-current={phase.status === "active" ? "step" : undefined}>
             <span className="plan-mark" aria-hidden="true">{MARK[phase.status]}</span>
             <span className="plan-title" dir="auto">{title(phase)}</span>
+            {phase.id === "drawing-check-review" && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{phase.title}</pre></details>}
             <span className="plan-status">{t(`ai.plan.${phase.status}`)}</span>
           </li>
         ))}

@@ -961,3 +961,51 @@ fn the_pdf_is_written_from_a_snapshot_without_the_session() {
         "the title as text, its font from the snapshot"
     );
 }
+
+#[test]
+fn plotted_linetypes_and_hidden_points_match_the_screen_in_every_unit() {
+    for units in [4, 5, 6, 1] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("patterns.dxf"), units);
+        let k = 1.0 / s.drawing.units.to_metres();
+        s.run(Command::AnnotationScale {
+            name: "1:50".into(),
+        })
+        .unwrap();
+        s.run(Command::SymmetryAxis {
+            p1: [0.0, 0.0],
+            p2: [10.0 * k, 0.0],
+        })
+        .unwrap();
+        s.drawing.doc.header.point_display_mode = 1;
+        s.drawing
+            .doc
+            .add_entity(EntityType::Point(opencadcodec::entities::Point::at(
+                opencadcodec::Vector3::new(5.0 * k, k, 0.0),
+            )))
+            .unwrap();
+        let path = dir.path().join("patterns.pdf");
+        plot_pdf_to(&s, &job(MODEL), &path).unwrap();
+        if let Some(folder) = std::env::var_os("QIYAS_GOAL_G_ARTIFACTS") {
+            let folder = std::path::Path::new(&folder);
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::copy(&path, folder.join(format!("patterns-units-{units}.pdf"))).unwrap();
+        }
+        let page = read(&path);
+        let segments: Vec<_> = page
+            .paints
+            .iter()
+            .flat_map(|p| &p.subpaths)
+            .filter(|p| p.len() == 2)
+            .collect();
+        assert!(
+            segments.len() > 10,
+            "CENTER must draw dashes: {}",
+            segments.len()
+        );
+        assert!(
+            segments.iter().all(|p| (p[1][1] - p[0][1]).abs() < 0.01),
+            "Hidden points must add no crosses"
+        );
+    }
+}

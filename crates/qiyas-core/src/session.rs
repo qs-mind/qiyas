@@ -130,6 +130,7 @@ pub struct Session {
     pub(crate) isolated: Option<crate::layers::Isolation>,
     /// What the last command or transaction did to the drawing's entities (`last_change`).
     pub(crate) last_change: crate::Change,
+    pub(crate) handle_replacements: std::collections::BTreeMap<u64, Vec<u64>>,
     /// How many transactions are open (`crate::transaction`).
     pub(crate) tx_depth: usize,
     /// The user coordinate system (see `crate::ucs`). Saved in the project file and the
@@ -727,6 +728,7 @@ impl Session {
             state_hidden,
             isolated: None,
             last_change: crate::Change::default(),
+            handle_replacements: std::collections::BTreeMap::new(),
             tx_depth: 0,
             ucs,
             history: History::default(),
@@ -769,6 +771,8 @@ impl Session {
                     .push(format!("Legacy object conversion needs review: {error}"));
             }
         }
+        session.migrate_grid_provenance();
+        session.refresh_loaded_derivations();
         if let Err(error) = session.validate_object_metadata() {
             session
                 .drawing
@@ -776,6 +780,37 @@ impl Session {
                 .push(format!("Object metadata needs review: {error}"));
         }
         session
+    }
+
+    /// Opening and external reloads establish derived state outside the edit recorder.
+    fn refresh_loaded_derivations(&mut self) {
+        if self.derived_extras().0 || self.drawing.doc.app_ids.contains(crate::field::FIELD_APP) {
+            let before = self.drawing.doc.clone();
+            let takeoff = self.takeoff.clone();
+            if let Err(error) = crate::derived::full(self) {
+                self.drawing.doc = before;
+                self.takeoff = takeoff;
+                self.drawing
+                    .problems
+                    .push(format!("Derived drawing data needs review: {error}"));
+                // An unrelated damaged object must not restore a stale room quantity.
+                // Preserve Goal A's enclosure invalidation even when full refresh fails.
+                if self.has_object_regions() {
+                    if let Err(error) = self
+                        .refresh_object_regions()
+                        .and_then(|()| self.sync_legacy_room_regions())
+                        .and_then(|()| self.refresh_object_schedules())
+                        .and_then(|()| self.refresh_measurement())
+                        .and_then(|()| self.follow_fields())
+                    {
+                        self.drawing
+                            .problems
+                            .push(format!("Room quantities need review: {error}"));
+                    }
+                }
+            }
+        }
+        self.handle_replacements.clear();
     }
 
     /// Saves the take-off, the BOQ, the conflicts and the schedules to the drawing's project file
@@ -987,6 +1022,7 @@ impl Session {
     /// Looks for every xref again and reopens it (a changed or newly found file shows).
     pub fn reload_xrefs(&mut self) {
         self.xrefs = XrefSet::load(&self.drawing, &self.xref_overrides, MAX_XREF_DEPTH);
+        self.refresh_loaded_derivations();
         *self.cache.get_mut() = None;
     }
 
@@ -1686,12 +1722,19 @@ impl Session {
     /// Runs `cmd` for `source` and, when it changes the take-off, the BOQ, the conflicts or the
     /// drawing, records an undo step.
     /// New measurements are marked as made by `source`.
-    pub fn run_as(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
+    pub fn run_as(&mut self, mut cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
         }
-        let raw = serde_json::to_value(&cmd)
+        let mut raw = serde_json::to_value(&cmd)
             .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
+        if self.tx_depth > 0 {
+            self.resolve_input_handles(&mut raw)?;
+            cmd = serde_json::from_value(raw.clone())
+                .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
+        } else {
+            self.handle_replacements.clear();
+        }
         let report = self.validate_input(&raw);
         if !report.valid {
             return Err(crate::input::with_warnings(
@@ -1844,6 +1887,20 @@ impl Session {
                 return Err(e);
             }
         };
+        let changed = match &before {
+            Step::Takeoff(value) => {
+                serde_json::to_value(value).ok() != serde_json::to_value(&self.takeoff).ok()
+            }
+            Step::Boq(value) => value != &self.boq,
+            Step::Conflicts(conflicts, schedules) => {
+                serde_json::to_value((conflicts, schedules)).ok()
+                    != serde_json::to_value((&self.conflicts, &self.schedules)).ok()
+            }
+            _ => true,
+        };
+        if !changed {
+            return Ok(Outcome::Nothing);
+        }
         if !matches!(outcome, Outcome::Nothing) {
             self.history.record(before, source, &label);
         }
@@ -1917,18 +1974,47 @@ impl Session {
         let view = tables.then(|| self.view_refs().get());
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
+        let previous_replacements = self.handle_replacements.clone();
+        let derived_inputs = (derived_tables
+            || self.drawing.doc.app_ids.contains(crate::field::FIELD_APP))
+        .then(|| crate::derived::Inputs::capture(self))
+        .transpose()?;
         let recorder = self.drawing.doc.begin_entity_change_recording();
+        let mut before = Vec::new();
         let done = f(self).and_then(|value| {
-            self.rederive()?;
+            before = recorder.take_before_images();
+            let unchanged = before.iter().all(|(handle, old)| {
+                match (old.as_deref(), self.drawing.doc.get_entity(*handle)) {
+                    (None, None) => true,
+                    (Some(old), Some(now)) => crate::net_effect::same_entity(old, now),
+                    _ => false,
+                }
+            }) && tables
+                .as_ref()
+                .is_none_or(|tables| tables.same_as(&self.drawing.doc))
+                && takeoff.as_ref().is_none_or(|takeoff| {
+                    serde_json::to_value(takeoff).ok() == serde_json::to_value(&self.takeoff).ok()
+                });
+            if unchanged && label != "update_fields" {
+                return Ok(value);
+            }
+            let mut requested =
+                crate::net_effect::RequestedChanges::capture(&self.drawing.doc, &before);
+            self.rederive(derived_inputs.as_ref(), &mut requested)?;
             Ok(value)
         });
         self.drawing.doc.end_entity_change_recording();
-        let mut change = DocChange::from_before_images(
-            &self.drawing.doc,
-            recorder.take_before_images(),
-            tables,
-            takeoff,
+        let touched: std::collections::BTreeSet<_> = before.iter().map(|(h, _)| *h).collect();
+        before.extend(
+            recorder
+                .take_before_images()
+                .into_iter()
+                .filter(|(h, _)| !touched.contains(h)),
         );
+        let takeoff = takeoff.filter(|before| {
+            serde_json::to_value(before).ok() != serde_json::to_value(&self.takeoff).ok()
+        });
+        let mut change = DocChange::from_before_images(&self.drawing.doc, before, tables, takeoff);
         // Kept only when the change moved it, and then only what it moved, so undoing a step
         // never touches layers hidden or shown since.
         change.view = view
@@ -1952,6 +2038,7 @@ impl Session {
                 Ok(done)
             }
             Err(e) => {
+                self.handle_replacements = previous_replacements;
                 let mut view = ViewRefs {
                     current: &mut self.current,
                     hidden: &mut self.visibility.hidden_layers,

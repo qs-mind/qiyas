@@ -683,7 +683,7 @@ impl Session {
             let e = self.entity(h);
             let refuse = |why: &str| {
                 Err(invalid(format!(
-                    "{} {:X} {why}",
+                    "{} {} {why}",
                     crate::session::variant_name(e),
                     h.value()
                 )))

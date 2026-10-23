@@ -104,7 +104,7 @@ test("an error stays in the dialog and Close closes it", async () => {
   render(<FindReplaceDialog onFind={onFind} onReplaceAll={vi.fn()} onShow={vi.fn()} onClose={onClose} />);
   fireEvent.change(screen.getByLabelText("Find"), { target: { value: "x" } });
   fireEvent.click(screen.getByRole("button", { name: "Find next" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("No drawing"));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Open a drawing first."));
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(onClose).toHaveBeenCalled();
 });

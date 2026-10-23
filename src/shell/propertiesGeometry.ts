@@ -1,3 +1,4 @@
+import { entityKind } from "../i18n/entityKind";
 /** The properties palette's Geometry and Selection rows, as data: what each kind of entity shows
  *  (like AutoCAD's Properties palette), in the drawing's units converted to metres with the
  *  drafting precision. Pure: the palette draws the rows and lets the editable ones become fields. */
@@ -203,7 +204,7 @@ export function summarise(infos: EntityInfo[]): SelectionSummary {
 export function selectionRows(s: SelectionSummary, units: Units, precision: number, t: Translate): GeoRow[] {
   const f = formatter(units, precision, t);
   const rows: GeoRow[] = [{ key: "count", label: "props.count", text: String(s.count), copy: String(s.count) }];
-  const kinds = s.kinds.map(([k, n]) => `${k} ×${n}`).join(", ");
+  const kinds = s.kinds.map(([k, n]) => `${entityKind(k)} ×${n}`).join(", ");
   rows.push({ key: "kinds", label: "props.kinds", text: kinds, copy: kinds, prose: true });
   if (s.length !== null) rows.push(f.length("totalLength", "props.totalLength", s.length));
   if (s.area !== null) rows.push(f.area("totalArea", "props.totalArea", s.area));

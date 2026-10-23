@@ -20,6 +20,7 @@ mod script;
 pub mod secrets;
 pub mod settings;
 mod state;
+mod subscriptions;
 mod tabs;
 mod updater;
 
@@ -130,6 +131,15 @@ pub fn run() {
             commands::ai_send,
             documents::ai_attach_pdf,
             commands::ai_models,
+            commands::claude_code_status,
+            subscriptions::chatgpt_account,
+            subscriptions::chatgpt_models,
+            subscriptions::chatgpt_select_account,
+            subscriptions::chatgpt_resume_plan,
+            subscriptions::chatgpt_sign_in,
+            subscriptions::chatgpt_sign_out,
+            subscriptions::cancel_chatgpt_sign_in,
+            subscriptions::subscription_link,
             ai_window::ai_window_reply,
             commands::ai_cancel,
             commands::ai_clear,

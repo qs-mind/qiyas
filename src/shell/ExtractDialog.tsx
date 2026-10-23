@@ -1,3 +1,5 @@
+import { entityKind } from "../i18n/entityKind";
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { EntityFilter, Field } from "../api";
 import { useT } from "../i18n";
@@ -52,7 +54,7 @@ type Props = {
   layers: string[];
   /** Runs the extraction on the sheet shown: one filter per layer chosen (one without a layer
    *  when none is). Resolves to the rows of all of them. */
-  onRun(filters: EntityFilter[], fields: Field[]): Promise<string[][]>;
+  onRun(filters: EntityFilter[], fields: Field[], progress?: (rows: number) => void): Promise<string[][]>;
   /** Writes the table to Excel (asks where first). */
   onExport(columns: string[], rows: string[][]): Promise<void>;
   onClose(): void;
@@ -70,6 +72,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
   const [fields, setFields] = useState<Set<Plain>>(new Set(DEFAULT_FIELDS));
   const [tags, setTags] = useState("");
   const [table, setTable] = useState<{ columns: string[]; rows: string[][] } | null>(null);
+  const [progress, setProgress] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -107,12 +110,14 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
     const chosen: Field[] = [...plain, ...attributeTags.map((attribute) => ({ attribute }))];
     const columns = [...plain.map((f) => t(`field.${f}`)), ...attributeTags];
     setBusy(true);
+    setTable(null);
+    setProgress(0);
     setError(null);
     setCopied(false);
     try {
-      setTable({ columns, rows: await onRun(filters, chosen) });
+      setTable({ columns, rows: await onRun(filters, chosen, setProgress) });
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     } finally {
       setBusy(false);
     }
@@ -124,7 +129,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
       await navigator.clipboard.writeText(toTsv(table.columns, table.rows));
       setCopied(true);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -134,7 +139,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
     try {
       await onExport(table.columns, table.rows);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 
@@ -156,6 +161,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
         <h2 id="extract-title" className="heading">
           {t("extract.title")}
         </h2>
+        {busy && <p role="status">{t("extract.progress", { count: progress })}</p>}
         <div className="extract-filters">
           <label>
             <span>{t("extract.layers")}</span>
@@ -181,7 +187,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
                 <option value="">{t("extract.anyKind")}</option>
                 {KINDS.map((k) => (
                   <option key={k} value={k}>
-                    {k}
+                    {entityKind(k, t)}
                   </option>
                 ))}
               </select>

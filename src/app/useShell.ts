@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** The window's own chrome: theme, the notices and errors (toasts), the settings and About
  *  dialogs' switches, the side panel's tab, the command line aliases, and the viewport refs. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -74,7 +75,7 @@ export function useShell() {
       await step();
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

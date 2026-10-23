@@ -586,6 +586,14 @@ pub async fn set_settings<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     settings::validate(&settings)?;
+    let old = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if old.providers.openai_compatible.base_url != settings.providers.openai_compatible.base_url {
+        keychain(move || secrets::migrate(&old)).await?;
+    }
     let (changed, mcp_changed) = {
         let mut cached = state
             .settings
@@ -644,6 +652,7 @@ async fn keychain<R: Send + 'static>(
 pub async fn ai_models(
     provider: Option<String>,
     base_url: Option<String>,
+    typed_key: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<qiyas_ai::models::ModelList, String> {
     use qiyas_ai::models::{model_list, ModelSource};
@@ -652,6 +661,16 @@ pub async fn ai_models(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
+    if matches!(
+        provider.as_deref().unwrap_or(settings.provider.name()),
+        "claude_code" | "chatgpt_plan"
+    ) {
+        return Ok(qiyas_ai::models::ModelList {
+            models: Vec::new(),
+            from_service: false,
+            error: None,
+        });
+    }
     let anthropic = match provider.as_deref() {
         Some(p) => p == "anthropic",
         None => settings.provider == settings::Provider::Anthropic,
@@ -661,33 +680,55 @@ pub async fn ai_models(
     } else {
         settings::Provider::OpenaiCompatible.name()
     };
-    let key = keychain(move || secrets::get_api_key(name))
-        .await
-        .ok()
-        .flatten();
-    if anthropic {
-        return Ok(model_list(ModelSource::Anthropic, key.as_deref()).await);
-    }
-    let base = if provider.is_some() {
-        base_url
+    // A draft key is explicit and never saved here. Without one, Goal A's saved-address
+    // check runs before any keychain read. Never pair a saved key with a draft destination.
+    let typed_key = typed_key.filter(|key| !key.trim().is_empty());
+    let requested = if typed_key.is_some() {
+        if anthropic {
+            Ok("https://api.anthropic.com/v1".into())
+        } else {
+            qiyas_ai::endpoint::normalize(base_url.as_deref().unwrap_or(""))
+        }
     } else {
-        base_url.or(settings.providers.openai_compatible.base_url)
-    }
-    .filter(|b| !b.trim().is_empty());
-    match base {
-        Some(base_url) => Ok(model_list(
-            ModelSource::OpenAiCompatible {
-                base_url: &base_url,
-            },
-            key.as_deref(),
+        secrets::discovery_address(
+            &settings,
+            name,
+            if anthropic { None } else { base_url.as_deref() },
         )
-        .await),
-        None => Ok(qiyas_ai::models::ModelList {
-            models: Vec::new(),
-            from_service: false,
-            error: Some("no_base_url".into()),
-        }),
-    }
+    };
+    let requested = match requested {
+        Ok(base) => base,
+        Err(error) => {
+            return Ok(qiyas_ai::models::ModelList {
+                models: Vec::new(),
+                from_service: false,
+                error: Some(error),
+            })
+        }
+    };
+    let key = match typed_key {
+        Some(key) => Some(key),
+        None => keychain(move || secrets::get_saved(&settings, name)).await?,
+    };
+    let source = if anthropic {
+        ModelSource::Anthropic
+    } else {
+        ModelSource::OpenAiCompatible {
+            base_url: &requested,
+        }
+    };
+    Ok(model_list(source, key.as_deref()).await)
+}
+
+/// Checks only documented CLI metadata when the user presses Check in Settings.
+#[tauri::command]
+pub async fn claude_code_status(
+    executable: Option<String>,
+) -> Result<qiyas_ai::claude_code::Status, String> {
+    let home = qiyas_core::data_home::qiyas_dir()?;
+    qiyas_ai::claude_code::status(executable.as_deref(), &home)
+        .await
+        .map_err(|e| e.for_window())
 }
 
 /// Stores the provider's API key in the OS keychain. The key never comes back to the window. The
@@ -699,14 +740,29 @@ pub async fn set_api_key<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    keychain(move || secrets::set_api_key(&provider, &key)).await?;
+    let saved = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let base = secrets::address(&saved, &provider)?;
+    keychain(move || {
+        secrets::migrate(&saved)?;
+        secrets::set_at(&provider, &base, &key)
+    })
+    .await?;
     new_conversation(&app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn has_api_key(provider: String) -> Result<bool, String> {
-    keychain(move || Ok(secrets::get_api_key(&provider)?.is_some())).await
+pub async fn has_api_key(provider: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    keychain(move || Ok(secrets::get_saved(&saved, &provider)?.is_some())).await
 }
 
 #[tauri::command]
@@ -715,7 +771,17 @@ pub async fn delete_api_key<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    keychain(move || secrets::delete_api_key(&provider)).await?;
+    let saved = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let base = secrets::address(&saved, &provider)?;
+    keychain(move || {
+        secrets::migrate(&saved)?;
+        secrets::delete_at(&provider, &base)
+    })
+    .await?;
     new_conversation(&app, &state);
     Ok(())
 }
@@ -866,9 +932,25 @@ async fn new_agent(
     }
     let (provider, name) = match ai::mock_provider(&state.session) {
         Some(mock) => (mock, "mock"),
+        None if settings.provider == settings::Provider::ChatgptPlan => {
+            (crate::subscriptions::provider()?, "chatgpt_plan")
+        }
+        None if settings.provider == settings::Provider::ClaudeCode => {
+            let provider = qiyas_ai::claude_code::ClaudeCode::new(
+                settings.claude_executable.as_deref(),
+                qiyas_core::data_home::qiyas_dir()?,
+                state.session.clone(),
+            )
+            .map_err(|e| e.for_window())?;
+            (
+                Box::new(provider) as Box<dyn qiyas_ai::Provider>,
+                "claude_code",
+            )
+        }
         None => {
             let name = settings.provider.name();
-            let key = match keychain(move || secrets::get_api_key(name)).await {
+            let saved = settings.clone();
+            let key = match keychain(move || secrets::get_saved(&saved, name)).await {
                 Ok(key) => key,
                 // A local OpenAI-compatible server needs no key, so no keychain is fine.
                 Err(_) if settings.provider == settings::Provider::OpenaiCompatible => None,
@@ -901,7 +983,7 @@ async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, message: qiyas_ai:
     let error = match task.await {
         Ok((agent, result)) => {
             ai_run(&app.state::<AppState>()).finish(agent, generation);
-            result.err().map(|e| e.to_string())
+            result.err().map(|e| e.for_window())
         }
         Err(_) => {
             let state = app.state::<AppState>();
@@ -958,8 +1040,16 @@ async fn run_turn<R: Runtime>(
             let run = ai_run(&state);
             if run.generation() == generation {
                 // Persist the opening message and each completed step, including during a long
-                // turn. Text deltas stay in the shared checkpoint until the next step or reset.
-                if first || !matches!(event, AgentEvent::Text { .. } | AgentEvent::Thinking { .. })
+                // turn. Text deltas reach the checkpoint at the end of their response.
+                if first
+                    || matches!(
+                        event,
+                        AgentEvent::ToolResult { .. }
+                            | AgentEvent::Done { .. }
+                            | AgentEvent::Stopped { .. }
+                            | AgentEvent::AwaitingApproval { .. }
+                            | AgentEvent::Refused { .. }
+                    )
                 {
                     run.save_logged();
                     opening_saved = true;
@@ -1164,7 +1254,8 @@ pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
         true
     } else {
         let name = settings.provider.name();
-        keychain(move || secrets::get_api_key(name))
+        let saved = settings.clone();
+        keychain(move || secrets::get_saved(&saved, name))
             .await
             .is_ok_and(|key| key.is_some())
     };

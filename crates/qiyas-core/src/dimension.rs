@@ -901,6 +901,26 @@ impl Session {
         Ok(handles)
     }
 
+    fn measured_dimension(&self, d: &Dimension) -> qiyas_geom::DimGeometry {
+        let geometry = dimension_entities(&self.drawing.doc, d);
+        let xrefs = self.xref_docs();
+        let width = geometry.entities.iter().find_map(|e| {
+            let flat = flatten(&self.drawing.doc, e, &Xform::identity(), 0.01);
+            let text = flat.paths.into_iter().find_map(|p| p.text)?;
+            let laid = self.text.borrow_mut().lay_out_text(
+                &self.drawing.doc,
+                &xrefs,
+                &text,
+                self.arabic_reversed,
+            )?;
+            Some(
+                (laid.corners[1][0] - laid.corners[0][0])
+                    .hypot(laid.corners[1][1] - laid.corners[0][1]),
+            )
+        });
+        qiyas_geom::dimension_entities_with_width(&self.drawing.doc, d, width)
+    }
+
     /// Generates the `*D` block of the dimension `h` again from its points and style (a new one
     /// when it has none), placing its text where the style puts it unless it was moved.
     pub(crate) fn rebuild_dimension(&mut self, h: Handle) -> Result<(), CoreError> {
@@ -908,7 +928,7 @@ impl Session {
             return Err(invalid("This is no dimension"));
         };
         let mut d = d.clone();
-        let geometry = dimension_entities(&self.drawing.doc, &d);
+        let geometry = self.measured_dimension(&d);
         {
             let base = d.base_mut();
             if !base.text_user_positioned {
@@ -1326,4 +1346,115 @@ fn generated_block(doc: &CadDocument, d: &Dimension) -> bool {
         && doc
             .entities_in_block(block)
             .any(|part| is_logical_text(part.common()))
+}
+
+impl Session {
+    /// Search both sides of the measured points. Only the dimension line moves; measurement
+    /// endpoints remain exact. Grid bubbles, annotation and text against geometry are obstacles.
+    pub(crate) fn place_dimension_clear(
+        &mut self,
+        handle: Handle,
+        clearance_mm: f64,
+    ) -> Result<(), CoreError> {
+        if !clearance_mm.is_finite() || clearance_mm < 0.0 {
+            return Err(invalid("Clearance must be non-negative"));
+        }
+        let Some(EntityType::Dimension(original)) = self.drawing.doc.get_entity(handle) else {
+            return Err(invalid("Choose a dimension"));
+        };
+        let original = original.clone();
+        let Some((p1, p2, def, axis)) = linear_parts(&original) else {
+            return Err(invalid(
+                "Automatic placement supports linear and aligned dimensions",
+            ));
+        };
+        let ink = self.sheet_ink(&self.sheet);
+        if !ink.incomplete.is_empty() {
+            return Err(invalid("The drawing could not be checked completely"));
+        }
+        let normal = [-axis[1], axis[0]];
+        let step = self.paper_distance(7.5);
+        let clearance = self.paper_distance(clearance_mm);
+        let mid = [(p1[0] + p2[0]) * 0.5, (p1[1] + p2[1]) * 0.5];
+        let mut candidates = vec![def];
+        for i in 1..=40 {
+            for side in [-1.0, 1.0] {
+                candidates.push([
+                    mid[0] + normal[0] * step * i as f64 * side,
+                    mid[1] + normal[1] * step * i as f64 * side,
+                ]);
+            }
+        }
+        for at in candidates {
+            let mut d = original.clone();
+            d.set_definition_point(v3(at));
+            d.base_mut().text_user_positioned = false;
+            let geometry = self.measured_dimension(&d);
+            let mut clear = true;
+            let xrefs = self.xref_docs();
+            let mut engine = self.text.borrow_mut();
+            for e in geometry.entities {
+                for flat in flatten(
+                    &self.drawing.doc,
+                    &e,
+                    &Xform::identity(),
+                    0.0002 / self.drawing.units.to_metres(),
+                )
+                .paths
+                {
+                    let is_text = flat.text.is_some();
+                    let points = if let Some(t) = flat.text {
+                        engine
+                            .lay_out_text(&self.drawing.doc, &xrefs, &t, self.arabic_reversed)
+                            .map(|l| l.corners.to_vec())
+                            .unwrap_or_default()
+                    } else {
+                        flat.path.points
+                    };
+                    if points.is_empty() {
+                        continue;
+                    }
+                    let b = crate::ink::expand(crate::ink::bounds(&points), clearance);
+                    if ink.near(b).any(|obstacle| {
+                        if obstacle.owner == handle.value() {
+                            return false;
+                        }
+                        let bubble = crate::check_layout::grid_bubble(self, &ink, obstacle);
+                        if !is_text && !obstacle.annotation && !bubble {
+                            return false;
+                        }
+                        if is_text || obstacle.filled || bubble {
+                            obstacle.hits_polygon(&crate::ink::corners(b))
+                        } else {
+                            crate::ink::edges(&points, flat.path.closed).any(|(a, b)| {
+                                obstacle
+                                    .edges()
+                                    .any(|(c, d)| crate::ink::crosses(a, b, c, d))
+                            })
+                        }
+                    }) {
+                        clear = false;
+                        break;
+                    }
+                }
+                if !clear {
+                    break;
+                }
+            }
+            drop(engine);
+            drop(xrefs);
+            if clear {
+                *self
+                    .drawing
+                    .doc
+                    .get_entity_mut(handle)
+                    .expect("dimension exists") = EntityType::Dimension(d);
+                self.rebuild_dimension(handle)?;
+                return Ok(());
+            }
+        }
+        Err(invalid(
+            "No clear dimension position was found; move nearby annotation or choose another side",
+        ))
+    }
 }

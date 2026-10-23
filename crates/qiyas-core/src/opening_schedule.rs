@@ -12,6 +12,7 @@ use crate::{CoreError, Session};
 
 pub(crate) const SCHEDULE_APP: &str = "QIYAS_OPENING_SCHEDULE";
 pub(crate) const MARK_APP: &str = "QIYAS_OPENING_MARK";
+pub(crate) const ID_SOURCE_APP: &str = "QIYAS_OPENING_ID_SOURCE";
 
 fn invalid(message: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(message.into())
@@ -73,7 +74,46 @@ impl Session {
             return Ok(());
         }
         let app = self.object_app(MARK_APP)?;
-        for record in objects {
+        for mut record in objects {
+            let handle = record.instance.id;
+            let entity = self
+                .drawing
+                .doc
+                .get_entity(Handle::new(handle))
+                .expect("object driver");
+            let legacy_default = entity
+                .common()
+                .extended_data
+                .get_record(ID_SOURCE_APP)
+                .is_none()
+                && mark(entity).is_some_and(|old| {
+                    record
+                        .instance
+                        .props
+                        .get("mark")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(old.as_str())
+                });
+            if legacy_default {
+                // Previous versions wrote the size label into the editable ID. Keep that
+                // value automatic; explicit edits carry their own source marker now.
+                record
+                    .instance
+                    .props
+                    .insert("mark".into(), serde_json::json!(""));
+                self.stamp_object(handle, &record.instance)?;
+            }
+            let source_app = self.object_app(ID_SOURCE_APP)?;
+            crate::xdata::write_text(
+                self.drawing
+                    .doc
+                    .get_entity_mut(Handle::new(handle))
+                    .expect("object driver")
+                    .common_mut(),
+                ID_SOURCE_APP,
+                source_app,
+                Some("explicit_or_empty"),
+            );
             let value = self
                 .schedule_value(&spec, &record, "mark")?
                 .ok_or_else(|| invalid("Opening schedule recipe requires a mark"))?;
@@ -88,13 +128,6 @@ impl Session {
                 .expect("object driver");
             if crate::opening_schedule::mark(entity).as_deref() != Some(mark) {
                 crate::xdata::write_text(entity.common_mut(), MARK_APP, app, Some(mark));
-            }
-            if record.instance.props.contains_key("mark")
-                && record.instance.props.get("mark") != Some(&value)
-            {
-                let mut object = record.instance;
-                object.props.insert("mark".into(), value);
-                self.stamp_object(handle, &object)?;
             }
         }
         Ok(())

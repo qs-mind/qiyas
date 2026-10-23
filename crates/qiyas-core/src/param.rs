@@ -1058,7 +1058,7 @@ impl Session {
         }
         if let Some((h, _)) = changes.iter().find(|(h, _)| self.is_locked(*h)) {
             return Err(invalid(format!(
-                "Entity {:X} is locked and would have to move to keep its constraints",
+                "Entity {} is locked and would have to move to keep its constraints",
                 h.value()
             )));
         }
@@ -1171,7 +1171,7 @@ impl Session {
                     true
                 }
             }
-            _ => return Err(invalid(format!("Entity {h:X} changed kind"))),
+            _ => return Err(invalid(format!("Entity {h} changed kind"))),
         };
         if !moved {
             return Ok(None);
@@ -1184,7 +1184,7 @@ impl Session {
     fn part_position(&self, r: &Ref) -> Result<[f64; 2], CoreError> {
         self.geo(r.handle)
             .and_then(|g| g.position(r.part))
-            .ok_or_else(|| invalid(format!("Entity {:X} no longer has that part", r.handle)))
+            .ok_or_else(|| invalid(format!("Entity {} no longer has that part", r.handle)))
     }
 
     /// The ends of the straight edge `r`, start first.
@@ -1513,11 +1513,10 @@ impl Session {
         self.solve_trial(seeds, &parts)
     }
 
-    /// The take-off rows and fields that read entities the solver moved follow them.
+    /// Take-off rows follow the solver. Fields update in the shared derivation pass.
     fn follow_moved(&mut self, moved: &[Handle]) -> Result<(), CoreError> {
         if !moved.is_empty() {
             self.follow_takeoff(moved, &[]);
-            self.follow_fields()?;
         }
         Ok(())
     }

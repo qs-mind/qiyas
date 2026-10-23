@@ -207,18 +207,17 @@ fn images_keep_the_origin_of_a_sheet_with_fills_only() {
 }
 
 #[test]
-fn a_point_is_a_cross_sized_from_the_sheet() {
+fn default_point_is_a_dot_instead_of_a_large_cross() {
     let line = EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 100.0, 0.0, 0.0));
     let point = EntityType::Point(Point::at(Vector3::new(30.0, 20.0, 0.0)));
     let (b, handles) = batch_of(vec![line, point]);
     let range = b.ranges.iter().find(|r| r.entity == handles[1]).unwrap();
-    assert_eq!(range.count, 2);
+    assert_eq!(range.count, 1);
     assert_eq!(range.flags, 0);
-    // One percent of the sheet's larger side (100) across, centred on the point.
+    // PDMODE 0 is a visible dot, not the cross reserved for mode 2.
     let close = |a: [f64; 4], e: [f64; 4]| a.iter().zip(e).all(|(a, e)| (a - e).abs() < 1e-4);
     let first = range.first as usize;
-    assert!(close(segment(&b, first), [29.5, 20.0, 30.5, 20.0]));
-    assert!(close(segment(&b, first + 1), [30.0, 19.5, 30.0, 20.5]));
+    assert!(close(segment(&b, first), [29.98, 20.0, 30.02, 20.0]));
     // The point (not its cross) grows the sheet; picking near it finds it.
     assert_eq!(b.bounds, [[0.0, 0.0], [100.0, 20.0]]);
     let index = PickIndex::new(&b);
@@ -228,7 +227,7 @@ fn a_point_is_a_cross_sized_from_the_sheet() {
     let (alone, _) = batch_of(vec![EntityType::Point(Point::at(Vector3::new(
         1.0, 1.0, 0.0,
     )))]);
-    assert_eq!(alone.segments.len(), 8);
+    assert_eq!(alone.segments.len(), 4);
 }
 
 fn section_table(bytes: &[u8]) -> Vec<(u32, usize, usize)> {

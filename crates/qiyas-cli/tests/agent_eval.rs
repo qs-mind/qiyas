@@ -125,8 +125,9 @@ async fn stdio_client_uses_shared_tools_instructions_finish_and_eof() {
             .unwrap();
         // Outside agents get the same take-off workflow as Mizan, then the registry index.
         let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
-        assert!(instructions.starts_with(qiyas_ai::prompt::TAKEOFF_WORKFLOW.trim()));
-        assert!(instructions.ends_with(qiyas_core::registry::registry().index_text().as_str()));
+        assert!(!instructions.contains("Take-off workflow:"));
+        assert!(instructions.contains("Drawing work needs no BOQ or finish call"));
+        assert!(instructions.ends_with(qiyas_ai::prompt::command_index().as_str()));
         let tools = client.list_all_tools().await.unwrap();
         assert_eq!(
             tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
@@ -646,4 +647,54 @@ fn holdout_contaminated_cases_are_excluded_and_exam_is_incomplete() {
     }
     assert_eq!(fixture.log()[1]["status"], "incomplete");
     fixture.assert_closed();
+}
+
+#[test]
+fn eval_agent_passes_the_selected_name_to_mcp_and_saved_boq() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/fake_agent.py");
+    let template = format!(
+        "python3 '{}' {{cli}} {{drawing}} {{workdir}} --method {{method}}",
+        script.display()
+    );
+    let result = Command::new(CLI)
+        .env("QIYAS_HOME", dir.path().join("methods-home"))
+        .args([
+            "--json",
+            "eval-agent",
+            "--cases",
+            "generated",
+            "--agent",
+            "fake",
+            "--method",
+            "POMI (RICS)",
+            "--agent-cmd",
+            &template,
+            "--root",
+        ])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let run = Path::new(report["reports"][0]["report_directory"].as_str().unwrap());
+    assert_artifacts(run);
+    let measurement = read(&run.join("measurement.json"));
+    assert_eq!(measurement["selection"]["settings"]["name"], "POMI (RICS)");
+    for item in measurement["items"].as_array().unwrap() {
+        for line in item["lines"].as_array().unwrap() {
+            assert_eq!(line["method"], "POMI (RICS)");
+        }
+    }
+    let config = read(&Path::new(report["report_directory"].as_str().unwrap()).join("mcp-0.json"));
+    let args = config["mcpServers"]["qiyas"]["args"].as_array().unwrap();
+    assert_eq!(
+        &args[args.len() - 2..],
+        &[json!("--method"), json!("POMI (RICS)")]
+    );
 }

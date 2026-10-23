@@ -95,7 +95,7 @@ fn reads_words_points_and_arabic_digits() {
                 LAYOFF A-WALL \"A DOOR\"\n\
                 LAYFRZ A-WALL\n\
                 LAYER CURRENT A-DOOR\n\
-                MEASURE 2F\n\
+                MEASURE 0x2F\n\
                 ZOOM E\n\
                 ECHO all done\n\
                 DELAY ٥\n\
@@ -183,8 +183,15 @@ fn registry_words_share_points_with_the_legacy_grammar() {
 #[test]
 fn json_and_typed_script_lines_keep_omissions_and_report_input_notes() {
     let dir = tempfile::tempdir().unwrap();
-    let script = parsed(
+    let (line, message) = error(
         "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
+        dir.path(),
+        None,
+    );
+    assert_eq!(line, 1);
+    assert!(message.contains("unknown_field at /typo"));
+    let script = parsed(
+        "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\"}\nTEXT 2,0 Door\n",
         dir.path(),
         None,
     );
@@ -192,10 +199,8 @@ fn json_and_typed_script_lines_keep_omissions_and_report_input_notes() {
         assert!(step.input.as_ref().unwrap().get("height").is_none());
         assert!(matches!(step.action, Action::Command(Command::Text { .. })));
     }
-    assert_eq!(script.steps[0].input.as_ref().unwrap()["typo"], true);
     let session = Session::new_blank(&dir.path().join("input-notes.dxf"), 6);
     let run = script::run(&script, Some(session), &mut Stub::default()).unwrap();
-    assert!(run.steps[0].text.contains("/typo"), "{}", run.steps[0].text);
     for step in run.steps {
         assert!(step.text.contains("height=0.25 m"), "{}", step.text);
         assert!(step.text.contains("rotation=0"), "{}", step.text);
@@ -379,7 +384,7 @@ fn runs_measures_layers_and_export_then_stops_at_quit() {
          DI 0,0 3,4\n\
          AA 0,0 4,0 4,3 0,3\n\
          \n\
-         MEASURE {line:X}\n\
+         MEASURE {line}\n\
          LAYOFF A-WALL\n\
          LAYFRZ A-DOOR\n\
          LAYER CURRENT A-DOOR\n\
@@ -472,13 +477,13 @@ fn a_command_before_any_open_and_a_failing_command_name_their_line() {
 
     let drawing = write_sample(dir.path(), "dwg");
     let script = parsed(
-        "COUNT DOOR\nMEASURE FFFF\nCOUNT DOOR",
+        "COUNT DOOR\nMEASURE 0xFFFF\nCOUNT DOOR",
         dir.path(),
         Some(&drawing),
     );
     let session = Session::open(&drawing).unwrap();
     let e = fails(script::run(&script, Some(session), &mut Stub::default()));
-    assert_eq!(e.to_string(), "line 2: No entity with handle FFFF");
+    assert_eq!(e.to_string(), "line 2: No entity with handle 65535");
     // OPEN of a file that is not a drawing fails on its line.
     std::fs::write(dir.path().join("junk.dwg"), b"not a drawing").unwrap();
     let script = parsed("OPEN junk.dwg", dir.path(), None);

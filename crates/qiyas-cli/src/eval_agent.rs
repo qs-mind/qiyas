@@ -14,6 +14,9 @@ use serde_json::{json, Value};
 #[derive(Args)]
 #[command(group(ArgGroup::new("selection").args(["case", "cases", "set", "holdout"]).required(true)))]
 pub struct EvalAgentArgs {
+    /// Method name for this run. Rules are optional; Mizan authors missing rules.
+    #[arg(long)]
+    pub method: Option<String>,
     /// Open the sealed final exam instead of selecting development cases.
     #[arg(long)]
     pub holdout: bool,
@@ -26,7 +29,7 @@ pub struct EvalAgentArgs {
     pub cases: Vec<String>,
     #[arg(long, value_parser = ["live-dev"])]
     pub set: Option<String>,
-    #[arg(long, default_value = "codex")]
+    #[arg(long, default_value = "codex", value_parser = agent_name)]
     pub agent: String,
     /// Shell template; placeholders are shell-quoted arguments, not raw shell fragments.
     #[arg(long)]
@@ -39,6 +42,16 @@ pub struct EvalAgentArgs {
     pub timeout_min: u32,
     #[arg(long, default_value = ".local/benchmark")]
     pub root: PathBuf,
+}
+
+const CLAUDE_EVAL_REFUSED: &str = "Claude subscriptions are for individual Mizan messages, not benchmarks or evaluations. Use ChatGPT, Codex or an API key for benchmarks.";
+
+fn agent_name(value: &str) -> Result<String, String> {
+    if value.eq_ignore_ascii_case("claude") {
+        Err(CLAUDE_EVAL_REFUSED.into())
+    } else {
+        Ok(value.into())
+    }
 }
 
 fn folder(root: &Path, prefix: &str) -> Result<PathBuf, String> {
@@ -54,6 +67,9 @@ fn folder(root: &Path, prefix: &str) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
+    if args.agent.eq_ignore_ascii_case("claude") {
+        return Err(CLAUDE_EVAL_REFUSED.into());
+    }
     if args.holdout && !args.i_understand_this_opens_the_holdout {
         return Err("The holdout is sealed. Opening it requires --i-understand-this-opens-the-holdout and is logged.".into());
     }
@@ -93,6 +109,34 @@ pub fn run(args: &EvalAgentArgs) -> Result<Value, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let combined = folder(&root, "eval-agent-set")?;
     run_cases(args, &root, &inputs, &combined)
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::*;
+
+    #[test]
+    fn claude_evaluation_is_refused_before_files_or_custom_commands() {
+        for name in ["claude", "CLAUDE", "Claude"] {
+            assert_eq!(agent_name(name).unwrap_err(), CLAUDE_EVAL_REFUSED);
+            let args = EvalAgentArgs {
+                method: None,
+                holdout: true,
+                i_understand_this_opens_the_holdout: false,
+                case: None,
+                cases: Vec::new(),
+                set: None,
+                agent: name.into(),
+                agent_cmd: Some("must-never-execute".into()),
+                model: String::new(),
+                effort: String::new(),
+                timeout_min: 1,
+                root: PathBuf::from("/must-not-be-read"),
+            };
+            assert_eq!(run(&args).unwrap_err(), CLAUDE_EVAL_REFUSED);
+        }
+        assert_eq!(agent_name("codex").unwrap(), "codex");
+    }
 }
 
 struct CaseInput {
@@ -191,7 +235,13 @@ fn run_case(
     if let Some(text) = &preamble {
         fs::write(output.join("preamble.md"), text).map_err(|e| e.to_string())?;
     }
-    let server_args = json!(["mcp", "--drawing", drawing, "--workdir", output]);
+    let mut server_args = json!(["mcp", "--drawing", drawing, "--workdir", output]);
+    if let Some(method) = &args.method {
+        server_args
+            .as_array_mut()
+            .unwrap()
+            .extend([json!("--method"), json!(method)]);
+    }
     crate::bench::write_json(
         config,
         &json!({"mcpServers":{"qiyas":{"command":cli,"args":server_args}}}),
@@ -199,6 +249,9 @@ fn run_case(
     let mut instructions = "Use the Qiyas MCP tools. Call qiyas_execute finish with your end report in args.answer before ending. Do not inspect files outside this run folder or use repository code, benchmark data, truth or recipes. The MCP server prepares PDF page 1 when applicable; its digest exposes visible source documents.".to_string();
     if preamble.is_some() {
         instructions.push_str(" The project preamble (specification excerpt issued with this drawing) is preamble.md in this run folder: read it and apply its measurement rules to the elements it names.");
+    }
+    if let Some(method) = &args.method {
+        instructions.push_str(&format!(" Selected measurement method: {method}. Read the method and authoring instruction from state and takeoff_kit."));
     }
     let request = crate::eval::task_request(&instructions);
     let mut command = if let Some(template) = &args.agent_cmd {
@@ -211,6 +264,7 @@ fn run_case(
                 ("request", &request),
                 ("model", &args.model),
                 ("effort", &args.effort),
+                ("method", args.method.as_deref().unwrap_or("")),
                 ("mcp_config", config.to_string_lossy().as_ref()),
             ],
         )?;

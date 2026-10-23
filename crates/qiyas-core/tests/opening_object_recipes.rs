@@ -53,7 +53,8 @@ fn baseline(s: &Session, handles: &[u64]) {
     near(right.x_scale(), -1.0);
     for (reference, x) in [(&left, 1.55), (&right, 4.45)] {
         near(reference.insert_point.x * factor, x);
-        near(reference.insert_point.y * factor, -0.1);
+        // Hinge on the swing face, corrected by Goal G.
+        near(reference.insert_point.y * factor, 0.1);
     }
     let door: Vec<_> = s.drawing.doc.entities_in_block(&left.block_name).collect();
     assert_eq!(door.len(), 2);

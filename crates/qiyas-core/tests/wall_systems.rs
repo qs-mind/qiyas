@@ -256,7 +256,7 @@ fn takeoff_and_fields_follow_a_split_hatch_and_replaced_centreline_in_the_same_u
 }
 
 #[test]
-fn rebuilding_drops_constraints_on_old_centrelines_and_undo_restores_them() {
+fn rebuilding_keeps_constraints_on_surviving_centrelines_through_undo() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::new_blank(&dir.path().join("constraints.dxf"), 6);
     let wall = run(
@@ -275,14 +275,17 @@ fn rebuilding_drops_constraints_on_old_centrelines_and_undo_restores_them() {
         &mut session,
         json!({"type":"add_wall_openings","centreline":centreline,"openings":[{"at":5,"width":1.2,"kind":"window"}]}),
     );
-    assert!(
-        run(&mut session, json!({"type":"list_constraints"}))["constraints"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        run(&mut session, json!({"type":"list_constraints"})),
+        before
     );
     assert_eq!(session.history_steps().0.len(), count + 1);
     assert!(session.undo());
+    assert_eq!(
+        run(&mut session, json!({"type":"list_constraints"})),
+        before
+    );
+    assert!(session.redo());
     assert_eq!(
         run(&mut session, json!({"type":"list_constraints"})),
         before

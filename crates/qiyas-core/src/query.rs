@@ -97,6 +97,8 @@ pub struct Page<T> {
 #[derive(Debug, Clone, Serialize)]
 pub struct TextRow {
     pub handle: u64,
+    /// Effective layer, including block layer inheritance and the external drawing prefix.
+    pub layer: String,
     pub text: String,
     pub at: [f64; 2],
     pub height: f64,
@@ -290,6 +292,7 @@ impl Session {
             xrefs: &xrefs,
             budget: MAX_INSTANCES,
             out: Vec::new(),
+            layers: Vec::new(),
         };
         walk.collect(
             &self.drawing.doc,
@@ -454,8 +457,24 @@ impl Session {
     /// The entity's flattened points in world coordinates; for an entity that does not
     /// flatten (a dimension or table), the corners of its own bounding box.
     pub(crate) fn points_of(&self, xrefs: &XrefDocs, c: &Candidate) -> Vec<[f64; 2]> {
-        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, self.batch_tol()).into_paths();
-        let points: Vec<[f64; 2]> = paths.into_iter().flat_map(|p| p.points).collect();
+        let paths = flatten_with(c.doc, xrefs, c.entity, &c.xf, self.batch_tol()).paths;
+        let points: Vec<[f64; 2]> = paths
+            .into_iter()
+            .flat_map(|p| {
+                p.text
+                    .as_ref()
+                    .and_then(|text| {
+                        self.text.borrow_mut().lay_out_text(
+                            c.doc,
+                            xrefs,
+                            text,
+                            self.arabic_reversed,
+                        )
+                    })
+                    .map(|laid| laid.corners.to_vec())
+                    .unwrap_or(p.path.points)
+            })
+            .collect();
         if !points.is_empty() {
             return points;
         }
@@ -492,6 +511,7 @@ struct TextWalk<'x, 'a> {
     /// Block instances still allowed.
     budget: usize,
     out: Vec<TextRow>,
+    layers: Vec<String>,
 }
 
 impl TextWalk<'_, '_> {
@@ -509,10 +529,20 @@ impl TextWalk<'_, '_> {
         for e in entities {
             let handle = e.common().handle.value();
             let xref = xref_stack.first().cloned();
+            let layer = if e.common().layer == "0" {
+                self.layers.last().cloned().unwrap_or_else(|| "0".into())
+            } else {
+                e.common().layer.clone()
+            };
             let out = &mut self.out;
-            let mut push = |text: String, at: &opencadcodec::Vector3, height: f64| {
+            let mut push = |text: String, at: &opencadcodec::Vector3, height: f64, layer: &str| {
                 out.push(TextRow {
                     handle,
+                    layer: if xref_stack.is_empty() {
+                        layer.into()
+                    } else {
+                        format!("{}|{layer}", xref_stack.join("|"))
+                    },
                     text,
                     at: xf.apply([at.x, at.y]),
                     height: scaled_height(xf, height),
@@ -521,12 +551,23 @@ impl TextWalk<'_, '_> {
                 })
             };
             match e {
-                EntityType::Text(t) => push(t.value.clone(), &t.insertion_point, t.height),
-                EntityType::MText(t) => push(plain_text(&t.value), &t.insertion_point, t.height),
+                EntityType::Text(t) => push(t.value.clone(), &t.insertion_point, t.height, &layer),
+                EntityType::MText(t) => {
+                    push(plain_text(&t.value), &t.insertion_point, t.height, &layer)
+                }
                 EntityType::Insert(insert) => {
                     // Attributes are stored where the insert sits, not in the block's coordinates.
                     for a in &insert.attributes {
-                        push(a.value.clone(), &a.insertion_point, a.height);
+                        push(
+                            a.value.clone(),
+                            &a.insertion_point,
+                            a.height,
+                            if a.common.layer == "0" {
+                                &layer
+                            } else {
+                                &a.common.layer
+                            },
+                        );
                     }
                     if depth >= MAX_DEPTH {
                         continue;
@@ -553,6 +594,7 @@ impl TextWalk<'_, '_> {
                     if entering {
                         xref_stack.push(insert.block_name.clone());
                     }
+                    self.layers.push(layer);
                     for instance in insert_instances(doc, insert, xf) {
                         if self.budget == 0 {
                             break;
@@ -561,6 +603,7 @@ impl TextWalk<'_, '_> {
                         let entities = inner.entities_in_block(block);
                         self.collect(inner, entities, &instance, inside, depth + 1, xref_stack);
                     }
+                    self.layers.pop();
                     if entering {
                         xref_stack.pop();
                     }

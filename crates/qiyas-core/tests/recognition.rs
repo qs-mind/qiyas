@@ -115,10 +115,7 @@ fn extraction_review_and_one_step_undo_work_in_every_unit() {
         let mut s = Session::new_blank(&dir.path().join("drawing.dxf"), units);
         define(&mut s);
         let u = 1.0 / s.drawing.units.to_metres();
-        run(
-            &mut s,
-            json!({"type":"new_layer","name":"LINES","color":16777215}),
-        );
+        run(&mut s, json!({"type":"new_layer","name":"LINES"}));
         run(
             &mut s,
             json!({"type":"set_current","current":{"layer":"LINES"}}),

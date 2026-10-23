@@ -236,7 +236,7 @@ pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
     AgentSettings {
         provider: provider_identity(s),
         model: s.profile().model.clone(),
-        effort: s.effort.clone(),
+        effort: s.effective_effort().to_string(),
         language,
         autonomy: s.autonomy,
         measurement_method: crate::methods::selected(s.measurement_method.as_deref()),
@@ -248,7 +248,7 @@ pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
 /// fingerprint in conversations without copying the address or its optional credentials.
 /// FNV-1a is an identity checksum here, not a security hash.
 fn provider_identity(settings: &Settings) -> String {
-    if settings.provider == settings::Provider::Anthropic {
+    if settings.provider != settings::Provider::OpenaiCompatible {
         return settings.provider.name().into();
     }
     let endpoint = settings
@@ -307,7 +307,7 @@ pub fn conversation_entry(provider: &str, s: &Settings, language: Lang) -> Strin
     if let (settings::Provider::OpenaiCompatible, Some(url)) = (s.provider, &s.profile().base_url) {
         lines.push(format!("address: {url}"));
     }
-    lines.push(format!("effort: {}", s.effort));
+    lines.push(format!("effort: {}", s.effective_effort()));
     lines.push(format!("language: {language:?}"));
     lines.join("\n")
 }
@@ -315,7 +315,11 @@ pub fn conversation_entry(provider: &str, s: &Settings, language: Lang) -> Strin
 /// Whether going from `old` to `new` changes who answers (provider, address or model), which needs
 /// a new conversation. Effort changes apply to the next message.
 pub fn answerer_changed(old: &Settings, new: &Settings) -> bool {
-    (old.provider, old.profile()) != (new.provider, new.profile())
+    old.provider != new.provider
+        || old.profile().model != new.profile().model
+        || old.profile().base_url != new.profile().base_url
+        || (old.provider == settings::Provider::ClaudeCode
+            && old.claude_executable != new.claude_executable)
 }
 
 /// The provider the settings name, with `key` from the keychain. `Err("no_api_key")` for Claude
@@ -323,6 +327,9 @@ pub fn answerer_changed(old: &Settings, new: &Settings) -> bool {
 /// `Err("no_model")` until its model is chosen. The window opens Settings for all three.
 pub fn build_provider(s: &Settings, key: Option<String>) -> Result<Box<dyn Provider>, String> {
     match s.provider {
+        settings::Provider::ChatgptPlan | settings::Provider::ClaudeCode => {
+            Err("Subscription providers require the local application context".into())
+        }
         settings::Provider::Anthropic => {
             let key = key.ok_or("no_api_key")?;
             Ok(Box::new(Anthropic::new(key)))
@@ -335,6 +342,7 @@ pub fn build_provider(s: &Settings, key: Option<String>) -> Result<Box<dyn Provi
                 .map(str::trim)
                 .filter(|u| !u.is_empty())
                 .ok_or("no_base_url")?;
+            qiyas_ai::endpoint::normalize(url)?;
             if s.profile().model.trim().is_empty() {
                 return Err("no_model".into());
             }
@@ -375,6 +383,7 @@ mod tests {
             provider: settings::Provider::OpenaiCompatible,
             providers: settings::ProviderProfiles {
                 openai_compatible: settings::ProviderProfile {
+                    effort: None,
                     base_url: Some("https://api.runware.ai/v1".into()),
                     model: "google:gemini@3.8-flash".into(),
                 },
@@ -493,7 +502,8 @@ mod tests {
     fn effort_keeps_the_conversation_and_model_does_not() {
         let old = Settings::default();
         let mut new = old.clone();
-        new.effort = "low".into();
+        new.profile_mut().effort = Some("low".into());
+        assert_eq!(agent_settings(&new, Lang::En).effort, "low");
         assert!(!answerer_changed(&old, &new));
         new.providers.openai_compatible.model = "other-provider-model".into();
         assert!(!answerer_changed(&old, &new));

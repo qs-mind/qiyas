@@ -214,7 +214,15 @@ pub fn flatten_with(
     xf: &Xform,
     tol: f64,
 ) -> FlattenOutcome {
-    walk(doc, xrefs, entity, xf, tol, &mut MAX_WORK.clone(), false)
+    walk(
+        doc,
+        xrefs,
+        entity,
+        xf,
+        tol,
+        &mut MAX_WORK.clone(),
+        PaintMode::Geometry,
+    )
 }
 
 /// `flatten_with` for drawing a sheet: spends `budget` (block instances plus paths) and leaves
@@ -230,7 +238,27 @@ pub fn flatten_within(
     tol: f64,
     budget: &mut usize,
 ) -> FlattenOutcome {
-    walk(doc, xrefs, entity, xf, tol, budget, true)
+    walk(doc, xrefs, entity, xf, tol, budget, PaintMode::Display)
+}
+
+/// Visible CAD outlines for boundary tracing, with continuous linetypes. Keeps rays and
+/// multiline elements, but never treats a printed dash gap as a break in the source geometry.
+pub fn flatten_continuous_within(
+    doc: &CadDocument,
+    xrefs: &XrefDocs,
+    entity: &EntityType,
+    xf: &Xform,
+    tol: f64,
+    budget: &mut usize,
+) -> FlattenOutcome {
+    walk(doc, xrefs, entity, xf, tol, budget, PaintMode::Continuous)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PaintMode {
+    Geometry,
+    Continuous,
+    Display,
 }
 
 fn walk(
@@ -240,14 +268,15 @@ fn walk(
     xf: &Xform,
     tol: f64,
     budget: &mut usize,
-    paint: bool,
+    mode: PaintMode,
 ) -> FlattenOutcome {
     let mut walk = Walk {
         host: doc,
         xrefs,
         doc,
         tol,
-        paint,
+        paint: mode != PaintMode::Geometry,
+        line_patterns: mode == PaintMode::Display,
         out: Vec::new(),
         budget: *budget,
         truncated: false,
@@ -284,6 +313,7 @@ pub fn drawn_style(
         doc,
         tol: 0.0,
         paint: false,
+        line_patterns: false,
         out: Vec::new(),
         budget: 0,
         truncated: false,
@@ -309,6 +339,7 @@ pub fn drawn_style(
 struct Style {
     layer: String,
     color: Color,
+    pattern: Vec<f64>,
 }
 
 struct Walk<'a> {
@@ -320,6 +351,7 @@ struct Walk<'a> {
     tol: f64,
     /// Paint fills, pattern lines and rays too (see `Paint`), not only outlines.
     paint: bool,
+    line_patterns: bool,
     out: Vec<FlatPath>,
     /// Block instances plus paths still allowed.
     budget: usize,
@@ -362,7 +394,37 @@ impl Walk<'_> {
             Color::ByBlock => parent.map_or(Color::ByBlock, |p| p.color),
             other => other,
         };
-        Style { layer, color }
+        let name = if common.linetype.is_empty() || common.linetype.eq_ignore_ascii_case("ByLayer")
+        {
+            find_layer(self.host, self.xrefs, &layer)
+                .map(|l| l.line_type.as_str())
+                .unwrap_or("Continuous")
+        } else {
+            &common.linetype
+        };
+        let pattern = if name.eq_ignore_ascii_case("ByBlock") {
+            parent.map(|p| p.pattern.clone()).unwrap_or_default()
+        } else {
+            self.doc
+                .line_types
+                .get(name)
+                .map(|t| {
+                    t.elements
+                        .iter()
+                        .map(|e| e.length * self.doc.header.linetype_scale)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let pattern = pattern
+            .into_iter()
+            .map(|v| v * common.linetype_scale)
+            .collect();
+        Style {
+            layer,
+            color,
+            pattern,
+        }
     }
 
     fn entity(&mut self, entity: &EntityType, xf: &Xform, style: &Style, depth: usize) {
@@ -524,8 +586,12 @@ impl Walk<'_> {
             EntityType::Point(e) => {
                 if self.paint {
                     let size = self.host.header.point_display_size;
+                    if self.host.header.point_display_mode == 1 {
+                        return;
+                    }
                     let paint = Paint::Point {
-                        size: if size > 0.0 { size } else { 0.0 },
+                        size,
+                        mode: self.host.header.point_display_mode,
                     };
                     let at = vec![xy(&e.location)];
                     self.push_with(at, false, xf, style, handle, None, paint);
@@ -886,20 +952,35 @@ impl Walk<'_> {
         if closed && points.len() > 1 && same_point(points[0], points[points.len() - 1]) {
             points.pop();
         }
-        self.out.push(FlatPath {
-            path: Path {
-                points: points.into_iter().map(|p| xf.apply(p)).collect(),
-                closed,
-            },
-            layer: style.layer.clone(),
-            color: style.color,
-            chain: self.chain.clone(),
-            entity: self.xref_entity.or(self.owner).unwrap_or(entity),
-            xref: self.xref_stack.first().cloned(),
-            xref_insert_layers: self.xref_insert_layers.clone(),
-            text,
-            paint,
-        });
+        let source = Path { points, closed };
+        let (paths, truncated) = if self.line_patterns && paint == Paint::Outline && text.is_none()
+        {
+            crate::linetype::dashed(
+                &source,
+                &style.pattern,
+                self.budget.saturating_add(1).min(100_000),
+            )
+        } else {
+            (vec![source], false)
+        };
+        self.truncated |= truncated;
+        self.budget = self.budget.saturating_sub(paths.len().saturating_sub(1));
+        for path in paths {
+            self.out.push(FlatPath {
+                path: Path {
+                    points: path.points.into_iter().map(|p| xf.apply(p)).collect(),
+                    closed: path.closed,
+                },
+                layer: style.layer.clone(),
+                color: style.color,
+                chain: self.chain.clone(),
+                entity: self.xref_entity.or(self.owner).unwrap_or(entity),
+                xref: self.xref_stack.first().cloned(),
+                xref_insert_layers: self.xref_insert_layers.clone(),
+                text: text.clone(),
+                paint: paint.clone(),
+            });
+        }
     }
 }
 

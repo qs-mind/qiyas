@@ -24,7 +24,7 @@ pub enum Paint {
     Infinite { both_ways: bool },
     /// A POINT: the path holds its position. Drawn as a small cross, `size` across (drawing
     /// units), or sized from the sheet when 0. Picked as the point, never measured.
-    Point { size: f64 },
+    Point { size: f64, mode: i16 },
 }
 
 /// A filled area: `rings` in the filled entity's own coordinates, mapped to drawing coordinates

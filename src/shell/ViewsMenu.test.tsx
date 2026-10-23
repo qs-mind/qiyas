@@ -46,7 +46,7 @@ test("a refused save shows why and stays open", async () => {
   fireEvent.click(await screen.findByRole("menuitem", { name: "Save current view…" }));
   fireEvent.change(screen.getByLabelText("View name"), { target: { value: "A" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  expect((await screen.findByRole("alert")).textContent).toContain("Model sheet");
+  expect((await screen.findByRole("alert")).textContent).toContain("The file could not be written. Check the folder and available space.");
   expect(screen.getByRole("menu")).toBeTruthy();
 });
 

@@ -16,6 +16,12 @@ fn workbook_preserves_bilingual_boq_exact_dimension_arithmetic_and_references() 
     let boq = book.worksheet_range("Generated BOQ").unwrap();
     assert_eq!(boq.get((1, 2)), Some(&Data::String("سطح بعرض 0.2".into())));
     assert_eq!(boq.get((1, 4)), Some(&Data::Float(32.68)));
+    assert_eq!(boq.get((1, 9)), Some(&Data::String("export-test".into())));
+    assert!(boq
+        .get((1, 10))
+        .unwrap()
+        .to_string()
+        .contains("Invented test method; not a published standard /"));
     let dimensions = book.worksheet_range("Dimension sheets").unwrap();
     assert_eq!(dimensions.height(), report.items[0].lines.len() + 1);
     for (i, line) in report.items[0].lines.iter().enumerate() {
@@ -24,6 +30,10 @@ fn workbook_preserves_bilingual_boq_exact_dimension_arithmetic_and_references() 
             Some(&Data::String(line.expression.clone()))
         );
         assert_eq!(dimensions.get((i + 1, 7)), Some(&Data::Bool(line.included)));
+        assert_eq!(
+            dimensions.get((i + 1, 9)),
+            Some(&Data::String("export-test".into()))
+        );
         assert!(dimensions
             .get((i + 1, 11))
             .unwrap()

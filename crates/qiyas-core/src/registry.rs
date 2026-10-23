@@ -158,9 +158,113 @@ pub fn canonicalize(value: &mut Value) {
     if let Some(kind) = info.schema["properties"]["kind"]["const"].as_str() {
         value["kind"] = json!(kind);
     }
+    if value["type"] == "delete_entities" && value.get("targets").is_none() {
+        if let Some(handles) = value.as_object_mut().and_then(|o| o.remove("handles")) {
+            value["targets"] = handles;
+        }
+    }
+    if value["type"] == "set_layer" && value.get("prop").is_none() && value.get("value").is_none() {
+        let mut properties = serde_json::Map::new();
+        for name in [
+            "color",
+            "linetype",
+            "lineweight",
+            "on",
+            "frozen",
+            "locked",
+            "plot",
+        ] {
+            if let Some(v) = value.as_object_mut().and_then(|o| o.remove(name)) {
+                properties.insert(name.into(), v);
+            }
+        }
+        if !properties.is_empty() {
+            value["prop"] = json!("properties");
+            value["value"] = Value::Object(properties);
+        }
+    }
+    normalize_handles(&info.schema, value, "");
+    if value["type"] == "set_records" && value["collection"] == "entities" {
+        if let Some(updates) = value["updates"].as_array_mut() {
+            for update in updates {
+                if let Some(n) = handle_number(&update["key"]) {
+                    update["key"] = json!(n);
+                }
+            }
+        }
+    }
     if let Some(commands) = value.get_mut("commands").and_then(Value::as_array_mut) {
         for command in commands {
             canonicalize(command);
+        }
+    }
+}
+
+/// Accept record keys and explicit hexadecimal input without changing the decimal wire form.
+pub fn handle_number(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value.as_str().and_then(|s| {
+            s.strip_prefix("0x")
+                .or_else(|| s.strip_prefix("0X"))
+                .map_or_else(
+                    || s.parse().ok(),
+                    |digits| u64::from_str_radix(digits, 16).ok(),
+                )
+        })
+    })
+}
+
+pub(crate) fn is_handle_field(field: &str) -> bool {
+    matches!(
+        field,
+        "handle"
+            | "handles"
+            | "targets"
+            | "chain"
+            | "centreline"
+            | "insert"
+            | "inserts"
+            | "driver"
+            | "host"
+            | "ids"
+            | "a"
+            | "b"
+            | "dimension"
+    )
+}
+
+fn normalize_handles(schema: &Value, value: &mut Value, field: &str) {
+    let handle_field = is_handle_field(field);
+    if schema["type"] == "integer" && handle_field {
+        if let Some(n) = handle_number(value) {
+            *value = json!(n);
+        }
+        return;
+    }
+    if schema["properties"].get("handle").is_some() && !value.is_object() {
+        if let Some(n) = handle_number(value) {
+            *value = json!({"handle":n});
+        }
+    }
+    for variant in ["anyOf", "oneOf", "allOf"] {
+        if let Some(variants) = schema[variant].as_array() {
+            for sub in variants {
+                normalize_handles(sub, value, field);
+            }
+        }
+    }
+    if let Some(items) = value.as_array_mut() {
+        for item in items {
+            normalize_handles(&schema["items"], item, field);
+        }
+    }
+    if let Some(map) = value.as_object_mut() {
+        if let Some(props) = schema["properties"].as_object() {
+            for (key, sub) in props {
+                if let Some(value) = map.get_mut(key) {
+                    normalize_handles(sub, value, key);
+                }
+            }
         }
     }
 }
@@ -256,6 +360,42 @@ impl Registry {
             }
         }
         for c in &mut commands {
+            if c.name == "set_layer" {
+                let props = c.schema["properties"]
+                    .as_object_mut()
+                    .expect("command properties");
+                for key in [
+                    "color",
+                    "linetype",
+                    "lineweight",
+                    "on",
+                    "frozen",
+                    "locked",
+                    "plot",
+                ] {
+                    let schema = match key {
+                        "color" => {
+                            json!({"anyOf":[{"type":"string"},{"type":"integer","minimum":1,"maximum":255}]})
+                        }
+                        "linetype" => json!({"type":"string"}),
+                        "lineweight" => json!({"type":"integer"}),
+                        _ => json!({"type":"boolean"}),
+                    };
+                    props.insert(key.into(), schema);
+                }
+                c.schema["required"] = json!(["type", "name"]);
+                c.schema["anyOf"] = json!([
+                    {"required":["prop","value"]}, {"required":["color"]},
+                    {"required":["linetype"]}, {"required":["lineweight"]},
+                    {"required":["on"]}, {"required":["frozen"]},
+                    {"required":["locked"]}, {"required":["plot"]}
+                ]);
+            }
+            if c.name == "delete_entities" {
+                c.schema["properties"]["handles"] = c.schema["properties"]["targets"].clone();
+                c.schema["required"] = json!(["type"]);
+                c.schema["anyOf"] = json!([{"required":["targets"]},{"required":["handles"]}]);
+            }
             describe_defaults(&mut c.schema);
             let mut words = String::new();
             schema_words(&c.schema, &mut words);

@@ -30,10 +30,9 @@ pub struct OpenAiCompatible {
 /// The request fields some services refuse with a 400: `reasoning_effort` (a model that doesn't
 /// reason), `max_completion_tokens` (an older server: `max_tokens` is sent instead),
 /// `stream_options` (a server without usage in streams). Asked for first, dropped when refused.
-pub const OPTIONAL_FIELDS: [&str; 4] = [
+pub const OPTIONAL_FIELDS: [&str; 3] = [
     "reasoning_effort",
     "max_completion_tokens",
-    "max_tokens",
     "stream_options",
 ];
 
@@ -61,7 +60,7 @@ impl Provider for OpenAiCompatible {
     fn save_state(&self) -> Value {
         json!({
             "extras": self.extras.lock().map(|v| v.clone()).unwrap_or_default(),
-            "refused": self.refused.lock().map(|v| v.clone()).unwrap_or_default(),
+            "refused": self.refused.lock().map(|v| v.iter().filter(|f| !f.starts_with("max_")).copied().collect::<Vec<_>>()).unwrap_or_default(),
         })
     }
 
@@ -72,6 +71,7 @@ impl Provider for OpenAiCompatible {
         if let Ok(mut refused) = self.refused.lock() {
             *refused = OPTIONAL_FIELDS
                 .into_iter()
+                .filter(|field| !field.starts_with("max_"))
                 .filter(|field| {
                     state["refused"]
                         .as_array()
@@ -88,72 +88,102 @@ impl Provider for OpenAiCompatible {
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
             let extras = self.extras.lock().map(|m| m.clone()).unwrap_or_default();
-            let url = format!("{}/chat/completions", self.base_url);
+            let base = crate::endpoint::normalize(&self.base_url).map_err(AiError::Network)?;
+            let url = format!("{base}/chat/completions");
             let secret = self.api_key.as_deref().unwrap_or("");
-            // A 400 that names one of the optional fields drops it, and the request goes again
-            // once per field.
-            let response = loop {
-                let refused = self.refused.lock().map(|r| r.clone()).unwrap_or_default();
-                let body = request_body(&req, &extras, &refused);
-                sink(StreamEvent::RequestSent(crate::provider::sent_fields(
-                    &body,
-                )));
-                let sent = send_with_retry(
-                    || {
-                        let r = self.client.post(&url).json(&body);
-                        match &self.api_key {
-                            Some(key) => r.bearer_auth(key),
-                            None => r,
-                        }
-                    },
-                    secret,
-                    &body,
-                    !self.strict_budget,
-                )
-                .await;
-                if self.strict_budget {
-                    break sent
-                        .map_err(|e| e.for_model(&service_name(&self.base_url), &req.model))?;
-                }
-                match sent {
-                    Err(AiError::Api {
-                        status: 400,
-                        message,
-                        body: answer,
-                        request,
-                    }) => match refused_field(&format!("{message} {answer}"), &refused) {
-                        Some(field) => {
-                            if let Ok(mut r) = self.refused.lock() {
-                                r.insert(field);
+            // Only an explicit unsupported-parameter refusal can change a request field.
+            // A value error must never remove the output cap.
+            let started = tokio::time::Instant::now();
+            let mut backoff = crate::provider::RetryBackoff::default();
+            loop {
+                let response = loop {
+                    let refused = self.refused.lock().map(|r| r.clone()).unwrap_or_default();
+                    let body = request_body(&req, &extras, &refused);
+                    let sent = send_with_retry(
+                        || {
+                            let r = self.client.post(&url).json(&body);
+                            match &self.api_key {
+                                Some(key) => r.bearer_auth(key),
+                                None => r,
                             }
-                        }
-                        None => {
-                            return Err(AiError::Api {
-                                status: 400,
-                                message,
-                                body: answer,
-                                request,
-                            }
-                            .for_model(&service_name(&self.base_url), &req.model))
-                        }
-                    },
-                    other => {
-                        break other
-                            .map_err(|e| e.for_model(&service_name(&self.base_url), &req.model))?
+                        },
+                        secret,
+                        &body,
+                        !self.strict_budget,
+                        sink,
+                    )
+                    .await;
+                    if self.strict_budget {
+                        break sent
+                            .map_err(|e| e.for_model(&service_name(&self.base_url), &req.model))?;
                     }
+                    match sent {
+                        Err(error)
+                            if matches!(
+                                error.code(),
+                                "billing" | "context_too_long" | "model_not_found" | "auth"
+                            ) =>
+                        {
+                            return Err(error.for_model(&service_name(&self.base_url), &req.model))
+                        }
+                        Err(AiError::Api {
+                            status: 400,
+                            message,
+                            body: answer,
+                            request,
+                        }) => match refused_field(&format!("{message} {answer}"), &refused) {
+                            Some(field) => {
+                                if let Ok(mut r) = self.refused.lock() {
+                                    r.insert(field);
+                                }
+                                sink(StreamEvent::Retrying {
+                                    seconds: 0,
+                                    code: "ai.error.service_error".into(),
+                                    diagnostic: format!("Unsupported parameter: {field}"),
+                                    discard_partial: false,
+                                });
+                            }
+                            None => {
+                                return Err(AiError::Api {
+                                    status: 400,
+                                    message,
+                                    body: answer,
+                                    request,
+                                }
+                                .for_model(&service_name(&self.base_url), &req.model))
+                            }
+                        },
+                        other => {
+                            break other.map_err(|e| {
+                                e.for_model(&service_name(&self.base_url), &req.model)
+                            })?
+                        }
+                    }
+                };
+                let mut turn = Turn::default();
+                if let Err(error) = read_events(response, |e| turn.on_event(&e.data, sink)).await {
+                    let error = error
+                        .scrubbed(secret)
+                        .for_model(&service_name(&self.base_url), &req.model);
+                    if crate::provider::retry_stream(
+                        &error,
+                        !self.strict_budget,
+                        &mut backoff,
+                        started,
+                        sink,
+                        !turn.text.is_empty(),
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    return Err(error);
                 }
-            };
-            let mut turn = Turn::default();
-            read_events(response, |e| turn.on_event(&e.data, sink))
-                .await
-                .map_err(|e| {
-                    e.scrubbed(self.api_key.as_deref().unwrap_or(""))
-                        .for_model(&service_name(&self.base_url), &req.model)
-                })?;
-            if let Ok(mut kept) = self.extras.lock() {
-                kept.extend(turn.extras());
+                if let Ok(mut kept) = self.extras.lock() {
+                    kept.extend(turn.extras());
+                }
+                return Ok(turn.finish(sink));
             }
-            Ok(turn.finish(sink))
         })
     }
 }
@@ -167,10 +197,43 @@ fn service_name(base_url: &str) -> String {
 
 /// The optional field a 400's text names, among those not refused yet.
 fn refused_field(text: &str, refused: &HashSet<&'static str>) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    if [
+        "valid range",
+        "between",
+        "exceeds",
+        "at most",
+        "supported values",
+        "unsupported value",
+        "invalid value",
+        "invalid max_",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+    {
+        return None;
+    }
+    let unsupported = [
+        "unsupported_parameter",
+        "unknown parameter",
+        "unsupported parameter",
+        "unrecognized parameter",
+        "unrecognized request argument",
+        "unrecognised parameter",
+        "unknown argument",
+        "unsupported argument",
+        "not supported",
+        "does not support",
+    ]
+    .iter()
+    .any(|word| lower.contains(word));
+    if !unsupported {
+        return None;
+    }
     OPTIONAL_FIELDS
         .into_iter()
         .filter(|f| !refused.contains(f))
-        .find(|f| text.contains(f))
+        .find(|f| lower.contains(f))
 }
 
 /// `effort` as OpenAI's `reasoning_effort`: low, medium or high (the deeper levels are high,
@@ -220,13 +283,13 @@ pub fn request_body(
         body["tools"] = Value::Array(tools);
         body["tool_choice"] = json!("auto");
     }
-    if !refused.contains("reasoning_effort") && !req.effort.is_empty() {
+    if !refused.contains("reasoning_effort") && !req.effort.is_empty() && req.effort != "none" {
         body["reasoning_effort"] = json!(reasoning_effort(&req.effort));
     }
     if req.max_tokens > 0 {
         if !refused.contains("max_completion_tokens") {
             body["max_completion_tokens"] = json!(req.max_tokens);
-        } else if !refused.contains("max_tokens") {
+        } else {
             body["max_tokens"] = json!(req.max_tokens);
         }
     }
@@ -348,6 +411,7 @@ struct Turn {
     by_index: HashMap<u64, usize>,
     finish_reason: Option<String>,
     usage: Usage,
+    prompt_tokens: Option<u64>,
 }
 
 impl Turn {
@@ -370,13 +434,23 @@ impl Turn {
             return Err(AiError::Stream(message));
         }
         if let Some(u) = e.get("usage").filter(|u| u.is_object()) {
-            let prompt = u["prompt_tokens"].as_u64().unwrap_or(0);
-            let cached = u["prompt_tokens_details"]["cached_tokens"]
+            if let Some(prompt) = u["prompt_tokens"].as_u64() {
+                self.prompt_tokens = Some(prompt);
+            }
+            if let Some(cached) = u["prompt_tokens_details"]["cached_tokens"]
                 .as_u64()
-                .unwrap_or(0);
-            self.usage.input_tokens = prompt.saturating_sub(cached);
-            self.usage.cache_read_input_tokens = cached;
-            self.usage.output_tokens = u["completion_tokens"].as_u64().unwrap_or(0);
+                .or_else(|| u["prompt_cache_hit_tokens"].as_u64())
+            {
+                self.usage.cache_read_input_tokens = cached;
+            }
+            if let Some(prompt) = self.prompt_tokens {
+                self.usage.input_tokens = prompt.saturating_sub(self.usage.cache_read_input_tokens);
+            } else if let Some(missed) = u["prompt_cache_miss_tokens"].as_u64() {
+                self.usage.input_tokens = missed;
+            }
+            if let Some(output) = u["completion_tokens"].as_u64() {
+                self.usage.output_tokens = output;
+            }
             if let Some(reasoning) = [
                 u["completion_tokens_details"]["reasoning_tokens"].as_u64(),
                 u["reasoning_tokens"].as_u64(),
@@ -609,6 +683,54 @@ mod tests {
     }
 
     #[test]
+    fn range_errors_and_saved_refusals_cannot_remove_output_caps() {
+        for message in [
+            "Invalid max_tokens value, the valid range is [1, 8192]",
+            "max_completion_tokens exceeds 32768",
+            "Unsupported value for reasoning_effort: supported values are low and medium",
+        ] {
+            assert_eq!(refused_field(message, &HashSet::new()), None);
+        }
+        let provider = OpenAiCompatible::new("http://localhost/v1", None);
+        provider.restore_state(json!({"refused":["max_tokens","max_completion_tokens"]}));
+        let body = request_body(
+            &request("none", 4000),
+            &HashMap::new(),
+            &provider.refused.lock().unwrap(),
+        );
+        assert_eq!(body["max_completion_tokens"], 4000);
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn partial_usage_keeps_prompt_cache_and_output_counts() {
+        let mut turn = Turn::default();
+        let mut sink = |_| {};
+        for usage in [
+            json!({"prompt_tokens":1000,"prompt_tokens_details":{"cached_tokens":800},"completion_tokens":60}),
+            json!({"completion_tokens":90,"reasoning_tokens":71}),
+            json!({"prompt_tokens_details":{"cached_tokens":900}}),
+        ] {
+            turn.on_event(&json!({"choices":[],"usage":usage}).to_string(), &mut sink)
+                .unwrap();
+        }
+        assert_eq!(turn.usage.input_tokens, 100);
+        assert_eq!(turn.usage.cache_read_input_tokens, 900);
+        assert_eq!(turn.usage.output_tokens, 90);
+        assert_eq!(turn.usage.reasoning_tokens, 71);
+        let mut aliases = Turn::default();
+        aliases
+            .on_event(
+                &json!({"usage":{"prompt_cache_hit_tokens":800,"prompt_cache_miss_tokens":200}})
+                    .to_string(),
+                &mut sink,
+            )
+            .unwrap();
+        assert_eq!(aliases.usage.cache_read_input_tokens, 800);
+        assert_eq!(aliases.usage.input_tokens, 200);
+    }
+
+    #[test]
     fn a_refused_parameter_is_dropped_and_remembered() {
         let none = HashSet::new();
         assert_eq!(
@@ -626,13 +748,13 @@ mod tests {
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("max_completion_tokens").is_none());
         assert_eq!(body["max_tokens"], 4_000, "the older name instead");
-        // OpenAI's own answer to max_tokens names both: the one not refused yet is dropped.
+        // A service refusing both cap names must fail; it must never get an uncapped request.
         assert_eq!(
             refused_field(
                 "'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
                 &refused
             ),
-            Some("max_tokens")
+            None
         );
     }
 

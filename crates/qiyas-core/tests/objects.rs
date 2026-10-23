@@ -795,7 +795,7 @@ fn damaged_generic_metadata_is_reported_without_hiding_objects_or_erasing_their_
         let steps = s.history_steps().0.len();
         let error = s.objects(&ObjectFilter::default()).unwrap_err().to_string();
         assert!(error.contains(app), "{error}");
-        assert!(error.contains(&format!("{target:X}")), "{error}");
+        assert!(error.contains(&target.to_string()), "{error}");
         assert!(s
             .run_input(
                 &json!({"type":"draw","kind":"point","p":[10,10]}),

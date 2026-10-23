@@ -1,12 +1,12 @@
-//! Rooms: the smallest closed region round each room name (or seed point), found as the Hatch
-//! tool finds a boundary (`Session::boundary_at`). `enclosed_area_m2` is what the line work
+//! Rooms: the smallest closed enclosure round each room name or seed, excluding annotation,
+//! grid graphics and opening symbols. Qiyas walls close at their faces through openings. `enclosed_area_m2` is what the line work
 //! encloses; `net_area_m2` also takes the islands off (a fountain, a shaft) unless
 //! `subtract_islands` is false. Edges bent along arcs are exact. Texts that look like areas or
 //! numbers are skipped, so labelling twice does not label the labels.
 //!
-//! These are candidate areas only: geometry can't tell wall faces or an approved net area, so
+//! These are candidate areas only: geometry cannot grant professional approval, so
 //! every room says `measurement_basis` "unapproved_net" and `net_accuracy_eligible` false, and
-//! `Command::LabelSpaces` writes them as "Unapproved candidate 58.28 m²" (Arabic when asked, or
+//! `Command::LabelSpaces` writes them as "Area 58.28 m²" (Arabic when asked, or
 //! when the room's name is Arabic).
 
 use std::collections::HashSet;
@@ -18,8 +18,6 @@ use crate::{Boundary, CoreError, EntityFilter, Outcome, Session, Source};
 
 /// Most rooms one call looks for.
 const MAX_ROOMS: usize = 500;
-/// The first search radius round a seed, in metres.
-const SEARCH_METRES: f64 = 1.0;
 /// The gap between a room name and its label, in text heights.
 const LABEL_GAP: f64 = 1.6;
 /// A text's width is about this many text heights per character.
@@ -44,6 +42,8 @@ pub struct RoomSeed {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct RoomsQuery {
+    #[serde(default, flatten)]
+    pub boundary_layers: crate::object_regions::BoundaryLayers,
     pub seeds: Option<Vec<RoomSeed>>,
     pub text_layer: Option<String>,
     pub names: Option<Vec<String>>,
@@ -92,6 +92,9 @@ pub struct RoomRow {
     /// Persistent closed boundary used by labels, schedules and take-off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary_handle: Option<u64>,
+    /// How a generated label fits: inside or wrapped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<String>,
 }
 
 /// A seed that found no room, and why.
@@ -252,6 +255,7 @@ impl Session {
                 label_point: labels.map(|(points, _)| points[i]),
                 label_handle: labels.and_then(|(_, handles)| handles.get(i).copied()),
                 boundary_handle: self.room_at(&self.sheet, room.point).map(|(h, _)| h),
+                placement: None,
             })
             .collect();
         RoomsReport {
@@ -272,7 +276,10 @@ impl Session {
     ) -> (f64, [f64; 2], LabelLanguage) {
         let label_height = height.map(|m| m / self.drawing.units.to_metres());
         let (h, at) = match room.from_text {
-            Some((h, at)) => (label_height.unwrap_or(h), [at[0], at[1] - LABEL_GAP * h]),
+            Some((h, at)) => (
+                label_height.unwrap_or((h * 0.7).max(self.default_text_height())),
+                [at[0], at[1] - LABEL_GAP * h],
+            ),
             None => (
                 label_height.unwrap_or_else(|| self.default_text_height()),
                 room.point,
@@ -352,24 +359,32 @@ impl Session {
             let previous = s.current.clone();
             let mut points = Vec::new();
             let mut handles = Vec::new();
+            let mut placements = Vec::new();
             for room in &rooms {
                 let boundary = s.keep_room(
                     room.name.clone(),
                     room.point,
                     &room.boundary,
                     q.subtract_islands.unwrap_or(true),
+                    &q.boundary_layers,
                 )?;
                 let (h, at, language) = s.room_label(room, height, language);
-                points.push(at);
+
                 let template = s.room_label_template(boundary, language)?;
                 let code = crate::room_objects::room_area_code(&[boundary], decimals);
                 s.current.layer = layer.clone();
                 let handle = s.add_text(at, h, 0.0, template.replace("{area}", &code), None)?;
                 s.mark_room_label(handle, boundary, decimals);
+                let (at, wrapped) = s.fit_room_label(handle, &room.boundary, at)?;
+                points.push(at);
+                placements.push(if wrapped { "wrapped" } else { "inside" });
                 handles.push(handle);
             }
             s.current = previous;
             let mut report = s.report(&rooms, skipped, Some((&points, &handles)));
+            for (room, placement) in report.rooms.iter_mut().zip(placements) {
+                room.placement = Some(placement.into());
+            }
             report.layer = Some(layer);
             report.layer_created = Some(created);
             Ok(Outcome::Rooms {
@@ -432,7 +447,16 @@ impl Session {
             .map(|n| n.iter().map(|s| s.trim().to_lowercase()).collect());
         let mut out = Vec::new();
         for row in self.read_text(None, q.within) {
-            if row.xref.is_some() || row.inside_block.is_some() {
+            if row.xref.is_some()
+                || row.inside_block.is_some()
+                || self
+                    .drawing
+                    .doc
+                    .get_entity(opencadcodec::Handle::new(row.handle))
+                    .is_some_and(|e| {
+                        crate::draw::room_boundary::is_grid(e) || crate::object_tags::is_tag(e)
+                    })
+            {
                 continue;
             }
             let text = row.text.trim().to_string();
@@ -490,13 +514,12 @@ impl Session {
             ));
         }
         let subtract = q.subtract_islands.unwrap_or(true);
-        let start = SEARCH_METRES / self.drawing.units.to_metres();
         let mut rooms: Vec<Room> = Vec::new();
         for seed in seeds {
             let mut found = None;
             let mut dense = false;
             for &p in &seed.tries {
-                match self.boundary_at(p, start) {
+                match self.room_boundary_in(&self.sheet, p, &q.boundary_layers) {
                     Boundary::Ring {
                         ring,
                         holes,

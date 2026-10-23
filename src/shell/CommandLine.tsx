@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { Command } from "cmdk";
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { useT } from "../i18n";
@@ -150,7 +151,7 @@ export function CommandLine({ state, prompt, onAction, inputRef, words = [], onT
           write(!coreActive && action.type === "error" && action.key === "cmd.unknown" &&
             /^(?:Error:\s*)?unknown command\b/i.test(message)
             ? t(action.key, action.args)
-            : message);
+            : uiError(message));
         })
         .finally(() => { pending.current = false; });
       return;

@@ -71,7 +71,11 @@ impl Session {
                 timesing: 1.,
                 factors: vec![i.shown],
                 source_expressions: vec!["stored manual measurement".into()],
-                expression: i.shown.to_string(),
+                expression: if i.available() {
+                    i.shown.to_string()
+                } else {
+                    "Unavailable".into()
+                },
                 value: i.shown,
                 unit: i.unit.clone(),
                 method: "manual".into(),
@@ -89,8 +93,15 @@ impl Session {
                         evidence: vec![],
                     })
                     .collect(),
-                included: true,
-                decision: Some("Stored measurement; no authored rule".into()),
+                included: i.available(),
+                decision: Some(
+                    if i.available() {
+                        "Stored measurement; no authored rule"
+                    } else {
+                        "Source enclosure unavailable; excluded from totals"
+                    }
+                    .into(),
+                ),
             });
             (i.shown, i.unit.clone(), i.confidence, json!(i))
         } else if matches!(kind, "" | "boq" | "boq-row") {

@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 /** The AI model, chosen from what the provider offers: Anthropic's Models API, or an
  *  OpenAI-compatible service's `/models` (read in the core, with the key from the keychain). A
  *  filter narrows a long list (OpenRouter offers hundreds); "Other…" takes an id the list lacks;
@@ -19,12 +20,13 @@ type Props = {
   provider: Provider;
   baseUrl: string | null;
   value: string;
+  typedKey?: string;
   onChange(model: string): void;
   /** Reads the list (tests give their own). */
   load?: typeof aiModels;
 };
 
-export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModels }: Props) {
+export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, load = aiModels }: Props) {
   const t = useT();
   const [list, setList] = useState<ModelList | null>(null);
   const [loading, setLoading] = useState(false);
@@ -37,10 +39,10 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
     const n = ++asked.current;
     setLoading(true);
     try {
-      const next = await load(provider, baseUrl);
+      const next = await (typedKey ? load(provider, baseUrl, typedKey) : load(provider, baseUrl));
       if (n === asked.current) setList(next);
     } catch (e) {
-      if (n === asked.current) setList({ models: [], from_service: false, error: String(e) });
+      if (n === asked.current) setList({ models: [], from_service: false, error: uiError(e) });
     } finally {
       if (n === asked.current) setLoading(false);
     }
@@ -50,7 +52,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
   useEffect(() => {
     ++asked.current;
     setList(null);
-    if (provider === "anthropic") {
+    if (provider === "anthropic" && !typedKey) {
       refresh();
       return () => { ++asked.current; };
     }
@@ -59,7 +61,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
       ++asked.current;
       window.clearTimeout(timer);
     };
-  }, [provider, baseUrl]);
+  }, [provider, baseUrl, typedKey]);
 
   const models = list?.models ?? [];
   const known = models.some((m) => m.id === value);
@@ -68,7 +70,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
     const q = filter.trim().toLowerCase();
     return m.id === value || !q || m.id.toLowerCase().includes(q) || m.label.toLowerCase().includes(q);
   });
-  const typing = custom || (list !== null && !known && value !== "" && models.length === 0);
+  const typing = custom || (!!list?.from_service && !!value && !known) || (list !== null && !known && value !== "" && models.length === 0);
 
   return (
     <div className="model-picker">
@@ -98,7 +100,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
           }}
         >
           {!value && <option value="">{t("settings.modelChoose")}</option>}
-          {!known && value && (
+          {!known && value && !list?.from_service && (
             <option value={value}>
               {value} {t("settings.modelSaved")}
             </option>
@@ -138,14 +140,17 @@ export function ModelPicker({ provider, baseUrl, value, onChange, load = aiModel
       )}
       {list && !list.from_service && (
         <p className="note" role="status">
-          {list.error === "no_base_url"
+          {list.error === "save_address_first"
+            ? t("settings.saveAddressFirst")
+            : list.error === "no_base_url"
             ? t("settings.modelNoBaseUrl")
             : models.length > 0
-              ? t("settings.modelBuiltin", { why: list.error ?? "" })
-              : t("settings.modelNone", { why: list.error ?? "" })}
+              ? t("settings.modelBuiltin", { why: list.error ? uiError(list.error) : "" })
+              : t("settings.modelNone", { why: list.error ? uiError(list.error) : "" })}
         </p>
       )}
-      {list?.from_service && value && !known && (
+      {list?.from_service && models.length === 0 && <p className="note" role="status">{t("ai.error.no_models")}</p>}
+      {list?.from_service && models.length > 0 && value && !known && (
         <p className="note" role="status">
           {t("settings.modelMissing", { model: value })}
         </p>

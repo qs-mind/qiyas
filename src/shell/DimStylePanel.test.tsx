@@ -91,7 +91,7 @@ test("creates a style from the current one, sets the annotation scale, shows err
   await waitFor(() => expect(onSave).toHaveBeenCalledWith("QS-100", fields, false));
   fireEvent.change(screen.getByRole("combobox", { name: "Annotation scale" }), { target: { value: "big" } });
   fireEvent.click(screen.getByRole("button", { name: "Set scale" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("big is no scale"));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Check the values you entered, then try again."));
   expect(onScale).toHaveBeenCalledWith("big");
 });
 

@@ -643,15 +643,16 @@ export type Source = "user" | "ai" | "mcp";
  * item's own unit for items); `shown` is in `unit`.
  */
 export type Measurement = {
+  quantity_valid?: boolean;
   area_origin?: "unspecified" | "existing_boundary" | "wall_face" | "manual_or_entity";
   measurement_basis?: "unspecified" | "gross" | "wall_face" | "unapproved_net" | "approved_net";
   count_scope?: string | null;
   id: string;
   kind: Kind;
-  value: number;
+  value: number | null;
   /** "m", "m2", "m3", "pcs", or an item's own unit. */
   unit: string;
-  shown: number;
+  shown: number | null;
   description: string;
   layer: string;
   sheet: string;
@@ -1357,18 +1358,20 @@ export const resolveConflict = (id: string, status: ConflictStatus, note: string
 export const exportConflicts = (path: string) => invoke<void>("export_conflicts", { path });
 
 /** Who answers the in-app assistant. */
-export type Provider = "anthropic" | "openai_compatible";
+export type ApiProvider = "anthropic" | "openai_compatible";
+export type Provider = ApiProvider | "chatgpt_plan" | "claude_code";
 
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
 /** A provider keeps its model and service address when another provider is chosen. */
-export type ProviderProfile = { model: string; base_url?: string | null };
+export type ProviderProfile = { effort?: Effort | null; model: string; base_url?: string | null };
 
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
   provider: Provider;
-  providers: Record<Provider, ProviderProfile>;
+  providers: Record<ApiProvider, ProviderProfile> & Partial<Record<"chatgpt_plan" | "claude_code", ProviderProfile>>;
+  claude_executable?: string | null;
   effort: Effort;
   /** The plan approval setting (per_job when absent in older settings). */
   autonomy?: "per_job" | "per_phase" | "autonomous";
@@ -1743,16 +1746,21 @@ export type PlanPhase = {
 };
 
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
+export type Activity = { category: string; effect: string };
+
 export type AgentEvent =
+  | { type: "provider_status"; code: string }
+  | { type: "retrying"; seconds: number; code: string; discard_partial: boolean }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "plan"; phases: PlanPhase[] }
   | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
-  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean }
+  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null }
   | {
       type: "tool_result";
       id: string;
       summary: string;
+      count?: number | null;
       handles: number[];
       ui: AiUi | null;
       is_error: boolean;
@@ -1849,8 +1857,8 @@ export type ModelList = { models: ModelInfo[]; from_service: boolean; error: str
 
 /** The models `provider` offers at `base_url` (the saved ones when left out); the key stays in
  *  the core. */
-export const aiModels = (provider?: Provider, baseUrl?: string | null) =>
-  invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null });
+export const aiModels = (provider?: Provider, baseUrl?: string | null, typedKey?: string) =>
+  invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null, typedKey: typedKey || null });
 
 /** The agent log: where the file is and its newest part (empty before the first conversation). */
 export type AiLog = { path: string; text: string };
@@ -1934,3 +1942,16 @@ export type Explanation = {
   notes?: string[];
 };
 export const explainItem = (item: string, project?: string) => invoke<Explanation>("explain_item", { item, project });
+
+/** Explicit check only; Qiyas never opens or scripts Claude login. */
+export type ClaudeCodeStatus = { installed: boolean; compatible: boolean; signed_in: boolean | null; version: string | null; code: string | null };
+export const claudeCodeStatus = (executable?: string | null) => invoke<ClaudeCodeStatus>("claude_code_status", { executable: executable || null });
+export type ChatgptAccount = { signed_in: boolean; display_name: string | null; plan_granted: boolean; available?: boolean; active_id?: string | null; accounts?: { id: string; display_name: string; signed_in: boolean }[]; paused?: boolean; notice?: string | null };
+export const chatgptAccount = () => invoke<ChatgptAccount>("chatgpt_account");
+export const chatgptSignIn = () => invoke<ChatgptAccount>("chatgpt_sign_in");
+export const chatgptSignOut = () => invoke<ChatgptAccount>("chatgpt_sign_out");
+export const chatgptSelectAccount = (id: string | null) => invoke<ChatgptAccount>("chatgpt_select_account", { id });
+export const chatgptResumePlan = () => invoke<ChatgptAccount>("chatgpt_resume_plan");
+export const chatgptModels = () => invoke<ModelInfo[]>("chatgpt_models");
+export const cancelChatgptSignIn = () => invoke<void>("cancel_chatgpt_sign_in");
+export const subscriptionLink = (link: "claude_install" | "chatgpt_limits") => invoke<void>("subscription_link", { link });

@@ -56,12 +56,37 @@ pub async fn serve(
     on_mutated: OnMutated,
     on_ui: OnUi,
 ) -> Result<SocketAddr, AiError> {
+    let handler = Qiyas::new(session, host, on_mutated, on_ui);
+    serve_handler(handler, port, token, shutdown).await
+}
+
+/// Mizan's local CLI connection attributes edits to the assistant, so the same Undo works.
+/// Its private token cannot reach inference or any other MCP server.
+pub(crate) async fn serve_agent(
+    session: Arc<Mutex<Option<Session>>>,
+    host: Option<Arc<dyn DrawingHost>>,
+    user_text: String,
+    token: String,
+    shutdown: CancellationToken,
+    on_ui: OnUi,
+) -> Result<SocketAddr, AiError> {
+    let mut handler = Qiyas::new(session, host, Arc::new(|| {}), on_ui);
+    handler.source = Source::Ai;
+    handler.user_text = Some(user_text);
+    serve_handler(handler, 0, token, shutdown).await
+}
+
+async fn serve_handler(
+    handler: Qiyas,
+    port: u16,
+    token: String,
+    shutdown: CancellationToken,
+) -> Result<SocketAddr, AiError> {
     let listener = bind(port).await?;
     let addr = listener
         .local_addr()
         .map_err(|e| AiError::Server(format!("127.0.0.1:{port}: {e}")))?;
 
-    let handler = Qiyas::new(session, host, on_mutated, on_ui);
     // Browsers send `Origin`; only the server's own origin may call it, so a web page can't drive
     // Qiyas even with the token. MCP apps and the bridge send no `Origin` and pass.
     let port = addr.port();
@@ -147,6 +172,9 @@ pub struct Qiyas {
     on_ui: OnUi,
     tools: Arc<Vec<Tool>>,
     retries: Arc<Mutex<VecDeque<Retry>>>,
+    ineffective: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
+    source: Source,
+    user_text: Option<String>,
 }
 
 #[derive(Clone)]
@@ -195,12 +223,16 @@ impl Qiyas {
             on_ui,
             tools: Arc::new(tools),
             retries: Arc::new(Mutex::new(VecDeque::new())),
+            ineffective: Arc::default(),
+            source: Source::Mcp,
+            user_text: None,
         }
     }
 
     fn new_connection(&self) -> Self {
         Self {
             retries: Arc::new(Mutex::new(VecDeque::new())),
+            ineffective: Arc::default(),
             ..self.clone()
         }
     }
@@ -260,6 +292,35 @@ impl Qiyas {
     /// Runs one tool on the session, holding the lock only while it runs; a file tool through the
     /// host, without the session's lock (the host locks the app's tabs first).
     fn run(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
+        let Some(key) = crate::agent::edit_fingerprint(name, input) else {
+            return self.run_checked(name, input);
+        };
+        let revision = self
+            .session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|s| (s.epoch(), s.history_revision()));
+        let key = format!("{revision:?}:{key}");
+        let mut attempts = self
+            .ineffective
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if attempts.get(&key).copied().unwrap_or(0) >= 2 {
+            return Err(ToolError::Structured {code: "repeated_ineffective_edit".into(),
+                message: "This edit made no change in two attempts. Stop repeating it and explain what remains incomplete.".into(),
+                details: serde_json::json!({"attempts":2})});
+        }
+        let output = self.run_checked(name, input);
+        if output.is_err() || matches!(&output, Ok(ToolOutput::Json(v)) if v["no_change"] == true) {
+            *attempts.entry(key).or_default() += 1;
+        } else {
+            attempts.clear();
+        }
+        output
+    }
+
+    fn run_checked(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
         if let Some(host) = self.host.as_deref() {
             host.before_tool(name, input).map_err(ToolError::Failed)?;
@@ -283,7 +344,7 @@ impl Qiyas {
             self.host.as_deref().is_some_and(DrawingHost::has_window),
             self.host.is_some(),
         )?;
-        if surface::needs_sheet_authority(&route) {
+        if self.source == Source::Mcp && surface::needs_sheet_authority(&route) {
             if let Some(host) = self.host.as_deref() {
                 return host.with_sheet_authority(&mut || self.run_route(route.clone()));
             }
@@ -306,7 +367,7 @@ impl Qiyas {
                     .host
                     .as_deref()
                     .ok_or(ToolError::Failed(NO_HOST.into()))?;
-                run_host(host, tool, &input, None)
+                run_host(host, tool, &input, self.user_text.as_deref())
                     .map(ToolOutput::Json)
                     .map_err(ToolError::Failed)
             }
@@ -320,7 +381,7 @@ impl Qiyas {
                 let session = guard
                     .as_mut()
                     .ok_or_else(|| ToolError::Failed(NO_DRAWING.into()))?;
-                surface::run_session(session, &tool, &op, &args, Source::Mcp)
+                surface::run_session(session, &tool, &op, &args, self.source)
             }
         }
     }
@@ -332,8 +393,8 @@ impl ServerHandler for Qiyas {
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
                 "{}\n\nCommands by category:\n{}",
-                crate::prompt::TAKEOFF_WORKFLOW.trim(),
-                qiyas_core::registry::registry().index_text()
+                "Follow the user's request. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after two identical ineffective edits, stop and explain. Fix new warnings before claiming completion. Save only when asked; finish does not save.",
+                crate::prompt::command_index()
             ))
     }
 
@@ -454,6 +515,43 @@ mod tests {
             Arc::new(|| {}),
             Arc::new(|_| {}),
         )
+    }
+
+    #[test]
+    fn private_claude_mcp_edits_can_be_undone_as_mizans_own_work() {
+        let mut server = test_server();
+        server.source = Source::Ai;
+        let input = serde_json::json!({"op":"run","args":{"command":{
+            "type":"draw","kind":"line","a":[0,0],"b":[3,0]
+        }}});
+        server.run(surface::EXECUTE, &input).unwrap();
+        assert_eq!(
+            server
+                .session
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .history_steps()
+                .0
+                .len(),
+            1
+        );
+        server
+            .run(
+                surface::EXECUTE,
+                &serde_json::json!({"op":"undo_own","args":{}}),
+            )
+            .unwrap();
+        assert!(server
+            .session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .history_steps()
+            .0
+            .is_empty());
     }
 
     #[derive(Default)]

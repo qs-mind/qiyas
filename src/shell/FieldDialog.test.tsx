@@ -75,7 +75,7 @@ test("an area or a length reads a picked entity: Pick asks for it", async () => 
     </LanguageProvider>,
   );
   expect(kind().value).toBe("area");
-  expect(screen.getByText(/LwPolyline 2A/)).toBeTruthy();
+  expect(screen.getByText(/^Polyline$/)).toBeTruthy();
   fireEvent.click(insert());
   await waitFor(() =>
     expect(onSubmit).toHaveBeenCalledWith({ kind: "area", target: { handle: 42, chain: [] } }),

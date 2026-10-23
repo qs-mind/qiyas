@@ -18,22 +18,27 @@
   src: url("./instrument-sans/InstrumentSans-Bold.woff2") format("woff2");
 }
 
-/* Thmanyah Sans (licensed) for Arabic. The files are never committed: scripts/fonts.sh copies them
-   into the git-ignored thmanyah/ folder. Without them the system Arabic font is used. */
+/* Thmanyah Sans (licensed) for Arabic. Only a sealed (encrypted) copy is committed,
+   assets/fonts/thmanyah-sans.sealed; scripts/fonts.sh puts the files in the git-ignored thmanyah/
+   folder (from Downloads, or unsealed with THMANYAH_FONTS_KEY in release builds). Without them the
+   system Arabic font is used. */
 @font-face {
   font-family: "Thmanyah Sans";
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-089F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+1EE00-1EEFF;
   font-weight: 400;
   font-display: swap;
   src: url("./thmanyah/thmanyahsans-Regular.otf") format("opentype");
 }
 @font-face {
   font-family: "Thmanyah Sans";
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-089F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+1EE00-1EEFF;
   font-weight: 500;
   font-display: swap;
   src: url("./thmanyah/thmanyahsans-Medium.otf") format("opentype");
 }
 @font-face {
   font-family: "Thmanyah Sans";
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-089F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+1EE00-1EEFF;
   font-weight: 700;
   font-display: swap;
   src: url("./thmanyah/thmanyahsans-Bold.otf") format("opentype");

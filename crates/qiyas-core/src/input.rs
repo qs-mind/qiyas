@@ -109,9 +109,11 @@ impl Session {
     pub fn run_input(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
+            self.handle_replacements.clear();
         }
         let mut input = raw.clone();
         crate::registry::canonicalize(&mut input);
+        self.resolve_input_handles(&mut input)?;
         let report = self.validate_input(&input);
         let parsed = serde_path_to_error::deserialize::<_, Command>(input.clone());
         if !report.valid {

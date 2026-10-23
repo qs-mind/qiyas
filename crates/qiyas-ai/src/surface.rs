@@ -32,10 +32,11 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 19] = [
+pub const READ_OPS: [&str; 21] = [
     "explain",
     "digest",
     "takeoff_kit",
+    "workflow",
     "takeoff_check",
     "document",
     "state",
@@ -51,10 +52,11 @@ pub const READ_OPS: [&str; 19] = [
     "history",
     "drawings",
     "selection",
+    "panel_state",
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 19] = [
+pub const EXECUTE_OPS: [&str; 20] = [
     "plan",
     "finish",
     "run",
@@ -63,6 +65,7 @@ pub const EXECUTE_OPS: [&str; 19] = [
     "set_records",
     "create_entities",
     "undo_own",
+    "redo_own",
     "select",
     "view",
     "new_drawing",
@@ -110,6 +113,7 @@ operations![
     (READ, "explain", [Nothing]),
     (READ, "digest", [Drawing]),
     (READ, "takeoff_kit", [Nothing]),
+    (READ, "workflow", [Nothing]),
     (READ, "takeoff_check", [Drawing]),
     (READ, "capabilities", [Nothing]),
     (READ, "commands", [Nothing]),
@@ -124,6 +128,7 @@ operations![
     (READ, "rooms", [Drawing]),
     (READ, "drawings", [Host], "list_drawings"),
     (READ, "selection", [Window, Drawing], "get_selection"),
+    (READ, "panel_state", [Window], "panel_state"),
     (EXECUTE, "plan", [Nothing]),
     (EXECUTE, "run", [Drawing]),
     (EXECUTE, "type", [Drawing]),
@@ -131,6 +136,7 @@ operations![
     (EXECUTE, "set_records", [Drawing]),
     (EXECUTE, "create_entities", [Drawing]),
     (EXECUTE, "undo_own", [Drawing]),
+    (EXECUTE, "redo_own", [Drawing]),
     (EXECUTE, "view", [Drawing]),
     (EXECUTE, "import_boq", [Drawing]),
     (EXECUTE, "compare", [Drawing]),
@@ -201,7 +207,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -215,7 +221,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own ({}); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: saves the drawing and writes the headless submission and end report); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -438,12 +444,15 @@ pub(crate) fn needs_sheet_authority(route: &Route) -> bool {
                 .is_some_and(|commands| commands.iter().any(changes)),
             "type" => args["line"].as_str().is_some_and(|line| {
                 matches!(
+                    line.trim().to_ascii_uppercase().as_str(),
+                    "UNDO" | "U" | "REDO"
+                ) || matches!(
                     qiyas_core::cmdline::Machine::default().step(line),
                     Ok(qiyas_core::cmdline::Step::Command(command)) if changes(&json!(command))
                 )
             }),
             "view" => args["sheet"].is_string(),
-            "undo_own" => true,
+            "undo_own" | "redo_own" => true,
             _ => false,
         },
         _ => false,
@@ -501,6 +510,7 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{name} needs {field}"))?
         .to_string();
+    let args = read_handle_values(&args);
     if let Some(entry) = operation(name, &op) {
         crate::surface_args::validate(name, &op, &args)
             .map_err(|error| error.json().to_string())?;
@@ -586,6 +596,9 @@ pub fn run_without_drawing(
         )
         .map_err(Into::into),
         "document" => crate::document::read(args),
+        "workflow" => Ok(
+            json!({"workflow":crate::prompt::takeoff_workflow(crate::prompt::Lang::from_code(args["language"].as_str().unwrap_or("en")))}),
+        ),
         "takeoff_kit" if units.is_none() => {
             let mut kit = qiyas_core::takeoff_kit::kit();
             finish_kit(&mut kit);
@@ -713,6 +726,8 @@ fn run_working_session(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
+    let normalized = read_handle_values(args);
+    let args = &normalized;
     let argument_warnings = crate::surface_args::validate(tool, op, args)?;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
@@ -764,8 +779,16 @@ fn run_working_session(
         (READ, "document") => json(crate::document::read(args)?),
         (CAPTURE, "document") => crate::document::capture(args),
         (READ, "digest") => {
-            json(session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?)
+            let mut digest =
+                session.drawing_digest(args["offset"].as_u64().unwrap_or(0) as usize)?;
+            let selected = crate::MeasurementMethod::for_session(session, method)?;
+            digest["measurement_method"]["name"] = json!(selected.name);
+            digest["measurement_method"]["rules_loaded"] = json!(selected.rules_loaded);
+            json(digest)
         }
+        (READ, "workflow") => json(
+            json!({"workflow": crate::prompt::takeoff_workflow(crate::prompt::Lang::from_code(args["language"].as_str().unwrap_or("en")))}),
+        ),
         (READ, "takeoff_kit") => {
             let mut kit = qiyas_core::takeoff_kit::kit();
             let digest = session.drawing_digest(0)?;
@@ -782,6 +805,34 @@ fn run_working_session(
                 }
             }
             bind(&mut kit["batch"], &digest["example_names"]);
+            let selected = crate::MeasurementMethod::for_session(session, method)?;
+            if selected.name.is_some() {
+                kit["measurement_method"] = selected.state();
+            }
+            let selection = session.measurement_selection()?;
+            let scope = if selection.project.is_some() {
+                "project"
+            } else {
+                "settings"
+            };
+            if let Some(name) = &selected.name {
+                kit["measurement_method"]["scope"] = json!(scope);
+                let commands = kit["batch"]["commands"].as_array_mut().expect("kit batch");
+                if selected.rules_loaded {
+                    // Existing rules may be large. Reuse them without resending or replacing them.
+                    commands.retain(|command| {
+                        !(command["type"] == "measurement" && command["kind"] == "set_method")
+                    });
+                } else {
+                    for command in commands {
+                        if command["type"] == "measurement" && command["kind"] == "set_method" {
+                            command["scope"] = json!(scope);
+                            command["method"] =
+                                json!(qiyas_core::measurement::RuleSet::named(name));
+                        }
+                    }
+                }
+            }
             finish_kit(&mut kit);
             json(kit)
         }
@@ -800,23 +851,14 @@ fn run_working_session(
         }
         (READ, "state") => {
             let mut value = state(session);
-            value["measurement_method"] = json!(method);
-            if qiyas_core::knowledge::get(
-                &session.drawing.doc,
-                qiyas_core::knowledge::Kind::Measurement,
-                "selection",
-            )?
-            .is_some()
-            {
-                let selection = session.measurement_selection()?;
-                let effective = selection.effective();
-                value["measurement_method"] = json!({"name":effective.map(|m| &m.name),"rules_loaded":effective.is_some_and(|m| !m.rules.is_empty())});
-                value["measurement_scope"] = json!(if selection.project.is_some() {
-                    "project"
-                } else {
-                    "settings"
-                });
-            }
+            value["measurement_method"] =
+                crate::MeasurementMethod::for_session(session, method)?.state();
+            let selection = session.measurement_selection()?;
+            value["measurement_scope"] = json!(if selection.project.is_some() {
+                "project"
+            } else {
+                "settings"
+            });
             json(value)
         }
         (READ, "capabilities") => json(capabilities()),
@@ -873,12 +915,41 @@ fn run_working_session(
         }
         (EXECUTE, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
-            json(run_one(session, command, &input, source)?)
+            let result = if args["layer"].is_string() || args["color"].is_string() {
+                let layer = args["layer"].as_str().map(str::to_owned);
+                let color = args["color"].as_str().map(str::to_owned);
+                let wrapped =
+                    json!({"type":"batch","commands":[input],"layer":layer,"color":color});
+                run_one(
+                    session,
+                    Command::Batch {
+                        commands: vec![command],
+                        layer,
+                        color,
+                    },
+                    &wrapped,
+                    source,
+                )?
+            } else {
+                run_one(session, command, &input, source)?
+            };
+            json(result)
         }
         (EXECUTE, "type") => {
             let line = args["line"]
                 .as_str()
                 .ok_or_else(|| bad("type needs {line}: a complete typed command line"))?;
+            if matches!(
+                line.trim().to_ascii_uppercase().as_str(),
+                "UNDO" | "U" | "REDO"
+            ) {
+                let op = if line.trim().eq_ignore_ascii_case("REDO") {
+                    "redo_own"
+                } else {
+                    "undo_own"
+                };
+                return run_session_with_method(session, EXECUTE, op, &json!({}), source, method);
+            }
             let mut machine = qiyas_core::cmdline::Machine::default();
             machine.set_ucs(session.ucs);
             match machine.step(line).map_err(bad)? {
@@ -912,12 +983,24 @@ fn run_working_session(
             json(run_one(session, command, &input, source)?)
         }
         (EXECUTE, "batch") => json(batch(session, args, source)?),
+        (EXECUTE, "redo_own") => {
+            let step = session.history_steps().1.first().cloned();
+            let view = ViewState::of(session);
+            let redone = step.as_ref().is_some_and(|step| step.source == source) && session.redo();
+            let mut out = json!({"redone": redone, "no_change": !redone,
+                "step": if redone { step } else { None },
+                "why": if redone { Value::Null } else { json!("The next step is not yours, or there is none") },
+                "ui": {"action": "redraw"}});
+            view.update_ui(session, &mut out);
+            json(out)
+        }
         (EXECUTE, "undo_own") => {
             let label = session.history_steps().0.last().map(|s| s.label.clone());
             let view = ViewState::of(session);
             let undone = session.undo_if(source);
             let mut out = json!({
                 "undone": undone,
+            "no_change": !undone,
                 "step": if undone { label } else { None },
                 "why": if undone { Value::Null } else { json!("The last step is not yours, or there is none") },
                 "ui": { "action": "redraw" },
@@ -1019,11 +1102,11 @@ fn capabilities() -> Value {
         },
         "capture": ["screen", "picture"],
         "query_kinds": QUERY_KINDS,
-        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters"],
+        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters", "objects", "object_types", "knowledge_types", "knowledge_levels", "knowledge_tables", "knowledge_rules", "knowledge_sheets", "knowledge_mappings", "knowledge_views", "knowledge_measurement", "knowledge_checks", "knowledge_queries", "knowledge_reports"],
         "creatable_entity_types": qiyas_core::record_edit::CREATABLE,
         "check_rules": qiyas_core::check::RULES,
         "commands_by_category": categories,
-        "limits": { "records_page": 20, "records_page_max": 200, "result_bytes": 40_960, "batch_commands": MAX_BATCH },
+        "limits": { "records_page": 20, "records_page_max": 200, "records_bytes": qiyas_core::records::MAX_BYTES, "result_bytes": 40_960, "batch_commands": MAX_BATCH },
     })
 }
 
@@ -1046,6 +1129,20 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     if let Some(name) = args.get("name").and_then(Value::as_str) {
         if name.eq_ignore_ascii_case("plan") {
             return Ok(plan_info());
+        }
+        let normalized = name.trim().to_ascii_lowercase();
+        let operations: Vec<_> = OPERATIONS.iter().filter(|operation| {
+            normalized == format!("{}.{}", operation.tool, operation.op)
+                || (normalized == operation.op && reg.get(name).is_none())
+        }).map(|operation| {
+            let (schema, example) = crate::surface_args::contract(operation.tool, operation.op);
+            json!({"name":format!("{}.{}", operation.tool, operation.op),"tool":operation.tool,"op":operation.op,"schema":schema,"example":example})
+        }).collect();
+        if operations.len() == 1 {
+            return Ok(operations[0].clone());
+        }
+        if !operations.is_empty() {
+            return Ok(json!({"operations": operations}));
         }
         let info = reg
             .get(name)
@@ -1085,8 +1182,17 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     };
     if let Some(query) = args.get("search").and_then(Value::as_str) {
         let mut answer = json!({ "commands": list(reg.search(query, SEARCH_LIMIT)) });
-        if "plan phases pending active done skipped".contains(&query.to_lowercase()) {
-            answer["operations"] = json!([plan_info()]);
+        let query = query.to_lowercase();
+        answer["operations"] = json!(OPERATIONS
+            .iter()
+            .filter(|o| format!("{}.{}", o.tool, o.op).contains(&query))
+            .map(|o| json!({"name":format!("{}.{}",o.tool,o.op),"tool":o.tool,"op":o.op}))
+            .collect::<Vec<_>>());
+        if "plan phases pending active done skipped".contains(&query) {
+            answer["operations"]
+                .as_array_mut()
+                .expect("operation list")
+                .push(plan_info());
         }
         return Ok(answer);
     }
@@ -1099,10 +1205,28 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
         return Ok(json!({ "commands": list(cs) }));
     }
     Ok(json!({
-        "index": reg.index_text(),
-        "operations": [plan_info()],
-        "next": "qiyas_read commands {\"name\": \"…\"} gives a command's schema and examples",
+        "index": crate::prompt::command_index(),
+        "operations": std::iter::once(plan_info()).chain(OPERATIONS.iter().filter(|o| o.op != "plan").map(|o| json!({"name":format!("{}.{}",o.tool,o.op),"tool":o.tool,"op":o.op}))).collect::<Vec<_>>(),
+        "next": "qiyas_read commands {\"name\": \"…\"} gives a command or operation schema and examples",
     }))
+}
+
+/// Normalize handle shortcuts before operation validation, for MCP and direct callers alike.
+fn read_handle_values(args: &Value) -> Value {
+    let mut value = args.clone();
+    if let Some(handle) = qiyas_core::registry::handle_number(&value["handle"]) {
+        value["handle"] = json!(handle);
+    }
+    for key in ["handles", "chain", "highlight"] {
+        if let Some(handles) = value.get_mut(key).and_then(Value::as_array_mut) {
+            for handle in handles {
+                if let Some(number) = qiyas_core::registry::handle_number(handle) {
+                    *handle = json!(number);
+                }
+            }
+        }
+    }
+    value
 }
 
 /// `query`: entities near a point or in a window, one entity, texts, tables, dimensions,
@@ -1177,7 +1301,10 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
 fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
     let to_m = crate::execute::sheet_metres_per_unit(session);
-    if let Some(h) = args.get("handle").and_then(Value::as_u64) {
+    if let Some(handle) = args.get("handle") {
+        let h = handle
+            .as_u64()
+            .ok_or_else(|| bad("Give a decimal handle or an explicit 0x hexadecimal handle"))?;
         let chain: Vec<u64> = args
             .get("chain")
             .map(|c| read_args(c, "chain"))
@@ -1278,6 +1405,9 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
     }
     // Use the registry's spelling after a lookup that accepts case and hyphens.
     qiyas_core::registry::canonicalize(&mut value);
+    session
+        .resolve_input_handles(&mut value)
+        .map_err(|e| bad(e.to_string()))?;
     let mut report = session.validate_input(&value);
     batch_limits(&value, "", &mut report);
     if !report.valid {
@@ -1388,7 +1518,9 @@ fn close_commands(name: &str) -> Vec<&'static str> {
         .filter(|command| !command.internal)
         .map(|command| (distance(&name, &command.name), command.name.as_str()))
         .collect();
+    ranked.extend(OPERATIONS.iter().map(|o| (distance(&name, o.op), o.op)));
     ranked.sort_unstable();
+    ranked.dedup();
     ranked.into_iter().take(5).map(|(_, name)| name).collect()
 }
 
@@ -1585,6 +1717,7 @@ fn changed(
     let mut out = json!({
         "ok": true,
         "command": label,
+        "no_change": effect == Effect::Edit && session.history_revision() == history_before,
         "effect": effect,
         "outcome": outcome,
         "added": change.added,
@@ -1601,10 +1734,13 @@ fn changed(
             });
             out["check"] = json!({
                 "line": report.line,
+                "complete": report.complete,
+                "layout_findings": report.counts.iter().filter(|(r,_)| qiyas_core::check::layout_rule(r)).map(|(_,n)| n).sum::<usize>(),
+                "not_checked": report.not_checked,
                 "findings": report.findings.iter().take(CHECK_FINDINGS).collect::<Vec<_>>(),
             });
         } else {
-            out["check"] = json!({ "line": "Not checked: a large sheet. qiyas_read check {\"handles\": […]} checks what you changed" });
+            out["check"] = json!({ "complete": false, "line": "Not checked: a large sheet. qiyas_read check {\"handles\": […]} checks what you changed" });
         }
         out["ui"] = json!({ "action": "reveal", "sheet": session.sheet, "handles": touched });
     } else if !change.removed.is_empty() || effect == Effect::View {

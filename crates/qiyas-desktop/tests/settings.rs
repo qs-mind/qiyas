@@ -13,6 +13,12 @@ fn mock_keychain() {
     ONCE.call_once(|| keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap()));
 }
 
+fn legacy_key_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn read(dir: &Path) -> String {
     fs::read_to_string(dir.join("settings.json")).unwrap()
 }
@@ -24,7 +30,7 @@ fn defaults_when_missing() {
     assert_eq!(s.provider, Provider::Anthropic);
     assert_eq!(s.profile().model, "claude-opus-5-5");
     assert_eq!(s.profile().base_url, None);
-    assert_eq!(s.effort, "high");
+    assert_eq!(s.effective_effort(), "medium");
     assert_eq!(s.autonomy, qiyas_ai::Autonomy::Autonomous);
     assert_eq!(s.measurement_method, None);
     assert!(!s.mcp_enabled);
@@ -43,6 +49,7 @@ fn round_trip() {
         provider: Provider::OpenaiCompatible,
         providers: settings::ProviderProfiles {
             openai_compatible: settings::ProviderProfile {
+                effort: None,
                 model: "my-model".into(),
                 base_url: Some("http://localhost:11434/v1".into()),
             },
@@ -66,19 +73,27 @@ fn round_trip() {
 #[test]
 fn approval_modes_and_measurement_method_round_trip() {
     let dir = tempfile::tempdir().unwrap();
-    for autonomy in [
-        qiyas_ai::Autonomy::PerJob,
-        qiyas_ai::Autonomy::PerPhase,
-        qiyas_ai::Autonomy::Autonomous,
+    for method in [
+        None,
+        Some("local-test"),
+        Some("POMI (RICS)"),
+        Some("Client's own / ARM4"),
+        Some("طريقة العميل"),
     ] {
-        let s = Settings {
-            autonomy,
-            measurement_method: Some("local-test".into()),
-            ..Settings::default()
-        };
-        assert_eq!(settings::validate(&s), Ok(()));
-        settings::save(dir.path(), &s).unwrap();
-        assert_eq!(settings::load(dir.path()), s);
+        for autonomy in [
+            qiyas_ai::Autonomy::PerJob,
+            qiyas_ai::Autonomy::PerPhase,
+            qiyas_ai::Autonomy::Autonomous,
+        ] {
+            let s = Settings {
+                autonomy,
+                measurement_method: method.map(str::to_owned),
+                ..Settings::default()
+            };
+            assert_eq!(settings::validate(&s), Ok(()));
+            settings::save(dir.path(), &s).unwrap();
+            assert_eq!(settings::load(dir.path()), s);
+        }
     }
     assert!(serde_json::from_str::<Settings>(r#"{"autonomy":"unknown"}"#).is_err());
     let s = Settings {
@@ -210,6 +225,7 @@ fn validation_rejects_bad_values() {
 
 #[test]
 fn api_key_set_read_delete() {
+    let _guard = legacy_key_lock();
     mock_keychain();
     assert_eq!(secrets::get_api_key("openai_compatible").unwrap(), None);
     secrets::set_api_key("openai_compatible", "  sk-test-123  ").unwrap();
@@ -218,6 +234,20 @@ fn api_key_set_read_delete() {
             .unwrap()
             .as_deref(),
         Some("sk-test-123")
+    );
+    let mut saved = Settings::default();
+    saved.providers.openai_compatible.base_url = Some("https://migration.example.test/v1".into());
+    secrets::migrate(&saved).unwrap();
+    assert_eq!(
+        secrets::get_at("openai_compatible", "https://migration.example.test/v1")
+            .unwrap()
+            .as_deref(),
+        Some("sk-test-123")
+    );
+    assert!(
+        secrets::get_at("openai_compatible", "https://different.example.test/v1")
+            .unwrap()
+            .is_none()
     );
     secrets::delete_api_key("openai_compatible").unwrap();
     assert_eq!(secrets::get_api_key("openai_compatible").unwrap(), None);
@@ -240,6 +270,7 @@ fn files_under(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 #[test]
 fn api_key_never_written_to_disk() {
+    let _guard = legacy_key_lock();
     mock_keychain();
     let dir = tempfile::tempdir().unwrap();
     let key = "sk-ant-never-on-disk-5f3c9a";
@@ -350,4 +381,113 @@ fn autosave_runs_every_five_minutes_by_default_and_zero_turns_it_off() {
         ..Settings::default()
     };
     assert!(settings::validate(&long).unwrap_err().contains("120"));
+}
+
+#[test]
+fn credentials_are_scoped_and_draft_addresses_are_rejected_without_network() {
+    mock_keychain();
+    let first = "https://scope.example.test/v1";
+    let second = "https://other.example.test/v1";
+    let mut saved = Settings::default();
+    saved.providers.openai_compatible.base_url = Some(first.into());
+    secrets::set_at("openai_compatible", first, "mock-scope-only").unwrap();
+    assert_eq!(
+        secrets::discovery_address(&saved, "openai_compatible", Some(first)).unwrap(),
+        first
+    );
+    for draft in [
+        second,
+        "https://",
+        "https://half",
+        "http://example.test/v1",
+        "https://scope.example.test/v2",
+    ] {
+        assert!(secrets::discovery_address(&saved, "openai_compatible", Some(draft)).is_err());
+    }
+    assert!(secrets::get_at("openai_compatible", second)
+        .unwrap()
+        .is_none());
+    assert!(secrets::get_at("anthropic", first).unwrap().is_none());
+    assert!(
+        secrets::get_at("openai_compatible", "https://scope.example.test/v2")
+            .unwrap()
+            .is_none()
+    );
+    secrets::delete_at("openai_compatible", first).unwrap();
+}
+
+#[tokio::test]
+async fn credentials_follow_the_saved_address_and_never_a_draft() {
+    mock_keychain();
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let first = format!("http://{}/v1", listener.local_addr().unwrap());
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    other.set_nonblocking(true).unwrap();
+    let second = format!("http://{}/v1", other.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut buf = [0; 4096];
+        let mut bytes = Vec::new();
+        while !bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "Request ended before its headers");
+            bytes.extend_from_slice(&buf[..n]);
+        }
+        let request = String::from_utf8_lossy(&bytes).to_lowercase();
+        assert!(request.contains("authorization: bearer mock-goal-a"));
+        let body = r#"{"data":[{"id":"test-model"}]}"#;
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+    });
+    let mut saved = Settings::default();
+    saved.providers.openai_compatible.base_url = Some(first.clone());
+    secrets::set_at("openai_compatible", &first, "mock-goal-a").unwrap();
+    let accepted = secrets::discovery_address(&saved, "openai_compatible", Some(&first)).unwrap();
+    let key = secrets::get_at("openai_compatible", &accepted).unwrap();
+    let list = qiyas_ai::models::list_models(
+        qiyas_ai::models::ModelSource::OpenAiCompatible {
+            base_url: &accepted,
+        },
+        key.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list[0].id, "test-model");
+    server.join().unwrap();
+    for draft in [&second, "https://", "http://example.test/v1"] {
+        assert!(secrets::discovery_address(&saved, "openai_compatible", Some(draft)).is_err());
+    }
+    assert!(other.accept().is_err());
+    assert!(secrets::get_at("openai_compatible", &second)
+        .unwrap()
+        .is_none());
+    assert!(secrets::get_at("anthropic", &first).unwrap().is_none());
+    assert!(
+        secrets::get_at("openai_compatible", &format!("{first}/different"))
+            .unwrap()
+            .is_none()
+    );
+    secrets::delete_at("openai_compatible", &first).unwrap();
+}
+
+#[test]
+fn effort_is_per_provider_with_responsive_defaults_and_legacy_migration() {
+    let mut defaults = Settings::default();
+    assert_eq!(defaults.effective_effort(), "medium");
+    defaults.provider = Provider::OpenaiCompatible;
+    assert_eq!(defaults.effective_effort(), "low");
+    defaults.profile_mut().effort = Some("none".into());
+    assert!(settings::validate(&defaults).is_ok());
+    defaults.provider = Provider::Anthropic;
+    assert_eq!(defaults.effective_effort(), "medium");
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("settings.json"), r#"{"provider":"openai_compatible","effort":"max","providers":{"openai_compatible":{"model":"x","base_url":"https://example.test/v1"}}}"#).unwrap();
+    let mut migrated = settings::load(dir.path());
+    assert_eq!(migrated.effective_effort(), "high");
+    migrated.provider = Provider::Anthropic;
+    assert_eq!(migrated.effective_effort(), "medium");
+    assert!(settings::validate(&migrated).is_ok());
 }

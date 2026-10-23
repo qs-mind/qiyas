@@ -179,3 +179,49 @@ test("a new table's rows, columns and sizes", async () => {
     expect(onSubmit).toHaveBeenCalledWith({ rows: 4, cols: 3, col_width: 25, row_height: 5 }),
   );
 });
+
+test("a failed cell write retries the same text and an in-flight Enter does not duplicate it", async () => {
+  const onRun = vi.fn().mockRejectedValueOnce("invalid cell /tmp/internal.json").mockResolvedValue(undefined);
+  render(<TableEditor handle={42} table={plain} cell={[0, 0]} onRun={onRun} onField={() => {}} onClose={() => {}} />);
+  fireEvent.change(cellInput(0, 0), { target: { value: "New room" } });
+  fireEvent.keyDown(cellInput(0, 0), { key: "Enter" });
+  fireEvent.keyDown(cellInput(0, 0), { key: "Enter" });
+  expect(onRun).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Check the values"));
+  expect(screen.getByRole("alert").textContent).not.toContain("internal.json");
+  fireEvent.keyDown(cellInput(0, 0), { key: "Enter" });
+  await waitFor(() => expect(onRun).toHaveBeenCalledTimes(2));
+  expect(onRun.mock.calls[1][0]).toEqual(onRun.mock.calls[0][0]);
+});
+
+test("Shift and arrow keys select a rectangle for merging without changing text", async () => {
+  const { onRun } = editor();
+  cellInput(0, 0).focus();
+  fireEvent.keyDown(cellInput(0, 0), { key: "ArrowRight", shiftKey: true });
+  fireEvent.keyDown(cellInput(0, 1), { key: "ArrowDown", shiftKey: true });
+  expect(screen.getAllByRole("cell").filter((cell) => cell.getAttribute("aria-selected") === "true")).toHaveLength(4);
+  fireEvent.click(screen.getByRole("button", { name: "Merge cells" }));
+  await waitFor(() => expect(onRun).toHaveBeenCalledWith({ type: "merge_cells", target, first: [0, 0], last: [1, 1] }));
+});
+
+test.each([true, false])("a structural edit waits for the cell save; success = %s", async (success) => {
+  let resolve!: () => void;
+  let reject!: (error: string) => void;
+  const save = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const onRun = vi.fn().mockReturnValueOnce(save).mockResolvedValue(undefined);
+  render(<TableEditor handle={42} table={plain} cell={[0, 0]} onRun={onRun} onField={() => {}} onClose={() => {}} />);
+  fireEvent.change(cellInput(0, 0), { target: { value: "Unsaved room" } });
+  fireEvent.blur(cellInput(0, 0));
+  fireEvent.click(screen.getByRole("button", { name: "Insert row below" }));
+  expect(onRun).toHaveBeenCalledTimes(1);
+  if (success) {
+    resolve();
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(2));
+    expect(onRun.mock.calls[1][0].type).toBe("insert_row");
+  } else {
+    reject("invalid cell");
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(cellInput(0, 0).value).toBe("Unsaved room");
+  }
+});

@@ -28,6 +28,8 @@ use crate::{CoreError, Drawing, LayerInfo, Session, Target};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerProp {
+    /// Several layer properties, applied together in one undo step.
+    Properties,
     On,
     Frozen,
     Locked,
@@ -251,6 +253,21 @@ impl Session {
         prop: LayerProp,
         value: &Value,
     ) -> Result<(), CoreError> {
+        if prop == LayerProp::Properties {
+            let values = value
+                .as_object()
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| invalid("Give at least one layer property"))?;
+            for (key, value) in values {
+                let property: LayerProp = serde_json::from_value(Value::String(key.clone()))
+                    .map_err(|_| invalid(format!("Unknown layer property {key}; choose color, linetype, lineweight, on, frozen, locked or plot")))?;
+                if property == LayerProp::Properties {
+                    return Err(invalid("Layer properties cannot be nested"));
+                }
+                self.set_layer_prop(name, property, value)?;
+            }
+            return Ok(());
+        }
         let name = own_layer(&self.drawing.doc, name)?;
         let linetype = match prop {
             LayerProp::Linetype => {
@@ -281,12 +298,18 @@ impl Session {
         }
         let layer = self.drawing.doc.layers.get_mut(&name).expect("found above");
         match prop {
+            LayerProp::Properties => unreachable!("handled above"),
             LayerProp::On => layer.flags.off = !as_bool(value)?,
             LayerProp::Frozen => layer.flags.frozen = as_bool(value)?,
             LayerProp::Locked => layer.flags.locked = as_bool(value)?,
             LayerProp::Plot => layer.is_plottable = as_bool(value)?,
             LayerProp::Color => {
-                layer.color = layer_color(as_str(value)?)?;
+                layer.color = if let Some(index) = value.as_u64().filter(|i| (1..=255).contains(i))
+                {
+                    Color::Index(index as u8)
+                } else {
+                    layer_color(as_str(value)?)?
+                };
                 layer.color_name = None;
                 layer.book_name = None;
             }
@@ -401,6 +424,7 @@ impl Session {
             return Ok(());
         }
         self.drawing.doc.rename_layer(&from, &to).map_err(invalid)?;
+        self.rename_layer_references(&from, &to)?;
         self.layer_renamed(&from, &to);
         Ok(())
     }
@@ -522,6 +546,7 @@ impl Session {
         let old = self.drawing.doc.layers.get(from).expect("checked").handle;
         self.forget_viewport_layer(old, Some(into.1));
         self.drawing.doc.layers.remove(from);
+        self.rename_layer_references(from, &into.0)?;
         self.layer_renamed(from, &into.0);
         Ok(into.0)
     }

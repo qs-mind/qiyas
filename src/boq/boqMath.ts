@@ -29,6 +29,7 @@ export function measuredFor(item: BoqItem, takeoff: QuantityLink[]): Measured {
   let sum: number | null = null;
   const other = new Map<string, number>();
   for (const m of links) {
+    if (m.shown === null) continue;
     if (unitKey(m.unit) === unitKey(item.unit)) sum = (sum ?? 0) + m.shown;
     else other.set(m.unit, (other.get(m.unit) ?? 0) + m.shown);
   }

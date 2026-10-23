@@ -59,7 +59,10 @@ pub fn net_room_accuracy<'a>(
 ) -> NetRoomAccuracy {
     let mut report = NetRoomAccuracy::default();
     for (m, reference, tolerance, rounded) in rows {
-        if m.kind != Kind::Area || m.measurement_basis != MeasurementBasis::ApprovedNet {
+        if !m.available()
+            || m.kind != Kind::Area
+            || m.measurement_basis != MeasurementBasis::ApprovedNet
+        {
             report.excluded += 1;
             continue;
         }

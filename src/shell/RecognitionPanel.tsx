@@ -1,3 +1,6 @@
+import { TechnicalDetails, ReviewNotes } from "./TechnicalDetails";
+import { entityKind } from "../i18n/entityKind";
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { runCommand, type Command, type RecognitionCandidate } from "../api";
 import { useT } from "../i18n";
@@ -19,7 +22,7 @@ export function RecognitionPanel({ active, drawing, revision, run }: {
       if (current !== generation.current) return;
       if (result.type === "recognition") setRows((result.result.candidates ?? []).filter((row) => row.state === "pending" || row.confidence < 0.9 || row.issues.length > 0));
       setError(null);
-    }).catch((error) => { if (current === generation.current) setError(String(error)); });
+    }).catch((error) => { if (current === generation.current) setError(uiError(error)); });
     return () => { generation.current++; };
   }, [active, drawing, revision, reload]);
 
@@ -32,7 +35,7 @@ export function RecognitionPanel({ active, drawing, revision, run }: {
         ...(props ? { props } : {}), ...(object_type ? { object_type } : {}),
         ...(saveRule ? { save_as: `review-${row.handle.toString(16)}` } : {}) });
       if (current === generation.current) setReload((n) => n + 1);
-    } catch (error) { if (current === generation.current) setError(String(error)); }
+    } catch (error) { if (current === generation.current) setError(uiError(error)); }
     finally { setBusy(false); }
   }
   return <section className="recognition-panel" aria-label={t("recognition.review")}>
@@ -65,14 +68,14 @@ function ReviewRow({ row, busy, decide }: {
     return [key, value];
   }));
   return <article>
-    <strong>{row.placement.type}</strong> <span>{t("recognition.confidence")}: {Math.round(row.confidence * 100)}%</span>
-    <p>{row.rule} · {row.handle.toString(16).toUpperCase()}</p>
-    {row.evidence.map((source, index) => <p key={index}>{source.path}{source.page ? ` · ${source.page}` : ""} {source.detail}</p>)}
-    {row.issues.map((issue, index) => <p key={index}>{issue}</p>)}
+    <strong>{entityKind(row.placement.type, t)}</strong> <span>{t("recognition.confidence")}: {Math.round(row.confidence * 100)}%</span>
+    <TechnicalDetails><pre>{row.rule}{"\n"}{JSON.stringify(row.placement, null, 2)}</pre></TechnicalDetails>
+    {row.evidence.map((source, index) => <p key={index}><bdi>{source.path?.split(/[\\/]/).pop()}{source.page ? ` · ${source.page}` : ""}</bdi></p>)}
+    <ReviewNotes notes={row.issues} />
     {row.state !== "pending" && <p>{t(row.state === "accepted" ? "recognition.included" : "recognition.excluded")}</p>}
     {fix && row.state === "pending" && <fieldset disabled={busy}>
       <label>{t("recognition.type")}<input value={type} onChange={(e) => setType(e.target.value)} /></label>
-      {Object.entries(values).map(([key, value]) => <label key={key}>{key}<input value={value}
+      {Object.entries(values).map(([key, value], index) => <label key={key}>{t(`props.${key}`) === `props.${key}` ? t("recognition.property", { n: index + 1 }) : t(`props.${key}`)}<input value={value}
         onChange={(e) => setValues((now) => ({ ...now, [key]: e.target.value }))} /></label>)}
       <button disabled={Object.entries(values).some(([key, value]) => !value.trim()
         || (typeof row.placement.props[key] === "number" && !Number.isFinite(Number(value)))

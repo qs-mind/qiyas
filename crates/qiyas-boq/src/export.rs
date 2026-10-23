@@ -93,7 +93,11 @@ pub fn export_takeoff_with_queries(
     for m in items {
         sheet.write_string(row, 0, &m.description)?;
         sheet.write_string(row, 1, kind_name(m.kind))?;
-        sheet.write_number_with_format(row, 2, m.shown, &qty(m.kind))?;
+        if m.available() {
+            sheet.write_number_with_format(row, 2, m.shown, &qty(m.kind))?;
+        } else {
+            sheet.write_string(row, 2, "Unavailable")?;
+        }
         sheet.write_string(row, 3, &m.unit)?;
         sheet.write_string(row, 4, &m.layer)?;
         sheet.write_string(row, 5, &m.sheet)?;

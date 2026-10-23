@@ -18,7 +18,7 @@ test("accept, fix with a saved rule, and reject use one review command", async (
   await waitFor(() => expect(run).toHaveBeenCalledWith({ type: "recognition", kind: "review", handle: 42, decision: "accepted" }));
   await waitFor(() => expect((screen.getByText("Fix properties") as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByText("Fix properties"));
-  fireEvent.change(screen.getByLabelText("height"), { target: { value: "4" } });
+  fireEvent.change(screen.getByLabelText("Height"), { target: { value: "4" } });
   fireEvent.click(screen.getByLabelText("Save correction as a rule"));
   fireEvent.click(screen.getByText("Save and accept"));
   await waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({ props: { height: 4 }, save_as: "review-2a" })));
@@ -36,8 +36,8 @@ test("Arabic review labels and unresolved properties remain actionable", async (
   const accept = await screen.findByText("قبول");
   expect((accept as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByText("تصحيح الخصائص"));
-  fireEvent.change(screen.getByLabelText("width"), { target: { value: "1.2" } });
-  fireEvent.change(screen.getByLabelText("tag"), { target: { value: "W02" } });
+  fireEvent.change(screen.getByLabelText("العرض"), { target: { value: "1.2" } });
+  fireEvent.change(screen.getByLabelText("العلامة"), { target: { value: "W02" } });
   fireEvent.click(screen.getByText("حفظ وقبول"));
   await waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({ props: { height: 3, width: 1.2, tag: "W02" } })));
 });

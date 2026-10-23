@@ -1,3 +1,4 @@
+import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { PaletteItem } from "../api";
 import { useT } from "../i18n";
@@ -33,7 +34,7 @@ export function ToolPalettes({ items, onRun, onSave, onClose }: Props) {
       await onSave(next);
       setList(next);
     } catch (e) {
-      setError(String(e));
+      setError(uiError(e));
     }
   }
 

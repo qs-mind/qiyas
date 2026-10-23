@@ -108,9 +108,11 @@ fn reports_all_missing_invalid_and_unknown_fields_with_json_pointers() {
             "{report:?}"
         );
     }
-    assert_eq!(report.warnings.len(), 1);
-    assert_eq!(report.warnings[0].pointer, "/typo");
-    assert_eq!(report.warnings[0].code, "unknown_field");
+    assert!(report.warnings.is_empty());
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.pointer == "/typo" && issue.code == "unknown_field"));
     let error = parse_command(json!({"type":"draw","kind":"line"})).unwrap_err();
     assert!(error.contains("/a") && error.contains("/b"), "{error}");
     assert!(
@@ -349,16 +351,24 @@ fn declared_defaults_are_visible_and_described_in_every_registry_schema() {
 }
 
 #[test]
-fn every_wire_caller_gets_unknown_warnings_and_effective_defaults() {
+fn wire_edits_refuse_unknown_fields_and_valid_inputs_keep_effective_defaults() {
     for (code, factor) in [(4, 0.001), (5, 0.01), (6, 1.0), (1, 0.0254)] {
         let mut session = Session::new_blank(std::path::Path::new("defaults.dxf"), code);
-        let raw = json!({"type":"text","at":[0,0],"value":"Room","typo":10});
+        let mut raw = json!({"type":"text","at":[0,0],"value":"Room","typo":10});
+        let before = session.history_steps();
+        assert!(session
+            .run_input(&raw, Source::User)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown_field"));
+        assert_eq!(session.history_steps(), before);
+        raw.as_object_mut().unwrap().remove("typo");
         let reported = session.run_input(&raw, Source::User).unwrap();
         assert!(matches!(reported.outcome, Outcome::Added { .. }));
         let outcome = serde_json::to_value(reported).unwrap();
         assert_eq!(outcome["type"], "added");
         assert!(outcome.get("outcome").is_none(), "{outcome}");
-        assert_eq!(outcome["warnings"][0]["pointer"], "/typo");
+        assert_eq!(outcome["warnings"], json!([]));
         let height = outcome["defaults_used"]
             .as_array()
             .unwrap()
@@ -388,7 +398,7 @@ fn batch_reports_defaults_from_the_context_when_each_step_runs() {
                 "type":"batch",
                 "commands":[
                     {"type":"annotation_scale","name":"1:50"},
-                    {"type":"text","at":[0,0],"value":"Room","typo":true},
+                    {"type":"text","at":[0,0],"value":"Room"},
                     {"type":"annotation_scale","name":"1:20"},
                     {"type":"text","at":[0,1.0/factor],"value":"Door"},
                     {"type":"text","at":[0,2.0/factor],"value":"Explicit","height":0.4/factor,"rotation":0}
@@ -423,9 +433,9 @@ fn batch_reports_defaults_from_the_context_when_each_step_runs() {
             .iter()
             .any(|value| value["field"] == "/commands/4/height"
                 || value["field"] == "/commands/4/rotation"));
-        assert_eq!(wire["warnings"][0]["pointer"], "/commands/1/typo");
+        assert_eq!(wire["warnings"], json!([]));
         assert_eq!(wire["outcomes"][1]["type"], "added");
-        assert_eq!(wire["outcomes"][1]["warnings"][0]["pointer"], "/typo");
+        assert_eq!(wire["outcomes"][1]["warnings"], json!([]));
         let step_height = wire["outcomes"][1]["defaults_used"]
             .as_array()
             .unwrap()
