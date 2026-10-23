@@ -225,7 +225,7 @@ fn load_verified(
     Ok(cases)
 }
 
-pub(super) fn north_star(metrics: &Metrics) -> Value {
+pub(crate) fn north_star(metrics: &Metrics) -> Value {
     let rates = metrics.rates();
     let accuracy = (metrics.truth_items != 0)
         .then(|| metrics.within_2_percent as f64 / metrics.truth_items as f64);
@@ -235,6 +235,8 @@ pub(super) fn north_star(metrics: &Metrics) -> Value {
         "coverage":rates["coverage"],"coverage_target_exclusive":0.90,
         "coverage_target_met":rates["coverage"].as_f64().map(|v| v > 0.90),
         "traceability_submitted":rates["traceability_submitted"],
+        "traceability_all":rates["traceability_all"],"traceability_target":1.0,
+        "traceability_target_met":rates["traceability_submitted"].as_f64().map(|v| v == 1.0),
         "seeded_error_recall":rates["error_recall"],"precision":rates["item_precision"],
         "seeded_error_precision":rates["error_precision"]})
 }

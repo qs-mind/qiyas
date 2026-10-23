@@ -629,9 +629,18 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   with the same rules. Only a matching note-citing exclusion excuses omission. Overlapping note
   scopes and other unitless scope still need judgement.
 - `bench rescore-agent --report <combined report.json> --output <new directory>` rebuilds
-  submissions from saved measurement reports and accepted recognition in the saved drawing.
-  Only the outer scorer then opens truth. Originals and contamination exclusions are retained;
-  missing measurement artefacts remain empty. This command never starts an agent or provider.
+  retains saved submissions and re-evaluates embedded measurement rules on the saved drawing.
+  Traceability never uses truth quantities or rule names; counts reproduce exactly and other
+  quantities within 0.5%. All cited handles must exist; rule-derived drawing-note citations
+  need note handles. Complete aggregates require every component to trace. Per-submission
+  reasons include extras; submitted and all-truth traceability use separate numerators.
+  Development scoring then opens truth only for correctness and matching. Holdout replay
+  retains saved correctness/correspondence and appends a `rescore` event without opening
+  sealed inputs. New reports save submission indices. Legacy mixed outcomes recover the
+  scored set only from a unique partition of saved extras and aggregate memberships; missing
+  per-truth-row links remain undisclosed, with exact failure identities in `submission_traces`.
+  No quantity chooses a correspondence. Originals and contamination exclusions are retained; missing saved
+  submissions remain empty. This command never starts an agent or provider.
 - Submissions and saved replay use drawing-owned element metadata: centroid/insertion point
   converted to metres (PDF drivers already contain calibration), and verbatim element labels
   with rule text as fallback. PDF regions use the nearest enclosed text; equally near labels
@@ -2182,7 +2191,7 @@ and Mizan's turn epoch together.
   flag it refuses. The exam verifies every published SHA-256 over `drawing.dxf || truth.json`
   before starting any agent, restores the sealed directory's permissions, and retains verified
   inputs in memory. Agents receive only a drawing and clause-only preamble in fresh case folders
-  under `.local/benchmark/runs/holdout-exam-<timestamp>/`. The shared scorer uses original geometry;
+  under `.local/benchmark/runs/holdout-exam-<timestamp>/`. The shared scorer traces saved geometry and embedded rules;
   the usual contamination guard still excludes contaminated cases. `report.json` includes explicit
   north-star accuracy within ±2% over all truth items (target ≥95%), coverage (target >90%),
   submitted-item traceability, seeded-error recall, item precision and seeded-error precision.

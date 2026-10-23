@@ -1,5 +1,5 @@
 //! Subscription clients drive a drawing-only workspace. Only this outer harness scores truth.
-mod holdout;
+pub(crate) mod holdout;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -305,7 +305,10 @@ fn run_case(
                 json!(crate::bench::score::score(
                     truth,
                     &submission,
-                    original.as_ref()
+                    qiyas_core::Session::open_embedded(&drawing)
+                        .ok()
+                        .as_ref()
+                        .or(original.as_ref())
                 ))
             }) {
             Ok(score) => score,

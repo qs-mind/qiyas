@@ -334,7 +334,8 @@ pub fn aggregate_components(items: &[Item], index: usize) -> Option<Vec<usize>> 
             || components.contains(&i)
             || !q.aggregate_of.is_empty()
             || q.kind != aggregate.kind
-            || q.basis != aggregate.basis
+            || (q.basis != aggregate.basis
+                && aggregate.basis != format!("rule:mixed:{}", aggregate.id))
             || unit(&q.unit) != unit(&aggregate.unit)
             || q.source_objects.is_empty()
         {
@@ -350,7 +351,11 @@ pub fn aggregate_components(items: &[Item], index: usize) -> Option<Vec<usize>> 
     }
     if !lines.is_empty()
         || sources != objects(aggregate)
-        || (total - aggregate.quantity).abs() > 1e-10 * total.abs().max(1.0)
+        || if aggregate.kind == "count" {
+            total != aggregate.quantity
+        } else {
+            (total - aggregate.quantity).abs() > 1e-10 * total.abs().max(1.0)
+        }
     {
         return None;
     }

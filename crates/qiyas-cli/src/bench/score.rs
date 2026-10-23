@@ -24,6 +24,8 @@ pub struct Metrics {
     pub within_10_percent: usize,
     pub within_25_percent: usize,
     pub traceable: usize,
+    #[serde(default)]
+    pub traceable_submitted: Option<usize>,
     pub extras: usize,
     pub true_positives: usize,
     pub false_positives: usize,
@@ -64,6 +66,10 @@ impl Metrics {
         self.within_5_percent += other.within_5_percent;
         self.within_10_percent += other.within_10_percent;
         self.within_25_percent += other.within_25_percent;
+        self.traceable_submitted = Some(
+            self.traceable_submitted.unwrap_or(self.traceable)
+                + other.traceable_submitted.unwrap_or(other.traceable),
+        );
         self.traceable += other.traceable;
         self.extras += other.extras;
         self.true_positives += other.true_positives;
@@ -86,7 +92,7 @@ impl Metrics {
             "p_at_5_percent":ratio(self.within_5_percent,self.matched),
             "p_at_10_percent":ratio(self.within_10_percent,self.matched),
             "p_at_25_percent":ratio(self.within_25_percent,self.matched),
-            "traceability_submitted":ratio(self.traceable,self.matched+self.extras),
+            "traceability_submitted":ratio(self.traceable_submitted.unwrap_or(self.traceable),self.matched+self.extras),
             "traceability_all":ratio(self.traceable,self.truth_items),
             "error_precision":ratio(self.true_positives,self.true_positives+self.false_positives),
             "error_recall":ratio(self.true_positives,self.true_positives+self.false_negatives),
@@ -105,9 +111,13 @@ pub struct ItemScore {
     pub expected: f64,
     pub submitted: Option<f64>,
     pub matched_by: Option<String>,
+    #[serde(default)]
+    pub submitted_index: Option<usize>,
     pub absolute_percent_error: Option<f64>,
     pub passed: bool,
+    #[serde(default)]
     pub traceable: bool,
+    #[serde(default)]
     pub trace_reason: String,
 }
 
@@ -121,6 +131,8 @@ pub struct CaseScore {
     pub rates: serde_json::Value,
     pub items: Vec<ItemScore>,
     pub extra_items: Vec<String>,
+    #[serde(default)]
+    pub submission_traces: Vec<super::trace::ItemTrace>,
     pub reported_aggregates: Vec<String>,
     pub error_classes: serde_json::Value,
     pub elapsed_ms: f64,
@@ -282,72 +294,8 @@ fn ape(actual: f64, expected: f64) -> Option<f64> {
     }
 }
 
-fn remeasure(
-    session: &Session,
-    gold: &Item,
-    submitted: &Item,
-    truth: &Truth,
-) -> Result<f64, String> {
-    if submitted.source_objects.is_empty() {
-        return Err("no cited handles".into());
-    }
-    if objects(submitted) != objects(gold) {
-        return Err("citations do not identify the truth item's objects".into());
-    }
-    if submitted.basis != gold.basis {
-        return Err("missing or different measurement rule reference".into());
-    }
-    let unique = objects(submitted);
-    let mut length = 0.0;
-    let mut area = 0.0;
-    let mut count = 0;
-    let mut has_length = true;
-    let mut has_area = true;
-    let factor = session.drawing.units.to_metres();
-    for source in &unique {
-        // Model IDs accompany drawing handles but cannot themselves prove a 2D measurement.
-        if source.starts_with("ifc:") || source.starts_with("model:") {
-            continue;
-        }
-        let handle = u64::from_str_radix(source.trim_start_matches("0x"), 16)
-            .map_err(|_| format!("unresolved source object {source}"))?;
-        let info = session
-            .entity_info(handle, &[])
-            .map_err(|e| e.to_string())?;
-        length += info.length.unwrap_or(0.0) * factor;
-        area += info.area.unwrap_or(0.0) * factor * factor;
-        has_length &= info.length.is_some();
-        has_area &= info.area.is_some();
-        count += 1;
-    }
-    if count == 0 {
-        return Err("no drawing handles to remeasure".into());
-    }
-    if let Some(name) = gold.basis.strip_prefix("rule:") {
-        let rule = &truth.rules[name];
-        return match rule.operation.as_str() {
-            "area_times_height" if has_area => Ok(area * rule.height_m.unwrap_or(0.0)),
-            "length_times_factor" if has_length => Ok(length * rule.factor.unwrap_or(0.0)),
-            "area_net" if has_area => Ok((area - rule.deduction.unwrap_or(0.0)).max(0.0)),
-            _ => Err("rule cannot be reproduced from cited geometry".into()),
-        };
-    }
-    match gold.kind.as_str() {
-        "count" => Ok(count as f64),
-        "length" if has_length => Ok(length),
-        "area" if has_area => Ok(area),
-        "volume" if has_area => {
-            let h = submitted.height_m.ok_or("volume needs cited height_m")?;
-            if gold.height_m != Some(h) {
-                return Err("height does not match the declared source".into());
-            }
-            Ok(area * h)
-        }
-        _ => Err("cited geometry cannot reproduce this kind".into()),
-    }
-}
-
 pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) -> CaseScore {
+    let traces = super::trace::submission(submission, session);
     let pdf = std::path::Path::new(&truth.drawing)
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
@@ -370,6 +318,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
             expected: gold.quantity,
             submitted: None,
             matched_by: None,
+            submitted_index: None,
             absolute_percent_error: None,
             passed: false,
             traceable: false,
@@ -399,6 +348,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
             row.submitted = Some(s.quantity);
             row.confidence = s.confidence;
             row.matched_by = Some(mode.into());
+            row.submitted_index = Some(i);
             let compatible = unit(&s.unit) == unit(&gold.unit) && s.kind == gold.kind;
             row.absolute_percent_error =
                 compatible.then(|| ape(s.quantity, gold.quantity)).flatten();
@@ -411,31 +361,12 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
                 metrics.within_10_percent += usize::from(error <= 10.0);
                 metrics.within_25_percent += usize::from(error <= 25.0);
             }
-            let measured = session
-                .ok_or_else(|| "drawing unavailable to remeasure".to_string())
-                .and_then(|session| remeasure(session, gold, s, truth));
-            match measured {
-                Ok(value) => {
-                    // Traceability is a numerical reproduction check, stricter than rule acceptance.
-                    row.traceable = compatible
-                        && ape(s.quantity, value)
-                            .is_some_and(|p| p <= if gold.kind == "count" { 0.0 } else { 0.5 });
-                    row.trace_reason = if row.traceable {
-                        "reproduced from cited handles and basis"
-                    } else {
-                        "cited geometry does not reproduce the submitted quantity/unit"
-                    }
-                    .into();
-                }
-                Err(e) => row.trace_reason = e,
-            }
-            // Correctness is the quantity within tolerance on the same kind and unit. Basis names
-            // are benchmark-internal, so they only order the matching tiers, with one exception:
-            // a quantity claimed as plain geometry must reproduce from its geometry when the truth
-            // derives it from a rule.
+            row.traceable = traces[i].traceable;
+            row.trace_reason = traces[i].reason.clone();
+            // Preserve the existing accuracy penalty for declaring a rule quantity geometric.
+            // Traceability is independent of that correctness policy.
             let false_geometry = basis_category(&s.basis) == "geometric"
-                && basis_category(&gold.basis) != "geometric"
-                && !row.traceable;
+                && basis_category(&gold.basis) != "geometric";
             row.passed = within && !false_geometry;
             metrics.passed += usize::from(row.passed);
             metrics.calibrate(s.confidence, row.passed);
@@ -457,6 +388,15 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         })
         .collect::<Vec<_>>();
     metrics.extras = extra_items.len();
+    metrics.traceable_submitted = Some(
+        metrics.traceable
+            + traces
+                .iter()
+                .filter(|t| {
+                    !used.contains(&t.index) && !aggregates.contains_key(&t.index) && t.traceable
+                })
+                .count(),
+    );
     for (i, item) in submission
         .items
         .iter()
@@ -515,6 +455,7 @@ pub fn score(truth: &Truth, submission: &Submission, session: Option<&Session>) 
         metrics,
         items,
         extra_items,
+        submission_traces: traces,
         reported_aggregates: aggregates
             .keys()
             .map(|i| submission.items[*i].id.clone())

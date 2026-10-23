@@ -83,7 +83,7 @@ then restores its original permissions before agents start, including on verific
 Verified drawing bytes and truth stay in the outer harness's memory. Each case workspace
 receives only the drawing and `preamble.md` when there are clauses: specification wording only,
 without rule parameters, truth quantities, recipes, sidecars or visible BOQ/schedule files.
-The scorer snapshots the original geometry before the agent can edit its drawing copy.
+The scorer retains the saved drawing and its embedded measurement knowledge for numerical tracing.
 
 The report and all case runs are under `.local/benchmark/runs/holdout-exam-<timestamp>/`.
 `report.json` retains the shared scorer's metrics and per-case scores, plus `north_star`:
@@ -217,15 +217,34 @@ The median absolute percentage error uses compatible matched nonzero truth quant
 (exact zero/zero contributes zero); incompatible units and nonzero/zero are failures and
 do not have a finite percentage error.
 
-Traceability reopens the original drawing and remeasures the submitted citations. The
-cited object set must identify the gold item; reproducing the same number from unrelated
-geometry earns no credit. Counts count cited distinct entities; length/area use measured
-geometry in physical units; volume requires height; rules execute the declared expression.
-A rule item must cite the correct basis to pass accuracy as well as traceability. Reproduction must be exact for counts and
-within 0.5% otherwise, even when the acceptance band is wider. Model IDs alone cannot prove
-a 2D quantity. PDF page-region IDs, broken boundaries, and exploded symbols with multiple
-primitive handles per symbol currently cannot reproduce every semantic quantity; the report
-records that limitation instead of marking a plausible number traceable.
+Traceability is independent of truth quantities and rule names. Agent scoring opens the saved
+run's drawing with embedded knowledge only, without sidecars or external-resource loading.
+The scorer freshly evaluates its measurement method against geometry, then locates each
+submitted dimension recipe by ID or source handles and rule. Sources and evidence handles
+must exist; rule-derived drawing-note citations must name existing note handles. Dimension
+sources, expressions, operations, units, citations and inclusion decisions must agree, and
+fresh numerical values must reproduce the submission within 0.5%, or exactly for counts.
+Plain geometric submissions retain direct handle remeasurement as a second path. Cached
+measurement results alone cannot establish traceability. Calibrated PDF driver handles can
+be checked in the saved drawing without opening the original PDF.
+
+A complete aggregate traces only when all its component dimension recipes trace. Reports
+retain `submission_traces` for every submitted row, including extras and aggregates, with a
+failure reason. `traceability_submitted` counts traceable matched rows and extras over the
+existing matched-plus-extras denominator; redundant aggregates and consumed components are
+not counted twice. `traceability_all` counts traceable matched items over all truth items;
+missing items therefore remain failures. The two rates have separate numerators.
+
+`bench rescore-agent` preserves saved submissions and writes a new report directory. For a
+saved holdout report it updates only traceability, preserves correctness and correspondence,
+and appends a `rescore` event to `holdout-log.jsonl`; it never opens sealed inputs. New scores
+retain submitted row indices. For legacy reports without those indices, the scored set can
+be recovered from saved extras and complete aggregate memberships when that partition is
+unique. No quantity chooses a correspondence. In mixed legacy results the per-truth-row
+trace fields are omitted because the individual links were not saved; `submission_traces`
+identifies each exact failure and the recovered scored set supplies the totals. Ambiguous
+partitions are refused. If every submitted row reproduces, all previously matched rows
+necessarily reproduce without needing the missing links.
 
 Detection requires both the correct item/location and error class. Precision, recall and F1
 are reported, with TP/FP/FN by class and false alarms per clean case. Repeated alerts count

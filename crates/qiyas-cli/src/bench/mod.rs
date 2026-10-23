@@ -12,6 +12,7 @@ mod revisions;
 pub(crate) mod score;
 pub(crate) mod sets;
 pub(crate) mod submission;
+mod trace;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -350,7 +351,16 @@ pub fn score_submission(
         return Err("holdout submissions are sealed".into());
     }
     let submission = submission::read(submission_path)?;
-    let session = Session::open_standalone(&directory.join(&truth.drawing)).ok();
+    let saved = submission_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("drawing.dxf");
+    let session = if saved.exists() {
+        reject_symlink(&saved)?;
+        Some(Session::open_embedded(&saved).map_err(|e| e.to_string())?)
+    } else {
+        Session::open_standalone(&directory.join(&truth.drawing)).ok()
+    };
     let scored = score::score(&truth, &submission, session.as_ref());
     serde_json::to_value(scored).map_err(|e| e.to_string())
 }

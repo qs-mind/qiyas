@@ -656,3 +656,119 @@ subset has 29 matches, all passing, and no extras. Comparison found all 36 seede
 with nine false positives. This is the shared-rule engine diagnostic, not an agent evaluation.
 
 Quick report_directory: `.local/benchmark/runs/baseline-autonomy-20261023T002825336674420-3`.
+
+
+## Saved-drawing traceability (23 October 2026)
+
+Traceability now freshly evaluates the saved drawing's embedded measurement method against
+its geometry. It does not use truth quantities or truth rule names. Dimension IDs or handles
+and rule IDs identify the saved recipe; cited geometry/evidence handles must exist, and
+rule-derived drawing-note citations must name existing note handles. A note can be named
+in the rule basis or its citations. Sources, expressions, operations, units, citations and
+inclusion flags are checked against fresh dimension lines, whose values reproduce within
+0.5%, or exactly for counts. Cached report values alone cannot prove a measurement.
+
+Plain geometry retains direct remeasurement. Complete BOQ aggregates require every component
+to reproduce; count aggregates also require exact totals. Extras receive independent trace
+results. `submission_traces` reports each row and failure reason; `traceability_submitted`
+uses traceable matched rows plus extras, while `traceability_all` uses traceable matches over
+all expected items. Existing correctness and correspondence policies remain separate.
+
+Headless saved drawing opens omit sidecars, reject linked drawings before loading references,
+and retain embedded calibrated PDF drivers without opening source PDFs. `bench score`, live
+agent scoring and offline replay use saved drawing knowledge when available. Replays copy
+saved submissions byte-for-byte and write separate report folders.
+
+The holdout replay preserves saved accuracy and matching, without opening sealed inputs.
+New reports retain submission indices. The older holdout report lacks those links; for its
+one case with mixed outcomes the scored set is recovered from a unique partition of saved
+extras and aggregate memberships. Neither truth quantities nor submitted quantities choose
+that partition. Individual legacy truth-row trace flags are omitted where their submission
+link is unknown; exact submitted failure identities and reasons remain in `submission_traces`.
+Other legacy cases have every row traceable, proving every retained match traceable too.
+
+The source reports and before/after rates are recorded in
+`.local/traceability-fix/before-after.json`. All four verified replay commands exited 0.
+
+| Saved run | Traceability submitted before → after | Traceability all before → after |
+|---|---:|---:|
+| `holdout-exam-20261023T004650302420683-1628506` | 38.75% → 98.75% | 63.27% → 93.88% |
+| `eval-agent-set-20261022T234438437979749-1494095` | 32.10% → 100.00% | 52.00% → 92.00% |
+| `eval-agent-set-20261022T235917558365856-1519430` | 35.71% → 100.00% | 61.22% → 95.92% |
+| `eval-agent-set-20261023T003808668757783-1609631` | 33.33% → 100.00% | 52.00% → 98.00% |
+
+Holdout counts are 31 → 79 traceable scored submissions out of 80, and 31 → 46 traceable
+matches out of 49 expected items. Coverage and accuracy remain 47/49 = 95.92%, with all 47
+matches within ±2%. The remaining failure is `dimension:3D:DrainTrench_lining:m2` in case
+`b902f81613fe4ae5dff98916ac15a6acb90c6f9afd6c1ab3e771b3b9c81d027a`:
+“drawing note citation lacks a note handle”. Its redundant `DrainTrench_lining` BOQ total
+also fails through that component. Its own rule basis and citations do not name a note handle;
+the scorer does not supply one from another rule. Two expected volume items remain missing.
+The 100% traceability target is therefore still unmet; no saved citation was repaired.
+
+The oldest of the three dev sets also incorporates the existing PDF correspondence fix:
+39 → 46 matches and 39 → 41 passing quantities, as already documented for the eleventh-run
+replay above. The two newer dev sets preserve their matching and accuracy metrics. Their
+new submitted traceability numerators are 78/78, 84/84 and 78/78 respectively; all-item
+numerators are 46/50, 47/49 and 49/50.
+
+Verified reports:
+
+- `.local/benchmark/runs/rescore-traceability-holdout-verified/report.json`
+- `.local/benchmark/runs/rescore-traceability-20261022T234438437979749-1494095-verified/report.json`
+- `.local/benchmark/runs/rescore-traceability-20261022T235917558365856-1519430-verified/report.json`
+- `.local/benchmark/runs/rescore-traceability-20261023T003808668757783-1609631-verified/report.json`
+
+The holdout log contains append-only `rescore` events for the successful saved replays,
+including the final verified report; no new `opening` event was made. An earlier attempt
+refused mixed legacy outcomes before aggregate-partition recovery was implemented. The
+successful preliminary and verified reports remain separate rather than being overwritten.
+
+SHA-256 confirms all 124 original report/drawing/knowledge/measurement/submission artifacts
+are unchanged. All 616 saved submission rows are copied byte-for-byte in the verified
+replays. Audit: `.local/traceability-fix/audit.json`. No real agent was run and no original
+sealed holdout input was opened. No new crates, API keys/settings access, helper agents,
+staging, commits or pushes were used.
+
+### Verification
+
+The three requested commands each ran once. Every Cargo invocation was sequential, with
+`CARGO_BUILD_JOBS=4` for compilation; `scripts/check.sh` was not run.
+
+| Check | Actual result |
+|---|---|
+| `cargo fmt --all` | Passed, exit 0. Later touched Rust files were formatted directly with rustfmt. |
+| `CARGO_BUILD_JOBS=4 cargo clippy --offline --workspace --all-targets -- -D warnings` | Passed, exit 0. Scoped core/CLI Clippy also passed after recovery, and final CLI Clippy passed after the exact-count and byte-copy changes. |
+| `CARGO_BUILD_JOBS=4 cargo test --offline -p qiyas-cli -p qiyas-core` | Exit 101 after compilation: 60 CLI tests passed; the existing scripted-evaluation assertion failed because `bench score` still opened original geometry without saved rules. Fixed the production scoring path; no assertion was weakened. |
+| Focused CLI recovery | Two fixture compilation failures were corrected (a test-only fixture module and the `Insert` import path). Final core/CLI changes compiled; all 65 CLI unit tests and seven agent-eval integration tests passed, exit 0. |
+| Remaining built test binaries | All 79 core binaries passed (766 tests). Remaining CLI integration binaries passed (18 CLI tests and three project tests). These complete the suites skipped when the original Cargo command stopped. |
+| Core doc tests | Passed, exit 0; zero tests. |
+| Final direct rustfmt check and `git diff --check` | Both passed, exit 0. |
+| Final trace replay and preservation audit | All four replays passed; 124 original artifacts unchanged and all 616 submission rows byte-identical. |
+
+There are 859 distinct passing core/CLI tests across the original build and focused recovery.
+The originally requested full test command itself did not pass and was not repeated.
+Regression coverage includes saved rule/aggregate reproduction without truth rules, changed
+quantities, exact count totals, missing geometry/note handles, unnamed notes, stale caches,
+linked-drawing refusal, quantity-independent legacy membership and logged saved holdout replay.
+Logs and per-binary results remain under `.local/traceability-fix/`.
+
+Files touched:
+
+- `CLAUDE.md`
+- `docs/2026-10-21-qiyas-qs-benchmark.md`
+- `docs/2026-10-22-agent-eval-fixes.md`
+- `crates/qiyas-core/src/session.rs`
+- `crates/qiyas-core/src/measurement.rs`
+- `crates/qiyas-cli/src/bench/mod.rs`
+- `crates/qiyas-cli/src/bench/trace.rs`
+- `crates/qiyas-cli/src/bench/score.rs`
+- `crates/qiyas-cli/src/bench/submission.rs`
+- `crates/qiyas-cli/src/bench/rescore.rs`
+- `crates/qiyas-cli/src/bench/tests.rs`
+- `crates/qiyas-cli/src/eval.rs`
+- `crates/qiyas-cli/src/eval_agent.rs`
+- `crates/qiyas-cli/src/eval_agent/holdout.rs`
+- `crates/qiyas-cli/tests/agent_eval.rs`
+
+Run reports, the holdout rescore log entries and audit/check logs are local-only.

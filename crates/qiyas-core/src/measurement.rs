@@ -405,6 +405,11 @@ impl Session {
             crate::trust::ConfidenceSummary::of(report.items.iter().map(|i| i.confidence));
         Ok(report)
     }
+
+    /// Re-evaluates the saved method against current geometry without trusting cached results.
+    pub fn remeasure_report(&self) -> Result<MeasurementReport, CoreError> {
+        evaluate::derive(self)
+    }
     pub(crate) fn run_measurement(
         &mut self,
         command: MeasurementCommand,

@@ -186,10 +186,21 @@ fn citations_are_remeasured_and_rule_citation_is_required() {
         },
     );
     truth.validate().unwrap();
+    let citation = json!({"source":"project preamble","clause":"Height 3 m"});
+    session.run_input(&json!({"type":"batch","commands":[
+        {"type":"define_object_type","definition":{"name":"Measured","geometry":"region","category":"test"}},
+        {"type":"recognition","kind":"define","rule":{"name":"measured","object_type":"Measured","match":{"entity_type":"LwPolyline","closed_region":true},"confidence":0.99}},
+        {"type":"recognition","kind":"apply"},
+        {"type":"measurement","kind":"set_method","scope":"project","method":{"name":"own method","title":"Own method","based_on":"drawing","source_note":"Project height","rules":[
+            {"id":"own-height","element_type":"Measured","kind":"volume","basis":"rule:own-height","unit":"m3","terms":[{"label":"Volume","operation":"add","factors":["geometry.area","3"],"citation":citation}],"citation":citation}
+        ]}}
+    ]}), Source::User).unwrap();
     let mut proposal = Submission {
         items: truth.items.clone(),
         ..Default::default()
     };
+    proposal.items[1] = submission::from_session(&session).unwrap().items.remove(0);
+    proposal.items[1].id = "volume".into();
     assert_eq!(
         score::score(&truth, &proposal, Some(&session))
             .metrics

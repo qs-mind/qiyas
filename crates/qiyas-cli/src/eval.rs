@@ -957,8 +957,10 @@ fn run_case(args: &EvalArgs, case: &str, max_cost: Option<f64>) -> Result<Value,
     write_json(&output.join("usage.json"), &*summary)?;
     let usage = json!(*summary);
     drop(summary);
-    let score = crate::bench::score_submission(&root, case, &submission_path)?;
-    let report = json!({ "run": run_id, "case": case, "headline":"MIZAN ALONE", "usage":usage,"step_log":output.join("steps.jsonl"),"agent_log":output.join("agent.log"), "status": status, "provider": identity, "elapsed_ms": elapsed_ms, "drawing": drawing, "takeoff": submission_path, "score": score, "preparation": note, "traceability_basis": "Original case geometry when available; the resulting drawing is also retained for review", "autonomy": "autonomous, explicitly approved for this evaluation", "max_tokens_per_request": args.max_tokens, "max_requests": args.max_requests });
+    let submitted = crate::bench::submission::read(&submission_path)?;
+    let saved = Session::open_embedded(&drawing).map_err(|e| e.to_string())?;
+    let score = crate::bench::score::score(&truth, &submitted, Some(&saved));
+    let report = json!({ "run": run_id, "case": case, "headline":"MIZAN ALONE", "usage":usage,"step_log":output.join("steps.jsonl"),"agent_log":output.join("agent.log"), "status": status, "provider": identity, "elapsed_ms": elapsed_ms, "drawing": drawing, "takeoff": submission_path, "score": score, "preparation": note, "traceability_basis": "Numerical reproduction from the saved drawing and its own measurement rules", "autonomy": "autonomous, explicitly approved for this evaluation", "max_tokens_per_request": args.max_tokens, "max_requests": args.max_requests });
     write_json(&output.join("report.json"), &report)?;
     Ok(report)
 }

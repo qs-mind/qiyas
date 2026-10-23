@@ -550,6 +550,23 @@ impl Session {
         Ok(session)
     }
 
+    /// Opens saved drawing knowledge without sidecars or resolving external resources.
+    /// Underlays may remain as evidence; only embedded geometry is available to measure.
+    pub fn open_embedded(path: &Path) -> Result<Session, CoreError> {
+        let drawing = Drawing::open(path)?;
+        if drawing
+            .doc
+            .block_records
+            .iter()
+            .any(|b| is_xref_block(&drawing.doc, &b.name))
+        {
+            return Err(CoreError::InvalidCommand(
+                "Embedded drawings cannot load external drawing references".into(),
+            ));
+        }
+        Ok(Self::from_drawing(drawing, None))
+    }
+
     /// `open`, with the project file at `project_file`, saved for the drawing named `name`.
     pub(crate) fn open_with(
         path: &Path,

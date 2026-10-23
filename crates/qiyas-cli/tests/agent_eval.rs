@@ -579,6 +579,30 @@ fn holdout_fake_agent_scores_logs_and_keeps_only_drawing_and_clause_inputs() {
     assert_eq!(log[1]["model"], "gpt-6.1-sol");
     assert_eq!(log[1]["git_commit"].as_str().unwrap().len(), 40);
     assert!(chrono::DateTime::parse_from_rfc3339(log[0]["time"].as_str().unwrap()).is_ok());
+    let original_report = fs::read(run.join("report.json")).unwrap();
+    let replay = fixture.root().join("saved-rescore");
+    let rescored = Command::new(CLI)
+        .args(["--json", "bench", "--root"])
+        .arg(fixture.root())
+        .args(["rescore-agent", "--report"])
+        .arg(run.join("report.json"))
+        .arg("--output")
+        .arg(&replay)
+        .output()
+        .unwrap();
+    assert!(
+        rescored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rescored.stderr)
+    );
+    let after = read(&replay.join("report.json"));
+    assert_eq!(after["metrics"]["matched"], report["metrics"]["matched"]);
+    assert_eq!(after["north_star"]["traceability_submitted"], 1.0);
+    assert_eq!(after["north_star"]["traceability_all"], 0.5);
+    assert_eq!(fixture.log().len(), 3);
+    assert_eq!(fixture.log()[2]["status"], "rescore");
+    assert_eq!(fixture.log()[2]["sealed_inputs_opened"], false);
+    assert_eq!(fs::read(run.join("report.json")).unwrap(), original_report);
     fixture.assert_closed();
 }
 
