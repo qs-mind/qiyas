@@ -425,6 +425,35 @@ fn validate_at(
     let mut canonical = value.clone();
     crate::registry::canonicalize(&mut canonical);
     walk(&info.schema, &canonical, path, step, &mut report);
+    if info.name == "set_layer" && canonical.get("prop").is_some() {
+        for key in [
+            "color",
+            "linetype",
+            "lineweight",
+            "on",
+            "frozen",
+            "locked",
+            "plot",
+        ] {
+            if canonical.get(key).is_some() {
+                report.error(
+                    "invalid_value",
+                    &pointer(path, key),
+                    "Use either prop/value or named layer properties, not both",
+                );
+            }
+        }
+    }
+    if info.name == "delete_entities"
+        && canonical.get("targets").is_some()
+        && canonical.get("handles").is_some()
+    {
+        report.error(
+            "invalid_value",
+            path,
+            "Use either targets or handles, not both",
+        );
+    }
     if report
         .errors
         .iter()
@@ -586,6 +615,34 @@ pub fn validate_schema(schema: &Value, value: &Value) -> ValidationReport {
     report
 }
 
+fn scalar_choices(schema: &Value) -> Option<Vec<Value>> {
+    if let Some(value) = schema
+        .get("const")
+        .filter(|v| !v.is_object() && !v.is_array())
+    {
+        return Some(vec![value.clone()]);
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        return values
+            .iter()
+            .all(|v| !v.is_object() && !v.is_array())
+            .then(|| values.clone());
+    }
+    let variants = schema
+        .get("oneOf")
+        .or_else(|| schema.get("anyOf"))?
+        .as_array()?;
+    let mut choices = Vec::new();
+    for variant in variants {
+        for value in scalar_choices(variant)? {
+            if !choices.contains(&value) {
+                choices.push(value);
+            }
+        }
+    }
+    Some(choices)
+}
+
 fn walk(
     schema: &Value,
     value: &Value,
@@ -609,40 +666,51 @@ fn walk(
         .or_else(|| schema.get("anyOf"))
         .and_then(Value::as_array)
     {
-        let candidates: Vec<_> = variants
-            .iter()
-            .map(|variant| {
-                let mut candidate = ValidationReport::default();
-                walk(variant, value, path, step, &mut candidate);
-                (variant, candidate)
-            })
-            .collect();
-        // Prefer a matching discriminator, so a missing field does not disguise a known kind.
-        let chosen = candidates.iter().min_by_key(|(variant, report)| {
-            let mut mismatches = 0;
-            let mut matches = 0;
-            if let Some(props) = variant.get("properties").and_then(Value::as_object) {
-                for (key, schema) in props {
-                    if let Some(constant) = schema.get("const") {
-                        if value.get(key) == Some(constant) {
-                            matches += 1;
+        // Documented scalar variants may be separate const/enum branches. Report the union.
+        if let Some(choices) = scalar_choices(schema) {
+            if !choices.contains(value) {
+                out.error(
+                    "invalid_value",
+                    path,
+                    format!("Choose one of {}", json!(choices)),
+                );
+            }
+        } else {
+            let candidates: Vec<_> = variants
+                .iter()
+                .map(|variant| {
+                    let mut candidate = ValidationReport::default();
+                    walk(variant, value, path, step, &mut candidate);
+                    (variant, candidate)
+                })
+                .collect();
+            // Prefer a matching discriminator, so a missing field does not disguise a known kind.
+            let chosen = candidates.iter().min_by_key(|(variant, report)| {
+                let mut mismatches = 0;
+                let mut matches = 0;
+                if let Some(props) = variant.get("properties").and_then(Value::as_object) {
+                    for (key, schema) in props {
+                        if let Some(constant) = schema.get("const") {
+                            if value.get(key) == Some(constant) {
+                                matches += 1;
+                            } else if value.get(key).is_some() {
+                                mismatches += 1;
+                            }
                         } else if value.get(key).is_some() {
-                            mismatches += 1;
+                            matches += 1;
                         }
-                    } else if value.get(key).is_some() {
-                        matches += 1;
                     }
                 }
+                (
+                    mismatches,
+                    std::cmp::Reverse(matches),
+                    report.errors.len(),
+                    report.warnings.len(),
+                )
+            });
+            if let Some((_, chosen)) = chosen {
+                out.append(chosen.clone());
             }
-            (
-                mismatches,
-                std::cmp::Reverse(matches),
-                report.errors.len(),
-                report.warnings.len(),
-            )
-        });
-        if let Some((_, chosen)) = chosen {
-            out.append(chosen.clone());
         }
     }
     if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {

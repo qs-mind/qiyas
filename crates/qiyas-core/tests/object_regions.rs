@@ -376,7 +376,7 @@ fn curved_island_metadata_is_exact_and_accepts_two_bulged_vertices() {
     qiyas_core::xdata::write_json(common, "QIYAS_OBJECT_REGION", app, &invalid_region).unwrap();
     common.extended_data.raw_dwg_eed.push((app, vec![1, 2, 3]));
     // A retained boundary cannot be moved on its own. Refresh imported metadata through
-    // an ordinary drawing edit instead, while preserving the invalid-region checks below.
+    // a boundary-source edit instead; unrelated layer edits do not retrace regions.
     let history = session.history_steps();
     let error = session
         .run_input(
@@ -388,7 +388,7 @@ fn curved_island_metadata_is_exact_and_accepts_two_bulged_vertices() {
     assert_eq!(session.history_steps(), history);
     run(
         &mut session,
-        json!({"type":"new_layer","name":"Metadata refresh"}),
+        json!({"type":"draw","kind":"line","a":[100,100],"b":[101,100]}),
     );
     let common = session
         .drawing

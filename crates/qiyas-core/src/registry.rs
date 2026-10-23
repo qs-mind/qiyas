@@ -158,6 +158,31 @@ pub fn canonicalize(value: &mut Value) {
     if let Some(kind) = info.schema["properties"]["kind"]["const"].as_str() {
         value["kind"] = json!(kind);
     }
+    if value["type"] == "delete_entities" && value.get("targets").is_none() {
+        if let Some(handles) = value.as_object_mut().and_then(|o| o.remove("handles")) {
+            value["targets"] = handles;
+        }
+    }
+    if value["type"] == "set_layer" && value.get("prop").is_none() && value.get("value").is_none() {
+        let mut properties = serde_json::Map::new();
+        for name in [
+            "color",
+            "linetype",
+            "lineweight",
+            "on",
+            "frozen",
+            "locked",
+            "plot",
+        ] {
+            if let Some(v) = value.as_object_mut().and_then(|o| o.remove(name)) {
+                properties.insert(name.into(), v);
+            }
+        }
+        if !properties.is_empty() {
+            value["prop"] = json!("properties");
+            value["value"] = Value::Object(properties);
+        }
+    }
     normalize_handles(&info.schema, value, "");
     if value["type"] == "set_records" && value["collection"] == "entities" {
         if let Some(updates) = value["updates"].as_array_mut() {
@@ -335,6 +360,42 @@ impl Registry {
             }
         }
         for c in &mut commands {
+            if c.name == "set_layer" {
+                let props = c.schema["properties"]
+                    .as_object_mut()
+                    .expect("command properties");
+                for key in [
+                    "color",
+                    "linetype",
+                    "lineweight",
+                    "on",
+                    "frozen",
+                    "locked",
+                    "plot",
+                ] {
+                    let schema = match key {
+                        "color" => {
+                            json!({"anyOf":[{"type":"string"},{"type":"integer","minimum":1,"maximum":255}]})
+                        }
+                        "linetype" => json!({"type":"string"}),
+                        "lineweight" => json!({"type":"integer"}),
+                        _ => json!({"type":"boolean"}),
+                    };
+                    props.insert(key.into(), schema);
+                }
+                c.schema["required"] = json!(["type", "name"]);
+                c.schema["anyOf"] = json!([
+                    {"required":["prop","value"]}, {"required":["color"]},
+                    {"required":["linetype"]}, {"required":["lineweight"]},
+                    {"required":["on"]}, {"required":["frozen"]},
+                    {"required":["locked"]}, {"required":["plot"]}
+                ]);
+            }
+            if c.name == "delete_entities" {
+                c.schema["properties"]["handles"] = c.schema["properties"]["targets"].clone();
+                c.schema["required"] = json!(["type"]);
+                c.schema["anyOf"] = json!([{"required":["targets"]},{"required":["handles"]}]);
+            }
             describe_defaults(&mut c.schema);
             let mut words = String::new();
             schema_words(&c.schema, &mut words);

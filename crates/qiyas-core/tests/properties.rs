@@ -172,7 +172,7 @@ fn the_general_properties_of_a_line() {
     assert_eq!(entity(&s, line).common().linetype, "");
     for (prop, value) in [
         (EntityProp::Layer, json!("NOPE")),
-        (EntityProp::Color, json!("blue")),
+        (EntityProp::Color, json!("not-a-color")),
         (EntityProp::Lineweight, json!(3)),
         (EntityProp::Text, json!("x")),
     ] {

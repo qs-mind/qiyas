@@ -5,10 +5,11 @@
 //! drawing library serialises it, so a JSON pointer into it (`/common/layer`, `/radius`) names
 //! one property for `where`, `fields` and `Command::SetRecords`.
 //!
-//! Pages are small (20 by default, 200 at most) and every page stays under `MAX_BYTES`; a long
-//! array inside a record shows its first `MAX_ITEMS` items and says how many it left out.
+//! Pages hold 20 records by default, 200 at most, with a `MAX_BYTES` budget for records
+//! and warnings (excluding the page envelope). One oversized record is returned on its own
+//! so paging can advance. Long arrays show their first `MAX_ITEMS` items and the omitted count.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
@@ -23,7 +24,7 @@ use crate::{CoreError, EntityFilter, Session};
 /// Records a page holds by default, and at most.
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 200;
-/// A page's JSON stays under this many bytes: records past it go to the next page.
+/// Budget for records and warnings, apart from a single oversized record and the envelope.
 pub const MAX_BYTES: usize = 12_000;
 /// Items of an array shown inside one record.
 const MAX_ITEMS: usize = 100;
@@ -97,7 +98,7 @@ pub enum Detail {
 /// `value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Where {
-    /// A JSON pointer into `data` (`/common/layer`, `/radius`).
+    /// A summary name (layer, length, area), or a JSON pointer into data (/common/layer).
     pub path: String,
     #[serde(default)]
     pub op: WhereOp,
@@ -112,6 +113,10 @@ pub enum WhereOp {
     #[default]
     Eq,
     Ne,
+    /// Matches any value in the supplied array (text in any case).
+    In,
+    /// Matches none of the supplied array; missing properties do not match.
+    NotIn,
     Lt,
     Le,
     Gt,
@@ -145,7 +150,8 @@ pub struct RecordQuery {
     /// Every condition must hold.
     #[serde(rename = "where")]
     pub conditions: Vec<Where>,
-    /// JSON pointers into `data`: each record gives the key, type and these only.
+    /// Summary names (key, type, layer, length, area, text) or JSON pointers into data.
+    /// Lengths, areas and bounds use drawing units. Missing properties are reported in warnings.
     pub fields: Vec<String>,
     pub detail: Detail,
     pub offset: usize,
@@ -165,6 +171,9 @@ pub struct RecordPage {
     pub next_offset: Option<usize>,
     /// The page was cut short to stay under `MAX_BYTES`.
     pub truncated: bool,
+    /// Missing properties are distinct from an explicit null in a record.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl Session {
@@ -180,25 +189,38 @@ impl Session {
             Collection::Viewports => self.viewport_records(q, detail)?,
             other => self.other_records(other, detail)?,
         };
+        let mut warnings = validate_paths(&all, q)?;
         let names: Vec<String> = q.names.iter().map(|n| normalize_name(n)).collect();
-        let matching: Vec<Value> = all
-            .into_iter()
-            .filter(|r| names.is_empty() || key_matches(r, &names))
-            .filter(|r| q.conditions.iter().all(|w| holds(r.get("data"), w)))
-            .collect();
+        let mut matching = Vec::new();
+        for record in all {
+            if !names.is_empty() && !key_matches(&record, &names) {
+                continue;
+            }
+            // Check every condition, even when an earlier one does not match.
+            let results = q
+                .conditions
+                .iter()
+                .map(|w| holds(&record, w))
+                .collect::<Result<Vec<_>, _>>()?;
+            if results.into_iter().all(|v| v) {
+                matching.push(record);
+            }
+        }
         let total = matching.len();
         let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
         let mut records = Vec::new();
-        let mut bytes = 0;
+        let mut bytes = json!(warnings).to_string().len();
         let mut truncated = false;
         for record in matching.into_iter().skip(q.offset).take(limit) {
-            let record = shape(record, &q.fields, q.detail);
-            let size = record.to_string().len();
+            let mut record_warnings = Vec::new();
+            let record = shape(record, &q.fields, q.detail, &mut record_warnings);
+            let size = record.to_string().len() + json!(record_warnings).to_string().len();
             if bytes + size > MAX_BYTES && !records.is_empty() {
                 truncated = true;
                 break;
             }
             bytes += size;
+            warnings.extend(record_warnings);
             records.push(record);
         }
         let end = q.offset + records.len();
@@ -209,6 +231,7 @@ impl Session {
             next_offset: (end < total && !records.is_empty()).then_some(end),
             records,
             truncated,
+            warnings,
         })
     }
 
@@ -497,12 +520,23 @@ fn key_matches(record: &Value, names: &[String]) -> bool {
 
 /// The record as the page gives it: with `fields`, the key, type and those values only; with
 /// the summary, no `data`; long arrays cut to `MAX_ITEMS`.
-fn shape(mut record: Value, fields: &[String], detail: Detail) -> Value {
+fn shape(
+    mut record: Value,
+    fields: &[String],
+    detail: Detail,
+    warnings: &mut Vec<String>,
+) -> Value {
     if !fields.is_empty() {
-        let data = record.get("data").cloned().unwrap_or(Value::Null);
         let mut picked = BTreeMap::new();
         for f in fields {
-            picked.insert(f.clone(), data.pointer(f).cloned().unwrap_or(Value::Null));
+            if let Some(value) = field_value(&record, f) {
+                picked.insert(f.clone(), value.clone());
+            } else {
+                warnings.push(format!(
+                    "Record {} ({}) has no {f}; the field was omitted",
+                    record["key"], record["type"]
+                ));
+            }
         }
         let mut out = json!({ "key": record["key"].clone(), "type": record["type"].clone() });
         for k in ["xref", "chain"] {
@@ -547,32 +581,127 @@ fn cut_arrays(value: &mut Value) {
     }
 }
 
-/// Whether `data` meets the condition.
-fn holds(data: Option<&Value>, w: &Where) -> bool {
-    let found = data.and_then(|d| d.pointer(&w.path));
-    if w.op == WhereOp::Exists {
-        let there = found.is_some_and(|v| !v.is_null());
-        return there == w.value.as_bool().unwrap_or(true);
+/// Bare names address the summary first. Pointers retain their original data meaning.
+fn field_value<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
+    if path == "handle" {
+        return record.get("key");
     }
-    let Some(found) = found else {
-        return w.op == WhereOp::Ne;
-    };
-    match w.op {
+    if path.starts_with('/') {
+        record
+            .get("data")
+            .and_then(|d| d.pointer(path))
+            .or_else(|| record.pointer(path))
+    } else {
+        record
+            .get(path)
+            .or_else(|| record.get("data").and_then(|d| d.get(path)))
+    }
+}
+
+fn validate_paths(records: &[Value], q: &RecordQuery) -> Result<Vec<String>, CoreError> {
+    let mut available = BTreeSet::new();
+    for record in records {
+        if let Some(map) = record.as_object() {
+            available.extend(map.keys().filter(|k| *k != "data").cloned());
+        }
+        if let Some(map) = record.get("data").and_then(Value::as_object) {
+            available.extend(map.keys().map(|k| format!("/{k}")));
+        }
+    }
+    for path in q.fields.iter().chain(q.conditions.iter().map(|w| &w.path)) {
+        let valid_escape = path
+            .split('~')
+            .skip(1)
+            .all(|part| part.starts_with('0') || part.starts_with('1'));
+        if path.is_empty()
+            || (!path.starts_with('/') && (path.contains('/') || path.contains('~') || path == "*"))
+            || !valid_escape
+        {
+            return Err(invalid(format!("Invalid record path {path:?}. Use a summary name such as layer or a JSON pointer such as /common/layer")));
+        }
+        let existence = q
+            .conditions
+            .iter()
+            .any(|w| &w.path == path && w.op == WhereOp::Exists)
+            && !q.fields.contains(path);
+        if !records.is_empty()
+            && !existence
+            && !records.iter().any(|r| field_value(r, path).is_some())
+        {
+            return Err(invalid(format!(
+                "No record has {path:?}. Available summary names and data paths: {}",
+                available.iter().cloned().collect::<Vec<_>>().join(", ")
+            )));
+        }
+    }
+    for w in &q.conditions {
+        if matches!(w.op, WhereOp::In | WhereOp::NotIn) && !w.value.is_array() {
+            return Err(invalid(format!(
+                "{}: in and not_in need an array of values",
+                w.path
+            )));
+        }
+        if w.op == WhereOp::Exists && !w.value.is_boolean() && !w.value.is_null() {
+            return Err(invalid(format!("{}: exists needs true or false", w.path)));
+        }
+    }
+    Ok(
+        if records.is_empty() && (!q.fields.is_empty() || !q.conditions.is_empty()) {
+            vec!["No records in this scope; property paths could not be checked".into()]
+        } else {
+            Vec::new()
+        },
+    )
+}
+
+fn holds(record: &Value, w: &Where) -> Result<bool, CoreError> {
+    let found = field_value(record, &w.path);
+    if w.op == WhereOp::Exists {
+        return Ok(found.is_some_and(|v| !v.is_null()) == w.value.as_bool().unwrap_or(true));
+    }
+    let Some(found) = found else { return Ok(false) };
+    Ok(match w.op {
         WhereOp::Eq => same(found, &w.value),
         WhereOp::Ne => !same(found, &w.value),
+        WhereOp::In | WhereOp::NotIn => {
+            let matched = w
+                .value
+                .as_array()
+                .expect("validated array")
+                .iter()
+                .any(|v| same(found, v));
+            if w.op == WhereOp::In {
+                matched
+            } else {
+                !matched
+            }
+        }
         WhereOp::Contains => match (found, &w.value) {
             (Value::String(s), Value::String(n)) => s.to_lowercase().contains(&n.to_lowercase()),
             (Value::Array(items), v) => items.iter().any(|i| same(i, v)),
-            _ => false,
+            _ => {
+                return Err(invalid(format!(
+                    "{}: contains needs text with text, or an array",
+                    w.path
+                )))
+            }
         },
         WhereOp::Lt | WhereOp::Le | WhereOp::Gt | WhereOp::Ge => {
+            if found.is_null() {
+                return Ok(false);
+            }
             let ord = match (found, &w.value) {
                 (Value::Number(a), Value::Number(b)) => a
                     .as_f64()
                     .zip(b.as_f64())
                     .and_then(|(a, b)| a.partial_cmp(&b)),
                 (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
-                _ => None,
+                _ => {
+                    return Err(invalid(format!(
+                        "{}: ordered comparisons need two numbers or two strings",
+                        w.path
+                    )))
+                }
             };
             ord.is_some_and(|o| match w.op {
                 WhereOp::Lt => o.is_lt(),
@@ -582,7 +711,7 @@ fn holds(data: Option<&Value>, w: &Where) -> bool {
             })
         }
         WhereOp::Exists => unreachable!("handled above"),
-    }
+    })
 }
 
 /// Equal, text in any case and numbers by value.

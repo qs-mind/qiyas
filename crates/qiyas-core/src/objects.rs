@@ -1656,7 +1656,21 @@ impl Session {
                         .map(|n| n / self.drawing.units.to_metres())
                 })
                 .transpose()?
-                .unwrap_or(self.default_text_height());
+                .unwrap_or_else(|| {
+                    // A generated label belongs to its driver's sheet, even while another
+                    // sheet is on screen. View changes must not resize existing objects.
+                    let model = self
+                        .drawing
+                        .doc
+                        .block_records
+                        .get("*Model_Space")
+                        .is_some_and(|b| b.handle == driver.common().owner_handle);
+                    if model {
+                        0.0025 * self.annotation_scale().1 / self.drawing.units.to_metres()
+                    } else {
+                        2.5
+                    }
+                });
             if height <= 0.0 {
                 return Err(invalid("Label height must be positive"));
             }
@@ -1750,13 +1764,17 @@ impl Session {
         Ok(true)
     }
 
-    fn refresh_hosted_positions(&mut self) -> Result<(), CoreError> {
+    fn refresh_hosted_positions(&mut self, only: Option<&BTreeSet<u64>>) -> Result<(), CoreError> {
         let objects: Vec<_> = self
             .drawing
             .doc
             .entities()
             .filter_map(instance)
-            .filter(|o| o.host.is_some() && o.compatibility.is_none())
+            .filter(|o| {
+                o.host.is_some()
+                    && o.compatibility.is_none()
+                    && only.is_none_or(|ids| ids.contains(&o.id))
+            })
             .collect();
         for object in objects {
             let definition = self.object_type(&object.type_name)?;
@@ -1877,6 +1895,12 @@ impl Session {
     /// Replaces matching parts under their existing handles, so measurements and fields retain
     /// their sources. Removed parts follow the same remapping path as a wall rebuild.
     pub(crate) fn refresh_objects(&mut self) -> Result<(), CoreError> {
+        self.refresh_objects_scoped(None)
+    }
+    pub(crate) fn refresh_objects_scoped(
+        &mut self,
+        only: Option<&BTreeSet<u64>>,
+    ) -> Result<(), CoreError> {
         self.validate_object_metadata()?;
         if !self.drawing.doc.app_ids.contains(OBJECT_APP) {
             return Ok(());
@@ -1946,7 +1970,7 @@ impl Session {
             object.id = h;
             self.stamp_object(h, &object)?;
         }
-        self.refresh_hosted_positions()?;
+        self.refresh_hosted_positions(only)?;
         let drivers: Vec<_> = self
             .drawing
             .doc
@@ -1970,6 +1994,9 @@ impl Session {
         self.follow_edit(&[], &stale, &[], &[]);
         let app = self.object_app(PART_APP)?;
         for (handle, mut object) in drivers {
+            if only.is_some_and(|ids| !ids.contains(&handle)) {
+                continue;
+            }
             // Ordinary copy commands copy xdata too: a new driver gets its own identity.
             if object.id != handle {
                 object.id = handle;

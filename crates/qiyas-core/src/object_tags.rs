@@ -34,6 +34,21 @@ fn value(o: &crate::objects::ObjectRecord, property: &str) -> Option<String> {
         _ => None,
     })
 }
+
+/// What a tag shows: the object's own property, or for an opening without an explicit ID, the
+/// automatic size mark it displays (an explicit ID always wins, as in schedules).
+fn shown(
+    doc: &opencadcodec::CadDocument,
+    o: &crate::objects::ObjectRecord,
+    property: &str,
+) -> Option<String> {
+    value(o, property).or_else(|| {
+        (property == "mark")
+            .then(|| doc.get_entity(Handle::new(o.instance.id)))
+            .flatten()
+            .and_then(crate::opening_schedule::mark)
+    })
+}
 impl Session {
     pub(crate) fn object_tags(
         &mut self,
@@ -55,7 +70,7 @@ impl Session {
                 .iter()
                 .find(|o| o.instance.id == handle.value())
                 .ok_or_else(|| invalid("Choose an object with properties"))?;
-            let text = value(o, property).ok_or_else(|| {
+            let text = shown(&self.drawing.doc, o, property).ok_or_else(|| {
                 invalid(format!("The object has no text or number in {property}"))
             })?;
             let at = anchor(self.drawing.doc.get_entity(handle).expect("checked object"))
@@ -172,7 +187,7 @@ impl Session {
             else {
                 continue;
             };
-            let next = value(o, &link.property).unwrap_or_else(|| "?".into());
+            let next = shown(&self.drawing.doc, o, &link.property).unwrap_or_else(|| "?".into());
             let delta = [at[0] - link.last_anchor[0], at[1] - link.last_anchor[1]];
             let Some(EntityType::Text(t)) = self.drawing.doc.get_entity_mut(h) else {
                 continue;
@@ -209,7 +224,7 @@ impl Session {
             let expected = objects
                 .iter()
                 .find(|o| o.identity == link.identity)
-                .and_then(|o| value(o, &link.property));
+                .and_then(|o| shown(&self.drawing.doc, o, &link.property));
             let actual = match e {
                 EntityType::Text(t) => Some(t.value.clone()),
                 _ => None,

@@ -511,7 +511,7 @@ pub enum Command {
     DeleteView { name: String },
     /// Deletes the entities `targets` from the sheet on screen: one undo step. Each must be an
     /// entity of the drawing itself at the top of that sheet (an empty chain: not inside a block,
-    /// not an xref's); otherwise nothing is deleted.
+    /// not an xref's); otherwise nothing is deleted. Wire inputs also accept handles: [1234, "0x4D3"].
     #[schemars(extend("x-category" = "modify", "x-destructive" = true))]
     #[schemars(example = json!({"type": "delete_entities", "targets": [{"handle": 1234}, {"handle": 1235}]}))]
     #[schemars(extend("x-words" = ["ERASE", "E"]))]
@@ -938,7 +938,9 @@ pub enum Command {
     #[schemars(extend("x-category" = "layers"))]
     #[schemars(example = json!({"type": "rename_layer_state", "from": "Walls only", "to": "Structure"}))]
     RenameLayerState { from: String, to: String },
-    /// One property of the drawing's layer `name` (see `LayerProp` for the values).
+    /// Properties of the drawing's layer `name`. Use prop/value, or several properties:
+    /// {type: "set_layer", name: "A-WALL", color: "red", lineweight: 50, locked: true}.
+    /// Color accepts ACI 1 to 255, an integer index, #rrggbb, or red/yellow/green/cyan/blue/magenta/white.
     /// Setting its linetype to CENTER or HIDDEN adds that standard pattern when missing.
     #[schemars(extend("x-category" = "layers"))]
     #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "color", "value": "ACI 1"}))]
@@ -1225,9 +1227,10 @@ pub enum Command {
     /// Records of a collection (`crate::records`): the entities of a sheet or block, layers,
     /// linetypes, text and dimension styles, blocks, layouts, viewports, groups, views, the header,
     /// layer states, xrefs, the take-off, BOQ, conflicts, schedules, comments, constraints and
-    /// parameters. Filter by handles, names, type, layer, sheet, bounds and `where` conditions on
+    /// parameters, objects, object types and knowledge collections. Filter by handles, names, type,
+    /// layer, sheet, bounds and `where` conditions on summary names or
     /// JSON pointers into each record's `data`; `fields` picks values; `detail` "full" gives the
-    /// whole `data`. Pages of 20 (200 at most), under 40 KB. `Outcome::Records`; not an undo step.
+    /// whole `data`. Pages of 20 (200 at most), a 12 KB record-and-warning budget (excluding the page envelope; one oversized record may exceed it). `Outcome::Records`; not an undo step.
     #[schemars(extend("x-category" = "records"))]
     #[schemars(example = json!({"type": "records", "query": {"collection": "entities", "type": "Line", "layer": "A-WALL"}}))]
     #[schemars(example = json!({"type": "records", "query": {"collection": "layers", "detail": "full", "names": ["A-WALL"]}}))]

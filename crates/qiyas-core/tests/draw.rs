@@ -140,7 +140,7 @@ fn the_current_state_styles_new_entities_is_saved_and_is_no_undo_step() {
             ..Current::default()
         },
         Current {
-            color: "red".into(),
+            color: "not-a-color".into(),
             ..Current::default()
         },
         Current {

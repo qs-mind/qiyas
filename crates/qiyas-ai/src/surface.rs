@@ -221,7 +221,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -915,7 +915,25 @@ fn run_working_session(
         }
         (EXECUTE, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
-            json(run_one(session, command, &input, source)?)
+            let result = if args["layer"].is_string() || args["color"].is_string() {
+                let layer = args["layer"].as_str().map(str::to_owned);
+                let color = args["color"].as_str().map(str::to_owned);
+                let wrapped =
+                    json!({"type":"batch","commands":[input],"layer":layer,"color":color});
+                run_one(
+                    session,
+                    Command::Batch {
+                        commands: vec![command],
+                        layer,
+                        color,
+                    },
+                    &wrapped,
+                    source,
+                )?
+            } else {
+                run_one(session, command, &input, source)?
+            };
+            json(result)
         }
         (EXECUTE, "type") => {
             let line = args["line"]
@@ -1084,11 +1102,11 @@ fn capabilities() -> Value {
         },
         "capture": ["screen", "picture"],
         "query_kinds": QUERY_KINDS,
-        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters"],
+        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters", "objects", "object_types", "knowledge_types", "knowledge_levels", "knowledge_tables", "knowledge_rules", "knowledge_sheets", "knowledge_mappings", "knowledge_views", "knowledge_measurement", "knowledge_checks", "knowledge_queries", "knowledge_reports"],
         "creatable_entity_types": qiyas_core::record_edit::CREATABLE,
         "check_rules": qiyas_core::check::RULES,
         "commands_by_category": categories,
-        "limits": { "records_page": 20, "records_page_max": 200, "result_bytes": 40_960, "batch_commands": MAX_BATCH },
+        "limits": { "records_page": 20, "records_page_max": 200, "records_bytes": qiyas_core::records::MAX_BYTES, "result_bytes": 40_960, "batch_commands": MAX_BATCH },
     })
 }
 
@@ -1111,6 +1129,20 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     if let Some(name) = args.get("name").and_then(Value::as_str) {
         if name.eq_ignore_ascii_case("plan") {
             return Ok(plan_info());
+        }
+        let normalized = name.trim().to_ascii_lowercase();
+        let operations: Vec<_> = OPERATIONS.iter().filter(|operation| {
+            normalized == format!("{}.{}", operation.tool, operation.op)
+                || (normalized == operation.op && reg.get(name).is_none())
+        }).map(|operation| {
+            let (schema, example) = crate::surface_args::contract(operation.tool, operation.op);
+            json!({"name":format!("{}.{}", operation.tool, operation.op),"tool":operation.tool,"op":operation.op,"schema":schema,"example":example})
+        }).collect();
+        if operations.len() == 1 {
+            return Ok(operations[0].clone());
+        }
+        if !operations.is_empty() {
+            return Ok(json!({"operations": operations}));
         }
         let info = reg
             .get(name)
@@ -1150,8 +1182,17 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     };
     if let Some(query) = args.get("search").and_then(Value::as_str) {
         let mut answer = json!({ "commands": list(reg.search(query, SEARCH_LIMIT)) });
-        if "plan phases pending active done skipped".contains(&query.to_lowercase()) {
-            answer["operations"] = json!([plan_info()]);
+        let query = query.to_lowercase();
+        answer["operations"] = json!(OPERATIONS
+            .iter()
+            .filter(|o| format!("{}.{}", o.tool, o.op).contains(&query))
+            .map(|o| json!({"name":format!("{}.{}",o.tool,o.op),"tool":o.tool,"op":o.op}))
+            .collect::<Vec<_>>());
+        if "plan phases pending active done skipped".contains(&query) {
+            answer["operations"]
+                .as_array_mut()
+                .expect("operation list")
+                .push(plan_info());
         }
         return Ok(answer);
     }
@@ -1165,8 +1206,8 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     }
     Ok(json!({
         "index": crate::prompt::command_index(),
-        "operations": [plan_info()],
-        "next": "qiyas_read commands {\"name\": \"…\"} gives a command's schema and examples",
+        "operations": std::iter::once(plan_info()).chain(OPERATIONS.iter().filter(|o| o.op != "plan").map(|o| json!({"name":format!("{}.{}",o.tool,o.op),"tool":o.tool,"op":o.op}))).collect::<Vec<_>>(),
+        "next": "qiyas_read commands {\"name\": \"…\"} gives a command or operation schema and examples",
     }))
 }
 
@@ -1477,7 +1518,9 @@ fn close_commands(name: &str) -> Vec<&'static str> {
         .filter(|command| !command.internal)
         .map(|command| (distance(&name, &command.name), command.name.as_str()))
         .collect();
+    ranked.extend(OPERATIONS.iter().map(|o| (distance(&name, o.op), o.op)));
     ranked.sort_unstable();
+    ranked.dedup();
     ranked.into_iter().take(5).map(|(_, name)| name).collect()
 }
 

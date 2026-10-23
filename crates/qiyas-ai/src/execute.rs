@@ -190,10 +190,14 @@ pub fn execute(
             let ReadInput {
                 sheet,
                 within,
+                layer,
                 offset,
             } = parse(input)?;
             let block = sheet_block(session, sheet.as_deref())?;
-            let rows = session.read_text(Some(&block), within);
+            let mut rows = session.read_text(Some(&block), within);
+            if let Some(layer) = layer {
+                rows.retain(|row| row.layer.eq_ignore_ascii_case(&layer));
+            }
             (with_units(session, &block, page(rows, offset)), offset)
         }
         "read_tables" => {
@@ -433,6 +437,8 @@ struct Handle {
 #[serde(deny_unknown_fields)]
 struct ReadInput {
     sheet: Option<String>,
+    layer: Option<String>,
+    #[serde(alias = "bounds")]
     within: Option<[[f64; 2]; 2]>,
     #[serde(default)]
     offset: usize,

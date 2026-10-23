@@ -69,6 +69,16 @@ const IDENTITY: Rule = Rule::Refuse {
 
 /// The rule for `path` of an entity of type `kind`.
 pub(crate) fn entity_rule(kind: &str, path: &str) -> Rule {
+    // Dimension records carry their variant and base around the common entity fields.
+    let path = if kind == "Dimension" {
+        path.strip_prefix('/')
+            .and_then(|p| p.split_once('/'))
+            .and_then(|(_, p)| p.strip_prefix("base"))
+            .filter(|p| p.starts_with('/'))
+            .unwrap_or(path)
+    } else {
+        path
+    };
     let under = |prefix: &str| path == prefix || path.starts_with(&format!("{prefix}/"));
     if [
         "/common/handle",
@@ -1061,6 +1071,87 @@ fn traced() -> Registry {
 
 fn trace_passes(tracer: &mut Tracer, names: &BTreeSet<String>) {
     let samples = Samples::new();
+    // Seed nested enums directly: revisiting EntityType selects its first variant once
+    // complete, so it cannot finish enums buried in later entity variants or sequences.
+    macro_rules! enums {
+        ($($ty:ty),* $(,)?) => { $(let _ = tracer.trace_type::<$ty>(&samples);)* };
+    }
+    enums!(
+        opencadcodec::entities::attribute_definition::HorizontalAlignment,
+        opencadcodec::entities::attribute_definition::VerticalAlignment,
+        opencadcodec::entities::attribute_definition::MTextFlag,
+        opencadcodec::entities::centerline::CenterLineSourceKind,
+        opencadcodec::entities::centerline::CenterMarkSourceKind,
+        opencadcodec::entities::dimension::DimensionType,
+        opencadcodec::entities::dimension::AttachmentPointType,
+        opencadcodec::entities::dimension::Dimension,
+        opencadcodec::entities::embedded_entity::EmbeddedEntity,
+        opencadcodec::entities::extended_entity::ExtendedEntityData,
+        opencadcodec::entities::extended_entity::LegacyEntityData,
+        opencadcodec::entities::hatch::HatchPatternType,
+        opencadcodec::entities::hatch::HatchStyleType,
+        opencadcodec::entities::hatch::EdgeType,
+        opencadcodec::entities::hatch::BoundaryEdge,
+        opencadcodec::entities::helix::HelixConstraint,
+        opencadcodec::entities::leader::LeaderPathType,
+        opencadcodec::entities::leader::LeaderCreationType,
+        opencadcodec::entities::leader::HooklineDirection,
+        opencadcodec::entities::mline::MLineJustification,
+        opencadcodec::entities::EntityType,
+        opencadcodec::entities::mtext::AttachmentPoint,
+        opencadcodec::entities::mtext::DrawingDirection,
+        opencadcodec::entities::multileader::LeaderContentType,
+        opencadcodec::entities::multileader::MultiLeaderPathType,
+        opencadcodec::entities::multileader::TextAttachmentType,
+        opencadcodec::entities::multileader::TextAngleType,
+        opencadcodec::entities::multileader::BlockContentConnectionType,
+        opencadcodec::entities::multileader::TextAttachmentDirectionType,
+        opencadcodec::entities::multileader::TextAttachmentPointType,
+        opencadcodec::entities::multileader::TextAlignmentType,
+        opencadcodec::entities::multileader::FlowDirectionType,
+        opencadcodec::entities::multileader::LineSpacingStyle,
+        opencadcodec::entities::ole2frame::OleFrameEnvelope,
+        opencadcodec::entities::ole2frame::OleObjectType,
+        opencadcodec::entities::polyface_mesh::PolyfaceSmoothType,
+        opencadcodec::entities::polygon_mesh::SurfaceSmoothType,
+        opencadcodec::entities::polyline::SmoothSurfaceType,
+        opencadcodec::entities::polyline3d::SmoothSurfaceType,
+        opencadcodec::entities::proxy_graphics::ProxyGraphicRecord,
+        opencadcodec::entities::raster_image::ClipMode,
+        opencadcodec::entities::raster_image::ClipType,
+        opencadcodec::entities::raster_image::ResolutionUnit,
+        opencadcodec::entities::raster_image::ImageDisplayQuality,
+        opencadcodec::entities::solid3d::WireType,
+        opencadcodec::entities::solid3d::AcisVersion,
+        opencadcodec::entities::surface::SurfaceKind,
+        opencadcodec::entities::surface::SurfaceData,
+        opencadcodec::entities::table::CellType,
+        opencadcodec::entities::table::CellValueType,
+        opencadcodec::entities::table::ValueUnitType,
+        opencadcodec::entities::table::BorderType,
+        opencadcodec::entities::table::TableCellContentType,
+        opencadcodec::entities::table::CellStyleType,
+        opencadcodec::entities::table::BreakFlowDirection,
+        opencadcodec::entities::text::TextHorizontalAlignment,
+        opencadcodec::entities::text::TextVerticalAlignment,
+        opencadcodec::entities::underlay::UnderlayType,
+        opencadcodec::entities::viewport::ViewportRenderMode,
+        opencadcodec::entities::viewport::StandardView,
+        opencadcodec::entities::wipeout::WipeoutClipType,
+        opencadcodec::entities::wipeout::WipeoutClipMode,
+        opencadcodec::tables::linetype::LineTypeComplexContent,
+        opencadcodec::types::color::Color,
+        opencadcodec::types::line_weight::LineWeight,
+        opencadcodec::types::DxfVersion,
+        opencadcodec::types::transparency::Transparency,
+        opencadcodec::xdata::XDataValue,
+        opencadcodec::objects::PlotPaperUnits,
+        opencadcodec::objects::PlotRotation,
+        opencadcodec::objects::PlotType,
+        opencadcodec::objects::ScaledType,
+        opencadcodec::objects::ShadePlotMode,
+        opencadcodec::objects::ShadePlotResolutionLevel,
+    );
     for _ in 0..10_000 {
         let _ = tracer.trace_type_once::<EntityType>(&samples);
         let _ = tracer.trace_type_once::<Layer>(&samples);
@@ -1377,11 +1468,22 @@ fn walk_container(
     types: &mut BTreeMap<String, String>,
     rule: &dyn Fn(&str) -> Rule,
 ) {
-    if let ContainerFormat::Struct(fields) = format {
-        for field in fields {
-            let path = format!("{prefix}/{}", field.name);
-            walk_field(registry, &field.value, &path, depth, paths, types, rule);
+    match format {
+        ContainerFormat::Struct(fields) => {
+            for field in fields {
+                let path = format!("{prefix}/{}", field.name);
+                walk_field(registry, &field.value, &path, depth, paths, types, rule);
+            }
         }
+        ContainerFormat::Enum(variants) => {
+            for variant in variants.values() {
+                if let VariantFormat::NewType(inner) = &variant.value {
+                    let path = format!("{prefix}/{}", variant.name);
+                    walk_field(registry, inner, &path, depth, paths, types, rule);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1526,4 +1628,26 @@ fn container_shape(
 
 fn invalid(why: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(why.into())
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+    #[test]
+    fn codec_trace_finishes_every_enum_without_unchecked_fallback() {
+        let mut names = BTreeSet::new();
+        loop {
+            match trace_with(&names) {
+                Ok(_) => break,
+                Err(missing) => {
+                    let old = names.len();
+                    names.extend(missing);
+                    assert!(
+                        names.len() > old,
+                        "Unfinished record schema trace: {names:?}"
+                    );
+                }
+            }
+        }
+    }
 }
