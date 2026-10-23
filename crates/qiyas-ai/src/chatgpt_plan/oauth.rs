@@ -1,9 +1,6 @@
 //! OAuth and OIDC primitives. Endpoints are fixed by the reviewed SIWC protocol, never by
 //! Settings or an ID token's untrusted jku/x5u headers.
 
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -22,9 +19,9 @@ pub struct Protocol {
     pub authorization: String,
     pub token: String,
     pub issuer: String,
-    pub jwks: String,
+    pub discovery: String,
     pub responses: String,
-    pub host_parameter: String,
+    pub models: String,
 }
 
 fn invalid() -> AiError {
@@ -38,41 +35,35 @@ pub fn now() -> u64 {
         .as_secs()
 }
 
-/// One random identifier for this installation. It has no account-derived component.
-pub fn host_id(home: &Path) -> Result<String, AiError> {
-    std::fs::create_dir_all(home).map_err(|_| invalid())?;
-    let path = home.join("chatgpt-host-id");
-    if path
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return Err(invalid());
-    }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    match options.open(&path) {
-        Ok(mut file) => {
-            let id = uuid::Uuid::new_v4().to_string();
-            file.write_all(id.as_bytes()).map_err(|_| invalid())?;
-            file.sync_all().map_err(|_| invalid())?;
-            Ok(id)
+pub const RESOURCE: &str = "https://api.openai.com/v1";
+
+impl Protocol {
+    /// The reviewed SIWC endpoints. Tests supply only local mock endpoints.
+    pub fn official() -> Self {
+        Self {
+            authorization: "https://auth.openai.com/api/accounts/authorize".into(),
+            token: "https://auth.openai.com/api/accounts/oauth/token".into(),
+            issuer: "https://auth.openai.com".into(),
+            discovery: "https://auth.openai.com/.well-known/openid-configuration".into(),
+            responses: format!("{RESOURCE}/responses"),
+            models: format!("{RESOURCE}/models"),
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Never deserialize a profile, email or account identifier from this file.
-            let text = std::fs::read_to_string(path).map_err(|_| invalid())?;
-            let id = uuid::Uuid::parse_str(&text).map_err(|_| invalid())?;
-            if id.get_version_num() != 4 || id.to_string() != text {
-                return Err(invalid());
-            }
-            Ok(text)
-        }
-        Err(_) => Err(invalid()),
     }
+}
+
+/// Codes and registration IDs stay in memory until the verified identity is saved.
+pub struct Grant {
+    pub code: String,
+    pub client_id: String,
+}
+
+fn issued_client(value: &str) -> bool {
+    value.starts_with("oaiapp_")
+        && value.len() > 7
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 fn random() -> Result<String, AiError> {
@@ -98,9 +89,15 @@ impl Pending {
         if url.scheme() != "http"
             || url.host_str() != Some("127.0.0.1")
             || url.port().is_none()
+            || url.path() != "/auth/callback"
+            || !url.username().is_empty()
+            || url.password().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
         {
+            return Err(invalid());
+        }
+        if client_id.as_ref().is_some_and(|id| !issued_client(id)) {
             return Err(invalid());
         }
         Ok(Self {
@@ -113,6 +110,9 @@ impl Pending {
     }
 
     pub fn authorization_url(&self, protocol: &Protocol, host: &str) -> Result<String, AiError> {
+        if !host.starts_with("urn:uuid:") || uuid::Uuid::parse_str(&host[9..]).is_err() {
+            return Err(invalid());
+        }
         let mut url = url::Url::parse(&protocol.authorization).map_err(|_| invalid())?;
         let challenge =
             URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, self.verifier.as_bytes()));
@@ -122,20 +122,24 @@ impl Pending {
             ("redirect_uri", self.redirect.as_str()),
             (
                 "scope",
-                &format!("openid profile offline_access {PLAN_SCOPE}"),
+                &format!("openid profile email offline_access resource.invoke {PLAN_SCOPE}"),
             ),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
             ("state", self.state.as_str()),
             ("nonce", self.nonce.as_str()),
-            ("agent_name_hint", "Qiyas"),
-            (protocol.host_parameter.as_str(), host),
+            ("resource", RESOURCE),
+            ("ext_agent_host_id", host),
         ]);
+        if self.client_id == "dynamic_agent_client" {
+            url.query_pairs_mut()
+                .append_pair("agent_name_hint", "Qiyas");
+        }
         Ok(url.into())
     }
 
     /// Duplicate state/code parameters, wrong paths and callbacks without state are refused.
-    pub fn callback_code(&self, target: &str) -> Result<String, AiError> {
+    pub fn callback_code(&self, target: &str) -> Result<Grant, AiError> {
         let expected = url::Url::parse(&self.redirect).map_err(|_| invalid())?;
         let callback =
             url::Url::parse(&format!("http://127.0.0.1{target}")).map_err(|_| invalid())?;
@@ -169,13 +173,29 @@ impl Pending {
             return Err(invalid());
         }
         if pairs.iter().any(|(key, _)| key == "error") {
-            let message = one("error_description").or_else(|_| one("error"))?;
-            return Err(denial(
-                &message,
-                &[&self.state, &self.nonce, &self.verifier],
-            ));
+            return Err(if one("error")? == "access_denied" {
+                AiError::Subscription("chatgpt_scope")
+            } else {
+                invalid()
+            });
         }
-        one("code")
+        let client_id = if pairs.iter().any(|(key, _)| key == "client_id") {
+            let issued = one("client_id")?;
+            if !issued_client(&issued)
+                || (self.client_id != "dynamic_agent_client" && issued != self.client_id)
+            {
+                return Err(invalid());
+            }
+            issued
+        } else if self.client_id != "dynamic_agent_client" {
+            self.client_id.clone()
+        } else {
+            return Err(invalid());
+        };
+        Ok(Grant {
+            code: one("code")?,
+            client_id,
+        })
     }
 }
 
@@ -185,7 +205,7 @@ pub async fn loopback_code(
     listener: tokio::net::TcpListener,
     pending: &Pending,
     cancel: &CancellationToken,
-) -> Result<String, AiError> {
+) -> Result<Grant, AiError> {
     let receive = async {
         for _ in 0..32 {
             let (mut socket, peer) = listener.accept().await.map_err(|_| invalid())?;
@@ -236,7 +256,7 @@ pub async fn loopback_code(
             if let Ok(Ok(code)) = result {
                 return Ok(code);
             }
-            if let Ok(Err(error @ AiError::ChatgptDenied(_))) = result {
+            if let Ok(Err(error @ AiError::Subscription("chatgpt_scope"))) = result {
                 return Err(error);
             }
         }
@@ -250,13 +270,19 @@ pub async fn loopback_code(
 }
 
 impl Protocol {
-    pub async fn exchange(&self, pending: Pending, code: String) -> Result<Tokens, AiError> {
+    pub async fn exchange(&self, pending: Pending, grant: Grant) -> Result<Tokens, AiError> {
+        if !issued_client(&grant.client_id)
+            || (pending.client_id != "dynamic_agent_client" && grant.client_id != pending.client_id)
+        {
+            return Err(invalid());
+        }
         let fields = [
             ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("client_id", pending.client_id.as_str()),
+            ("code", grant.code.as_str()),
+            ("client_id", grant.client_id.as_str()),
             ("redirect_uri", pending.redirect.as_str()),
             ("code_verifier", pending.verifier.as_str()),
+            ("resource", RESOURCE),
         ];
         let response = self.token_request(&fields).await?;
         let jwks = self.keys().await?;
@@ -264,26 +290,28 @@ impl Protocol {
             response,
             &jwks,
             self,
-            &pending.client_id,
+            &grant.client_id,
             Some(&pending.nonce),
             None,
         )
     }
 
     pub async fn refresh(&self, old: Tokens) -> Result<Tokens, AiError> {
-        old.require_plan()?;
         let refresh = old
             .refresh_token
             .as_deref()
             .ok_or(AiError::Subscription("chatgpt_auth"))?;
+        // Fetch verification keys before rotating a refresh token. A discovery outage
+        // must not discard an already-issued replacement and force reuse of the old token.
+        let jwks = self.keys().await?;
         let response = self
             .token_request(&[
                 ("grant_type", "refresh_token"),
                 ("refresh_token", refresh),
                 ("client_id", &old.client_id),
+                ("resource", RESOURCE),
             ])
             .await?;
-        let jwks = self.keys().await?;
         tokens_from_response(response, &jwks, self, &old.client_id, None, Some(&old))
     }
 
@@ -295,32 +323,75 @@ impl Protocol {
             .post(&self.token)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(encoded)
+            .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
-            .map_err(|_| invalid())?;
+            .map_err(|_| AiError::Subscription("chatgpt_temporary"))?;
+        if response.status().is_server_error() {
+            return Err(AiError::Subscription("chatgpt_temporary"));
+        }
         if !response.status().is_success() {
-            // Keep only the explicit provider message, scrubbing submitted and returned
-            // secrets before it can reach the window or log. Never log the response body.
             let body: Value = response.json().await.map_err(|_| invalid())?;
-            let message = body["error_description"]
+            let code = body["error"]
                 .as_str()
-                .or_else(|| body["error"]["message"].as_str())
-                .or_else(|| body["error"].as_str())
-                .unwrap_or("ChatGPT could not authorize this connection.");
-            let mut secrets: Vec<&str> = fields.iter().map(|(_, value)| *value).collect();
-            for name in ["access_token", "refresh_token", "id_token", "code"] {
-                if let Some(value) = body[name].as_str() {
-                    secrets.push(value);
-                }
-            }
-            return Err(denial(message, &secrets));
+                .or_else(|| body["error"]["code"].as_str())
+                .unwrap_or("");
+            return Err(AiError::Subscription(match code {
+                "invalid_client" => "chatgpt_setup",
+                "invalid_grant"
+                | "invalid_refresh_token"
+                | "token_expired"
+                | "refresh_token_expired"
+                | "refresh_token_invalidated"
+                | "refresh_token_reused" => "chatgpt_reauthorize",
+                "access_denied" => "chatgpt_scope",
+                _ => "chatgpt_oauth",
+            }));
         }
         response.json().await.map_err(|_| invalid())
     }
 
-    async fn keys(&self) -> Result<Value, AiError> {
+    async fn discovery_document(&self) -> Result<Value, AiError> {
         let response = crate::provider::http_client()
-            .get(&self.jwks)
+            .get(&self.discovery)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|_| invalid())?;
+        if !response.status().is_success() {
+            return Err(invalid());
+        }
+        let doc: Value = response.json().await.map_err(|_| invalid())?;
+        if doc["issuer"] != self.issuer {
+            return Err(invalid());
+        }
+        Ok(doc)
+    }
+
+    // Discovery is trusted only at the pinned issuer. Never follow redirects or send
+    // credentials to HTTP destinations outside local mock servers.
+    fn discovered_url(&self, doc: &Value, key: &str) -> Result<String, AiError> {
+        let value = doc[key].as_str().ok_or_else(invalid)?;
+        let url = url::Url::parse(value).map_err(|_| invalid())?;
+        let discovery = url::Url::parse(&self.discovery).map_err(|_| invalid())?;
+        let local_mock = discovery.scheme() == "http"
+            && discovery.host_str() == Some("127.0.0.1")
+            && url.origin() == discovery.origin();
+        if (!local_mock && url.scheme() != "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid());
+        }
+        Ok(value.into())
+    }
+
+    async fn keys(&self) -> Result<Value, AiError> {
+        let doc = self.discovery_document().await?;
+        let response = crate::provider::http_client()
+            .get(self.discovered_url(&doc, "jwks_uri")?)
+            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
             .map_err(|_| invalid())?;
@@ -329,20 +400,44 @@ impl Protocol {
         }
         response.json().await.map_err(|_| invalid())
     }
-}
 
-fn denial(message: &str, secrets: &[&str]) -> AiError {
-    let mut message = message.to_owned();
-    for secret in secrets {
-        message = crate::provider::scrub(&message, secret);
+    /// Clear local tokens even when the provider cannot confirm revocation.
+    pub async fn revoke(&self, tokens: &Tokens) -> bool {
+        for attempt in 0..3 {
+            let result = async {
+                let doc = self.discovery_document().await?;
+                let url = self.discovered_url(&doc, "revocation_endpoint")?;
+                let refresh = tokens.refresh_token.as_deref().ok_or_else(invalid)?;
+                let encoded = url::form_urlencoded::Serializer::new(String::new())
+                    .extend_pairs([
+                        ("token", refresh),
+                        ("token_type_hint", "refresh_token"),
+                        ("client_id", &tokens.client_id),
+                    ])
+                    .finish();
+                let response = crate::provider::http_client()
+                    .post(url)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .body(encoded)
+                    .timeout(std::time::Duration::from_secs(15))
+                    .send()
+                    .await;
+                match response {
+                    Ok(r) if r.status().as_u16() == 200 => Ok(true),
+                    Ok(r) if !r.status().is_server_error() => Ok(false),
+                    _ => Err(invalid()),
+                }
+            }
+            .await;
+            if let Ok(confirmed) = result {
+                return confirmed;
+            }
+            if attempt < 2 {
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+            }
+        }
+        false
     }
-    AiError::ChatgptDenied(
-        message
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(800)
-            .collect(),
-    )
 }
 
 fn tokens_from_response(
@@ -369,7 +464,7 @@ fn tokens_from_response(
         .ok_or_else(invalid)?;
     let scopes = match value["scope"].as_str() {
         Some(scope) => scope.split_whitespace().map(str::to_owned).collect(),
-        None => old.map(|t| t.scopes.clone()).unwrap_or_default(),
+        None => Vec::new(),
     };
     let (id_token, claims) = if let Some(id) = value["id_token"].as_str() {
         let claims = validate_id_token(
@@ -400,8 +495,8 @@ fn tokens_from_response(
         scopes,
         refresh_token: value["refresh_token"]
             .as_str()
-            .map(str::to_owned)
-            .or_else(|| old.and_then(|t| t.refresh_token.clone())),
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
         expires_at: now().checked_add(expires_in).ok_or_else(invalid)?,
         client_id: client.into(),
         subject: claims["sub"].as_str().ok_or_else(invalid)?.into(),
@@ -413,7 +508,9 @@ fn tokens_from_response(
             .take(160)
             .collect(),
     };
-    tokens.require_plan()?;
+    if tokens.refresh_token.is_none() {
+        return Err(invalid());
+    }
     Ok(tokens)
 }
 
@@ -528,9 +625,9 @@ mod tests {
             authorization: format!("{base}/authorize"),
             token: format!("{base}/token"),
             issuer: "https://test-issuer.invalid".into(),
-            jwks: format!("{base}/jwks"),
+            discovery: format!("{base}/discovery"),
             responses: format!("{base}/responses"),
-            host_parameter: "test_host_parameter".into(),
+            models: format!("{base}/models"),
         }
     }
     fn claims() -> Value {
@@ -600,25 +697,22 @@ mod tests {
     }
 
     #[test]
-    fn host_is_stable_opaque_and_never_an_account_identifier() {
-        let home = tempfile::tempdir().unwrap();
-        let id = host_id(home.path()).unwrap();
-        assert_eq!(id, host_id(home.path()).unwrap());
-        assert_eq!(uuid::Uuid::parse_str(&id).unwrap().get_version_num(), 4);
-        assert!(!id.contains('@'));
-        std::fs::write(home.path().join("chatgpt-host-id"), "somebody@example.test").unwrap();
-        assert!(host_id(home.path()).is_err());
-    }
-
-    #[test]
     fn pkce_state_nonce_and_callback_are_bound_to_one_attempt() {
-        let pending = Pending::new("http://127.0.0.1:43210/callback".into(), None).unwrap();
+        let pending = Pending::new("http://127.0.0.1:43210/auth/callback".into(), None).unwrap();
         let p = protocol("https://test-issuer.invalid");
-        let url = url::Url::parse(&pending.authorization_url(&p, "opaque-host").unwrap()).unwrap();
+        let url = url::Url::parse(
+            &pending
+                .authorization_url(&p, "urn:uuid:814178b2-ff06-4415-98ed-41518f0f88a8")
+                .unwrap(),
+        )
+        .unwrap();
         let params: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(params["client_id"], "dynamic_agent_client");
         assert_eq!(params["agent_name_hint"], "Qiyas");
-        assert_eq!(params["test_host_parameter"], "opaque-host");
+        assert_eq!(
+            params["ext_agent_host_id"],
+            "urn:uuid:814178b2-ff06-4415-98ed-41518f0f88a8"
+        );
         assert!(params["scope"]
             .split_whitespace()
             .any(|scope| scope == PLAN_SCOPE));
@@ -631,22 +725,29 @@ mod tests {
         assert_ne!(pending.state, pending.nonce);
         assert_eq!(
             pending
-                .callback_code(&format!("/callback?state={}&code=test-code", pending.state))
-                .unwrap(),
+                .callback_code(&format!(
+                    "/auth/callback?state={}&code=test-code&client_id=oaiapp_test",
+                    pending.state
+                ))
+                .unwrap()
+                .code,
             "test-code"
         );
         for target in [
-            "/callback?state=wrong&code=test",
-            "/callback?code=test",
+            "/auth/callback?state=wrong&code=test",
+            "/auth/callback?code=test",
             "/wrong?code=test",
             &format!(
-                "/callback?state={}&state={}&code=test",
+                "/auth/callback?state={}&state={}&code=test",
                 pending.state, pending.state
             ),
-            &format!("/callback?state={}&code=a&code=b", pending.state),
-            &format!("/callback?state={}&code=test&error=test", pending.state),
+            &format!("/auth/callback?state={}&code=a&code=b", pending.state),
             &format!(
-                "/callback?state={}&access_token=fake&error_description=fake&error=test",
+                "/auth/callback?state={}&code=test&error=test",
+                pending.state
+            ),
+            &format!(
+                "/auth/callback?state={}&access_token=fake&error_description=fake&error=test",
                 pending.state
             ),
         ] {
@@ -655,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn first_grant_requires_explicit_scope_and_refresh_cannot_expand_or_change_identity() {
+    fn missing_scope_keeps_identity_but_blocks_plan_and_refresh_requires_rotated_tokens() {
         let p = protocol("https://test-issuer.invalid");
         let mut claims = claims();
         claims["iat"] = json!(now());
@@ -687,10 +788,12 @@ mod tests {
                 Some("test-nonce"),
                 None
             )
+            .unwrap()
+            .require_plan()
             .is_err());
         }
         let refreshed = tokens_from_response(
-            json!({"token_type":"Bearer","access_token":"fake-new-access","expires_in":3600}),
+            json!({"token_type":"Bearer","access_token":"fake-new-access","refresh_token":"fake-rotated","expires_in":3600,"scope":"openid"}),
             &keys(),
             &p,
             "dynamic_agent_client",
@@ -698,8 +801,9 @@ mod tests {
             Some(&tokens),
         )
         .unwrap();
-        assert_eq!(refreshed.refresh_token, tokens.refresh_token);
-        assert_eq!(refreshed.scopes, tokens.scopes);
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("fake-rotated"));
+        assert_eq!(refreshed.scopes, vec!["openid"]);
+        assert!(refreshed.require_plan().is_err());
         claims["sub"] = json!("another-person");
         let mut changed = body;
         changed["id_token"] = json!(signed(&claims));
@@ -715,6 +819,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
     async fn mock_token_and_jwks_servers_exchange_without_real_accounts() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -722,17 +827,28 @@ mod tests {
             .expect("mock OAuth needs a loopback port");
         let base = format!("http://{}", listener.local_addr().unwrap());
         let p = protocol(&base);
-        let pending = Pending::new("http://127.0.0.1:43210/callback".into(), None).unwrap();
+        let pending = Pending::new("http://127.0.0.1:43210/auth/callback".into(), None).unwrap();
+        let grant = pending
+            .callback_code(&format!(
+                "/auth/callback?state={}&code=fake-code&client_id=oaiapp_test",
+                pending.state
+            ))
+            .unwrap();
         let nonce = pending.nonce.clone();
         let mut claims = claims();
         claims["nonce"] = json!(nonce);
+        claims["aud"] = json!("oaiapp_test");
         claims["iat"] = json!(now());
         claims["exp"] = json!(now() + 3600);
         let response = json!({"token_type":"Bearer","access_token":"fake-access-token","refresh_token":"fake-refresh-token",
             "id_token":signed(&claims),"expires_in":3600,"scope":format!("openid {PLAN_SCOPE}")});
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
-            for body in [response, keys()] {
+            for body in [
+                response,
+                json!({"issuer":"https://test-issuer.invalid","jwks_uri":format!("{base}/jwks"),"revocation_endpoint":format!("{base}/revoke")}),
+                keys(),
+            ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buf = vec![0; 16384];
                 let len = socket.read(&mut buf).await.unwrap();
@@ -742,35 +858,46 @@ mod tests {
             }
             requests
         });
-        let tokens = p.exchange(pending, "fake-code".into()).await.unwrap();
+        let tokens = p.exchange(pending, grant).await.unwrap();
         tokens.require_plan().unwrap();
         let requests = server.await.unwrap();
         assert!(requests[0].contains("code_verifier="));
         assert!(requests[0].contains("grant_type=authorization_code"));
-        assert!(requests[1].starts_with("GET /jwks "));
+        assert!(requests[0].contains("client_id=oaiapp_test"));
+        assert!(requests[0].contains("resource=https%3A%2F%2Fapi.openai.com%2Fv1"));
+        assert!(requests[1].starts_with("GET /discovery "));
+        assert!(requests[2].starts_with("GET /jwks "));
         assert!(!requests[1].contains("fake-access-token"));
     }
 
     #[tokio::test]
+    #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
     async fn mock_loopback_ignores_wrong_state_and_never_echoes_the_code() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("mock OAuth callback needs a loopback port");
         let addr = listener.local_addr().unwrap();
-        let pending =
-            Pending::new(format!("http://127.0.0.1:{}/callback", addr.port()), None).unwrap();
+        let pending = Pending::new(
+            format!("http://127.0.0.1:{}/auth/callback", addr.port()),
+            None,
+        )
+        .unwrap();
         let state = pending.state.clone();
         let receive = tokio::spawn(async move {
             loopback_code(listener, &pending, &CancellationToken::new()).await
         });
         for (query, status) in [
             ("state=wrong&code=fake-code".to_string(), "400 Bad Request"),
-            (format!("state={state}&code=fake-code"), "200 OK"),
+            (
+                format!("state={state}&code=fake-code&client_id=oaiapp_test"),
+                "200 OK",
+            ),
         ] {
             let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
             socket
                 .write_all(
-                    format!("GET /callback?{query} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes(),
+                    format!("GET /auth/callback?{query} HTTP/1.1\r\nHost: {addr}\r\n\r\n")
+                        .as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -780,6 +907,75 @@ mod tests {
             assert!(!answer.contains("fake-code"));
             assert!(!answer.contains(&state));
         }
-        assert_eq!(receive.await.unwrap().unwrap(), "fake-code");
+        assert_eq!(receive.await.unwrap().unwrap().code, "fake-code");
+    }
+
+    #[test]
+    fn issued_client_is_bound_and_consent_errors_require_state() {
+        let p = protocol("https://test-issuer.invalid");
+        let pending = Pending::new(
+            "http://127.0.0.1:43123/auth/callback".into(),
+            Some("oaiapp_test".into()),
+        )
+        .unwrap();
+        let url = url::Url::parse(
+            &pending
+                .authorization_url(&p, "urn:uuid:814178b2-ff06-4415-98ed-41518f0f88a8")
+                .unwrap(),
+        )
+        .unwrap();
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert!(!pairs.contains_key("agent_name_hint"));
+        assert!(!pairs.contains_key("id_token_hint"));
+        assert_eq!(pairs["resource"], RESOURCE);
+        assert_eq!(
+            pairs["scope"],
+            "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+        );
+        assert_eq!(
+            pending
+                .callback_code(&format!("/auth/callback?state={}&code=fake", pending.state))
+                .unwrap()
+                .client_id,
+            "oaiapp_test"
+        );
+        assert!(pending
+            .callback_code(&format!(
+                "/auth/callback?state={}&code=fake&client_id=oaiapp_other",
+                pending.state
+            ))
+            .is_err());
+        assert_eq!(
+            pending
+                .callback_code(&format!(
+                    "/auth/callback?state={}&error=access_denied",
+                    pending.state
+                ))
+                .err()
+                .unwrap()
+                .code(),
+            "chatgpt_scope"
+        );
+        assert_eq!(
+            pending
+                .callback_code("/auth/callback?state=wrong&error=access_denied")
+                .err()
+                .unwrap()
+                .code(),
+            "chatgpt_oauth"
+        );
+        assert!(Pending::new("http://localhost:43123/auth/callback".into(), None).is_err());
+        assert!(Pending::new("http://127.0.0.1:43123/wrong".into(), None).is_err());
+        assert!(Pending::new(
+            "http://127.0.0.1:43123/auth/callback".into(),
+            Some("someone@example.test".into())
+        )
+        .is_err());
+        let fresh = Pending::new("http://127.0.0.1:43123/auth/callback".into(), None).unwrap();
+        assert_ne!(fresh.state, pending.state);
+        assert_ne!(fresh.nonce, pending.nonce);
+        assert!(fresh
+            .callback_code(&format!("/auth/callback?state={}&code=fake", fresh.state))
+            .is_err());
     }
 }

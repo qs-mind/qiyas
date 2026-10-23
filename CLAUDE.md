@@ -1905,15 +1905,36 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   holds stop immediately. Qiyas never retries this provider, including its usual context
   and output-limit retries. `eval-agent --agent claude` is refused even with `--agent-cmd`.
   Benchmarks must use ChatGPT, Codex or an API key, never this Claude provider.
-- ChatGPT's transport and security components are present, but real sign-in is disabled:
-  the reviewer confirmed the policy excerpts, not the complete SIWC wire specification.
-  `subscriptions::reviewed_protocol` deliberately refuses until those exact registration,
-  endpoint and audience details are supplied. Do not replace this with guessed constants.
-  The implemented components cover PKCE/state/nonce, a loopback callback, RSA ID-token
-  verification, explicit `chatgpt.tokens.use.direct` grants, refresh, and Responses with
-  `store: false` / `stream: true`. Tokens use only keychain service `qiyas`, account
-  `chatgpt-plan`; conversation state and Settings never receive them. The opaque host ID is
-  a random UUID persisted separately. This is not a general inference proxy or MCP token relay.
+- ChatGPT Settings enables **Continue with ChatGPT** (Arabic: **المتابعة باستخدام ChatGPT**),
+  an account picker, Sign out, a model list and the ChatGPT per-app limits link. The exact
+  SIWC wire specification was supplied by the reviewer on 23 October 2026; do not substitute
+  backend-api endpoints or API-key billing for plan usage. OAuth uses PKCE/state/nonce,
+  `http://127.0.0.1:<port>/auth/callback`, first registration with `dynamic_agent_client`
+  and `agent_name_hint=Qiyas`, then the callback's issued `oaiapp_...` client ID.
+- The OS keychain entry `qiyas` / `chatgpt-plan` contains the entire ChatGPT vault: stable
+  `urn:uuid:...` host ID, separate account registrations, active account and tokens. Sign-out
+  removes only the active account's tokens after attempting discovery-based revocation;
+  the host ID and issued client IDs survive. OAuth tokens, subjects and issued client IDs never reach files,
+  Settings, conversation state, logs or the frontend. UI account IDs are random local IDs.
+- ChatGPT validates ID-token signature against discovery JWKS, issuer, issued-client audience,
+  expiry and nonce. Missing `chatgpt.tokens.use.direct` keeps sign-in but blocks inference and
+  model discovery. Refresh is serialized, rotates tokens/scopes atomically and retains saved
+  credentials on temporary failures. Blocking keychain work owns the account lock even if its
+  waiter is cancelled; a started rotation finishes and saves before sign-out can revoke it.
+  Queued requests are cancelled before they can use another account. Terminal refresh failure
+  clears only tokens and starts one OAuth recovery using the saved registration; a mismatched account is refused.
+- ChatGPT lists only models with `visibility=list`, displaying `display_name` and sending
+  `slug`. Account changes clear the model list and cancel requests. Responses use `store:false`
+  and `stream:true`; only `response.completed` succeeds. Incomplete/broken streams stop.
+  SIWC errors use their own English/Arabic classification: limits pause requests until the
+  user explicitly resumes, temporary failures use bounded backoff, and unsupported features
+  remove the named optional field before retrying a changed body, with a visible notice.
+  An admission 401 never starts an OAuth loop or erases credentials. Sign-out cancels requests,
+  retries transient revocation failures, clears local tokens and reports unconfirmed revocation.
+  This provider is only for Mizan's own requests, never a general proxy or MCP token relay.
+- ChatGPT mock HTTP/loopback tests are explicitly marked as requiring a socket-capable runner.
+  Run the named ignored `chatgpt_plan::` tests there; no real sign-in or service calls belong
+  in automated checks. The original Claude fake-process and credential sentinel checks remain.
 - The public documentation was verified by the reviewer on 23 October 2026 and supplied in
   the task; no further fetch was attempted after the founder's instruction. See
   `docs/2026-10-23-qiyas-subscriptions.md` for policy and release gates, and

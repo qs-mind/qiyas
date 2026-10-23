@@ -4,13 +4,13 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use super::Tokens;
-use crate::provider::{http_client, read_events, response_error, send_with_retry, Sink};
+use crate::provider::{http_client, read_events, Sink};
 use crate::{
     AiError, ContentBlock, ResultPart, RetryBackoff, Role, StopReason, StreamEvent, TurnRequest,
     TurnResult, Usage,
 };
 
-/// This adapter is private to the Mizan provider; MCP never exposes it or its credentials.
+/// This adapter is private to Mizan; MCP never exposes it or its credentials.
 pub(super) async fn stream(
     endpoint: &str,
     tokens: &Tokens,
@@ -18,58 +18,225 @@ pub(super) async fn stream(
     sink: Sink<'_>,
 ) -> Result<TurnResult, AiError> {
     tokens.require_plan()?;
-    let body = request(&req)?;
+    let mut body = request(&req)?;
     let client = http_client();
     let mut retry = RetryBackoff::default();
     let started = Instant::now();
+    let mut adaptations = 0;
     loop {
-        let mut http_sink = |event| sink(scrub_http_event(tokens, event));
-        let response = send_with_retry(
-            || {
-                client
-                    .post(endpoint)
-                    .bearer_auth(&tokens.access_token)
-                    .json(&body)
-            },
-            &tokens.access_token,
-            &body,
-            true,
-            &mut http_sink,
-        )
-        .await
-        .map_err(|e| {
-            e.scrubbed(&tokens.id_token)
-                .scrubbed(tokens.refresh_token.as_deref().unwrap_or(""))
-        })?;
-        let mut events = Events::default();
-        let result = read_events(response, |event| {
-            let text = tokens.scrub(&event.data);
-            let value = serde_json::from_str(&text)
-                .map_err(|_| AiError::Stream("ChatGPT returned an unreadable event".into()))?;
-            events.read(value, sink)
-        })
-        .await;
-        match result {
-            Ok(()) => {
-                return events
-                    .result
-                    .ok_or_else(|| AiError::Stream("ChatGPT did not finish its answer".into()))
+        sink(scrub_http_event(
+            tokens,
+            StreamEvent::RequestSent("ChatGPT Responses request".into()),
+        ));
+        let response = client
+            .post(endpoint)
+            .bearer_auth(&tokens.access_token)
+            .json(&body)
+            .send()
+            .await;
+        let mut retry_after = None;
+        let mut unsupported = None;
+        let result = match response {
+            Err(_) => Err(AiError::Subscription("chatgpt_temporary")),
+            Ok(response) if !response.status().is_success() => {
+                let status = response.status().as_u16();
+                retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok());
+                // Provider detail and message fields are diagnostic only and never logged.
+                let detail = response.json::<Value>().await.unwrap_or(Value::Null);
+                unsupported = detail["error"]["param"].as_str().map(str::to_owned);
+                Err(failure(status, &detail["error"]))
             }
-            Err(error) if error.retryable() => {
-                let Some(wait) = retry.next_delay(None, started.elapsed()) else {
-                    return Err(error);
+            Ok(response) => {
+                let mut events = Events::default();
+                let read = read_events(response, |event| {
+                    let value = serde_json::from_str(&tokens.scrub(&event.data))
+                        .map_err(|_| AiError::Subscription("chatgpt_incomplete"))?;
+                    events.read(value, sink)
+                })
+                .await;
+                unsupported = events.unsupported;
+                match read {
+                    Ok(()) => events
+                        .result
+                        .ok_or(AiError::Subscription("chatgpt_incomplete")),
+                    Err(e @ AiError::Subscription(_)) => Err(e),
+                    Err(_) => Err(AiError::Subscription("chatgpt_incomplete")),
+                }
+            }
+        };
+        match result {
+            Err(e) if e.code() == "chatgpt_capability" && adaptations < 3 => {
+                if !unsupported
+                    .as_deref()
+                    .is_some_and(|param| drop_capability(&mut body, param))
+                {
+                    return Err(e);
+                }
+                adaptations += 1;
+                let notice = AiError::Subscription("chatgpt_capability_removed").public_error();
+                sink(StreamEvent::Retrying {
+                    seconds: 0,
+                    code: notice.code,
+                    diagnostic: notice.message,
+                    discard_partial: true,
+                });
+            }
+            Err(e) if e.code() == "chatgpt_temporary" => {
+                let Some(wait) = retry.next_delay(retry_after, started.elapsed()) else {
+                    return Err(e);
                 };
                 sink(StreamEvent::Retrying {
                     seconds: wait.as_secs(),
-                    code: error.public_error().code,
-                    diagnostic: tokens.scrub(&error.to_string()),
+                    code: e.public_error().code,
+                    diagnostic: e.public_error().message,
                     discard_partial: true,
                 });
                 tokio::time::sleep(wait).await;
             }
-            Err(error) => return Err(error),
+            result => return result,
         }
     }
+}
+
+pub(super) fn failure(status: u16, detail: &Value) -> AiError {
+    let code = match detail["code"]
+        .as_str()
+        .or_else(|| detail["type"].as_str())
+        .unwrap_or("")
+    {
+        "subscription_sharing_user_not_eligible" => "chatgpt_ineligible",
+        "subscription_sharing_usage_limit_exceeded" | "rate_limit_exceeded" => "chatgpt_limit",
+        "subscription_sharing_usage_unavailable"
+        | "subscription_sharing_user_unavailable"
+        | "server_error"
+        | "overloaded_error" => "chatgpt_temporary",
+        "subscription_sharing_unsupported_capability" => "chatgpt_capability",
+        "subscription_sharing_route_not_supported"
+        | "chatpass_v2_scope_not_authorized"
+        | "chatpass_v2_invalid_authorization_context" => "chatgpt_setup",
+        "subscription_sharing_invalid_user" | "invalid_api_key" | "authentication_error" => {
+            "chatgpt_access"
+        }
+        _ => match status {
+            401 => "chatgpt_access",
+            403 => "chatgpt_policy",
+            429 => "chatgpt_limit",
+            500..=599 => "chatgpt_temporary",
+            _ => "chatgpt_failed",
+        },
+    };
+    AiError::Subscription(code)
+}
+
+/// Remove only the specific optional feature identified by the provider. Required
+/// protocol fields cannot be removed, and an unchanged body is never sent again.
+fn drop_capability(body: &mut Value, param: &str) -> bool {
+    let path = param.replace('[', ".").replace(']', "");
+    let parts: Vec<_> = path.split('.').collect();
+    if !matches!(
+        parts.first().copied(),
+        Some(
+            "input"
+                | "tools"
+                | "reasoning"
+                | "include"
+                | "max_output_tokens"
+                | "parallel_tool_calls"
+        )
+    ) {
+        return false;
+    }
+    if parts == ["input"] {
+        return false;
+    }
+    let mut parent = &mut *body;
+    for key in &parts[..parts.len() - 1] {
+        parent = match parent {
+            Value::Array(a) => match key.parse::<usize>().ok().and_then(|i| a.get_mut(i)) {
+                Some(v) => v,
+                None => return false,
+            },
+            Value::Object(o) => match o.get_mut(*key) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+    }
+    let last = parts[parts.len() - 1];
+    match parent {
+        Value::Object(o) => o.remove(last).is_some(),
+        Value::Array(a) => {
+            let Some(i) = last.parse::<usize>().ok().filter(|i| *i < a.len()) else {
+                return false;
+            };
+            if parts[0] == "input" && parts.len() == 2 && a.len() == 1 {
+                return false;
+            }
+            a.remove(i);
+            true
+        }
+        _ => false,
+    }
+}
+
+pub(super) async fn models(
+    endpoint: &str,
+    tokens: &Tokens,
+) -> Result<Vec<crate::models::ModelInfo>, AiError> {
+    tokens.require_plan()?;
+    let mut retry = RetryBackoff::default();
+    let started = Instant::now();
+    loop {
+        let response = http_client()
+            .get(endpoint)
+            .bearer_auth(&tokens.access_token)
+            .send()
+            .await;
+        let result = match response {
+            Ok(r) if r.status().is_success() => {
+                let value: Value = r
+                    .json()
+                    .await
+                    .map_err(|_| AiError::Subscription("chatgpt_failed"))?;
+                return visible_models(value);
+            }
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let value = r.json::<Value>().await.unwrap_or(Value::Null);
+                failure(status, &value["error"])
+            }
+            Err(_) => AiError::Subscription("chatgpt_temporary"),
+        };
+        if result.code() != "chatgpt_temporary" {
+            return Err(result);
+        }
+        let Some(wait) = retry.next_delay(None, started.elapsed()) else {
+            return Err(result);
+        };
+        tokio::time::sleep(wait).await;
+    }
+}
+fn visible_models(value: Value) -> Result<Vec<crate::models::ModelInfo>, AiError> {
+    let models = value["models"]
+        .as_array()
+        .ok_or(AiError::Subscription("chatgpt_failed"))?;
+    Ok(models
+        .iter()
+        .filter(|m| m["visibility"] == "list")
+        .filter_map(|m| {
+            let id = m["slug"].as_str()?.trim();
+            let label = m["display_name"].as_str()?.trim();
+            (!id.is_empty() && !label.is_empty()).then(|| crate::models::ModelInfo {
+                id: id.into(),
+                label: label.into(),
+            })
+        })
+        .collect())
 }
 
 fn scrub_http_event(tokens: &Tokens, event: StreamEvent) -> StreamEvent {
@@ -146,6 +313,7 @@ fn request(req: &TurnRequest) -> Result<Value, AiError> {
 
 #[derive(Default)]
 struct Events {
+    unsupported: Option<String>,
     call_ids: HashMap<String, String>,
     result: Option<TurnResult>,
 }
@@ -190,7 +358,8 @@ impl Events {
                     });
                 }
             }
-            "response.completed" | "response.incomplete" => {
+            "response.incomplete" => return Err(AiError::Subscription("chatgpt_incomplete")),
+            "response.completed" => {
                 let response = &value["response"];
                 let mut content = Vec::new();
                 let mut refused = None;
@@ -239,14 +408,6 @@ impl Events {
                         category: None,
                         text,
                     }
-                } else if value["type"] == "response.incomplete" {
-                    if response["incomplete_details"]["reason"] == "max_output_tokens" {
-                        StopReason::MaxTokens
-                    } else {
-                        return Err(AiError::Stream(
-                            "ChatGPT did not complete its answer".into(),
-                        ));
-                    }
                 } else if content
                     .iter()
                     .any(|c| matches!(c, ContentBlock::ToolUse { .. }))
@@ -279,23 +440,12 @@ impl Events {
                 return Ok(true);
             }
             "response.failed" | "error" => {
-                let detail = value.pointer("/response/error").unwrap_or(&value);
-                let code = detail["code"]
-                    .as_str()
-                    .or_else(|| detail["type"].as_str())
-                    .unwrap_or("");
-                let status = match code {
-                    "rate_limit_exceeded" => 429,
-                    "server_error" | "overloaded_error" => 503,
-                    "invalid_api_key" | "authentication_error" => 401,
-                    _ => 400,
-                };
-                return Err(response_error(
-                    status,
-                    &json!({"error":detail}).to_string(),
-                    &Value::Null,
-                    "",
-                ));
+                let detail = value
+                    .pointer("/response/error")
+                    .or_else(|| value.get("error"))
+                    .unwrap_or(&value);
+                self.unsupported = detail["param"].as_str().map(str::to_owned);
+                return Err(failure(400, detail));
             }
             _ => {}
         }
@@ -389,19 +539,80 @@ mod tests {
     }
 
     #[test]
-    fn stream_billing_is_terminal_and_overload_is_retryable() {
-        for (code, retryable) in [
-            ("insufficient_quota", false),
-            ("invalid_api_key", false),
-            ("server_error", true),
-            ("rate_limit_exceeded", true),
+    fn subscription_errors_have_their_own_retry_and_account_policy() {
+        for (code, expected) in [
+            (
+                "subscription_sharing_user_not_eligible",
+                "chatgpt_ineligible",
+            ),
+            ("subscription_sharing_usage_limit_exceeded", "chatgpt_limit"),
+            (
+                "subscription_sharing_usage_unavailable",
+                "chatgpt_temporary",
+            ),
+            (
+                "subscription_sharing_unsupported_capability",
+                "chatgpt_capability",
+            ),
+            ("subscription_sharing_route_not_supported", "chatgpt_setup"),
+            ("subscription_sharing_invalid_user", "chatgpt_access"),
+            ("chatpass_v2_scope_not_authorized", "chatgpt_setup"),
+            ("chatpass_v2_invalid_authorization_context", "chatgpt_setup"),
+            ("subscription_sharing_user_unavailable", "chatgpt_temporary"),
         ] {
-            let error=Events::default().read(json!({"type":"response.failed","response":{"error":{"code":code,"message":code}}}), &mut |_|{}).unwrap_err();
-            assert_eq!(error.retryable(), retryable, "{code}");
+            let error = Events::default().read(json!({"type":"response.failed","response":{"error":{"code":code,"message":"fake-secret"}}}), &mut |_| {}).unwrap_err();
+            assert_eq!(error.code(), expected);
+            assert!(
+                !error.retryable(),
+                "The generic API retry policy must not handle SIWC"
+            );
+            assert!(!error.for_window().contains("fake-secret"));
         }
+        for (status, expected) in [
+            (401, "chatgpt_access"),
+            (403, "chatgpt_policy"),
+            (503, "chatgpt_temporary"),
+        ] {
+            assert_eq!(failure(status, &Value::Null).code(), expected);
+        }
+    }
+    #[test]
+    fn incomplete_is_never_success_and_unsupported_body_must_change() {
+        let mut e = Events::default();
+        assert_eq!(e.read(json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}), &mut |_| {}).unwrap_err().code(), "chatgpt_incomplete");
+        assert!(e.result.is_none());
+        let mut body = request(&req()).unwrap();
+        let before = body.clone();
+        assert!(drop_capability(&mut body, "tools[0]"));
+        assert_ne!(before, body);
+        assert!(!drop_capability(&mut body, "store"));
+        assert!(!drop_capability(&mut body, "input"));
+        assert!(!drop_capability(&mut body, "input[0]"));
+        assert!(!drop_capability(&mut body, "tools[999]"));
+        assert!(drop_capability(&mut body, "include"));
+        assert!(!drop_capability(&mut body, "include"));
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+    }
+    #[test]
+    fn models_use_only_visible_slugs_and_display_names() {
+        let models = visible_models(json!({"models":[
+            {"slug":"visible-slug","display_name":"Visible model","visibility":"list"},
+            {"slug":"hidden","display_name":"Hidden model","visibility":"hidden"},
+            {"slug":"missing-label","visibility":"list"}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            models,
+            vec![crate::models::ModelInfo {
+                id: "visible-slug".into(),
+                label: "Visible model".into()
+            }]
+        );
     }
 
     #[tokio::test]
+    #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
     async fn mock_responses_server_gets_only_mizan_requests_and_no_stored_response() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

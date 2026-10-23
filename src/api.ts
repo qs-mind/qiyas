@@ -1946,9 +1946,12 @@ export const explainItem = (item: string, project?: string) => invoke<Explanatio
 /** Explicit check only; Qiyas never opens or scripts Claude login. */
 export type ClaudeCodeStatus = { installed: boolean; compatible: boolean; signed_in: boolean | null; version: string | null; code: string | null };
 export const claudeCodeStatus = (executable?: string | null) => invoke<ClaudeCodeStatus>("claude_code_status", { executable: executable || null });
-export type ChatgptAccount = { signed_in: boolean; display_name: string | null; plan_granted: boolean; available?: boolean };
+export type ChatgptAccount = { signed_in: boolean; display_name: string | null; plan_granted: boolean; available?: boolean; active_id?: string | null; accounts?: { id: string; display_name: string; signed_in: boolean }[]; paused?: boolean; notice?: string | null };
 export const chatgptAccount = () => invoke<ChatgptAccount>("chatgpt_account");
 export const chatgptSignIn = () => invoke<ChatgptAccount>("chatgpt_sign_in");
-export const chatgptSignOut = () => invoke<void>("chatgpt_sign_out");
+export const chatgptSignOut = () => invoke<ChatgptAccount>("chatgpt_sign_out");
+export const chatgptSelectAccount = (id: string | null) => invoke<ChatgptAccount>("chatgpt_select_account", { id });
+export const chatgptResumePlan = () => invoke<ChatgptAccount>("chatgpt_resume_plan");
+export const chatgptModels = () => invoke<ModelInfo[]>("chatgpt_models");
 export const cancelChatgptSignIn = () => invoke<void>("cancel_chatgpt_sign_in");
 export const subscriptionLink = (link: "claude_install" | "chatgpt_limits") => invoke<void>("subscription_link", { link });

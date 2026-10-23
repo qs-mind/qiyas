@@ -5,10 +5,10 @@ instructed this work not to fetch the pages again. The earlier DNS failure is re
 [the preflight transcript](../.local/goal-run/subscription-preflight/transcript.txt) as history;
 it is no longer the reason for stopping implementation.
 
-Claude Code is implemented for Unix. ChatGPT's security and transport components are
-implemented, but production sign-in remains disabled pending the exact SIWC registration
-and endpoint specification requested from the reviewer. This document does not claim that
-ChatGPT sign-in is ready or that an account can never be restricted by its provider.
+Claude Code is implemented for Unix. ChatGPT sign-in is enabled using the exact SIWC wire
+specification supplied by the reviewer on the same date. Automated verification uses fake
+credentials and mock servers only. This is not a guarantee against future provider policy
+changes or account restrictions; the founder performs live acceptance himself.
 
 ## What the verified sources allow
 
@@ -28,12 +28,14 @@ reviewed restriction is: “Use the user's plan only for the application they co
 Do not provide general-purpose API access for other tools.” Qiyas exposes no subscription
 inference endpoint through MCP and never passes the ChatGPT token to Claude Code.
 
-Users must be able to use their ChatGPT plan without paying Qiyas. The provider's own
-eligibility error is shown; Qiyas does not maintain a guessed list of eligible plans.
+Users must be able to use their ChatGPT plan without paying Qiyas. A structured provider
+eligibility error is shown in plain English and Arabic; Qiyas does not maintain a guessed list of eligible plans.
 
-Tokens belong only in the OS keychain, service `qiyas`, account `chatgpt-plan`. The host ID
-file contains only a random UUID. UI responses contain display name and connection state,
-never token values. Mock tests use a synthetic signing key and fake credentials.
+The OS keychain entry `qiyas` / `chatgpt-plan` holds the entire account vault, including the
+opaque `urn:uuid:<random UUID>` host ID. It is generated once and survives sign-out. Each
+account has its own issued client ID and tokens. The account picker exposes only a random
+local ID, display name and connection state. No registration or credential is saved in
+settings.json, a conversation, a token file or logs. Mock tests use a synthetic signing key and fake credentials.
 
 ### Claude Code
 
@@ -90,16 +92,66 @@ runs the real installed Claude Code, starts real ChatGPT sign-in or makes a paid
   [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) and the Claude Code
   legal page. Personal subscription use is not assumed to authorize a commercial hosted
   service or pooled accounts.
-- Complete the SIWC wire specification and button guidance review, mock security and
-  integration checks, platform support, and the founder's live acceptance. Policy
+- Complete the socket-capable mock integration checks, platform support and the founder's
+  live acceptance. The reviewed button label is exactly **Continue with ChatGPT** /
+  **المتابعة باستخدام ChatGPT** and has comparable prominence to the other account controls. Policy
   confirmation is not evidence that an untested implementation works.
 
-## Remaining SIWC details
+## Implemented SIWC contract
 
-The policy excerpts omit the exact authorization/token/Responses endpoints, issuer/JWKS
-URL, host-ID parameter name, how registration returns/reuses a client ID, the resulting
-ID-token audience, refresh-specific rules and button guidelines. A question requesting
-those public details is pending. The code deliberately has no guessed production
-configuration; the Settings button explains that sign-in is unavailable in this build.
-The generic implementation and mocks are preparation for that final wiring, not proof of
-compatibility with OpenAI's current SIWC service.
+- Authorization: `https://auth.openai.com/api/accounts/authorize`; token exchange and refresh:
+  `https://auth.openai.com/api/accounts/oauth/token`, form encoded, with no client secret.
+- Discovery: `https://auth.openai.com/.well-known/openid-configuration`; the issuer must be
+  `https://auth.openai.com`. JWKS and revocation URLs come from discovery. Redirects are
+  disabled. The browser callback binds only to `127.0.0.1`, on a fresh port, at `/auth/callback`.
+- First authorization uses `dynamic_agent_client`, `agent_name_hint=Qiyas`, `ext_agent_host_id`,
+  fresh state/nonce and S256 PKCE. The exact scope is `openid profile email offline_access
+  resource.invoke chatgpt.tokens.use.direct`; resource is `https://api.openai.com/v1`.
+  Reauthorization reuses the issued `oaiapp_...` ID and omits the first-registration hint.
+  The implementation omits optional login and ID-token hints, so authorization URLs contain
+  no tokens. Callback state and client ID must match; consent denial also requires state.
+- Token exchange uses the callback's issued client ID and the exact redirect. An invalid code
+  is discarded and permits one fresh browser attempt. The ID token is checked against the
+  discovered signing keys for signature, issuer, audience, expiry and nonce; `sub` identifies
+  the account. A different account cannot replace an existing registration's identity.
+- Missing plan scope keeps the sign-in but blocks model discovery and inference. Refresh
+  omits scope, includes resource, and replaces access/refresh tokens, expiry and granted
+  scopes together under a session lock. A started rotation and its keychain write keep the
+  lock through cancellation, so sign-out revokes the latest token. Queued requests cannot
+  move to another account. Missing scopes cannot silently inherit plan access.
+  Temporary failures retain saved credentials. Terminal refresh errors clear only tokens
+  and allow one OAuth recovery with the saved client ID. `invalid_client` is a setup error.
+- Account changes cancel requests and reload `GET https://api.openai.com/v1/models`.
+  Only `models[]` entries with `visibility=list` appear; labels use `display_name` and requests
+  send `slug`. This provider never uses OpenAI-compatible base URL settings.
+- Inference uses `POST https://api.openai.com/v1/responses`, bearer authorization,
+  `store:false`, `stream:true`. Only `response.completed` succeeds. Tools, reasoning and
+  usage map to Mizan's existing provider events. Incomplete, failed and broken streams stop.
+- Admission 401 and policy 403 errors do not erase credentials or trigger OAuth loops.
+  Ineligible accounts and setup errors stop. Plan limits pause requests with no invented
+  reset time; the user checks ChatGPT settings and explicitly chooses to try again.
+  Temporary failures use Qiyas's bounded backoff (at most four retries over two minutes).
+  Unsupported optional capabilities are removed only at the identified parameter; the body
+  must change before retry, with a visible notice. Unknown or required parameters stop.
+- Sign-out cancels requests before revocation. It posts the refresh token, its type hint and
+  issued client ID to the discovered revocation endpoint. Empty HTTP 200 is success; network
+  and server failures permit two retries. Local tokens are removed even if confirmation fails,
+  with a message asking the user to remove Qiyas in ChatGPT settings. Host ID and registrations
+  remain in the keychain. Other accounts retain their separate credentials.
+
+## Verification boundary
+
+No real Claude binary, ChatGPT login, live service or paid call is used during checks.
+Socket-dependent Goal S tests carry an explicit `Requires a socket-capable runner` annotation.
+The reviewer runs them with the build prefix appropriate to their checkout:
+
+```sh
+CARGO_TARGET_DIR=/home/kareem/Work/qs-mind/qiyas/.local/wt/goal-s/target \
+CARGO_BUILD_JOBS=3 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
+cargo test --offline -p qiyas-ai --lib chatgpt_plan:: -- --ignored --test-threads=1
+```
+
+These tests cover mock callback/token/discovery/Responses endpoints, rotation, terminal
+refresh failures, revocation, model lists, unsupported features, limits and broken streams.
+They are separate from the non-socket security/unit tests and the stdio MCP drawing acceptance
+jobs. See the Goal S report for actual commands, counts and artifact paths.

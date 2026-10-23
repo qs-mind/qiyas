@@ -1,220 +1,203 @@
 # Goal S: subscription providers
 
-Worktree: `.local/wt/goal-s`, branch `goal/s`. No commit or push was made.
-
-**Goal S is not ready for production.** The Claude Code path is implemented for Unix and
-Work autonomously mode. ChatGPT security and Responses components are implemented, but
-production sign-in is deliberately disabled until the reviewer supplies the exact public
-SIWC wire specification. The founder's supplied live-policy verification is accepted;
-no network fetch was attempted after the instruction not to fetch again.
+Worktree: `.local/wt/goal-s`, branch `goal/s`. No commit or push. The reviewer supplied the
+verified terms and exact SIWC wire specification on 23 October 2026. No pages were fetched
+again, and no real account, real Claude executable, real token or paid call was used.
 
 ## 1. Changes by requested item
 
-| Item | Before | After |
+| Item | Before this completion | After |
 | --- | --- | --- |
-| ChatGPT plan provider | No OAuth or Responses adapter | PKCE/state/nonce, bounded loopback callback, RSA ID-token validation, explicit plan scope, keychain-only tokens, opaque stable host ID, refresh and streamed Responses components with synthetic tests. Real sign-in is disabled; exact registration and endpoint wiring and official button guidance remain incomplete. |
-| Claude subscription provider | No native subscription provider | Uses only the selected installed executable or PATH. Runtime help checks, strict private MCP, exactly three allowed tools, disabled built-in tools/settings/hooks, sanitized environment, dedicated empty working folder, session resume, plain activity/errors, and cancellation signals. No SDK, adapter, bundled executable, credentials or login automation. |
-| Individual use | No unconditional Claude evaluation prohibition | One inference process per user message, one active process across conversations, no Qiyas retries or polling, and unconditional case-insensitive `eval-agent --agent claude` refusal, including custom commands. |
-| API-key providers | Scoped keys and provider errors from Goal E | Existing API transports and defaults retained. New subscription kinds are explicitly excluded from API-key lookup and model discovery. |
-| Settings and language | Two providers | Four named providers with one-sentence English/Arabic descriptions. Claude has terminal login instructions, path selection, explicit status check and official installation link. ChatGPT has account/sign-in/sign-out/plan-limit controls; this build explains that sign-in is unavailable. Existing Arabic font rules remain in place. |
-| Documentation and release gates | No subscription implementation guide | Subscription permission/release document, this report, CLAUDE.md behavior updates and license notes. OpenAI paid/hosted interest form and Anthropic Commercial Terms remain release gates. |
-| Credentials and safety tests | API-key tests only | Fake CLI records arguments/environment/cwd; Linux sentinel watches credential-file opens; mock keychain and synthetic OIDC keys; scope rejection, token redaction, stable host ID, CLI cancellation, resume and native-turn retry/approval guards. HTTP integration tests retain their socket requirements. |
+| ChatGPT plan | `reviewed_protocol()` always refused; the generic adapter was not enabled | Official authorization/token/discovery/Responses endpoints, exact resource/scopes, browser PKCE/state/nonce, `127.0.0.1` callback and issued client IDs. ID-token signature, issuer, audience, expiry, nonce and identity are checked. |
+| Consent | Missing plan scope rejected sign-in | Identity stays signed in; model discovery and inference refuse without `chatgpt.tokens.use.direct`. Consent denial validates state and stops. |
+| Registration and storage | One token record; host UUID in a separate file | One OS keychain vault (`qiyas` / `chatgpt-plan`) holds the stable `urn:uuid:...` host ID, separate registrations, active account and tokens. Sign-out keeps host ID and issued client IDs. Account identity and client ID must both match before replacing credentials. Distinct earlier registrations remain available for sign-out. |
+| Refresh and recovery | Generic refresh without the final wire contract | Resource included, scope omitted, refreshes serialized, new tokens/expiry/scopes saved together. Verification keys are fetched before rotation. Rotation and keychain writes retain the lock through cancellation; queued requests cannot move to another account. Temporary failures retain credentials; terminal refresh errors clear only tokens and permit one OAuth recovery with the saved registration. Invalid client is a setup error. |
+| Sign-out | Local deletion only | Cancels active requests, discovers revocation endpoint, posts the refresh token/type/client ID, accepts empty 200, retries transient failures twice, clears local tokens even if unconfirmed, and tells the user how to disconnect in ChatGPT settings. |
+| Responses | Generic API retry handling; incomplete output could count as success | Only completed responses succeed. SIWC-specific English/Arabic errors, bounded transient backoff, persistent plan-limit pause, and changed-body retry for named optional unsupported features. Admission 401 never erases credentials or loops OAuth. Tools, reasoning and usage retain existing Mizan events. |
+| Settings | Disabled ChatGPT button and manually typed model | Exact **Continue with ChatGPT** / **المتابعة باستخدام ChatGPT**, account picker, Sign out, plan note and limits link. Models are fetched for the active account, filtered by `visibility=list`, labelled by `display_name` and sent by `slug`. Switching accounts clears the list and stops requests. |
+| Claude Code | Already implemented in the starting point | Kept unchanged: installed unmodified CLI only, isolated private MCP and tools, sanitized environment, no credential access or scripted login, individual turns, no Qiyas retries/evals, runtime help checks and Unix cancellation. |
+| API keys | Existing Anthropic and OpenAI-compatible providers | Their transports, key storage, defaults and error policy are unchanged. No subscription fallback to paid API calls. |
+| Policy/docs | Policy verified, exact SIWC details pending | Exact supplied protocol documented; OpenAI paid/hosted interest form and Anthropic Commercial Terms remain release gates. Plan usage remains free to the user and limited to Mizan's own requests. No general proxy or token pass-through. |
 
-The Claude native loop cannot currently enforce Qiyas's per-job/per-phase approval pauses.
-Those modes are refused before any process starts; they are never silently bypassed.
-Non-Unix platforms also refuse the provider because safe cancellation is not implemented
-there. The private MCP attributes changes to Mizan so Undo works and preserves the original
-user text for file-access authority. A cancelled request is not merged into the next native
-CLI prompt.
+The old test expecting missing scope to reject the whole sign-in was corrected because
+that encoded the wrong behavior under the supplied specification. It now proves that
+identity is retained and inference is refused. Refresh tests now require the returned
+rotated token and replace, rather than inherit, granted scopes. Security assertions were
+not removed. Socket tests remain explicit acceptance requirements for the reviewer.
 
-## 2. Files touched
+## 2. Files touched in this completion
 
 - `CLAUDE.md`
-- `Cargo.lock`
-- `LICENSES/README.md`
-- `crates/qiyas-ai/Cargo.toml`
-- `crates/qiyas-ai/src/agent.rs`
 - `crates/qiyas-ai/src/chatgpt_plan.rs`
 - `crates/qiyas-ai/src/chatgpt_plan/oauth.rs`
 - `crates/qiyas-ai/src/chatgpt_plan/responses.rs`
-- `crates/qiyas-ai/src/claude_code.rs`
-- `crates/qiyas-ai/src/lib.rs`
-- `crates/qiyas-ai/src/mcp.rs`
-- `crates/qiyas-ai/src/provider.rs`
-- `crates/qiyas-ai/src/provider_error.rs`
-- `crates/qiyas-ai/tests/fixtures/README.md`
-- `crates/qiyas-ai/tests/fixtures/claude.py`
-- `crates/qiyas-ai/tests/fixtures/fake-oidc-jwks.json`
-- `crates/qiyas-ai/tests/fixtures/fake-oidc-private.der`
-- `crates/qiyas-cli/src/eval_agent.rs`
-- `crates/qiyas-desktop/src/ai.rs`
-- `crates/qiyas-desktop/src/commands.rs`
+- `crates/qiyas-ai/src/chatgpt_plan/tests.rs`
 - `crates/qiyas-desktop/src/lib.rs`
-- `crates/qiyas-desktop/src/secrets.rs`
-- `crates/qiyas-desktop/src/settings.rs`
 - `crates/qiyas-desktop/src/subscriptions.rs`
-- `docs/2026-10-23-qiyas-goal-s.md`
-- `docs/2026-10-23-qiyas-subscriptions.md`
-- `src/ai/AssistantPanel.tsx`
-- `src/ai/messages.test.ts`
-- `src/ai/messages.ts`
 - `src/api.ts`
-- `src/i18n/ar.json`
-- `src/i18n/en.json`
-- `src/i18n/errors.ts`
-- `src/shell/SettingsDialog.test.tsx`
 - `src/shell/SettingsDialog.tsx`
-- `src/shell/SubscriptionSettings.test.tsx`
 - `src/shell/SubscriptionSettings.tsx`
+- `src/shell/SubscriptionSettings.test.tsx`
+- `src/i18n/en.json`
+- `src/i18n/ar.json`
+- `docs/2026-10-23-qiyas-subscriptions.md`
+- `docs/2026-10-23-qiyas-goal-s.md`
 
-Worktree-local evidence helpers: `.local/mcp_client.py`, `.local/inspect_audit_xlsx.py`,
-`.local/subscription_drawing_jobs.py`, `.local/subscription_sample_boq.py`, and
-`.local/subscription_cli_refusal.py`. Their inputs, transcripts, PNGs and retained binary
-are under `.local/goal-run/`; none was written to another checkout.
+No dependencies were added; LICENSES and third-party inventories are unchanged.
+Worktree-local MCP acceptance helpers and evidence remain under `.local/`.
 
-The `libc`, `ring` and `url` versions were already in the lockfile and third-party inventory.
-The inventory was regenerated with no entry changes; LICENSES/README.md records their direct
-use and the synthetic fixtures. No Claude SDK, adapter or binary is bundled.
+## 3. Checks and real results
 
-## 3. Checks and actual results
+All Cargo commands use this completion's isolated build prefix:
 
-All Cargo commands used the shared target directory, four build jobs, disabled debug
-information and disabled incremental compilation. No real provider, installed Claude
-executable, account credential, login or paid call was used.
+```sh
+CARGO_TARGET_DIR=/home/kareem/Work/qs-mind/qiyas/.local/wt/goal-s/target \
+CARGO_BUILD_JOBS=3 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
+```
 
-| Check | Result | Evidence under `.local/goal-run/` |
-| --- | --- | --- |
-| `cargo fmt --all` | Passed; later Rust edits were formatted directly with rustfmt | `subscription-fmt.log` |
-| `cargo clippy --offline --workspace --all-targets -- -D warnings` | Passed; final AI follow-up recorded below | `subscription-clippy.log` |
-| `cargo test --offline -p qiyas-ai -p qiyas-desktop -p qiyas-cli --no-fail-fast` | 430 passed, 46 failed, one existing private-fixture test ignored. Every failure reported a denied local socket | `subscription-rust-tests.log`, `subscription-rust-summary.json` |
-| Required `qiyas-ai --lib --test surface --test agent --no-fail-fast` after the native approval/retry fixes | 160 passed, 35 failed, all at denied local socket binds. Library: 100/5; surface: 57/0; agent: 3/30 | `subscription-ai-required.log` |
-| `tsc --noEmit` | Passed | `subscription-tsc-final.log` |
-| Full `vitest run --maxWorkers=2` | 118 files, 872 tests passed | `subscription-vitest-final.log` |
-| Translation/account tests after the approval-mode message was added | Three files, nine tests passed | `subscription-translations-final.log` |
-| License inventory | Regenerated successfully; entries unchanged | `subscription-licenses.log` |
-| Production credential-path scan and fake child environment | No credential paths matched, no provider credential variables passed, sentinel never opened | `subscription-fakes/credential-scan.json` |
+- `cargo fmt --all`: passed; `.local/goal-s-fmt-final.log`.
+- `node_modules/.bin/tsc --noEmit`: passed; `.local/goal-s-tsc-final.log`.
+- `node_modules/.bin/vitest run --maxWorkers=2`: 118 files, 877 tests passed;
+  `.local/goal-s-vitest-final.log`. Includes account switching, slug selection, retained
+  sign-in without scope, unconfirmed sign-out, explicit limit resume and the Arabic button.
+- Production ChatGPT source storage audit: passed; no file I/O, Claude credential access or
+  backend-api path in the reviewed modules. `.local/goal-run/subscription-chatgpt-storage-audit.json`.
+- `cargo check --offline -p qiyas-ai -p qiyas-desktop --all-targets`: passed;
+  `.local/goal-s-check-targets.log`. The initial check found a form-serializer lifetime
+  across the revocation request; encoding before the async request fixed it.
+- `cargo clippy --offline --workspace --all-targets -- -D warnings`: passed;
+  `.local/goal-s-clippy-final.log`.
+- `cargo build --offline -p qiyas-cli`: passed; `.local/goal-s-build-cli-final.log`.
+  The isolated cold build took 19 minutes; the final source rebuild took 27 seconds.
+  `.local/goal-run/subscription-build-provenance.json` records the accepted binary hash.
+- Final formatting verification: `cargo fmt --all -- --check` passed after the last edits;
+  `.local/goal-s-fmt-check-final.log`. Workspace Clippy was also rerun after the cancellation
+  fixes and passed for the final source.
+- `cargo test --offline --no-fail-fast -p qiyas-ai -p qiyas-desktop -p qiyas-cli`:
+  exit **101**; **437 passed, 44 failed with socket permission errors, 13 ignored**.
+  All 44 failure traces report `Operation not permitted` / `PermissionDenied`; none is
+  a failed ChatGPT assertion. Two subprocess result lines are excluded from the totals
+  because their parent tests are already counted. `.local/goal-s-rust-tests-final.log` and
+  `.local/goal-run/subscription-rust-test-summary.json` contain the evidence.
 
-The complete socket-failure list is in `subscription-port-failures.md`. It includes the
-new mock OAuth callback, OAuth token/JWKS, Responses and private Claude MCP tests; the
-existing model-discovery, agent HTTP, key-safety and MCP tests; and two existing desktop
-socket tests. Tests were not skipped, weakened or relabelled as passes.
+  | Crate | Passed | Socket failures | Ignored |
+  | --- | ---: | ---: | ---: |
+  | qiyas-ai | 220 | 42 | 13 |
+  | qiyas-cli | 94 | 0 | 0 |
+  | qiyas-desktop | 123 | 2 | 0 |
 
-Earlier development checks caught an unresolved import while Cargo waited on an older
-manifest and a source-scan false positive on the official `code.claude.com` installation
-link. Both were corrected. The scan still rejects credential paths; it excludes only the
-official URL and translation-key prefix. A later review found that HTTP retry diagnostics
-needed to scrub refresh and ID tokens as well as the access token; that is fixed and
-covered by a passing regression test.
+  The required AI `--lib`, `--test surface` and `--test agent` targets are included:
+  together **166 passed, 32 socket failures, 12 deferred**. Surface passed all 57 tests.
+  All **15 ChatGPT tests that need no socket passed**, covering OIDC validation, exact
+  authorization parameters, consent/client binding, scope refusal, stable host/account
+  separation, errors, models, streams, token redaction, limit pause and cancellation safety.
+  All **12 ChatGPT HTTP/loopback mocks** are explicitly deferred. The thirteenth ignored
+  test is the pre-existing takeoff acceptance case.
+  The fake Claude argv/environment/cwd/resume, cancellation, credential sentinel/source
+  checks and CLI evaluation refusal passed. Its private HTTP MCP integration needs sockets.
+  The desktop mock-keychain test passed.
 
-Additional final checks:
+The current sandbox rejects creation of an IPv4 TCP socket with `EPERM` (errno 1);
+`.local/goal-run/subscription-socket-probe.json` records the local-only probe. The 12
+socket-dependent ChatGPT tests have `Requires a socket-capable runner` annotations and
+are not counted as passed here. The reviewer must run:
 
-- CLI build passed: `subscription-cli-build.log`. The retained binary is
-  `.local/goal-run/qiyas-cli`; its SHA-256 is in `subscription-cli-sha256.txt`.
-- Final AI lint after the retry-redaction, approval and callback fixes passed:
-  `subscription-clippy-ai-final.log`.
-- Final OAuth callback regression passed (one test): `subscription-callback-final.log`.
-  Mixed success/error callbacks and token-bearing callbacks are rejected without exposing secrets.
-- `git diff --check` passed.
+```sh
+CARGO_TARGET_DIR=/home/kareem/Work/qs-mind/qiyas/.local/wt/goal-s/target \
+CARGO_BUILD_JOBS=3 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
+cargo test --offline -p qiyas-ai --lib chatgpt_plan:: -- --ignored --test-threads=1
+```
+
+Use the same Cargo prefix. These tests exercise local mock OAuth, discovery, JWKS,
+revocation, models and Responses servers, including concurrent refresh, terminal refresh
+recovery, limit pause, changed-body retry, broken streams and request cancellation.
+No command in this report should be pointed at a live account for automated verification.
 
 ## 4. End-to-end evidence
 
-All paths below are inside this worktree. The CLI snapshot was built from this worktree;
-the stdlib client invokes `qiyas-cli mcp --drawing ... --workdir ...` over stdin/stdout.
-The later OAuth-only callback hardening is checked separately; the retained CLI snapshot
-covers the headless and evaluation-refusal paths exercised here.
+The fresh isolated `target/debug/qiyas-cli mcp --drawing … --workdir …` ran the stdlib
+Python acceptance helpers. These are drawing/tool tests, not claims of live subscription
+verification or substitutes for the mock HTTP acceptance above.
 
-### Drawing and Arabic, four units
+| Run | Read-back evidence | Artifacts |
+| --- | --- | --- |
+| Four unit cases | Each starts with one line, adds a 4 m × 3 m outline and bilingual labels, and measures **12 m²** in mm, cm, m and in. Every mutation has entity/object/layer readbacks. Save adds the expected measurement outline; reopening preserves geometry and labels. The saved sidecar contains the 12 m² measurement. | `.local/goal-run/subscription-drawing-v4-{mm,cm,m,in}/transcript.jsonl`, each `reopened/transcript.jsonl`, and `.local/goal-run/subscription-drawing-summary.json` |
+| Sample BOQ | Six measurements: 42 m, 14 m, 58.29 m², 22.09 m², 3 doors and 5 windows. Comparison produces the two expected conflicts (A.4 and B.2). Exported workbooks are read back with the stdlib inspector. | `.local/goal-run/subscriptions-sample-boq-v3/transcript.jsonl`, exports and summary in that directory; `.local/goal-s-mcp-boq-final.log` |
+| Claude evaluation refusal | `claude`, `CLAUDE`, and `claude` with a custom command are refused before a client starts. The custom-command marker is never created. | `.local/goal-run/subscription-cli-refusal/transcript.json`; `.local/goal-s-cli-refusal-final.log` |
 
-`.local/subscription_drawing_jobs.py` passed in **mm, cm, m and inches**. Each starts with
-one seed line, creates a closed 4 m × 3 m outline, adds a 12 m² takeoff and English/Arabic
-labels, reads back after every mutation, saves, reads the takeoff sidecar and reopens the
-saved geometry. The original geometry and both exact label strings survive. A request
-for the unavailable window returns `needs_window` and makes no drawing change.
+Visual inspection completed for the before image, all four unit-case after images and the
+sample BOQ capture. The measured outline and English/Arabic 12 m² labels are visible in
+all four cases; the sample drawing shows the two comparison callouts.
 
-For each unit, use:
+- Before: `.local/goal-run/subscription-drawing-v4-mm/0004-before-0.png`
+- After: `.local/goal-run/subscription-drawing-v4-{mm,cm,m,in}/0025-after-0.png`
+- Sample BOQ: `.local/goal-run/subscriptions-sample-boq-v3/0125-sample-plan-0.png`
+- Drawing run log: `.local/goal-s-mcp-drawings-final.log`
 
-- `.local/goal-run/subscription-drawing-v3-<unit>/transcript.jsonl`
-- `.local/goal-run/subscription-drawing-v3-<unit>/reopened/transcript.jsonl`
-- `.local/goal-run/subscription-drawing-v3-<unit>/0004-before-0.png`
-- `.local/goal-run/subscription-drawing-v3-<unit>/0025-after-0.png`
+The headless MCP contract reopens a standalone drawing without loading its project sidecar;
+its reopened takeoff count is therefore zero. The separate sidecar readback proves the
+measurement was saved. This behavior is unchanged. Asking for a window screenshot in
+headless mode returns `needs_window` without changing drawing contents.
 
-The seed PNG and all four final PNGs were opened and inspected. The outline and both
-labels are clear. Numerical results are in `subscription-drawing-summary.json`, with
-12 m² in all four units within floating-point tolerance.
+## 5. Remaining acceptance and founder decisions
 
-The first harness incorrectly expected saving a takeoff not to add its derived area
-outline. The corrected check verifies the one new outline's layer and 12 m² area, and
-that every original entity survives. The next harness incorrectly expected standalone
-MCP reopening to load the adjacent project. `headless.rs` explicitly excludes sidecars;
-the corrected check reads the saved project separately, verifies its quantity and source
-handle, and verifies that standalone reopening retains geometry without importing the
-sidecar. The earlier transcripts and failed assertions remain in the non-v3 folders.
-No product test was weakened and no production behavior changed to satisfy the harness.
+- The reviewer runs socket-dependent mocks on a socket-capable runner. The founder alone
+  tests live sign-in, model availability, plan usage and sign-out on his own accounts.
+- Before paid/hosted ChatGPT distribution, complete OpenAI's interest form and resulting
+  requirements. Products running Claude Code need the applicable Anthropic Commercial Terms.
+- Existing Claude limitations remain: Unix cancellation only, and **Work autonomously**
+  mode only. Per-job/per-phase approvals and other platforms are refused, never bypassed.
+- Provider terms and account eligibility remain controlled by the providers. The supplied
+  verification is dated 23 October 2026; no unsupported credential route has been added.
 
-### Sample takeoff and BOQ
+## Socket-dependent failures for the reviewer
 
-The copied audit workflow `.local/subscription_sample_boq.py` passed. Quantities are
-**42 m, 14 m, 58.29 m², 22.09 m², 3 doors and 5 windows**. Comparison identifies exactly
-**A.4 and B.2**. Both exported workbooks were reopened with the stdlib XML/ZIP reader;
-quantity totals are 56 m, 80.38 m² and 8 items. No rate calculation was added.
+These existing test assertions were retained. Each failed before completing its local
+server setup in this sandbox; rerun them on a socket-capable runner.
 
-Evidence:
-
-- `.local/goal-run/subscriptions-sample-boq-v2/transcript.jsonl`
-- `.local/goal-run/subscriptions-sample-boq-v2/verified-results.json`
-- `.local/goal-run/subscriptions-sample-boq-v2/takeoff-workbook-readback.json`
-- `.local/goal-run/subscriptions-sample-boq-v2/conflicts-workbook-readback.json`
-- `.local/goal-run/subscriptions-sample-boq-v2/0125-sample-plan-0.png`
-
-The sample PNG was opened and inspected. Its room geometry and both conflict annotations
-are visible; the smaller conflict note remains dense at this overview scale. This is not
-a claim that the parallel drawing-quality goal has passed. The first copied workbook
-inspector still restricted paths to `.local/audit/`; its worktree copy now restricts reads
-to this worktree's `.local/goal-run/` instead.
-
-The transcript scan `subscription-e2e-readback-scan.json` found no repeated mutation
-requests, no unexpected tool errors, and no reverted requested geometry in these jobs.
-Only the four deliberate headless screen requests return errors.
-
-### Fake CLI, credentials and evaluation refusal
-
-- `.local/goal-run/subscription-fakes/claude-argv-environment.jsonl`: fake help/version,
-  two user turns, exact permitted tools, strict MCP, isolated settings, resume and cwd.
-- `subscription-fakes/claude-events.txt`: the plain stream delivered to Mizan.
-- `subscription-fakes/sentinel.json` and `credential-scan.json`: no sentinel opens,
-  no forbidden environment variables, no production credential-path access found.
-- `subscription-fakes/claude-sigint.jsonl` and `claude-sigterm.jsonl`: interruption and
-  escalation. The passing test checks the five-second wait and permit lifetime.
-- `.local/goal-run/subscription-cli-refusal/transcript.json`: the built CLI refuses bare,
-  uppercase and custom-command `--agent claude` forms; the fake command's marker was never
-  created.
-
-The fake process tests pass without sockets. The full fake-process/private-HTTP-MCP test
-is present but cannot bind here. Stdio MCP jobs above establish drawing/tool behavior,
-not a completed native-provider HTTP integration. No real provider chat or live Settings
-screen was used as acceptance evidence.
-
-The existing headless end report still labels these drawing/manual-takeoff jobs as failed
-because they have no recognized submitted items. Quantity and geometry assertions above
-pass independently. That existing job-classification behavior belongs to parallel Goal D;
-this branch does not change it or claim that its report is successful.
-
-## 5. Incomplete work, risks and founder decisions
-
-1. **ChatGPT is disabled.** Supply the exact public SIWC endpoint/issuer/JWKS, host-ID
-   parameter, dynamic registration/client-ID/audience, refresh and button/limits-link
-   details requested from the reviewer. Finish production registration and refresh wiring
-   against that specification. Generic OAuth mocks do not prove current SIWC compatibility.
-2. Run the unchanged socket-based tests in an environment that permits local ports. They
-   are listed individually in `.local/goal-run/subscription-port-failures.md`. The native
-   Claude private-MCP and OAuth/Responses HTTP paths have not passed end-to-end here.
-3. Claude is Unix-only and requires Work autonomously. Add and verify other cancellation
-   platforms and enforced plan-approval pauses before advertising those modes.
-4. The founder alone performs the requested live acceptance using his installed unmodified
-   Claude Code and real ChatGPT login, after the missing wiring and mock checks pass.
-   Actual CLI compatibility, account eligibility, official button appearance, full desktop
-   screenshots and live plan limits have not been verified by this session.
-5. Complete the paid/hosted/commercial release gates in
-   [the subscriptions guide](2026-10-23-qiyas-subscriptions.md). No implementation can
-   guarantee that a provider will never restrict an account; this branch follows the
-   supplied policy constraints and does not promise immunity.
+```text
+models::tests::an_unreachable_service_falls_back_to_the_builtin_list
+claude_code::tests::fake_cli_drives_private_mcp_with_readback_and_undo
+a_marked_region_lists_what_is_in_it
+attached_pictures_go_before_the_words
+an_answer_that_keeps_running_out_stops_at_the_cap
+an_answer_cut_off_before_it_said_anything_is_asked_again_with_more_room
+all_server_failures_retry_with_a_visible_wait_and_identical_request
+a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_the_user
+a_selection_is_listed_and_shown
+a_question_ends_the_turn_cleanly_and_the_answer_carries_on
+api_key_absent_from_logs_and_errors
+billing_is_immediate_and_drawing_errors_never_add_a_takeoff_report
+cancel_stops_within_one_second
+cancel_between_tool_calls_runs_no_more_of_them
+file_tools_without_a_host_say_to_use_the_app
+invalid_output_value_keeps_the_cap_and_does_not_retry
+history_is_append_only_and_system_prompt_is_stable
+malformed_tool_input_still_stops_after_40_calls
+invalid_tool_json_is_answered_with_an_error_and_not_run
+loop_stops_after_40_tool_calls
+partial_usage_chunks_retain_prior_counts_through_the_http_adapter
+openai_compatible_drops_a_refused_field_and_asks_again
+openai_compatible_streams_text_and_tool_calls
+rejected_request_after_find_entities_is_logged_without_retry
+text_stream_is_forwarded_in_order
+refusal_stop_reason_surfaces_category
+tool_use_round_trip_executes_against_the_session
+mid_stream_overload_discards_partial_text_and_keeps_a_retry_log
+old_pictures_give_way_to_a_line
+gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn
+view_image_stops_when_the_image_budget_is_used
+removals_and_resolutions_stop_after_10_in_one_turn
+network_tests::model_discovery_never_follows_a_redirect_with_credentials
+other_origins_are_refused_even_with_the_token
+execute_request_ids_replay_without_another_mutation_or_ui_event
+concurrent_counts_both_land
+tool_errors_are_error_results
+lists_the_catalogue_and_measures_as_mcp
+a_restart_on_the_same_port_binds_again
+sheet_layer_and_zoom_changes_reach_the_window
+a_wrong_token_is_refused_with_401
+view_image_is_an_image_block
+commands::tests::the_mcp_server_follows_the_settings
+credentials_follow_the_saved_address_and_never_a_draft
+```
