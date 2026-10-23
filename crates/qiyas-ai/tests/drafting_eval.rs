@@ -571,8 +571,10 @@ async fn a_flange_uses_the_same_surface_without_building_rules() {
                     json!({"type": "center_mark", "targets": [{"$step":0,"pointer":"/added/0"}]}),
                     json!({"type": "new_layer", "name": "DIMS"}),
                     json!({"type": "set_current", "current": {"layer": "DIMS"}}),
-                    json!({"type": "dimension", "kind": "diameter",
-                       "target": {"handle": {"$step":0,"pointer":"/added/0"}}, "point": [2,2]}),
+                    // Overall diameter as a linear dimension clear of the centre mark: a diameter
+                    // dimension's default text sits on the centre lines (a Qiyas placement follow-up).
+                    json!({"type": "dimension", "kind": "linear",
+                       "p1": [-2,0], "p2": [2,0], "line_point": [0,-2.8]}),
                 ],
             ),
             ScriptCall::FromHistory(flange_verify),

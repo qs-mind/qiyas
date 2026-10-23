@@ -506,7 +506,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Text clusters are geometric hints, not semantic assertions about a legend or a room.
 - `commands {names:[...]}` fetches several schemas in one call. The registry index generates its
   take-off workflow from command/kind `x-takeoff-step` schema metadata. The three tools remain.
-- `takeoff_workflow.txt` guides digest/picture, batched type/rule authoring, recognition, Settings
+- `takeoff_workflow.txt` and its Arabic counterpart guide digest/picture for quantity jobs, batched type/rule authoring, recognition, Settings
   method (project override wins), mappings, self-check and repairs by handle. No case names,
   trade lists, standards text, thresholds or rates are supplied. A named method without rules
   tells Mizan to write rules from its knowledge in its own words, with clause references, through
@@ -557,9 +557,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - MIZAN ALONE remains the priority. No paid eval is part of implementation. The first six-case
   run exposed expensive repeated history, invalid authored definitions and a PDF-only capture
   failure; its 22% coverage is the live baseline, not a target achieved by engine diagnostics.
-- `qiyas-ai/src/history.rs` keeps the newest three tool results whole and summarizes older
-  results once, retaining handles, ids, names, decisions and error codes. The first digest and
-  system prompt remain unchanged for caching; tool ids, arguments and signatures stay paired.
+- `qiyas-ai/src/history.rs` keeps the newest twenty tool results whole and summarizes older
+  results once, retaining handles, ids, names, decisions and error codes. Identical successful
+  reads keep their newest full result rather than duplicate evidence; changed values stay separate. The first digest and the latest successful command/schema lookups remain whole.
+  Pictures follow their separate retention limit. The system prompt stays unchanged; tool ids, arguments and signatures stay paired.
   The older message-count compactor remains the final guard for long conversations.
 - Records default to summaries without null/empty fields, with 12 KB pages; digest previews and capture captions
   are compact. PDF digest entries expose real source paths/pages and document capture arguments.
@@ -575,7 +576,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   contain complete recipes and citations. Recognition and mapping should be published together,
   then extended, so partial work remains measurable if a cap interrupts the run.
 - The provider exposes current budget notices to the agent. At 80% of requests or cost used,
-  or when fewer than two conservative reservations fit, it tells Mizan to stop exploring,
+  or when fewer than two conservative reservations fit, it tells Mizan to stop exploring in a quantity job,
   finish mappings and write the end report. Hard stops report retained quantities locally.
 - Eval always writes `end-report.json` and logs it in both logs, retaining the actual answer,
   measurement report, submission count and self-check. `done` with zero submitted items becomes
@@ -2139,12 +2140,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
   room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
   for each live run.
-- Long conversations are compacted, never ended: past `COMPACT_AT` (300) messages, earlier user
-  turns go, then the current turn's oldest call-and-result pairs, down to `COMPACT_TO` (160),
-  always keeping the newest `KEEP_RECENT` (60) messages whole (`Agent::compact`). A note first
-  in the history keeps the user's earlier requests word for word and one line per step dropped
-  (the newest 80), and tells Mizan to read the drawing for what was done; a later compaction
-  merges into it. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
+- Past `COMPACT_AT` (300), compaction retains the newest 160 messages, rounding out to a
+  complete call/result boundary, plus a first user note. It does not discard all earlier turns.
+  The note preserves every user request block, including merged interrupted requests and long
+  briefs, without clipping. Requests are JSON-escaped reversibly. The newest 80 removed call
+  summaries distinguish successful returns, failures and incomplete calls; success is not
+  described as verified work. Discovered contracts survive in a separate memory block. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
   make room. It replaced a hard stop at 400 that ended a design-package run mid-task.
 - An answer cut off by its length limit before it wrote text or a call (its room went on
   thinking: Gemini through Runware once thought 94 s and wrote nothing) is asked again with
@@ -2184,11 +2185,13 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   drawing's folder; an outside drawing is copied into it. Only that drawing is opened,
   without project sidecars or external drawing resources. PDF page 1 uses eval's uncalibrated
   preparation. `qiyas_capture source picture` works; screen and selection return `needs_window`.
-- MCP `instructions` is exactly `registry().index_text()`, including the generated take-off
-  workflow used by Mizan. `qiyas_execute finish {answer?}` saves the drawing and headless
-  submission; stdin EOF also saves partial work. Outputs are `takeoff.json`, `measurement.json`,
-  `takeoff.xlsx` (generated BOQ and dimensions), `self-check.json`, `conflicts.json`, and
-  `end-report.json`. Each command/batch keeps its existing single undo boundary, source `mcp`.
+- MCP instructions give neutral task rules and the command categories. Quantity workflow is
+  read from `workflow {language: "en"|"ar"}` only when needed. `finish {answer?}` records
+  completion and reports without saving the drawing; `save_drawing` is explicit. Stdin EOF
+  still saves partial work in the run folder. Drawing completion has no requirement for BOQ
+  rows and writes a drawing check in `end-report.json`. Quantity jobs additionally write
+  `takeoff.json`, `measurement.json`, `takeoff.xlsx`, `self-check.json` and `conflicts.json`.
+  Each command/batch keeps its existing single undo boundary, source `mcp`.
 - Headless file paths stay in the workdir; traversal, symlinks, truth, recipes and settings
   are refused. One server owns one drawing; start another process to open a different drawing.
   This host does not supply desktop tabs or a project workspace.
@@ -2744,3 +2747,41 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   a published standard's rules. They check plumbing and persistence, not model knowledge or
   correctness of any standard interpretation. No paid provider is used. Evidence and real
   check results are in `docs/2026-10-23-qiyas-goal-M.md`.
+
+## Goal D: Mizan's judgement (23 October 2026)
+
+- Drawing chats receive no injected take-off workflow or BOQ completion notice. Job scope comes
+  from the request and operations used, not drawing names or layer conventions. Continuations
+  retain their scope; a fresh drawing request resets it. Measuring a handle for a numeric read
+  does not start a take-off. Actual quantity commands and `takeoff_kit` do. The stable system
+  prompt and neutral command index stay cached. Old saved prompts with an unconditional
+  quantity workflow are rebuilt on resume; their tied provider signatures are dropped, while
+  requests and tool results remain. Both fixed prompts remain below 900 words.
+- Workflow and budget guidance follow the chat language. The separate workflow read accepts a
+  language; the kit keeps its existing size bound. Prior injected workflow guidance is removed
+  at the next turn, then supplied only for the current job in the current chat language.
+  Mizan supplies the chat language itself. Drawing budget notices ask for requested checks
+  and remaining work. Confidence and interrupted take-off reports run only for quantity jobs and follow the chat language.
+- `finish` never calls Save, opens Save As, or reports a saved drawing. The default desktop host
+  records completion only. Explicit Save and headless EOF retention remain separate operations.
+- An identical failed or ineffective edit can execute twice; the third is refused with a plain
+  explanation. Reads between attempts do not reset the guard. Successful edits permit another
+  attempt in changed state. MCP retries with the same request ID still return the cached result.
+  Core edit results expose `no_change` from the committed undo revision, including table edits.
+- `redo_own` and typed `REDO` restore the original next redo step only when the caller owns it;
+  typed `UNDO`/`U` use `undo_own`. Handles and the original transaction are preserved. Sheet
+  authority, drawing epoch, and ordinary undo safety still apply.
+- `qiyas_read panel_state {}` reads through the existing window request/reply channel
+  (`ai:panels` / `ai_window_reply`). It returns visible panel folds, the active side tab,
+  current layer, flat/folder mode, expanded groups, selected layer rows, open layer properties,
+  drawing selection and open dialog labels. It uses rendered React state, including choices
+  not saved to storage. It changes nothing and needs no drawing. Headless replies `needs_window`
+  with a plain no-window explanation. A screen capture shows the drawing canvas only.
+- New warnings as well as errors on touched geometry prevent a clean completion. The baseline
+  uses the full check, including findings beyond the display cap. Autonomous work gets up to two
+  correction requests after a premature final answer, then stops as incomplete if findings remain.
+  Phase completion is refused while new findings remain. Existing approval modes retain their
+  pause behavior. Both prompts require readable labels, clear placement, picture review and
+  correction of warnings. Questions about panels authorize explanation, not unsolicited edits.
+- Scripted-provider tests and headless evidence are documented in
+  `docs/2026-10-23-qiyas-goal-D.md`. No paid calls or new dependencies.

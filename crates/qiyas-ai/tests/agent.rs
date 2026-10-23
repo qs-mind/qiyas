@@ -443,7 +443,14 @@ async fn tool_use_round_trip_executes_against_the_session() {
             json!({"op":"run","args":{"command":{"type":"measure_area","points": [[0, 0], [10, 0], [10, 10], [0, 10]]}}})
         );
         assert_eq!(messages[2]["role"], "user");
-        let results = messages[2]["content"].as_array().unwrap();
+        // Goal D: a take-off turn also receives its job guidance once, after the results.
+        let results: Vec<_> = messages[2]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["type"] == "tool_result")
+            .cloned()
+            .collect();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["type"], "tool_result");
         assert_eq!(results[0]["tool_use_id"], "toolu_1");
@@ -614,13 +621,25 @@ async fn malformed_tool_input_still_stops_after_40_calls() {
     .expect("test malformed_tool_input_still_stops_after_40_calls timed out after 60 seconds");
 }
 
-/// Each message of a request body as its JSON text.
+/// User requests and evidence stay unchanged; job-specific guidance expires at a new turn.
 fn serialised(body: &Value) -> Vec<String> {
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .map(Value::to_string)
+        .map(|message| {
+            let mut message = message.clone();
+            if let Some(blocks) = message["content"].as_array_mut() {
+                blocks.retain(|b| {
+                    !b["text"].as_str().is_some_and(|text| {
+                        text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
+                            || text
+                                == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar)
+                    })
+                });
+            }
+            message.to_string()
+        })
         .collect()
 }
 
@@ -657,7 +676,7 @@ async fn history_is_append_only_and_system_prompt_is_stable() {
             "no live take-off in the system prompt"
         );
 
-        // Each request only appends to the one before it.
+        // Evidence and user messages only append; expired job guidance is excluded.
         for pair in reqs.windows(2) {
             let (before, after) = (serialised(&pair[0].body), serialised(&pair[1].body));
             assert!(after.len() > before.len());

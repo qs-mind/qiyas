@@ -1723,5 +1723,7 @@
   "ai.error.no_models": "The service listed no suitable models. Check the service and model in Settings.",
   "effort.none": "None (service default)",
   "settings.rotateToken": "Replace token on Save",
-  "ai.error.takeoff_stopped": "The take-off stopped before completion. Completed quantities were kept."
+  "ai.error.takeoff_stopped": "The take-off stopped before completion. Completed quantities were kept.",
+  "ai.repeatedEdit": "Stopped after two attempts made no change. The requested edit is incomplete.",
+  "ai.unresolvedChecks": "Drawing issues remain. The work is incomplete."
 }

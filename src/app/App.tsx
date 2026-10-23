@@ -391,6 +391,7 @@ export default function App() {
         onUndo={() => history(undo)}
       />
       <div
+        data-open-panel={shell.sideTab}
         className={`middle${panels.hidden.left ? " left-off" : ""}${panels.hidden.right ? " right-off" : ""}`}
         style={{ "--left-w": `${panels.width.left}px`, "--side-w": `${panels.width[rightSlot]}px` } as CSSProperties}
       >

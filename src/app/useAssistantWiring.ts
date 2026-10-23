@@ -24,6 +24,7 @@ import {
 import type { ToolCardItem } from "../ai/messages";
 import { kindsLabel, pointedKey, pointedTargets, regionBounds, regionRing } from "../ai/pointing";
 import { useAssistant } from "../ai/useAssistant";
+import { readPanelState } from "../ai/windowState";
 import type { Lang } from "../i18n";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import type { Tool } from "../shell/Ribbon";
@@ -318,6 +319,7 @@ export function useAssistantWiring({
   const onWindowAsk = useRef({
     capture: async (_id: number, _maxSide: number) => {},
     pointed: (): Omit<AiContext, "picture"> => ({ selection: [], region: null, view: null }),
+    panels: () => readPanelState([]),
     select: (_handles: number[], _zoom: boolean) => {},
   });
   onWindowAsk.current = {
@@ -334,6 +336,7 @@ export function useAssistantWiring({
       }
     },
     pointed: () => ({ selection: attached, region, view: viewport.current?.visible() ?? null }),
+    panels: () => readPanelState(selection),
     select: (handles, zoom) => {
       chooseTool("select");
       measure.select(handles);
@@ -356,6 +359,9 @@ export function useAssistantWiring({
     ).then(keep);
     listen<{ id: number }>(AI_POINTED, (e) =>
       aiWindowReply(e.payload.id, { value: onWindowAsk.current.pointed() }).catch(() => {}),
+    ).then(keep);
+    listen<{ id: number }>("ai:panels", (e) =>
+      aiWindowReply(e.payload.id, { value: onWindowAsk.current.panels() }).catch(() => {}),
     ).then(keep);
     listen<{ handles: number[]; zoom: boolean }>(AI_SELECT, (e) =>
       onWindowAsk.current.select(e.payload.handles, e.payload.zoom),

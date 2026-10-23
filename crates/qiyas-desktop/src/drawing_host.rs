@@ -260,6 +260,10 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         self.state().ai_window.select(&self.app, handles, zoom)
     }
 
+    fn panel_state(&self) -> Result<Value, String> {
+        self.state().ai_window.panels(&self.app)
+    }
+
     fn pointed(&self) -> Result<TurnContext, String> {
         self.state().ai_window.pointed(&self.app)
     }

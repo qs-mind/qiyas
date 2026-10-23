@@ -390,7 +390,15 @@ export const LayersPanel = memo(function LayersPanel({
   }
 
   return (
-    <aside className="layers" aria-busy={busy || undefined}>
+    <aside className="layers" aria-busy={busy || undefined} data-layer-state={JSON.stringify({
+      view: folders ? "folders" : "flat", current: current ?? null,
+      selected: selectedItems.map(id => tree.nodes[id]?.name).filter(Boolean),
+      open_properties: open,
+      rows: instance.getItems().map(item => {
+        const node = item.getItemData();
+        return { name: node.name, kind: node.kind, ...(node.kind === "group" ? { expanded: expanded.includes(item.getId()), count: node.children.length } : { hidden: hidden.has(node.layer.name) }) };
+      }),
+    })}>
       <div className="layers-head">
         <h2 className="heading">{t("layers")}</h2>
         <button type="button" className="link" onClick={onShowAll} disabled={hidden.size === 0 || busy}>
