@@ -52,7 +52,8 @@ elif "-p" in args:
                     while True:
                         line = response.readline()
                         assert line, "MCP response ended before the result"
-                        if line.startswith(b"data: "):
+                        # Servers may send an empty priming event before the result.
+                        if line.startswith(b"data: ") and line[6:].strip():
                             result = json.loads(line[6:])
                             if result.get("id") == sequence:
                                 break

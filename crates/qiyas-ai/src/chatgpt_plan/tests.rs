@@ -2,6 +2,9 @@ use super::*;
 use crate::{ContentBlock, Message};
 use serde_json::json;
 
+// Sign-out and plan pauses act on the whole app (process-wide state), so these tests take turns.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Memory(std::sync::Mutex<Option<String>>);
 impl TokenStore for Memory {
     fn load(&self) -> Result<Option<Vault>, AiError> {
@@ -60,6 +63,7 @@ fn protocol() -> oauth::Protocol {
 }
 #[tokio::test]
 async fn missing_scope_blocks_inference_before_any_network_or_refresh() {
+    let _serial = SERIAL.lock().await;
     let mut token = tokens(&["openid", "profile"]);
     token.expires_at = 0;
     let store = memory(token);
@@ -150,6 +154,7 @@ fn host_is_opaque_stable_across_sign_out_and_accounts_and_is_keychain_only() {
 }
 #[tokio::test]
 async fn plan_limits_pause_requests_until_user_resumes_and_never_clear_tokens() {
+    let _serial = SERIAL.lock().await;
     let store = memory(tokens(&[PLAN_SCOPE]));
     let provider = ChatgptPlan::new(store.clone(), protocol());
     let id = store.load().unwrap().unwrap().active.unwrap();
@@ -243,6 +248,7 @@ fn local_protocol(base: &str) -> oauth::Protocol {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_refresh_rotates_atomically_and_omits_scope_and_secret() {
+    let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
         (200, discovery()), (200,serde_json::from_str(include_str!("../../tests/fixtures/fake-oidc-jwks.json")).unwrap()),
         (200,json!({"token_type":"Bearer","access_token":"fake-rotated-access","refresh_token":"fake-rotated-refresh","expires_in":3600,"scope":format!("openid {PLAN_SCOPE}")})),
@@ -270,6 +276,7 @@ async fn mock_refresh_rotates_atomically_and_omits_scope_and_secret() {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_terminal_refresh_clears_only_tokens_and_network_failures_keep_them() {
+    let _serial = SERIAL.lock().await;
     for code in [
         "invalid_grant",
         "invalid_refresh_token",
@@ -339,6 +346,7 @@ async fn mock_terminal_refresh_clears_only_tokens_and_network_failures_keep_them
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_revocation_accepts_empty_200_and_retries_server_failure() {
+    let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
         (200, discovery()),
         (503, json!({"detail":"temporary"})),
@@ -360,6 +368,7 @@ async fn mock_revocation_accepts_empty_200_and_retries_server_failure() {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_unsupported_feature_changes_the_next_body_and_reports_activity() {
+    let _serial = SERIAL.lock().await;
     let done = json!({"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Measured."}]}],"usage":{}}});
     let (base, server) = mock_server(vec![
         (400,json!({"error":{"code":"subscription_sharing_unsupported_capability","param":"include","message":"fake-id-secret"}})),
@@ -389,6 +398,7 @@ async fn mock_unsupported_feature_changes_the_next_body_and_reports_activity() {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_admission_limit_stops_next_request_and_401_keeps_credentials() {
+    let _serial = SERIAL.lock().await;
     for (status, body, expected) in [
         (
             429,
@@ -443,6 +453,7 @@ async fn mock_admission_limit_stops_next_request_and_401_keeps_credentials() {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_broken_stream_never_succeeds_or_executes_partial_tools() {
+    let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![(
         200,
         json!("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n\n"),
@@ -468,6 +479,7 @@ async fn mock_broken_stream_never_succeeds_or_executes_partial_tools() {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers serially"]
 async fn mock_refresh_is_serial_and_terminal_failure_reauthorizes_once_with_saved_registration() {
+    let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
         (200,discovery()), (200,serde_json::from_str(include_str!("../../tests/fixtures/fake-oidc-jwks.json")).unwrap()),
         (200,json!({"token_type":"Bearer","access_token":"fake-new-access","refresh_token":"fake-new-refresh","expires_in":3600,"scope":PLAN_SCOPE})),
@@ -526,6 +538,7 @@ async fn mock_refresh_is_serial_and_terminal_failure_reauthorizes_once_with_save
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers serially"]
 async fn mock_sign_out_cancellation_stops_an_inflight_request() {
+    let _serial = SERIAL.lock().await;
     use tokio::io::AsyncReadExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -567,6 +580,7 @@ async fn mock_sign_out_cancellation_stops_an_inflight_request() {
 
 #[tokio::test]
 async fn queued_request_cancellation_does_not_wait_or_use_another_account() {
+    let _serial = SERIAL.lock().await;
     let operation = TOKEN_OPERATION.lock().await;
     let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -624,6 +638,7 @@ fn paused_write(
 }
 #[tokio::test]
 async fn cancelled_keychain_waiter_keeps_the_lock_until_the_write_finishes() {
+    let _serial = SERIAL.lock().await;
     let memory = memory(tokens(&[PLAN_SCOPE]));
     let (store, started, release) = paused_write(memory.clone());
     let (operation, mut vault) = load(store.clone()).await.unwrap();
@@ -661,6 +676,7 @@ async fn cancelled_keychain_waiter_keeps_the_lock_until_the_write_finishes() {
 #[tokio::test]
 #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_cancelled_rotation_commits_before_another_account_operation() {
+    let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
         (200, discovery()), (200, serde_json::from_str(include_str!("../../tests/fixtures/fake-oidc-jwks.json")).unwrap()),
         (200, json!({"token_type":"Bearer","access_token":"fake-new-access","refresh_token":"fake-new-refresh","expires_in":3600,"scope":PLAN_SCOPE})),
