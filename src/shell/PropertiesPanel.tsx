@@ -330,7 +330,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     row("props.sheet", sheet, true);
     for (const r of selectionRows(sum, units, precision, t)) into(selected)(r.label, <Value row={r} />, r.prose);
   } else if (entity && editable && onSet) {
-    row("props.handle", entity.handle.toString(16).toUpperCase());
+    row("props.handle", entity.handle.toString());
     row("props.kind", entity.kind);
     row("props.layer", <Choice label={t("props.layer")} value={entity.layer} names={layers} onPick={(v) => onSet("layer", v)} />);
     row(
@@ -345,7 +345,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     row("props.sheet", sheet, true);
     geometryOf(entity, true);
   } else if (entity) {
-    row("props.handle", entity.handle.toString(16).toUpperCase());
+    row("props.handle", entity.handle.toString());
     row("props.kind", entity.kind);
     row("props.layer", <span title={entity.layer}>{entity.layer_short}</span>, true);
     row("props.color", <>{swatch(entity.color_rgb)}{byName(entity.color)}</>);

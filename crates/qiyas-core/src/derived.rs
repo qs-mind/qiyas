@@ -2,7 +2,13 @@
 use crate::{CoreError, Session};
 
 type Pass = fn(&mut Session) -> Result<(), CoreError>;
-const PASSES: &[Pass] = &[objects, views, schedules, boq_rows, fields];
+const PASSES: &[(&str, Pass)] = &[
+    ("object geometry and hosted positions", objects),
+    ("drawing views", views),
+    ("live schedules", schedules),
+    ("measurement rules", boq_rows),
+    ("linked fields", fields),
+];
 fn objects(s: &mut Session) -> Result<(), CoreError> {
     s.migrate_legacy_objects()?;
     s.refresh_objects()?;
@@ -49,10 +55,14 @@ impl Session {
             || self.drawing.doc.app_ids.contains(crate::WALL_APP);
         (exists, exists)
     }
-    pub(crate) fn rederive(&mut self) -> Result<(), CoreError> {
-        for pass in PASSES {
+    pub(crate) fn rederive(
+        &mut self,
+        requested: &mut crate::net_effect::RequestedChanges,
+    ) -> Result<(), CoreError> {
+        for &(name, pass) in PASSES {
             pass(self)?;
+            requested.observe(&self.drawing.doc, name);
         }
-        Ok(())
+        requested.verify(&self.drawing.doc)
     }
 }

@@ -52,6 +52,23 @@ impl Default for ValidationReport {
 }
 
 impl ValidationReport {
+    pub(crate) fn reject_unknown_fields(&mut self) {
+        let warnings = std::mem::take(&mut self.warnings);
+        for issue in warnings {
+            if issue.code == "unknown_field" {
+                self.error(
+                    &issue.code,
+                    &issue.pointer,
+                    issue
+                        .message
+                        .replace("; it is ignored", "; remove it or use a documented field"),
+                );
+            } else {
+                self.warnings.push(issue);
+            }
+        }
+    }
+
     fn deduplicate(&mut self) {
         let mut seen = std::collections::BTreeSet::new();
         self.errors
@@ -143,6 +160,9 @@ fn batch_context_notes(report: &mut ValidationReport) {
 impl Session {
     /// The same dry input check with the current drawing's sizes and annotation scale.
     pub fn validate_input(&self, input: &Value) -> ValidationReport {
+        let mut canonical = input.clone();
+        crate::registry::canonicalize(&mut canonical);
+        let input = &canonical;
         let mut report = validate_command(input, Some(self.drawing.units));
         report.append(self.validate_record_inputs(input));
         if report.valid {
@@ -488,6 +508,9 @@ fn validate_at(
                 }
             }
         }
+    }
+    if info.effect != crate::registry::Effect::Read {
+        report.reject_unknown_fields();
     }
     if info.name == "batch" {
         if let Some(commands) = canonical["commands"].as_array() {

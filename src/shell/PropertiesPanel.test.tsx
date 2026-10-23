@@ -41,7 +41,7 @@ const rows = () =>
 test("a block reference shows its handle, colour, weight and attributes", () => {
   render(<PropertiesPanel entity={door} units="metres" precision={3} sheet="Model" />);
   expect(rows()).toEqual([
-    ["Handle", "2A"],
+    ["Handle", "42"],
     ["Type", "Insert"],
     ["Layer", "A-DOOR"],
     ["Colour", "ACI 4"],

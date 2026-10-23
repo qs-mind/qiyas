@@ -12,7 +12,7 @@ test("shows rule decisions and source handles and follows refreshed generated qu
   fireEvent.click(screen.getByText(/A · Test surface/));
   expect(screen.getByText(/Excluded by rule/)).toBeTruthy();
   expect(screen.getByText(/Test source \/ D1/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "2A · Model · A/1" }));
+  fireEvent.click(screen.getByRole("button", { name: "42 · Model · A/1" }));
   expect(onShow).toHaveBeenCalledWith([42], "Model");
   view.rerender(<GeneratedBoq report={{ ...report, items: [{ ...report.items[0], quantity: 15 }] }} onShow={onShow} />);
   expect(screen.getByText(/A · Test surface · 15 m2/)).toBeTruthy();

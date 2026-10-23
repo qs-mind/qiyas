@@ -22,7 +22,7 @@ export function GeneratedBoq({ report, onShow }: { report: MeasurementReport | n
         {line.decision && <div>{line.decision}</div>}
         {line.sources.map((source) => <button key={`${source.sheet}:${source.handle}`} type="button"
           disabled={!onShow} onClick={() => onShow?.([source.handle], source.sheet)}>
-          {source.handle.toString(16).toUpperCase()} · {source.sheet} · {source.grid ?? t("boq.noGrid")}
+          {source.handle} · {source.sheet} · {source.grid ?? t("boq.noGrid")}
         </button>)}
       </li>)}</ol>
     </details>)}

@@ -387,7 +387,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
                     .sources
                     .iter()
                     .map(|s| format!(
-                        "{drawing} / {:X} / {} / {}",
+                        "{drawing} / {} / {} / {}",
                         s.handle,
                         s.sheet,
                         s.grid.as_deref().unwrap_or("?")

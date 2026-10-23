@@ -395,6 +395,7 @@ impl Session {
         let value = value.replace("\\n", "\n");
         let value = value.as_str();
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
+        self.refuse_generated_edit(&[h], false)?;
         let entity = self.drawing.doc.get_entity(h).expect("a sheet target");
         // Check first, so a refused edit changes nothing.
         let attribute = match (entity, tag) {

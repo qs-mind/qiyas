@@ -242,11 +242,7 @@ impl Session {
                 && !blocks.contains(&owner)
                 && doc.get_entity(owner).is_none()
             {
-                found.add(
-                    AuditKind::OwnerGone,
-                    &format!("{:X}", owner.value()),
-                    Some(h),
-                );
+                found.add(AuditKind::OwnerGone, &format!("{}", owner.value()), Some(h));
             }
             if no_layer(&common.layer) {
                 found.add(AuditKind::MissingLayer, &common.layer, Some(h));
@@ -278,7 +274,7 @@ impl Session {
                     let named = !t.block_name.is_empty() || t.block_record_handle.is_some();
                     if named && qiyas_geom::table_block(doc, t).is_none() {
                         let name = if t.block_name.is_empty() {
-                            format!("{:X}", t.block_record_handle.unwrap_or_default().value())
+                            format!("{}", t.block_record_handle.unwrap_or_default().value())
                         } else {
                             t.block_name.clone()
                         };

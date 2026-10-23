@@ -69,7 +69,9 @@ fn template(record: &ObjectRecord, text: &str) -> Result<String, CoreError> {
         let expr = Expr::parse(expression).map_err(|e| invalid(e.to_string()))?;
         let value = expr.eval_with(&|name: &str| {
             if name == "id_hex" {
-                Some(ExprValue::Text(format!("{:X}", record.instance.id)))
+                // Keep older stored recipes readable, using the same decimal handle that
+                // records and commands expose.
+                Some(ExprValue::Text(record.instance.id.to_string()))
             } else {
                 record_value(record, name).and_then(typed)
             }
@@ -114,6 +116,16 @@ impl Session {
         record: &ObjectRecord,
         name: &str,
     ) -> Result<Option<Value>, CoreError> {
+        if name == "mark" {
+            if let Some(value) = record
+                .instance
+                .props
+                .get(name)
+                .filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+            {
+                return Ok(Some(value.clone()));
+            }
+        }
         if let Some(text) = spec.templates.get(name) {
             return template(record, text).map(|s| Some(Value::String(s)));
         }

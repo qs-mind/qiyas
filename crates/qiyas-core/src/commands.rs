@@ -1016,8 +1016,9 @@ pub enum Command {
         targets: Vec<Target>,
         props: Vec<MatchProp>,
     },
-    /// The palette's edit: one property of the entity `target` at the top of the sheet (see
-    /// `EntityProp` for the values).
+    /// Change one property of `target` on the current sheet. On a generated part, colour,
+    /// linetype and lineweight change its owner and all inherited graphics; other part
+    /// properties are refused with the owner's handle. See `EntityProp` for values.
     #[schemars(extend("x-category" = "modify"))]
     #[schemars(example = json!({"type": "set_property", "target": {"handle": 1234}, "prop": "layer", "value": "A-WALL"}))]
     #[schemars(example = json!({"type": "set_property", "target": {"handle": 1234}, "prop": "viewport_scale", "value": 0.01}))]
@@ -2338,7 +2339,6 @@ impl Session {
             }
             Command::DeleteEntities { targets } => {
                 let outcome = self.delete_entities(&targets)?;
-                self.follow_fields()?;
                 return Ok(outcome);
             }
             Command::Draw(spec) => {
@@ -2359,12 +2359,10 @@ impl Session {
             }
             Command::Modify(spec) => {
                 let outcome = self.modify(spec)?;
-                self.follow_fields()?;
                 return Ok(outcome);
             }
             Command::Edit(spec) => {
                 let outcome = self.edit_entities(spec)?;
-                self.follow_fields()?;
                 return Ok(outcome);
             }
             Command::Text {
@@ -2658,7 +2656,6 @@ impl Session {
                 props,
             } => {
                 self.match_properties(&source, &targets, &props)?;
-                self.follow_fields()?;
                 return Ok(Outcome::Changed);
             }
             Command::Ucs { origin, x_axis } => {
@@ -2719,9 +2716,19 @@ impl Session {
                 prop,
                 value,
             } => {
+                if !matches!(
+                    prop,
+                    crate::EntityProp::Color
+                        | crate::EntityProp::Linetype
+                        | crate::EntityProp::Lineweight
+                ) {
+                    self.refuse_generated_edit(
+                        &[Handle::new(target.handle)],
+                        !matches!(prop, crate::EntityProp::Layer),
+                    )?;
+                }
                 let target = self.object_edit_targets(std::slice::from_ref(&target))[0].clone();
                 self.set_property(&target, prop, &value)?;
-                self.follow_fields()?;
                 return Ok(Outcome::Changed);
             }
             Command::AddConstraint {
@@ -3142,7 +3149,7 @@ impl Session {
             let layer = &doc.get_entity(h).expect("found above").common().layer;
             if doc.layers.get(layer).is_some_and(|l| l.flags.locked) {
                 return Err(CoreError::InvalidCommand(format!(
-                    "Entity {:X} is on the locked layer {layer}: unlock it first",
+                    "Entity {} is on the locked layer {layer}: unlock it first",
                     h.value()
                 )));
             }
@@ -3192,10 +3199,10 @@ impl Session {
             if !chain.is_empty() {
                 return Err(CoreError::InvalidCommand(match xref_of_chain(doc, chain) {
                     Some(name) => {
-                        format!("Entity {h:X} belongs to the xref {name}, which is read-only")
+                        format!("Entity {h} belongs to the xref {name}, which is read-only")
                     }
                     None => {
-                        format!("Entity {h:X} is inside a block: pick the block reference instead")
+                        format!("Entity {h} is inside a block: pick the block reference instead")
                     }
                 }));
             }
@@ -3204,12 +3211,12 @@ impl Session {
                 .ok_or(CoreError::NoSuchEntity(*h))?;
             if Some(entity.common().owner_handle) != sheet {
                 return Err(CoreError::InvalidCommand(format!(
-                    "Entity {h:X} is not on this sheet"
+                    "Entity {h} is not on this sheet"
                 )));
             }
             if let Some(edit) = self.block_edit.as_ref().filter(|e| e.outside.contains(h)) {
                 return Err(CoreError::InvalidCommand(format!(
-                    "Entity {h:X} is locked while block {} is edited in place",
+                    "Entity {h} is locked while block {} is edited in place",
                     edit.name
                 )));
             }

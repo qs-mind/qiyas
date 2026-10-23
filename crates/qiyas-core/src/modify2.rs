@@ -247,7 +247,7 @@ fn tol(p: [f64; 2]) -> Tolerance {
 
 /// "Line 2A": how a message names an entity.
 fn named(e: &EntityType) -> String {
-    format!("{} {:X}", variant_name(e), e.common().handle.value())
+    format!("{} {}", variant_name(e), e.common().handle.value())
 }
 
 fn xy(v: Vector3) -> [f64; 2] {
@@ -695,7 +695,9 @@ impl Session {
         // locked: only what changes may not).
         self.sheet_targets_any(&spec.targets())?;
         let one = |s: &Session, t: &Target| -> Result<Handle, CoreError> {
-            Ok(s.sheet_targets(std::slice::from_ref(t))?[0])
+            let h = s.sheet_targets(std::slice::from_ref(t))?[0];
+            s.refuse_generated_edit(&[h], true)?;
+            Ok(h)
         };
         match spec {
             EditSpec::Trim {
@@ -725,6 +727,7 @@ impl Session {
             }
             EditSpec::Join { targets } => {
                 let handles = self.sheet_targets(&targets)?;
+                self.refuse_generated_edit(&handles, true)?;
                 self.join(&handles)
             }
             EditSpec::Lengthen { target, at_end, by } => {
@@ -735,6 +738,7 @@ impl Session {
             }
             EditSpec::Reverse { targets } => {
                 let handles = self.sheet_targets(&targets)?;
+                self.refuse_generated_edit(&handles, true)?;
                 self.reverse(&handles)
             }
             EditSpec::Offset {
@@ -794,10 +798,12 @@ impl Session {
                     return Err(invalid("The tolerance must be 0 or more"));
                 }
                 let handles = self.sheet_targets(&targets)?;
+                self.refuse_generated_edit(&handles, true)?;
                 self.overkill(&handles, tol.max(1e-15 / self.drawing.units.to_metres()))
             }
             EditSpec::Flatten { targets } => {
                 let handles = self.sheet_targets(&targets)?;
+                self.refuse_generated_edit(&handles, true)?;
                 self.flatten_all(&handles)
             }
         }

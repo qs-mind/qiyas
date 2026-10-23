@@ -158,9 +158,88 @@ pub fn canonicalize(value: &mut Value) {
     if let Some(kind) = info.schema["properties"]["kind"]["const"].as_str() {
         value["kind"] = json!(kind);
     }
+    normalize_handles(&info.schema, value, "");
+    if value["type"] == "set_records" && value["collection"] == "entities" {
+        if let Some(updates) = value["updates"].as_array_mut() {
+            for update in updates {
+                if let Some(n) = handle_number(&update["key"]) {
+                    update["key"] = json!(n);
+                }
+            }
+        }
+    }
     if let Some(commands) = value.get_mut("commands").and_then(Value::as_array_mut) {
         for command in commands {
             canonicalize(command);
+        }
+    }
+}
+
+/// Accept record keys and explicit hexadecimal input without changing the decimal wire form.
+pub fn handle_number(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value.as_str().and_then(|s| {
+            s.strip_prefix("0x")
+                .or_else(|| s.strip_prefix("0X"))
+                .map_or_else(
+                    || s.parse().ok(),
+                    |digits| u64::from_str_radix(digits, 16).ok(),
+                )
+        })
+    })
+}
+
+pub(crate) fn is_handle_field(field: &str) -> bool {
+    matches!(
+        field,
+        "handle"
+            | "handles"
+            | "targets"
+            | "chain"
+            | "centreline"
+            | "insert"
+            | "inserts"
+            | "driver"
+            | "host"
+            | "ids"
+            | "a"
+            | "b"
+            | "dimension"
+    )
+}
+
+fn normalize_handles(schema: &Value, value: &mut Value, field: &str) {
+    let handle_field = is_handle_field(field);
+    if schema["type"] == "integer" && handle_field {
+        if let Some(n) = handle_number(value) {
+            *value = json!(n);
+        }
+        return;
+    }
+    if schema["properties"].get("handle").is_some() && !value.is_object() {
+        if let Some(n) = handle_number(value) {
+            *value = json!({"handle":n});
+        }
+    }
+    for variant in ["anyOf", "oneOf", "allOf"] {
+        if let Some(variants) = schema[variant].as_array() {
+            for sub in variants {
+                normalize_handles(sub, value, field);
+            }
+        }
+    }
+    if let Some(items) = value.as_array_mut() {
+        for item in items {
+            normalize_handles(&schema["items"], item, field);
+        }
+    }
+    if let Some(map) = value.as_object_mut() {
+        if let Some(props) = schema["properties"].as_object() {
+            for (key, sub) in props {
+                if let Some(value) = map.get_mut(key) {
+                    normalize_handles(sub, value, key);
+                }
+            }
         }
     }
 }

@@ -56,7 +56,7 @@ fn every_entity_payload_is_checked_before_create_or_define_block() {
             );
         }
         assert!(report
-            .warnings
+            .errors
             .iter()
             .any(|issue| issue.pointer == "/entities/0/data/typo"));
         assert!(parse_command(command).is_err());
@@ -92,7 +92,7 @@ fn creation_refusals_keep_the_command_hint_in_validation() {
 }
 
 #[test]
-fn ignored_record_fields_are_visible_in_the_command_outcome() {
+fn unknown_record_fields_refuse_the_edit_without_changing_the_drawing() {
     let mut session = Session::new_blank(std::path::Path::new("records.dxf"), 6);
     let command = json!({
         "type":"create_entities",
@@ -100,13 +100,18 @@ fn ignored_record_fields_are_visible_in_the_command_outcome() {
             "start":{"x":0,"y":0},"end":{"x":5,"y":0},"spelling_mistake":10
         }}]
     });
-    let result = serde_json::to_value(session.run_input(&command, Source::User).unwrap()).unwrap();
-    assert_eq!(result["warnings"][0]["code"], "unknown_field");
-    assert_eq!(
-        result["warnings"][0]["pointer"],
-        "/entities/0/data/spelling_mistake"
-    );
-    assert_eq!(session.drawing.doc.entities().count(), 1);
+    let before = session.drawing.doc.entities().count();
+    let history = session.history_steps();
+    let report = session.validate_input(&command);
+    assert!(!report.valid);
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "unknown_field"
+            && issue.pointer == "/entities/0/data/spelling_mistake"));
+    assert!(session.run_input(&command, Source::User).is_err());
+    assert_eq!(session.drawing.doc.entities().count(), before);
+    assert_eq!(session.history_steps(), history);
 }
 
 #[test]

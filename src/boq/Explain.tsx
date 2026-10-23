@@ -63,7 +63,7 @@ export function Explain({ item, project }: { item: string; project?: string }) {
           const [drawing, sheet] = JSON.parse(key) as [string, string];
           const group = evidence.filter(e => e.drawing === drawing && e.sheet === sheet);
           return <button key={key} type="button" onClick={() => { show(group); setOpen(false); }}>
-            {ar ? "إظهار الأدلة" : "Show evidence"} · <bdi>{drawing.split(/[\\/]/).pop()} · {sheet} · {group.map(e => e.handle.toString(16).toUpperCase()).join(", ")}</bdi>
+            {ar ? "إظهار الأدلة" : "Show evidence"} · <bdi>{drawing.split(/[\\/]/).pop()} · {sheet} · {group.map(e => e.handle).join(", ")}</bdi>
           </button>;
         })}
       </>}

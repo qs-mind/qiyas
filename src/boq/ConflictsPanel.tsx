@@ -112,7 +112,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
       },
       {
         id: "grid", header: t("conflicts.grid"), size: 100,
-        cell: (c) => c.query?.references.map((r) => `${r.sheet} / ${r.grid ?? t("conflicts.unassigned")} (${r.handle.toString(16).toUpperCase()})`).join(", ") ?? "—",
+        cell: (c) => c.query?.references.map((r) => `${r.sheet} / ${r.grid ?? t("conflicts.unassigned")} (${r.handle})`).join(", ") ?? "—",
       },
       {
         id: "reason",

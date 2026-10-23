@@ -125,7 +125,7 @@ impl Session {
                 EntityType::Arc(arc) => (arc.center, arc.radius, arc.normal),
                 _ => {
                     return Err(invalid(format!(
-                        "Entity {:X} is not a circle or arc",
+                        "Entity {} is not a circle or arc",
                         handle.value()
                     )))
                 }
@@ -162,7 +162,7 @@ impl Session {
             Some(EntityType::Line(line)) => {
                 Ok(([line.start.x, line.start.y], [line.end.x, line.end.y]))
             }
-            _ => Err(invalid(format!("Entity {handle:X} is not a line"))),
+            _ => Err(invalid(format!("Entity {handle} is not a line"))),
         };
         let (a0, a1) = endpoints(a)?;
         let (b0, b1) = endpoints(b)?;

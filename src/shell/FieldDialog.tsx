@@ -131,7 +131,7 @@ export function FieldDialog(props: Props) {
           <div className="field-target">
             <span>
               {target
-                ? t("insertField.object", { kind: target.kind, handle: target.handle.toString(16).toUpperCase() })
+                ? t("insertField.object", { kind: target.kind, handle: target.handle })
                 : t("insertField.noObject")}
             </span>
             <button type="button" onClick={props.onPick}>

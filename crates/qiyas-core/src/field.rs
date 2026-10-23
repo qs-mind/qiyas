@@ -479,6 +479,19 @@ impl Session {
             for (a, b) in code_spans(text) {
                 out.push_str(&text[at..a]);
                 let original = &text[a..b];
+                if let Code::ObjectValue(ids, name, decimals) = parse_code(original) {
+                    let mut replaced = std::collections::BTreeSet::new();
+                    for id in ids {
+                        replaced.extend(mapping.get(&id).cloned().unwrap_or_else(|| vec![id]));
+                    }
+                    out.push_str(&crate::object_schedules::object_value_code(
+                        &replaced.into_iter().collect::<Vec<_>>(),
+                        &name,
+                        decimals,
+                    ));
+                    at = b;
+                    continue;
+                }
                 let selection = match parse_code(original) {
                     Code::Area(h) => Some((vec![h], true)),
                     Code::Length(h) => Some((vec![h], false)),
@@ -556,7 +569,8 @@ impl Session {
                 }
             }
         }
-        self.follow_fields()
+        // Evaluate after geometry and schedules finish, in the shared derivation pass.
+        Ok(())
     }
 
     /// True when following fields may draw a table's block again: a table holds a field reading

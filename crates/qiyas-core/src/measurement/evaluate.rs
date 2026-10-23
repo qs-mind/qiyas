@@ -220,7 +220,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             })
         {
             report.warnings.push(format!(
-                "Object {:X} is invalid or awaiting recognition review; no quantity generated",
+                "Object {} is invalid or awaiting recognition review; no quantity generated",
                 object.instance.id
             ));
             continue;
@@ -234,7 +234,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     }))
         }) {
             report.warnings.push(format!(
-                "Object {:X} has an unresolved void; its quantity is withheld",
+                "Object {} has an unresolved void; its quantity is withheld",
                 object.instance.id
             ));
             continue;
@@ -271,7 +271,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 .collect::<Vec<_>>();
             if bands.len() > 1 {
                 return Err(invalid(format!(
-                    "Overlapping unit bands in {} for {:X}",
+                    "Overlapping unit bands in {} for {}",
                     rule.id, object.instance.id
                 )));
             }
@@ -304,7 +304,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 }) {
                     if !void.valid {
                         return Err(invalid(format!(
-                            "Void {:X} has invalid geometry",
+                            "Void {} has invalid geometry",
                             void.instance.id
                         )));
                     }
@@ -341,7 +341,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             let raw = total(&context, &lines)?;
             if raw < 0.0 {
                 return Err(invalid(format!(
-                    "Deductions exceed gross quantity for {} on {:X}",
+                    "Deductions exceed gross quantity for {} on {}",
                     rule.id, object.instance.id
                 )));
             }
@@ -465,13 +465,13 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
         }
         if measured && source.grid.is_none() {
             report.warnings.push(format!(
-                "Object {:X} on {} has no assigned grid reference",
+                "Object {} on {} has no assigned grid reference",
                 object.instance.id, object.sheet
             ));
         }
         if !measured {
             report.warnings.push(format!(
-                "No measurement rule covers object {:X} ({})",
+                "No measurement rule covers object {} ({})",
                 object.instance.id, object.instance.type_name
             ));
         }

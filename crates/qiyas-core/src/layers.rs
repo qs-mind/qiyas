@@ -401,6 +401,7 @@ impl Session {
             return Ok(());
         }
         self.drawing.doc.rename_layer(&from, &to).map_err(invalid)?;
+        self.rename_layer_references(&from, &to)?;
         self.layer_renamed(&from, &to);
         Ok(())
     }
@@ -522,6 +523,7 @@ impl Session {
         let old = self.drawing.doc.layers.get(from).expect("checked").handle;
         self.forget_viewport_layer(old, Some(into.1));
         self.drawing.doc.layers.remove(from);
+        self.rename_layer_references(from, &into.0)?;
         self.layer_renamed(from, &into.0);
         Ok(into.0)
     }

@@ -55,7 +55,12 @@
       "hatch": true,
       "centreline": true,
       "centreline_driver": true,
-      "band_justification": "justification"
+      "band_justification": "justification",
+      "layer_properties": {
+        "outline": "outline_layer",
+        "hatch": "hatch_layer",
+        "centreline": "centreline_layer"
+      }
     },
     "quantities": {
       "run_length": "length",
@@ -178,7 +183,8 @@
           "end": 90
         }
       ],
-      "symbols_in_driver": true
+      "symbols_in_driver": true,
+      "host_layer_property": "doors_layer"
     },
     "property_bindings": {
       "host_width": "host.band_width"
@@ -272,7 +278,8 @@
           ]
         }
       ],
-      "symbols_in_driver": true
+      "symbols_in_driver": true,
+      "host_layer_property": "windows_layer"
     },
     "property_bindings": {
       "host_width": "host.band_width"

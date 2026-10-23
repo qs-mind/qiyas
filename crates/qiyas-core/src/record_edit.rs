@@ -370,6 +370,7 @@ impl Session {
             }
             if let Some(value_schema) = input_schema_at(schema, data, path) {
                 let mut checked = crate::validation::validate_schema(&value_schema, value);
+                checked.reject_unknown_fields();
                 let codec_error = if checked.errors.is_empty() {
                     None
                 } else {
@@ -500,8 +501,7 @@ impl Session {
         let mut rebuild_dims = Vec::new();
         let mut rebuild_tables = Vec::new();
         for (key, list) in by_key(updates) {
-            let h = key
-                .as_u64()
+            let h = crate::registry::handle_number(&key)
                 .ok_or_else(|| invalid(format!("An entity's key is its handle, not {key}")))?;
             let handle = Handle::new(h);
             let old = self
@@ -510,8 +510,12 @@ impl Session {
                 .get_entity(handle)
                 .ok_or(CoreError::NoSuchEntity(h))?
                 .clone();
+            self.refuse_generated_edit(
+                &[handle],
+                list.iter().any(|u| !u.path.starts_with("/common/")),
+            )?;
             let kind = variant_name(&old);
-            let what = format!("{kind} {h:X}");
+            let what = format!("{kind} {h}");
             if !sheets.contains(&old.common().owner_handle) {
                 return Err(invalid(format!(
                     "{what} is inside a block: edit the block in place first (edit_block_in_place)"
@@ -547,7 +551,6 @@ impl Session {
             self.rebuild_table(h)?;
         }
         let unlinked = self.follow_takeoff(&changed, &[]);
-        self.follow_fields()?;
         Ok(if unlinked == 0 {
             Outcome::Changed
         } else {

@@ -66,7 +66,7 @@ function ReviewRow({ row, busy, decide }: {
   }));
   return <article>
     <strong>{row.placement.type}</strong> <span>{t("recognition.confidence")}: {Math.round(row.confidence * 100)}%</span>
-    <p>{row.rule} · {row.handle.toString(16).toUpperCase()}</p>
+    <p>{row.rule} · {row.handle}</p>
     {row.evidence.map((source, index) => <p key={index}>{source.path}{source.page ? ` · ${source.page}` : ""} {source.detail}</p>)}
     {row.issues.map((issue, index) => <p key={index}>{issue}</p>)}
     {row.state !== "pending" && <p>{t(row.state === "accepted" ? "recognition.included" : "recognition.excluded")}</p>}

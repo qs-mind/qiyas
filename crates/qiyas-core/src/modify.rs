@@ -214,7 +214,7 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
 /// `translation` (their block moving with them).
 fn check_placeable(e: &EntityType, copying: bool, translation: bool) -> Result<(), CoreError> {
     let h = e.common().handle.value();
-    let refuse = |why: &str| Err(invalid(format!("{} {h:X} {why}", variant_name(e))));
+    let refuse = |why: &str| Err(invalid(format!("{} {h} {why}", variant_name(e))));
     match e {
         EntityType::Dimension(_) | EntityType::Table(_) if !translation => {
             refuse("can only be moved or copied yet: its block is not drawn again")
@@ -464,6 +464,10 @@ impl Session {
     pub(crate) fn modify(&mut self, spec: ModifySpec) -> Result<Outcome, CoreError> {
         let targets = self.object_edit_targets(spec.targets());
         let handles = self.sheet_targets(&targets)?;
+        self.refuse_generated_edit(
+            &handles,
+            handles.len() == 1 || matches!(&spec, ModifySpec::Stretch { .. }),
+        )?;
         match spec {
             ModifySpec::Move { delta, .. } => {
                 finite(&delta)?;
@@ -612,6 +616,20 @@ impl Session {
             check_placeable(self.entity(h), false, p.shift.is_some())?;
         }
         for &h in handles {
+            if let Some(object) = crate::objects::instance(self.entity(h)) {
+                if object
+                    .host
+                    .is_some_and(|host| !handles.contains(&Handle::new(host)))
+                {
+                    if let Some(delta) = p.shift {
+                        if self.move_hosted_object(h, delta)? {
+                            continue;
+                        }
+                    } else {
+                        return Err(invalid(format!("Object {} is attached to its wall. Change its distance, width or swing with set_object_props or edit_wall_opening.", h.value())));
+                    }
+                }
+            }
             let e = self.drawing.doc.get_entity_mut(h).expect("checked above");
             let dimension_block = place_keeping_blocks(e, &p);
             if let (Some(name), Some(d)) = (dimension_block, p.shift) {
@@ -641,6 +659,14 @@ impl Session {
     /// Adds a copy of every entity `handles` placed by each of `copies`.
     fn copy_all(&mut self, handles: &[Handle], copies: Vec<Placing>) -> Result<Outcome, CoreError> {
         self.check_count(handles, copies.len() as u64)?;
+        for &h in handles {
+            if crate::objects::instance(self.entity(h))
+                .and_then(|o| o.host)
+                .is_some_and(|host| !handles.contains(&Handle::new(host)))
+            {
+                return Err(invalid(format!("Object {} is attached to its wall. Use add_wall_openings to place another opening, or copy it together with its wall.", h.value())));
+            }
+        }
         for &h in handles {
             let translations = copies.iter().all(|p| p.shift.is_some());
             check_placeable(self.entity(h), true, translations)?;
@@ -887,7 +913,7 @@ impl Session {
                 EntityType::Insert(insert) => {
                     if is_xref_block(doc, &insert.block_name) {
                         return Err(invalid(format!(
-                            "Entity {:X} is the xref {}: an xref can't be exploded",
+                            "Entity {} is the xref {}: an xref can't be exploded",
                             h.value(),
                             insert.block_name
                         )));
@@ -1264,6 +1290,16 @@ impl Session {
         pieces: &[(Handle, Vec<u64>)],
         merged: &[(Handle, Handle)],
     ) -> usize {
+        for (old, replacements) in pieces {
+            if replacements.as_slice() != [old.value()] {
+                self.handle_replacements
+                    .insert(old.value(), replacements.clone());
+            }
+        }
+        for (old, new) in merged {
+            self.handle_replacements
+                .insert(old.value(), vec![new.value()]);
+        }
         for m in &mut self.takeoff.items {
             if !m.chain.is_empty() {
                 continue;
