@@ -25,7 +25,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio = { version = "1", features = ["macros", "sync", "time", "rt", "net", "process", "io-util"] }
 tokio-util = "0.7"
-base64 = "0.22"
+base64 = "0.23"
 # Process signals (MIT OR Apache-2.0); never invoke a shell to cancel Claude Code.
 libc = "0.2"
 # PKCE, OS randomness and ID-token signature validation (already in rustls's dependency tree).
