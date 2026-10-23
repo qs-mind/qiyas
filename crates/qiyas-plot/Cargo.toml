@@ -11,7 +11,7 @@ qiyas-core = { path = "../qiyas-core" }
 qiyas-geom = { path = "../qiyas-geom" }
 qiyas-render = { path = "../qiyas-render" }
 # Writing the PDF (MIT), without its date and thread-pool features.
-lopdf = { version = "0.44", default-features = false }
+lopdf = { version = "0.45", default-features = false }
 # Glyph subsets of the TrueType fonts the PDF embeds (MIT OR Apache-2.0); TrueType and CFF only.
 subsetter = { version = "0.2", default-features = false }
 # Font metrics and glyph outlines (MIT OR Apache-2.0), the version rustybuzz already brings.
