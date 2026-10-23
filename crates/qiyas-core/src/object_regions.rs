@@ -268,6 +268,12 @@ impl Session {
 
     /// Follow source geometry inside the current command's entity and table snapshots.
     pub(crate) fn refresh_object_regions(&mut self) -> Result<(), CoreError> {
+        self.refresh_object_regions_scoped(None)
+    }
+    pub(crate) fn refresh_object_regions_scoped(
+        &mut self,
+        only: Option<&std::collections::BTreeSet<u64>>,
+    ) -> Result<(), CoreError> {
         if !self.has_object_regions() {
             return Ok(());
         }
@@ -276,6 +282,9 @@ impl Session {
             .doc
             .entities()
             .filter_map(|entity| {
+                if only.is_some_and(|ids| !ids.contains(&entity.common().handle.value())) {
+                    return None;
+                }
                 let region = retained_region(entity)?;
                 let sheet = self
                     .drawing

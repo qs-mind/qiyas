@@ -454,6 +454,12 @@ impl Session {
     }
 
     pub(crate) fn refresh_object_schedules(&mut self) -> Result<(), CoreError> {
+        self.refresh_object_schedules_scoped(None)
+    }
+    pub(crate) fn refresh_object_schedules_scoped(
+        &mut self,
+        only: Option<&std::collections::BTreeSet<u64>>,
+    ) -> Result<(), CoreError> {
         if !self.drawing.doc.app_ids.contains(SCHEDULE_APP) {
             return Ok(());
         }
@@ -470,6 +476,9 @@ impl Session {
             })
             .collect();
         for (mut table, spec) in tables {
+            if only.is_some_and(|ids| !ids.contains(&table.common.handle.value())) {
+                continue;
+            }
             let data = self.object_schedule_data(&spec)?;
             let previous = crate::xdata::read_json::<Rendered>(&table.common, STATE_APP);
             let Some(prototype) = table.rows.get(1).cloned() else {

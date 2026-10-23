@@ -238,7 +238,7 @@ fn layer_colour_linetype_weight_lock_and_plot_are_edited() {
 
     for (prop, value) in [
         (LayerProp::Color, json!("ByLayer")),
-        (LayerProp::Color, json!("red")),
+        (LayerProp::Color, json!("not-a-color")),
         (LayerProp::Linetype, json!("NOPE")),
         (LayerProp::Lineweight, json!(-1)),
         (LayerProp::Lineweight, json!(7)),

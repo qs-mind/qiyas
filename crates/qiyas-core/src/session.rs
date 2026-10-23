@@ -772,21 +772,7 @@ impl Session {
             }
         }
         session.migrate_grid_provenance();
-        // Reopening cannot make yesterday's broken enclosure a usable quantity again.
-        if session.has_object_regions() {
-            if let Err(error) = session
-                .refresh_object_regions()
-                .and_then(|()| session.sync_legacy_room_regions())
-                .and_then(|()| session.refresh_object_schedules())
-                .and_then(|()| session.refresh_measurement())
-                .and_then(|()| session.follow_fields())
-            {
-                session
-                    .drawing
-                    .problems
-                    .push(format!("Room quantities need review: {error}"));
-            }
-        }
+        session.refresh_loaded_derivations();
         if let Err(error) = session.validate_object_metadata() {
             session
                 .drawing
@@ -794,6 +780,37 @@ impl Session {
                 .push(format!("Object metadata needs review: {error}"));
         }
         session
+    }
+
+    /// Opening and external reloads establish derived state outside the edit recorder.
+    fn refresh_loaded_derivations(&mut self) {
+        if self.derived_extras().0 || self.drawing.doc.app_ids.contains(crate::field::FIELD_APP) {
+            let before = self.drawing.doc.clone();
+            let takeoff = self.takeoff.clone();
+            if let Err(error) = crate::derived::full(self) {
+                self.drawing.doc = before;
+                self.takeoff = takeoff;
+                self.drawing
+                    .problems
+                    .push(format!("Derived drawing data needs review: {error}"));
+                // An unrelated damaged object must not restore a stale room quantity.
+                // Preserve Goal A's enclosure invalidation even when full refresh fails.
+                if self.has_object_regions() {
+                    if let Err(error) = self
+                        .refresh_object_regions()
+                        .and_then(|()| self.sync_legacy_room_regions())
+                        .and_then(|()| self.refresh_object_schedules())
+                        .and_then(|()| self.refresh_measurement())
+                        .and_then(|()| self.follow_fields())
+                    {
+                        self.drawing
+                            .problems
+                            .push(format!("Room quantities need review: {error}"));
+                    }
+                }
+            }
+        }
+        self.handle_replacements.clear();
     }
 
     /// Saves the take-off, the BOQ, the conflicts and the schedules to the drawing's project file
@@ -1005,6 +1022,7 @@ impl Session {
     /// Looks for every xref again and reopens it (a changed or newly found file shows).
     pub fn reload_xrefs(&mut self) {
         self.xrefs = XrefSet::load(&self.drawing, &self.xref_overrides, MAX_XREF_DEPTH);
+        self.refresh_loaded_derivations();
         *self.cache.get_mut() = None;
     }
 
@@ -1957,6 +1975,10 @@ impl Session {
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
         let previous_replacements = self.handle_replacements.clone();
+        let derived_inputs = (derived_tables
+            || self.drawing.doc.app_ids.contains(crate::field::FIELD_APP))
+        .then(|| crate::derived::Inputs::capture(self))
+        .transpose()?;
         let recorder = self.drawing.doc.begin_entity_change_recording();
         let mut before = Vec::new();
         let done = f(self).and_then(|value| {
@@ -1978,7 +2000,7 @@ impl Session {
             }
             let mut requested =
                 crate::net_effect::RequestedChanges::capture(&self.drawing.doc, &before);
-            self.rederive(&mut requested)?;
+            self.rederive(derived_inputs.as_ref(), &mut requested)?;
             Ok(value)
         });
         self.drawing.doc.end_entity_change_recording();

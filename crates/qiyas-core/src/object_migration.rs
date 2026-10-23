@@ -408,6 +408,20 @@ impl Session {
             let Some(owner) = owners.get(&(sheet.value(), tag.group)) else {
                 continue;
             };
+            // Once converted, the object engine owns each part's role and index. Replacing
+            // them with legacy per-role indices would change untouched wall groups whenever
+            // another group is edited. New parts and changed owners still need migration.
+            if self
+                .drawing
+                .doc
+                .get_entity(Handle::new(h))
+                .is_some_and(|entity| {
+                    crate::xdata::read_json::<ObjectPart>(entity.common(), PART_APP)
+                        .is_some_and(|part| part.owner == *owner)
+                })
+            {
+                continue;
+            }
             let entity = self
                 .drawing
                 .doc

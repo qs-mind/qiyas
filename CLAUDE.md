@@ -224,9 +224,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   an xref's entities carry `xref` and `chain` and are read-only), layers, linetypes, text and dim
   styles, blocks, layouts, viewports, groups, views, header, layer states, xrefs, take-off, BOQ,
   conflicts, schedules, comments, constraints, parameters; filters handles, names, type, layer,
-  sheet, bounds and `where` (eq, ne, lt, le, gt, ge, contains, exists on a JSON pointer into
-  `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) under 12 KB
-  (`MAX_BYTES`, `truncated`); arrays past 100 items say how many they left out.
+  sheet, bounds and `where` (eq, ne, in, not_in, lt, le, gt, ge, contains, exists on a summary
+  name or a JSON pointer into `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) with a 12 KB budget for records and warnings, excluding the page envelope
+  (`MAX_BYTES`, `truncated`; one oversized record can exceed the budget); arrays past 100 items say how many they left out.
 - `qiyas-core/src/record_edit.rs`: `Command::SetRecords { collection, updates: [{key, path,
   value, expected}] }`: serialise, set the JSON pointer, read back with `serde_path_to_error` (the
   error names the field), `entity_from_record` puts back what serde skips (and a block
@@ -249,7 +249,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `via` where refused, the shapes of the named types (enums as their variants: `Color` is
   `"ByLayer" | … | {"Index": …} | {"Rgb": {…}}`), whether the type can be created, and that
   angles are radians there. Traced once off the types' serde (`serde-reflection`, MIT OR
-  Apache-2.0: repeated passes until every enum variant is seen, about 12 ms) and kept as JSON.
+  Apache-2.0), explicitly seeding the codec's nested enums before tracing record roots. Dimension
+  paths retain their variant, e.g. `/Linear/base/text_middle_point`, matching its record data.
 - `record_input_schema` caches those traced types as input schemas too. Creation and block
   definition check all supplied data fields before merging the entity defaults. Record edits
   stage each replacement without mutation, including sequential `expected` values, and collect
@@ -550,7 +551,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   results once, retaining handles, ids, names, decisions and error codes. The first digest and
   system prompt remain unchanged for caching; tool ids, arguments and signatures stay paired.
   The older message-count compactor remains the final guard for long conversations.
-- Records default to summaries without null/empty fields, with 12 KB pages; digest previews and capture captions
+- Records default to summaries without null/empty fields, with a 12 KB record-and-warning budget (page envelope excluded; a single oversized record is allowed); digest previews and capture captions
   are compact. PDF digest entries expose real source paths/pages and document capture arguments.
   Picture framing includes PDF/raster bounds, even without vector geometry. Relative document
   paths resolve beside the active drawing. Scans use calibrated `recognition.vision` hints and
@@ -1961,8 +1962,8 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   schema and example; unknown names suggest close matches. Changed geometry comes with a
   drawing check. The loop discovers a command, acts, checks and fixes by handle.
 - Before execution, the core checks all fields together against the command registry: missing
-  fields, wrong values and ranges are errors with JSON pointers; unknown fields are visible
-  warnings. Results include `defaults_used` with each field, value and unit. Errors preserve
+  fields, wrong values and ranges are errors with JSON pointers; unknown fields are warnings
+  on reads and errors on edits. Results include `defaults_used` with each field, value and unit. Errors preserve
   the serde field message, schema and example; unknown names still suggest close matches.
   All automation errors carry `code` beside `message`; `capabilities.error_codes` lists them.
 - `qiyas_read validate {command}` or `{commands}` checks inputs without changing the drawing,
@@ -2607,3 +2608,49 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Unknown fields on editing, file, session and view commands are errors. Read commands retain
   their warnings. Tests that previously required ignored edit fields now require refusal and
   unchanged state; default-value coverage remains on valid inputs.
+
+
+## Goal C: reliable inputs and incremental updates (23 October 2026)
+
+- Record `fields` and `where.path` accept summary names, including `layer`, `length`, `area`,
+  `text`, `key` and `type`; `handle` aliases the key. Bare raw-data keys also work. Existing
+  JSON pointers keep their data meaning and can fall back to summary paths such as `/length`.
+  A malformed path or a path absent from every record is an error naming available fields.
+  On mixed records a missing projected property is omitted and named in page `warnings`;
+  an explicit null stays null. An empty scope reports that paths could not be checked.
+  `exists` can deliberately test an absent path. Missing properties never satisfy `ne` or
+  `not_in`. `in`/`not_in` need arrays and match text without case; ordered comparisons require
+  two numbers or two strings. Record lengths, areas and bounds remain in drawing units.
+- Text queries accept `bounds` (the same box as `within`) and a case-insensitive `layer`.
+  Returned text rows include the effective layer, with layer 0 inherited inside blocks and
+  the external drawing prefix. Supplying both bounds names is refused as a duplicate.
+- JSON `set_layer` accepts several named properties in one undo step: color, linetype,
+  lineweight, on, frozen, locked and plot. The existing prop/value form remains valid; mixing
+  the two forms is refused. The wire normalizer maps the shorthand to the native properties
+  operation. Colors accept the existing ACI/hex notation, layer color indices 1–255, and
+  red/yellow/green/cyan/blue/magenta/white. Named colors work in other color commands too.
+  `delete_entities {handles}` aliases targets and uses the same handle normalization and
+  protection rules. Supplying handles and targets together is refused.
+- `qiyas_execute run {command, layer?, color?}` uses the existing atomic batch context,
+  including making a missing layer and restoring the current drawing properties afterwards.
+  Its wrapped batch outcome reports the actual entity changes. Read-only run stays read-only.
+- `commands {name}` discovers surface operations such as query and finish as well as core
+  commands. Qualified names (`qiyas_read.query`, `qiyas_execute.run`, `qiyas_capture.picture`)
+  select the exact operation when names overlap. Operation results include schema and example.
+  Scalar enum unions list every allowed value in validation errors. Record schemas seed nested
+  codec enum variants, so valid text alignments are accepted. Record documentation and
+  capabilities say 20 records by default, 200 maximum, and a 12,000-byte budget for records
+  and warnings, excluding the page envelope; a single oversized record can exceed it. The generic surface has its separate result byte limit.
+- Derivation compares immutable entity snapshots and source definitions from before the edit.
+  Object refresh follows hosts, union groups and block references; retained regions follow their
+  sheet/enclosure sources; schedules follow their selected objects; linked fields follow their
+  referenced entities and counts. New or edited take-off rows refresh retained-region validity
+  and metadata without retracing unchanged enclosures. Definition/lookup changes conservatively
+  refresh dependents.
+  Generated label defaults use the driver's own sheet, so switching the viewed sheet cannot resize them.
+  Full derivation establishes a consistent state when opening or reloading linked drawings
+  and remains the differential-test reference. No persistent derivation cache can go stale after undo or rollback.
+  Legacy wall migration preserves the role/index of already converted parts with the same
+  owner, so editing a copied wall does not rewrite its source group's metadata.
+  Goal B's requested-field checks and final net change reports remain in force.
+- Evidence, timings, checks and limitations: `docs/2026-10-23-qiyas-goal-C.md`.

@@ -2324,3 +2324,41 @@ fn read_shortcuts_accept_the_same_handle_strings_as_commands() {
         assert_eq!(measured["length_m"], 1.0);
     }
 }
+
+#[test]
+fn goal_c_operation_discovery_and_scoped_text_queries() {
+    for unit in [4, 5, 6, 1] {
+        let mut s = Session::new_blank(std::path::Path::new("text-query.dxf"), unit);
+        let k = 1.0 / s.drawing.units.to_metres();
+        for (layer, point, text) in [
+            ("Notes", [k, k], "Inside"),
+            ("Notes", [5.0 * k, k], "Outside"),
+            ("Other", [k, k], "Other layer"),
+        ] {
+            let v=call(&mut s,EXECUTE,json!({"op":"run","args":{"layer":layer,"command":{"type":"text","at":point,"value":text}}})).unwrap();
+            assert!(v["ok"].as_bool().unwrap(), "{v}");
+        }
+        for bounds in ["bounds", "within"] {
+            let mut args = json!({"kind":"texts","layer":"notes"});
+            args[bounds] = json!([[0, 0], [2.0 * k, 2.0 * k]]);
+            let v = call(&mut s, READ, json!({"op":"query","args":args})).unwrap();
+            assert!(v.to_string().contains("Inside"), "{v}");
+            assert!(
+                !v.to_string().contains("Outside") && !v.to_string().contains("Other layer"),
+                "{v}"
+            );
+        }
+        assert_eq!(s.current.layer, "0");
+        for name in [
+            "query",
+            "finish",
+            "qiyas_execute.run",
+            "qiyas_read.query",
+            "qiyas_capture.picture",
+        ] {
+            let v = call(&mut s, READ, json!({"op":"commands","args":{"name":name}})).unwrap();
+            assert!(v["schema"].is_object(), "{name}: {v}");
+            assert!(v["example"].is_object(), "{name}: {v}");
+        }
+    }
+}

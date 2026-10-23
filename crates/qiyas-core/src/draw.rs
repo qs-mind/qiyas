@@ -57,6 +57,12 @@ impl Default for Current {
 /// A colour as `Current::color` writes it; `None` when it is none of those forms.
 pub(crate) fn parse_color(text: &str) -> Option<Color> {
     let t = text.trim();
+    if let Some(index) = ["red", "yellow", "green", "cyan", "blue", "magenta", "white"]
+        .iter()
+        .position(|name| t.eq_ignore_ascii_case(name))
+    {
+        return Some(Color::Index(index as u8 + 1));
+    }
     if t.eq_ignore_ascii_case("ByLayer") {
         return Some(Color::ByLayer);
     }
@@ -1359,7 +1365,8 @@ mod tests {
             })
         );
         assert_eq!(parse_color("#fff"), None);
-        assert_eq!(parse_color("red"), None);
+        assert_eq!(parse_color("red"), Some(Color::Index(1)));
+        assert_eq!(parse_color("unknown colour"), None);
     }
 
     #[test]

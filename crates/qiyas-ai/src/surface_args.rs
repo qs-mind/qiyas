@@ -89,7 +89,14 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
             object(json!({"name":string}), &["name"]),
             json!({"name":"layer"}),
         ),
-        (READ | EXECUTE, "run") => (
+        (EXECUTE, "run") => (
+            object(
+                json!({"command":command,"layer":nullable(&string),"color":nullable(&string)}),
+                &["command"],
+            ),
+            json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[1000,0]},"layer":"A-WALL"}),
+        ),
+        (READ, "run") => (
             object(json!({"command":command}), &["command"]),
             json!({"command":{"type":"records","query":{"collection":"layers"}}}),
         ),
@@ -203,6 +210,8 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
                             required.push("handle");
                         }
                         "texts" => {
+                            props["layer"] = nullable(&string);
+                            props["bounds"] = nullable(&bounds);
                             props["sheet"] = nullable(&string);
                             props["within"] = nullable(&bounds);
                             props["offset"] = handle.clone();

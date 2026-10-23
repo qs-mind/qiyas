@@ -409,10 +409,35 @@ impl Session {
     /// (or outside the block edited in place) is worked out too: the lock stops the user, not
     /// the field (as AutoCAD). How many texts and tables changed.
     pub(crate) fn update_fields(&mut self, objects_only: bool) -> Result<usize, CoreError> {
+        self.update_fields_scoped(objects_only, None, true)
+    }
+    fn update_fields_scoped(
+        &mut self,
+        objects_only: bool,
+        dirty: Option<&std::collections::BTreeSet<u64>>,
+        counts: bool,
+    ) -> Result<usize, CoreError> {
         if self.needs_field_app() {
             return Ok(0);
         }
-        let wanted = |code: &str| !objects_only || has_object_fields(code);
+        let wanted = |code: &str, holder: u64| {
+            (!objects_only || has_object_fields(code))
+                && dirty.is_none_or(|dirty| {
+                    dirty.contains(&holder)
+                        || code_spans(code)
+                            .iter()
+                            .any(|(a, b)| match parse_code(&code[*a..*b]) {
+                                Code::Area(h) | Code::Length(h) => dirty.contains(&h),
+                                Code::Sum { handles, .. }
+                                | Code::RoomArea { handles, .. }
+                                | Code::ObjectValue(handles, ..) => {
+                                    handles.iter().any(|h| dirty.contains(h))
+                                }
+                                Code::Count(_) | Code::OpeningCount(..) => counts,
+                                _ => false,
+                            })
+                })
+        };
         let holders: Vec<Handle> = self
             .drawing
             .doc
@@ -426,7 +451,7 @@ impl Session {
             let sheet = e.common().owner_handle;
             match e {
                 EntityType::Text(t) => {
-                    let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
+                    let Some(code) = text_field(&t.common).filter(|c| wanted(c, h.value())) else {
                         continue;
                     };
                     let value = self.evaluate_fields(&code, sheet);
@@ -439,7 +464,7 @@ impl Session {
                     }
                 }
                 EntityType::MText(t) => {
-                    let Some(code) = text_field(&t.common).filter(|c| wanted(c)) else {
+                    let Some(code) = text_field(&t.common).filter(|c| wanted(c, h.value())) else {
                         continue;
                     };
                     let value = escape_mtext(&self.evaluate_fields(&code, sheet));
@@ -455,7 +480,7 @@ impl Session {
                     let mut table = t.clone();
                     let mut any = false;
                     for (r, c, code) in cell_fields(t) {
-                        if !wanted(&code) {
+                        if !wanted(&code, h.value()) {
                             continue;
                         }
                         let value = escape_mtext(&self.evaluate_fields(&code, sheet));
@@ -481,6 +506,13 @@ impl Session {
     /// in the same step.
     pub(crate) fn follow_fields(&mut self) -> Result<(), CoreError> {
         self.update_fields(true).map(|_| ())
+    }
+    pub(crate) fn follow_fields_scoped(
+        &mut self,
+        dirty: Option<&std::collections::BTreeSet<u64>>,
+        counts: bool,
+    ) -> Result<(), CoreError> {
+        self.update_fields_scoped(true, dirty, counts).map(|_| ())
     }
 
     /// Follows replaced wall entities, retaining sums when one measured hatch splits.
