@@ -1214,10 +1214,9 @@ fn room_areas_of_the_test_plan_match_its_documented_numbers() {
 }
 
 #[test]
-fn label_spaces_writes_unapproved_candidate_areas_under_names_and_a_schedule_follows() {
+fn label_spaces_fits_unapproved_candidate_areas_and_a_schedule_follows() {
     let (_dir, mut s) = test_plan();
     let before_steps = steps(&mut s);
-    let names = read(&mut s, "query", json!({"kind": "texts"})).unwrap();
     let result = command(
         &mut s,
         json!({"type": "label_spaces", "query": {"text_layer": "A-TEXT"}, "layer": "A-AREA"}),
@@ -1246,23 +1245,30 @@ fn label_spaces_writes_unapproved_candidate_areas_under_names_and_a_schedule_fol
     let info = s.entity_info(label, &[]).unwrap();
     assert_eq!(info.layer_short, "A-AREA");
     assert_eq!(info.text.as_deref(), Some("Area 51.21 m²"));
-    // Under the name: same start, lower down.
-    let name_row = names["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["text"] == "LIVING")
-        .unwrap();
-    let at = living["label_point"].as_array().unwrap();
-    assert!(near(
-        at[0].as_f64().unwrap(),
-        name_row["at"][0].as_f64().unwrap(),
-        1e-9
-    ));
-    assert!(at[1].as_f64().unwrap() < name_row["at"][1].as_f64().unwrap());
+    // Placement may move away from the name to keep the rendered label inside the room.
+    assert_eq!(
+        serde_json::to_value(info.position).unwrap(),
+        living["label_point"]
+    );
+    let layout = s.check_drawing(&qiyas_core::check::CheckScope {
+        handles: out["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["label_handle"].as_u64().unwrap())
+            .collect(),
+        rules: vec![
+            "label_outside_room".into(),
+            "text_over_lines".into(),
+            "text_overlaps_text".into(),
+        ],
+        ..Default::default()
+    });
+    assert!(layout.complete && layout.findings.is_empty(), "{layout:?}");
     let all = read(&mut s, "query", json!({"kind": "texts"}))
         .unwrap()
-        .to_string();
+        .to_string()
+        .replace('\u{00a0}', " ");
     for name in ["BEDROOM", "KITCHEN"] {
         let net = room(out, name)["net_area_m2"].as_f64().unwrap();
         assert!(all.contains(&format!("{net:.2} m²")), "{name}: {all}");

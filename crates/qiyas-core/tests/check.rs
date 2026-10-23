@@ -656,8 +656,8 @@ fn takeoff_with_a_missing_entity_is_reported_on_its_own_sheet() {
 }
 
 #[test]
-fn construction_checks_are_opt_in_until_the_drawing_has_a_construction_cue() {
-    for layer in ["A-ROOM-NAME", "Spaces", "floor_areas"] {
+fn explicit_room_checks_do_not_depend_on_layer_language() {
+    for layer in ["A-ROOM-NAME", "Spaces", "floor_areas", "غرف", "Notes"] {
         let (mut s, _) = blank(6);
         let h = run(
             &mut s,
@@ -673,7 +673,7 @@ fn construction_checks_are_opt_in_until_the_drawing_has_a_construction_cue() {
             rules: vec!["room_open".into()],
             ..Default::default()
         };
-        assert!(s.check_drawing(&scope).findings.is_empty());
+        assert_eq!(rules(&s.check_drawing(&scope)), ["room_open"]);
         let enabled = CheckScope {
             packs: vec!["construction".into()],
             ..scope.clone()

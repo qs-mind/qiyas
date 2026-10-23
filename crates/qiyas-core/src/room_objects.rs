@@ -410,7 +410,7 @@ impl Session {
         Ok(handle)
     }
 
-    fn room_from_label(&self, label: &Target) -> Result<u64, CoreError> {
+    pub(crate) fn room_from_label(&self, label: &Target) -> Result<u64, CoreError> {
         if !label.chain.is_empty() {
             return Err(invalid("Pick a room label at the top of its sheet"));
         }

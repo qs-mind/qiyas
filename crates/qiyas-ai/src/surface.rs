@@ -1601,10 +1601,13 @@ fn changed(
             });
             out["check"] = json!({
                 "line": report.line,
+                "complete": report.complete,
+                "layout_findings": report.counts.iter().filter(|(r,_)| qiyas_core::check::layout_rule(r)).map(|(_,n)| n).sum::<usize>(),
+                "not_checked": report.not_checked,
                 "findings": report.findings.iter().take(CHECK_FINDINGS).collect::<Vec<_>>(),
             });
         } else {
-            out["check"] = json!({ "line": "Not checked: a large sheet. qiyas_read check {\"handles\": […]} checks what you changed" });
+            out["check"] = json!({ "complete": false, "line": "Not checked: a large sheet. qiyas_read check {\"handles\": […]} checks what you changed" });
         }
         out["ui"] = json!({ "action": "reveal", "sheet": session.sheet, "handles": touched });
     } else if !change.removed.is_empty() || effect == Effect::View {

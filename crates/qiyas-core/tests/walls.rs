@@ -214,10 +214,10 @@ fn door_leaf_and_hinge_follow_the_wall_rotation_and_swing() {
         let leaf = session.entity_info(leaf, &result.inserts).unwrap();
         let start = leaf.start.unwrap();
         let end = leaf.end.unwrap();
-        // The hinge sits on the east face; the open leaf reaches 900 mm west of it.
-        near(start[0], 10.1);
+        // The hinge sits on the west (swing) face; the open leaf reaches 900 mm west of it.
+        near(start[0], 9.9);
         near(start[1], hinge_y);
-        near(end[0], 9.2);
+        near(end[0], 9.0);
         near(end[1], hinge_y);
         near(leaf.length.unwrap(), 0.9);
         near(result.gross_area, 1.0);
@@ -299,7 +299,7 @@ fn dwg_and_dxf_keep_wall_outlines_hatches_blocks_and_xdata() {
         near(door.x_scale(), -1.0);
         near(door.y_scale(), 1.0);
         near(door.insert_point.x, 1.95);
-        near(door.insert_point.y, -0.1);
+        near(door.insert_point.y, 0.1);
         assert_eq!(
             entities
                 .iter()

@@ -229,7 +229,9 @@ pub enum Command {
     #[schemars(extend("x-category" = "tables", "x-words" = ["OPENINGSCHEDULE"]))]
     #[schemars(example = json!({"type":"opening_schedule", "at":[10,100], "source_sheet":"*Model_Space"}))]
     OpeningSchedule {
-        at: [f64; 2],
+        /// Top-left corner in drawing units. Omit to place clear of plotted annotation.
+        #[serde(default)]
+        at: Option<[f64; 2]>,
         #[serde(default)]
         source_sheet: Option<String>,
     },
@@ -578,7 +580,7 @@ pub enum Command {
     /// An omitted or zero height is 2.5 mm on paper at the annotation scale. As `Text` otherwise.
     #[serde(rename = "mtext")]
     #[schemars(extend("x-category" = "text"))]
-    #[schemars(example = json!({"type": "mtext", "at": [2, 6], "width": 4, "height": 0.2, "value": "Floor: porcelain tiles\nSkirting: 100 mm"}))]
+    #[schemars(example = json!({"type": "mtext", "at": [2, 6], "width": 4, "height": 0.25, "value": "Floor: porcelain tiles\nSkirting: 100 mm"}))]
     #[schemars(extend("x-words" = ["MTEXT", "MT", "T"]))]
     MText {
         at: [f64; 2],
@@ -1300,7 +1302,9 @@ pub enum Command {
     #[schemars(extend("x-category" = "takeoff", "x-words" = ["ROOMSCHEDULE"]))]
     #[schemars(example = json!({"type":"room_schedule", "at":[12,8]}))]
     RoomSchedule {
-        at: [f64; 2],
+        /// Top-left corner in drawing units. Omit to place clear of plotted annotation.
+        #[serde(default)]
+        at: Option<[f64; 2]>,
         #[serde(default)]
         language: Option<crate::rooms::LabelLanguage>,
         #[serde(default)]
@@ -1323,6 +1327,41 @@ pub enum Command {
         #[serde(default)]
         point: Option<[f64; 2]>,
     },
+    /// Adds live labels for a text or number property of selected objects, including door/window
+    /// marks. Labels follow the object and its property through edits and saves. Height uses
+    /// drawing units; default 2.5 mm on paper. Existing labels are reused. One undo step.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type":"object_tags","targets":[{"handle":1234}],"property":"mark"}))]
+    ObjectTags {
+        targets: Vec<Target>,
+        property: String,
+        #[serde(default)]
+        height: Option<f64>,
+    },
+    /// Finds clear positions for a rectangle or existing annotation using plotted geometry and
+    /// rendered text. Coordinates and sizes are drawing units; clearance is paper millimetres.
+    /// Positions name the top-left corner, bounds and move delta. No drawing or undo change.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"free_space","size":[2000,1000],"side":"right","clearance_mm":10}))]
+    #[schemars(example = json!({"type":"free_space","entity":1234,"near":[0,0]}))]
+    FreeSpace {
+        #[serde(flatten)]
+        query: crate::placement::SpaceQuery,
+    },
+    /// Places labels, tables and linear dimensions clear of plotted annotation. Dimensions keep
+    /// their measured points and search both sides for a clear dimension line. Near and side guide
+    /// free labels/tables; room labels stay in their room. One undo step; failure changes nothing.
+    #[schemars(extend("x-category" = "modify"))]
+    #[schemars(example = json!({"type":"auto_place","targets":[{"handle":1234}],"clearance_mm":2.5}))]
+    AutoPlace {
+        targets: Vec<Target>,
+        #[serde(default)]
+        near: Option<[f64; 2]>,
+        #[serde(default)]
+        side: crate::placement::Side,
+        #[serde(default)]
+        clearance_mm: Option<f64>,
+    },
     /// Checks the drawing as a reviewer would: lines that stop short of or run past another,
     /// repeats and overlaps, scraps, rooms whose outline is open or whose size label disagrees,
     /// colliding or unreadable text, layer 0 and colours of their own, dimension text that
@@ -1330,7 +1369,7 @@ pub enum Command {
     /// take-off rows whose entity is gone (`crate::check::RULES`). On the sheet on screen (or
     /// `scope.sheet`); `scope.handles` keeps the findings about those entities, `scope.rules` the
     /// rules named. `scope.packs` selects general drafting or construction checks; empty selects
-    /// general plus construction when take-off rows or room/space/area layers are present.
+    /// general plus construction when take-off rows, retained rooms or enclosure geometry exist.
     /// `Outcome::Checked` names each finding's pack; not an undo step.
     #[schemars(extend("x-category" = "inquiry"))]
     #[schemars(example = json!({"type": "check_drawing"}))]
@@ -1474,6 +1513,7 @@ impl Command {
             | Command::Records { .. }
             | Command::RecordSchema { .. }
             | Command::Rooms { .. }
+            | Command::FreeSpace { .. }
             | Command::CheckDrawing { .. }
             | Command::Verify { .. }
             | Command::ListComments => None,
@@ -1494,6 +1534,8 @@ impl Command {
             // The comment layer and the comment and text marks' applications.
             | Command::Comment { .. }
             | Command::Dimension(_)
+            | Command::ObjectTags { .. }
+            | Command::AutoPlace { .. }
             | Command::DimEdit { .. }
             | Command::DimBreak { .. }
             | Command::DimSpace { .. }
@@ -1693,6 +1735,12 @@ pub enum Outcome {
     Rooms {
         report: Box<crate::rooms::RoomsReport>,
     },
+    FreeSpace {
+        report: crate::placement::SpaceReport,
+    },
+    Placed {
+        placements: Vec<crate::placement::Placement>,
+    },
     /// What `Command::CheckDrawing` found.
     Checked {
         report: Box<crate::check::CheckReport>,
@@ -1877,7 +1925,7 @@ impl Session {
             } => {
                 return Ok(Outcome::Measurement {
                     result: json!(self.compare_revisions(&other_path, tolerance)?),
-                })
+                });
             }
             Command::CarryKnowledge {
                 from_path,
@@ -1885,12 +1933,12 @@ impl Session {
             } => {
                 return Ok(Outcome::Measurement {
                     result: self.carry_knowledge(&from_path, tolerance)?,
-                })
+                });
             }
             Command::VariationReport { layer } => {
                 return Ok(Outcome::Measurement {
                     result: json!(self.variation_report(layer)?),
-                })
+                });
             }
             Command::Check { .. } => unreachable!("check is a transaction"),
             Command::DefineCheck { name, rule } => {
@@ -1911,7 +1959,7 @@ impl Session {
             Command::Recognition(command) => {
                 return Ok(Outcome::Recognition {
                     result: self.run_recognition(*command)?,
-                })
+                });
             }
             Command::DefineObjectType { definition } => {
                 self.define_object_type(*definition, false)?;
@@ -1970,17 +2018,18 @@ impl Session {
             Command::Walls(spec) => {
                 return Ok(Outcome::Walls {
                     result: self.walls(spec)?,
-                })
+                });
             }
             Command::OpeningSchedule { at, source_sheet } => {
-                return Ok(Outcome::Added {
-                    handles: vec![self.add_opening_schedule(at, source_sheet.as_deref())?],
-                });
+                let h =
+                    self.add_opening_schedule(at.unwrap_or([0.0, 0.0]), source_sheet.as_deref())?;
+                self.place_new_table(h, at.is_none())?;
+                return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::WallGroups { width } => {
                 return Ok(Outcome::WallGroups {
                     groups: self.wall_groups(width)?,
-                })
+                });
             }
             Command::AddWallOpenings {
                 centreline,
@@ -1988,17 +2037,17 @@ impl Session {
             } => {
                 return Ok(Outcome::Walls {
                     result: self.add_wall_openings(centreline, openings)?,
-                })
+                });
             }
             Command::RemoveWallOpenings { inserts } => {
                 return Ok(Outcome::Walls {
                     result: self.remove_wall_openings(&inserts)?,
-                })
+                });
             }
             Command::EditWallOpening { insert, edit } => {
                 return Ok(Outcome::Walls {
                     result: self.edit_wall_opening(insert, edit)?,
-                })
+                });
             }
             Command::DefineBlock {
                 name,
@@ -2593,30 +2642,30 @@ impl Session {
                 return Ok(Outcome::Changed);
             }
             Command::SaveLayerState { name } => {
-                return self.save_layer_state(&name).map(|()| Outcome::Changed)
+                return self.save_layer_state(&name).map(|()| Outcome::Changed);
             }
             Command::RestoreLayerState { name } => {
-                return self.restore_layer_state(&name).map(|()| Outcome::Changed)
+                return self.restore_layer_state(&name).map(|()| Outcome::Changed);
             }
             Command::DeleteLayerState { name } => {
-                return self.delete_layer_state(&name).map(|()| Outcome::Changed)
+                return self.delete_layer_state(&name).map(|()| Outcome::Changed);
             }
             Command::RenameLayerState { from, to } => {
                 return self
                     .rename_layer_state(&from, &to)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::SetLayer { name, prop, value } => {
                 return self
                     .set_layer_prop(&name, prop, &value)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::NewLayer { name } => return self.new_layer(&name).map(|()| Outcome::Changed),
             Command::DeleteLayer { name } => {
-                return self.delete_layer(&name).map(|()| Outcome::Changed)
+                return self.delete_layer(&name).map(|()| Outcome::Changed);
             }
             Command::RenameLayer { from, to } => {
-                return self.rename_layer(&from, &to).map(|()| Outcome::Changed)
+                return self.rename_layer(&from, &to).map(|()| Outcome::Changed);
             }
             Command::TranslateLayers {
                 from_path,
@@ -2624,7 +2673,7 @@ impl Session {
             } => {
                 return self
                     .translate_layers(from_path.as_deref(), &mappings)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::SetViewportFrozen {
                 viewport,
@@ -2633,28 +2682,28 @@ impl Session {
             } => {
                 return self
                     .set_viewport_frozen(&viewport, &layer, frozen)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::CreateGroup { name, targets } => {
                 return self
                     .create_group(&name, &targets)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::AddToGroup { name, targets } => {
                 return self
                     .add_to_group(&name, &targets)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::RemoveFromGroup { name, targets } => {
                 return self
                     .remove_from_group(&name, &targets)
-                    .map(|()| Outcome::Changed)
+                    .map(|()| Outcome::Changed);
             }
             Command::DeleteGroup { name } => {
-                return self.delete_group(&name).map(|()| Outcome::Changed)
+                return self.delete_group(&name).map(|()| Outcome::Changed);
             }
             Command::Ungroup { targets } => {
-                return self.ungroup(&targets).map(|()| Outcome::Changed)
+                return self.ungroup(&targets).map(|()| Outcome::Changed);
             }
             Command::MatchProperties {
                 source,
@@ -2780,22 +2829,47 @@ impl Session {
                 labels,
                 decimals,
             } => {
-                return Ok(Outcome::Added {
-                    handles: vec![self.room_schedule(
-                        at,
-                        source_sheet,
-                        &labels,
-                        decimals,
-                        language,
-                    )?],
-                });
+                let h = self.room_schedule(
+                    at.unwrap_or([0.0, 0.0]),
+                    source_sheet,
+                    &labels,
+                    decimals,
+                    language,
+                )?;
+                self.place_new_table(h, at.is_none())?;
+                return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::Rooms { query } => {
                 return Ok(Outcome::Rooms {
                     report: Box::new(self.rooms(&query)?),
                 });
             }
+            Command::ObjectTags {
+                targets,
+                property,
+                height,
+            } => {
+                return Ok(Outcome::Added {
+                    handles: self.object_tags(&targets, &property, height)?,
+                });
+            }
+            Command::FreeSpace { query } => {
+                return Ok(Outcome::FreeSpace {
+                    report: self.free_space(&query)?,
+                });
+            }
+            Command::AutoPlace {
+                targets,
+                near,
+                side,
+                clearance_mm,
+            } => {
+                return Ok(Outcome::Placed {
+                    placements: self.auto_place(&targets, near, side, clearance_mm)?,
+                });
+            }
             Command::CheckDrawing { scope } => {
+                scope.validate()?;
                 return Ok(Outcome::Checked {
                     report: Box::new(self.check_drawing(&scope)),
                 });
@@ -2806,7 +2880,9 @@ impl Session {
                 return Ok(Outcome::Verified {
                     results,
                     untied_checks,
-                    line: format!("{untied_checks} checks use only literal inputs and prove nothing about the drawing"),
+                    line: format!(
+                        "{untied_checks} checks use only literal inputs and prove nothing about the drawing"
+                    ),
                 });
             }
             // `run_as` runs it as a transaction before it gets here.

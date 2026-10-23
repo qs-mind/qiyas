@@ -147,7 +147,7 @@
       "width": "width",
       "at": "distance",
       "offset_along": "if(swing == 'right', width / 2, -width / 2)",
-      "offset_normal": "-host_width / 2",
+      "offset_normal": "host_width / 2",
       "mirror": "swing == 'right'"
     },
     "quantities": {

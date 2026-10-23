@@ -95,7 +95,7 @@ impl Session {
             if !self.room_source(doc, entity) {
                 continue;
             }
-            let flat = flatten_within(
+            let flat = flatten_continuous_within(
                 doc,
                 &xrefs,
                 entity,

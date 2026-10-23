@@ -11,16 +11,16 @@ mod transform;
 pub mod walls;
 
 pub use dimension::{
-    clear_dimpost, dimension_entities, dimension_text, dimpost, dimscale, dimtxt, format_measure,
-    leader_entities, set_dimpost, set_dimscale, set_dimtxt, style_named, tolerance_entities,
-    DimGeometry, DimLook,
+    clear_dimpost, dimension_entities, dimension_entities_with_width, dimension_text, dimpost,
+    dimscale, dimtxt, format_measure, leader_entities, set_dimpost, set_dimscale, set_dimtxt,
+    style_named, tolerance_entities, DimGeometry, DimLook,
 };
 pub use exact::{exact_area, exact_hatch_areas, exact_length};
 pub use flatten::{
-    arc_points, drawn_style, find_layer, flatten, flatten_with, flatten_within, insert_instances,
-    is_logical_text, is_overlay_block, is_xref_block, object_to_world, xref_symbol, FlatPath,
-    FlatText, FlattenOutcome, HAlign, TextLayout, VAlign, XrefDocs, LOGICAL_TEXT_APP, MAX_WORK,
-    MAX_XREF_DEPTH,
+    arc_points, drawn_style, find_layer, flatten, flatten_continuous_within, flatten_with,
+    flatten_within, insert_instances, is_logical_text, is_overlay_block, is_xref_block,
+    object_to_world, xref_symbol, FlatPath, FlatText, FlattenOutcome, HAlign, TextLayout, VAlign,
+    XrefDocs, LOGICAL_TEXT_APP, MAX_WORK, MAX_XREF_DEPTH,
 };
 pub use paint::{FlatFill, Paint};
 pub use path::{tol_near, Path, SAME_POINT};
@@ -31,3 +31,5 @@ pub use transform::Xform;
 #[cfg(test)]
 #[path = "../../../tests/support/performance.rs"]
 mod performance;
+
+mod linetype;

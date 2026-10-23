@@ -480,6 +480,7 @@ impl Session {
     /// After a modify, an edit or an erase: the fields reading an entity are worked out again,
     /// in the same step.
     pub(crate) fn follow_fields(&mut self) -> Result<(), CoreError> {
+        self.refresh_object_tags()?;
         self.update_fields(true).map(|_| ())
     }
 
@@ -574,6 +575,7 @@ impl Session {
                 }
             }
         }
+        self.remap_object_tags(mapping)?;
         self.follow_fields()
     }
 
