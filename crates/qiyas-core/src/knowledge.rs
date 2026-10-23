@@ -100,7 +100,7 @@ fn dictionary(doc: &CadDocument, handle: Handle) -> Result<&Dictionary, CoreErro
     match doc.objects.get(&handle) {
         Some(ObjectType::Dictionary(d)) => Ok(d),
         _ => Err(invalid(format!(
-            "Knowledge dictionary {handle:X} is missing or invalid"
+            "Knowledge dictionary {handle} is missing or invalid"
         ))),
     }
 }

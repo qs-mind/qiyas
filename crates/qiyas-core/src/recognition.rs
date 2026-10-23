@@ -958,7 +958,7 @@ impl Session {
                             key,
                             Extraction::Constant {
                                 value,
-                                source: format!("Reviewed correction of source {handle:X}"),
+                                source: format!("Reviewed correction of source {handle}"),
                             },
                         );
                     }

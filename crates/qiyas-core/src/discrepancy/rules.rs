@@ -217,7 +217,7 @@ fn number(o: &ObjectRecord, name: &str) -> Result<f64, CoreError> {
     };
     n.filter(|n| n.is_finite()).ok_or_else(|| {
         invalid(format!(
-            "Missing numeric property {name} on {:X}",
+            "Missing numeric property {name} on {}",
             o.instance.id
         ))
     })
@@ -278,7 +278,7 @@ pub(crate) fn local_table(s: &Session, source: &TableSource) -> Result<ReadTable
                     grid: None,
                 }],
                 Citation {
-                    source: format!("Drawing {sheet} handle {handle:X}"),
+                    source: format!("Drawing {sheet} handle {handle}"),
                     clause: "Table rows".into(),
                 },
             ))
@@ -434,7 +434,7 @@ pub(crate) fn evaluate_named(
                                 emit(
                                     ConflictKind::ScheduleVsPlan,
                                     format!(
-                                        "row {i} ({k}) instance {}{:X}",
+                                        "row {i} ({k}) instance {}{}",
                                         object
                                             .drawing
                                             .as_ref()
@@ -498,7 +498,7 @@ pub(crate) fn evaluate_named(
                         emit(
                             ConflictKind::RelationMismatch,
                             format!(
-                                "{}{:X}",
+                                "{}{}",
                                 o.drawing
                                     .as_ref()
                                     .map(|d| format!("{d}:"))
@@ -534,7 +534,7 @@ pub(crate) fn evaluate_named(
                         emit(
                             ConflictKind::DocumentMismatch,
                             format!(
-                                "{}{:X} ({k})",
+                                "{}{} ({k})",
                                 o.drawing
                                     .as_ref()
                                     .map(|d| format!("{d}:"))

@@ -438,6 +438,9 @@ pub struct AddedWallOpening {
 /// Changes to one opening, picked by its insert. Omitted properties stay as they are.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WallOpeningEdit {
+    /// Custom opening ID; empty uses the size mark.
+    #[serde(default)]
+    pub mark: Option<String>,
     #[serde(default)]
     pub at: Option<f64>,
     #[serde(default)]
@@ -683,7 +686,7 @@ impl Session {
         result
     }
 
-    fn stamp_wall(&mut self, handle: u64, tag: &WallTag) -> Result<(), CoreError> {
+    pub(crate) fn stamp_wall(&mut self, handle: u64, tag: &WallTag) -> Result<(), CoreError> {
         let app_handle = crate::xdata::app_handle(&self.drawing.doc, WALL_APP);
         let entity = self
             .drawing
@@ -753,6 +756,21 @@ impl Session {
                     if let Some(object) =
                         crate::objects::instance(&EntityType::LwPolyline(poly.clone()))
                     {
+                        for (role, slot) in [
+                            ("outline", &mut group.spec.layers.outline),
+                            ("hatch", &mut group.spec.layers.hatch),
+                            ("centreline", &mut group.spec.layers.centreline),
+                            ("doors", &mut group.spec.layers.doors),
+                            ("windows", &mut group.spec.layers.windows),
+                        ] {
+                            if let Some(layer) = object
+                                .props
+                                .get(&format!("{role}_layer"))
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                *slot = Some(layer.to_string());
+                            }
+                        }
                         let factor = self.drawing.units.to_metres();
                         if let Some(width) = object
                             .props
@@ -1050,12 +1068,6 @@ impl Session {
                 result.handle_map.insert(handle, replacements);
             }
         }
-        let removed: Vec<_> = result.handle_map.keys().copied().map(Handle::new).collect();
-        let pieces: Vec<_> = result
-            .handle_map
-            .iter()
-            .map(|(&h, into)| (Handle::new(h), into.clone()))
-            .collect();
         // Compatibility rebuilds retain data supplied through the common object commands,
         // including levels and additional properties from a redefined type.
         let objects: Vec<_> = result
@@ -1107,12 +1119,183 @@ impl Session {
                 self.stamp_object(handle, &object)?;
             }
         }
+        // Reuse surviving identities before publishing the rebuild. Geometry may change,
+        // but a wall run and an opening remain the same selected object.
+        let mut reuse = BTreeMap::new();
+        for group in old {
+            for &(handle, ref role, _) in &group.members {
+                let candidates = &result.handle_map[&handle];
+                if matches!(role.as_str(), "run" | "opening") && candidates.len() == 1 {
+                    reuse.entry(candidates[0]).or_insert(handle);
+                }
+            }
+        }
+        // Match unchanged graphics first, then reuse remaining members by role.
+        for exact in [true, false] {
+            for group in old {
+                for &(handle, ref role, _) in &group.members {
+                    if matches!(role.as_str(), "run" | "opening")
+                        || reuse.values().any(|h| *h == handle)
+                    {
+                        continue;
+                    }
+                    let shape = |h| {
+                        crate::net_effect::geometry_state(
+                            self.drawing
+                                .doc
+                                .get_entity(Handle::new(h))
+                                .expect("wall member"),
+                        )
+                    };
+                    if let Some(&new) = result.handle_map[&handle].iter().find(|h| {
+                        !reuse.contains_key(h)
+                            && (!exact
+                                || crate::net_effect::same_geometry_state(
+                                    &shape(**h),
+                                    &shape(handle),
+                                ))
+                    }) {
+                        reuse.insert(new, handle);
+                    }
+                }
+            }
+        }
+        let remap = |h: u64| reuse.get(&h).copied().unwrap_or(h);
+        let app = self.object_app(crate::objects::PART_APP)?;
+        let snapshots: Vec<_> = result
+            .handles
+            .iter()
+            .filter_map(|&h| {
+                self.drawing
+                    .doc
+                    .get_entity(Handle::new(h))
+                    .cloned()
+                    .map(|e| (h, e))
+            })
+            .collect();
+        for (new, mut entity) in snapshots {
+            let handle = remap(new);
+            if new != handle {
+                let previous = self
+                    .drawing
+                    .doc
+                    .get_entity(Handle::new(handle))
+                    .expect("old member");
+                let data = entity.common().extended_data.clone();
+                *entity.common_mut() = previous.common().clone();
+                for record in data.records() {
+                    crate::xdata::write_values(
+                        entity.common_mut(),
+                        &record.application_name,
+                        crate::xdata::app_handle(&self.drawing.doc, &record.application_name),
+                        Some(record.values.clone()),
+                    );
+                }
+                entity.common_mut().raw_record = None;
+                entity.common_mut().graphic_data = None;
+            }
+            if let Some(mut object) = crate::objects::instance(&entity) {
+                object.id = handle;
+                object.host = object.host.map(remap);
+                crate::xdata::write_json(
+                    entity.common_mut(),
+                    crate::objects::OBJECT_APP,
+                    crate::xdata::app_handle(&self.drawing.doc, crate::objects::OBJECT_APP),
+                    &object,
+                )?;
+            }
+            if let Some(mut part) = crate::xdata::read_json::<crate::objects::ObjectPart>(
+                entity.common(),
+                crate::objects::PART_APP,
+            ) {
+                part.owner = remap(part.owner);
+                crate::xdata::write_json(
+                    entity.common_mut(),
+                    crate::objects::PART_APP,
+                    app,
+                    &part,
+                )?;
+            }
+            let tag = wall_tag(&entity).map(|mut tag| {
+                tag.group = remap(tag.group);
+                tag
+            });
+            self.drawing
+                .doc
+                .replace_entity_arc(Handle::new(handle), std::sync::Arc::new(entity));
+            if let Some(tag) = tag {
+                self.stamp_wall(handle, &tag)?;
+            }
+            if new != handle {
+                self.drawing.doc.remove_entity_arc(Handle::new(new));
+            }
+        }
+        result.group = remap(result.group);
+        for handles in [
+            &mut result.handles,
+            &mut result.centrelines,
+            &mut result.inserts,
+            &mut result.outlines,
+            &mut result.hatches,
+        ] {
+            handles.iter_mut().for_each(|h| *h = remap(*h));
+        }
+        for handles in result.handle_map.values_mut() {
+            handles.iter_mut().for_each(|h| *h = remap(*h));
+        }
+        let removed: Vec<_> = result
+            .handle_map
+            .keys()
+            .filter(|h| !result.handles.contains(h))
+            .copied()
+            .map(Handle::new)
+            .collect();
+        let pieces: Vec<_> = result
+            .handle_map
+            .iter()
+            .filter(|(h, into)| into.as_slice() != [**h])
+            .map(|(&h, into)| (Handle::new(h), into.clone()))
+            .collect();
         for &handle in &removed {
             self.drawing.doc.remove_entity_arc(handle);
         }
         self.follow_edit(&[], &removed, &pieces, &[]);
         self.remap_wall_fields(&result.handle_map)?;
+        self.remember_replacements(&result.handle_map)?;
         Ok(result)
+    }
+
+    fn wall_result(&self, group: &WallGroup) -> Result<WallResult, CoreError> {
+        let role = |name: &str| {
+            group
+                .members
+                .iter()
+                .filter(|(_, r, _)| r == name)
+                .map(|(h, _, _)| *h)
+                .collect::<Vec<_>>()
+        };
+        let centrelines = role("run");
+        let records = self.objects(&crate::objects::ObjectFilter::default())?;
+        let sum = |name: &str| {
+            records
+                .iter()
+                .filter(|r| centrelines.contains(&r.instance.id))
+                .filter_map(|r| r.facts.get(name))
+                .sum()
+        };
+        Ok(WallResult {
+            group: group.id,
+            handles: group.members.iter().map(|(h, _, _)| *h).collect(),
+            outlines: role("outline"),
+            hatches: role("hatch"),
+            inserts: role("opening"),
+            centreline_length: sum("length"),
+            gross_area: sum("gross_area"),
+            net_area: sum("net_area"),
+            volume: sum("volume"),
+            centrelines,
+            handle_map: BTreeMap::new(),
+        })
     }
 
     fn wall_group_for(&self, handle: u64, role: &str) -> Result<(WallGroup, usize), CoreError> {
@@ -1131,7 +1314,7 @@ impl Session {
             }
         }
         Err(invalid(format!(
-            "Handle {handle:X} is not a wall {role}; use wall_groups to read the system"
+            "Handle {handle} is not a wall {role}; use wall_groups to read the system"
         )))
     }
 
@@ -1212,11 +1395,18 @@ impl Session {
         if let Some(v) = edit.head {
             opening.head = Some(v);
         }
-        let mut result = self.rebuild_walls(spec, &[group])?;
-        result
-            .handle_map
-            .insert(insert, vec![result.inserts[index]]);
-        Ok(result)
+        if let Some(mark) = edit.mark {
+            self.set_object_props(
+                &[insert],
+                &BTreeMap::from([("mark".into(), serde_json::json!(mark))]),
+                None,
+            )?;
+        }
+        if crate::net_effect::same_value(&serde_json::json!(&spec), &serde_json::json!(&group.spec))
+        {
+            return self.wall_result(&group);
+        }
+        self.rebuild_walls(spec, &[group])
     }
 
     pub(crate) fn refuse_wall_insert_erase(&self, handles: &[Handle]) -> Result<(), CoreError> {
@@ -1228,7 +1418,7 @@ impl Session {
                 .and_then(wall_tag)
                 .is_some_and(|tag| tag.role == "opening")
             {
-                return Err(invalid(format!("Opening insert {:X} belongs to a wall system; use remove_wall_openings to close the wall in the same undo step", handle.value())));
+                return Err(invalid(format!("Opening insert {} belongs to a wall system; use remove_wall_openings to close the wall in the same undo step", handle.value())));
             }
         }
         Ok(())

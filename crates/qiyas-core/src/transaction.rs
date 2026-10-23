@@ -110,6 +110,10 @@ impl Session {
         label: &str,
         f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        let replacements = self.handle_replacements.clone();
+        if self.tx_depth == 0 {
+            self.handle_replacements.clear();
+        }
         let view = TxView::take(self);
         let current = self.current.clone();
         let revision = self.document_revision;
@@ -148,6 +152,7 @@ impl Session {
                     doc_changed: &mut doc_changed,
                 });
                 view.put_back(self);
+                self.handle_replacements = replacements;
                 self.last_change = change;
                 // The drawing is as it was at `revision`: drawn again, and no unsaved change
                 // left by steps that were put back.

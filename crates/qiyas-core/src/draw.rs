@@ -892,12 +892,10 @@ impl Session {
                         .get_entity(Handle::new(h))
                         .ok_or(CoreError::NoSuchEntity(h))?;
                     if Some(entity.common().owner_handle) != sheet {
-                        return Err(invalid(format!("Entity {h:X} is not on this sheet")));
+                        return Err(invalid(format!("Entity {h} is not on this sheet")));
                     }
                     hatch.add_path(self.boundary_path(entity).ok_or_else(|| {
-                        invalid(format!(
-                            "Entity {h:X} is not closed: it can't bound a hatch"
-                        ))
+                        invalid(format!("Entity {h} is not closed: it can't bound a hatch"))
                     })?);
                 }
             }

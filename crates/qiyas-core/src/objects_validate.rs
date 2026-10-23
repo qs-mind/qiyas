@@ -17,7 +17,7 @@ fn metadata<T: DeserializeOwned>(common: &EntityCommon, app: &str) -> Result<Opt
     };
     let invalid = |reason: &str| {
         CoreError::InvalidCommand(format!(
-            "Invalid {app} metadata on entity {:X}: {reason}",
+            "Invalid {app} metadata on entity {}: {reason}",
             common.handle.value()
         ))
     };
@@ -56,7 +56,7 @@ impl Session {
             if let Some(region) = metadata::<RetainedRegion>(common, REGION_APP)? {
                 if !crate::object_regions::valid_region_metadata(&region) {
                     return Err(CoreError::InvalidCommand(format!(
-                        "Invalid {REGION_APP} geometry on entity {:X}",
+                        "Invalid {REGION_APP} geometry on entity {}",
                         common.handle.value(),
                     )));
                 }

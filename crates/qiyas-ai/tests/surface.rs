@@ -1252,7 +1252,7 @@ fn validate_reports_all_input_errors_and_checks_step_indexes_without_a_drawing()
     assert_eq!(out["valid"], false);
     assert!(out["errors"].as_array().unwrap().len() >= 3, "{out}");
     assert!(
-        out["warnings"]
+        out["errors"]
             .as_array()
             .unwrap()
             .iter()
@@ -1301,7 +1301,9 @@ fn executing_bad_inputs_reports_all_fields_and_keeps_schema_and_example() {
         errors.iter().any(|issue| issue["pointer"] == "/b"),
         "{error}"
     );
-    assert_eq!(error["warnings"][0]["code"], "unknown_field");
+    assert!(errors
+        .iter()
+        .any(|issue| issue["pointer"] == "/typo" && issue["code"] == "unknown_field"));
     assert!(error["schema"].is_object());
     assert!(error["example"].is_object());
 }
@@ -1324,21 +1326,32 @@ async fn mizan_reads_commands_and_validates_before_a_drawing_is_open() {
 }
 
 #[test]
-fn successful_inputs_expose_ignored_fields_and_defaults_in_single_and_batch_results() {
+fn valid_inputs_keep_defaults_and_edits_refuse_unknown_fields() {
     let (_dir, mut session) = sample();
-    let command =
+    let mut command =
         json!({"type":"draw","kind":"polyline","points":[[20000,0],[21000,0]],"typo":true});
+    let before = count(&session);
+    let error = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":command}}),
+    )
+    .unwrap_err()
+    .json();
+    assert!(error["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["pointer"] == "/typo"));
+    assert_eq!(count(&session), before);
+    command.as_object_mut().unwrap().remove("typo");
     let single = call(
         &mut session,
         EXECUTE,
         json!({"op":"run","args":{"command":command}}),
     )
     .unwrap();
-    assert!(single["warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|issue| issue["pointer"] == "/typo"));
+    assert_eq!(single["warnings"], json!([]));
     assert!(
         single["defaults_used"]
             .as_array()
@@ -1351,15 +1364,11 @@ fn successful_inputs_expose_ignored_fields_and_defaults_in_single_and_batch_resu
         &mut session,
         EXECUTE,
         json!({"op":"batch","args":{"commands":[{
-            "type":"draw","kind":"polyline","points":[[22000,0],[23000,0]],"typo":true
+            "type":"draw","kind":"polyline","points":[[22000,0],[23000,0]]
         }]}}),
     )
     .unwrap();
-    assert!(batch["warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|issue| issue["pointer"] == "/commands/0/typo"));
+    assert_eq!(batch["warnings"], json!([]));
     assert!(
         batch["defaults_used"]
             .as_array()
@@ -1445,7 +1454,7 @@ fn validate_and_execute_share_the_batch_size_schema() {
 }
 
 #[test]
-fn unknown_reference_fields_are_reported_as_warnings_after_binding() {
+fn unknown_reference_fields_are_refused_before_binding() {
     let (_dir, mut session) = sample();
     let commands = json!([
         {"type":"draw","kind":"line","a":[30000,0],"b":[31000,0]},
@@ -1457,15 +1466,16 @@ fn unknown_reference_fields_are_reported_as_warnings_after_binding() {
         json!({"op":"validate","args":{"commands":commands}}),
     )
     .unwrap();
-    assert_eq!(validation["valid"], true, "{validation}");
+    assert_eq!(validation["valid"], false, "{validation}");
     let out = call(
         &mut session,
         EXECUTE,
         json!({"op":"batch","args":{"commands":commands}}),
     )
-    .unwrap();
+    .unwrap_err()
+    .json();
     assert!(
-        out["warnings"]
+        out["errors"]
             .as_array()
             .unwrap()
             .iter()
@@ -1478,7 +1488,7 @@ fn unknown_reference_fields_are_reported_as_warnings_after_binding() {
 }
 
 #[test]
-fn runtime_refusals_keep_input_warnings() {
+fn unknown_edit_fields_are_refused_before_geometry_runs() {
     let (_dir, mut session) = sample();
     let error = call(
         &mut session,
@@ -1491,11 +1501,11 @@ fn runtime_refusals_keep_input_warnings() {
     .json();
     assert!(error["code"].is_string(), "{error}");
     assert!(
-        error["message"].as_str().unwrap().contains("radius"),
+        error["message"].as_str().unwrap().contains("typo"),
         "{error}"
     );
     assert!(
-        error["warnings"]
+        error["errors"]
             .as_array()
             .unwrap()
             .iter()
@@ -1505,13 +1515,32 @@ fn runtime_refusals_keep_input_warnings() {
 }
 
 #[test]
-fn failed_batches_keep_warnings_and_the_bound_fields_error_path() {
+fn failed_batches_report_unknown_fields_and_bound_value_errors_without_mutation() {
     let (_dir, mut session) = sample();
     let before = count(&session);
     let error = call(&mut session, EXECUTE, json!({"op":"batch","args":{"commands":[
         {"type":"draw","kind":"polyline","points":[[30000,0],[31000,0]],"typo":true},
         {"type":"draw","kind":"line","a":{"$step":0,"pointer":"/added/0"},"b":[32000,0],"extra":true}
     ],"batch_typo":true}})).unwrap_err().json();
+    assert_eq!(error["code"], "unknown_field", "{error}");
+    let errors = error["errors"].as_array().unwrap();
+    for pointer in ["/batch_typo", "/commands/0/typo", "/commands/1/extra"] {
+        assert!(
+            errors.iter().any(|issue| issue["pointer"] == pointer),
+            "{error}"
+        );
+    }
+    assert_eq!(count(&session), before);
+    let error = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":[
+            {"type":"draw","kind":"polyline","points":[[30000,0],[31000,0]]},
+            {"type":"draw","kind":"line","a":{"$step":0,"pointer":"/added/0"},"b":[32000,0]}
+        ]}}),
+    )
+    .unwrap_err()
+    .json();
     assert_eq!(error["code"], "invalid_value", "{error}");
     assert!(
         error["errors"]
@@ -1521,14 +1550,7 @@ fn failed_batches_keep_warnings_and_the_bound_fields_error_path() {
             .any(|issue| issue["pointer"] == "/commands/1/a"),
         "{error}"
     );
-    let warnings = error["warnings"].as_array().unwrap();
-    for pointer in ["/batch_typo", "/commands/0/typo", "/commands/1/extra"] {
-        assert!(
-            warnings.iter().any(|issue| issue["pointer"] == pointer),
-            "{error}"
-        );
-    }
-    assert!(error["schema"].is_object(), "{error}");
+    assert!(error["schema"].is_object());
     assert_eq!(count(&session), before, "the earlier step was rolled back");
 }
 
@@ -2189,4 +2211,116 @@ fn digest_named_handles_and_scope_checks_share_drawing_evidence() {
         .quantities
         .iter()
         .any(|q| q.object == named && (q.quantity - 18.6).abs() < 1e-9));
+}
+
+#[test]
+fn wall_opening_batch_keeps_earlier_step_handles_and_custom_ids() {
+    let (_dir, mut session) = sample();
+    let result = call(&mut session, EXECUTE, json!({"op":"batch","args":{"commands":[
+        {"type":"walls","runs":[{"points":[[30000,0],[36000,0]]},{"points":[[36000,0],[36000,6000]]}],"thickness":200},
+        {"type":"add_wall_openings","centreline":{"$step":0,"pointer":"/outcome/centrelines/0"},"openings":[{"at":2000,"width":900,"kind":"door"}]},
+        {"type":"add_wall_openings","centreline":{"$step":0,"pointer":"/outcome/centrelines/1"},"openings":[{"at":2000,"width":1200,"kind":"window"}]},
+        {"type":"set_object_props","targets":[{"$step":1,"pointer":"/outcome/inserts/0"}],"props":{"mark":"D1"}}
+    ]}})).unwrap();
+    assert_eq!(result["ok"], true, "{result}");
+    let groups = session.wall_groups(None).unwrap();
+    let group = groups
+        .iter()
+        .find(|g| g.runs.iter().any(|r| r.points[0][0] == 30000.0))
+        .unwrap();
+    assert_eq!(
+        group.runs.iter().map(|r| r.openings.len()).sum::<usize>(),
+        2
+    );
+    let door = group
+        .runs
+        .iter()
+        .flat_map(|r| &r.openings)
+        .find(|o| matches!(o.opening.kind, qiyas_core::OpeningKind::Door))
+        .unwrap()
+        .insert;
+    let objects = call(
+        &mut session,
+        READ,
+        json!({"op":"records","args":{"collection":"objects"}}),
+    )
+    .unwrap();
+    let door_key = door.to_string();
+    assert!(
+        objects["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["key"] == door_key && r["properties"]["mark"] == "D1"),
+        "{objects}"
+    );
+}
+
+#[test]
+fn bound_step_handles_follow_a_real_replacement_after_joining() {
+    let (_dir, mut session) = sample();
+    let result = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":[
+            {"type":"draw","kind":"line","a":[30000,0],"b":[31000,0]},
+            {"type":"draw","kind":"line","a":[31000,0],"b":[32000,0]},
+            {"type":"edit","kind":"join","targets":[{"handle":{"$step":0}},{"handle":{"$step":1}}]},
+            {"type":"set_property","target":{"handle":{"$step":1}},"prop":"color","value":"ACI 1"}
+        ]}}),
+    )
+    .unwrap();
+    assert_eq!(result["ok"], true, "{result}");
+    let records = call(&mut session, READ, json!({"op":"records","args":{"collection":"entities","type":"LwPolyline","bounds":[[29999,-1],[32001,1]],"fields":["/common/color"]}})).unwrap();
+    assert!(
+        records["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["fields"]["/common/color"] == json!({"Index":1})),
+        "{records}"
+    );
+}
+
+#[test]
+fn read_shortcuts_accept_the_same_handle_strings_as_commands() {
+    let (_dir, mut session) = sample();
+    let metre = 1.0 / session.drawing.units.to_metres();
+    let added = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"draw","kind":"line","a":[30.0*metre,0],"b":[31.0*metre,0]
+        }}}),
+    )
+    .unwrap();
+    let handle = added["added"][0].as_u64().unwrap();
+    for value in [
+        json!(handle),
+        json!(handle.to_string()),
+        json!(format!("0x{handle:X}")),
+    ] {
+        let records = call(
+            &mut session,
+            READ,
+            json!({"op":"records","args":{"collection":"entities","handles":[value]}}),
+        )
+        .unwrap();
+        assert_eq!(records["records"][0]["key"], handle);
+        let entity = call(
+            &mut session,
+            READ,
+            json!({"op":"query","args":{"kind":"entity","handle":value}}),
+        )
+        .unwrap();
+        assert_eq!(entity["entity"]["handle"], handle);
+        let measured = call(
+            &mut session,
+            READ,
+            json!({"op":"measure","args":{"handle":value}}),
+        )
+        .unwrap();
+        assert_eq!(measured["handle"], handle);
+        assert_eq!(measured["length_m"], 1.0);
+    }
 }

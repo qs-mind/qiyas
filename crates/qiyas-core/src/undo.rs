@@ -320,7 +320,7 @@ impl TablesSnapshot {
     }
 
     /// True when `doc` holds these tables still.
-    fn same_as(&self, doc: &CadDocument) -> bool {
+    pub(crate) fn same_as(&self, doc: &CadDocument) -> bool {
         self.layers == doc.layers
             && self.line_types == doc.line_types
             && self.text_styles == doc.text_styles
@@ -374,7 +374,14 @@ impl DocChange {
             match (image, now) {
                 (None, true) => change.added.push(handle),
                 (None, false) => {}
-                (Some(image), true) => change.replaced.push((handle, image)),
+                (Some(image), true) => {
+                    if !crate::net_effect::same_entity(
+                        &image,
+                        doc.get_entity(handle).expect("present"),
+                    ) {
+                        change.replaced.push((handle, image));
+                    }
+                }
                 (Some(image), false) => change.removed.push(image),
             }
         }

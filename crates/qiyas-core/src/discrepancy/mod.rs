@@ -285,7 +285,7 @@ impl Session {
                             .drawing
                             .doc
                             .get_entity(opencadcodec::Handle::new(h))
-                            .ok_or_else(|| invalid(format!("Query evidence {h:X} is missing")))?;
+                            .ok_or_else(|| invalid(format!("Query evidence {h} is missing")))?;
                         let candidate = crate::query::Candidate {
                             entity,
                             doc: &s.drawing.doc,

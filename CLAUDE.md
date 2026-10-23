@@ -193,7 +193,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   refuses a word owned by two commands. `x-prompts` overrides argument order or prompt text.
 - `validation.rs` checks raw inputs against those schemas before execution, collecting missing
   fields, wrong types, enums, constants and bounds together with JSON pointers. Unknown fields
-  are returned as warnings. The existing serde path error, schema and example remain available.
+  on edits are errors; read commands return warnings. The existing serde path error, schema and example remain available.
   `Session::run_input(&Value, Source)` is the JSON execution boundary: it validates the raw
   input, deserializes a plain `Command`, resolves omitted defaults, then executes. Its separate
   `Reported` struct holds `outcome: Outcome`, `defaults_used: [{field, value, unit}]` and
@@ -925,14 +925,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `add_wall_openings {centreline, openings: [{at, width, kind, swing?, sill?, head?}]}` adds
   doors/windows to the run named by its centreline handle. `remove_wall_openings {inserts}`
   closes the cuts named by opening insert handles. `edit_wall_opening {insert, at?, width?,
-  kind?, swing?, sill?, head?}` moves or resizes an opening or changes its properties. Each
-  rebuilds the group in one undo step. `delete_entities` refuses wall opening inserts and
+  kind?, swing?, sill?, head?, mark?}` moves or resizes an opening or changes its properties.
+  Geometry changes rebuild the group in one undo step; an empty edit does not rebuild. `delete_entities` refuses wall opening inserts and
   names `remove_wall_openings`, so erasing a symbol cannot leave an unexplained hole.
 - `wall_groups {width?}` is a read command, reachable with `qiyas_read run`. It reports each
   group on the sheet, its layers, and runs with centreline handle, length, thickness, height,
   justification and opening insert handles/properties. With `width`, each run includes
   `free_ranges` of opening-centre `at` values. Both ends are accepted by the same geometry
-  checks used by the mutating commands. Read it again after a rebuild to get current handles.
+  checks used by the mutating commands. Surviving runs and openings retain their handles.
 - Openings must fit a straight segment clear of corners, junctions and other openings.
   Refusals name the junction and offer the fitting ranges (or say none fit). A door defaults
   to left swing, sill 0 and head `min(2.1, run height)`; a window defaults to sill 0.9 m and
@@ -2261,7 +2261,7 @@ and Mizan's turn epoch together.
   | `COUNT <block>` | `CountBlock` on the sheet (the counts go in the batch report). |
   | `DI` / `DIST p1 p2` | `MeasureDistance`; exactly 2 points. |
   | `AA` / `AREA p1 p2 p3…` | `MeasureArea`; 3 points or more; a blank line or the end of the file ends them. |
-  | `MEASURE <handle hex>` | `MeasureEntity` of the drawing's own entity. |
+  | `MEASURE <decimal handle or 0x…>` | `MeasureEntity` of the drawing's own entity. |
   | `EXPORT [xlsx path]` | The take-off to Excel; bare, `{name}.{ext}.xlsx`. |
   | `IMPORTBOQ <xlsx path>` | BOQ from Excel, then `SetBoq`. |
   | `COMPARE` | `compare_session`, default tolerance. |
@@ -2511,9 +2511,9 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
   entity targets and counts read the drawing. The overall `untied_checks` and `line` explicitly
   say how many checks prove nothing about the drawing, even when their arithmetic passes.
 - (9) `opening_schedule {at, source_sheet?}` / `OPENINGSCHEDULE` builds an ACAD_TABLE on the
-  current sheet from wall systems on the source (Model by default). Rows group by kind, width,
-  and head minus sill, with physical dimensions in mm. Size marks such as D-900x2100 are
-  assigned to inserts in `QIYAS_OPENING_MARK` xdata and returned by `wall_groups`; those marks
+  current sheet from wall systems on the source (Model by default). Rows group by explicit ID,
+  falling back to a size mark from kind, width and head minus sill, with dimensions in mm.
+  Display marks such as D1 or D-900x2100 are assigned to inserts in `QIYAS_OPENING_MARK` xdata and returned by `wall_groups`; those marks
   can be used in plan tags. Count cells and the total use `QiyasOpeningCount` fields linked
   to the source sheet handle. `QIYAS_OPENING_SCHEDULE` keeps the source on the table. Drawing
   edits refresh groups, marks and counts within their undo step, including newly added sizes;
@@ -2548,3 +2548,62 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Delete all conversations opens a confirmation naming the count; Cancel or Escape preserves
   the saved chats. Single-conversation deletion is unchanged.
 - Report and evidence: `docs/2026-10-23-qiyas-goal-F.md`. No new dependencies or licence changes.
+
+## Honest commands and stable handles (Goal B, 23 October 2026)
+
+- Drawing edits keep the requested field changes before derivation and verify them after
+  object geometry, hosted positions, schedules, measurement and linked fields finish. An
+  overridden field cancels the whole command and names the responsible update. Entity
+  fields refresh only in the final derivation pass, after object geometry and schedules.
+  Computed closed outlines and hatch boundaries compare by their full edges, arcs and widths, allowing a different
+  starting vertex or direction and floating-point round-off. Ordinary vertex order stays
+  significant. Hosted angles compare modulo a full turn.
+  Entity comparisons ignore raw drawing caches. Unchanged entities and unchanged take-off snapshots
+  do not enter the change list or create undo steps; a no-op retains redo. Unchanged table
+  cells also skip rebuilding their display blocks.
+  If an edit changes no entity, drawing table or take-off value, derivations are skipped too;
+  this includes empty edits after reopening a DWG or DXF. Explicit `update_fields` still refreshes.
+  Unchanged take-off, BOQ and conflict edits likewise report no change and retain redo.
+- Opening `mark` is an explicit ID. Automatic size marks remain display defaults and never
+  replace that property. Opening schedules group by the explicit ID when present.
+  `edit_wall_opening` accepts `mark`; an empty edit keeps its handles and makes no undo step.
+  Old size marks written into the property by previous versions remain automatic; explicit
+  edits carry an ID-source marker.
+- Moving a hosted opening along its wall updates the position property named by its host-cut
+  recipe, in metres. A perpendicular move is refused. Copy an opening with its host, or use
+  `add_wall_openings`; copying it alone is refused before creating overlapping geometry.
+- Generated parts cannot receive raw record, text or vertex edits. Their owner is named in
+  the refusal. Whole-object transforms and erase through a part selection act on its owner.
+  Colour, linetype and lineweight through `set_property` apply to the owner and
+  its generated graphics. A part's direct layer or shape edit is refused. Retained room boundaries
+  follow enclosing walls; direct vertex, shape and transform edits are refused.
+- Live schedules refuse row/column/merge changes. Cells are editable only for a recipe that
+  explicitly preserves overrides. Change the source objects or create the desired schedule.
+- Layer renames and merges update persisted layer references in object instances, types,
+  schedules, wall metadata and drawing knowledge, including layer-property defaults and
+  choices. `plan.layer_properties` binds editable
+  text properties to role layers; `plan.host_layer_property` binds a hosted driver's layer
+  to its host's property. Wall layer properties use these data bindings and actually apply.
+  Role-layer edits on a joined wall update every run because the outlines and hatch are shared.
+  Placement role layers initialise their bound properties; conflicting explicit values are
+  refused. Unchanged generated graphics reserve their handles before changed graphics match.
+- Wall rebuilds reuse surviving driver and member handles and retain presentation properties.
+  Surviving centrelines retain their constraints. Joined groups give shared graphics to
+  the smallest surviving driver handle, matching the object engine even when run order differs.
+  Selected-object schedules and linked object fields follow replacement maps. Within a
+  transaction, literal handles and bound `$step` results follow single replacements; ambiguous
+  replacements produce a clear refusal. The MCP boundary resolves them before validation.
+- Command handles are decimal. Decimal strings and explicit `0x` hexadecimal strings are
+  accepted at the JSON boundary, including object record keys. Target objects also accept
+  a bare handle. MCP record, entity and measurement reads accept the same handle strings;
+  operation shortcuts normalize them before their argument validation, including captures.
+  Script `MEASURE` takes decimal, or explicit `0x` hexadecimal, matching the
+  command boundary. DWG field codes keep their required hexadecimal storage syntax.
+  Older schedule templates using `id_hex` remain readable but display decimal handles.
+  Properties, constraints, field target labels, recognition results and BOQ evidence also
+  display decimal handles. DWG field-code construction keeps its hexadecimal encoding.
+  Display tests that expected `2A` for handle 42 now expect `42`; field-code tests still
+  require the DWG hexadecimal form.
+- Unknown fields on editing, file, session and view commands are errors. Read commands retain
+  their warnings. Tests that previously required ignored edit fields now require refusal and
+  unchanged state; default-value coverage remains on valid inputs.

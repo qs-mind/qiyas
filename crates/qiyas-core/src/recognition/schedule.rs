@@ -64,7 +64,7 @@ impl Session {
             self.drawing
                 .doc
                 .get_entity(Handle::new(h))
-                .ok_or_else(|| invalid(format!("Missing schedule source {h:X}")))
+                .ok_or_else(|| invalid(format!("Missing schedule source {h}")))
         };
         match source {
             GridSource::Table { handle, skip_rows } => {

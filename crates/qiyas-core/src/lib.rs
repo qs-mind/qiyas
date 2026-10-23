@@ -29,15 +29,18 @@ mod field;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
 mod groups;
+mod handle_refs;
 mod image;
 mod input;
 mod input_context_defaults;
 mod inquiry;
 pub mod knowledge;
+mod layer_refs;
 mod layers;
 pub mod layouts;
 mod modify;
 mod modify2;
+mod net_effect;
 mod object_bands;
 mod object_migration;
 pub mod object_regions;

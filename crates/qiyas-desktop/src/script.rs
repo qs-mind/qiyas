@@ -726,7 +726,7 @@ mod tests {
 
         // A step that fails: the steps before it stay done, those after it never run.
         let result = ipc
-            .run("fails.scr", "COUNT DOOR\nMEASURE FFFF\nCOUNT DOOR\n")
+            .run("fails.scr", "COUNT DOOR\nMEASURE 0xFFFF\nCOUNT DOOR\n")
             .unwrap();
         let got = lines(&result);
         assert_eq!(got.len(), 2, "{got:?}");
@@ -1035,19 +1035,24 @@ mod tests {
                     "unexpected": true
                 }}),
             )
-            .unwrap();
-        assert_eq!(outcome["type"], "added");
-        assert_eq!(outcome["warnings"][0]["code"], "unknown_field");
-        assert_eq!(outcome["warnings"][0]["pointer"], "/unexpected");
+            .unwrap_err();
+        // Goal B: an unknown field on an edit is refused, naming it, and nothing is drawn.
+        let message = outcome.as_str().unwrap();
+        assert!(
+            message.contains("unknown_field") && message.contains("/unexpected"),
+            "{message}"
+        );
     }
 
     #[test]
     fn script_logs_keep_defaults_and_unknown_fields_from_raw_input() {
         let ipc = Ipc::open();
-        let result = ipc.run(
-            "input-notes.scr",
-            "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\nTEXT 2,0 Door\n",
-        ).unwrap();
+        let result = ipc
+            .run(
+                "input-notes.scr",
+                "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\"}\nTEXT 2,0 Door\n",
+            )
+            .unwrap();
         let lines = result["lines"].as_array().unwrap();
         assert_eq!(lines.len(), 2);
         for line in lines {
@@ -1056,6 +1061,15 @@ mod tests {
             assert!(text.contains("/height="), "{text}");
             assert!(text.contains("/rotation=0"), "{text}");
         }
+        // Goal B: an unknown field on an edit stops the script on its line, naming the field.
+        let result = ipc
+            .run(
+                "typo.scr",
+                "{\"type\":\"text\",\"at\":[0,0],\"value\":\"Room\",\"typo\":true}\n",
+            )
+            .unwrap();
+        let lines = result["lines"].as_array().unwrap();
+        assert_eq!(lines[0]["ok"], false, "{lines:?}");
         assert!(lines[0]["message"].as_str().unwrap().contains("/typo"));
     }
 }

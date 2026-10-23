@@ -570,10 +570,10 @@ impl Parser {
             }
             "MEASURE" => {
                 let handle = match args.as_slice() {
-                    [h] => u64::from_str_radix(&normalize_digits(h), 16).ok(),
+                    [h] => crate::registry::handle_number(&serde_json::Value::String(normalize_digits(h))),
                     _ => None,
                 }
-                .ok_or_else(|| at(line, "MEASURE takes an entity handle in hex"))?;
+                .ok_or_else(|| at(line, "MEASURE takes a decimal entity handle, or 0x followed by hexadecimal digits"))?;
                 self.push(
                     line,
                     Action::Command(Command::MeasureEntity {

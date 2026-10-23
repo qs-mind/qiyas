@@ -19,7 +19,7 @@
     "filter": {"category": "room"},
     "columns": ["name", "net_floor_area"],
     "headers": ["Room", "Area (m²)"],
-    "templates": {"name": "{if(name == '', 'Room ', '')}{if(name == '', id_hex, name)}"},
+    "templates": {"name": "{if(name == '', 'Room ', '')}{if(name == '', id, name)}"},
     "decimals": {"net_floor_area": 2},
     "totals": {"name": "Total area", "net_floor_area": ""},
     "default_layer": "A-ANNO-TABL",

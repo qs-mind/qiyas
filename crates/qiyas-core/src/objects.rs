@@ -75,6 +75,10 @@ pub struct PlanRecipe {
     pub centreline_driver: bool,
     /// Optional layer per generated role; instance overrides are applied last.
     pub role_layers: BTreeMap<String, String>,
+    /// Editable text properties supplying the layers for each role.
+    pub layer_properties: BTreeMap<String, String>,
+    /// A host property supplying this driver's layer.
+    pub host_layer_property: Option<String>,
     pub hatch: bool,
     pub centreline: bool,
     /// DrawSpec JSON in local drawing coordinates. Strings beginning '=' are expressions.
@@ -334,6 +338,18 @@ impl ObjectType {
         .flatten()
         {
             expression(text)?;
+        }
+        for (role, property) in &self.plan.layer_properties {
+            if role.trim().is_empty()
+                || !matches!(
+                    self.properties.get(property),
+                    Some(Property::Text { .. } | Property::Choice { .. })
+                )
+            {
+                return Err(invalid(format!(
+                    "Layer role {role} must use a declared text or choice property: {property}"
+                )));
+            }
         }
         if matches!(self.join, JoinRule::Union) && self.plan.band_faces.is_none() {
             return Err(invalid("Union joins require band_faces"));
@@ -644,7 +660,19 @@ impl Session {
         let mut out = Vec::new();
         for p in placements {
             let definition = self.object_type(&p.type_name)?;
-            let props = definition.properties(&p.props)?;
+            let mut supplied = p.props.clone();
+            for (role, property) in &definition.plan.layer_properties {
+                if let Some(layer) = p.layers.get(role) {
+                    let value = json!(layer);
+                    if supplied.get(property).is_some_and(|given| given != &value) {
+                        return Err(invalid(format!(
+                            "The {role} layer and {property} property must name the same layer"
+                        )));
+                    }
+                    supplied.insert(property.clone(), value);
+                }
+            }
+            let props = definition.properties(&supplied)?;
             if p.region.is_some() && definition.geometry != GeometryKind::Region {
                 return Err(invalid("A retained region requires region geometry"));
             }
@@ -741,7 +769,105 @@ impl Session {
             if level.is_some() {
                 object.level = level.clone();
             }
+            let role_edits: BTreeMap<_, _> = definition
+                .plan
+                .layer_properties
+                .iter()
+                .filter_map(|(role, property)| {
+                    props
+                        .get(property)
+                        .map(|value| (role.clone(), value.clone()))
+                })
+                .collect();
+            if !role_edits.is_empty() && matches!(definition.join, JoinRule::Union) {
+                // A joined band's outlines and hatch belong to the assembly. Keep every
+                // member's source layer properties consistent, whichever run was selected.
+                for member in self.band_members(&object, &definition)? {
+                    if member.id == h {
+                        continue;
+                    }
+                    let mut peer = self
+                        .drawing
+                        .doc
+                        .get_entity(Handle::new(member.id))
+                        .and_then(instance)
+                        .ok_or(CoreError::NoSuchEntity(member.id))?;
+                    let peer_definition = self.object_type(&peer.type_name)?;
+                    for (role, value) in &role_edits {
+                        if let Some(property) = peer_definition.plan.layer_properties.get(role) {
+                            peer.props.insert(property.clone(), value.clone());
+                        }
+                    }
+                    peer.props = peer_definition.properties(&peer.props)?;
+                    self.apply_object_layers(&mut peer, &peer_definition)?;
+                    self.stamp_object(peer.id, &peer)?;
+                }
+            }
+            self.apply_object_layers(&mut object, &definition)?;
             self.stamp_object(h, &object)?;
+            if props
+                .get("mark")
+                .and_then(Value::as_str)
+                .is_some_and(|mark| !mark.is_empty())
+            {
+                let app = self.object_app(crate::opening_schedule::ID_SOURCE_APP)?;
+                crate::xdata::write_text(
+                    self.drawing
+                        .doc
+                        .get_entity_mut(Handle::new(h))
+                        .expect("object driver")
+                        .common_mut(),
+                    crate::opening_schedule::ID_SOURCE_APP,
+                    app,
+                    Some("explicit_or_empty"),
+                );
+            }
+        }
+        Ok(())
+    }
+    fn apply_object_layers(
+        &mut self,
+        object: &mut ObjectInstance,
+        definition: &ObjectType,
+    ) -> Result<(), CoreError> {
+        for (role, property) in &definition.plan.layer_properties {
+            if let Some(layer) = object.props.get(property).and_then(Value::as_str) {
+                object.layers.insert(role.clone(), layer.to_string());
+            }
+        }
+        let driver_layer = if definition.plan.centreline_driver {
+            object.layers.get("centreline").cloned()
+        } else {
+            definition
+                .plan
+                .host_layer_property
+                .as_ref()
+                .and_then(|property| {
+                    object
+                        .host
+                        .and_then(|h| self.drawing.doc.get_entity(Handle::new(h)))
+                        .and_then(instance)
+                        .and_then(|host| {
+                            host.props
+                                .get(property)
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        })
+                })
+        };
+        if let Some(layer) = driver_layer {
+            if layer.trim().is_empty() || layer.contains('|') {
+                return Err(invalid("Choose a local drawing layer"));
+            }
+            if !self.drawing.doc.layers.contains(&layer) {
+                self.new_layer(&layer)?;
+            }
+            self.drawing
+                .doc
+                .get_entity_mut(Handle::new(object.id))
+                .ok_or(CoreError::NoSuchEntity(object.id))?
+                .common_mut()
+                .layer = layer;
         }
         Ok(())
     }
@@ -1569,6 +1695,61 @@ impl Session {
         }
         Ok(result)
     }
+    pub(crate) fn move_hosted_object(
+        &mut self,
+        handle: Handle,
+        delta: [f64; 2],
+    ) -> Result<bool, CoreError> {
+        let Some(mut object) = self.drawing.doc.get_entity(handle).and_then(instance) else {
+            return Ok(false);
+        };
+        let definition = self.object_type(&object.type_name)?;
+        let Some(cut) = definition.host_cut.as_ref() else {
+            return Ok(false);
+        };
+        let Some(host) = object
+            .host
+            .and_then(|h| self.drawing.doc.get_entity(Handle::new(h)))
+            .and_then(instance)
+        else {
+            return Ok(false);
+        };
+        let host_definition = self.object_type(&host.type_name)?;
+        let member = self.band_member(&host, &host_definition)?;
+        let current = self.band_cut(&object, &definition)?.at_m / self.drawing.units.to_metres();
+        let mut remaining = current;
+        let mut segments: Vec<_> = member.points.windows(2).map(|p| (p[0], p[1])).collect();
+        if member.closed {
+            segments.push((*member.points.last().expect("host point"), member.points[0]));
+        }
+        let mut direction = None;
+        for (a, b) in segments {
+            let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+            if remaining <= length + self.measure_tol() {
+                direction = Some([(b[0] - a[0]) / length, (b[1] - a[1]) / length]);
+                break;
+            }
+            remaining -= length;
+        }
+        let Some([dx, dy]) = direction else {
+            return Err(invalid("The opening is outside its host wall"));
+        };
+        if (delta[0] * dy - delta[1] * dx).abs() > self.measure_tol() {
+            return Err(invalid(format!("Object {} must stay on wall {}. Move it along the wall or change its distance with set_object_props.", object.id, host.id)));
+        }
+        if !definition.properties.contains_key(&cut.at)
+            || definition.property_bindings.contains_key(&cut.at)
+        {
+            return Err(invalid("The opening position is calculated. Change the source properties of its position instead."));
+        }
+        let value = (current + delta[0] * dx + delta[1] * dy) * self.drawing.units.to_metres();
+        object
+            .props
+            .insert(cut.at.clone(), serde_json::json!(value));
+        self.stamp_object(object.id, &object)?;
+        Ok(true)
+    }
+
     fn refresh_hosted_positions(&mut self) -> Result<(), CoreError> {
         let objects: Vec<_> = self
             .drawing
@@ -1802,6 +1983,7 @@ impl Session {
                     object.props.insert(name.clone(), expr_json(value));
                 }
             }
+            self.apply_object_layers(&mut object, &definition)?;
             self.stamp_object(handle, &object)?;
             for layer in definition
                 .plan
@@ -1856,17 +2038,46 @@ impl Session {
                     .zip(new_regions[after].as_ref())
                     .is_some_and(|(a, b)| qiyas_geom::walls::regions_overlap(a, b, tolerance))
             };
+            let shape = crate::net_effect::geometry_state;
+            let old_shapes: Vec<_> = old.iter().map(|(_, entity)| shape(entity)).collect();
+            // Reserve every unchanged part before assigning changed geometry. Otherwise an
+            // earlier changed edge could consume the handle of a later unchanged edge.
+            let mut reserved = BTreeSet::new();
+            let exact: Vec<_> = wanted
+                .iter()
+                .map(|(role, entity)| {
+                    let wanted_shape = shape(entity);
+                    let found = old
+                        .iter()
+                        .enumerate()
+                        .find(|(i, (part, before))| {
+                            !reserved.contains(i)
+                                && same_role(part, before, role, entity)
+                                && crate::net_effect::same_geometry_state(
+                                    &old_shapes[*i],
+                                    &wanted_shape,
+                                )
+                        })
+                        .map(|(i, _)| i);
+                    if let Some(i) = found {
+                        reserved.insert(i);
+                    }
+                    found
+                })
+                .collect();
             let mut used = BTreeSet::new();
             let mut changed = Vec::new();
             let mut live = Vec::new();
             for (index, (role, mut entity)) in wanted.iter().cloned().enumerate() {
-                let candidate = old
-                    .iter()
-                    .enumerate()
-                    .find(|(i, (part, before))| {
-                        !used.contains(i)
-                            && same_role(part, before, &role, &entity)
-                            && (role != "hatch" || overlaps(*i, index))
+                let candidate = exact[index]
+                    .map(|i| (i, &old[i]))
+                    .or_else(|| {
+                        old.iter().enumerate().find(|(i, (part, before))| {
+                            !used.contains(i)
+                                && !reserved.contains(i)
+                                && same_role(part, before, &role, &entity)
+                                && (role != "hatch" || overlaps(*i, index))
+                        })
                     })
                     .or_else(|| {
                         // A move can leave no geometric overlap. The same number of matching
@@ -1885,7 +2096,9 @@ impl Session {
                         (old_count == new_count)
                             .then(|| {
                                 old.iter().enumerate().find(|(i, (part, before))| {
-                                    !used.contains(i) && same_role(part, before, &role, &entity)
+                                    !used.contains(i)
+                                        && !reserved.contains(i)
+                                        && same_role(part, before, &role, &entity)
                                 })
                             })
                             .flatten()
@@ -1977,6 +2190,7 @@ impl Session {
                 .collect();
             self.follow_edit(&changed, &removed, &pieces, &[]);
             self.remap_wall_fields(&mapping)?;
+            self.remember_replacements(&mapping)?;
         }
         self.refresh_insert_symbol_recipes()
     }

@@ -221,11 +221,47 @@ impl Session {
             return Ok(());
         }
         let definitions = definitions()?;
+        // Older stored recipes predate layer-property bindings. Upgrade only that missing
+        // contract, keeping the drawing's supplied geometry and quantity recipes intact.
+        for template in definitions.values() {
+            if let Some(entry) = knowledge::get(&self.drawing.doc, Kind::Types, &template.name)? {
+                if entry.data["plan"].get("layer_properties").is_none() {
+                    let mut data = entry.data;
+                    data["plan"]["layer_properties"] = json!(template.plan.layer_properties);
+                    data["plan"]["host_layer_property"] = json!(template.plan.host_layer_property);
+                    knowledge::put(&mut self.drawing.doc, Kind::Types, &template.name, &data)?;
+                    let drivers: Vec<_> = self
+                        .drawing
+                        .doc
+                        .entities()
+                        .filter_map(instance)
+                        .filter(|o| o.type_name == template.name)
+                        .collect();
+                    for mut object in drivers {
+                        for (role, property) in &template.plan.layer_properties {
+                            if let Some(layer) = object.layers.get(role) {
+                                object.props.insert(property.clone(), json!(layer));
+                            }
+                        }
+                        self.stamp_object(object.id, &object)?;
+                    }
+                }
+            }
+        }
         let runs: BTreeMap<_, _> = members
             .iter()
             .filter(|(_, _, tag)| tag.role == "run")
             .map(|(h, sheet, tag)| ((sheet.value(), tag.group, tag.index), *h))
             .collect();
+        // Stable handles can put an older run after a newer run when groups are joined.
+        // The object engine gives shared graphics to the smallest surviving driver handle.
+        let mut owners = BTreeMap::<(u64, u64), u64>::new();
+        for (&(sheet, group, _), &handle) in &runs {
+            owners
+                .entry((sheet, group))
+                .and_modify(|owner| *owner = (*owner).min(handle))
+                .or_insert(handle);
+        }
         let factor = self.drawing.units.to_metres();
         let mut converted = Vec::new();
         for (h, sheet, mut tag) in members.iter().cloned() {
@@ -294,6 +330,15 @@ impl Session {
                 _ => continue,
             };
             let names = crate::walls::resolved_layers(&tag.spec.layers);
+            let mut props = props;
+            if kind == "wall" {
+                for (role, layer) in ["outline", "hatch", "centreline", "doors", "windows"]
+                    .into_iter()
+                    .zip(&names)
+                {
+                    props.insert(format!("{role}_layer"), json!(layer));
+                }
+            }
             let layers = BTreeMap::from([
                 ("outline".into(), names[0].clone()),
                 ("hatch".into(), names[1].clone()),
@@ -360,7 +405,7 @@ impl Session {
             if matches!(tag.role.as_str(), "run" | "opening") {
                 continue;
             }
-            let Some(owner) = runs.get(&(sheet.value(), tag.group, 0)) else {
+            let Some(owner) = owners.get(&(sheet.value(), tag.group)) else {
                 continue;
             };
             let entity = self

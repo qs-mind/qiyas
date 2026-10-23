@@ -501,6 +501,7 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{name} needs {field}"))?
         .to_string();
+    let args = read_handle_values(&args);
     if let Some(entry) = operation(name, &op) {
         crate::surface_args::validate(name, &op, &args)
             .map_err(|error| error.json().to_string())?;
@@ -713,6 +714,8 @@ fn run_working_session(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
+    let normalized = read_handle_values(args);
+    let args = &normalized;
     let argument_warnings = crate::surface_args::validate(tool, op, args)?;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
@@ -1105,6 +1108,24 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     }))
 }
 
+/// Normalize handle shortcuts before operation validation, for MCP and direct callers alike.
+fn read_handle_values(args: &Value) -> Value {
+    let mut value = args.clone();
+    if let Some(handle) = qiyas_core::registry::handle_number(&value["handle"]) {
+        value["handle"] = json!(handle);
+    }
+    for key in ["handles", "chain", "highlight"] {
+        if let Some(handles) = value.get_mut(key).and_then(Value::as_array_mut) {
+            for handle in handles {
+                if let Some(number) = qiyas_core::registry::handle_number(handle) {
+                    *handle = json!(number);
+                }
+            }
+        }
+    }
+    value
+}
+
 /// `query`: entities near a point or in a window, one entity, texts, tables, dimensions,
 /// blocks, the boundary round a point, the layers.
 fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutput, ToolError> {
@@ -1177,7 +1198,10 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
 fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
     let to_m = crate::execute::sheet_metres_per_unit(session);
-    if let Some(h) = args.get("handle").and_then(Value::as_u64) {
+    if let Some(handle) = args.get("handle") {
+        let h = handle
+            .as_u64()
+            .ok_or_else(|| bad("Give a decimal handle or an explicit 0x hexadecimal handle"))?;
         let chain: Vec<u64> = args
             .get("chain")
             .map(|c| read_args(c, "chain"))
@@ -1278,6 +1302,9 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
     }
     // Use the registry's spelling after a lookup that accepts case and hyphens.
     qiyas_core::registry::canonicalize(&mut value);
+    session
+        .resolve_input_handles(&mut value)
+        .map_err(|e| bad(e.to_string()))?;
     let mut report = session.validate_input(&value);
     batch_limits(&value, "", &mut report);
     if !report.valid {

@@ -151,6 +151,23 @@ impl Session {
         value: &Value,
     ) -> Result<(), CoreError> {
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
+        if prop == EntityProp::Layer {
+            if let Some(object) = crate::objects::instance(self.entity(h)) {
+                let definition = self.object_type(&object.type_name)?;
+                if let Some(property) = definition
+                    .plan
+                    .layer_properties
+                    .get("centreline")
+                    .filter(|_| definition.plan.centreline_driver)
+                {
+                    return self.set_object_props(
+                        &[h.value()],
+                        &std::collections::BTreeMap::from([(property.clone(), value.clone())]),
+                        None,
+                    );
+                }
+            }
+        }
         if prop == EntityProp::Text {
             let e = self.entity(h);
             if !matches!(e, EntityType::Text(_) | EntityType::MText(_)) {
@@ -426,6 +443,7 @@ impl Session {
         props: &[MatchProp],
     ) -> Result<(), CoreError> {
         let handles = self.sheet_targets(targets)?;
+        self.refuse_generated_edit(&handles, false)?;
         let xrefs = self.xref_docs();
         let located = locate(&self.drawing.doc, &xrefs, source.handle, &source.chain)?;
         let from = located.entity.clone();
