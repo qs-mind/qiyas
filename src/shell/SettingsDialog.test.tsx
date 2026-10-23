@@ -327,6 +327,8 @@ test("subscription choices never ask for an API key or fetch API models", async 
   expect(Array.from((provider as HTMLSelectElement).options).map((option) => option.text)).toEqual([
     "Anthropic API key", "OpenAI-compatible API key", "ChatGPT (your plan)", "Claude Code (your subscription)",
   ]);
+  // Let the opening key check for the saved API provider finish before counting calls.
+  await vi.waitFor(() => expect(api.hasApiKey).toHaveBeenCalledWith("anthropic"));
   api.aiModels.mockClear();
   api.hasApiKey.mockClear();
   fireEvent.change(provider, { target: { value: "claude_code" } });
