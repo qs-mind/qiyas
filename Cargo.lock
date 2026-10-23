@@ -3923,6 +3923,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "libc",
  "opencadcodec",
  "qiyas-boq",
  "qiyas-core",
@@ -3930,6 +3931,7 @@ dependencies = [
  "qiyas-render",
  "qiyas-takeoff",
  "reqwest",
+ "ring",
  "rmcp",
  "rust_xlsxwriter",
  "rustls",
@@ -3940,6 +3942,7 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tokio-util",
+ "url",
  "uuid",
 ]
 

@@ -23,9 +23,14 @@ tiny-skia.workspace = true
 # than reqwest's default aws-lc-rs, which needs a C/CMake build and carries the OpenSSL licence.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-tokio = { version = "1", features = ["macros", "sync", "time", "rt", "net"] }
+tokio = { version = "1", features = ["macros", "sync", "time", "rt", "net", "process", "io-util"] }
 tokio-util = "0.7"
 base64 = "0.22"
+# Process signals (MIT OR Apache-2.0); never invoke a shell to cancel Claude Code.
+libc = "0.2"
+# PKCE, OS randomness and ID-token signature validation (already in rustls's dependency tree).
+ring = "0.17"
+url = "2"
 # Local time for the agent log (MIT OR Apache-2.0).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The MCP server: rmcp (Apache-2.0) over Streamable HTTP, served by axum (MIT) on 127.0.0.1.

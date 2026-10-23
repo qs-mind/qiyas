@@ -1907,6 +1907,60 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## AI assistant and settings
 
+- Goal S adds `claude_code` and `chatgpt_plan` Settings profiles alongside the unchanged
+  API-key profiles. Claude Code uses the user's installed executable on PATH or their selected
+  absolute path; an empty model lets Claude Code choose. Sign-in stays in the user's terminal:
+  run `claude`, then `/login`. Settings checks are explicit, not polled. Runtime help must
+  document strict MCP, permission mode and settings/tool isolation, or the turn is refused.
+- Claude Code owns one `-p` process per user message. It gets only Qiyas's three MCP tools,
+  no built-in tools, no inherited provider credentials/endpoint overrides, and an empty
+  `<Qiyas data home>/claude-work` directory. User/project settings and hooks are excluded.
+  Qiyas never reads Claude credentials, runs an SDK/ACP adapter, or scripts a login. Cancel
+  sends SIGINT, then SIGTERM after five seconds; a process permit stays held until reaping.
+  This cancellation implementation is Unix-only; other platforms refuse this provider.
+  It currently requires Work autonomously: per-job/per-phase approvals are refused before
+  starting a turn, because Qiyas cannot yet enforce those pauses inside the CLI's tool loop.
+- The private MCP connection attributes changes to Mizan, preserving Undo, and uses the
+  original user message for named-file authority. Claude stream events become ordinary
+  activity cards and translated status/errors. Authentication, limits, billing and account
+  holds stop immediately. Qiyas never retries this provider, including its usual context
+  and output-limit retries. `eval-agent --agent claude` is refused even with `--agent-cmd`.
+  Benchmarks must use ChatGPT, Codex or an API key, never this Claude provider.
+- ChatGPT Settings enables **Continue with ChatGPT** (Arabic: **المتابعة باستخدام ChatGPT**),
+  an account picker, Sign out, a model list and the ChatGPT per-app limits link. The exact
+  SIWC wire specification was supplied by the reviewer on 23 October 2026; do not substitute
+  backend-api endpoints or API-key billing for plan usage. OAuth uses PKCE/state/nonce,
+  `http://127.0.0.1:<port>/auth/callback`, first registration with `dynamic_agent_client`
+  and `agent_name_hint=Qiyas`, then the callback's issued `oaiapp_...` client ID.
+- The OS keychain entry `qiyas` / `chatgpt-plan` contains the entire ChatGPT vault: stable
+  `urn:uuid:...` host ID, separate account registrations, active account and tokens. Sign-out
+  removes only the active account's tokens after attempting discovery-based revocation;
+  the host ID and issued client IDs survive. OAuth tokens, subjects and issued client IDs never reach files,
+  Settings, conversation state, logs or the frontend. UI account IDs are random local IDs.
+- ChatGPT validates ID-token signature against discovery JWKS, issuer, issued-client audience,
+  expiry and nonce. Missing `chatgpt.tokens.use.direct` keeps sign-in but blocks inference and
+  model discovery. Refresh is serialized, rotates tokens/scopes atomically and retains saved
+  credentials on temporary failures. Blocking keychain work owns the account lock even if its
+  waiter is cancelled; a started rotation finishes and saves before sign-out can revoke it.
+  Queued requests are cancelled before they can use another account. Terminal refresh failure
+  clears only tokens and starts one OAuth recovery using the saved registration; a mismatched account is refused.
+- ChatGPT lists only models with `visibility=list`, displaying `display_name` and sending
+  `slug`. Account changes clear the model list and cancel requests. Responses use `store:false`
+  and `stream:true`; only `response.completed` succeeds. Incomplete/broken streams stop.
+  SIWC errors use their own English/Arabic classification: limits pause requests until the
+  user explicitly resumes, temporary failures use bounded backoff, and unsupported features
+  remove the named optional field before retrying a changed body, with a visible notice.
+  An admission 401 never starts an OAuth loop or erases credentials. Sign-out cancels requests,
+  retries transient revocation failures, clears local tokens and reports unconfirmed revocation.
+  This provider is only for Mizan's own requests, never a general proxy or MCP token relay.
+- ChatGPT mock HTTP/loopback tests are explicitly marked as requiring a socket-capable runner.
+  Run the named ignored `chatgpt_plan::` tests there; no real sign-in or service calls belong
+  in automated checks. The original Claude fake-process and credential sentinel checks remain.
+- The public documentation was verified by the reviewer on 23 October 2026 and supplied in
+  the task; no further fetch was attempted after the founder's instruction. See
+  `docs/2026-10-23-qiyas-subscriptions.md` for policy and release gates, and
+  `docs/2026-10-23-qiyas-goal-s.md` for actual tests and remaining work.
+
 - Agent session access always runs on a blocking worker, including turn-opening state, drawing
   paths/epochs and drawing checks. Snapshot/checkpoint/resume use cached metadata returned by
   those workers. The first mutation's error baseline is captured under the same session lock,
@@ -2006,8 +2060,8 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   and the Log. A recovered failure says "Fixing a problem…" within its own user turn.
   Execute calls remain mutating except plan, select and view; execution is unchanged.
 - Settings live in `settings.json` in the app's config folder (Linux:
-  `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic` or
-  `openai_compatible`), `providers.anthropic.model` (default `claude-opus-5-5`) and
+  `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic`,
+  `openai_compatible`, `claude_code` or `chatgpt_plan`; subscription status above), `providers.anthropic.model` (default `claude-opus-5-5`) and
   `providers.openai_compatible.{model,base_url}` (a new profile has no model selected), per-profile effort,
   MCP on/off, port and token, language, theme. Loading an old flat model and base URL moves them
   into the selected provider's profile and writes the new shape; the other provider keeps its

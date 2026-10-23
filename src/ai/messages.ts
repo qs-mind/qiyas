@@ -33,6 +33,7 @@ export type ToolCardItem = {
 export type Attached = { pointed?: string[]; images?: string[] };
 
 export type Item =
+  | { kind: "provider_status"; code: string }
   | ({ kind: "user"; text: string } & Attached)
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
@@ -102,6 +103,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
         i === plan && item.kind === "plan" ? { ...item, awaitingApproval: true } : item,
       ) };
     }
+    case "provider_status":
+      return { items: [...finishText(items), { kind: "provider_status", code: action.code }] };
     case "retrying": {
       let kept = items;
       if (action.discard_partial) {

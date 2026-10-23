@@ -74,6 +74,8 @@ pub enum Provider {
     #[default]
     Anthropic,
     OpenaiCompatible,
+    ChatgptPlan,
+    ClaudeCode,
 }
 
 impl Provider {
@@ -82,13 +84,20 @@ impl Provider {
         match self {
             Provider::Anthropic => "anthropic",
             Provider::OpenaiCompatible => "openai_compatible",
+            Provider::ChatgptPlan => "chatgpt_plan",
+            Provider::ClaudeCode => "claude_code",
         }
     }
 
     pub fn from_name(name: &str) -> Option<Provider> {
-        [Provider::Anthropic, Provider::OpenaiCompatible]
-            .into_iter()
-            .find(|p| p.name() == name)
+        [
+            Provider::Anthropic,
+            Provider::OpenaiCompatible,
+            Provider::ChatgptPlan,
+            Provider::ClaudeCode,
+        ]
+        .into_iter()
+        .find(|p| p.name() == name)
     }
 }
 
@@ -117,6 +126,8 @@ fn anthropic_profile() -> ProviderProfile {
 pub struct ProviderProfiles {
     pub anthropic: ProviderProfile,
     pub openai_compatible: ProviderProfile,
+    pub chatgpt_plan: ProviderProfile,
+    pub claude_code: ProviderProfile,
 }
 
 impl Default for ProviderProfiles {
@@ -124,6 +135,8 @@ impl Default for ProviderProfiles {
         Self {
             anthropic: anthropic_profile(),
             openai_compatible: ProviderProfile::default(),
+            chatgpt_plan: ProviderProfile::default(),
+            claude_code: ProviderProfile::default(),
         }
     }
 }
@@ -132,6 +145,8 @@ impl Default for ProviderProfiles {
 #[serde(default)]
 pub struct Settings {
     pub provider: Provider,
+    /// Empty uses the user-installed command on PATH; never downloaded by Qiyas.
+    pub claude_executable: Option<String>,
     /// Each provider keeps its own model and address when the chosen provider changes.
     pub providers: ProviderProfiles,
     /// Legacy effort, migrated into the selected profile when loading older settings.
@@ -199,6 +214,7 @@ impl Settings {
             .unwrap_or(match self.provider {
                 Provider::Anthropic => "medium",
                 Provider::OpenaiCompatible => "low",
+                Provider::ChatgptPlan | Provider::ClaudeCode => "none",
             })
     }
 
@@ -206,6 +222,8 @@ impl Settings {
         match self.provider {
             Provider::Anthropic => &self.providers.anthropic,
             Provider::OpenaiCompatible => &self.providers.openai_compatible,
+            Provider::ChatgptPlan => &self.providers.chatgpt_plan,
+            Provider::ClaudeCode => &self.providers.claude_code,
         }
     }
 
@@ -213,6 +231,8 @@ impl Settings {
         match self.provider {
             Provider::Anthropic => &mut self.providers.anthropic,
             Provider::OpenaiCompatible => &mut self.providers.openai_compatible,
+            Provider::ChatgptPlan => &mut self.providers.chatgpt_plan,
+            Provider::ClaudeCode => &mut self.providers.claude_code,
         }
     }
 
@@ -230,6 +250,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             provider: Provider::Anthropic,
+            claude_executable: None,
             providers: ProviderProfiles::default(),
             effort: "medium".into(),
             autonomy: qiyas_ai::Autonomy::default(),

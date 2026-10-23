@@ -661,6 +661,16 @@ pub async fn ai_models(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
+    if matches!(
+        provider.as_deref().unwrap_or(settings.provider.name()),
+        "claude_code" | "chatgpt_plan"
+    ) {
+        return Ok(qiyas_ai::models::ModelList {
+            models: Vec::new(),
+            from_service: false,
+            error: None,
+        });
+    }
     let anthropic = match provider.as_deref() {
         Some(p) => p == "anthropic",
         None => settings.provider == settings::Provider::Anthropic,
@@ -708,6 +718,17 @@ pub async fn ai_models(
         }
     };
     Ok(model_list(source, key.as_deref()).await)
+}
+
+/// Checks only documented CLI metadata when the user presses Check in Settings.
+#[tauri::command]
+pub async fn claude_code_status(
+    executable: Option<String>,
+) -> Result<qiyas_ai::claude_code::Status, String> {
+    let home = qiyas_core::data_home::qiyas_dir()?;
+    qiyas_ai::claude_code::status(executable.as_deref(), &home)
+        .await
+        .map_err(|e| e.for_window())
 }
 
 /// Stores the provider's API key in the OS keychain. The key never comes back to the window. The
@@ -911,6 +932,21 @@ async fn new_agent(
     }
     let (provider, name) = match ai::mock_provider(&state.session) {
         Some(mock) => (mock, "mock"),
+        None if settings.provider == settings::Provider::ChatgptPlan => {
+            (crate::subscriptions::provider()?, "chatgpt_plan")
+        }
+        None if settings.provider == settings::Provider::ClaudeCode => {
+            let provider = qiyas_ai::claude_code::ClaudeCode::new(
+                settings.claude_executable.as_deref(),
+                qiyas_core::data_home::qiyas_dir()?,
+                state.session.clone(),
+            )
+            .map_err(|e| e.for_window())?;
+            (
+                Box::new(provider) as Box<dyn qiyas_ai::Provider>,
+                "claude_code",
+            )
+        }
         None => {
             let name = settings.provider.name();
             let saved = settings.clone();

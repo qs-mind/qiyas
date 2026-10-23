@@ -29,6 +29,8 @@ const api = vi.hoisted(() => ({
   mcpStatus: vi.fn(),
   aiModels: vi.fn(),
   measurementMethods: vi.fn(),
+  chatgptAccount: vi.fn(),
+  claudeCodeStatus: vi.fn(),
 }));
 
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
@@ -50,6 +52,7 @@ afterEach(() => {
 });
 
 function setup(hasKey = false) {
+  api.chatgptAccount.mockResolvedValue({ signed_in: false, display_name: null, plan_granted: false });
   api.getSettings.mockResolvedValue(settings);
   api.hasApiKey.mockResolvedValue(hasKey);
   api.appDir.mockResolvedValue("/opt/Qiyas");
@@ -316,4 +319,25 @@ test("named methods remain available without files and local choices have Arabic
     document.documentElement.lang = "en";
     document.documentElement.dir = "ltr";
   }
+
+test("subscription choices never ask for an API key or fetch API models", async () => {
+  setup();
+  const provider = await screen.findByLabelText("Provider");
+  expect(Array.from((provider as HTMLSelectElement).options).map((option) => option.text)).toEqual([
+    "Anthropic API key", "OpenAI-compatible API key", "ChatGPT (your plan)", "Claude Code (your subscription)",
+  ]);
+  api.aiModels.mockClear();
+  api.hasApiKey.mockClear();
+  fireEvent.change(provider, { target: { value: "claude_code" } });
+  expect(screen.queryByLabelText("API key")).toBeNull();
+  expect(screen.queryByLabelText("Effort")).toBeNull();
+  expect(screen.getByText("Open a terminal and run claude, then type /login.")).toBeTruthy();
+  expect(api.claudeCodeStatus).not.toHaveBeenCalled();
+  expect(api.hasApiKey).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "sonnet" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalled());
+  expect(api.aiModels).not.toHaveBeenCalled();
+  expect(api.setApiKey).not.toHaveBeenCalled();
+  expect(api.setSettings.mock.calls[0][0].providers.claude_code.model).toBe("sonnet");
 });

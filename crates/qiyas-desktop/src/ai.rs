@@ -248,7 +248,7 @@ pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
 /// fingerprint in conversations without copying the address or its optional credentials.
 /// FNV-1a is an identity checksum here, not a security hash.
 fn provider_identity(settings: &Settings) -> String {
-    if settings.provider == settings::Provider::Anthropic {
+    if settings.provider != settings::Provider::OpenaiCompatible {
         return settings.provider.name().into();
     }
     let endpoint = settings
@@ -318,6 +318,8 @@ pub fn answerer_changed(old: &Settings, new: &Settings) -> bool {
     old.provider != new.provider
         || old.profile().model != new.profile().model
         || old.profile().base_url != new.profile().base_url
+        || (old.provider == settings::Provider::ClaudeCode
+            && old.claude_executable != new.claude_executable)
 }
 
 /// The provider the settings name, with `key` from the keychain. `Err("no_api_key")` for Claude
@@ -325,6 +327,9 @@ pub fn answerer_changed(old: &Settings, new: &Settings) -> bool {
 /// `Err("no_model")` until its model is chosen. The window opens Settings for all three.
 pub fn build_provider(s: &Settings, key: Option<String>) -> Result<Box<dyn Provider>, String> {
     match s.provider {
+        settings::Provider::ChatgptPlan | settings::Provider::ClaudeCode => {
+            Err("Subscription providers require the local application context".into())
+        }
         settings::Provider::Anthropic => {
             let key = key.ok_or("no_api_key")?;
             Ok(Box::new(Anthropic::new(key)))

@@ -40,6 +40,8 @@ pub fn public_error(code: &str) -> PublicError {
 impl AiError {
     pub fn code(&self) -> &'static str {
         match self {
+            Self::ChatgptDenied(_) => "chatgpt_denied",
+            Self::Subscription(code) => code,
             Self::ModelNotFound { .. } => "model_not_found",
             Self::Auth => "auth",
             Self::RateLimited { .. } => "rate_limited",
@@ -73,6 +75,13 @@ impl AiError {
     }
 
     pub fn public_error(&self) -> PublicError {
+        if let Self::ChatgptDenied(message) = self {
+            return PublicError {
+                code: "ai.error.chatgpt_denied".into(),
+                message: message.clone(),
+                message_ar: message.clone(),
+            };
+        }
         public_error(self.code())
     }
 
