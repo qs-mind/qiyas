@@ -120,6 +120,7 @@ mod subscription_tests {
         for name in ["claude", "CLAUDE", "Claude"] {
             assert_eq!(agent_name(name).unwrap_err(), CLAUDE_EVAL_REFUSED);
             let args = EvalAgentArgs {
+                method: None,
                 holdout: true,
                 i_understand_this_opens_the_holdout: false,
                 case: None,
