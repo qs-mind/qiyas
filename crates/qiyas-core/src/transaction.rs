@@ -251,6 +251,11 @@ impl Session {
         self.history.revision()
     }
 
+    /// Handles added by the caller's newest undo step. Read-only, for automation rebuild checks.
+    pub fn undo_added_handles(&self, source: Source) -> Vec<u64> {
+        self.history.undo_added_handles(source)
+    }
+
     /// The steps that can be undone (oldest first) and redone (next first).
     pub fn history_steps(&self) -> (Vec<HistoryStep>, Vec<HistoryStep>) {
         self.history.labels()

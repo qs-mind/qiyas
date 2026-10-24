@@ -233,6 +233,8 @@ pub struct Agent {
     phase_state: PhaseState,
     /// Metadata captured while the session is locked on a blocking worker.
     phase_epoch: Option<u64>,
+    churn: Arc<Mutex<crate::churn::Guard>>,
+    destination_pending: bool,
 }
 
 /// What a user turn starts from: the `[state]` block, the session's epoch (none without a
@@ -243,6 +245,7 @@ struct Opening {
     drawing: Option<PathBuf>,
     system: Option<String>,
     picture: Option<(Vec<u8>, String)>,
+    has_content: bool,
 }
 
 /// What the tool calls of one user turn have used so far.
@@ -305,6 +308,8 @@ impl Agent {
             plan: None,
             phase_state: PhaseState::default(),
             phase_epoch: None,
+            churn: Arc::default(),
+            destination_pending: false,
         }
     }
 
@@ -533,6 +538,11 @@ impl Agent {
         self.resumed = false;
         self.phase_state = PhaseState::default();
         self.phase_epoch = None;
+        self.destination_pending = false;
+        self.churn
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reset();
     }
 
     /// The new settings apply to the next request; the language of the system prompt changes
@@ -615,6 +625,14 @@ impl Agent {
             }
             entry
         });
+        {
+            let mut churn = self.churn.lock().unwrap_or_else(PoisonError::into_inner);
+            churn.reset();
+            if let Some(plan) = &self.plan {
+                churn.set_phase(active_phase(plan).unwrap_or(""));
+            }
+        }
+        let pointed_destination = !pointed.selection.is_empty() || pointed.region.is_some();
         self.compact();
         if self.history.len() >= MAX_MESSAGES {
             return self.stop(&events, TOO_LONG).await;
@@ -628,6 +646,7 @@ impl Agent {
             drawing,
             system,
             picture,
+            has_content,
         } = match self.opening(pointed, &cancel).await {
             Ok(opening) => opening,
             Err(why) => return self.stop(&events, &why).await,
@@ -638,7 +657,7 @@ impl Agent {
         }
         let system = self.system.clone().unwrap_or_default();
         self.job = Job::request(&user_text, self.job);
-        self.chat_language = judgement::language(&user_text, self.settings.language);
+        self.chat_language = judgement::language(&user_text, self.chat_language);
         // Guidance belongs to this job and language; preserve the user's actual requests.
         for message in &mut self.history {
             message.content.retain(|block| {
@@ -648,8 +667,42 @@ impl Agent {
             });
         }
         self.turn_text = user_text.clone();
-        self.provider.begin_turn(&user_text);
-        let mut content = vec![ContentBlock::Text { text: state }];
+        let choice = user_text.to_lowercase();
+        let answered = [
+            "this drawing",
+            "this one",
+            "current drawing",
+            "existing drawing",
+            "new drawing",
+            "new one",
+            "start new",
+            "هذا الرسم",
+            "الحالي",
+            "هنا",
+            "جديد",
+        ]
+        .iter()
+        .any(|s| choice.contains(s))
+            || choice
+                .split_whitespace()
+                .any(|word| word.trim_matches(|c: char| !c.is_alphabetic()) == "here")
+            || choice.trim() == "new";
+        let cancelled = ["cancel", "never mind", "إلغاء", "توقف"]
+            .iter()
+            .any(|s| choice.starts_with(s));
+        let ask_destination = has_content
+            && !pointed_destination
+            && !cancelled
+            && ((self.destination_pending && !answered)
+                || (!self.destination_pending && judgement::new_design(&user_text)));
+        self.destination_pending = ask_destination;
+        let reply_language = match self.chat_language {
+            Lang::En => "[reply language] Answer this turn in English. Follow the latest user message, even if an earlier greeting or the interface was Arabic.",
+            Lang::Ar => "[reply language] أجب بلغة آخر رسالة للمستخدم. استخدم العربية الفصحى البسيطة، ولا تحاكِ لهجة إلا إذا كتب المستخدم بها في رسالته الحالية.",
+        };
+        let mut content = vec![ContentBlock::Text {
+            text: format!("{state}\n\n{reply_language}"),
+        }];
         if std::mem::take(&mut self.resumed) {
             content.push(ContentBlock::Text { text: "[resumed] This conversation continues after a pause; the drawing may have changed: read it before acting.".into() });
         }
@@ -684,6 +737,28 @@ impl Agent {
         self.push_user(content);
         self.trim_pictures();
         self.update_checkpoint();
+        if ask_destination {
+            let text = match self.chat_language {
+                Lang::En => "Start a new drawing (recommended), or use this drawing?",
+                Lang::Ar => "هل أبدأ رسمًا جديدًا (المقترح)، أم أستخدم هذا الرسم؟",
+            }
+            .to_string();
+            self.history
+                .push(Message::assistant(vec![ContentBlock::Text {
+                    text: text.clone(),
+                }]));
+            self.emit(&events, AgentEvent::Text { text }).await;
+            self.emit(
+                &events,
+                AgentEvent::Done {
+                    usage: Usage::default(),
+                },
+            )
+            .await;
+            self.update_checkpoint();
+            return Ok(());
+        }
+        self.provider.begin_turn(&self.turn_text);
         let tools = catalogue();
         let mut counts = TurnCounts {
             approved: matches!(
@@ -1104,6 +1179,9 @@ impl Agent {
     ) -> Result<(), String> {
         let mut stopped = None;
         for (id, name, input) in assistant.tool_uses() {
+            let (normalized, envelope_warnings) = crate::normalise::envelope(name, input)
+                .unwrap_or_else(|_| (input.clone(), Vec::new()));
+            let input = &normalized;
             self.emit(
                 events,
                 AgentEvent::ToolCall {
@@ -1205,6 +1283,16 @@ impl Agent {
                     }
                 }
             };
+            if let ContentBlock::ToolResult { content, .. } = &mut block {
+                for part in content {
+                    if let ResultPart::Text(text) = part {
+                        if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                            crate::normalise::append(&mut value, &envelope_warnings);
+                            *text = value.to_string();
+                        }
+                    }
+                }
+            }
             if let Some(key) = fingerprint {
                 if ineffective(&block) {
                     *counts.ineffective.entry(key).or_default() += 1;
@@ -1279,6 +1367,10 @@ impl Agent {
                         self.phase_state.baseline_errors = None;
                         self.phase_state.touched.clear();
                     }
+                    self.churn
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .set_phase(active_phase(&plan).unwrap_or(""));
                     self.plan = Some(plan.clone());
                     self.emit(
                         events,
@@ -1411,6 +1503,7 @@ impl Agent {
         let method = self.settings.measurement_method.clone();
         let cancel = cancel.clone();
         let mut phase = self.phase_state.clone();
+        let churn = self.churn.clone();
         let ran = tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             check_turn(guard.as_ref(), &cancel, epoch)?;
@@ -1430,8 +1523,14 @@ impl Agent {
             }
             check_turn(Some(s), &cancel, epoch)?;
             let before = s.document_revision();
-            let output =
-                surface::run_session_with_method(s, &tool, &op, &args, Source::Ai, &method);
+            let output = churn.lock().unwrap_or_else(PoisonError::into_inner).run(
+                s,
+                &tool,
+                &op,
+                &args,
+                Source::Ai,
+                &method,
+            );
             let changed = before != s.document_revision();
             if mutating {
                 if let Ok(ToolOutput::Json(value)) = &output {
@@ -1654,6 +1753,7 @@ impl Agent {
             check_turn(guard.as_ref(), &cancel, epoch)?;
             Ok(Opening {
                 state: text,
+                has_content: guard.as_ref().is_some_and(|s| s.drawing.sheets().iter().any(|sheet| s.drawing.entities_in(&sheet.block).next().is_some())),
                 epoch,
                 drawing: guard.as_ref().map(|s| s.drawing.path.clone()),
                 system,
@@ -1930,6 +2030,7 @@ fn user_words(message: &Message) -> Vec<String> {
             ContentBlock::Text { text }
                 if !text.starts_with("[state]")
                     && !text.starts_with("[resumed]")
+                    && !text.starts_with("[reply language]")
                     && !text.starts_with("[picture of")
                     && !text.starts_with("[known contracts]")
                     && !text.starts_with("[drawing check]")

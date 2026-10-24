@@ -173,6 +173,7 @@ pub struct Qiyas {
     tools: Arc<Vec<Tool>>,
     retries: Arc<Mutex<VecDeque<Retry>>>,
     ineffective: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
+    churn: Arc<Mutex<crate::churn::Guard>>,
     source: Source,
     user_text: Option<String>,
 }
@@ -224,6 +225,7 @@ impl Qiyas {
             tools: Arc::new(tools),
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
+            churn: Arc::default(),
             source: Source::Mcp,
             user_text: None,
         }
@@ -233,6 +235,7 @@ impl Qiyas {
         Self {
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
+            churn: Arc::default(),
             ..self.clone()
         }
     }
@@ -321,6 +324,13 @@ impl Qiyas {
     }
 
     fn run_checked(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
+        let (normalized, warnings) = crate::normalise::envelope(name, input)?;
+        let input = &normalized;
+        self.run_normalized(name, input)
+            .map(|output| crate::normalise::output(output, &warnings))
+    }
+
+    fn run_normalized(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
         if let Some(host) = self.host.as_deref() {
             host.before_tool(name, input).map_err(ToolError::Failed)?;
@@ -381,7 +391,25 @@ impl Qiyas {
                 let session = guard
                     .as_mut()
                     .ok_or_else(|| ToolError::Failed(NO_DRAWING.into()))?;
-                surface::run_session(session, &tool, &op, &args, self.source)
+                let mut churn = self.churn.lock().unwrap_or_else(PoisonError::into_inner);
+                let result = churn.run(
+                    session,
+                    &tool,
+                    &op,
+                    &args,
+                    self.source,
+                    &crate::MeasurementMethod::default(),
+                );
+                if result.is_ok() && tool == surface::EXECUTE && op == "plan" {
+                    let plan = surface::read_plan(&args)?;
+                    churn.set_phase(
+                        plan.phases
+                            .iter()
+                            .find(|p| p.status == surface::PlanStatus::Active)
+                            .map_or("", |p| p.id.as_str()),
+                    );
+                }
+                result
             }
         }
     }
@@ -393,7 +421,7 @@ impl ServerHandler for Qiyas {
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
                 "{}\n\nCommands by category:\n{}",
-                "Follow the user's request. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after two identical ineffective edits, stop and explain. Fix new warnings before claiming completion. Save only when asked; finish does not save.",
+                "Follow the user's request and latest message language. Arabic is simple Modern Standard Arabic unless that message uses a dialect. For a new design on a populated drawing, ask new drawing (recommended) or this one, then wait. Use small phases, one batch per phase, capture and check, and edit by handle; repeated rebuilding is refused. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after two identical ineffective edits, stop and explain. Fix new warnings before claiming completion. Save only when asked; finish does not save.",
                 crate::prompt::command_index()
             ))
     }

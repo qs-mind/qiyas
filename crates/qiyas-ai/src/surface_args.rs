@@ -222,16 +222,21 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
                             props["sheet"] = nullable(&string);
                             props["within"] = nullable(&bounds);
                             props["offset"] = handle.clone();
+                            props["limit"] = handle.clone();
                         }
                         "tables" | "dimensions" | "blocks" => {
                             props["sheet"] = nullable(&string);
                             props["offset"] = handle.clone();
+                            props["limit"] = handle.clone();
                         }
                         "boundary" => {
                             props["point"] = point.clone();
                             required.push("point");
                         }
-                        "layers" => {}
+                        "layers" => {
+                            props["offset"] = handle.clone();
+                            props["limit"] = handle.clone();
+                        }
                         _ => unreachable!("QUERY_KINDS lists every query"),
                     }
                     object(props, &required)
@@ -370,7 +375,8 @@ mod tests {
             json!({"kind":"dimensions","sheet":null,"offset":0}),
             json!({"kind":"blocks","sheet":null,"offset":0}),
             json!({"kind":"boundary","point":[0,0]}),
-            json!({"kind":"layers"}),
+            json!({"kind":"layers","offset":0,"limit":20}),
+            json!({"kind":"texts","limit":20}),
         ] {
             assert!(validate(READ, "query", &args).is_ok(), "{args}");
         }
@@ -382,7 +388,6 @@ mod tests {
                 "/args/within",
             ),
             (json!({"kind":"dimensions","layer":"A-DIMS"}), "/args/layer"),
-            (json!({"kind":"layers","offset":0}), "/args/offset"),
             (
                 json!({"kind":"entity","handle":1,"sheet":"Model"}),
                 "/args/sheet",

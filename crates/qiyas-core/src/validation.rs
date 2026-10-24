@@ -162,8 +162,8 @@ impl Session {
     pub fn validate_input(&self, input: &Value) -> ValidationReport {
         let mut canonical = input.clone();
         crate::registry::canonicalize(&mut canonical);
-        let input = &canonical;
         let mut report = validate_command(input, Some(self.drawing.units));
+        let input = &canonical;
         report.append(self.validate_record_inputs(input));
         if report.valid {
             self.validate_batch_knowledge(input, &mut report);
@@ -425,6 +425,14 @@ fn validate_at(
     let mut canonical = value.clone();
     crate::registry::canonicalize(&mut canonical);
     walk(&info.schema, &canonical, path, step, &mut report);
+    report.warnings.extend(
+        crate::registry::normalization_warnings(value)
+            .into_iter()
+            .map(|mut w| {
+                w.pointer = format!("{path}{}", w.pointer);
+                w
+            }),
+    );
     if info.name == "set_layer" && canonical.get("prop").is_some() {
         for key in [
             "color",

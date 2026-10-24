@@ -423,9 +423,7 @@ impl Session {
                         .iter()
                         .any(|l| l.name.eq_ignore_ascii_case(layer));
                 if !known {
-                    return Err(invalid(format!(
-                        "No layer named {layer}; the layers list gives the names"
-                    )));
+                    return Ok((Vec::new(), skipped));
                 }
                 let mut handles = HashSet::new();
                 for kind in ["Text", "MText"] {
@@ -509,9 +507,44 @@ impl Session {
     fn find_rooms(&self, q: &RoomsQuery) -> Result<(Vec<Room>, Vec<SkippedRoom>), CoreError> {
         let (seeds, mut skipped) = self.room_seeds(q)?;
         if seeds.is_empty() {
-            return Err(invalid(
-                "No room names found to start from: give seeds, or check text_layer and names (the texts list shows them)",
-            ));
+            let mut candidates = std::collections::BTreeMap::<String, usize>::new();
+            for row in self.read_text(Some(&self.sheet), q.within) {
+                let text = row.text.trim();
+                if row.xref.is_some()
+                    || row.inside_block.is_some()
+                    || text.is_empty()
+                    || text.chars().count() > 80
+                    || looks_like_a_label(text)
+                {
+                    continue;
+                }
+                if self
+                    .drawing
+                    .doc
+                    .get_entity(opencadcodec::Handle::new(row.handle))
+                    .is_some_and(|e| {
+                        crate::draw::room_boundary::is_grid(e) || crate::object_tags::is_tag(e)
+                    })
+                {
+                    continue;
+                }
+                if matches!(
+                    self.room_boundary_in(&self.sheet, row.at, &q.boundary_layers),
+                    Boundary::Ring { .. }
+                ) {
+                    *candidates.entry(row.layer).or_default() += 1;
+                }
+            }
+            let candidates = if candidates.is_empty() {
+                "none; give a seed point inside each room".into()
+            } else {
+                candidates
+                    .into_iter()
+                    .map(|(layer, count)| format!("{layer} ({count})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(invalid(format!("No room names found. Candidate text layers (short texts inside closed regions): {candidates}. Retry text_layer or give seeds.")));
         }
         let subtract = q.subtract_islands.unwrap_or(true);
         let mut rooms: Vec<Room> = Vec::new();

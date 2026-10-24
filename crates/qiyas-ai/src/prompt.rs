@@ -424,10 +424,13 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_says_fix_what_you_drew_never_draw_it_again() {
+    fn the_prompt_requires_handle_edits_and_allows_one_honest_correction() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
-        assert!(en.contains("Fix what you drew by changing or erasing it (undo_own takes back your newest step), never by drawing it again"));
-        assert!(en.contains("never hide layers to hide a mistake"));
+        assert!(en.contains("Fix by handle: edit_wall_opening, modify move, set_records, auto_place, dim_space, dim_edit, edit_text"));
+        assert!(
+            en.contains("One honest undo_own correction is allowed; repeated rebuilds are refused")
+        );
+        assert!(en.contains("Never hide layers to hide a mistake"));
         assert!(en.contains("Dimensions use dimension commands, never lines and text"));
     }
 
@@ -466,7 +469,7 @@ mod tests {
     fn no_drawing_says_so_in_both_languages() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         assert!(en.contains("No drawing was open"));
-        assert!(en.contains("You are Mizan, the AI agent inside Qiyas"));
+        assert!(en.contains("You are Mizan in Qiyas"));
         let state = state_block(Lang::En, &LiveState::none());
         assert!(state.starts_with("[state]"));
         assert!(state.contains("No drawing is open"));

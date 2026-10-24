@@ -183,6 +183,9 @@ pub fn canonicalize(value: &mut Value) {
             value["value"] = Value::Object(properties);
         }
     }
+    if value["type"] == "records" && value["query"]["where"].is_object() {
+        value["query"]["where"] = json!([value["query"]["where"]]);
+    }
     normalize_handles(&info.schema, value, "");
     if value["type"] == "set_records" && value["collection"] == "entities" {
         if let Some(updates) = value["updates"].as_array_mut() {
@@ -234,6 +237,31 @@ pub(crate) fn is_handle_field(field: &str) -> bool {
 }
 
 fn normalize_handles(schema: &Value, value: &mut Value, field: &str) {
+    // Only normalize the matching tagged variant. Another variant may legitimately
+    // use a plural handles field where this one expects a single handle.
+    if schema["properties"].as_object().is_some_and(|props| {
+        props.iter().any(|(key, sub)| {
+            value.get(key).is_some_and(|actual| {
+                sub.get("const").is_some_and(|expected| actual != expected)
+                    || sub["enum"]
+                        .as_array()
+                        .is_some_and(|values| !values.contains(actual))
+            })
+        })
+    }) {
+        return;
+    }
+    if schema["properties"].get("handle").is_some()
+        && schema["properties"].get("handles").is_none()
+        && value.get("handle").is_none()
+        && value["handles"].as_array().is_some_and(|a| a.len() == 1)
+    {
+        value["handle"] = value["handles"][0].clone();
+        value
+            .as_object_mut()
+            .expect("handles object")
+            .remove("handles");
+    }
     let handle_field = is_handle_field(field);
     if schema["type"] == "integer" && handle_field {
         if let Some(n) = handle_number(value) {
@@ -882,4 +910,41 @@ pub fn effect_of(command: &Command) -> Effect {
         Some(info) if info.effect != Effect::Edit => info.effect,
         _ => Effect::Read,
     }
+}
+
+/// Explain accepted aliases without losing their original field paths.
+pub fn normalization_warnings(raw: &Value) -> Vec<crate::validation::InputIssue> {
+    fn compare(a: &Value, b: &Value, path: &str, out: &mut Vec<crate::validation::InputIssue>) {
+        if a["handles"].is_array() && b.get("handles").is_none() && b.get("handle").is_some() {
+            out.push(crate::validation::InputIssue {
+                code: "normalised_input".into(),
+                pointer: format!("{path}/handle"),
+                message: "Normalised the single handles entry to handle.".into(),
+            });
+        }
+        if a["where"].is_object() && b["where"].is_array() {
+            out.push(crate::validation::InputIssue {
+                code: "normalised_input".into(),
+                pointer: format!("{path}/where"),
+                message: "Normalised one where condition to an array.".into(),
+            });
+        }
+        if let Some(map) = a.as_object() {
+            for (key, v) in map {
+                if let Some(next) = b.get(key) {
+                    compare(v, next, &format!("{path}/{key}"), out);
+                }
+            }
+        }
+        if let (Some(a), Some(b)) = (a.as_array(), b.as_array()) {
+            for (i, (a, b)) in a.iter().zip(b).enumerate() {
+                compare(a, b, &format!("{path}/{i}"), out);
+            }
+        }
+    }
+    let mut canonical = raw.clone();
+    canonicalize(&mut canonical);
+    let mut out = Vec::new();
+    compare(raw, &canonical, "", &mut out);
+    out
 }

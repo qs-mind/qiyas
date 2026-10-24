@@ -861,7 +861,7 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
                     "document" if entry.tool == CAPTURE => json!({"path":pdf,"page":1}),
                     "document" => json!({"path":pdf,"pages":[1]}),
                     "plan" => {
-                        json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"}]})
+                        json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"},{"id":"review","title":"Review","status":"pending"}]})
                     }
                     "record_schema" => json!({"name":"line"}),
                     "validate" => {
@@ -947,9 +947,9 @@ fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
 
 #[tokio::test]
 async fn plan_events_follow_valid_snapshots_and_the_provider_observes_them_without_a_drawing() {
-    let pending = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"pending"}]});
-    let active = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"}]});
-    let done = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"done"}]});
+    let pending = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"pending"},{"id":"review","title":"Review","status":"pending"}]});
+    let active = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"},{"id":"review","title":"Review","status":"pending"}]});
+    let done = json!({"phases":[{"id":"sizes","title":"Check sizes","status":"done"},{"id":"review","title":"Review","status":"pending"}]});
     let (agent, events, requests) = scripted(
         Arc::new(Mutex::new(None)),
         vec![
@@ -2624,7 +2624,7 @@ async fn goal_d_same_ineffective_edit_stops_after_two_attempts_with_plain_reason
 #[tokio::test]
 async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
     for (request, takeoff, arabic) in [
-        ("Draw a mounting plate", false, false),
+        ("Draw a mounting plate in this drawing", false, false),
         ("Take off the quantities", true, false),
         ("احصر كميات المخطط", true, true),
     ] {
@@ -2710,7 +2710,7 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
                 .contains("tool result summary"));
         }
         if takeoff {
-            events_for(&mut agent, "Draw a bracket, drawing only.").await;
+            events_for(&mut agent, "Draw a bracket in this drawing, drawing only.").await;
             let reqs = requests.lock().unwrap();
             assert!(
                 !reqs
@@ -2840,7 +2840,7 @@ async fn goal_d_switching_jobs_preserves_requests_and_evidence() {
         AgentSettings::default(),
     );
     events_for(&mut agent, "Take off the quantities").await;
-    events_for(&mut agent, "Draw a bracket, drawing only.").await;
+    events_for(&mut agent, "Draw a bracket in this drawing, drawing only.").await;
     let requests = requests.lock().unwrap();
     let evidence = |messages: &[qiyas_ai::Message]| {
         let mut messages = messages.to_vec();
