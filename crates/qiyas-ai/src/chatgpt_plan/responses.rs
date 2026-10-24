@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use super::Tokens;
+use super::{PlanModel, Tokens};
 use crate::provider::{http_client, read_events, Sink};
 use crate::{
     AiError, ContentBlock, ResultPart, RetryBackoff, Role, StopReason, StreamEvent, TurnRequest,
@@ -15,10 +16,18 @@ pub(super) async fn stream(
     endpoint: &str,
     tokens: &Tokens,
     req: TurnRequest,
+    refused_effort: &Mutex<HashSet<String>>,
     sink: Sink<'_>,
 ) -> Result<TurnResult, AiError> {
     tokens.require_plan()?;
     let mut body = request(&req)?;
+    if refused_effort
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&req.model)
+    {
+        body.as_object_mut().unwrap().remove("reasoning");
+    }
     let client = http_client();
     let mut retry = RetryBackoff::default();
     let started = Instant::now();
@@ -26,7 +35,14 @@ pub(super) async fn stream(
     loop {
         sink(scrub_http_event(
             tokens,
-            StreamEvent::RequestSent("ChatGPT Responses request".into()),
+            StreamEvent::RequestSent(format!(
+                "ChatGPT Responses; {} input items; model {}; reasoning.effort={}",
+                body["input"].as_array().map_or(0, Vec::len),
+                req.model,
+                body.pointer("/reasoning/effort")
+                    .and_then(Value::as_str)
+                    .unwrap_or("default")
+            )),
         ));
         let response = client
             .post(endpoint)
@@ -51,7 +67,7 @@ pub(super) async fn stream(
                 Err(failure(status, &detail["error"]))
             }
             Ok(response) => {
-                let mut events = Events::default();
+                let mut events = Events::with_tokens(tokens);
                 let read = read_events(response, |event| {
                     let value = serde_json::from_str(&tokens.scrub(&event.data))
                         .map_err(|_| AiError::Subscription("chatgpt_incomplete"))?;
@@ -75,6 +91,15 @@ pub(super) async fn stream(
                     .is_some_and(|param| drop_capability(&mut body, param))
                 {
                     return Err(e);
+                }
+                if matches!(
+                    unsupported.as_deref(),
+                    Some("reasoning" | "reasoning.effort" | "reasoning[effort]")
+                ) {
+                    refused_effort
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(req.model.clone());
                 }
                 adaptations += 1;
                 let notice = AiError::Subscription("chatgpt_capability_removed").public_error();
@@ -184,10 +209,7 @@ fn drop_capability(body: &mut Value, param: &str) -> bool {
     }
 }
 
-pub(super) async fn models(
-    endpoint: &str,
-    tokens: &Tokens,
-) -> Result<Vec<crate::models::ModelInfo>, AiError> {
+pub(super) async fn models(endpoint: &str, tokens: &Tokens) -> Result<Vec<PlanModel>, AiError> {
     tokens.require_plan()?;
     let mut retry = RetryBackoff::default();
     let started = Instant::now();
@@ -221,7 +243,7 @@ pub(super) async fn models(
         tokio::time::sleep(wait).await;
     }
 }
-fn visible_models(value: Value) -> Result<Vec<crate::models::ModelInfo>, AiError> {
+fn visible_models(value: Value) -> Result<Vec<PlanModel>, AiError> {
     let models = value["models"]
         .as_array()
         .ok_or(AiError::Subscription("chatgpt_failed"))?;
@@ -231,9 +253,18 @@ fn visible_models(value: Value) -> Result<Vec<crate::models::ModelInfo>, AiError
         .filter_map(|m| {
             let id = m["slug"].as_str()?.trim();
             let label = m["display_name"].as_str()?.trim();
-            (!id.is_empty() && !label.is_empty()).then(|| crate::models::ModelInfo {
+            (!id.is_empty() && !label.is_empty()).then(|| PlanModel {
                 id: id.into(),
                 label: label.into(),
+                // Unknown metadata is not permission to send an optional field.
+                reasoning_efforts: m["supported_reasoning_levels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|level| level.as_str().or_else(|| level["effort"].as_str()))
+                    .filter(|level| matches!(*level, "low" | "medium" | "high" | "xhigh" | "max"))
+                    .map(str::to_owned)
+                    .collect(),
             })
         })
         .collect())
@@ -305,153 +336,14 @@ fn request(req: &TurnRequest) -> Result<Value, AiError> {
         "store":false, "stream":true, "max_output_tokens":req.max_tokens,
         "include":["reasoning.encrypted_content"],
     });
-    if req.effort != "none" {
+    if !req.effort.is_empty() && req.effort != "none" {
         body["reasoning"] = json!({"effort":req.effort});
     }
     Ok(body)
 }
 
-#[derive(Default)]
-struct Events {
-    unsupported: Option<String>,
-    call_ids: HashMap<String, String>,
-    result: Option<TurnResult>,
-}
-
-impl Events {
-    fn read(&mut self, value: Value, sink: Sink<'_>) -> Result<bool, AiError> {
-        match value["type"].as_str().unwrap_or("") {
-            "response.output_text.delta" => {
-                if let Some(text) = value["delta"].as_str() {
-                    sink(StreamEvent::TextDelta(text.into()));
-                }
-            }
-            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-                if let Some(text) = value["delta"].as_str() {
-                    sink(StreamEvent::Thinking(text.into()));
-                }
-            }
-            "response.output_item.added" if value["item"]["type"] == "function_call" => {
-                let item = &value["item"];
-                if let (Some(item_id), Some(id), Some(name)) = (
-                    item["id"].as_str(),
-                    item["call_id"].as_str(),
-                    item["name"].as_str(),
-                ) {
-                    self.call_ids.insert(item_id.into(), id.into());
-                    sink(StreamEvent::ToolUseStart {
-                        id: id.into(),
-                        name: name.into(),
-                    });
-                }
-            }
-            "response.function_call_arguments.delta" => {
-                if let (Some(id), Some(text)) = (
-                    value["item_id"]
-                        .as_str()
-                        .and_then(|id| self.call_ids.get(id)),
-                    value["delta"].as_str(),
-                ) {
-                    sink(StreamEvent::ToolInputDelta {
-                        id: id.clone(),
-                        json_fragment: text.into(),
-                    });
-                }
-            }
-            "response.incomplete" => return Err(AiError::Subscription("chatgpt_incomplete")),
-            "response.completed" => {
-                let response = &value["response"];
-                let mut content = Vec::new();
-                let mut refused = None;
-                for item in response["output"].as_array().into_iter().flatten() {
-                    match item["type"].as_str().unwrap_or("") {
-                        "message" => {
-                            for block in item["content"].as_array().into_iter().flatten() {
-                                if block["type"] == "output_text" {
-                                    content.push(ContentBlock::Text {
-                                        text: block["text"].as_str().unwrap_or("").into(),
-                                    });
-                                }
-                                if block["type"] == "refusal" {
-                                    refused =
-                                        Some(block["refusal"].as_str().unwrap_or("").to_owned());
-                                }
-                            }
-                        }
-                        "reasoning" => content.push(ContentBlock::Raw(item.clone())),
-                        "function_call" => {
-                            let id = item["call_id"].as_str().ok_or_else(|| {
-                                AiError::Stream("ChatGPT omitted a tool call ID".into())
-                            })?;
-                            let name = item["name"].as_str().ok_or_else(|| {
-                                AiError::Stream("ChatGPT omitted a tool name".into())
-                            })?;
-                            let raw = item["arguments"].as_str().unwrap_or("");
-                            let input = serde_json::from_str(raw)
-                                .unwrap_or_else(|_| Value::String(raw.into()));
-                            sink(StreamEvent::ToolUse {
-                                id: id.into(),
-                                name: name.into(),
-                                input: input.clone(),
-                            });
-                            content.push(ContentBlock::ToolUse {
-                                id: id.into(),
-                                name: name.into(),
-                                input,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                let stop_reason = if let Some(text) = refused {
-                    StopReason::Refusal {
-                        category: None,
-                        text,
-                    }
-                } else if content
-                    .iter()
-                    .any(|c| matches!(c, ContentBlock::ToolUse { .. }))
-                {
-                    StopReason::ToolUse
-                } else {
-                    StopReason::EndTurn
-                };
-                let u = &response["usage"];
-                let cached = u["input_tokens_details"]["cached_tokens"]
-                    .as_u64()
-                    .unwrap_or(0);
-                self.result = Some(TurnResult {
-                    content,
-                    stop_reason,
-                    usage: Usage {
-                        input_tokens: u["input_tokens"]
-                            .as_u64()
-                            .unwrap_or(0)
-                            .saturating_sub(cached),
-                        output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
-                        cache_read_input_tokens: cached,
-                        reasoning_tokens: u["output_tokens_details"]["reasoning_tokens"]
-                            .as_u64()
-                            .unwrap_or(0),
-                        ..Usage::default()
-                    },
-                });
-                sink(StreamEvent::Done);
-                return Ok(true);
-            }
-            "response.failed" | "error" => {
-                let detail = value
-                    .pointer("/response/error")
-                    .or_else(|| value.get("error"))
-                    .unwrap_or(&value);
-                self.unsupported = detail["param"].as_str().map(str::to_owned);
-                return Err(failure(400, detail));
-            }
-            _ => {}
-        }
-        Ok(false)
-    }
-}
+mod streamed;
+use streamed::Events;
 
 #[cfg(test)]
 mod tests {
@@ -604,8 +496,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             models,
-            vec![crate::models::ModelInfo {
+            vec![PlanModel {
                 id: "visible-slug".into(),
+                reasoning_efforts: Vec::new(),
                 label: "Visible model".into()
             }]
         );
@@ -657,9 +550,11 @@ mod tests {
             display_name: "Test Surveyor".into(),
         };
         let mut seen = Vec::new();
-        let result = stream(&endpoint, &tokens, req(), &mut |e| seen.push(e))
-            .await
-            .unwrap();
+        let result = stream(&endpoint, &tokens, req(), &Mutex::default(), &mut |e| {
+            seen.push(e)
+        })
+        .await
+        .unwrap();
         assert_eq!(result.usage.output_tokens, 20);
         let received = server.await.unwrap();
         let (headers, body) = received.split_once("\r\n\r\n").unwrap();
@@ -709,5 +604,154 @@ mod tests {
         ] {
             assert!(!format!("{event:?}").contains(secret));
         }
+    }
+}
+
+#[cfg(test)]
+mod streamed_regressions {
+    use super::*;
+
+    fn run(items: Vec<Value>, output: Value) -> TurnResult {
+        let mut events = Events::default();
+        for item in items {
+            events.read(item, &mut |_| {}).unwrap();
+        }
+        events.read(json!({"type":"response.completed","response":{"output":output,"usage":{"output_tokens":23}}}), &mut |_| {}).unwrap();
+        events.result.unwrap()
+    }
+
+    #[test]
+    fn delta_only_answer_survives_empty_completed_output() {
+        let result = run(
+            vec![
+                json!({"type":"response.output_text.delta","item_id":"msg-1","output_index":0,"content_index":0,"delta":"Hello "}),
+                json!({"type":"response.output_text.delta","item_id":"msg-1","output_index":0,"content_index":0,"delta":"surveyor."}),
+            ],
+            json!([]),
+        );
+        assert_eq!(
+            result.content,
+            vec![ContentBlock::Text {
+                text: "Hello surveyor.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn streamed_call_survives_partial_completed_output() {
+        let result = run(
+            vec![
+                json!({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc-1","call_id":"call-1","name":"qiyas_read","arguments":""}}),
+                json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc-1","delta":"{\"op\":\"state\",\"args\":\"{}\"}"}),
+                json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc-1","call_id":"call-1","name":"qiyas_read","arguments":"{\"op\":\"state\",\"args\":\"{}\"}"}}),
+            ],
+            json!([{"type":"reasoning","id":"rs-1","summary":[]} ]),
+        );
+        assert_eq!(result.stop_reason, StopReason::ToolUse);
+        assert!(result.content.iter().any(|c| matches!(c,ContentBlock::ToolUse{id,input,..} if id=="call-1" && input["op"]=="state")));
+    }
+}
+
+#[cfg(test)]
+mod acceptance;
+
+#[cfg(test)]
+mod capability_regressions {
+    use super::*;
+    #[test]
+    fn model_discovery_never_invents_effort_support() {
+        let models=visible_models(json!({"models":[
+            {"slug":"with-effort","display_name":"With effort","visibility":"list","supported_reasoning_levels":[{"effort":"low","display_name":"Low"},{"effort":"high"}]},
+            {"slug":"without-effort","display_name":"Without effort","visibility":"list"},
+            {"slug":"future","display_name":"Unknown","visibility":"list","supported_reasoning_levels":["medium","invented"]}
+        ]})).unwrap();
+        assert_eq!(models[0].reasoning_efforts, vec!["low", "high"]);
+        assert!(models[1].reasoning_efforts.is_empty());
+        assert_eq!(models[2].reasoning_efforts, vec!["medium"]);
+    }
+
+    #[tokio::test]
+    async fn unsupported_reasoning_is_dropped_on_retry_and_on_the_next_turn() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Capability adaptation test needs loopback sockets");
+        let endpoint = format!("http://{}/responses", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut bodies = Vec::new();
+            for index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut received = Vec::new();
+                loop {
+                    let mut buf = [0; 8192];
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0);
+                    received.extend_from_slice(&buf[..n]);
+                    if let Some(end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&received[..end]).to_lowercase();
+                        let len: usize = header
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        if received.len() >= end + 4 + len {
+                            bodies.push(
+                                serde_json::from_slice::<Value>(&received[end + 4..end + 4 + len])
+                                    .unwrap(),
+                            );
+                            break;
+                        }
+                    }
+                }
+                let (status, kind, body) = if index == 0 {
+                    (400,"application/json",json!({"error":{"code":"subscription_sharing_unsupported_capability","param":"reasoning.effort"}}).to_string())
+                } else {
+                    (
+                        200,
+                        "text/event-stream",
+                        format!(
+                            "data: {}\n\n",
+                            json!({"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Ready."}]}],"usage":{"output_tokens":2}}})
+                        ),
+                    )
+                };
+                socket.write_all(format!("HTTP/1.1 {status} Reply\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            bodies
+        });
+        let tokens = Tokens {
+            access_token: "fake-access".into(),
+            refresh_token: None,
+            id_token: "fake-id".into(),
+            scopes: vec![super::super::PLAN_SCOPE.into()],
+            expires_at: 0,
+            client_id: "fake".into(),
+            subject: "fake".into(),
+            display_name: "Fake".into(),
+        };
+        let req = TurnRequest {
+            system: "Mizan".into(),
+            messages: vec![crate::Message::user(vec![ContentBlock::Text {
+                text: "Hi".into(),
+            }])],
+            tools: crate::catalogue(),
+            model: "advertised".into(),
+            effort: "high".into(),
+            max_tokens: 100,
+        };
+        let refused = Mutex::default();
+        stream(&endpoint, &tokens, req.clone(), &refused, &mut |_| {})
+            .await
+            .unwrap();
+        stream(&endpoint, &tokens, req, &refused, &mut |_| {})
+            .await
+            .unwrap();
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies[0]["reasoning"]["effort"], "high");
+        assert!(bodies[1].pointer("/reasoning/effort").is_none());
+        assert!(bodies[2].pointer("/reasoning/effort").is_none());
+        assert!(refused.lock().unwrap().contains("advertised"));
     }
 }

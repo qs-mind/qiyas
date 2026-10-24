@@ -1365,7 +1365,7 @@ export const EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as cons
 export type Effort = (typeof EFFORTS)[number];
 
 /** A provider keeps its model and service address when another provider is chosen. */
-export type ProviderProfile = { effort?: Effort | null; model: string; base_url?: string | null };
+export type ProviderProfile = { effort?: string | null; model: string; base_url?: string | null };
 
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
@@ -1946,7 +1946,10 @@ export type Explanation = {
 export const explainItem = (item: string, project?: string) => invoke<Explanation>("explain_item", { item, project });
 
 /** Explicit check only; Qiyas never opens or scripts Claude login. */
-export type ClaudeCodeStatus = { installed: boolean; compatible: boolean; signed_in: boolean | null; version: string | null; code: string | null };
+export type ClaudeCodeStatus = {
+  installed: boolean; compatible: boolean; signed_in: boolean | null; version: string | null; code: string | null;
+  supports_model?: boolean; supports_effort?: boolean; model_aliases?: string[]; effort_levels?: string[];
+};
 export const claudeCodeStatus = (executable?: string | null) => invoke<ClaudeCodeStatus>("claude_code_status", { executable: executable || null });
 export type ChatgptAccount = { signed_in: boolean; display_name: string | null; plan_granted: boolean; available?: boolean; active_id?: string | null; accounts?: { id: string; display_name: string; signed_in: boolean }[]; paused?: boolean; notice?: string | null };
 export const chatgptAccount = () => invoke<ChatgptAccount>("chatgpt_account");
@@ -1954,6 +1957,7 @@ export const chatgptSignIn = () => invoke<ChatgptAccount>("chatgpt_sign_in");
 export const chatgptSignOut = () => invoke<ChatgptAccount>("chatgpt_sign_out");
 export const chatgptSelectAccount = (id: string | null) => invoke<ChatgptAccount>("chatgpt_select_account", { id });
 export const chatgptResumePlan = () => invoke<ChatgptAccount>("chatgpt_resume_plan");
-export const chatgptModels = () => invoke<ModelInfo[]>("chatgpt_models");
+export type PlanModel = ModelInfo & { reasoning_efforts?: string[] };
+export const chatgptModels = () => invoke<PlanModel[]>("chatgpt_models");
 export const cancelChatgptSignIn = () => invoke<void>("cancel_chatgpt_sign_in");
 export const subscriptionLink = (link: "claude_install" | "chatgpt_limits") => invoke<void>("subscription_link", { link });

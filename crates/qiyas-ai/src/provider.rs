@@ -163,6 +163,11 @@ pub enum ResultPart {
 /// What arrives while a turn streams.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// Sanitized provider detail for support logs only, never authentication material.
+    Diagnostic {
+        kind: String,
+        text: String,
+    },
     /// A local agent has already performed this activity through Qiyas's MCP server.
     Activity(Box<crate::AgentEvent>),
     /// The optional fields in an actual HTTP request, including retries after a refusal.

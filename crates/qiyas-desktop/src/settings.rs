@@ -582,9 +582,12 @@ fn read_settings(text: &str) -> Result<(Settings, bool), serde_json::Error> {
             .as_str()
             .unwrap_or("anthropic")
             .to_string();
-        if value["providers"][&provider]
-            .as_object()
-            .is_none_or(|p| !p.contains_key("effort"))
+        // The legacy effort belonged to API providers. A subscription uses its own
+        // default until the user explicitly chooses a supported level.
+        if matches!(provider.as_str(), "anthropic" | "openai_compatible")
+            && value["providers"][&provider]
+                .as_object()
+                .is_none_or(|p| !p.contains_key("effort"))
         {
             if value["providers"].is_null() {
                 value["providers"] = serde_json::json!({});

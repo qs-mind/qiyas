@@ -1105,7 +1105,37 @@ impl Agent {
             let mut streamed = false;
             while let Some(e) = rx.recv().await {
                 let event = match e {
-                    StreamEvent::Activity(event) => *event,
+                    StreamEvent::Activity(event) => {
+                        // Local providers own their tool loop; these calls never pass through
+                        // run_tools. Log each received activity while it is still running.
+                        match event.as_ref() {
+                            AgentEvent::ToolCall {
+                                id, name, input, ..
+                            } => self.log("TOOL CALL", || {
+                                format!("{id}; {name}\n{}", clip(&input.to_string()))
+                            }),
+                            AgentEvent::ToolResult {
+                                id,
+                                summary,
+                                is_error,
+                                ..
+                            } => self.log("TOOL RESULT", || {
+                                format!("{id}; error: {is_error}\n{}", clip(summary))
+                            }),
+                            AgentEvent::ProviderStatus { code } => {
+                                self.log("PROVIDER STATUS", || code.clone())
+                            }
+                            AgentEvent::Plan { phases } => self.log("PLAN", || {
+                                clip(&serde_json::to_string(phases).unwrap_or_default())
+                            }),
+                            _ => {}
+                        }
+                        *event
+                    }
+                    StreamEvent::Diagnostic { kind, text } => {
+                        self.log(&kind, || clip(&text));
+                        continue;
+                    }
                     StreamEvent::RequestSent(fields) => {
                         reported = true;
                         self.log(&format!("REQUEST {request_number}; sent: {fields}"), || {
@@ -1135,6 +1165,9 @@ impl Agent {
                         }
                     }
                     StreamEvent::TextDelta(text) => {
+                        if self.provider.owns_turn() {
+                            self.log("TEXT", || clip(&text));
+                        }
                         streamed = true;
                         if partial.len() < crate::log::MAX_TEXT {
                             partial.push_str(&text);

@@ -715,3 +715,61 @@ async fn mock_cancelled_rotation_commits_before_another_account_operation() {
         "cancellation never starts inference"
     );
 }
+
+#[tokio::test]
+async fn first_account_model_is_automatic_and_effort_requires_explicit_model_support() {
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    *provider.models.lock().unwrap() = Some((
+        "registration".into(),
+        vec![
+            PlanModel {
+                id: "first".into(),
+                label: "First".into(),
+                reasoning_efforts: vec!["low".into(), "high".into()],
+            },
+            PlanModel {
+                id: "plain".into(),
+                label: "Plain".into(),
+                reasoning_efforts: Vec::new(),
+            },
+        ],
+    ));
+    let mut req = request();
+    req.model.clear();
+    req.effort = "high".into();
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.model, "first");
+    assert_eq!(req.effort, "high");
+    req.model = "plain".into();
+    req.effort = "high".into();
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.effort, "none");
+    req.model = "first".into();
+    req.effort = "max".into();
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.effort, "none");
+}
+
+#[test]
+fn refused_reasoning_survives_conversation_state_without_account_material() {
+    let first = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    first
+        .refused_effort
+        .lock()
+        .unwrap()
+        .insert("model-one".into());
+    let state = first.save_state();
+    assert_eq!(state, json!({"refused_effort":["model-one"]}));
+    let resumed = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    resumed.restore_state(state.clone());
+    assert_eq!(resumed.save_state(), state);
+}

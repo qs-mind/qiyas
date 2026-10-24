@@ -2956,3 +2956,42 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
 - Unsupported measurement-method versions name supported version 1; the registry and
   take-off kit examples include `version: 1`. No dependency or provider changes.
 - Evidence and limitations: `docs/2026-10-24-qiyas-goal-J.md`.
+## Goal H: subscription replies, activity and choices (24 October 2026)
+
+- ChatGPT assembles its completed turn from output-item, text, content-part and function-argument
+  stream events. Final `response.completed.output` fills gaps; an empty or partial final array
+  cannot erase streamed text or calls. Item IDs, output indices and call IDs keep repeated
+  snapshots from duplicating calls or visible text. Reasoning items retain their opaque payload
+  for subsequent Responses requests. Interrupted/incomplete responses still execute no calls.
+- A completed response with no answer, refusal or call fails with `ai.error.chatgpt_empty` in
+  English/Arabic. The support log records item types and usage, never encrypted reasoning or
+  authentication material. Possible credential prefixes are held across text/thinking deltas,
+  so joining fragments cannot reveal them; assembled refusal text is scrubbed too.
+  Completed text, calls and token counts use the ordinary Agent answer
+  log. Retained answers and call/results are sent in later requests; the request line also states
+  the actual Responses input-item count, distinct from the conversation-message count.
+- ChatGPT selects the account's first visible model when no model is selected. Desktop sign-in,
+  account selection, model discovery and the first send/resume persist that choice; Settings
+  shows its display name and sends its slug. Account changes clear the old choice. Discovery
+  failure keeps sign-in and reports the failure. A failed settings write does not update memory.
+- ChatGPT effort is optional and sent only when the selected model's discovery entry advertises
+  the level in `supported_reasoning_levels` (strings or objects with `effort`). Unknown metadata
+  means the service default. The profile keeps its own choice. A named unsupported reasoning
+  capability removes effort for the rest of this conversation, including resume; credentials
+  and account identity never enter that saved capability state.
+- Claude Code status reads only its ordinary version/help/auth-status commands. Model aliases
+  and effort levels come from the selected executable's help text. Settings offers Default,
+  documented model examples and Other for a full model name; effort offers Default and the
+  documented levels. A missing flag hides its control; checking an older compatible executable
+  clears choices it cannot accept. A late status from a previous provider cannot change the
+  current choice. Checks remain explicit, never polled.
+  Default omits the flag; an explicit model or effort must contain only ASCII letters, digits,
+  `.`, `_`, `:`, or `-` and must not start with `-`. Values are separate process arguments.
+  Legacy global API effort no longer migrates into a subscription profile.
+- Claude partial tool events are assembled before the full assistant summary and forwarded as
+  the existing activity cards. Received text, calls, results, retry/status and terminal result
+  events are written while the turn runs, so cancelling does not lose the diagnostic trail.
+  Raw thinking and account/init metadata remain excluded. Goal S's executable, environment,
+  private MCP, permissions, cancellation and no-retry safety rules remain in force.
+- No model calls, real login, new dependencies or licence changes. See
+  `docs/2026-10-24-qiyas-goal-H.md` for before/after evidence and actual check limitations.
