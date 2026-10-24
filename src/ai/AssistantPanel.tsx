@@ -206,6 +206,14 @@ export const AssistantPanel = memo(function AssistantPanel({
             <Markdown text={item.text} />
           </div>
         );
+      case "open_findings":
+        return <div key={i} className="msg notice" role="note">
+          <strong className="heading">{t("ai.openFindings")}</strong>
+          <ul>{[...new Set(item.findings.map(finding => finding.rule))].map(rule =>
+            <li key={rule}>{t(`ai.finding.${rule}`)} ({item.findings.filter(finding => finding.rule === rule).length})</li>,
+          )}</ul>
+          {showTechnicalDetails && <details className="technical-details"><summary>{t("technical.details")}</summary><pre dir="ltr">{JSON.stringify(item.findings, null, 2)}</pre></details>}
+        </div>;
       case "thinking":
         return null;
       case "tool": {

@@ -681,71 +681,46 @@ fn message_results(messages: &[qiyas_ai::Message]) -> Vec<(bool, Value)> {
 }
 
 #[tokio::test]
-async fn reads_stop_at_40_calls_and_results_warn_with_ten_left() {
+async fn successful_reads_continue_with_cost_advice() {
     let (_dir, s) = sample();
-    let calls = vec![(READ, json!({"op": "state", "args": "{}"})); 50];
+    let calls = vec![(READ, json!({"op":"state","args":"{}"})); 50];
     let (agent, events, requests) = scripted(Arc::new(Mutex::new(Some(s))), calls).await;
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 40);
-    assert_eq!(requests[0].tools.len(), 3);
+    assert_eq!(requests.len(), 51);
     for (offered, expected) in requests[0].tools.iter().zip(surface::tools()) {
         assert_eq!(offered.name, expected.name);
         assert_eq!(offered.input_schema, expected.input_schema);
     }
     let results = observed_results(&agent, &requests);
-    assert_eq!(results.len(), 40);
-    for (i, (error, value)) in results.iter().enumerate() {
-        assert!(!error, "{value}");
-        if i < 29 {
-            assert!(value.get("budget").is_none(), "{value}");
-        } else {
-            assert_eq!(value["budget"], format!("{} calls left", 39 - i));
-        }
-    }
-    assert_eq!(
-        events.last(),
-        Some(&AgentEvent::Stopped {
-            reason: "stopped after 40 steps".into()
-        })
-    );
+    assert_eq!(results.len(), 50);
+    assert!(results.iter().all(|(error, _)| !error));
+    assert!(results.last().unwrap().1["advice"]
+        .to_string()
+        .contains("tool_cost"));
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
 }
 
 #[tokio::test]
-async fn a_drawing_change_raises_the_turn_budget_to_120() {
+async fn drawing_work_continues_beyond_the_cost_advice_threshold() {
     let (_dir, s) = sample();
     let mut calls = vec![(
         EXECUTE,
-        json!({"op": "run", "args": {"command": {
-            "type": "draw", "kind": "line", "a": [30, 0], "b": [35, 0]
-        }}}),
+        json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[30,0],"b":[35,0]}}}),
     )];
-    calls.extend(vec![(READ, json!({"op": "state", "args": "{}"})); 130]);
+    calls.extend(vec![(READ, json!({"op":"state"})); 130]);
     let (agent, events, requests) = scripted(Arc::new(Mutex::new(Some(s))), calls).await;
-    assert_eq!(requests.lock().unwrap().len(), 120);
+    assert_eq!(requests.lock().unwrap().len(), 132);
     let results = observed_results(&agent, &requests.lock().unwrap());
-    assert_eq!(results.len(), 120);
-    for (i, (error, value)) in results.iter().enumerate() {
-        assert!(!error, "{value}");
-        if i < 109 {
-            assert!(value.get("budget").is_none(), "{value}");
-        } else {
-            assert_eq!(value["budget"], format!("{} calls left", 119 - i));
-        }
-    }
-    assert!(events.iter().any(|event| matches!(
-        event, AgentEvent::ToolCall { name, label: Some(label), mutating: true, .. }
-            if name == EXECUTE && label == "draw.line"
-    )));
-    assert_eq!(
-        events.last(),
-        Some(&AgentEvent::Stopped {
-            reason: "stopped after 120 steps".into()
-        })
-    );
+    assert_eq!(results.len(), 131);
+    assert!(results.iter().all(|(error, _)| !error));
+    assert!(results.last().unwrap().1["advice"]
+        .to_string()
+        .contains("tool_cost"));
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
 }
 
 #[tokio::test]
-async fn destructive_commands_in_run_and_batch_share_one_cap() {
+async fn destructive_commands_in_run_and_batch_report_counts_and_apply() {
     let (_dir, mut s) = sample();
     let ids: Vec<_> = (0..12)
         .map(|_| {
@@ -760,55 +735,25 @@ async fn destructive_commands_in_run_and_batch_share_one_cap() {
             }
         })
         .collect();
-    let remove = |id: &str| json!({"type": "remove_measurement", "id": id});
+    let remove = |id: &str| json!({"type":"remove_measurement","id":id});
     let mut calls: Vec<_> = ids[..6]
         .iter()
-        .map(|id| {
-            (
-                EXECUTE,
-                json!({"op": "run", "args": {"command": remove(id)}}),
-            )
-        })
+        .map(|id| (EXECUTE, json!({"op":"run","args":{"command":remove(id)}})))
         .collect();
-    let over = json!({"op": "batch", "args": {
-        "commands": ids[6..11].iter().map(|id| remove(id)).collect::<Vec<_>>()
-    }});
+    let over = json!({"op":"batch","args":{"commands":ids[6..11].iter().map(|id|remove(id)).collect::<Vec<_>>()}});
     assert_eq!(surface::destructive_count(EXECUTE, &over), 5);
     calls.push((EXECUTE, over));
-    calls.push((
-        EXECUTE,
-        json!({"op": "batch", "args": {
-            "commands": ids[6..10].iter().map(|id| remove(id)).collect::<Vec<_>>()
-        }}),
-    ));
-    calls.push((
-        EXECUTE,
-        json!({"op": "run", "args": {"command": remove(&ids[10])}}),
-    ));
     let session = Arc::new(Mutex::new(Some(s)));
-    let (agent, _, _) = scripted(session.clone(), calls).await;
+    let (agent, events, _) = scripted(session.clone(), calls).await;
     let results = results(&agent);
-    assert_eq!(results.len(), 9);
-    assert!(results[..6].iter().all(|(error, _)| !error));
-    for i in [6, 8] {
-        assert!(results[i].0, "{:?}", results[i]);
-        assert!(
-            results[i]
-                .1
-                .to_string()
-                .contains("Too many destructive commands"),
-            "{:?}",
-            results[i]
-        );
-    }
-    assert!(!results[7].0, "{:?}", results[7]);
+    assert_eq!(results.len(), 7);
+    assert!(results.iter().all(|(error, _)| !error));
+    assert!(results[6].1["advice"].to_string().contains("many_removals"));
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
     let guard = session.lock().unwrap();
     let remaining = &guard.as_ref().unwrap().takeoff.items;
-    assert_eq!(remaining.len(), 2);
-    assert_eq!(
-        remaining.iter().map(|row| &row.id).collect::<Vec<_>>(),
-        ids[10..].iter().collect::<Vec<_>>()
-    );
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, ids[11]);
 }
 
 #[test]
@@ -917,11 +862,12 @@ fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
     assert!(!surface::mutating(EXECUTE, &input));
     surface::check_need(EXECUTE, "plan", false, false, false).unwrap();
     let out = call(&mut session, EXECUTE, input).unwrap();
-    assert_eq!(out, json!({"plan":{"phases":phases}}));
+    assert_eq!(out["plan"], json!({"phases":phases}));
+    assert!(out.get("revision").is_some());
     assert_eq!(count(&session), before);
     assert_eq!(session.history_revision(), revision);
     assert!(!session.can_undo());
-    let info = call(
+    let mut info = call(
         &mut session,
         READ,
         json!({"op":"commands","args":{"name":"plan"}}),
@@ -930,6 +876,8 @@ fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
     assert_eq!(info["op"], "plan");
     assert_eq!(info["undo"], false);
     let caps = call(&mut session, READ, json!({"op":"capabilities"})).unwrap();
+    assert_eq!(info["revision"], caps["revision"]);
+    info.as_object_mut().unwrap().remove("revision");
     assert_eq!(caps["plan"], info);
     let index = call(&mut session, READ, json!({"op":"commands"})).unwrap();
     assert_eq!(index["operations"][0], info);
@@ -985,7 +933,7 @@ async fn plan_events_follow_valid_snapshots_and_the_provider_observes_them_witho
 }
 
 async fn events_for(agent: &mut Agent, message: &str) -> Vec<AgentEvent> {
-    let (tx, mut rx) = mpsc::channel(100);
+    let (tx, mut rx) = mpsc::channel(1024);
     agent
         .run_turn(message.into(), tx, CancellationToken::new())
         .await
@@ -1080,7 +1028,7 @@ fn state_read_reports_method_name_and_whether_rules_are_loaded() {
 }
 
 #[tokio::test]
-async fn unfinished_phase_error_attribution_survives_restart_until_repaired() {
+async fn open_findings_survive_restart_until_repaired() {
     let (_dir, mut session) = sample();
     session.current.layer = "A-WALL".into();
     let shared = Arc::new(Mutex::new(Some(session)));
@@ -1097,10 +1045,11 @@ async fn unfinished_phase_error_attribution_survives_restart_until_repaired() {
         shared.clone(),
         settings.clone(),
     );
-    assert!(matches!(
-        events_for(&mut agent, "Draw").await.last(),
-        Some(AgentEvent::AwaitingApproval { .. })
-    ));
+    let events = events_for(&mut agent, "Draw").await;
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e,AgentEvent::OpenFindings{findings,..} if !findings.is_empty())));
     let saved = serde_json::to_vec(&agent.snapshot()).unwrap();
     let conversation = serde_json::from_slice(&saved).unwrap();
     let mut resumed = Agent::resume(
@@ -1109,13 +1058,11 @@ async fn unfinished_phase_error_attribution_survives_restart_until_repaired() {
         shared.clone(),
         settings.clone(),
     );
-    assert!(
-        matches!(
-            events_for(&mut resumed, "Approved, continue.").await.last(),
-            Some(AgentEvent::AwaitingApproval { .. })
-        ),
-        "approval alone does not erase errors from the unfinished phase"
-    );
+    let events = events_for(&mut resumed, "Continue.").await;
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e,AgentEvent::OpenFindings{findings,..} if !findings.is_empty())));
     let mut repairing = Agent::resume(
         resumed.snapshot(),
         Box::new(Script::new(
@@ -1875,7 +1822,7 @@ fn revision_kit_runs_through_generic_tools_and_typed_commands() {
     let path = dir.path().join("A.dxf");
     a.save_as(&path).unwrap();
     let mut b = Session::open_standalone(&path).unwrap();
-    let mut carry = kit["revision"][1].clone();
+    let mut carry = kit["revision_commands"][1].clone();
     carry["from_path"] = json!(path);
     let n = b.history_steps().0.len();
     call(
@@ -2300,11 +2247,11 @@ async fn new_layout_warnings_are_visible_until_repaired() {
             },
         );
         let events = events_for(&mut agent, "Add a label").await;
-        assert_eq!(
-            matches!(events.last(), Some(AgentEvent::AwaitingApproval { .. })),
-            !repair,
+        assert!(
+            matches!(events.last(), Some(AgentEvent::Done { .. })),
             "{events:?}"
         );
+        assert_eq!(events.iter().any(|e|matches!(e,AgentEvent::OpenFindings{findings,..} if findings.iter().any(|f|f["rule"]=="text_overlaps_text"))),!repair);
         let serialized = serde_json::to_string(agent.history()).unwrap();
         assert!(
             serialized.contains("text_overlaps_text"),
@@ -2530,7 +2477,7 @@ fn project_method_overrides_the_settings_name_in_state_and_kit() {
 }
 
 #[tokio::test]
-async fn selected_modes_pause_and_autonomous_stops_with_unfixed_findings() {
+async fn all_modes_allow_completion_and_attach_open_findings() {
     use qiyas_ai::Autonomy;
     let line = json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[100,100],"b":[110,100]}}});
     for mode in [Autonomy::PerJob, Autonomy::PerPhase, Autonomy::Autonomous] {
@@ -2551,19 +2498,16 @@ async fn selected_modes_pause_and_autonomous_stops_with_unfixed_findings() {
                 },
             );
             let events = events_for(&mut agent, "Draw").await;
-            assert_eq!(
-                matches!(events.last(), Some(AgentEvent::AwaitingApproval { .. })),
-                !repair && mode != Autonomy::Autonomous,
+            assert!(
+                matches!(events.last(), Some(AgentEvent::Done { .. })),
                 "{mode:?}, repair={repair}: {events:?}"
             );
-            if mode == Autonomy::Autonomous && !repair {
-                assert!(
-                    matches!(events.last(), Some(AgentEvent::Stopped { reason }) if reason == "drawing_checks_unresolved")
-                );
-                assert!(events.iter().any(
-                    |e| matches!(e,AgentEvent::Text{text} if text.contains("work is incomplete"))
-                ));
-            }
+            assert_eq!(
+                events.iter().any(
+                    |e| matches!(e,AgentEvent::OpenFindings{findings,..} if !findings.is_empty())
+                ),
+                !repair
+            );
         }
         let (_dir, mut session) = sample();
         session.current.layer = "A-WALL".into();
@@ -2588,37 +2532,42 @@ async fn selected_modes_pause_and_autonomous_stops_with_unfixed_findings() {
 }
 
 #[tokio::test]
-async fn goal_d_same_ineffective_edit_stops_after_two_attempts_with_plain_reason() {
-    let (_dir, mut session) = sample();
-    call(
-        &mut session,
-        EXECUTE,
-        json!({"op":"run","args":{"command":{"type":"new_layer","name":"Repeated"}}}),
-    )
-    .unwrap();
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let input = json!({"op":"run","args":{"command":{"type":"new_layer","name":"Repeated"}}});
-    let mut agent = Agent::new(
-        Box::new(Script::new(
-            vec![
-                (EXECUTE, input.clone()),
-                (READ, json!({"op":"state","args":{}})),
-                (EXECUTE, input.clone()),
-                (EXECUTE, input),
-            ],
-            requests.clone(),
-        )),
-        Arc::new(Mutex::new(Some(session))),
-        AgentSettings::default(),
-    );
-    let events = events_for(&mut agent, "Create the requested layer").await;
-    assert!(
-        matches!(events.last(), Some(AgentEvent::Stopped {reason}) if reason == "repeated_ineffective_edit")
-    );
-    assert!(events.iter().any(
-        |e| matches!(e, AgentEvent::Text{text} if text.contains("two attempts made no change"))
-    ));
-    assert_eq!(requests.lock().unwrap().len(), 4);
+async fn identical_ineffective_edits_advise_then_stop_only_the_sixth_attempt() {
+    for attempts in [3, 6] {
+        let (_dir, mut session) = sample();
+        let input = json!({"op":"run","args":{"command":{"type":"new_layer","name":"Repeated"}}});
+        call(&mut session, EXECUTE, input.clone()).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut calls = vec![(EXECUTE, input.clone())];
+        calls.push((READ, json!({"op":"state"})));
+        calls.extend((1..attempts).map(|_| (EXECUTE, input.clone())));
+        let mut agent = Agent::new(
+            Box::new(Script::new(calls, requests.clone())),
+            Arc::new(Mutex::new(Some(session))),
+            AgentSettings::default(),
+        );
+        let events = events_for(&mut agent, "Create the requested layer").await;
+        let results = results(&agent);
+        for n in [2, 3] {
+            assert!(
+                results.iter().any(|(_, v)| v["advice"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|a| a["attempts"] == n))),
+                "{results:?}"
+            );
+        }
+        if attempts == 6 {
+            assert!(
+                matches!(events.last(),Some(AgentEvent::Stopped{reason}) if reason=="repeated_ineffective_edit")
+            );
+            assert!(events
+                .iter()
+                .any(|e| matches!(e,AgentEvent::Text{text} if text.contains("five times"))));
+            assert_eq!(requests.lock().unwrap().len(), 7);
+        } else {
+            assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+        }
+    }
 }
 
 #[tokio::test]
@@ -2691,7 +2640,7 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
                 .content
                 .iter()
                 .find_map(|b| match b {
-                    qiyas_ai::ContentBlock::Text { text } if text.starts_with("[finish now]") => {
+                    qiyas_ai::ContentBlock::Text { text } if text.starts_with("[cost advice]") => {
                         Some(text)
                     }
                     _ => None,
@@ -2701,7 +2650,7 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
                 notice.contains("BOQ") || notice.contains("ربط الكميات"),
                 takeoff
             );
-            assert_eq!(notice.contains("قاربت"), arabic);
+            assert_eq!(notice.contains("نُفّذت"), arabic);
             // The original schema remains, after far more than three results.
             let contract = last.messages.iter().flat_map(|m| &m.content).find(|b| matches!(b,qiyas_ai::ContentBlock::ToolResult{tool_use_id,..} if tool_use_id == "call_0")).unwrap();
             assert!(serde_json::to_string(contract).unwrap().contains("schema"));
@@ -2772,11 +2721,11 @@ fn goal_d_redo_restores_the_original_handles_and_respects_ownership() {
 }
 
 #[tokio::test]
-async fn goal_d_new_warnings_prevent_completion_in_all_drawing_units() {
+async fn new_warnings_are_attached_to_completion_in_all_drawing_units() {
     for (unit, factor) in [(4, 0.001), (5, 0.01), (6, 1.0), (1, 0.0254)] {
         let dir = tempfile::tempdir().unwrap();
         let session = Session::new_blank(&dir.path().join("warning.dxf"), unit);
-        // A new line on layer 0 is a warning, not an error. It still needs correction.
+        // The warning remains visible; Mizan decides whether the work is complete.
         let requests = Arc::new(Mutex::new(Vec::new()));
         let mut agent = Agent::new(
             Box::new(Script::new(
@@ -2791,14 +2740,14 @@ async fn goal_d_new_warnings_prevent_completion_in_all_drawing_units() {
         );
         let events = events_for(&mut agent, "Draw a line").await;
         assert!(
-            matches!(events.last(),Some(AgentEvent::Stopped{reason}) if reason == "drawing_checks_unresolved"),
+            matches!(events.last(), Some(AgentEvent::Done { .. })),
             "{unit}: {events:?}"
         );
-        assert!(!events.iter().any(|e| matches!(e, AgentEvent::Done { .. })));
+        assert!(events.iter().any(|e|matches!(e,AgentEvent::OpenFindings{findings,revision} if !revision.is_null() && findings.iter().any(|f|f["rule"]=="layer_zero"))));
         assert_eq!(
             requests.lock().unwrap().len(),
-            4,
-            "one edit, then at most two correction requests"
+            2,
+            "one edit and the model's final answer"
         );
     }
 }
@@ -2866,7 +2815,9 @@ async fn goal_d_switching_jobs_preserves_requests_and_evidence() {
 async fn goal_d_interrupted_quantity_work_reports_in_the_chat_language() {
     let (_dir, session) = sample();
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let reads = (0..40).map(|_| (READ, json!({"op":"state"}))).collect();
+    let reads = (0..6)
+        .map(|_| (EXECUTE, json!({"op":"run","args":{"command":{"type":"set_property","target":{"handle":999999},"prop":"color","value":"red"}}})))
+        .collect();
     let mut agent = Agent::new(
         Box::new(Script::new(reads, requests)),
         Arc::new(Mutex::new(Some(session))),

@@ -120,10 +120,10 @@ impl Job {
 
     pub fn budget(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::Drawing, Lang::En) => "[finish now] The working budget is nearly used. Stop exploring. Check the requested drawing changes, fix new warnings, and briefly say what is complete and what remains. Do not save unless asked.",
-            (Self::Drawing, Lang::Ar) => "[finish now] قاربت ميزانية العمل على النفاد. أوقف الاستكشاف. تحقّق من تعديلات الرسم المطلوبة وصحّح التحذيرات الجديدة، ثم اذكر باختصار ما اكتمل وما بقي. لا تحفظ إلا بطلب المستخدم.",
-            (Self::Takeoff, Lang::En) => "[finish now] The working budget is nearly used. Finish supported BOQ mappings, read measurement.report and takeoff_check, fix measurement errors, and report remaining uncertainty. Stop exploring. Do not save unless asked.",
-            (Self::Takeoff, Lang::Ar) => "[finish now] قاربت ميزانية العمل على النفاد. أكمل ربط الكميات المدعومة بالأدلة، واقرأ measurement.report وtakeoff_check وصحّح أخطاء القياس، ثم اذكر ما بقي غير مؤكد. أوقف الاستكشاف. لا تحفظ إلا بطلب المستخدم.",
+            (Self::Drawing, Lang::En) => "[cost advice] Many calls have run. Consider the remaining drawing changes and checks, and the subscription cost. This is information; Mizan decides whether to continue or finish and explain remaining findings. Do not save unless asked.",
+            (Self::Drawing, Lang::Ar) => "[cost advice] نُفّذت خطوات كثيرة. وازن بين تعديلات الرسم والفحوص المتبقية وتكلفة الاشتراك. هذه معلومات؛ ميزان يقرر المتابعة أو الإنهاء وشرح الملاحظات المتبقية. لا تحفظ إلا بطلب المستخدم.",
+            (Self::Takeoff, Lang::En) => "[cost advice] Many calls have run. Consider the remaining supported BOQ mappings, measurement.report and takeoff_check, and the subscription cost. This is information; Mizan decides whether to continue or finish and explain uncertainty. Do not save unless asked.",
+            (Self::Takeoff, Lang::Ar) => "[cost advice] نُفّذت خطوات كثيرة. وازن بين ربط الكميات المدعومة بالأدلة والفحوص المتبقية وتكلفة الاشتراك. هذه معلومات؛ ميزان يقرر المتابعة أو الإنهاء وشرح ما بقي غير مؤكد. لا تحفظ إلا بطلب المستخدم.",
         }
     }
 }

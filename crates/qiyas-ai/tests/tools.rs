@@ -465,15 +465,32 @@ fn add_markup_lands_on_the_markup_layer() {
 }
 
 #[test]
-fn count_with_non_insert_handle_is_bad_input() {
+fn count_with_non_insert_handles_advises_and_duplicate_handles_still_fail() {
     let (_dir, mut session) = sample();
     let line = handles_of(&session, "Line")[0];
     let doors = handles_of(&session, "Insert");
     let count =
         |handles: Vec<u64>| json!({ "kind": "count", "handles": handles, "description": "Doors" });
 
-    let err = run(&mut session, "add_measurement", count(vec![doors[0], line])).unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+    let mut command = count(vec![doors[0], line]);
+    command["type"] = json!("add_measurement");
+    let out = json_of(
+        qiyas_ai::surface::run_session(
+            &mut session,
+            qiyas_ai::surface::EXECUTE,
+            "run",
+            &json!({"command":command}),
+            Source::Ai,
+        )
+        .unwrap(),
+    );
+    assert_eq!(out["outcome"]["measurement"]["value"], 2.0);
+    assert!(out["advice"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["code"] == "count_non_block"));
+    assert_eq!(session.takeoff.items.last().unwrap().value, 2.0);
     let err = run(
         &mut session,
         "add_measurement",
@@ -481,7 +498,7 @@ fn count_with_non_insert_handle_is_bad_input() {
     )
     .unwrap_err();
     assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
-    assert!(session.takeoff.items.is_empty());
+    assert_eq!(session.takeoff.items.len(), 1);
 
     let out = run(&mut session, "add_measurement", count(doors)).unwrap();
     assert_eq!(out["measurement"]["value"], 3.0);

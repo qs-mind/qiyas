@@ -42,6 +42,15 @@ pub trait DrawingHost: Send + Sync {
     fn before_tool(&self, _name: &str, _input: &Value) -> Result<(), String> {
         Ok(())
     }
+    /// Hosts check expected_revision again while holding the lock which applies the change.
+    fn run_file(
+        &self,
+        name: &str,
+        input: &Value,
+        user_text: Option<&str>,
+    ) -> Result<Value, String> {
+        dispatch_host(self, name, input, user_text)
+    }
     /// Record completion only. Saving is a separate, explicit operation.
     fn finish(&self, _answer: &str) -> Result<Value, String> {
         Ok(
@@ -126,6 +135,21 @@ pub fn run_host(
     input: &Value,
     user_text: Option<&str>,
 ) -> Result<Value, String> {
+    host.run_file(name, input, user_text)
+}
+
+/// Default file dispatch, also used by a host carrying a checked operation's revision.
+pub fn dispatch_host<H: DrawingHost + ?Sized>(
+    host: &H,
+    name: &str,
+    input: &Value,
+    user_text: Option<&str>,
+) -> Result<Value, String> {
+    let mut input = input.clone();
+    if let Some(map) = input.as_object_mut() {
+        map.remove("expected_revision");
+    }
+    let input = &input;
     match name {
         "finish" => host.finish(input["answer"].as_str().unwrap_or_default()),
         "project" => host.project(
@@ -177,6 +201,15 @@ pub const NO_HOST: &str = "Drawings can't be opened, made or saved from here; as
 /// The answer of a host tool that only asked the window to do something.
 pub fn asked(what: &str) -> Value {
     json!({ "asked_user": true, "message": what })
+}
+
+/// Check at the host's mutation lock, preserving the structured stale-read details.
+pub fn check_expected_revision(
+    session: Option<&qiyas_core::Session>,
+    expected: Option<&Value>,
+) -> Result<(), String> {
+    crate::revision::check(session, &json!({"expected_revision":expected}))
+        .map_err(|e| e.json().to_string())
 }
 
 #[cfg(test)]

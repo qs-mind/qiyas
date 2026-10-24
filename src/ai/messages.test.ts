@@ -212,3 +212,12 @@ test("local agent status stays a plain notice in the transcript", () => {
   const state = reduce(EMPTY, { type: "provider_status", code: "ai.claudeConnected" });
   expect(state.items).toEqual([{ kind: "provider_status", code: "ai.claudeConnected" }]);
 });
+
+test("completion keeps open findings with the answer and restores them from History", () => {
+  const findings: AgentEvent = { type: "open_findings", findings: [{ rule: "text_overlaps_text", message: "Two labels overlap", handles: [2, 3] }], revision: { document_revision: 7 } };
+  const transcript = run([{ type: "user", text: "Finish", pointed: [], images: [] }, { type: "text", text: "Done." }, findings, { type: "done", usage: {} }]);
+  expect(transcript.items.map(item => item.kind)).toEqual(["user", "assistant", "open_findings"]);
+  expect(transcript.items[1]).toMatchObject({ text: "Done.", finished: true });
+  const restored = run([{ type: "restore", entries: [{ type: "user", text: "Finish", pointed: [], images: [] }, { type: "event", event: { type: "text", text: "Done." } }, { type: "event", event: findings }, { type: "event", event: { type: "done", usage: {} } }] }]);
+  expect(restored.items).toEqual(transcript.items);
+});

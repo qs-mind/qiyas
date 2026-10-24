@@ -392,7 +392,11 @@ pub async fn run_command(
     mut cmd: serde_json::Value,
     state: State<'_, AppState>,
 ) -> Result<Reported, String> {
-    let parsed = qiyas_core::registry::parse_command(cmd.clone())?;
+    let mut command = cmd.clone();
+    if let Some(fields) = command.as_object_mut() {
+        fields.remove("expected_revision");
+    }
+    let parsed = qiyas_core::registry::parse_command(command)?;
     if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
         cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
     }
@@ -446,9 +450,20 @@ pub async fn save_drawing(state: State<'_, AppState>) -> Result<(), String> {
 /// to it; the session then works on the new file, which goes first in the recent list.
 #[tauri::command]
 pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    with_session(&state, |s| s.save_as(Path::new(&path)))?;
-    ai_run(&state).drawing_saved_as(Path::new(&path).to_path_buf());
+    save_as_with_history(&state, Path::new(&path))?;
     remember_recent(&state, &path);
+    Ok(())
+}
+
+pub(crate) fn save_as_with_history(state: &AppState, path: &Path) -> Result<(), String> {
+    let mut run = ai_run(state);
+    let from = with_session(state, |s| {
+        let from = s.drawing.path.clone();
+        s.save_as(path)?;
+        Ok(from)
+    })?;
+    crate::conversations::Store::new(&state.config_dir).follow_drawing(&from, path)?;
+    run.drawing_saved_as(path.to_path_buf());
     Ok(())
 }
 
@@ -889,7 +904,10 @@ pub async fn ai_send<R: Runtime>(
         // Its file tools run on the app's tabs.
         None => new_agent(&state, &settings, language, None)
             .await?
-            .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() })),
+            .with_host(Arc::new(crate::drawing_host::AppHost {
+                app: app.clone(),
+                expected_revision: None,
+            })),
     };
     // Effort may have changed since the last message.
     agent.set_settings(ai::agent_settings(&settings, language));
@@ -1165,7 +1183,10 @@ pub async fn ai_resume<R: Runtime>(
     }
     let agent = new_agent(&state, &settings, language, Some(conversation))
         .await?
-        .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() }));
+        .with_host(Arc::new(crate::drawing_host::AppHost {
+            app: app.clone(),
+            expected_revision: None,
+        }));
     let mut run = ai_run(&state);
     if run.generation() != generation {
         return Err(ai::RESTARTED.into());
@@ -1986,6 +2007,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn save_as_keeps_its_chats_out_of_the_next_untitled_drawing() {
+        ai_test(
+            "save_as_keeps_its_chats_out_of_the_next_untitled_drawing",
+            || {
+                let ipc = Ipc::open();
+                let first = ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                ipc.call("ai_send", json!({"text":"Hello"})).unwrap();
+                ipc.turn();
+                let saved = ipc._dir.path().join("saved.dwg");
+                ipc.call("save_drawing_as", json!({"path":saved})).unwrap();
+                let second = ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+                assert_ne!(first["path"], second["path"]);
+                assert_eq!(
+                    ipc.call("ai_conversations", json!({"drawing":second["path"]}))
+                        .unwrap(),
+                    json!([])
+                );
+                assert_eq!(
+                    ipc.call("ai_conversations", json!({"drawing":saved}))
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn recovered_untitled_history_and_inactive_chats_follow_save_as() {
+        ai_test(
+            "recovered_untitled_history_and_inactive_chats_follow_save_as",
+            || {
+                let ipc = Ipc::open();
+                let untitled = ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+                assert_eq!(ipc.next().0, "ai:cleared");
+                let state = ipc._app.state::<AppState>();
+                // A copy of the founder's chat can exercise the same flow without reading his
+                // live store. Normal tests use the canned provider and synthetic conversations.
+                if let Some(path) = std::env::var_os("QIYAS_GOAL_L_CHAT_COPY") {
+                    let mut chat: qiyas_ai::conversation::Conversation =
+                        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    chat.drawing = Some(untitled["path"].as_str().unwrap().into());
+                    crate::conversations::Store::new(&state.config_dir)
+                        .save(&chat)
+                        .unwrap();
+                }
+                for _ in 0..2 {
+                    ipc.call("ai_send", json!({"text":"Hello"})).unwrap();
+                    ipc.turn();
+                    ipc.call("ai_clear", json!({})).unwrap();
+                    assert_eq!(ipc.next().0, "ai:cleared");
+                }
+                let before = ipc
+                    .call("ai_conversations", json!({"drawing":untitled["path"]}))
+                    .unwrap();
+                assert!(before.as_array().unwrap().len() >= 2);
+                ipc.call(
+                    "run_command",
+                    json!({"cmd":{"type":"draw","kind":"line","a":[0,0],"b":[5,0]}}),
+                )
+                .unwrap();
+                let autosave = ipc.call("autosave_drawings", json!({})).unwrap();
+                assert!(!autosave["written"].as_array().unwrap().is_empty());
+                let source = Path::new(untitled["path"].as_str().unwrap());
+                let auto = qiyas_core::autosave_path(source);
+                let crash =
+                    std::path::PathBuf::from(format!("{}.crash-20261024-120000", auto.display()));
+                std::fs::copy(&auto, &crash).unwrap();
+                let project = std::path::PathBuf::from(format!("{}.qiyas", auto.display()));
+                if project.exists() {
+                    std::fs::copy(&project, format!("{}.qiyas", crash.display())).unwrap();
+                }
+                let store = crate::conversations::Store::new(&state.config_dir);
+                for path in [&auto, &crash] {
+                    let mut chat = store.load(before[0]["id"].as_str().unwrap()).unwrap();
+                    chat.id = uuid::Uuid::new_v4().to_string();
+                    chat.drawing = Some(path.clone());
+                    store.save(&chat).unwrap();
+                }
+                let recovered = ipc.call("recover_autosave", json!({"path":crash})).unwrap();
+                let history = ipc
+                    .call("ai_conversations", json!({"drawing":recovered["path"]}))
+                    .unwrap();
+                assert_eq!(
+                    history.as_array().unwrap().len(),
+                    before.as_array().unwrap().len() + 2
+                );
+                let saved = ipc._dir.path().join("villa.dwg");
+                ipc.call("save_drawing_as", json!({"path":saved})).unwrap();
+                let after = ipc
+                    .call("ai_conversations", json!({"drawing":saved}))
+                    .unwrap();
+                assert_eq!(
+                    after.as_array().unwrap().len(),
+                    before.as_array().unwrap().len() + 2
+                );
+                let restarted = crate::conversations::Store::new(&state.config_dir);
+                restarted.recover().unwrap();
+                for entry in after.as_array().unwrap() {
+                    let chat = restarted.load(entry["id"].as_str().unwrap()).unwrap();
+                    assert_eq!(chat.drawing.as_deref(), Some(saved.as_path()));
+                    assert!(!chat.transcript.is_empty());
+                }
+                if let Some(path) = std::env::var_os("QIYAS_GOAL_L_HISTORY_EVIDENCE") {
+                    std::fs::write(path, serde_json::to_vec_pretty(&json!({"untitled":untitled,"before":before,"autosave":autosave,"recovered":recovered,"history":history,"save_as":after})).unwrap()).unwrap();
+                }
+            },
+        );
+    }
+
     /// Panics in its first turn (counted across the providers it makes), then answers "ok".
     struct PanicsFirst(Arc<AtomicUsize>);
     impl qiyas_ai::Provider for PanicsFirst {
@@ -2332,10 +2467,11 @@ mod tests {
         let cmd = json!({
             "type": "set_image_display", "handle": handle, "brightness": 60, "contrast": 45, "fade": 20
         });
-        assert_eq!(
-            ipc.call("run_command", json!({ "cmd": cmd })),
-            Ok(json!({ "type": "changed" }))
-        );
+        let changed = ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        assert_eq!(changed["type"], "changed");
+        assert!(changed["revision"].is_object());
+        assert!(changed["handle_map"].is_object());
+        assert_eq!(changed["advice"], json!([]));
         assert_eq!(
             ipc.call("image_display", json!({ "handle": handle })),
             Ok(json!({ "brightness": 60, "contrast": 45, "fade": 20 }))

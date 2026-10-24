@@ -26,9 +26,9 @@ use crate::surface::{self, Route};
 use crate::window::run_window;
 use crate::{catalogue, ToolError, ToolOutput};
 
-/// Most tool calls in one user turn.
+/// Tool-call count at which cost guidance begins.
 pub const MAX_TOOL_CALLS: usize = 40;
-/// Most calls once a tool of the turn has changed the drawing.
+/// Drawing-work threshold for cost guidance.
 pub const MAX_DRAWING_CALLS: usize = 120;
 /// Longest conversation sent. The history is append-only (the API ties the model's thinking to
 /// everything before it; only old pictures give way, see `trim_pictures`), so instead of
@@ -54,7 +54,7 @@ pub const KEEP_PICTURES: usize = 8;
 pub const KEEP_PICTURE_BYTES: usize = 10 * 1024 * 1024;
 /// What an old picture becomes.
 pub const PICTURE_REMOVED: &str = "[earlier picture removed; look again if you need it]";
-/// Most commands marked destructive by the registry in one user turn.
+/// Removal count at which edit-by-handle advice begins.
 pub const MAX_DESTRUCTIVE: usize = 10;
 const NO_IMAGE_BUDGET: &str =
     "Image budget for this conversation is used up; start a new conversation to look again";
@@ -143,6 +143,10 @@ impl Default for AgentSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    OpenFindings {
+        findings: Vec<Value>,
+        revision: Value,
+    },
     ProviderStatus {
         code: String,
     },
@@ -194,7 +198,7 @@ pub enum AgentEvent {
         category: Option<String>,
         text: String,
     },
-    /// The turn stopped early: "cancelled", "stopped after 40 steps", "max_tokens" or another
+    /// The turn stopped early: "cancelled", repeated failures, "max_tokens" or another
     /// stop reason.
     Stopped {
         reason: String,
@@ -234,7 +238,6 @@ pub struct Agent {
     /// Metadata captured while the session is locked on a blocking worker.
     phase_epoch: Option<u64>,
     churn: Arc<Mutex<crate::churn::Guard>>,
-    destination_pending: bool,
 }
 
 /// What a user turn starts from: the `[state]` block, the session's epoch (none without a
@@ -268,16 +271,6 @@ impl TurnCounts {
             MAX_TOOL_CALLS
         }
     }
-
-    /// Reserve the destructive commands before running any part of a call.
-    fn over_cap(&mut self, name: &str, input: &Value) -> Option<&'static str> {
-        let count = surface::destructive_count(name, input);
-        if self.destructive.saturating_add(count) > MAX_DESTRUCTIVE {
-            return Some("Too many destructive commands in one turn; ask the user to confirm");
-        }
-        self.destructive += count;
-        None
-    }
 }
 
 impl Agent {
@@ -309,7 +302,6 @@ impl Agent {
             phase_state: PhaseState::default(),
             phase_epoch: None,
             churn: Arc::default(),
-            destination_pending: false,
         }
     }
 
@@ -373,10 +365,11 @@ impl Agent {
     ) -> Self {
         // Old saved prompts injected the quantity workflow into every drawing chat. Rebuild
         // those prompts and discard their tied provider signatures, as for a model change.
-        let old_workflow = conv
-            .system
-            .as_ref()
-            .is_some_and(|s| s.contains("\nTake-off workflow:"));
+        let old_workflow = conv.system.as_ref().is_some_and(|s| {
+            s.contains("\nTake-off workflow:")
+                || s.contains("repeated rebuilds are refused")
+                || s.contains("تُرفض إعادة البناء المتكررة")
+        });
         if old_workflow {
             conv.system = None;
         }
@@ -538,7 +531,6 @@ impl Agent {
         self.resumed = false;
         self.phase_state = PhaseState::default();
         self.phase_epoch = None;
-        self.destination_pending = false;
         self.churn
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -667,35 +659,8 @@ impl Agent {
             });
         }
         self.turn_text = user_text.clone();
-        let choice = user_text.to_lowercase();
-        let answered = [
-            "this drawing",
-            "this one",
-            "current drawing",
-            "existing drawing",
-            "new drawing",
-            "new one",
-            "start new",
-            "هذا الرسم",
-            "الحالي",
-            "هنا",
-            "جديد",
-        ]
-        .iter()
-        .any(|s| choice.contains(s))
-            || choice
-                .split_whitespace()
-                .any(|word| word.trim_matches(|c: char| !c.is_alphabetic()) == "here")
-            || choice.trim() == "new";
-        let cancelled = ["cancel", "never mind", "إلغاء", "توقف"]
-            .iter()
-            .any(|s| choice.starts_with(s));
-        let ask_destination = has_content
-            && !pointed_destination
-            && !cancelled
-            && ((self.destination_pending && !answered)
-                || (!self.destination_pending && judgement::new_design(&user_text)));
-        self.destination_pending = ask_destination;
+        let destination_advice =
+            has_content && !pointed_destination && judgement::new_design(&user_text);
         let reply_language = match self.chat_language {
             Lang::En => "[reply language] Answer this turn in English. Follow the latest user message, even if an earlier greeting or the interface was Arabic.",
             Lang::Ar => "[reply language] أجب بلغة آخر رسالة للمستخدم. استخدم العربية الفصحى البسيطة، ولا تحاكِ لهجة إلا إذا كتب المستخدم بها في رسالته الحالية.",
@@ -734,30 +699,12 @@ impl Agent {
         if !pictures_only {
             content.push(ContentBlock::Text { text: user_text });
         }
+        if destination_advice {
+            content.push(ContentBlock::Text { text: "[advice] This drawing already contains work. Consider whether a new drawing or a destination question is appropriate. Mizan decides.".into() });
+        }
         self.push_user(content);
         self.trim_pictures();
         self.update_checkpoint();
-        if ask_destination {
-            let text = match self.chat_language {
-                Lang::En => "Start a new drawing (recommended), or use this drawing?",
-                Lang::Ar => "هل أبدأ رسمًا جديدًا (المقترح)، أم أستخدم هذا الرسم؟",
-            }
-            .to_string();
-            self.history
-                .push(Message::assistant(vec![ContentBlock::Text {
-                    text: text.clone(),
-                }]));
-            self.emit(&events, AgentEvent::Text { text }).await;
-            self.emit(
-                &events,
-                AgentEvent::Done {
-                    usage: Usage::default(),
-                },
-            )
-            .await;
-            self.update_checkpoint();
-            return Ok(());
-        }
         self.provider.begin_turn(&self.turn_text);
         let tools = catalogue();
         let mut counts = TurnCounts {
@@ -768,7 +715,6 @@ impl Agent {
             ..TurnCounts::default()
         };
         let mut workflow_sent = false;
-        let mut correction_requests = 0;
         let mut usage = Usage::default();
         let mut requests = 0;
         let mut context_retried = false;
@@ -899,10 +845,6 @@ impl Agent {
                             .await;
                         return Ok(());
                     }
-                    if counts.calls >= counts.limit() {
-                        let why = format!("stopped after {} steps", counts.limit());
-                        return self.stop(&events, &why).await;
-                    }
                 }
                 // Cut off before it said or called anything: its room went on thinking (Gemini
                 // through Runware once thought for 94 s and wrote nothing). Nothing ran, so the
@@ -943,41 +885,19 @@ impl Agent {
                     return match reason {
                         StopReason::EndTurn | StopReason::ToolUse => {
                             self.log("DONE", || tokens(&usage));
-                            let errors = match self.unfixed_errors(&cancel, epoch).await {
-                                Ok(errors) => errors,
-                                Err(why) => return self.stop(&events, &why).await,
-                            };
-                            if !errors.is_empty() && self.settings.autonomy != Autonomy::Autonomous
-                            {
-                                let plan = Self::error_approval_plan(
-                                    self.approval_plan(),
-                                    &errors,
-                                    self.chat_language,
-                                );
-                                self.emit(&events, AgentEvent::AwaitingApproval { plan })
+                            let (findings, revision) =
+                                match self.unfixed_errors(&cancel, epoch).await {
+                                    Ok(findings) => findings,
+                                    Err(why) => return self.stop(&events, &why).await,
+                                };
+                            if !findings.is_empty() {
+                                self.emit(&events, AgentEvent::OpenFindings { findings, revision })
                                     .await;
-                            } else {
-                                if !errors.is_empty() {
-                                    if correction_requests < 2 && counts.calls < counts.limit() {
-                                        correction_requests += 1;
-                                        self.push_user(vec![ContentBlock::Text {text: format!(
-                                            "[drawing check] Work is not complete. Fix the new errors and warnings before finishing; read the affected objects and check again. Findings: {}",
-                                            errors.iter().cloned().collect::<Vec<_>>().join("; "))}]);
-                                        continue;
-                                    }
-                                    let text = match self.chat_language {
-                                        Lang::En => "The drawing still has issues from my changes. I could not finish correcting them; the work is incomplete.",
-                                        Lang::Ar => "ما زالت هناك مشكلات نتجت عن تعديلاتي على الرسم. لم أتمكن من تصحيحها كلها؛ العمل غير مكتمل.",
-                                    };
-                                    self.emit(&events, AgentEvent::Text { text: text.into() })
-                                        .await;
-                                    return self.stop(&events, "drawing_checks_unresolved").await;
-                                }
-                                if self.job == Job::Takeoff {
-                                    self.report_confidence(&events).await;
-                                }
-                                self.emit(&events, AgentEvent::Done { usage }).await;
                             }
+                            if self.job == Job::Takeoff {
+                                self.report_confidence(&events).await;
+                            }
+                            self.emit(&events, AgentEvent::Done { usage }).await;
                             Ok(())
                         }
                         StopReason::MaxTokens => self.stop(&events, "max_tokens").await,
@@ -998,7 +918,11 @@ impl Agent {
             reason
         };
         self.log("STOPPED", || reason.to_string());
-        if reason.contains("steps") || reason.contains("budget") || reason.contains("limit") {
+        if reason.contains("steps")
+            || reason.contains("budget")
+            || reason.contains("limit")
+            || reason == "repeated_ineffective_edit"
+        {
             self.report_interrupted(events, reason).await;
         }
         self.emit(
@@ -1198,8 +1122,8 @@ impl Agent {
     }
 
     /// Runs the tool calls of `assistant` in order and returns one result block for each, all
-    /// for one user message. Once `cancel` fires, past `MAX_TOOL_CALLS`, and past
-    /// `MAX_DESTRUCTIVE` destructive commands, the calls are answered but not run. `epoch` is
+    /// for one user message. Cancellation and five identical failures stop a call;
+    /// cost and rebuilding counts are advice. `epoch` is
     /// the session's at the start of the turn (see `run_tool`), moved on when a file tool of the
     /// turn put another drawing on screen.
     async fn run_tools(
@@ -1229,29 +1153,40 @@ impl Agent {
             .await;
             let started = Instant::now();
             // Every answered call counts, bad input included.
-            let fingerprint = edit_fingerprint(name, input);
+            let fingerprint = if let Some(key) = edit_fingerprint(name, input) {
+                let session = self.session.clone();
+                let revision = tokio::task::spawn_blocking(move || {
+                    let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+                    guard.as_ref().map(Session::revision)
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+                Some(format!("{}:{key}", serde_json::json!(revision)))
+            } else {
+                None
+            };
             let repeated = fingerprint
                 .as_ref()
-                .is_some_and(|key| counts.ineffective.get(key).copied().unwrap_or(0) >= 2);
-            let (mut block, mut event) = if let Some(why) = stopped.as_deref() {
+                .is_some_and(|key| counts.ineffective.get(key).copied().unwrap_or(0) >= 5);
+            let (mut block, event) = if let Some(why) = stopped.as_deref() {
                 (error_result(id, why), error_event(id, why))
             } else if repeated {
                 let why = match self.chat_language {
-                    Lang::En => "I stopped repeating this edit because two attempts made no change. The requested change is still incomplete.",
-                    Lang::Ar => "توقفت عن تكرار هذا التعديل لأن محاولتين لم تغيّرا شيئًا. التعديل المطلوب لم يكتمل.",
+                    Lang::En => "This identical input has failed to make a change five times in this turn. I stopped a sixth attempt to avoid spending more of your subscription on the same failure.",
+                    Lang::Ar => "لم تُحدث المدخلات نفسها تغييرًا في خمس محاولات خلال هذه الرسالة. أوقفت المحاولة السادسة حتى لا تستهلك اشتراكك في الإخفاق نفسه.",
                 };
                 stopped = Some("repeated_ineffective_edit".into());
                 self.emit(events, AgentEvent::Text { text: why.into() })
                     .await;
-                (error_result(id, why), error_event(id, why))
+                (
+                    error_result(id, &crate::advice::stopped().json().to_string()),
+                    error_event(id, why),
+                )
             } else if counts.awaiting.is_some() {
                 let why = "Not run: waiting for the user's approval.";
                 (error_result(id, why), error_event(id, why))
             } else if cancel.is_cancelled() {
                 (error_result(id, CANCELLED), error_event(id, CANCELLED))
-            } else if counts.calls >= counts.limit() {
-                let why = "Not run: the limit of tool calls for this message was reached.";
-                (error_result(id, why), error_event(id, why))
             } else {
                 counts.calls += 1;
                 if !input.is_object() {
@@ -1259,8 +1194,6 @@ impl Agent {
                         error_result(id, INVALID_JSON),
                         error_event(id, INVALID_JSON),
                     )
-                } else if let Some(why) = counts.over_cap(name, input) {
-                    (error_result(id, why), error_event(id, why))
                 } else {
                     let op = input[if name == surface::CAPTURE {
                         "source"
@@ -1316,6 +1249,27 @@ impl Agent {
                     }
                 }
             };
+            if is_error(&block) {
+                let session = self.session.clone();
+                let revision = tokio::task::spawn_blocking(move || {
+                    let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+                    serde_json::json!(guard.as_ref().map(Session::revision))
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+                if let ContentBlock::ToolResult { content, .. } = &mut block {
+                    for part in content {
+                        if let ResultPart::Text(text) = part {
+                            if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                                if value.get("revision").is_none() {
+                                    value["revision"] = revision.clone();
+                                    *text = value.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if let ContentBlock::ToolResult { content, .. } = &mut block {
                 for part in content {
                     if let ResultPart::Text(text) = part {
@@ -1327,18 +1281,29 @@ impl Agent {
                 }
             }
             if let Some(key) = fingerprint {
-                if ineffective(&block) {
-                    *counts.ineffective.entry(key).or_default() += 1;
-                } else {
-                    counts.ineffective.clear();
+                if ineffective(&block) && !repeated {
+                    let attempts = counts.ineffective.entry(key).or_default();
+                    *attempts += 1;
+                    if *attempts >= 2 {
+                        append_advice(&mut block, crate::advice::repeated(*attempts));
+                    }
                 }
+            }
+            counts.destructive += surface::destructive_count(name, input);
+            if counts.destructive > MAX_DESTRUCTIVE {
+                append_advice(
+                    &mut block,
+                    serde_json::json!({"code":"many_removals","count":counts.destructive,"message":"Several removal or replacement commands have run in this turn. Consider editing existing objects by handle. Mizan decides."}),
+                );
             }
             if !is_error(&block) && Job::observes(name, input) {
                 self.job = Job::Takeoff;
             }
-            let left = counts.limit().saturating_sub(counts.calls);
-            if left <= 10 {
-                add_budget(&mut block, left);
+            if counts.calls * 5 >= counts.limit() * 4 {
+                append_advice(
+                    &mut block,
+                    serde_json::json!({"code":"tool_cost","calls":counts.calls,"message":"This turn has used many calls. Consider the remaining work and subscription cost. Mizan decides when to finish."}),
+                );
             }
             self.log(
                 &format!("TOOL {name} ({} ms)", started.elapsed().as_millis()),
@@ -1358,40 +1323,30 @@ impl Agent {
                             })
                     });
                     let switched = self.plan.as_ref().and_then(active_phase) != active_phase(&plan);
-                    let errors = if completed || switched {
+                    let (errors, revision) = if completed || switched {
                         match self.unfixed_errors(cancel, *epoch).await {
                             Ok(errors) => errors,
                             Err(why) => {
                                 // Finish answering this batch so every tool use still has a result.
                                 stopped = Some(why);
-                                BTreeSet::new()
+                                (Vec::new(), Value::Null)
                             }
                         }
                     } else {
-                        BTreeSet::new()
+                        (Vec::new(), Value::Null)
                     };
-                    if !errors.is_empty() && self.settings.autonomy == Autonomy::Autonomous {
-                        let why = format!("Fix the new drawing errors and warnings before completing this phase: {}", errors.iter().cloned().collect::<Vec<_>>().join("; "));
-                        block = error_result(id, &why);
-                        event = error_event(id, &why);
-                        if let Some(last) = self.history.last_mut() {
-                            last.content.push(block);
-                        }
-                        self.emit(events, event).await;
-                        continue;
+                    if !errors.is_empty() {
+                        append_advice(
+                            &mut block,
+                            serde_json::json!({"code":"open_findings","message":"Open findings remain. Mizan decides whether this phase is complete.","findings":errors,"revision":revision}),
+                        );
                     }
                     let first = !counts.plan_seen;
                     counts.plan_seen = true;
                     if stopped.is_some() {
                         counts.awaiting = None;
-                    } else if !errors.is_empty() && self.settings.autonomy != Autonomy::Autonomous {
-                        counts.awaiting = Some(Self::error_approval_plan(
-                            plan.clone(),
-                            &errors,
-                            self.chat_language,
-                        ));
                     } else if self.settings.autonomy != Autonomy::Autonomous
-                        && ((first && plan.phases.len() >= 2 && !counts.approved)
+                        && ((first && !counts.approved)
                             || (self.settings.autonomy == Autonomy::PerPhase && completed))
                     {
                         counts.awaiting = Some(plan.clone());
@@ -1428,55 +1383,38 @@ impl Agent {
         &mut self,
         cancel: &CancellationToken,
         epoch: Option<u64>,
-    ) -> Result<BTreeSet<String>, String> {
-        if self.phase_state.touched.is_empty() {
-            return Ok(BTreeSet::new());
-        }
-        let Some(baseline) = self.phase_state.baseline_errors.clone() else {
-            return Ok(BTreeSet::new());
-        };
-        let handles = self.phase_state.touched.iter().copied().collect::<Vec<_>>();
+    ) -> Result<(Vec<Value>, Value), String> {
+        let baseline = self.phase_state.baseline_errors.clone().unwrap_or_default();
+        let handles = self.phase_state.touched.clone();
         let session = self.session.clone();
         let cancel = cancel.clone();
-        let (drawing, errors) = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             check_turn(guard.as_ref(), &cancel, epoch)?;
-            let drawing = guard.as_ref().map(|s| s.drawing.path.clone());
-            let errors = guard.as_ref().map_or_else(BTreeSet::new, |s| {
-                drawing_errors(s, &handles)
-                    .difference(&baseline)
-                    .cloned()
-                    .collect()
-            });
-            check_turn(guard.as_ref(), &cancel, epoch)?;
-            Ok::<_, String>((drawing, errors))
+            let Some(s) = guard.as_ref() else {
+                return Ok((Vec::new(), Value::Null));
+            };
+            let revision = serde_json::json!(s.revision());
+            if handles.is_empty() {
+                return Ok((Vec::new(), revision));
+            }
+            let report = s.check_drawing_all(&qiyas_core::check::CheckScope::default());
+            let findings = report
+                .findings
+                .into_iter()
+                .filter(|f| {
+                    matches!(
+                        f.severity,
+                        qiyas_core::check::Severity::Error | qiyas_core::check::Severity::Warning
+                    ) && f.handles.iter().any(|h| handles.contains(h))
+                        && !baseline.contains(&finding_id(&report.sheet, f))
+                })
+                .map(|f| serde_json::json!(f))
+                .collect();
+            Ok((findings, revision))
         })
         .await
-        .map_err(|e| format!("The drawing check crashed: {e}"))??;
-        self.refresh_phase_drawing(drawing, epoch);
-        Ok(errors)
-    }
-
-    fn error_approval_plan(
-        mut plan: surface::Plan,
-        errors: &BTreeSet<String>,
-        lang: Lang,
-    ) -> surface::Plan {
-        for phase in &mut plan.phases {
-            if phase.status == surface::PlanStatus::Active {
-                phase.status = surface::PlanStatus::Pending;
-            }
-        }
-        plan.phases.push(surface::PlanPhase {
-            id: "drawing-check-review".into(),
-            title: if lang == Lang::Ar {
-                format!("تصحيح مشكلات الرسم ({})", errors.len())
-            } else {
-                format!("Fix drawing issues ({})", errors.len())
-            },
-            status: surface::PlanStatus::Active,
-        });
-        plan
+        .map_err(|e| format!("The drawing check crashed: {e}"))?
     }
 
     /// Apply metadata captured off-thread. Resume validates by path once; Save As keeps the
@@ -1492,21 +1430,6 @@ impl Agent {
         }
         self.phase_state.drawing = drawing;
         self.phase_epoch = epoch;
-    }
-
-    fn approval_plan(&self) -> surface::Plan {
-        self.plan.clone().unwrap_or_else(|| surface::Plan {
-            phases: vec![surface::PlanPhase {
-                id: "drawing-check".into(),
-                title: if self.chat_language == Lang::Ar {
-                    "تصحيح مشكلات الرسم"
-                } else {
-                    "Fix drawing issues"
-                }
-                .into(),
-                status: surface::PlanStatus::Active,
-            }],
-        })
     }
 
     /// Runs one tool off the async workers (a picture takes a while to draw), holding the
@@ -1625,11 +1548,17 @@ impl Agent {
             {
                 let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
                 check_turn(guard.as_ref(), &cancel, epoch)?;
+                crate::revision::check(guard.as_ref(), &args).map_err(|e| e.json().to_string())?;
             }
             // Window requests must run outside the session lock: rendering takes it too.
             let output = run_window(&*host, &session, &tool, &args, lang)?;
             let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             check_turn(guard.as_ref(), &cancel, epoch)?;
+            let output = crate::revision::stamp(
+                Ok(output),
+                serde_json::json!(guard.as_ref().map(Session::revision)),
+            )
+            .map_err(|e| e.json().to_string())?;
             Ok::<_, String>((output, guard.as_ref().map(|s| s.drawing.path.clone())))
         })
         .await;
@@ -1703,9 +1632,10 @@ impl Agent {
             {
                 let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
                 check_turn(guard.as_ref(), &cancel, epoch)?;
+                crate::revision::check(guard.as_ref(), &args).map_err(|e| e.json().to_string())?;
             }
             // The host takes tabs before session. Never hold session while calling it.
-            let value = run_host(&*host, &tool, &args, Some(&text))?;
+            let mut value = run_host(&*host, &tool, &args, Some(&text))?;
             let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             let next_epoch = guard.as_ref().map(Session::epoch);
             check_turn(
@@ -1718,6 +1648,7 @@ impl Agent {
                 },
             )?;
             let drawing = guard.as_ref().map(|s| s.drawing.path.clone());
+            value["revision"] = serde_json::json!(guard.as_ref().map(Session::revision));
             Ok::<_, String>((value, drawing, next_epoch))
         })
         .await;
@@ -1780,6 +1711,7 @@ impl Agent {
                 if let Some(working) = &session.automation_sheet {
                     text.push_str(&format!("Automation working sheet: {working}. Window sheet: {}. User browsing does not change the working sheet.\n", session.sheet));
                 }
+                text.push_str(&format!("revision: {}\n", serde_json::json!(session.revision())));
                 text.push_str(&context::describe(session, &pointed, lang));
                 picture = context::picture(session, &pointed);
             }
@@ -1950,28 +1882,37 @@ impl Agent {
 }
 
 pub(crate) fn edit_fingerprint(name: &str, input: &Value) -> Option<String> {
-    if !surface::mutating(name, input) {
-        return None;
-    }
-    if crate::activity::describe(name, input).effect != "edit" {
-        return None;
-    }
-    let args = surface::args_of(input).ok()?;
-    let op = input["op"].as_str()?;
-    let mut command = match op {
-        "run" => match &args["command"] {
-            Value::String(text) => serde_json::from_str(text).ok()?,
-            other => other.clone(),
-        },
-        "batch" | "set_records" | "create_entities" => {
-            let mut c = args;
-            c["type"] = serde_json::json!(op);
-            c
+    let normalized = crate::normalise::envelope(name, input)
+        .map(|(v, _)| v)
+        .unwrap_or_else(|_| input.clone());
+    let mut args = surface::args_of(&normalized).unwrap_or_else(|_| normalized.clone());
+    let op = normalized["op"].as_str().unwrap_or_default();
+    if op == "run" {
+        if let Some(text) = args["command"].as_str() {
+            args["command"] =
+                serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.into()));
         }
-        _ => serde_json::json!({"op":op,"args":args}),
-    };
-    qiyas_core::registry::canonicalize(&mut command);
-    Some(command.to_string())
+        qiyas_core::registry::canonicalize(&mut args["command"]);
+    }
+    let mut envelope = normalized;
+    if let Some(map) = envelope.as_object_mut() {
+        map.remove("request_id");
+        map.insert("args".into(), args);
+    }
+    Some(serde_json::json!({"tool":name,"input":envelope}).to_string())
+}
+
+fn append_advice(block: &mut ContentBlock, advice: Value) {
+    if let ContentBlock::ToolResult { content, .. } = block {
+        for part in content {
+            if let ResultPart::Text(text) = part {
+                if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                    crate::advice::append(&mut value, advice.clone());
+                    *text = value.to_string();
+                }
+            }
+        }
+    }
 }
 
 fn ineffective(block: &ContentBlock) -> bool {
@@ -2007,32 +1948,6 @@ fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
     (block, event)
 }
 
-/// Remind the model of the calls left, including in errors and picture captions.
-fn add_budget(block: &mut ContentBlock, left: usize) {
-    let ContentBlock::ToolResult {
-        content, is_error, ..
-    } = block
-    else {
-        return;
-    };
-    let budget = format!("{left} calls left");
-    if let Some(ResultPart::Text(text)) = content.first_mut() {
-        let mut value = serde_json::from_str::<Value>(text).unwrap_or_else(|_| {
-            if *is_error {
-                serde_json::json!({ "error": text })
-            } else {
-                serde_json::json!({ "caption": text })
-            }
-        });
-        if !value.is_object() {
-            value = serde_json::json!({ "result": value });
-        }
-        value["budget"] = Value::String(budget);
-        *text = value.to_string();
-    }
-}
-
-/// Whether a result block is an error.
 fn is_error(block: &ContentBlock) -> bool {
     matches!(block, ContentBlock::ToolResult { is_error: true, .. })
 }
@@ -2196,6 +2111,12 @@ fn check_turn(
     }
 }
 
+fn finding_id(sheet: &str, finding: &qiyas_core::check::Finding) -> String {
+    let mut handles = finding.handles.clone();
+    handles.sort_unstable();
+    format!("{}:{}:{:?}", sheet, finding.rule, handles)
+}
+
 /// Stable error identities allow a phase to repair its own changes before asking for review.
 fn drawing_errors(session: &Session, handles: &[u64]) -> BTreeSet<String> {
     let report = session.check_drawing_all(&qiyas_core::check::CheckScope::default());
@@ -2209,10 +2130,7 @@ fn drawing_errors(session: &Session, handles: &[u64]) -> BTreeSet<String> {
                 qiyas_core::check::Severity::Error | qiyas_core::check::Severity::Warning
             )
         })
-        .map(|mut f| {
-            f.handles.sort_unstable();
-            format!("{}:{}:{:?}", report.sheet, f.rule, f.handles)
-        })
+        .map(|f| finding_id(&report.sheet, &f))
         .collect()
 }
 

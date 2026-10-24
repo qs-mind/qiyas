@@ -200,6 +200,11 @@ pub const QUERY_KINDS: [&str; 9] = [
 
 /// The three tools.
 pub fn tools() -> Vec<ToolSpec> {
+    let mut revision = qiyas_core::revision_schema();
+    // Provider strict mode omits numeric bounds; native validation still checks them.
+    for field in revision["properties"].as_object_mut().unwrap().values_mut() {
+        field.as_object_mut().unwrap().remove("minimum");
+    }
     let args = json!({
         "type": "string",
         "description": "The op's arguments as a JSON object written as a string, e.g. \"{\\\"name\\\": \\\"draw.line\\\"}\"; \"{}\" for none."
@@ -221,14 +226,15 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "op": { "type": "string", "enum": EXECUTE_OPS },
+                    "expected_revision": {"anyOf": [revision, {"type":"null"}]},
                     "args": args,
                 },
-                "required": ["op", "args"],
+                "required": ["op", "args", "expected_revision"],
                 "additionalProperties": false,
             }),
             mutating: true,
@@ -308,9 +314,13 @@ pub enum PlanStatus {
 }
 
 pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
-    let plan: Plan = read_args(args, "plan")?;
-    if plan.phases.len() < 2 || plan.phases.len() > 24 {
-        return Err(bad("Use 2 to 24 small phases, not one phase for the whole job: grid, walls, openings, rooms, dimensions, sheet as needed. Use one batch per phase, then capture and check; fix by handle."));
+    let mut args = args.clone();
+    if let Some(map) = args.as_object_mut() {
+        map.remove("expected_revision");
+    }
+    let plan: Plan = read_args(&args, "plan")?;
+    if plan.phases.is_empty() || plan.phases.len() > 24 {
+        return Err(bad("A plan needs 1 to 24 phases."));
     }
     let mut ids = std::collections::BTreeSet::new();
     let mut active = 0;
@@ -338,13 +348,13 @@ pub(super) fn plan_info() -> Value {
         "name": "plan",
         "tool": EXECUTE,
         "op": "plan",
-        "doc": "State at least two small phases in the user's language before drawing: grid, walls, openings, rooms, dimensions, sheet as needed. Use one batch per phase and fix by handle. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
+        "doc": "Consider small phases in the user's language before drawing: grid, walls, openings, rooms, dimensions, sheet as needed. Use one batch per phase and fix by handle. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
         "changes": false,
         "undo": false,
         "schema": {
             "type": "object", "additionalProperties": false, "required": ["phases"],
             "properties": {"phases": {
-                "type": "array", "minItems": 2, "maxItems": 24,
+                "type": "array", "minItems": 1, "maxItems": 24,
                 "items": {"type": "object", "additionalProperties": false,
                     "required": ["id", "title", "status"],
                     "properties": {
@@ -524,9 +534,13 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
             if name == READ && effect_of(&command) != Effect::Read {
                 return Err("Use qiyas_execute for a project edit".into());
             }
+            let mut input = args["command"].clone();
+            if let Some(expected) = args.get("expected_revision") {
+                input["expected_revision"] = expected.clone();
+            }
             return Ok(Route::Host {
                 tool: "project",
-                input: args["command"].clone(),
+                input,
             });
         }
         return Ok(match (entry.needs.first(), entry.runner) {
@@ -586,10 +600,20 @@ pub fn run_without_drawing(
         return Some(Err(error));
     }
     if tool == EXECUTE && op == "plan" {
-        return Some(read_plan(args).map(|plan| ToolOutput::Json(json!({"plan": plan}))));
+        if let Err(error) = crate::revision::check(None, args) {
+            return Some(Err(error));
+        }
+        return Some(read_plan(args).map(|plan| {
+            let mut out = json!({"plan":plan,"revision":null});
+            if plan.phases.len() == 1 { crate::advice::append(&mut out, json!({"code":"small_phases","message":"Consider smaller phases with a capture and check after each. Mizan decides the plan."})); }
+            ToolOutput::Json(out)
+        }));
     }
     if tool == CAPTURE && op == "document" {
-        return Some(crate::document::capture(args));
+        return Some(crate::revision::stamp(
+            crate::document::capture(args),
+            Value::Null,
+        ));
     }
     if tool != READ {
         return None;
@@ -618,7 +642,10 @@ pub fn run_without_drawing(
         "validate" => validate(args, units, None),
         _ => return None,
     };
-    Some(value.map(ToolOutput::Json))
+    Some(crate::revision::stamp(
+        value.map(ToolOutput::Json),
+        Value::Null,
+    ))
 }
 
 fn batch_commands_schema() -> Value {
@@ -718,19 +745,29 @@ pub fn run_session_with_method(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (args, warnings) = crate::normalise::args(tool, op, args)?;
-        session
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (mut args, warnings) = crate::normalise::args(tool, op, args)?;
+        let before = session.revision();
+        let result = session
             .with_automation_sheet(|session| {
+                if tool == EXECUTE {
+                    crate::revision::check(Some(session), &args)?;
+                    args.as_object_mut().unwrap().remove("expected_revision");
+                }
                 run_working_session(session, tool, op, &args, source, method)
             })
-            .map(|out| crate::normalise::output(out, &warnings))
+            .map(|out| crate::normalise::output(out, &warnings));
+        if result.is_ok() {
+            session.record_tool_revision(before);
+        }
+        result
     }))
     .unwrap_or_else(|_| {
         Err(ToolError::Failed(
             "The tool stopped unexpectedly. You can keep working.".into(),
         ))
-    })
+    });
+    crate::revision::stamp(result, json!(session.revision()))
 }
 
 fn run_working_session(
@@ -1129,7 +1166,9 @@ fn capabilities() -> Value {
 fn finish_kit(kit: &mut Value) {
     let (schema, args) = crate::surface_args::contract(READ, "takeoff_check");
     kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
-    kit["end_report"] = json!({"action":"final answer","example":{"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved and low-confidence scope":"takeoff_check"}});
+    // Reserve room for the read revision by avoiding duplicate prose in this compact kit.
+    kit["end_report"] = json!({"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved":"takeoff_check"});
+    kit["measurement_rules"] = json!("count/length/area/volume; basis geometric or rule:<cited note name>. Apply cited factors to named_handles. Counts are whole numbers. Report Exclude <handle>: <reason> (note <handle>). Review takeoff_check.");
 }
 
 fn commands(args: &Value) -> Result<Value, ToolError> {
@@ -1731,7 +1770,7 @@ fn run_one(
 }
 
 fn copy_input_metadata(out: &mut Value) {
-    for field in ["defaults_used", "warnings"] {
+    for field in ["defaults_used", "warnings", "advice"] {
         if let Some(value) = out["outcome"].get(field).cloned() {
             out[field] = value;
         }
@@ -1764,6 +1803,7 @@ fn changed(
         "no_change": effect == Effect::Edit && session.history_revision() == history_before,
         "effect": effect,
         "outcome": outcome,
+        "handle_map": session.handle_map(),
         "added": change.added,
         "changed": change.changed,
         "removed": change.removed,

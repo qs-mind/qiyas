@@ -1751,6 +1751,7 @@ export type PlanPhase = {
 export type Activity = { category: string; effect: string };
 
 export type AgentEvent =
+  | { type: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { type: "provider_status"; code: string }
   | { type: "retrying"; seconds: number; code: string; discard_partial: boolean }
   | { type: "text"; text: string }

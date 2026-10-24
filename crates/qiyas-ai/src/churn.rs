@@ -17,6 +17,8 @@ struct Shape {
 struct Phase {
     own: BTreeMap<u64, (Shape, usize)>,
     removed: Vec<(Shape, usize)>,
+    added_total: usize,
+    removed_total: usize,
 }
 #[derive(Default)]
 pub(crate) struct Guard {
@@ -176,7 +178,7 @@ impl Guard {
                     .map(|(s, _)| (*h, s.family.as_str()))
             })
             .collect();
-        if !protected.is_empty() {
+        let advice = if !protected.is_empty() {
             let mut commands = BTreeSet::from(["modify move", "set_records"]);
             for (_, family) in &protected {
                 match *family {
@@ -195,13 +197,23 @@ impl Guard {
                     }
                 }
             }
-            return Err(ToolError::Structured {
-                code: "repeated_rebuild".into(),
-                message: format!("This work was already rebuilt in this phase. Keep it and edit by handle: {}. Read back the change, then capture and check it.", commands.into_iter().collect::<Vec<_>>().join(", ")),
-                details: json!({"handles":protected.iter().map(|(h,_)| h).collect::<Vec<_>>(),"churn":{"added":0,"removed":0,"total":0}}),
-            });
-        }
-        let mut output = surface::run_session_with_method(session, tool, op, args, source, method)?;
+            Some(
+                json!({"code":"repeated_rebuild","message":format!("This work was already rebuilt in this phase. Editing by handle may be cheaper: {}. Mizan decides whether to rebuild.", commands.into_iter().collect::<Vec<_>>().join(", ")),"handles":protected.iter().map(|(h,_)| h).collect::<Vec<_>>()}),
+            )
+        } else {
+            None
+        };
+        let mut output =
+            match surface::run_session_with_method(session, tool, op, args, source, method) {
+                Ok(output) => output,
+                Err(error) => {
+                    return if let Some(advice) = advice {
+                        crate::advice::result(Err(error), advice)
+                    } else {
+                        Err(error)
+                    }
+                }
+            };
         let after = snapshot(session);
         let removed: Vec<_> = before.difference(&after).copied().collect();
         let added: Vec<_> = after.difference(&before).copied().collect();
@@ -253,7 +265,14 @@ impl Guard {
                 }
             }
         }
+        phase.added_total += added.len();
+        phase.removed_total += removed.len();
         if let ToolOutput::Json(value) = &mut output {
+            value["phase_churn"] = json!({"added":phase.added_total,"removed":phase.removed_total,"total":phase.added_total+phase.removed_total});
+            if let Some(mut advice) = advice {
+                advice["churn"] = json!({"added":added.len(),"removed":removed.len(),"total":added.len()+removed.len()});
+                crate::advice::append(value, advice);
+            }
             value["churn"] = json!({"added":added.len(),"removed":removed.len(),"total":added.len()+removed.len()});
         }
         Ok(output)
@@ -297,22 +316,30 @@ mod tests {
             )
             .unwrap();
             let rebuilt = handle(run(&mut g, &mut s, text_at(0.0, k)).unwrap());
-            let revision = s.document_revision();
-            let error = run(
-                &mut g,
-                &mut s,
-                json!({"type":"delete_entities","targets":[rebuilt]}),
-            )
-            .unwrap_err()
-            .json();
-            assert_eq!(error["code"], "repeated_rebuild");
-            assert_eq!(s.document_revision(), revision);
             run(
                 &mut g,
                 &mut s,
                 json!({"type":"edit_text","target":rebuilt,"value":"Corrected"}),
             )
             .unwrap();
+            let revision = s.document_revision();
+            let ToolOutput::Json(output) = run(
+                &mut g,
+                &mut s,
+                json!({"type":"delete_entities","targets":[rebuilt]}),
+            )
+            .unwrap() else {
+                panic!()
+            };
+            assert_eq!(output["advice"][0]["code"], "repeated_rebuild");
+            assert_eq!(output["churn"]["removed"], 1);
+            assert!(s.document_revision() > revision);
+            assert!(s
+                .drawing
+                .doc
+                .get_entity(opencadcodec::Handle::new(rebuilt))
+                .is_none());
+            let rebuilt = handle(run(&mut g, &mut s, text_at(0.0, k)).unwrap());
             let other = handle(run(&mut g, &mut s, text_at(50.0, k)).unwrap());
             run(
                 &mut g,
@@ -323,13 +350,17 @@ mod tests {
             // Switching away and back cannot erase the phase's replacement history.
             g.set_phase("other");
             g.set_phase("walls");
-            assert!(run(
+            let ToolOutput::Json(output) = run(
                 &mut g,
                 &mut s,
-                json!({"type":"delete_entities","targets":[rebuilt]})
+                json!({"type":"delete_entities","targets":[rebuilt]}),
             )
-            .is_err());
+            .unwrap() else {
+                panic!()
+            };
+            assert_eq!(output["advice"][0]["code"], "repeated_rebuild");
             g.reset();
+            let rebuilt = handle(run(&mut g, &mut s, text_at(0.0, k)).unwrap());
             run(
                 &mut g,
                 &mut s,

@@ -101,6 +101,7 @@ impl ToolError {
 impl From<CoreError> for ToolError {
     fn from(e: CoreError) -> Self {
         match e {
+            CoreError::StaleRead { details } => ToolError::Structured { code: "stale_read".into(), message: "The drawing changed since this read. No edit was applied. Read the changed objects and use their current revision.".into(), details },
             CoreError::InputWarnings { error, warnings } => {
                 let underlying = ToolError::from(*error);
                 let mut details = underlying.json();

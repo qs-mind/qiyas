@@ -35,6 +35,26 @@ pub(crate) fn envelope(tool: &str, input: &Value) -> Result<(Value, Vec<InputIss
             ));
         }
     }
+    if tool == EXECUTE {
+        if let Some(expected) = v
+            .as_object_mut()
+            .and_then(|m| m.remove("expected_revision"))
+        {
+            if !expected.is_null() {
+                let mut args = crate::surface::args_of(&v).map_err(ToolError::BadInput)?;
+                if args
+                    .get("expected_revision")
+                    .is_some_and(|existing| existing != &expected)
+                {
+                    return Err(ToolError::BadInput(
+                        "Supply one expected_revision; the two supplied values differ.".into(),
+                    ));
+                }
+                args["expected_revision"] = expected;
+                v["args"] = args;
+            }
+        }
+    }
     Ok((v, warnings))
 }
 pub(crate) fn args(

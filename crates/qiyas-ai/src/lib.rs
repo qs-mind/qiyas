@@ -11,6 +11,7 @@
 //!
 //! The MCP server for outside AI apps (`mcp`).
 
+mod advice;
 pub mod agent;
 pub mod anthropic;
 pub mod chatgpt_plan;
@@ -28,6 +29,7 @@ pub mod models;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+mod revision;
 pub mod surface;
 mod tools;
 pub mod window;

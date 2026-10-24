@@ -4,7 +4,7 @@ fn run(s: &mut Session, v: Value) -> Value {
     serde_json::to_value(s.run_input(&v, Source::Ai).unwrap()).unwrap()
 }
 #[test]
-fn quantities_in_notes_need_real_citations_in_every_drawing_unit() {
+fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
     let dir = tempfile::tempdir().unwrap();
     for (units, k) in [(4, 1000.0), (5, 100.0), (6, 1.0), (1, 1.0 / 0.0254)] {
         let mut s = Session::new_blank(&dir.path().join("units.dxf"), units);
@@ -14,9 +14,8 @@ fn quantities_in_notes_need_real_citations_in_every_drawing_unit() {
         )["handles"][0]
             .clone();
         run(&mut s, json!({"type":"measure_entity","handle":h}));
-        let row = &s.takeoff.items[0];
-        assert!((row.shown - 20.0).abs() < 1e-7);
-        let id = row.id.clone();
+        assert!((s.takeoff.items[0].shown - 20.0).abs() < 1e-7);
+        let id = s.takeoff.items[0].id.clone();
         for source in [Source::Ai, Source::Mcp] {
             for text in [
                 "Area 20 m²",
@@ -26,56 +25,40 @@ fn quantities_in_notes_need_real_citations_in_every_drawing_unit() {
                 "الحجم ٦٠ متر مكعب",
             ] {
                 let before = s.takeoff.items.len();
-                let history = s.history_revision();
                 let v = json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":text});
-                let e = s.run_input(&v, source).unwrap_err().to_string();
-                assert!(e.contains("measure_entity"));
-                assert_eq!(s.takeoff.items.len(), before);
-                assert_eq!(s.history_revision(), history);
+                let out = json!(s.run_input(&v, source).unwrap());
+                assert_eq!(out["advice"][0]["code"], "uncited_quantity");
+                assert_eq!(s.takeoff.items.len(), before + 1);
+                assert_eq!(s.takeoff.items.last().unwrap().unit, "markup");
                 let mut cited = v;
                 cited["text"] = json!(format!("{text} [takeoff:{id}]"));
-                s.run_input(&cited, source).unwrap();
+                let out = json!(s.run_input(&cited, source).unwrap());
+                assert_eq!(out["advice"], json!([]));
                 assert!(s.takeoff.items.last().unwrap().description.contains(&id));
             }
         }
-        run(
-            &mut s,
-            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"Confirm this room"}),
-        );
         let markup = s.takeoff.items.last().unwrap().id.clone();
-        assert!(s
+        for v in [
+            json!({"type":"set_description","id":markup,"text":"20 m²"}),
+            json!({"type":"set_note","id":markup,"text":"٢٠ م²"}),
+            json!({"type":"comment","points":[[0,0],[k,0],[k,k]],"text":"20 m²"}),
+            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"20 m² [takeoff:missing]"}),
+            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("20 m² [takeoff:{id}-missing]")}),
+            json!({"type":"add_measurement","kind":"item","unit":"markup","value":0,"points":[[k,k]],"description":"Check this room","note":"٢٠ م²","empty_item":true}),
+        ] {
+            assert_eq!(run(&mut s, v)["advice"][0]["code"], "uncited_quantity");
+        }
+        let out = json!(s
             .run_input(
-                &json!({"type":"set_description","id":markup,"text":"20 m²"}),
-                Source::Mcp
+                &json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"20 m²"}),
+                Source::User
             )
-            .is_err());
-        assert!(s
-            .run_input(
-                &json!({"type":"comment","points":[[0,0],[k,0],[k,k]],"text":"20 m²"}),
-                Source::Ai
-            )
-            .is_err());
-        assert!(s
-            .run_input(
-                &json!({"type":"set_note","id":markup,"text":"٢٠ م²"}),
-                Source::Ai
-            )
-            .is_err());
-        assert!(s.run_input(&json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"20 m² [takeoff:missing]"}), Source::Mcp).is_err());
-        assert!(s.run_input(&json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("20 m² [takeoff:{id}-missing]")}), Source::Mcp).is_err());
-        let note = json!({"type":"add_measurement","kind":"item","unit":"markup","value":0,"points":[[k,k]],"description":"Check this room","note":"٢٠ م²","empty_item":true});
-        assert!(s.run_input(&note, Source::Mcp).is_err());
-        let mut cited_note = note;
-        cited_note["note"] = json!(format!("٢٠ م² [takeoff:{id}]"));
-        s.run_input(&cited_note, Source::Mcp).unwrap();
-        // Manual user notes retain their existing behaviour.
-        s.run_input(
-            &json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"20 m²"}),
-            Source::User,
-        )
-        .unwrap();
+            .unwrap());
+        assert_eq!(out["advice"], json!([]));
+        assert!((s.takeoff.items[0].shown - 20.0).abs() < 1e-7);
     }
 }
+
 #[test]
 fn rooms_names_candidate_layers_with_counts_only_inside_closed_regions() {
     let dir = tempfile::tempdir().unwrap();

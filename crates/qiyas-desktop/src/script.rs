@@ -273,7 +273,7 @@ fn run_step<R: Runtime>(
         Action::Zoom => ("zoom: nothing to do in a script".to_string(), false),
         Action::Open(path) => (open(app, state, path, false)?, true),
         Action::SaveAs(path) => {
-            with_session(state, |s| s.save_as(path))?;
+            crate::commands::save_as_with_history(state, path)?;
             remember_recent(state, &path.display().to_string());
             (format!("saved {}", path.display()), true)
         }
@@ -352,9 +352,19 @@ pub(crate) fn open<R: Runtime>(
     path: &Path,
     keep_conversation: bool,
 ) -> Result<String, String> {
+    open_checked(app, state, path, keep_conversation, None)
+}
+
+pub(crate) fn open_checked<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    path: &Path,
+    keep_conversation: bool,
+    expected: Option<&serde_json::Value>,
+) -> Result<String, String> {
     let shown = path.display().to_string();
     if let Some(id) = tabs::find_path(state, path) {
-        tabs::activate(app, state, id, keep_conversation)?;
+        tabs::activate_checked(app, state, id, keep_conversation, expected)?;
         remember_recent(state, &shown);
         return Ok(format!("showed {shown}, open already"));
     }
@@ -390,7 +400,7 @@ pub(crate) fn open<R: Runtime>(
     if !keep_conversation {
         new_conversation(app, state);
     }
-    tabs::add(state, session)?;
+    tabs::add_checked(state, session, expected)?;
     remember_recent(state, &shown);
     Ok(match problems {
         0 => format!("opened {shown}"),

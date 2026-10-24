@@ -374,7 +374,17 @@ pub async fn recover_autosave<R: Runtime>(
         session.mark_untitled();
     }
     new_conversation(&app, &state);
+    let recovered = session.drawing.path.clone();
     tabs::add(&state, session)?;
+    {
+        let _run = crate::commands::ai_run(&state);
+        let store = crate::conversations::Store::new(&state.config_dir);
+        let source = qiyas_core::autosave_copy_of(Path::new(&path))
+            .unwrap_or_else(|| Path::new(&path).to_path_buf());
+        store.follow_drawing(&source, &recovered)?;
+        store.follow_drawing(&qiyas_core::autosave_path(&source), &recovered)?;
+        store.follow_drawing(Path::new(&path), &recovered)?;
+    }
     with_session(&state, |s| Ok(s.info()))
 }
 

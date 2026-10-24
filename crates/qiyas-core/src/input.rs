@@ -11,6 +11,9 @@ use crate::{Command, CoreError, Outcome, Session, Source};
 #[derive(Debug, Clone)]
 pub struct Reported {
     pub outcome: Outcome,
+    pub revision: crate::Revision,
+    pub advice: Vec<Value>,
+    pub handle_map: std::collections::BTreeMap<u64, Vec<u64>>,
     pub defaults_used: Vec<DefaultUsed>,
     pub warnings: Vec<InputIssue>,
 }
@@ -42,6 +45,12 @@ impl Reported {
                 .iter()
                 .map(|warning| format!("Warning {}: {}", warning.pointer, warning.message)),
         );
+        notes.extend(
+            self.advice
+                .iter()
+                .filter_map(|a| a["message"].as_str())
+                .map(|m| format!("Advice: {m}")),
+        );
         notes.join("; ")
     }
 }
@@ -50,6 +59,9 @@ impl Serialize for Reported {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut value = serde_json::to_value(&self.outcome).map_err(serde::ser::Error::custom)?;
         metadata(&mut value, &self.defaults_used, &self.warnings);
+        value["revision"] = json!(self.revision);
+        value["advice"] = json!(self.advice);
+        value["handle_map"] = json!(self.handle_map);
         value.serialize(serializer)
     }
 }
@@ -109,9 +121,16 @@ impl Session {
     pub fn run_input(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
+            self.last_advice.clear();
             self.handle_replacements.clear();
         }
         let mut input = raw.clone();
+        if let Some(expected) = input
+            .as_object_mut()
+            .and_then(|o| o.remove("expected_revision"))
+        {
+            self.check_revision(&expected)?;
+        }
         crate::registry::canonicalize(&mut input);
         self.resolve_input_handles(&mut input)?;
         let mut report = self.validate_input(&input);
@@ -147,12 +166,22 @@ impl Session {
                 }
             }
             command => self.run_command(command, source).map(|outcome| Reported {
+                revision: self.revision(),
+                advice: self.last_advice.clone(),
+                handle_map: self.handle_map(),
                 outcome,
                 defaults_used: report.defaults_used,
                 warnings: report.warnings,
             }),
         };
-        result.map_err(|error| with_warnings(error, &warnings))
+        result
+            .map(|mut report| {
+                report.revision = self.revision();
+                report.advice = self.last_advice.clone();
+                report.handle_map = self.handle_map();
+                report
+            })
+            .map_err(|error| with_warnings(error, &warnings))
     }
 
     /// Runs a batch consisting solely of literal opening additions. Other batches keep
@@ -223,6 +252,9 @@ impl Session {
                 .into_iter()
                 .zip(reports)
                 .map(|(result, report)| Reported {
+                    revision: session.revision(),
+                    advice: session.last_advice.clone(),
+                    handle_map: session.handle_map(),
                     outcome: Outcome::Walls { result },
                     defaults_used: report.defaults_used,
                     warnings: report.warnings,
@@ -287,6 +319,9 @@ impl Session {
                     }));
             }
             Ok(Reported {
+                revision: session.revision(),
+                advice: session.last_advice.clone(),
+                handle_map: session.handle_map(),
                 outcome: Outcome::Batch {
                     outcomes,
                     added: session.last_change.added.clone(),

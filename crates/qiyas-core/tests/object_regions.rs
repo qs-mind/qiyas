@@ -82,7 +82,7 @@ fn hatch_area(session: &Session, driver: u64) -> f64 {
 }
 
 #[test]
-fn moving_a_retained_room_with_an_unrelated_entity_is_refused_atomically() {
+fn moving_a_retained_room_reports_derivation_and_keeps_the_unrelated_edit() {
     for units in [4, 5, 6, 1] {
         let (_directory, mut session, _outline, _island, driver) = setup(units);
         let k = 1.0 / session.drawing.units.to_metres();
@@ -92,15 +92,31 @@ fn moving_a_retained_room_with_an_unrelated_entity_is_refused_atomically() {
         );
         let before = session.drawing.doc.entities().cloned().collect::<Vec<_>>();
         let history = session.history_steps();
-        let error = session
+        let result = session
             .run_input(
                 &json!({"type":"modify","kind":"move","targets":[driver,line],"delta":[0.1*k,0]}),
                 Source::User,
             )
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("overridden"), "{error}");
-        assert_eq!(session.history_steps(), history);
+            .unwrap();
+        assert!(result.advice.iter().any(|a| a["handle"] == driver
+            && a["code"] == "derived_value_changed"
+            && a["requested"] != a["actual"]));
+        assert_eq!(session.history_steps().0.len(), history.0.len() + 1);
+        let EntityType::Line(moved) = session
+            .drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(line))
+            .unwrap()
+        else {
+            panic!("line")
+        };
+        near(moved.start.x, 8.1 * k);
+        near(moved.end.x, 9.1 * k);
+        near(quantity(&session, driver), 11.0);
+        near(hatch_area(&session, driver), 11.0);
+        assert!(session.undo());
+        assert_eq!(session.history_steps().0, history.0);
+        assert_eq!(session.history_steps().1.len(), 1);
         assert_eq!(
             session.drawing.doc.entities().cloned().collect::<Vec<_>>(),
             before

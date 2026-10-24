@@ -35,6 +35,13 @@ pub struct Store {
     dir: PathBuf,
 }
 
+/// Paths created by recovery and Save As share a history, including inactive chats.
+#[derive(Default, Serialize, Deserialize)]
+struct DrawingFamily {
+    paths: Vec<PathBuf>,
+    current: PathBuf,
+}
+
 impl Store {
     pub fn new(config_dir: &Path) -> Self {
         Self {
@@ -44,7 +51,7 @@ impl Store {
 
     fn path(&self, id: &str) -> Result<PathBuf, String> {
         if id.is_empty()
-            || id.eq_ignore_ascii_case("index")
+            || matches!(id.to_ascii_lowercase().as_str(), "index" | "drawings")
             || id.len() > 64
             || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
         {
@@ -105,15 +112,36 @@ impl Store {
         Ok(())
     }
 
+    /// A fresh untitled drawing must not reuse a placeholder with an existing chat history.
+    pub fn drawing_paths(&self) -> Result<Vec<PathBuf>, String> {
+        let mut paths: Vec<_> = self
+            .index()?
+            .into_iter()
+            .filter_map(|entry| entry.drawing)
+            .collect();
+        paths.extend(self.families()?.into_iter().flat_map(|family| family.paths));
+        Ok(paths)
+    }
+
     pub fn list(&self, drawing: Option<&Path>) -> Result<Vec<Summary>, String> {
         let mut entries = self.index()?;
+        let families = self.families()?;
         if let Some(drawing) = drawing {
             entries.retain(|entry| {
                 entry
                     .drawing
                     .as_deref()
-                    .is_some_and(|path| crate::settings::same_file(path, drawing))
+                    .is_some_and(|path| Self::related(&families, path, drawing))
             });
+        }
+        for entry in &mut entries {
+            if let Some(path) = &entry.drawing {
+                entry.drawing = Some(
+                    drawing
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| Self::current_path(&families, path)),
+                );
+            }
         }
         entries.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| a.id.cmp(&b.id)));
         Ok(entries)
@@ -122,12 +150,83 @@ impl Store {
     pub fn load(&self, id: &str) -> Result<Conversation, String> {
         let path = self.path(id)?;
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let conversation: Conversation =
+        let mut conversation: Conversation =
             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         if conversation.id != id {
             return Err("Conversation id does not match its file".into());
         }
+        if let Some(path) = &conversation.drawing {
+            let current = Self::current_path(&self.families()?, path);
+            if &current != path {
+                conversation.drawing = Some(current.clone());
+                conversation.phase_state.drawing = Some(current);
+            }
+        }
         Ok(conversation)
+    }
+
+    fn families(&self) -> Result<Vec<DrawingFamily>, String> {
+        match fs::read(self.dir.join("drawings.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn current_path(families: &[DrawingFamily], path: &Path) -> PathBuf {
+        families
+            .iter()
+            .find(|family| {
+                family
+                    .paths
+                    .iter()
+                    .any(|p| crate::settings::same_file(p, path))
+            })
+            .map_or_else(|| path.to_path_buf(), |family| family.current.clone())
+    }
+
+    fn related(families: &[DrawingFamily], a: &Path, b: &Path) -> bool {
+        crate::settings::same_file(a, b)
+            || families.iter().any(|family| {
+                family
+                    .paths
+                    .iter()
+                    .any(|p| crate::settings::same_file(p, a))
+                    && family
+                        .paths
+                        .iter()
+                        .any(|p| crate::settings::same_file(p, b))
+            })
+    }
+
+    /// Called after a successful save or recovery, under the assistant's store lock.
+    /// Persist separately from chat bodies so a paused checkpoint cannot undo the association.
+    pub fn follow_drawing(&self, from: &Path, to: &Path) -> Result<(), String> {
+        if crate::settings::same_file(from, to) {
+            return Ok(());
+        }
+        let mut families = self.families()?;
+        let mut joined = DrawingFamily {
+            paths: vec![from.to_path_buf(), to.to_path_buf()],
+            current: to.to_path_buf(),
+        };
+        families.retain(|family| {
+            if family
+                .paths
+                .iter()
+                .any(|p| crate::settings::same_file(p, from) || crate::settings::same_file(p, to))
+            {
+                joined.paths.extend(family.paths.clone());
+                false
+            } else {
+                true
+            }
+        });
+        joined.paths.sort();
+        joined.paths.dedup();
+        families.push(joined);
+        fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        write_json(&self.dir.join("drawings.json"), &families)
     }
 
     pub fn save(&self, conversation: &Conversation) -> Result<(), String> {

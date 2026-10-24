@@ -539,9 +539,12 @@ async fn refusal_stop_reason_surfaces_category() {
 }
 
 #[tokio::test]
-async fn loop_stops_after_40_tool_calls() {
+async fn successful_reads_continue_beyond_40_calls() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let mock = serve(|n| {
+            if n >= 45 {
+                return text_turn(&["Done."]);
+            }
             let id = format!("toolu_{n}");
             let id: &'static str = Box::leak(id.into_boxed_str());
             tool_turn(&[(
@@ -572,24 +575,19 @@ async fn loop_stops_after_40_tool_calls() {
                 )
             })
             .count();
-        assert_eq!(run, 40);
-        assert_eq!(mock.requests().len(), 40);
-        assert_eq!(
-            events.last(),
-            Some(&AgentEvent::Stopped {
-                reason: "stopped after 40 steps".into()
-            })
-        );
-        // Every call made was answered, so the history is valid to continue from.
-        let last = agent.history().last().unwrap();
-        assert!(last.has_tool_results());
+        assert_eq!(run, 45);
+        assert_eq!(mock.requests().len(), 46);
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+        assert!(serde_json::to_string(agent.history())
+            .unwrap()
+            .contains("tool_cost"));
     })
     .await
-    .expect("test loop_stops_after_40_tool_calls timed out after 60 seconds");
+    .expect("test successful_reads_continue_beyond_40_calls timed out after 60 seconds");
 }
 
 #[tokio::test]
-async fn malformed_tool_input_still_stops_after_40_calls() {
+async fn identical_malformed_input_stops_on_sixth_attempt() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let mock = serve(|n| {
             let id: &'static str = Box::leak(format!("toolu_{n}").into_boxed_str());
@@ -608,17 +606,17 @@ async fn malformed_tool_input_still_stops_after_40_calls() {
             .iter()
             .filter(|e| matches!(e, AgentEvent::ToolResult { is_error: true, .. }))
             .count();
-        assert_eq!(answered, 40);
-        assert_eq!(mock.requests().len(), 40);
+        assert_eq!(answered, 6);
+        assert_eq!(mock.requests().len(), 6);
         assert_eq!(
             events.last(),
             Some(&AgentEvent::Stopped {
-                reason: "stopped after 40 steps".into()
+                reason: "repeated_ineffective_edit".into()
             })
         );
     })
     .await
-    .expect("test malformed_tool_input_still_stops_after_40_calls timed out after 60 seconds");
+    .expect("test identical_malformed_input_stops_on_sixth_attempt timed out after 60 seconds");
 }
 
 /// User requests and evidence stay unchanged; job-specific guidance expires at a new turn.
@@ -1224,7 +1222,7 @@ fn many(name: &'static str, count: usize, input: impl Fn(usize) -> String) -> Re
 }
 
 #[tokio::test]
-async fn removals_and_resolutions_stop_after_10_in_one_turn() {
+async fn removals_and_resolutions_report_counts_without_blocking() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let (_dir, session) = sample();
         let ids: Vec<String> = {
@@ -1269,33 +1267,16 @@ async fn removals_and_resolutions_stop_after_10_in_one_turn() {
             .takeoff
             .items
             .len();
-        assert_eq!(left, 2, "10 removed, the 11th refused");
-        let summary = |id: &str, nth: usize| {
-            events
-                .iter()
-                .filter_map(|e| match e {
-                    AgentEvent::ToolResult { id: i, summary, .. } if i == id => Some(summary.clone()),
-                    _ => None,
-                })
-                .nth(nth)
-                .unwrap()
-        };
-        assert_eq!(
-            summary("toolu_10", 0),
-            "Too many destructive commands in one turn; ask the user to confirm"
-        );
-        assert_eq!(
-            summary("toolu_10", 1),
-            "Too many destructive commands in one turn; ask the user to confirm"
-        );
-        // Resolutions share the cap with removals, so none of them run.
-        assert_eq!(
-            summary("toolu_9", 1),
-            "Too many destructive commands in one turn; ask the user to confirm"
-        );
+        assert_eq!(left,1,"all eleven requested rows removed");
+        assert!(events.iter().filter(|e|matches!(e,AgentEvent::ToolResult{is_error:false,..})).count()>=11);
+        let history=serde_json::to_string(agent.history()).unwrap();
+        assert!(history.contains("many_removals"));
+        assert!(!history.contains("Too many destructive commands"));
+        assert!(events.iter().filter(|e|matches!(e,AgentEvent::ToolResult{is_error:true,..})).count()>=11,"missing conflicts still fail");
+
     })
     .await
-    .expect("test removals_and_resolutions_stop_after_10_in_one_turn timed out after 60 seconds");
+    .expect("test removals_and_resolutions_report_counts_without_blocking timed out after 60 seconds");
 }
 
 #[tokio::test]

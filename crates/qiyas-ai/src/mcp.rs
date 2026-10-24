@@ -190,6 +190,11 @@ pub fn tools() -> Vec<crate::ToolSpec> {
     let mut specs = catalogue();
     for spec in &mut specs {
         if spec.name == surface::EXECUTE {
+            // MCP accepts omission; strict provider schemas use a required nullable field.
+            spec.input_schema["required"]
+                .as_array_mut()
+                .expect("tool required fields")
+                .retain(|field| field != "expected_revision");
             spec.input_schema["properties"]["request_id"] = serde_json::json!({
                 "type": "string", "minLength": 1,
                 "description": "Optional retry id: identical arguments return the original result, never run twice; retained for this MCP session's last 256 ids."
@@ -250,7 +255,7 @@ impl Qiyas {
                 Err(ToolError::Structured {
                     code: "invalid_value".into(),
                     message: "request_id must be a nonempty string".into(),
-                    details: serde_json::json!({}),
+                    details: serde_json::json!({"revision": self.session.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(qiyas_core::Session::revision)}),
                 }),
                 false,
             );
@@ -273,14 +278,24 @@ impl Qiyas {
                 Err(ToolError::Structured {
                     code: "request_id_reused".into(),
                     message: "request_id was already used with different arguments".into(),
-                    details: serde_json::json!({}),
+                    details: serde_json::json!({"revision": self.session.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(qiyas_core::Session::revision)}),
                 }),
                 true,
             );
         }
         let output =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run(name, &arguments)))
-                .unwrap_or_else(|_| Err(ToolError::Failed(format!("The tool {name} crashed"))));
+                .unwrap_or_else(|_| {
+                    crate::revision::stamp(
+                        Err(ToolError::Failed(format!("The tool {name} crashed"))),
+                        serde_json::json!(self
+                            .session
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .as_ref()
+                            .map(Session::revision)),
+                    )
+                });
         if cache.len() == 256 {
             cache.pop_front();
         }
@@ -303,22 +318,43 @@ impl Qiyas {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-            .map(|s| (s.epoch(), s.history_revision()));
+            .map(qiyas_core::Session::revision);
         let key = format!("{revision:?}:{key}");
         let mut attempts = self
             .ineffective
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if attempts.get(&key).copied().unwrap_or(0) >= 2 {
-            return Err(ToolError::Structured {code: "repeated_ineffective_edit".into(),
-                message: "This edit made no change in two attempts. Stop repeating it and explain what remains incomplete.".into(),
-                details: serde_json::json!({"attempts":2})});
+        if attempts.get(&key).copied().unwrap_or(0) >= 5 {
+            return crate::revision::stamp(
+                Err(crate::advice::stopped()),
+                serde_json::json!(revision),
+            );
         }
-        let output = self.run_checked(name, input);
+        let mut output = self.run_checked(name, input);
+        if output
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.json().get("revision").is_none())
+        {
+            let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+            output = crate::revision::stamp(
+                output,
+                serde_json::json!(guard.as_ref().map(qiyas_core::Session::revision)),
+            );
+        }
         if output.is_err() || matches!(&output, Ok(ToolOutput::Json(v)) if v["no_change"] == true) {
-            *attempts.entry(key).or_default() += 1;
-        } else {
+            let count = attempts.entry(key).or_default();
+            *count += 1;
+            if *count >= 2 {
+                output = crate::advice::result(output, crate::advice::repeated(*count));
+            }
+        }
+        if input["op"] == "finish" && output.is_ok() {
             attempts.clear();
+            self.churn
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .reset();
         }
         output
     }
@@ -369,17 +405,36 @@ impl Qiyas {
                     .host
                     .as_deref()
                     .ok_or(ToolError::Failed(crate::host::NO_WINDOW.into()))?;
-                crate::run_window(host, &self.session, tool, &input, crate::prompt::Lang::En)
-                    .map_err(ToolError::Failed)
+                {
+                    let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+                    crate::revision::check(guard.as_ref(), &input)?;
+                }
+                let result =
+                    crate::run_window(host, &self.session, tool, &input, crate::prompt::Lang::En)
+                        .map_err(ToolError::Failed);
+                let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+                crate::revision::stamp(
+                    result,
+                    serde_json::json!(guard.as_ref().map(qiyas_core::Session::revision)),
+                )
             }
             Route::Host { tool, input } => {
                 let host = self
                     .host
                     .as_deref()
                     .ok_or(ToolError::Failed(NO_HOST.into()))?;
-                run_host(host, tool, &input, self.user_text.as_deref())
+                {
+                    let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+                    crate::revision::check(guard.as_ref(), &input)?;
+                }
+                let result = run_host(host, tool, &input, self.user_text.as_deref())
                     .map(ToolOutput::Json)
-                    .map_err(ToolError::Failed)
+                    .map_err(ToolError::Failed);
+                let guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+                crate::revision::stamp(
+                    result,
+                    serde_json::json!(guard.as_ref().map(qiyas_core::Session::revision)),
+                )
             }
             Route::Session { tool, op, args } => {
                 let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
@@ -421,7 +476,7 @@ impl ServerHandler for Qiyas {
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
                 "{}\n\nCommands by category:\n{}",
-                "Follow the user's request and latest message language. Arabic is simple Modern Standard Arabic unless that message uses a dialect. For a new design on a populated drawing, ask new drawing (recommended) or this one, then wait. Use small phases, one batch per phase, capture and check, and edit by handle; repeated rebuilding is refused. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after two identical ineffective edits, stop and explain. Fix new warnings before claiming completion. Save only when asked; finish does not save.",
+                "Follow the user's request and latest message language. Arabic is simple Modern Standard Arabic unless that message uses a dialect. For a new design on a populated drawing, consider the destination and ask when unclear. Use small phases, one batch per phase, capture and check, and edit by handle; rebuilding returns cost advice. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after repeated ineffective edits, weigh the advice; an identical input that fails five times is stopped on its sixth attempt. Report open findings when finishing; Qiyas attaches them to the turn record. Advice is information and Mizan decides. Quote the revision of the read you act on as expected_revision. On stale_read, read the changed handles again; never retry blindly. Save only when asked; finish does not save.",
                 crate::prompt::command_index()
             ))
     }
@@ -470,9 +525,18 @@ impl ServerHandler for Qiyas {
                 ContentBlock::text(caption),
             ]),
             Err(e) => {
+                let mut value = e.json();
+                if value.get("revision").is_none() {
+                    value["revision"] = serde_json::json!(self
+                        .session
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .as_ref()
+                        .map(Session::revision));
+                }
                 return Ok(
-                    CallToolResult::error(vec![ContentBlock::text(e.json().to_string())]).into(),
-                )
+                    CallToolResult::error(vec![ContentBlock::text(value.to_string())]).into(),
+                );
             }
         };
         if !replayed {
@@ -490,6 +554,52 @@ impl ServerHandler for Qiyas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revisions_refuse_stale_edits_and_request_ids_still_deduplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(Some(qiyas_core::Session::new_blank(
+            &dir.path().join("read.dxf"),
+            6,
+        ))));
+        let server = Qiyas::new(session.clone(), None, Arc::new(|| {}), Arc::new(|_| {}));
+        let json = |result: Result<ToolOutput, ToolError>| match result.unwrap() {
+            ToolOutput::Json(v) => v,
+            _ => panic!("json"),
+        };
+        let read = json(server.run(surface::READ, &serde_json::json!({"op":"state"})));
+        let create = serde_json::json!({"op":"run","request_id":"one","expected_revision":read["revision"],"args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[5,0]}}});
+        let (first, cached) = server.run_cached(surface::EXECUTE, &create);
+        assert!(!cached);
+        let first = json(first);
+        assert_ne!(first["revision"], read["revision"]);
+        let (again, cached) = server.run_cached(surface::EXECUTE, &create);
+        assert!(cached);
+        assert_eq!(json(again), first);
+        let handle = first["added"][0].clone();
+        let mut edit = serde_json::json!({"op":"run","expected_revision":read["revision"],"args":{"command":{"type":"set_property","target":{"handle":handle},"prop":"color","value":"red"}}});
+        let before = session.lock().unwrap().as_ref().unwrap().revision();
+        let error = server.run(surface::EXECUTE, &edit).unwrap_err().json();
+        assert_eq!(error["code"], "stale_read");
+        assert_eq!(error["history_complete"], true);
+        assert!(error["added"].as_array().unwrap().contains(&handle));
+        assert_eq!(session.lock().unwrap().as_ref().unwrap().revision(), before);
+        let read = json(server.run(
+            surface::READ,
+            &serde_json::json!({"op":"records","args":{"handles":[handle],"detail":"full"}}),
+        ));
+        edit["expected_revision"] = read["revision"].clone();
+        let applied = json(server.run(surface::EXECUTE, &edit));
+        assert!(applied["changed"].as_array().unwrap().contains(&handle));
+        let changed = serde_json::json!({"op":"run","request_id":"one","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[6,0]}}});
+        let conflict = server
+            .run_cached(surface::EXECUTE, &changed)
+            .0
+            .unwrap_err()
+            .json();
+        assert_eq!(conflict["code"], "request_id_reused");
+        assert!(conflict.get("revision").is_some());
+    }
 
     #[test]
     fn plan_round_trips_without_a_drawing_or_a_mutation() {
@@ -510,7 +620,10 @@ mod tests {
         let ToolOutput::Json(out) = out.unwrap() else {
             panic!("JSON")
         };
-        assert_eq!(out, serde_json::json!({"plan":{"phases":phases}}));
+        assert_eq!(
+            out,
+            serde_json::json!({"plan":{"phases":phases},"revision":null})
+        );
         assert!(server.run_cached(surface::EXECUTE, &input).1);
     }
 
@@ -526,6 +639,12 @@ mod tests {
         assert_eq!(server.tools.len(), 3);
         assert_eq!(server.tools.len(), specs.len());
         for spec in specs {
+            if spec.name == surface::EXECUTE {
+                assert!(!spec.input_schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("expected_revision")));
+            }
             let tool = server.get_tool(spec.name).expect("the same tool");
             assert_eq!(tool.description.as_deref(), Some(spec.description));
             assert_eq!(serde_json::json!(tool.input_schema), spec.input_schema);

@@ -41,6 +41,8 @@ pub mod layouts;
 mod modify;
 mod modify2;
 mod net_effect;
+mod read_revision;
+pub use read_revision::{revision_schema, Revision};
 mod object_bands;
 mod object_migration;
 pub mod object_regions;

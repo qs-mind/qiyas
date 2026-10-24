@@ -1,4 +1,4 @@
-//! Quantity notes must point back to a real take-off row.
+//! Advise when a quantity note has no measured source; keep the model's decision.
 use crate::{CoreError, Session, Source};
 
 pub(crate) fn states_measurement(text: &str) -> bool {
@@ -44,7 +44,11 @@ pub(crate) fn states_measurement(text: &str) -> bool {
     false
 }
 impl Session {
-    pub(crate) fn check_quantity_note(&self, text: &str, source: Source) -> Result<(), CoreError> {
+    pub(crate) fn check_quantity_note(
+        &mut self,
+        text: &str,
+        source: Source,
+    ) -> Result<(), CoreError> {
         if !matches!(source, Source::Ai | Source::Mcp) || !states_measurement(text) {
             return Ok(());
         }
@@ -64,9 +68,8 @@ impl Session {
         if cited {
             Ok(())
         } else {
-            Err(CoreError::InvalidCommand(
-            "A quantity note needs a take-off row citation (takeoff:<row id>). Measure it first with measure_entity, measure_room or count_block; use label_spaces for room area labels. Then cite the measured row, or keep this note free of quantities.".into()
-        ))
+            self.last_advice.push(serde_json::json!({"code":"uncited_quantity","message":"This note states a quantity without a measured take-off citation. Consider measure_entity, measure_room or count_block and cite takeoff:<row id>; label_spaces can label room areas. The note does not establish a measured quantity."}));
+            Ok(())
         }
     }
 }
