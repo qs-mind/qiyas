@@ -524,3 +524,14 @@ test("a later successful read does not hide an unresolved edit", () => {
   expect(document.querySelectorAll(".tool-card.error")).toHaveLength(1);
   expect(document.querySelector(".recovery-summary")).toBeNull();
 });
+
+test("open findings remain visible beside a completed answer without technical details", () => {
+  setup({ items: [
+    { kind: "assistant", text: "The drawing is ready for review.", finished: true },
+    { kind: "open_findings", findings: [{ rule: "text_overlaps_text", message: "Entities 2 and 3 overlap", handles: [2, 3] }], revision: { document_revision: 7 } },
+  ] });
+  expect(screen.getByText("The drawing is ready for review.")).toBeTruthy();
+  expect(screen.getByText("Open drawing findings")).toBeTruthy();
+  expect(screen.getByText("Text overlaps other text. (1)")).toBeTruthy();
+  expect(screen.queryByText("Entities 2 and 3 overlap")).toBeNull();
+});

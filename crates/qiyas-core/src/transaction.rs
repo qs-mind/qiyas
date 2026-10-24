@@ -110,6 +110,11 @@ impl Session {
         label: &str,
         f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        let before_revision = self.revision();
+        let advice = self.last_advice.clone();
+        if self.tx_depth == 0 {
+            self.last_advice.clear();
+        }
         let replacements = self.handle_replacements.clone();
         if self.tx_depth == 0 {
             self.handle_replacements.clear();
@@ -138,6 +143,7 @@ impl Session {
                 self.history.commit_group(source, label, delta);
                 let inner = std::mem::replace(&mut self.last_change, change);
                 self.last_change.merge(inner);
+                self.record_revision(before_revision);
                 Ok(value)
             }
             Err(e) => {
@@ -159,6 +165,7 @@ impl Session {
                 view.put_back(self);
                 self.handle_replacements = replacements;
                 self.last_change = change;
+                self.last_advice = advice;
                 // The drawing is as it was at `revision`: drawn again, and no unsaved change
                 // left by steps that were put back.
                 self.drawing_changed();

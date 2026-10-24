@@ -58,16 +58,19 @@ fn tab_info(id: u32, s: &Session) -> TabInfo {
 }
 
 /// Where a new drawing stands until its first Save As: `<config>/untitled/Untitled-N.dwg`, with
-/// the smallest N no open tab uses and no autosave of an earlier one holds (a crash's work is
-/// never written over). The folder is made when missing.
+/// the smallest N no open tab, autosave or conversation history already uses.
+/// A crash's work and an earlier drawing's chats are never assigned to a new drawing.
 pub(crate) fn untitled_path(state: &AppState) -> Result<PathBuf, String> {
     let dir = state.config_dir.join("untitled");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let open: Vec<String> = snapshot(state).tabs.into_iter().map(|t| t.path).collect();
+    let history = crate::conversations::Store::new(&state.config_dir).drawing_paths()?;
     (1u32..)
         .map(|n| dir.join(format!("Untitled-{n}.dwg")))
         .find(|p| {
-            !open.contains(&p.display().to_string()) && !qiyas_core::autosave_path(p).exists()
+            !open.contains(&p.display().to_string())
+                && !qiyas_core::autosave_path(p).exists()
+                && !history.iter().any(|old| crate::settings::same_file(old, p))
         })
         .ok_or_else(|| "No name left for a new drawing".to_string())
 }
@@ -115,12 +118,21 @@ pub(crate) fn find_path(state: &AppState, path: &Path) -> Option<u32> {
 
 /// Puts `session` on screen in a new tab after the others; the drawing on screen before is
 /// parked. Returns the new tab's id.
-pub(crate) fn add(state: &AppState, mut session: Session) -> Result<u32, String> {
+pub(crate) fn add(state: &AppState, session: Session) -> Result<u32, String> {
+    add_checked(state, session, None)
+}
+
+pub(crate) fn add_checked(
+    state: &AppState,
+    mut session: Session,
+    expected: Option<&serde_json::Value>,
+) -> Result<u32, String> {
     let name = lock(&state.settings).measurement_method.clone();
     let method = crate::methods::load_at(&crate::methods::qiyas_dir()?, name.as_deref())?;
     crate::methods::apply(&mut session, method.as_ref()).map_err(|e| e.to_string())?;
     let mut list = lock(&state.tabs);
     let mut active = lock(&state.session);
+    qiyas_ai::host::check_expected_revision(active.as_ref(), expected)?;
     let mut parked = lock(&state.parked);
     let id = list.next_id;
     list.next_id += 1;
@@ -147,13 +159,24 @@ pub(crate) fn activate<R: Runtime>(
     id: u32,
     keep_conversation: bool,
 ) -> Result<(), String> {
+    activate_checked(app, state, id, keep_conversation, None)
+}
+
+pub(crate) fn activate_checked<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    id: u32,
+    keep_conversation: bool,
+    expected: Option<&serde_json::Value>,
+) -> Result<(), String> {
     // Keep the same lock order as external sheet changes: turn, tabs, then session.
     let mut turn = (!keep_conversation).then(|| ai_run(state));
     let mut list = lock(&state.tabs);
+    let mut session = lock(&state.session);
+    qiyas_ai::host::check_expected_revision(session.as_ref(), expected)?;
     if list.active == Some(id) {
         return Ok(());
     }
-    let mut session = lock(&state.session);
     let mut parked = lock(&state.parked);
     let at = parked
         .iter()
@@ -198,12 +221,24 @@ pub(crate) fn close<R: Runtime>(
     force: bool,
     keep_conversation: bool,
 ) -> Result<(), String> {
+    close_checked(app, state, id, force, keep_conversation, None)
+}
+
+pub(crate) fn close_checked<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    id: u32,
+    force: bool,
+    keep_conversation: bool,
+    expected: Option<&serde_json::Value>,
+) -> Result<(), String> {
     let mut turn = (!keep_conversation).then(|| ai_run(state));
     let mut list = lock(&state.tabs);
     let Some(pos) = list.order.iter().position(|&t| t == id) else {
         return Err(format!("No tab {id}"));
     };
     let mut session = lock(&state.session);
+    qiyas_ai::host::check_expected_revision(session.as_ref(), expected)?;
     let mut parked = lock(&state.parked);
     if list.active == Some(id) {
         if !force && session.as_ref().is_some_and(Session::is_dirty) {

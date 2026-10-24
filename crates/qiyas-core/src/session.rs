@@ -130,6 +130,8 @@ pub struct Session {
     pub(crate) isolated: Option<crate::layers::Isolation>,
     /// What the last command or transaction did to the drawing's entities (`last_change`).
     pub(crate) last_change: crate::Change,
+    pub(crate) last_advice: Vec<serde_json::Value>,
+    pub(crate) revision_history: crate::read_revision::RevisionHistory,
     pub(crate) handle_replacements: std::collections::BTreeMap<u64, Vec<u64>>,
     /// How many transactions are open (`crate::transaction`).
     pub(crate) tx_depth: usize,
@@ -728,6 +730,8 @@ impl Session {
             state_hidden,
             isolated: None,
             last_change: crate::Change::default(),
+            last_advice: Vec::new(),
+            revision_history: Default::default(),
             handle_replacements: std::collections::BTreeMap::new(),
             tx_depth: 0,
             ucs,
@@ -1725,6 +1729,7 @@ impl Session {
     pub fn run_as(&mut self, mut cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
+            self.last_advice.clear();
         }
         let mut raw = serde_json::to_value(&cmd)
             .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
@@ -1746,6 +1751,22 @@ impl Session {
     }
 
     pub(crate) fn run_command(
+        &mut self,
+        cmd: Command,
+        source: Source,
+    ) -> Result<Outcome, CoreError> {
+        let before = self.revision();
+        let advice_before = self.last_advice.len();
+        let result = self.run_command_inner(cmd, source);
+        if result.is_ok() {
+            self.record_revision(before);
+        } else {
+            self.last_advice.truncate(advice_before);
+        }
+        result
+    }
+
+    pub(crate) fn run_command_inner(
         &mut self,
         mut cmd: Command,
         source: Source,
@@ -1914,6 +1935,10 @@ impl Session {
     /// Undoes the last take-off, BOQ, conflicts or drawing change. False when there is nothing to
     /// undo.
     pub fn undo(&mut self) -> bool {
+        let before = self.revision();
+        let change = self.history.swap_change(false);
+        self.last_advice.clear();
+        self.handle_replacements.clear();
         let mut doc_changed = false;
         let undone = self.history.undo(Parts {
             takeoff: &mut self.takeoff,
@@ -1930,6 +1955,10 @@ impl Session {
         });
         if doc_changed {
             self.drawing_changed();
+        }
+        if undone {
+            self.last_change = change;
+            self.record_revision(before);
         }
         undone
     }
@@ -2133,6 +2162,10 @@ impl Session {
     /// Redoes the last undone take-off, BOQ, conflicts or drawing change. False when there is
     /// nothing to redo.
     pub fn redo(&mut self) -> bool {
+        let before = self.revision();
+        let change = self.history.swap_change(true);
+        self.last_advice.clear();
+        self.handle_replacements.clear();
         let mut doc_changed = false;
         let redone = self.history.redo(Parts {
             takeoff: &mut self.takeoff,
@@ -2149,6 +2182,10 @@ impl Session {
         });
         if doc_changed {
             self.drawing_changed();
+        }
+        if redone {
+            self.last_change = change;
+            self.record_revision(before);
         }
         redone
     }

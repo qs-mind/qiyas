@@ -33,6 +33,7 @@ export type ToolCardItem = {
 export type Attached = { pointed?: string[]; images?: string[] };
 
 export type Item =
+  | { kind: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { kind: "provider_status"; code: string }
   | ({ kind: "user"; text: string } & Attached)
   /** Streamed: `finished` once anything else follows it or the turn ends. */
@@ -79,6 +80,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
   const items = state.items;
   const last = items.at(-1);
   switch (action.type) {
+    case "open_findings":
+      return { items: [...finishText(items), { kind: "open_findings", findings: action.findings, revision: action.revision }] };
     case "user": {
       const { type: _, ...item } = action;
       return { items: [...finishText(items), { ...item, kind: "user" }] };

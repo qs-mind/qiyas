@@ -84,7 +84,7 @@ async fn run(agent: &mut Agent, text: &str) -> Vec<AgentEvent> {
     events
 }
 #[tokio::test]
-async fn draw_log_replay_allows_one_correction_then_refuses_rebuilds() {
+async fn draw_log_replay_applies_rebuilds_and_reports_cheaper_edits() {
     let dir = tempfile::tempdir().unwrap();
     let session = Arc::new(Mutex::new(Some(Session::new_blank(
         &dir.path().join("blank.dxf"),
@@ -130,10 +130,11 @@ async fn draw_log_replay_allows_one_correction_then_refuses_rebuilds() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let mut agent = Agent::new(
         Box::new(Script::steps(calls, requests.clone())),
-        session,
+        session.clone(),
         AgentSettings::default(),
     );
     let events = run(&mut agent, "Draw a small 2-bedroom").await;
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
     let reqs = requests.lock().unwrap();
     if let Some(path) = std::env::var_os("QIYAS_GOAL_J_EVIDENCE") {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -173,6 +174,7 @@ async fn draw_log_replay_allows_one_correction_then_refuses_rebuilds() {
         }
     }
     let mut errors = Vec::new();
+    let mut advice = Vec::new();
     let mut previous = std::collections::BTreeSet::new();
     let mut churn = Vec::new();
     for m in scripted::observed_messages(&reqs) {
@@ -187,6 +189,8 @@ async fn draw_log_replay_allows_one_correction_then_refuses_rebuilds() {
                             if is_error {
                                 errors.push(value.clone());
                             }
+                            advice
+                                .extend(value["advice"].as_array().into_iter().flatten().cloned());
                             if let Some(rows) = value["records"].as_array() {
                                 let now: std::collections::BTreeSet<_> = rows
                                     .iter()
@@ -208,16 +212,43 @@ async fn draw_log_replay_allows_one_correction_then_refuses_rebuilds() {
     if let Some(path) = std::env::var_os("QIYAS_GOAL_J_EVIDENCE") {
         std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(path).join("scripted-churn.json"),serde_json::to_vec_pretty(&json!({"turn_total":churn.iter().filter_map(|v|v["total"].as_u64()).sum::<u64>(),"calls":churn})).unwrap()).unwrap();
     }
+    assert!(
+        errors.iter().all(|e| e["code"] != "repeated_rebuild"),
+        "{errors:?}"
+    );
+    let guard = session.lock().unwrap();
+    let drawing = guard.as_ref().unwrap();
+    assert!(!drawing.wall_groups(None).unwrap().is_empty());
+    assert_eq!(
+        drawing
+            .drawing
+            .doc
+            .entities()
+            .filter(
+                |e| matches!(e, opencadcodec::EntityType::Text(t) if t.value.starts_with("Bedroom"))
+            )
+            .count(),
+        2
+    );
+    assert_eq!(
+        drawing
+            .drawing
+            .doc
+            .entities()
+            .filter(|e| matches!(e, opencadcodec::EntityType::Dimension(_)))
+            .count(),
+        1
+    );
     for command in ["edit_text", "dim_edit", "edit_wall_opening"] {
         assert!(
-            errors.iter().any(|e| e["code"] == "repeated_rebuild"
+            advice.iter().any(|e| e["code"] == "repeated_rebuild"
                 && e["message"].as_str().is_some_and(|s| s.contains(command))),
-            "second rebuild must be refused with {command}: {errors:?}"
+            "second rebuild must advise {command}: {advice:?}"
         );
     }
 }
 #[tokio::test]
-async fn new_design_on_content_asks_one_question_and_waits_then_accepts_destination() {
+async fn new_design_on_content_gives_context_and_leaves_the_question_to_mizan() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::new_blank(&dir.path().join("existing.dxf"), 6);
     s.run_input(
@@ -237,23 +268,12 @@ async fn new_design_on_content_asks_one_question_and_waits_then_accepts_destinat
         AgentSettings::default(),
     );
     let events = run(&mut agent, "Draw a small 2-bedroom").await;
-    assert!(
-        requests.lock().unwrap().is_empty(),
-        "must wait before any provider/tool work"
-    );
-    let text: Vec<_> = events
-        .iter()
-        .filter_map(|e| {
-            if let AgentEvent::Text { text } = e {
-                Some(text)
-            } else {
-                None
-            }
-        })
-        .collect();
-    assert_eq!(text.len(), 1);
-    assert_eq!(text[0].matches('?').count(), 1);
-    assert!(text[0].contains("new drawing (recommended)"));
+    let reqs = requests.lock().unwrap();
+    assert_eq!(reqs.len(), 2);
+    assert!(serde_json::to_string(&reqs[0].messages)
+        .unwrap()
+        .contains("Mizan decides"));
+    assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
     assert_eq!(
         session
             .lock()
@@ -263,15 +283,8 @@ async fn new_design_on_content_asks_one_question_and_waits_then_accepts_destinat
             .document_revision(),
         revision
     );
-    run(&mut agent, "Yes").await;
-    run(&mut agent, "Where would it fit?").await;
-    assert!(
-        requests.lock().unwrap().is_empty(),
-        "an unclear answer is not a destination"
-    );
-    run(&mut agent, "Use this drawing").await;
-    assert!(!requests.lock().unwrap().is_empty());
 }
+
 struct LanguageScript(Arc<Mutex<Vec<TurnRequest>>>);
 impl qiyas_ai::Provider for LanguageScript {
     fn stream_turn<'a>(
@@ -436,10 +449,9 @@ fn surface_normalisations_are_reported_and_ambiguous_inputs_stay_invalid() {
     ] {
         assert!(qiyas_ai::surface::route(READ, &input).is_err());
     }
-    assert!(qiyas_ai::surface::read_plan(
-        &json!({"phases":[{"id":"all","title":"Whole design","status":"active"}]})
-    )
-    .is_err());
+    let plan = surface_call(&mut s, EXECUTE, json!({"op":"plan","args":{"phases":[{"id":"all","title":"Whole design","status":"active"}]}})).unwrap();
+    assert_eq!(plan["plan"]["phases"].as_array().unwrap().len(), 1);
+    assert_eq!(plan["advice"][0]["code"], "small_phases");
 }
 #[test]
 fn latest_language_recognises_uppercase_prose_and_keeps_numeric_replies_neutral() {

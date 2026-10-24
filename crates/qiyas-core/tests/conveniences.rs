@@ -182,18 +182,19 @@ fn automatic_table_sizes_fit_text_at_the_annotation_scale_in_each_unit() {
 }
 
 #[test]
-fn empty_items_need_explicit_intent_from_ai_and_mcp_only() {
+fn empty_items_advise_ai_and_mcp_without_blocking() {
     for source in [Source::Ai, Source::Mcp] {
         let (_dir, mut session) = blank(6);
         for value in [Value::Null, json!(0)] {
-            let item =
-                json!({"type": "add_measurement", "kind": "item", "value": value, "unit": "item"});
-            let error = session
-                .run_as(measurement(item.clone()), source)
-                .unwrap_err();
-            assert!(error.to_string().contains("empty_item true"), "{error}");
+            let item = json!({"type": "add_measurement", "kind": "item", "value": value, "unit": "item", "description": "Unmeasured item"});
+            let reported = session.run_input(&item, source).unwrap();
+            assert_eq!(reported.advice[0]["code"], "unmeasured_item");
+            let Outcome::Measured { measurement: row } = reported.outcome else {
+                panic!("item")
+            };
+            assert_eq!(row.value, 0.0);
+            assert!(session.undo());
             assert!(session.takeoff.items.is_empty());
-            assert!(!session.can_undo());
             let mut allowed = item;
             allowed["empty_item"] = json!(true);
             let Outcome::Measured { measurement } =
@@ -223,7 +224,7 @@ fn empty_items_need_explicit_intent_from_ai_and_mcp_only() {
 }
 
 #[test]
-fn ai_and_mcp_count_block_references_but_users_can_still_count_other_entities() {
+fn counting_other_entities_reports_the_actual_count_with_advice() {
     let dir = tempfile::tempdir().unwrap();
     let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
     let mut session = Session::open(&path).unwrap();
@@ -246,10 +247,14 @@ fn ai_and_mcp_count_block_references_but_users_can_still_count_other_entities() 
     let (line, insert) = (handle_of(false), handle_of(true));
     let count = |handle| measurement(json!({"kind": "count", "handles": [handle]}));
     for source in [Source::Ai, Source::Mcp] {
-        let error = session.run_as(count(line), source).unwrap_err();
-        assert!(error.to_string().contains("block reference"), "{error}");
-        assert!(session.takeoff.items.is_empty());
-        assert!(!session.can_undo());
+        let reported=session.run_input(&json!({"type":"add_measurement","kind":"count","handles":[line],"description":"Selected objects"}),source).unwrap();
+        assert_eq!(reported.advice[0]["code"], "count_non_block");
+        let Outcome::Measured { measurement } = reported.outcome else {
+            panic!("count")
+        };
+        assert_eq!(measurement.value, 1.0);
+        assert_eq!(measurement.handles, vec![line]);
+        assert!(session.undo());
         let Outcome::Measured { measurement } = session.run_as(count(insert), source).unwrap()
         else {
             panic!("a count");

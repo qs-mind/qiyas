@@ -14,7 +14,21 @@ pub struct Workspace {
     pub active: Option<PathBuf>,
 }
 pub fn execute(state: &AppState, input: &Value, source: Source) -> Result<Value, String> {
+    execute_checked(state, input, source, None)
+}
+
+pub(crate) fn execute_checked(
+    state: &AppState,
+    input: &Value,
+    source: Source,
+    expected: Option<&Value>,
+) -> Result<Value, String> {
     let command = qiyas_core::registry::parse_command(input.clone())?;
+    // Keep the drawing used by this read stable through the project operation.
+    let _tabs = state.tabs.lock().map_err(|e| e.to_string())?;
+    let active = state.session.lock().map_err(|e| e.to_string())?;
+    qiyas_ai::host::check_expected_revision(active.as_ref(), expected)?;
+    let parked = state.parked.lock().map_err(|e| e.to_string())?;
     let Command::Project(_) = command else {
         return Err("Expected a project command".into());
     };
@@ -23,9 +37,6 @@ pub fn execute(state: &AppState, input: &Value, source: Source) -> Result<Value,
             let path = qiyas_core::projects::project_path(path).map_err(|e| e.to_string())?;
             let set = qiyas_core::projects::load(&path).map_err(|e| e.to_string())?;
             let entries = qiyas_core::sheet_set_entries(&path, &set);
-            let _tabs = state.tabs.lock().map_err(|e| e.to_string())?;
-            let active = state.session.lock().map_err(|e| e.to_string())?;
-            let parked = state.parked.lock().map_err(|e| e.to_string())?;
             for session in active.iter().chain(parked.iter().map(|tab| &tab.session)) {
                 if session.is_dirty()
                     && entries.iter().any(|e| {

@@ -27,6 +27,14 @@ fn command_args(name: &str) -> Value {
 
 /// Contracts also appear in capabilities, so clients can discover the exact accepted form.
 pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
+    let (mut schema, example) = base_contract(tool, op);
+    if tool == EXECUTE {
+        schema["properties"]["expected_revision"] = qiyas_core::revision_schema();
+    }
+    (schema, example)
+}
+
+fn base_contract(tool: &str, op: &str) -> (Value, Value) {
     let string = json!({"type":"string"});
     let number = json!({"type":"number"});
     let boolean = json!({"type":"boolean"});

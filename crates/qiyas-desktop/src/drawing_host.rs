@@ -37,6 +37,7 @@ const MAX_LISTED: usize = 30;
 
 pub struct AppHost<R: Runtime> {
     pub app: AppHandle<R>,
+    pub expected_revision: Option<Value>,
 }
 
 impl<R: Runtime> AppHost<R> {
@@ -127,6 +128,26 @@ fn summary(s: &Session) -> Value {
 }
 
 impl<R: Runtime> DrawingHost for AppHost<R> {
+    fn run_file(
+        &self,
+        name: &str,
+        input: &Value,
+        user_text: Option<&str>,
+    ) -> Result<Value, String> {
+        {
+            let state = self.state();
+            let guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+            qiyas_ai::host::check_expected_revision(
+                guard.as_ref(),
+                input.get("expected_revision"),
+            )?;
+        }
+        let checked = Self {
+            app: self.app.clone(),
+            expected_revision: input.get("expected_revision").cloned(),
+        };
+        qiyas_ai::host::dispatch_host(&checked, name, input, user_text)
+    }
     fn has_window(&self) -> bool {
         true
     }
@@ -177,12 +198,17 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
             .path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        tabs::add(&state, session)?;
+        tabs::add_checked(&state, session, self.expected_revision.as_ref())?;
         self.shown(format!("New drawing {title} on screen, unsaved"))
     }
 
     fn project(&self, input: &Value, source: qiyas_core::Source) -> Result<Value, String> {
-        crate::projects::execute(&self.state(), input, source)
+        crate::projects::execute_checked(
+            &self.state(),
+            input,
+            source,
+            self.expected_revision.as_ref(),
+        )
     }
     fn open(&self, path: &str, user_named: bool) -> Result<Value, String> {
         let path = Path::new(path);
@@ -203,12 +229,24 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         {
             return Err(format!("The user did not allow opening {}", path.display()));
         }
-        let what = crate::script::open(&self.app, &self.state(), path, true)?;
+        let what = crate::script::open_checked(
+            &self.app,
+            &self.state(),
+            path,
+            true,
+            self.expected_revision.as_ref(),
+        )?;
         self.shown(what)
     }
 
     fn switch(&self, id: u32) -> Result<Value, String> {
-        tabs::activate(&self.app, &self.state(), id, true)?;
+        tabs::activate_checked(
+            &self.app,
+            &self.state(),
+            id,
+            true,
+            self.expected_revision.as_ref(),
+        )?;
         self.shown(format!("Tab {id} on screen"))
     }
 
@@ -224,10 +262,16 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
                 "The drawing was repaired when it opened: Qiyas asks the user before saving over it"
             }));
         }
-        let path = with_session(&state, |s| {
-            s.save()?;
-            Ok(s.drawing.path.display().to_string())
-        })?;
+        let path = {
+            let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+            qiyas_ai::host::check_expected_revision(
+                guard.as_ref(),
+                self.expected_revision.as_ref(),
+            )?;
+            let session = guard.as_mut().ok_or("No drawing is open")?;
+            session.save().map_err(|e| e.to_string())?;
+            session.drawing.path.display().to_string()
+        };
         Ok(json!({ "message": format!("Saved {path}"), "ui": { "action": "redraw" } }))
     }
 
@@ -248,7 +292,14 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
             )));
         }
         let title = tab.title.clone();
-        tabs::close(&self.app, &state, id, false, true)?;
+        tabs::close_checked(
+            &self.app,
+            &state,
+            id,
+            false,
+            true,
+            self.expected_revision.as_ref(),
+        )?;
         self.shown(format!("Closed {title}"))
     }
 
@@ -275,6 +326,7 @@ mod tests {
 
     use qiyas_ai::DrawingHost;
     use qiyas_core::{Command, DrawSpec};
+    use serde_json::{json, Value};
     use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
     use tauri::{App, Manager};
 
@@ -299,10 +351,67 @@ mod tests {
     }
 
     #[test]
+    fn checked_file_operations_refuse_stale_drawings_under_the_mutation_lock() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+        };
+        host.new_drawing("m").unwrap();
+        let state = app.state::<AppState>();
+        let expected = with_session(&state, |s| Ok(json!(s.revision()))).unwrap();
+        with_session(&state, |s| {
+            s.run_input(
+                &json!({"type":"draw","kind":"line","a":[0,0],"b":[5,0]}),
+                qiyas_core::Source::User,
+            )
+        })
+        .unwrap();
+        let before = json!(tabs::snapshot(&state));
+        // Call the checked host directly as well as its public dispatch: these are the
+        // second checks, after the tool's earlier read/validation released its lock.
+        let checked = AppHost {
+            app: app.handle().clone(),
+            expected_revision: Some(expected.clone()),
+        };
+        for error in [
+            checked.new_drawing("m").unwrap_err(),
+            checked
+                .switch(before["active"].as_u64().unwrap() as u32)
+                .unwrap_err(),
+        ] {
+            let error: Value = serde_json::from_str(&error).unwrap();
+            assert_eq!(error["code"], "stale_read");
+        }
+        for (name, args) in [
+            ("new_drawing", json!({"units":"m"})),
+            ("save_drawing", json!({})),
+            ("close_drawing", json!({})),
+        ] {
+            let mut args = args;
+            args["expected_revision"] = expected.clone();
+            let error = qiyas_ai::host::run_host(&host, name, &args, None).unwrap_err();
+            let error: Value = serde_json::from_str(&error).unwrap();
+            assert_eq!(error["code"], "stale_read");
+            assert_eq!(json!(tabs::snapshot(&state)), before);
+        }
+        let fresh = with_session(&state, |s| Ok(json!(s.revision()))).unwrap();
+        qiyas_ai::host::run_host(
+            &host,
+            "new_drawing",
+            &json!({"units":"cm","expected_revision":fresh}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs.len(), 2);
+    }
+
+    #[test]
     fn external_sheet_authority_holds_the_turn_lock_through_host_changes() {
         let (_dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
         };
         let state = app.state::<AppState>();
         let (_, generation) = state.ai.lock().unwrap().reserve().unwrap();
@@ -336,6 +445,7 @@ mod tests {
         let (dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
         };
         let state = app.state::<AppState>();
         let before = generation(&app);
@@ -405,6 +515,7 @@ mod tests {
         let (dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
         };
         host.new_drawing("m").unwrap();
         let state = app.state::<AppState>();
@@ -440,6 +551,7 @@ mod tests {
         let (_dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
         };
         host.new_drawing("m").unwrap();
         let state = app.state::<AppState>();

@@ -582,6 +582,38 @@ impl History {
         }
     }
 
+    /// Handles affected by swapping the next undo/redo entry, in execution order.
+    pub(crate) fn swap_change(&self, redo: bool) -> crate::Change {
+        fn collect(step: &Step, out: &mut crate::Change) {
+            match step {
+                Step::Document(change) => out.merge(crate::Change {
+                    added: change
+                        .removed
+                        .iter()
+                        .map(|e| e.common().handle.value())
+                        .collect(),
+                    changed: change.replaced.iter().map(|(h, _)| h.value()).collect(),
+                    removed: change.added.iter().map(|h| h.value()).collect(),
+                }),
+                Step::Group(steps, _) => {
+                    for step in steps {
+                        collect(step, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut result = crate::Change::default();
+        if let Some(entry) = if redo {
+            self.redo.last()
+        } else {
+            self.undo.last().filter(|_| self.undo.len() > self.floor)
+        } {
+            collect(&entry.step, &mut result);
+        }
+        result
+    }
+
     pub(crate) fn undo_added_handles(&self, source: Source) -> Vec<u64> {
         fn collect(step: &Step, out: &mut Vec<u64>) {
             match step {

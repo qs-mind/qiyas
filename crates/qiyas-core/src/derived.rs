@@ -316,7 +316,8 @@ impl Session {
                 self.follow_fields()?;
             }
             requested.observe(&self.drawing.doc, "new derived objects and linked fields");
-            return requested.verify(&self.drawing.doc);
+            self.last_advice.extend(requested.advice(&self.drawing.doc));
+            return Ok(());
         };
         let mut now = Inputs::capture(self)?;
         let all = before.objects != now.objects;
@@ -376,7 +377,8 @@ impl Session {
             });
         self.follow_fields_scoped(if all { None } else { Some(&dirty) }, counts)?;
         requested.observe(&self.drawing.doc, "linked fields");
-        requested.verify(&self.drawing.doc)
+        self.last_advice.extend(requested.advice(&self.drawing.doc));
+        Ok(())
     }
 }
 #[cfg(test)]

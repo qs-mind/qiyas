@@ -1,5 +1,5 @@
 //! The tools that write into the drawing (text, room areas and labels, tables, shapes, blocks),
-//! data-defined element types, the measure-by-handle rule and refusal of rows that are notes. Run through the
+//! data-defined element types, the measure-by-handle rule and advice about unmeasured rows. Run through the
 //! generic surface as the model calls it. Curve-hint tests also cover the internal executor.
 
 use std::f64::consts::PI;
@@ -665,25 +665,33 @@ fn points_that_trace_one_drawn_entity_get_a_hint_to_measure_it_by_handle() {
     ));
 }
 
-// ---- The take-off takes quantities, not notes ----
+// ---- Unmeasured items carry advice; missing units remain invalid ----
 
 #[test]
-fn a_take_off_row_with_no_geometry_and_no_quantity_is_refused() {
+fn unmeasured_takeoff_rows_advise_and_still_require_units() {
     let (_dir, mut s) = open(&sample_doc(), "rows.dxf");
-    for note in [
-        json!({ "kind": "item", "description": "Overall Width: 12.00 m" }),
-        json!({ "kind": "item", "description": "Living Room: 6.70 m x 8.70 m", "value": 0, "unit": "m" }),
-        json!({ "kind": "item", "description": "Analysis", "unit": "note", "note": "text" }),
-    ] {
-        let err = internal(&mut s, "add_measurement", note).unwrap_err();
-        assert!(matches!(err, ToolError::BadInput(_)), "{err}");
-        let why = err.to_string();
-        assert!(why.contains("real measured quantity"), "{why}");
-        assert!(why.contains("with text or comment"), "{why}");
-        assert!(why.contains("empty_item"), "{why}");
-    }
+    let err = internal(
+        &mut s,
+        "add_measurement",
+        json!({"kind":"item","description":"Overall Width: 12.00 m"}),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("needs a unit"));
     assert!(s.takeoff.items.is_empty());
-    assert!(!s.can_undo(), "nothing was recorded");
+    assert!(!s.can_undo(), "the invalid item was not recorded");
+    for command in [
+        json!({"type":"add_measurement","kind":"item","description":"Living Room: 6.70 m x 8.70 m","value":0,"unit":"m"}),
+        json!({"type":"add_measurement","kind":"item","description":"Analysis","unit":"note","note":"text"}),
+    ] {
+        let out = call(&mut s, surface::EXECUTE, "run", json!({"command":command})).unwrap();
+        assert!(out["advice"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["code"] == "unmeasured_item"));
+        assert_eq!(out["outcome"]["measurement"]["value"], 0.0);
+        assert_eq!(s.takeoff.items.last().unwrap().value, 0.0);
+    }
 
     // A real quantity, geometry, or an explicit empty item goes in.
     internal(
@@ -700,7 +708,7 @@ fn a_take_off_row_with_no_geometry_and_no_quantity_is_refused() {
     )
     .unwrap();
     internal(&mut s, "add_measurement", json!({ "kind": "item", "description": "Provisional sum", "unit": "ls", "empty_item": true })).unwrap();
-    assert_eq!(s.takeoff.items.len(), 3);
+    assert_eq!(s.takeoff.items.len(), 5);
     // add_markup still makes its own quantity-less row: it is not a take-off quantity.
     internal(
         &mut s,
@@ -708,7 +716,7 @@ fn a_take_off_row_with_no_geometry_and_no_quantity_is_refused() {
         json!({ "points": [[0, 0]], "text": "look here", "kind": "note" }),
     )
     .unwrap();
-    assert_eq!(s.takeoff.items.len(), 4);
+    assert_eq!(s.takeoff.items.len(), 6);
 }
 
 // ---- add_text ----

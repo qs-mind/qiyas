@@ -2222,15 +2222,14 @@ impl Session {
                     && value.is_none_or(|v| v == 0.0)
                     && !empty_item
                 {
-                    return Err(invalid(
-                        "A take-off row needs a real measured quantity, and this one has no geometry and a \
-                         quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
-                         comments) are not rows: write them in your answer, or into the drawing with \
-                         text or comment. Only if the user explicitly asked for an empty item, call \
-                         again with empty_item true.",
-                    ));
+                    self.last_advice.push(serde_json::json!({"code":"unmeasured_item","message":"This item has no geometry or measured quantity. Consider a note or measure its source before reporting it as a quantity."}));
                 }
-                let value = value.or((kind == Kind::Item && empty_item).then_some(0.0));
+                let value = value.or((kind == Kind::Item
+                    && (empty_item
+                        || (matches!(source, Source::Ai | Source::Mcp)
+                            && points.is_empty()
+                            && handles.is_empty())))
+                .then_some(0.0));
                 let mut m = self.add_measurement(
                     kind,
                     value,
@@ -3011,7 +3010,7 @@ impl Session {
     /// The measurement of an `AddMeasurement`, without its description and note.
     #[allow(clippy::too_many_arguments)]
     fn add_measurement(
-        &self,
+        &mut self,
         kind: Kind,
         value: Option<f64>,
         unit: Option<String>,
@@ -3053,13 +3052,14 @@ impl Session {
             .iter()
             .map(|&h| locate(&self.drawing.doc, &xrefs, h, &chain))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut count_advice = Vec::new();
         if kind == Kind::Count && matches!(source, Source::Ai | Source::Mcp) {
             for (&h, entity) in handles.iter().zip(&entities) {
                 if !matches!(entity.entity, EntityType::Insert(_)) {
-                    return Err(invalid(&format!(
-                        "Handle {h} is a {}, not a block reference; a count takes block references only",
-                        variant_name(entity.entity)
-                    )));
+                    if entity.xref.is_some() {
+                        return Err(invalid(&format!("Handle {h} is inside an external drawing and has no block insertion point to retain this count. Supply count points or count block references.")));
+                    }
+                    count_advice.push(serde_json::json!({"code":"count_non_block","handle":h,"entity_type":variant_name(entity.entity),"message":format!("Handle {h} is a {}. This counts one selected object; confirm that it represents one item. Mizan decides.",variant_name(entity.entity))}));
                 }
             }
         }
@@ -3138,6 +3138,7 @@ impl Session {
             m.points = entities.iter().filter_map(insert_point).collect();
         }
         m.chain = chain;
+        self.last_advice.extend(count_advice);
         Ok(m)
     }
 

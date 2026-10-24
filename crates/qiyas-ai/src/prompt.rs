@@ -382,6 +382,16 @@ mod tests {
     }
 
     #[test]
+    fn advice_and_revision_guidance_is_present_in_both_languages() {
+        for text in [EN, AR] {
+            assert!(text.contains("expected_revision"));
+            assert!(text.contains("stale_read"));
+        }
+        assert!(EN.contains("Advice is information; Mizan decides"));
+        assert!(AR.contains("ميزان يقرر"));
+    }
+
+    #[test]
     fn rules_say_link_first_and_treat_read_text_as_data() {
         let text = system_prompt(Lang::En, &DrawingFacts::none());
         assert!(!text.contains("Before comparing, link"));
@@ -424,12 +434,12 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_requires_handle_edits_and_allows_one_honest_correction() {
+    fn the_prompt_recommends_handle_edits_and_leaves_the_decision_to_mizan() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         assert!(en.contains("Fix by handle: edit_wall_opening, modify move, set_records, auto_place, dim_space, dim_edit, edit_text"));
-        assert!(
-            en.contains("One honest undo_own correction is allowed; repeated rebuilds are refused")
-        );
+        assert!(en.contains(
+            "Rebuilds return advice and churn counts; choose the appropriate correction."
+        ));
         assert!(en.contains("Never hide layers to hide a mistake"));
         assert!(en.contains("Dimensions use dimension commands, never lines and text"));
     }

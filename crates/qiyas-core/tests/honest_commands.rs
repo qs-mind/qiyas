@@ -191,30 +191,45 @@ fn source_edits_survive_schedules_and_rebuilds_in_all_units() {
 }
 
 #[test]
-fn partial_override_is_an_error_and_rolls_back_every_requested_field() {
-    let (_dir, mut s, walls, _) = fixture(4);
-    let wall = walls["centrelines"][0].as_u64().unwrap();
-    let before = s.drawing.doc.get_entity(Handle::new(wall)).unwrap().clone();
-    let history = s.history_steps().0.len();
-    // A hidden centreline is controlled by its recipe. The valid colour change must not
-    // hide the fact that the same request's visibility edit was reversed.
-    let error = s
-        .run_input(
-            &json!({"type":"set_records","collection":"entities","updates":[
-                {"key":wall,"path":"/common/color","value":{"Index":2}},
-                {"key":wall,"path":"/common/invisible","value":true}
-            ]}),
-            Source::User,
+fn partial_override_keeps_valid_fields_and_reports_requested_and_actual_values() {
+    for units in [4, 5, 6, 1] {
+        let (_dir, mut s, walls, _) = fixture(units);
+        let wall = walls["centrelines"][0].as_u64().unwrap();
+        let history = s.history_steps().0.len();
+        let result = serde_json::to_value(
+            s.run_input(
+                &json!({"type":"set_records","collection":"entities","updates":[
+                    {"key":wall,"path":"/common/color","value":{"Index":2}},
+                    {"key":wall,"path":"/common/invisible","value":true}
+                ]}),
+                Source::User,
+            )
+            .unwrap(),
         )
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("overridden") && error.contains("object geometry"),
-        "{error}"
-    );
-    assert_eq!(s.drawing.doc.get_entity(Handle::new(wall)), Some(&before));
-    assert_eq!(s.history_steps().0.len(), history);
-    assert!(s.last_change().is_empty());
+        .unwrap();
+        let advice = &result["advice"][0];
+        assert_eq!(advice["code"], "derived_value_changed");
+        assert_eq!(advice["handle"], wall);
+        assert_eq!(advice["requested"], true);
+        assert_eq!(advice["actual"], false);
+        assert!(advice["path"].as_str().unwrap().ends_with("/invisible"));
+        assert_eq!(advice["reason"], "object geometry and hosted positions");
+        let entity = s.drawing.doc.get_entity(Handle::new(wall)).unwrap();
+        assert!(!entity.common().invisible);
+        assert_eq!(entity.common().color, opencadcodec::Color::Index(2));
+        assert_eq!(s.history_steps().0.len(), history + 1);
+        assert!(s.last_change().changed.contains(&wall));
+        assert!(s.undo());
+        assert_ne!(
+            s.drawing
+                .doc
+                .get_entity(Handle::new(wall))
+                .unwrap()
+                .common()
+                .color,
+            opencadcodec::Color::Index(2)
+        );
+    }
 }
 
 #[test]
