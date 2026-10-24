@@ -2,6 +2,8 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Tabs } from "@base-ui/react/tabs";
+import { useState } from "react";
+import { LanguageProvider } from "../i18n";
 import { SideTabs } from "./SideTabs";
 
 afterEach(cleanup);
@@ -11,7 +13,7 @@ const tabs = [
   { id: "b", label: "BOQ" },
   { id: "c", label: "Conflicts", extra: <span className="tab-count">2</span> },
   { id: "d", label: "Comments" },
-  { id: "e", label: "Mizan" },
+  { id: "e", label: "Mizan", pinned: true },
 ];
 
 function ui(value: string, onChange = vi.fn()) {
@@ -83,21 +85,22 @@ test("a row too narrow for every tab folds the last into a ⋯ menu; they are no
     const row = screen.getByRole("tablist");
     // Two fit beside the ⋯; the others are folded (disabled and hidden), and the ⋯ holds them.
     const folded = Array.from(row.querySelectorAll(".side-tab.folded")).map((t) => t.textContent);
-    expect(folded).toEqual(["Conflicts2", "Comments", "Mizan"]);
-    const menuTab = screen.getByRole("tab", { name: "More tabs" });
-    expect(menuTab.getAttribute("aria-selected")).toBe("false");
+    expect(folded).toEqual(["BOQ", "Conflicts2", "Comments"]);
+    const menuTab = screen.getByRole("button", { name: "More tabs" });
+    expect(screen.getByRole("tab", { name: "Mizan" }).getAttribute("aria-hidden")).toBeNull();
     fireEvent.click(menuTab);
     const menu = await screen.findByRole("menu", { name: "More tabs" });
-    expect(within(menu).getAllByRole("menuitemradio").map((i) => i.textContent)).toEqual(["Conflicts2", "Comments", "Mizan"]);
+    expect(within(menu).getAllByRole("menuitemradio").map((i) => i.textContent)).toEqual(["BOQ", "Conflicts2", "Comments"]);
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Comments" }));
     expect(onChange).toHaveBeenCalledWith("d");
   });
 });
 
-test("while the chosen tab is a folded one, the ⋯ is the selected tab", async () => {
+test("the active tab and its panel stay visible when the panel is narrow", async () => {
   await withRoom(250, async () => {
     render(ui("e"));
-    expect(screen.getByRole("tab", { name: "More tabs" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Mizan" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").textContent).toBe("panel e");
     expect(screen.getByRole("tab", { name: "Take-off" }).getAttribute("aria-selected")).toBe("false");
   });
 });
@@ -105,7 +108,36 @@ test("while the chosen tab is a folded one, the ⋯ is the selected tab", async 
 test("a wide row shows every tab and has no ⋯", async () => {
   await withRoom(1000, async () => {
     render(ui("a"));
-    expect(screen.queryByRole("tab", { name: "More tabs" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "More tabs" })).toBeNull();
     expect(document.querySelectorAll(".side-tab.folded")).toHaveLength(0);
   });
+});
+
+for (const lang of ["en", "ar"] as const) for (const width of [260, 340, 600]) test(`active and busy Mizan tabs at ${width}px in ${lang}`, async () => {
+  localStorage.setItem("qiyas.lang", lang);
+  const labels = lang === "ar" ? ["الحصر", "جدول الكميات", "التعارضات", "التعليقات", "ميزان"] : tabs.map(t => t.label);
+  const names = tabs.map((tab, i) => ({...tab, label: labels[i], extra: tab.pinned ? <span aria-label="Working">●</span> : undefined}));
+  function Panel() {
+    const [value, setValue] = useState("d");
+    return <LanguageProvider><SideTabs className="side" tabs={names} value={value} onChange={setValue}>
+      {names.map(tab => <Tabs.Panel key={tab.id} value={tab.id} keepMounted>body {tab.id}</Tabs.Panel>)}
+    </SideTabs></LanguageProvider>;
+  }
+  try {
+    await withRoom(width, async () => {
+      render(<Panel />);
+      expect(screen.getByRole("tabpanel").textContent).toBe("body d");
+      expect(screen.getByRole("tab", {name: new RegExp(labels[4])}).querySelector('[aria-label="Working"]')).toBeTruthy();
+      const more = screen.queryByRole("button", {name: lang === "ar" ? "مزيد من علامات التبويب" : "More tabs"}) ?? document.querySelector(".side-tab-more");
+      if (more) {
+        fireEvent.click(more);
+        const menu = await screen.findByRole("menu");
+        const choice = within(menu).getAllByRole("menuitemradio")[0];
+        const chosen = names.find(t => t.label === choice.textContent)!;
+        fireEvent.click(choice);
+        expect(screen.getByRole("tabpanel").textContent).toBe(`body ${chosen.id}`);
+        expect(screen.getByRole("tab", {name: chosen.label}).getAttribute("aria-selected")).toBe("true");
+      }
+    });
+  } finally { localStorage.clear(); document.documentElement.lang = "en"; document.documentElement.dir = "ltr"; }
 });

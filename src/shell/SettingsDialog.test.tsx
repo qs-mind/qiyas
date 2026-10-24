@@ -344,3 +344,23 @@ test("subscription choices never ask for an API key or fetch API models", async 
   expect(api.setApiKey).not.toHaveBeenCalled();
   expect(api.setSettings.mock.calls[0][0].providers.claude_code.model).toBe("sonnet");
 });
+
+test("technical details default off and save through the existing settings IPC", async () => {
+  setup();
+  const toggle = await screen.findByRole("checkbox", { name: "Show technical details" });
+  expect((toggle as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({...settings, show_technical_details: true}));
+  // Read the saved preference back on the next opening.
+  const saved = api.setSettings.mock.calls.at(-1)![0];
+  cleanup();
+  setup();
+  api.getSettings.mockResolvedValue(saved);
+  cleanup();
+  render(<SettingsDialog onClose={() => {}} />);
+  expect((await screen.findByRole("checkbox", { name: "Show technical details" }) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show technical details" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenLastCalledWith({...settings, show_technical_details: false}));
+});

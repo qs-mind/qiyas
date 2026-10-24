@@ -51,7 +51,7 @@ export function mcpSnippets(dir: string, token: string) {
 }
 
 /** Settings: the AI provider, model, effort and API key, and the MCP server for outside AI apps. */
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSaved?(settings: Settings): void }) {
   const t = useT();
   const [draft, setDraft] = useState<Settings | null>(null);
   const [savedAddress, setSavedAddress] = useState<string | null>(null);
@@ -132,6 +132,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         }
       }
       await setSettings(next);
+      onSaved?.(next);
       if (!subscription && key.trim()) await setApiKey(draft.provider, key);
       onClose();
     } catch (e) {
@@ -352,6 +353,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </fieldset>
           </>
         )}
+        {draft && <label className="check">
+          <input type="checkbox" checked={draft.show_technical_details ?? false}
+            onChange={(e) => change({ show_technical_details: e.target.checked })} />
+          <span>{t("settings.showTechnicalDetails")}</span>
+        </label>}
         <SupportLog />
         {error && (
           <p className="error" role="alert">

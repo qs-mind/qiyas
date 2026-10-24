@@ -1784,5 +1784,10 @@
   "ai.error.chatgpt_account_mismatch": "This sign-in belongs to a different account. Choose Add an account in Settings.",
   "ai.error.chatgpt_revocation_unconfirmed": "Signed out on this device. ChatGPT could not confirm disconnection; remove Qiyas in ChatGPT settings.",
   "ai.error.chatgpt_incomplete": "ChatGPT did not finish its answer. Please send your message again.",
-  "ai.error.chatgpt_failed": "ChatGPT could not complete this request. Please review it and try again."
+  "ai.error.chatgpt_failed": "ChatGPT could not complete this request. Please review it and try again.",
+  "takeoff.note": "Note",
+  "takeoff.notes": "Notes",
+  "settings.showTechnicalDetails": "Show technical details",
+  "activity.recovered": "A problem was resolved.",
+  "grid.actions": "Actions"
 }

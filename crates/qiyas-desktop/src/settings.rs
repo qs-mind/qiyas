@@ -155,6 +155,8 @@ pub struct Settings {
     pub autonomy: qiyas_ai::Autonomy,
     /// The selected measurement method name; local rules are optional. None means geometric quantities.
     pub measurement_method: Option<String>,
+    /// Shows diagnostic disclosures in Mizan; ordinary surveying work keeps them hidden.
+    pub show_technical_details: bool,
     pub mcp_enabled: bool,
     pub mcp_port: u16,
     /// 32 hex characters, made once and kept. Empty when missing from the file, so `load` makes
@@ -255,6 +257,7 @@ impl Default for Settings {
             effort: "medium".into(),
             autonomy: qiyas_ai::Autonomy::default(),
             measurement_method: None,
+            show_technical_details: false,
             mcp_enabled: false,
             mcp_port: 48123,
             mcp_token: new_token(),

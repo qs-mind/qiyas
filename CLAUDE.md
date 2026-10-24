@@ -75,11 +75,11 @@ brand tokens in `theme.css` (no Tailwind, no shadcn, no `motion`; CSS transition
 arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) stubs `ResizeObserver`,
 `matchMedia` and `scrollIntoView` for jsdom.
 - `@base-ui/react`: Tabs (the ribbon's and the side panel's: one `Tabs.Indicator`, moved by a CSS
-  transform, is the chosen tab's face; `SideTabs.tsx` never wraps and folds the last tabs into a "⋯"
-  menu when the panel is too narrow, like the ribbon's "More"); Tooltip (`shell/Tooltip.tsx`: the
+  transform, is the chosen tab's face; `SideTabs.tsx` never wraps; the active tab and pinned Mizan tab stay visible, and other tabs fold into a "⋯"
+  menu when the panel is too narrow); Tooltip (`shell/Tooltip.tsx`: the
   `Tip` wrapper keeps its API, the delay is 400 ms, the next card shows at once within 300 ms, and a
   click's focus shows none); Menu (`shell/RibbonFlyout.tsx`: a group's "⋯" and the tabs' "More", where
-  the "More" tab is a `Tabs.Tab` that is also the `Menu.Trigger`); Context Menu (`viewport/CanvasMenu.tsx`:
+  the side panel's "More" is a menu button and never replaces the selected panel value); Context Menu (`viewport/CanvasMenu.tsx`:
   Move, Copy, Erase, Properties, Zoom extents on a right-click of the drawing); Popover (the status
   bar's list of recovered problems); Dialog (`ui/ModalDialog.tsx`, behind the Settings, Plot, Purge,
   Audit and Recovery dialogs: Escape closes unless `dismissible` is false, a click outside does not,
@@ -91,11 +91,14 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   is the take-off, BOQ and conflicts tables: sorting (click, again, again; numbers largest first, text
   in natural order, nothing last), resizing (drag the edge, arrows on it, double click to reset; the
   sizes are kept per grid in `localStorage` `qiyas.grid.<name>`), a sticky header, virtualised rows (a
-  box with no layout keeps its initial size), sections (`section`, rows sorted inside them), the one
-  `grow` column takes the room left over, every cell's full text is its tooltip, the arrows, Home, End
-  and Enter work on rows, and the row buttons (`actions`) show on hover or focus. Row heights are
-  fixed (27 px; the conflicts' reason wraps to two lines at 40). `--row-hover` and `--row-current`
-  are solid colours, because the row buttons sit on them.
+  box with no layout keeps its initial size), sections (`section`, rows sorted inside them), content widths from cached canvas measurement of the real font
+  in headers and rendered cells (minimums and a 360 px default cap), and `grow` columns sharing
+  the room left over. Long text wraps without a line limit; `measureElement` sets each row's height
+  from its content (27 px is only an initial estimate/minimum). Remembered user widths override
+  automatic widths, including growing columns; double click clears the override. Narrow panels
+  keep values complete and scroll sideways when needed. The arrows, Home, End and Enter work
+  on rows, and row buttons (`actions`) have a reserved final column, visible on hover or focus.
+  `--row-hover` and `--row-current` are solid colours.
 - `@headless-tree/react`: the Layers panel starts as a flat list, regardless of its length.
   "Show folders" is an explicit, remembered choice (`qiyas.layers.folders`, false by default).
   Folders follow name prefixes and external drawings, with a folder icon and a labelled layer
@@ -2056,8 +2059,9 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   card carries registry category/effect metadata (`qiyas-ai/src/activity.rs`) and an optional
   structured result count. The window builds a short translated sentence from these fields;
   it never humanises internal command names. Legacy cards use generic read/edit wording.
-  Command labels, input JSON and full summaries appear only in collapsed Technical details
-  and the Log. A recovered failure says "Fixing a problem…" within its own user turn.
+  Command labels, input JSON and full summaries remain in the Log. Card disclosures appear only
+  when Settings → Show technical details is enabled (`show_technical_details`, false by default).
+  Recoverable failures collapse into one calm line per user turn; unresolved failures stay visible.
   Execute calls remain mutating except plan, select and view; execution is unchanged.
 - Settings live in `settings.json` in the app's config folder (Linux:
   `~/.config/com.qsmind.qiyas/settings.json`, mode 0600): provider (`anthropic`,
@@ -2885,3 +2889,29 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   owner, so editing a copied wall does not rewrite its source group's metadata.
   Goal B's requested-field checks and final net change reports remain in force.
 - Evidence, timings, checks and limitations: `docs/2026-10-23-qiyas-goal-C.md`.
+
+
+## Goal I: readable panels and tables (24 October 2026)
+
+- Take-off, BOQ and conflicts use the shared content-sized, wrapping DataGrid described above.
+  Text width measurement visits only rendered rows, caches by font and text, and resets after
+  fonts load. Inputs and lists use their visible value, excluding unchosen options. User resizing starts at the rendered width. A hidden panel cannot zero its row
+  estimates. Markup measurements show Note and no unit; the footer counts Notes separately
+  from measured totals. Totals wrap and isolate their numeric values in either language.
+- SideTabs keeps its real selected value even while the menu is open. The active tab and the
+  pinned Mizan tab (including busy mark) remain visible. Selecting a menu item promotes that tab
+  into the strip; all panel bodies remain mounted and the selected one remains shown.
+- Arabic chat has a complete Thmanyah face for prose, inherited line height and baseline inline
+  elements. Body text explicitly disables swash; headings keep it. Latin identifiers still use
+  isolated `bdi` runs. The original raised words are plain text in the DOM; local HarfBuzz gives
+  their base letters zero vertical offsets. WebKitGTK painted confirmation remains unavailable
+  in this sandbox, so these safeguards are not a claim of a visually verified glyph fix.
+- Settings stores `show_technical_details` through the existing settings IPC and settings.json;
+  old files default to false. The app reads it at startup and applies saved changes immediately.
+  Tool cards, review-plan diagnostics and refusal diagnostics hide disclosures when off. The
+  support Log and stored transcript remain intact. Recoverable errors use one line per turn,
+  with grouped diagnostics available when enabled; final failed steps and actionable alerts stay.
+  Recovery presentation requires a later successful retry with the same operation label in the
+  same turn; unrelated successful reads cannot hide failed edits. While a turn is still busy,
+  errors share a Fixing a problem line. No provider or agent execution behavior changed.
+- Evidence and remaining visual acceptance: `docs/2026-10-24-qiyas-goal-I.md`.

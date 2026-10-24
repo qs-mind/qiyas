@@ -16,7 +16,7 @@ afterEach(() => { cleanup(); localStorage.clear(); document.documentElement.lang
 const card: ToolCardItem = { kind: "tool", id: "1", name: "qiyas_execute", label: "new_layer", input: { schema: "RAW INPUT" }, status: "error", summary: 'RAW ERROR {"default":null}', handles: [], ui: null, mutating: true, undone: false, stale: false, activity: { category: "layers", effect: "edit" } };
 
 test("recovering cards use plain sentences and diagnostics only inside closed details", () => {
-  render(<ToolCard card={card} recovering />);
+  render(<ToolCard card={card} recovering showTechnicalDetails />);
   expect(screen.getByText("Fixing a problem…")).toBeTruthy();
   expect(document.querySelector(".tool-card")?.getAttribute("title")).toBeNull();
   const details = document.querySelector("details")!;

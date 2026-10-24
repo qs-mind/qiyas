@@ -617,6 +617,7 @@ export function Dialogs({
       )}
       {settingsOpen && (
         <SettingsDialog
+          onSaved={options.takeSettings}
           onClose={() => {
             setSettingsOpen(false);
             assistant.refreshStatus();

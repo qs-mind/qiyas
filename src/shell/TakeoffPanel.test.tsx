@@ -216,3 +216,15 @@ test.each(["en", "ar"])("full names and quantity limits remain separate in %s", 
   expect(name.closest(".grid-row")!.getAttribute("data-index")).toBe("0");
   localStorage.removeItem("qiyas.lang");
 });
+
+test("markup rows are notes and never contribute zero quantities to the footer", () => {
+  render(<TakeoffPanel items={[item("note", "Check the finish / مراجعة التشطيب", 0, {kind: "item", unit: "markup"}), item("big", "Long measured wall", 1234567890.123)]}
+    totals={[{kind: "item", unit: "markup", count: 1, sum: 0}, {kind: "length", unit: "m", count: 1, sum: 1234567890.123}]}
+    selectedId={null} onSelect={() => {}} onRemove={() => {}} onRename={() => {}} boq={null} onLink={() => {}} />);
+  expect(bodyRows()[0].textContent).toContain("Note");
+  expect(bodyRows()[0].textContent).not.toContain("0.000");
+  expect(document.body.textContent).not.toContain("qty.markup");
+  const footer = screen.getByRole("list", {name: "Totals"});
+  expect(footer.textContent).toContain("Notes1");
+  expect(footer.textContent).toContain("1234567890.123 m");
+});

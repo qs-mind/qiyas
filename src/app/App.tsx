@@ -449,6 +449,7 @@ export default function App() {
           onResize={(w) => panels.resize(rightSlot, w)}
         />
         <SidePanel
+          showTechnicalDetails={options.showTechnicalDetails}
           info={info}
           drafting={drafting}
           shell={shell}

@@ -15,6 +15,7 @@ import type { Assistant } from "./useAssistant";
 import { useStickToBottom } from "./useStickToBottom";
 
 type Props = {
+  showTechnicalDetails?: boolean;
   assistant: Pick<
     Assistant,
     "transcript" | "busy" | "error" | "send" | "cancel" | "clear"
@@ -36,6 +37,7 @@ const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
  *  Memoised: the app re-renders on every pointer move. */
 export const AssistantPanel = memo(function AssistantPanel({
   assistant,
+  showTechnicalDetails = false,
   onShow,
   onUndo,
   onSettings,
@@ -151,6 +153,21 @@ export const AssistantPanel = memo(function AssistantPanel({
     return uiError(e, lang);
   }
 
+  // Group recoverable failures within their own user turn. Stored cards and the support log
+  // stay intact, and a failure with no recovery still renders as an ordinary stopped card.
+  const recovery = new Map<number, { indices: number[]; pending: boolean }>();
+  let turn = 0;
+  transcript.items.forEach((item, i) => {
+    if (item.kind === "user") turn = i;
+    if (item.kind !== "tool" || item.status !== "error" || !recoveringCard(transcript.items, i, busy)) return;
+    const group = recovery.get(turn) ?? { indices: [], pending: false };
+    group.indices.push(i);
+    group.pending ||= !recoveringCard(transcript.items, i, false);
+    recovery.set(turn, group);
+  });
+  const recoveredIndices = new Set([...recovery.values()].flatMap((group) => group.indices));
+  const recoveryHeads = new Map([...recovery.values()].map((group) => [group.indices[0], group]));
+
   function show(item: Item, i: number): ReactNode {
     if (item.kind === "provider_status") return <p key={i} className="msg notice" role="status">{t(item.code)}</p>;
     if (item.kind === "retrying") return <p key={i} className="msg notice" role="status">
@@ -158,7 +175,7 @@ export const AssistantPanel = memo(function AssistantPanel({
     </p>;
     switch (item.kind) {
       case "plan":
-        return <PlanChecklist key={i} phases={item.phases} language={chatLang}
+        return <PlanChecklist key={i} phases={item.phases} language={chatLang} showTechnicalDetails={showTechnicalDetails}
           onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
             ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;
@@ -192,6 +209,20 @@ export const AssistantPanel = memo(function AssistantPanel({
       case "thinking":
         return null;
       case "tool": {
+        if (recoveredIndices.has(i)) {
+          const group = recoveryHeads.get(i);
+          if (!group) return null;
+          return <div key={i} className="msg notice recovery-summary" role="note">
+            {t(group.pending ? "activity.fixing" : "activity.recovered")}
+            {showTechnicalDetails && <details className="technical-details">
+              <summary>{t("technical.details")}</summary>
+              <pre dir="ltr">{group.indices.map((index) => {
+                const failed = transcript.items[index] as ToolCardItem;
+                return `${failed.label ?? failed.name}\n${JSON.stringify(failed.input, null, 2)}\n${failed.summary}`;
+              }).join("\n\n")}</pre>
+            </details>}
+          </div>;
+        }
         if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
         const canUndo = !unavailable && item === undoable;
@@ -199,6 +230,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           <ToolCard
             key={i}
             card={item}
+            showTechnicalDetails={showTechnicalDetails}
             recovering={recoveringCard(transcript.items, i, busy)}
             onShow={canShow ? () => onShow(item) : undefined}
             onUndo={canUndo ? () => onUndo(item) : undefined}
@@ -210,7 +242,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           <div key={i} className="msg notice refused" role="note">
             <strong className="heading">{t("ai.refused")}</strong>
             {item.text && <Markdown text={item.text} />}
-            {item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
+            {showTechnicalDetails && item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
           </div>
         );
       case "stopped":
@@ -310,7 +342,7 @@ export const AssistantPanel = memo(function AssistantPanel({
       {error && (
         <div className="error" role="alert">
           {errorText(error)}
-          <button type="button" className="link" onClick={onSettings}>{t("support.details")}</button>
+          <button type="button" className="link" onClick={onSettings}>{t(showTechnicalDetails ? "support.details" : "settings")}</button>
         </div>
       )}
       <form

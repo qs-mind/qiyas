@@ -7,12 +7,13 @@ type Props = {
   /** Highlights the card's entities and zooms to them; absent when there is nothing to show. */
   onShow?(): void;
   recovering?: boolean;
+  showTechnicalDetails?: boolean;
   /** Undoes the card's change; absent when it can't be undone from here. */
   onUndo?(): void;
 };
 
 /** A translated activity sentence; raw tool input and output stay in support details. */
-export function ToolCard({ card, onShow, onUndo, recovering = false }: Props) {
+export function ToolCard({ card, onShow, onUndo, recovering = false, showTechnicalDetails = false }: Props) {
   const t = useT();
   const subjectKey = `activity.subject.${card.activity?.category ?? "drawing"}`;
   const subject = t(subjectKey) === subjectKey ? t("activity.subject.drawing") : t(subjectKey);
@@ -34,10 +35,10 @@ export function ToolCard({ card, onShow, onUndo, recovering = false }: Props) {
         <span className="tool-name heading">{label}</span>
       </div>
       {card.count != null && card.status === "done" && <p className="tool-summary">{t("activity.count", { n: card.count })}</p>}
-      <details className="technical-details">
+      {showTechnicalDetails && <details className="technical-details">
         <summary>{t("technical.details")}</summary>
         <pre dir="ltr">{card.label ?? card.name}{"\n"}{JSON.stringify(card.input, null, 2)}{"\n"}{card.summary}</pre>
-      </details>
+      </details>}
       {(onShow || onUndo || card.undone) && (
         <div className="tool-actions">
           {onShow && (
