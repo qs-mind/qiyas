@@ -209,7 +209,9 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
     };
     method.validate()?;
     let mappings: Vec<Mapping> = read(s, "mappings")?;
-    let objects = s.objects(&ObjectFilter::default())?;
+    // A name-only method has no numeric expressions to evaluate. Keep source/validity
+    // warnings, but do not solve every assembly's quantities merely to report missing rules.
+    let objects = s.object_records(&ObjectFilter::default(), !method.rules.is_empty())?;
     let evidence = s.recognition_evidence()?;
     let mut items = BTreeMap::<String, GeneratedItem>::new();
     for object in &objects {

@@ -1109,6 +1109,15 @@ impl Session {
         Ok(result)
     }
     pub fn objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRecord>, CoreError> {
+        self.object_records(filter, true)
+    }
+
+    /// Source and validity records suffice when no rule consumes numeric facts.
+    pub(crate) fn object_records(
+        &self,
+        filter: &ObjectFilter,
+        quantities: bool,
+    ) -> Result<Vec<ObjectRecord>, CoreError> {
         self.validate_object_metadata()?;
         let mut out = Vec::new();
         for entity in self.drawing.doc.entities() {
@@ -1146,7 +1155,9 @@ impl Session {
                 continue;
             }
             let mut context = self.object_context(&object, &definition)?;
-            self.band_facts(&object, &definition, &mut context)?;
+            if quantities {
+                self.band_facts(&object, &definition, &mut context)?;
+            }
             for name in definition.property_bindings.keys() {
                 if let Some(value) = context.values.get(name) {
                     object.props.insert(name.clone(), expr_json(value));
@@ -1161,7 +1172,7 @@ impl Session {
                 })
                 .collect();
             let valid = crate::object_regions::retained_region(entity).is_none_or(|r| r.valid);
-            let quantities = if valid {
+            let quantities = if valid && quantities {
                 self.quantity_values(&definition, &mut context)?
             } else {
                 BTreeMap::new()
@@ -1233,8 +1244,12 @@ impl Session {
             .get_entity(Handle::new(object.id))
             .ok_or_else(|| invalid("Missing driver"))?;
         let owner = driver.common().owner_handle;
-        let context = self.object_context(object, definition)?;
-        let span = [context.number("base")?, context.number("height")?];
+        let span = if object.assembly.is_none() {
+            let context = self.object_context(object, definition)?;
+            Some([context.number("base")?, context.number("height")?])
+        } else {
+            None
+        };
         let mut members = Vec::new();
         for entity in self.drawing.doc.entities() {
             if entity.common().owner_handle != owner {
@@ -1259,12 +1274,15 @@ impl Session {
             }
             // A copy's xdata still carries the old id until the refresh reaches that driver.
             member.id = entity.common().handle.value();
-            let context = self.object_context(&member, definition)?;
-            if object.assembly.is_some()
-                || [context.number("base")?, context.number("height")?] == span
-            {
-                members.push(member);
+            // Explicit assemblies own their vertical grouping. Evaluating every member's
+            // context here made each graphics/quantity request quadratic in assembly size.
+            if let Some(span) = span {
+                let context = self.object_context(&member, definition)?;
+                if [context.number("base")?, context.number("height")?] != span {
+                    continue;
+                }
             }
+            members.push(member);
         }
         members.sort_by_key(|member| member.id);
         Ok(members)
@@ -1344,7 +1362,7 @@ impl Session {
             height_m: context.number("height")?,
         })
     }
-    fn band_geometry(
+    pub(crate) fn band_geometry(
         &self,
         object: &ObjectInstance,
         definition: &ObjectType,
@@ -1363,7 +1381,7 @@ impl Session {
             return Ok(None);
         }
         let ids: BTreeSet<_> = members.iter().map(|m| m.id).collect();
-        let cuts = self
+        let mut cuts = self
             .drawing
             .doc
             .entities()
@@ -1371,6 +1389,16 @@ impl Session {
             .filter(|o| o.host.is_some_and(|host| ids.contains(&host)))
             .map(|o| self.band_cut(&o, &self.object_type(&o.type_name)?))
             .collect::<Result<Vec<_>, CoreError>>()?;
+        // Entity storage uses swap removal. Its iteration order must not decide the order
+        // of boolean cuts: driver identities and geometric positions are stable instead.
+        cuts.sort_by(|a, b| {
+            a.host
+                .cmp(&b.host)
+                .then_with(|| a.at_m.total_cmp(&b.at_m))
+                .then_with(|| a.width_m.total_cmp(&b.width_m))
+                .then_with(|| a.base_m.total_cmp(&b.base_m))
+                .then_with(|| a.height_m.total_cmp(&b.height_m))
+        });
         crate::object_bands::derive_band(
             &members,
             &cuts,
@@ -1495,14 +1523,42 @@ impl Session {
             }
         }
         let mut context = self.object_context(object, definition)?;
-        self.band_facts(object, definition, &mut context)?;
-        self.quantity_values(definition, &mut context)?;
-        let band = self.band_geometry(object, definition, None)?;
+        // Quantities feed symbols and labels. Plain band faces do not need a prefix union
+        // for every member simply to discover that another driver owns their graphics.
+        let computed_quantities = definition.plan.band_faces.is_none()
+            || definition.quantities.values().any(|expression| {
+                !matches!(
+                    expression
+                        .trim()
+                        .strip_prefix("geometry.")
+                        .unwrap_or(expression.trim()),
+                    "length"
+                        | "perimeter"
+                        | "area"
+                        | "gross_area"
+                        | "net_area"
+                        | "volume"
+                        | "gross_volume"
+                        | "count"
+                )
+            });
+        if (!definition.plan.symbols.is_empty() && !definition.plan.symbols_in_driver)
+            || definition.plan.label_template.is_some()
+            || computed_quantities
+        {
+            self.band_facts(object, definition, &mut context)?;
+            self.quantity_values(definition, &mut context)?;
+        }
         let draws_union = !matches!(definition.join, JoinRule::Union)
             || self
                 .band_members(object, definition)?
                 .first()
                 .is_some_and(|member| member.id == object.id);
+        let band = if definition.plan.band_faces.is_some() && draws_union {
+            self.band_geometry(object, definition, None)?
+        } else {
+            None
+        };
         let mut specs = Vec::new();
         if let Some(band) = band {
             if draws_union {
@@ -1518,7 +1574,7 @@ impl Session {
                     false,
                 ));
             }
-        } else {
+        } else if definition.plan.band_faces.is_none() {
             let regions: Vec<_> = if let Some(region) = crate::object_regions::region_graphics(
                 &self.drawing.doc,
                 driver,
@@ -1874,7 +1930,10 @@ impl Session {
         }
         Ok(())
     }
-    fn object_part_region(&self, entity: &EntityType) -> Option<qiyas_geom::walls::Region> {
+    pub(crate) fn object_part_region(
+        &self,
+        entity: &EntityType,
+    ) -> Option<qiyas_geom::walls::Region> {
         if !matches!(entity, EntityType::Hatch(_)) {
             return None;
         }

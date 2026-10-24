@@ -2995,3 +2995,36 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   private MCP, permissions, cancellation and no-retry safety rules remain in force.
 - No model calls, real login, new dependencies or licence changes. See
   `docs/2026-10-24-qiyas-goal-H.md` for before/after evidence and actual check limitations.
+
+## Goal K: wall openings and panic recovery (24 October 2026)
+
+- A wall rebuild establishes surviving source handles and hosted references before the
+  object engine generates outlines and hatches. Temporary wall drivers do not generate a
+  second set of graphics. The missing-member guard remains; shared graphics belong to the
+  smallest surviving driver. Boolean cuts use stable host/position order, independent of
+  entity storage order after removal. Goal B's requested-field verifier still applies.
+- A batch containing only independent literal opening additions validates inputs in order
+  and rebuilds each affected wall group once. Mixed edits and step references keep sequential
+  execution. Grouped step outcomes describe the final shared wall state; AI/MCP marks them
+  `shared_wall_result` and their change lists describe the whole grouped edit. The batch's net
+  change lists remain authoritative. Error steps and fitting ranges retain input order.
+- Whole-wall results calculate each complete assembly once instead of summing repeated
+  prefix unions. Plain band graphics skip repeated quantity aliases; computed expressions,
+  symbols and labels still evaluate quantities. Only the owning driver derives shared geometry.
+  Explicit assemblies do not repeatedly evaluate vertical grouping for every member. A name-only measurement method still reports
+  missing rules and invalid sources without calculating unused numeric quantities.
+- Failed transactions restore structural state, including handle allocation and block
+  membership, alongside recorded entities and view state. Wall edits also preserve that
+  structure on an individual failure. Document edits and transaction groups catch panics,
+  roll back and return a plain error. AI session tools and desktop command boundaries catch
+  remaining panics before leaving the session lock. The existing autosave panic hook can
+  still report that the active drawing is locked while unwinding; the lock is released when
+  the recovered command returns, and subsequent edits and undo continue normally.
+- Test-only fault injection is enabled by the existing fixtures feature, on the calling
+  thread, after a chosen document mutation. It has no command or MCP input. Regression tests
+  exercise the core, AI surface and desktop host; wall rollback covers mm, cm, m and inches.
+- `crates/qiyas-ai/tests/fixtures/villa-openings.json` contains the founder's drawing/opening
+  inputs only. The ordinary test replays them without a provider; an ignored four-unit variant
+  and a release speed guard cover the larger runs. `scripts/check.sh` runs the release guard
+  against `tests/support/performance.rs`. Evidence and measured results are in
+  `docs/2026-10-24-qiyas-goal-K.md`.

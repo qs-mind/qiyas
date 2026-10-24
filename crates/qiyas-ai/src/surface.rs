@@ -718,12 +718,19 @@ pub fn run_session_with_method(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
-    let (args, warnings) = crate::normalise::args(tool, op, args)?;
-    session
-        .with_automation_sheet(|session| {
-            run_working_session(session, tool, op, &args, source, method)
-        })
-        .map(|out| crate::normalise::output(out, &warnings))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (args, warnings) = crate::normalise::args(tool, op, args)?;
+        session
+            .with_automation_sheet(|session| {
+                run_working_session(session, tool, op, &args, source, method)
+            })
+            .map(|out| crate::normalise::output(out, &warnings))
+    }))
+    .unwrap_or_else(|_| {
+        Err(ToolError::Failed(
+            "The tool stopped unexpectedly. You can keep working.".into(),
+        ))
+    })
 }
 
 fn run_working_session(
@@ -1833,6 +1840,18 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
     let view = ViewState::of(session);
     let mut answers: Vec<Value> = Vec::new();
     let ran = session.batch_with(source, "batch", layer, color, |s| {
+        if let Some(grouped) = s.run_opening_batch(&commands, source) {
+            let grouped = grouped?;
+            let change = s.last_change().clone();
+            for outcome in grouped {
+                answers.push(json!({
+                    "command":"add_wall_openings", "outcome":outcome,
+                    "shared_wall_result":true,
+                    "added":change.added, "changed":change.changed, "removed":change.removed,
+                }));
+            }
+            return Ok(());
+        }
         for (i, raw) in commands.iter().enumerate() {
             let input_error = |error: ToolError| CoreError::Step {
                 index: i,

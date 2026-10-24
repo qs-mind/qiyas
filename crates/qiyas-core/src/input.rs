@@ -155,6 +155,82 @@ impl Session {
         result.map_err(|error| with_warnings(error, &warnings))
     }
 
+    /// Runs a batch consisting solely of literal opening additions. Other batches keep
+    /// ordinary sequential execution, including all step references and mixed edits.
+    /// Each result is the final shared wall state, in the original input order.
+    pub fn run_opening_batch(
+        &mut self,
+        inputs: &[Value],
+        source: Source,
+    ) -> Option<Result<Vec<Reported>, CoreError>> {
+        if inputs.len() < 2
+            || inputs.iter().any(|input| {
+                input["type"].as_str().is_none_or(|name| {
+                    !name.eq_ignore_ascii_case("add_wall_openings")
+                        && !name.eq_ignore_ascii_case("add-wall-openings")
+                })
+            })
+        {
+            return None;
+        }
+        let original = inputs;
+        let mut inputs = inputs.to_vec();
+        inputs.iter_mut().for_each(crate::registry::canonicalize);
+        if inputs.len() < 2
+            || inputs.iter().any(|input| {
+                input["type"] != "add_wall_openings"
+                    || !input["centreline"].is_u64()
+                    || serde_json::from_value::<Command>(input.clone()).is_err()
+            })
+        {
+            return None;
+        }
+        Some(self.transaction(source, "add_wall_openings", |session| {
+            let mut commands = Vec::new();
+            let mut reports = Vec::new();
+            for (index, input) in inputs.iter().enumerate() {
+                let mut input = input.clone();
+                session.resolve_input_handles(&mut input)?;
+                let mut report = session.validate_input(&input);
+                report
+                    .warnings
+                    .extend(crate::registry::normalization_warnings(&original[index]));
+                if !report.valid {
+                    return Err(CoreError::Step {
+                        index,
+                        label: "add_wall_openings".into(),
+                        error: Box::new(CoreError::InvalidCommand(report.message())),
+                    });
+                }
+                let command: Command = serde_json::from_value(input)
+                    .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
+                session.check_block_edit(&command)?;
+                let Command::AddWallOpenings {
+                    centreline,
+                    openings,
+                } = command
+                else {
+                    unreachable!("checked opening command")
+                };
+                commands.push((centreline, openings));
+                reports.push(report);
+            }
+            let results =
+                session.record_document_change(source, "add_wall_openings", true, true, |s| {
+                    s.add_wall_openings_many(&commands)
+                })?;
+            Ok(results
+                .into_iter()
+                .zip(reports)
+                .map(|(result, report)| Reported {
+                    outcome: Outcome::Walls { result },
+                    defaults_used: report.defaults_used,
+                    warnings: report.warnings,
+                })
+                .collect())
+        }))
+    }
+
     fn run_input_batch(
         &mut self,
         commands: &Value,
@@ -172,6 +248,11 @@ impl Session {
             .warnings
             .retain(|warning| !warning.pointer.starts_with("/commands/"));
         self.batch_with(source, "batch", layer, color, |session| {
+            let inputs = commands.as_array().expect("validated batch commands");
+            let mut grouped = session
+                .run_opening_batch(inputs, source)
+                .transpose()?
+                .map(Vec::into_iter);
             let mut outcomes = Vec::new();
             for (index, input) in commands
                 .as_array()
@@ -179,14 +260,18 @@ impl Session {
                 .iter()
                 .enumerate()
             {
-                let step = session
-                    .run_input(input, source)
-                    .map_err(|error| CoreError::Step {
-                        index,
-                        label: crate::registry::parse_command(input.clone())
-                            .map_or_else(|_| "input".into(), |command| command.label()),
-                        error: Box::new(error),
-                    })?;
+                let step = if let Some(grouped) = &mut grouped {
+                    grouped.next().expect("one result per input")
+                } else {
+                    session
+                        .run_input(input, source)
+                        .map_err(|error| CoreError::Step {
+                            index,
+                            label: crate::registry::parse_command(input.clone())
+                                .map_or_else(|_| "input".into(), |command| command.label()),
+                            error: Box::new(error),
+                        })?
+                };
                 outcomes.push(step.outcome);
                 report
                     .defaults_used

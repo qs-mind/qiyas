@@ -1,0 +1,1666 @@
+[
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "SITE-BNDY",
+        "commands": [
+          {
+            "type": "draw",
+            "kind": "rectangle",
+            "a": [
+              0,
+              0
+            ],
+            "b": [
+              20,
+              20
+            ]
+          },
+          {
+            "type": "draw",
+            "kind": "rectangle",
+            "a": [
+              11.5,
+              0.6
+            ],
+            "b": [
+              17.5,
+              4.6
+            ]
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-GRID",
+        "commands": [
+          {
+            "type": "annotation_scale",
+            "name": "1:100"
+          },
+          {
+            "type": "grid",
+            "extent": {
+              "min": [
+                -1,
+                -1
+              ],
+              "max": [
+                21,
+                21
+              ]
+            },
+            "x": [
+              {
+                "at": 2.5,
+                "label": "A"
+              },
+              {
+                "at": 5.5,
+                "label": "B"
+              },
+              {
+                "at": 8.5,
+                "label": "C"
+              },
+              {
+                "at": 11.5,
+                "label": "D"
+              },
+              {
+                "at": 14.5,
+                "label": "E"
+              },
+              {
+                "at": 17.5,
+                "label": "F"
+              }
+            ],
+            "y": [
+              {
+                "at": 5,
+                "label": "1"
+              },
+              {
+                "at": 8,
+                "label": "2"
+              },
+              {
+                "at": 11,
+                "label": "3"
+              },
+              {
+                "at": 14,
+                "label": "4"
+              },
+              {
+                "at": 16,
+                "label": "5"
+              }
+            ]
+          },
+          {
+            "type": "new_layer",
+            "name": "A-ROOM-NAME"
+          },
+          {
+            "type": "new_layer",
+            "name": "A-AREA"
+          },
+          {
+            "type": "new_layer",
+            "name": "A-DIM"
+          },
+          {
+            "type": "new_layer",
+            "name": "A-SCHED"
+          },
+          {
+            "type": "new_layer",
+            "name": "A-ANNO-NOTE"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "SITE-BNDY",
+        "commands": [
+          {
+            "type": "delete_entities",
+            "handles": [
+              {
+                "handle": 68
+              },
+              {
+                "handle": 69
+              }
+            ]
+          },
+          {
+            "type": "draw",
+            "kind": "rectangle",
+            "a": [
+              -2.5,
+              -2.5
+            ],
+            "b": [
+              22.5,
+              22.5
+            ]
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-WALL-OUTL",
+        "commands": [
+          {
+            "type": "walls",
+            "thickness": 0.25,
+            "height": 3.6,
+            "layers": {
+              "outline": "A-WALL-OUTL",
+              "hatch": "A-WALL-PATT",
+              "centreline": "A-WALL-CNTR",
+              "doors": "A-DOOR",
+              "windows": "A-GLAZ"
+            },
+            "runs": [
+              {
+                "points": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    20,
+                    0
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    20,
+                    0
+                  ],
+                  [
+                    20,
+                    20
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    20,
+                    20
+                  ],
+                  [
+                    0,
+                    20
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    0,
+                    20
+                  ],
+                  [
+                    0,
+                    0
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    0,
+                    5
+                  ],
+                  [
+                    20,
+                    5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    6,
+                    0
+                  ],
+                  [
+                    6,
+                    5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    14,
+                    0
+                  ],
+                  [
+                    14,
+                    5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    17,
+                    0
+                  ],
+                  [
+                    17,
+                    5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    17,
+                    2.5
+                  ],
+                  [
+                    20,
+                    2.5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    0,
+                    13
+                  ],
+                  [
+                    20,
+                    13
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    5.5,
+                    5
+                  ],
+                  [
+                    5.5,
+                    13
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    15.5,
+                    5
+                  ],
+                  [
+                    15.5,
+                    13
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    5.5,
+                    11.5
+                  ],
+                  [
+                    15.5,
+                    11.5
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    6.5,
+                    13
+                  ],
+                  [
+                    6.5,
+                    20
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    11,
+                    13
+                  ],
+                  [
+                    11,
+                    20
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    15.5,
+                    13
+                  ],
+                  [
+                    15.5,
+                    20
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    0,
+                    15.8
+                  ],
+                  [
+                    13.5,
+                    15.8
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    3,
+                    13
+                  ],
+                  [
+                    3,
+                    15.8
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    9,
+                    13
+                  ],
+                  [
+                    9,
+                    15.8
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              },
+              {
+                "points": [
+                  [
+                    13.5,
+                    13
+                  ],
+                  [
+                    13.5,
+                    15.8
+                  ]
+                ],
+                "thickness": 0.15,
+                "height": 3.2
+              }
+            ]
+          },
+          {
+            "type": "walls",
+            "thickness": 0.2,
+            "height": 2.4,
+            "layers": {
+              "outline": "A-SITE-WALL",
+              "hatch": "A-SITE-WALL-PATT",
+              "centreline": "A-SITE-WALL-CNTR",
+              "doors": "A-DOOR",
+              "windows": "A-GLAZ"
+            },
+            "runs": [
+              {
+                "points": [
+                  [
+                    -2.5,
+                    -2.5
+                  ],
+                  [
+                    22.5,
+                    -2.5
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    22.5,
+                    -2.5
+                  ],
+                  [
+                    22.5,
+                    22.5
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    22.5,
+                    22.5
+                  ],
+                  [
+                    -2.5,
+                    22.5
+                  ]
+                ]
+              },
+              {
+                "points": [
+                  [
+                    -2.5,
+                    22.5
+                  ],
+                  [
+                    -2.5,
+                    -2.5
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "type": "add_wall_openings",
+            "centreline": 143,
+            "openings": [
+              {
+                "at": 1.4,
+                "kind": "window",
+                "width": 1.6,
+                "sill": 0.6,
+                "head": 2.4
+              },
+              {
+                "at": 2.9,
+                "kind": "door",
+                "width": 1.0,
+                "head": 2.4
+              },
+              {
+                "at": 4.6,
+                "kind": "window",
+                "width": 1.6,
+                "sill": 0.6,
+                "head": 2.4
+              },
+              {
+                "at": 8.0,
+                "kind": "door",
+                "width": 1.8,
+                "head": 2.6
+              },
+              {
+                "at": 12.0,
+                "kind": "window",
+                "width": 2.0,
+                "sill": 0.9,
+                "head": 2.4
+              },
+              {
+                "at": 15.5,
+                "kind": "door",
+                "width": 1.0,
+                "head": 2.1
+              },
+              {
+                "at": 18.4,
+                "kind": "door",
+                "width": 0.9,
+                "head": 2.1
+              }
+            ]
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 144,
+            "openings": [
+              {
+                "at": 1.2,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 1.2,
+                "width": 1.2
+              },
+              {
+                "at": 3.6,
+                "head": 2.1,
+                "kind": "window",
+                "sill": 1.5,
+                "width": 0.8
+              },
+              {
+                "at": 9.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 2.0
+              },
+              {
+                "at": 16.5,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 145,
+            "openings": [
+              {
+                "at": 2.25,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.5
+              },
+              {
+                "at": 6.75,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 11.25,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 16.75,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 146,
+            "openings": [
+              {
+                "at": 2.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 5.5,
+                "head": 2.1,
+                "kind": "window",
+                "sill": 1.4,
+                "width": 0.8
+              },
+              {
+                "at": 11.0,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.3,
+                "width": 3.0
+              },
+              {
+                "at": 17.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.6
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 147,
+            "openings": [
+              {
+                "at": 2.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.2
+              },
+              {
+                "at": 8.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              },
+              {
+                "at": 12.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              },
+              {
+                "at": 14.8,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 16.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 149,
+            "openings": [
+              {
+                "at": 2.5,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.2
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 150,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 151,
+            "openings": [
+              {
+                "at": 1.2,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 3.7,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 152,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 153,
+            "openings": [
+              {
+                "at": 7.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              },
+              {
+                "at": 10.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              },
+              {
+                "at": 14.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 154,
+            "openings": [
+              {
+                "at": 3.5,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.0,
+                "width": 3.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 155,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 156,
+            "openings": [
+              {
+                "at": 7.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 157,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 159,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 160,
+            "openings": [
+              {
+                "at": 5.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 7.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 161,
+            "openings": [
+              {
+                "at": 1.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 162,
+            "openings": [
+              {
+                "at": 1.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 163,
+            "openings": [
+              {
+                "at": 1.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 190,
+            "openings": [
+              {
+                "at": 12.5,
+                "head": 2.4,
+                "kind": "door",
+                "width": 4.0
+              },
+              {
+                "at": 6.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.2
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 144,
+            "openings": [
+              {
+                "at": 1.2,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 1.2,
+                "width": 1.2
+              },
+              {
+                "at": 3.6,
+                "head": 2.1,
+                "kind": "window",
+                "sill": 1.5,
+                "width": 0.8
+              },
+              {
+                "at": 9.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 2.0
+              },
+              {
+                "at": 16.5,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 145,
+            "openings": [
+              {
+                "at": 2.25,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.5
+              },
+              {
+                "at": 6.75,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 11.25,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 16.75,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 146,
+            "openings": [
+              {
+                "at": 2.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 5.5,
+                "head": 2.1,
+                "kind": "window",
+                "sill": 1.4,
+                "width": 0.8
+              },
+              {
+                "at": 11.0,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.3,
+                "width": 3.0
+              },
+              {
+                "at": 17.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.6
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 147,
+            "openings": [
+              {
+                "at": 2.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.2
+              },
+              {
+                "at": 8.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              },
+              {
+                "at": 12.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              },
+              {
+                "at": 14.8,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 16.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 149,
+            "openings": [
+              {
+                "at": 2.5,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.2
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 150,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 151,
+            "openings": [
+              {
+                "at": 1.2,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 3.7,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 152,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 154,
+            "openings": [
+              {
+                "at": 3.5,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.0,
+                "width": 3.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 155,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 156,
+            "openings": [
+              {
+                "at": 7.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 157,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 159,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 160,
+            "openings": [
+              {
+                "at": 5.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 7.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 161,
+            "openings": [
+              {
+                "at": 1.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 162,
+            "openings": [
+              {
+                "at": 1.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 163,
+            "openings": [
+              {
+                "at": 1.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 190,
+            "openings": [
+              {
+                "at": 12.5,
+                "head": 2.4,
+                "kind": "door",
+                "width": 4.0
+              },
+              {
+                "at": 6.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.2
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 160,
+            "openings": [
+              {
+                "at": 5.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 144,
+            "openings": [
+              {
+                "at": 1.2,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 1.2,
+                "width": 1.2
+              },
+              {
+                "at": 3.6,
+                "head": 2.1,
+                "kind": "window",
+                "sill": 1.5,
+                "width": 0.8
+              },
+              {
+                "at": 9.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 2.0
+              },
+              {
+                "at": 16.5,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 145,
+            "openings": [
+              {
+                "at": 2.25,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.5
+              },
+              {
+                "at": 6.75,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 11.25,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 16.75,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 146,
+            "openings": [
+              {
+                "at": 2.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.8
+              },
+              {
+                "at": 5.5,
+                "head": 2.1,
+                "kind": "window",
+                "sill": 1.4,
+                "width": 0.8
+              },
+              {
+                "at": 11.0,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.3,
+                "width": 3.0
+              },
+              {
+                "at": 17.0,
+                "head": 2.4,
+                "kind": "window",
+                "sill": 0.9,
+                "width": 1.6
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 147,
+            "openings": [
+              {
+                "at": 2.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.2
+              },
+              {
+                "at": 8.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              },
+              {
+                "at": 12.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              },
+              {
+                "at": 14.8,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 16.4,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 149,
+            "openings": [
+              {
+                "at": 2.5,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.2
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 150,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 151,
+            "openings": [
+              {
+                "at": 1.2,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.9
+              },
+              {
+                "at": 3.7,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 152,
+            "openings": [
+              {
+                "at": 1.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 153,
+            "openings": [
+              {
+                "at": 7.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              },
+              {
+                "at": 10.0,
+                "head": 2.1,
+                "kind": "door",
+                "width": 0.8
+              },
+              {
+                "at": 14.5,
+                "head": 2.1,
+                "kind": "door",
+                "width": 1.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 154,
+            "openings": [
+              {
+                "at": 3.5,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.0,
+                "width": 3.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 155,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 156,
+            "openings": [
+              {
+                "at": 7.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": {
+        "layer": "A-DOOR",
+        "commands": [
+          {
+            "centreline": 154,
+            "openings": [
+              {
+                "at": 3.5,
+                "head": 2.8,
+                "kind": "window",
+                "sill": 0.0,
+                "width": 3.0
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 155,
+            "openings": [
+              {
+                "at": 3.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 1.5
+              }
+            ],
+            "type": "add_wall_openings"
+          },
+          {
+            "centreline": 156,
+            "openings": [
+              {
+                "at": 7.0,
+                "head": 2.4,
+                "kind": "door",
+                "width": 2.4
+              }
+            ],
+            "type": "add_wall_openings"
+          }
+        ]
+      },
+      "op": "batch"
+    }
+  }
+]

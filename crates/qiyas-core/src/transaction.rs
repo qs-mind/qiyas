@@ -114,6 +114,7 @@ impl Session {
         if self.tx_depth == 0 {
             self.handle_replacements.clear();
         }
+        let structure = self.drawing.doc.snapshot_structure();
         let view = TxView::take(self);
         let current = self.current.clone();
         let revision = self.document_revision;
@@ -126,7 +127,10 @@ impl Session {
         };
         self.tx_depth += 1;
         self.history.begin_group();
-        let done = f(self);
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
+            .unwrap_or_else(|_| Err(CoreError::InvalidCommand(
+                "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
+            )));
         self.tx_depth -= 1;
         match done {
             Ok(value) => {
@@ -151,6 +155,7 @@ impl Session {
                     },
                     doc_changed: &mut doc_changed,
                 });
+                self.drawing.doc.swap_structure(structure);
                 view.put_back(self);
                 self.handle_replacements = replacements;
                 self.last_change = change;
@@ -215,6 +220,22 @@ impl Session {
         source: Source,
     ) -> Result<Outcome, CoreError> {
         self.batch_with(source, "batch", layer, color, |s| {
+            if commands.len() > 1
+                && commands
+                    .iter()
+                    .all(|command| matches!(command, Command::AddWallOpenings { .. }))
+            {
+                let inputs: Vec<_> = commands
+                    .iter()
+                    .map(|command| serde_json::json!(command))
+                    .collect();
+                if let Some(grouped) = s.run_opening_batch(&inputs, source) {
+                    return Ok(Outcome::Batch {
+                        outcomes: grouped?.into_iter().map(|step| step.outcome).collect(),
+                        added: s.last_change.added.clone(),
+                    });
+                }
+            }
             let mut outcomes = Vec::with_capacity(commands.len());
             for (index, command) in commands.into_iter().enumerate() {
                 let label = command.label();
