@@ -191,19 +191,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </select>
             </label>
             <p>{t(`settings.providerDescription.${draft.provider}`)}</p>
-            {subscription && <SubscriptionSettings provider={draft.provider} model={profile.model} onModel={(model) => changeProfile({ model })} executable={draft.claude_executable ?? ""} onExecutable={(claude_executable) => change({ claude_executable })} />}
-            {draft.provider !== "chatgpt_plan" && <div className="field">
+            {subscription && <SubscriptionSettings provider={draft.provider} model={profile.model} onModel={(model) => changeProfile({ model })}
+              effort={profile.effort} onEffort={(effort) => changeProfile({ effort })}
+              executable={draft.claude_executable ?? ""} onExecutable={(claude_executable) => change({ claude_executable })} />}
+            {!subscription && <div className="field">
               <span>{t("settings.model")}</span>
-              {subscription ? <input aria-label={t("settings.model")} dir="ltr" value={profile.model}
-                placeholder={t("settings.claudeDefaultModel")}
-                onChange={(e) => changeProfile({ model: e.target.value })} /> : <ModelPicker
+              <ModelPicker
                 key={draft.provider}
                 provider={draft.provider}
                 baseUrl={profile.base_url ?? null}
                 value={profile.model}
                 typedKey={key}
                 onChange={(model) => changeProfile({ model })}
-              />}
+              />
             </div>}
             {draft.provider === "openai_compatible" && (
               <label>

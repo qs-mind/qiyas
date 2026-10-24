@@ -160,6 +160,70 @@ impl Capabilities {
             .any(|word| word == flag)
     }
 
+    fn description(&self, flag: &str) -> String {
+        let mut matching = false;
+        let mut lines = Vec::new();
+        for line in self.help.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('-') {
+                matching = trimmed
+                    .split_whitespace()
+                    .any(|word| word.trim_end_matches(',') == flag);
+            } else if trimmed.is_empty() || !line.starts_with(char::is_whitespace) {
+                matching = false;
+            }
+            if matching {
+                lines.push(trimmed);
+            }
+        }
+        lines.join(" ")
+    }
+
+    fn effort_levels(&self) -> Vec<String> {
+        if !self.has("--effort") {
+            return Vec::new();
+        }
+        let description = self.description("--effort");
+        let words: HashSet<_> = description
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .collect();
+        ["low", "medium", "high", "xhigh", "max"]
+            .into_iter()
+            .filter(|level| words.contains(level))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn model_aliases(&self) -> Vec<String> {
+        if !self.has("--model") {
+            return Vec::new();
+        }
+        let description = self.description("--model");
+        let Some((_, examples)) = description.split_once("e.g.") else {
+            return Vec::new();
+        };
+        let examples = examples.split(')').next().unwrap_or(examples);
+        let mut aliases = Vec::new();
+        let mut quoted = None;
+        let mut candidate = String::new();
+        for c in examples.chars() {
+            if let Some(quote) = quoted {
+                if c == quote {
+                    if valid_option(&candidate) && !aliases.contains(&candidate) {
+                        aliases.push(std::mem::take(&mut candidate));
+                    }
+                    candidate.clear();
+                    quoted = None;
+                } else {
+                    candidate.push(c);
+                }
+            } else if ['\'', '"', '`'].contains(&c) {
+                quoted = Some(c);
+            }
+        }
+        aliases
+    }
+
     fn validate(&self) -> Result<(), AiError> {
         // Without strict MCP and settings isolation, running could load unrelated tools/hooks.
         if REQUIRED.iter().any(|flag| !self.has(flag))
@@ -173,6 +237,14 @@ impl Capabilities {
         }
         Ok(())
     }
+}
+
+fn valid_option(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
 }
 
 async fn output(executable: &Path, cwd: &Path, args: &[&str]) -> Result<String, AiError> {
@@ -197,6 +269,10 @@ pub struct Status {
     pub signed_in: Option<bool>,
     pub version: Option<String>,
     pub code: Option<String>,
+    pub supports_model: bool,
+    pub supports_effort: bool,
+    pub model_aliases: Vec<String>,
+    pub effort_levels: Vec<String>,
 }
 
 /// Explicit Settings action only. No timer, polling, login or inference.
@@ -214,6 +290,10 @@ pub async fn status(selected: Option<&str>, home: &Path) -> Result<Status, AiErr
                 signed_in: None,
                 version: None,
                 code: Some("claude_missing".into()),
+                supports_model: false,
+                supports_effort: false,
+                model_aliases: Vec::new(),
+                effort_levels: Vec::new(),
             })
         }
     };
@@ -255,6 +335,10 @@ pub async fn status(selected: Option<&str>, home: &Path) -> Result<Status, AiErr
         signed_in,
         version,
         code: (!compatible).then(|| "claude_flags".into()),
+        supports_model: capabilities.has("--model"),
+        supports_effort: capabilities.has("--effort"),
+        model_aliases: capabilities.model_aliases(),
+        effort_levels: capabilities.effort_levels(),
     })
 }
 
@@ -328,14 +412,17 @@ impl ClaudeCode {
         if capabilities.has("--permission-prompts") {
             cmd.args(["--permission-prompts", "none"]);
         }
-        if !req.model.trim().is_empty() {
-            if req.model.starts_with('-') || req.model.chars().any(char::is_control) {
-                return Err(error("claude_flags"));
-            }
-            if !capabilities.has("--model") {
+        if !req.model.is_empty() {
+            if !valid_option(&req.model) || !capabilities.has("--model") {
                 return Err(error("claude_flags"));
             }
             cmd.args(["--model", &req.model]);
+        }
+        if !req.effort.is_empty() && req.effort != "none" {
+            if !valid_option(&req.effort) || !capabilities.effort_levels().contains(&req.effort) {
+                return Err(error("claude_flags"));
+            }
+            cmd.args(["--effort", &req.effort]);
         }
         let resume = self
             .session_id
@@ -605,9 +692,17 @@ struct Events {
     message_streamed: bool,
     session_id: Option<String>,
     calls: HashMap<String, String>,
+    partial_calls: HashMap<u64, PartialCall>,
     completed: HashSet<String>,
     usage: Usage,
     finished: bool,
+}
+
+struct PartialCall {
+    id: String,
+    name: String,
+    input: Value,
+    arguments: String,
 }
 
 fn terminal_error(category: &str) -> Option<AiError> {
@@ -621,6 +716,32 @@ fn terminal_error(category: &str) -> Option<AiError> {
 }
 
 impl Events {
+    fn call(
+        &mut self,
+        id: String,
+        name: &str,
+        input: Value,
+        sink: Sink<'_>,
+    ) -> Result<(), AiError> {
+        if !TOOLS.contains(&name) {
+            return Err(error("claude_tool"));
+        }
+        let name = name.trim_start_matches("mcp__qiyas__");
+        if self.calls.contains_key(&id) {
+            return Ok(());
+        }
+        self.calls.insert(id.clone(), name.into());
+        sink(StreamEvent::Activity(Box::new(AgentEvent::ToolCall {
+            id,
+            name: name.into(),
+            label: crate::surface::label(name, &input),
+            mutating: crate::surface::mutating(name, &input),
+            activity: Some(crate::activity::describe(name, &input)),
+            input,
+        })));
+        Ok(())
+    }
+
     fn read(&mut self, value: Value, sink: Sink<'_>) -> Result<(), AiError> {
         match value["type"].as_str().unwrap_or("") {
             "system" if value["subtype"] == "init" => {
@@ -639,6 +760,10 @@ impl Events {
                 if let Some(error) = terminal_error(category) {
                     return Err(error);
                 }
+                sink(StreamEvent::Diagnostic {
+                    kind: "CLAUDE RETRY".into(),
+                    text: "Claude Code is retrying.".into(),
+                });
                 sink(StreamEvent::Activity(Box::new(
                     AgentEvent::ProviderStatus {
                         code: "ai.claudeWaiting".into(),
@@ -649,6 +774,29 @@ impl Events {
                 let event = &value["event"];
                 if event["type"] == "message_start" {
                     self.message_streamed = false;
+                    self.partial_calls.clear();
+                }
+                if event["type"] == "content_block_start"
+                    && event["content_block"]["type"] == "tool_use"
+                {
+                    let block = &event["content_block"];
+                    let name = block["name"].as_str().unwrap_or("");
+                    if !TOOLS.contains(&name) {
+                        return Err(error("claude_tool"));
+                    }
+                    let index = event["index"]
+                        .as_u64()
+                        .ok_or_else(|| error("claude_stream"))?;
+                    let id = block["id"].as_str().ok_or_else(|| error("claude_stream"))?;
+                    self.partial_calls.insert(
+                        index,
+                        PartialCall {
+                            id: id.into(),
+                            name: name.into(),
+                            input: block["input"].clone(),
+                            arguments: String::new(),
+                        },
+                    );
                 }
                 if event["type"] == "content_block_delta" {
                     if let Some(text) = event["delta"]["text"].as_str() {
@@ -656,7 +804,32 @@ impl Events {
                         self.text.push_str(text);
                         sink(StreamEvent::TextDelta(text.into()));
                     }
+                    if let Some(delta) = event["delta"]["partial_json"].as_str() {
+                        if let Some(call) = event["index"]
+                            .as_u64()
+                            .and_then(|index| self.partial_calls.get_mut(&index))
+                        {
+                            if call.arguments.len().saturating_add(delta.len()) > 32 * 1024 * 1024 {
+                                return Err(error("claude_stream"));
+                            }
+                            call.arguments.push_str(delta);
+                        }
+                    }
                     // Raw thinking is intentionally not forwarded to the visible panel or log.
+                }
+                if event["type"] == "content_block_stop" {
+                    if let Some(call) = event["index"]
+                        .as_u64()
+                        .and_then(|index| self.partial_calls.remove(&index))
+                    {
+                        let input = if call.arguments.is_empty() {
+                            call.input
+                        } else {
+                            serde_json::from_str(&call.arguments)
+                                .map_err(|_| error("claude_stream"))?
+                        };
+                        self.call(call.id, &call.name, input, sink)?;
+                    }
                 }
             }
             "assistant" => {
@@ -672,26 +845,12 @@ impl Events {
                         }
                         "tool_use" => {
                             let name = block["name"].as_str().unwrap_or("");
-                            if !TOOLS.contains(&name) {
-                                return Err(error("claude_tool"));
-                            }
                             let id = block["id"]
                                 .as_str()
                                 .ok_or_else(|| error("claude_stream"))?
                                 .to_owned();
-                            let name = name.trim_start_matches("mcp__qiyas__");
-                            if self.calls.insert(id.clone(), name.into()).is_some() {
-                                continue;
-                            }
                             let input = block["input"].clone();
-                            sink(StreamEvent::Activity(Box::new(AgentEvent::ToolCall {
-                                id,
-                                name: name.into(),
-                                label: crate::surface::label(name, &input),
-                                mutating: crate::surface::mutating(name, &input),
-                                activity: Some(crate::activity::describe(name, &input)),
-                                input,
-                            })));
+                            self.call(id, name, input, sink)?;
                         }
                         _ => {}
                     }
@@ -737,6 +896,10 @@ impl Events {
             }
             "result" => {
                 if value["is_error"] == true || value["subtype"] != "success" {
+                    sink(StreamEvent::Diagnostic {
+                        kind: "CLAUDE RESULT".into(),
+                        text: "Claude Code stopped without completing the turn.".into(),
+                    });
                     let category = value["error"].as_str().unwrap_or("");
                     return Err(terminal_error(category).unwrap_or_else(|| error("claude_failed")));
                 }
@@ -757,6 +920,16 @@ impl Events {
                     }
                 }
                 self.finished = true;
+                sink(StreamEvent::Diagnostic {
+                    kind: "CLAUDE RESULT".into(),
+                    text: format!(
+                        "success; tokens: {} in, {} out, {} cache read, {} cache written",
+                        self.usage.input_tokens,
+                        self.usage.output_tokens,
+                        self.usage.cache_read_input_tokens,
+                        self.usage.cache_creation_input_tokens
+                    ),
+                });
             }
             _ => {}
         }
@@ -770,6 +943,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     const SESSION: &str = "6d22c32a-00da-4d6b-86b4-f13482078290";
+    static TEST_PROCESS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn help() -> String {
         format!("{} --permission-mode dontAsk --permission-prompts --setting-sources --settings --tools --model --resume\n auth Manage authentication", REQUIRED.join(" "))
@@ -825,6 +999,386 @@ mod tests {
             json!({"type":"assistant","message":{"content":[{"type":"text","text":"Measured."}]}}),
             json!({"type":"result","subtype":"success","is_error":false,"result":"Measured.","usage":{"input_tokens":14,"output_tokens":3,"cache_read_input_tokens":2}}),
         ]
+    }
+
+    fn option_help() -> String {
+        format!(
+            "{}\n  --effort <level> Effort level (low, medium, high, xhigh, max)\n  --model <model> Model for this session. An alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name.\n",
+            help()
+        )
+    }
+
+    #[tokio::test]
+    async fn help_status_exposes_only_documented_options() {
+        let _guard = TEST_PROCESS.lock().await;
+        let (dir, provider) = fixture(success());
+        std::fs::write(
+            dir.path().join("scenario.json"),
+            json!({"help":option_help()}).to_string(),
+        )
+        .unwrap();
+        let result = status(provider.path.to_str(), &provider.home)
+            .await
+            .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        if let Some(path) = std::env::var_os("QIYAS_SUBSCRIPTION_EVIDENCE") {
+            let path = PathBuf::from(path);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(
+                path.join("claude-status-with-options.json"),
+                serde_json::to_vec_pretty(&result).unwrap(),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            result["effort_levels"],
+            json!(["low", "medium", "high", "xhigh", "max"])
+        );
+        assert_eq!(result["model_aliases"], json!(["fable", "opus", "sonnet"]));
+        assert_eq!(result["supports_model"], true);
+        assert_eq!(result["supports_effort"], true);
+        assert!(records(dir.path()).iter().all(|record| !record["argv"]
+            .as_array()
+            .is_some_and(|args| args.contains(&json!("-p")))));
+        for (help, aliases, efforts) in [
+            (help().replace("--model", ""), json!([]), json!([])),
+            (format!("{}\n  --effort <level> Choices: low, high\n  --model <model> Alias (e.g. 'opus') or full name", help()), json!(["opus"]), json!(["low", "high"])),
+        ] {
+            std::fs::write(dir.path().join("scenario.json"), json!({"help":help}).to_string()).unwrap();
+            let result = serde_json::to_value(status(provider.path.to_str(), &provider.home).await.unwrap()).unwrap();
+            assert_eq!(result["model_aliases"], aliases);
+            assert_eq!(result["effort_levels"], efforts);
+            assert_eq!(result["supports_effort"], !efforts.as_array().unwrap().is_empty());
+            assert_eq!(result["supports_model"], !aliases.as_array().unwrap().is_empty());
+        }
+        // The fixture can independently advertise the optional flags, just like two CLI versions.
+        std::fs::write(
+            dir.path().join("scenario.json"),
+            json!({"help":help().replace("--model", ""),"option_help":true}).to_string(),
+        )
+        .unwrap();
+        let result = serde_json::to_value(
+            status(provider.path.to_str(), &provider.home)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["model_aliases"], json!(["fable", "opus", "sonnet"]));
+        assert_eq!(
+            result["effort_levels"],
+            json!(["low", "medium", "high", "xhigh", "max"])
+        );
+    }
+
+    #[tokio::test]
+    async fn selected_effort_and_model_are_separate_argv_items() {
+        let (dir, provider) = fixture(success());
+        let cwd = work_directory(&provider.home).unwrap();
+        let mut req = request();
+        req.model = "claude-model_2.1:latest".into();
+        req.effort = "xhigh".into();
+        provider
+            .execute(
+                req,
+                &cwd,
+                &Capabilities {
+                    help: option_help(),
+                },
+                config(),
+                permit(),
+                &mut |_| {},
+            )
+            .await
+            .unwrap();
+        let recorded = records(dir.path());
+        let argv = recorded[0]["argv"].as_array().unwrap();
+        for (flag, value) in [
+            ("--effort", "xhigh"),
+            ("--model", "claude-model_2.1:latest"),
+        ] {
+            let index = argv
+                .iter()
+                .position(|arg| arg == flag)
+                .expect("selected flag must be passed");
+            assert_eq!(argv[index + 1], value);
+        }
+        provider
+            .execute(
+                request(),
+                &cwd,
+                &Capabilities {
+                    help: help().replace("--model", ""),
+                },
+                config(),
+                permit(),
+                &mut |_| {},
+            )
+            .await
+            .unwrap();
+        let calls = records(dir.path());
+        let defaults = calls
+            .iter()
+            .rev()
+            .find_map(|entry| entry["argv"].as_array())
+            .unwrap();
+        assert!(!defaults
+            .iter()
+            .any(|arg| arg == "--model" || arg == "--effort"));
+    }
+
+    #[tokio::test]
+    async fn option_values_reject_unsupported_flags_and_non_identifier_characters_before_spawn() {
+        let (dir, provider) = fixture(success());
+        let cwd = work_directory(&provider.home).unwrap();
+        for invalid in [
+            " ",
+            "two words",
+            "a/b",
+            "a\\b",
+            "a\nb",
+            "a\tb",
+            "a;b",
+            "a'b",
+            "a\"b",
+            "a$b",
+            "a`b",
+            "a=b",
+            "عالي",
+            "--injected",
+        ] {
+            for field in ["model", "effort"] {
+                let mut req = request();
+                if field == "model" {
+                    req.model = invalid.into();
+                } else {
+                    req.effort = invalid.into();
+                }
+                let result = provider
+                    .execute(
+                        req,
+                        &cwd,
+                        &Capabilities {
+                            help: option_help(),
+                        },
+                        config(),
+                        permit(),
+                        &mut |_| {},
+                    )
+                    .await;
+                assert!(result.is_err(), "accepted {field} value {invalid:?}");
+            }
+        }
+        for (model, effort, help) in [
+            ("sonnet", "none", help().replace("--model", "")),
+            ("", "high", help()),
+            (
+                "",
+                "max",
+                format!("{}\n --effort <level> low, medium", help()),
+            ),
+        ] {
+            let mut req = request();
+            req.model = model.into();
+            req.effort = effort.into();
+            assert!(provider
+                .execute(
+                    req,
+                    &cwd,
+                    &Capabilities { help },
+                    config(),
+                    permit(),
+                    &mut |_| {}
+                )
+                .await
+                .is_err());
+        }
+        assert!(
+            records(dir.path()).is_empty(),
+            "invalid options must not launch the child"
+        );
+    }
+
+    #[test]
+    fn wrapped_help_does_not_invent_aliases_or_effort_levels() {
+        let caps = Capabilities { help: "  --model <model> Model for this session. An alias\n      (e.g. 'fable', 'opus') or the full name (e.g. 'not-an-alias')\n  --effort <level> Select effort:\n      low, high\n  --another <value> medium max sonnet".into() };
+        assert_eq!(caps.model_aliases(), ["fable", "opus"]);
+        assert_eq!(caps.effort_levels(), ["low", "high"]);
+    }
+
+    #[test]
+    fn partial_tool_stream_shows_activity_before_assistant_summary() {
+        let mut state = Events::default();
+        let mut events = Vec::new();
+        for event in [
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"partial-call","name":TOOLS[0],"input":{}}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"op\":\"state\",\"args\":\"{}\"}"}}),
+            json!({"type":"content_block_stop","index":0}),
+        ] {
+            state
+                .read(json!({"type":"stream_event","event":event}), &mut |event| {
+                    events.push(event)
+                })
+                .unwrap();
+        }
+        assert!(events.iter().any(|event| matches!(event, StreamEvent::Activity(activity) if matches!(activity.as_ref(), AgentEvent::ToolCall { id, input, .. } if id == "partial-call" && input["op"] == "state"))));
+        state.read(json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"partial-call","name":TOOLS[0],"input":{"op":"state","args":"{}"}}]}}), &mut |event| events.push(event)).unwrap();
+        assert_eq!(events.iter().filter(|event| matches!(event, StreamEvent::Activity(activity) if matches!(activity.as_ref(), AgentEvent::ToolCall { .. }))).count(), 1, "the final assistant item must not create another card");
+    }
+
+    /// Exercises the real child protocol and Agent log without opening a local MCP socket.
+    /// The separate private-MCP test below covers actual commands and their readbacks.
+    struct FakeCliWithoutMcp(ClaudeCode);
+
+    impl Provider for FakeCliWithoutMcp {
+        fn owns_turn(&self) -> bool {
+            true
+        }
+
+        fn stream_turn<'a>(
+            &'a self,
+            req: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            Box::pin(async move {
+                self.0
+                    .execute(
+                        req,
+                        &work_directory(&self.0.home)?,
+                        &Capabilities {
+                            help: option_help(),
+                        },
+                        config(),
+                        permit(),
+                        sink,
+                    )
+                    .await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_fake_cli_turn_keeps_received_activity_in_agent_log() {
+        let (dir, provider) = fixture(Vec::new());
+        let session = provider.session.clone();
+        let before_wait = vec![
+            json!({"type":"system","subtype":"init","session_id":SESSION,"apiKey":"fake-secret-should-not-appear"}),
+            json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Reading the drawing."}}}),
+            json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"visible-call","name":TOOLS[0],"input":{"op":"state","args":"{}"}}]}}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"visible-call","content":"{\"total\":2}"}]}}),
+            json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private-hidden-thinking"}}}),
+            json!({"type":"system","subtype":"api_retry","error":"overloaded","account":"fake-private-account"}),
+        ];
+        std::fs::write(
+            dir.path().join("scenario.json"),
+            json!({"help":option_help(),"events_before_wait":before_wait,"wait":true}).to_string(),
+        )
+        .unwrap();
+        let log_path = dir.path().join("agent.log");
+        let settings = crate::AgentSettings {
+            provider: "claude_code".into(),
+            model: String::new(),
+            effort: "none".into(),
+            ..crate::AgentSettings::default()
+        };
+        let mut agent = crate::Agent::new(Box::new(FakeCliWithoutMcp(provider)), session, settings)
+            .with_log(crate::AgentLog::new(log_path.clone()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let cancel = CancellationToken::new();
+        let running = agent.run_turn("Read the drawing.".into(), tx, cancel.clone());
+        tokio::pin!(running);
+        let mut events = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                tokio::select! {
+                    result = &mut running => panic!("fake must wait: {result:?}"),
+                    event = rx.recv() => {
+                        let event = event.expect("agent stays open");
+                        let waiting = matches!(&event, AgentEvent::ProviderStatus { code } if code == "ai.claudeWaiting");
+                        events.push(event);
+                        if waiting { break; }
+                    }
+                }
+            }
+        }).await.unwrap();
+        // Check before cancelling: an incomplete turn must already have useful diagnostics.
+        let live_log = std::fs::read_to_string(&log_path).unwrap();
+        cancel.cancel();
+        running.await.unwrap();
+        if let Some(path) = std::env::var_os("QIYAS_SUBSCRIPTION_EVIDENCE") {
+            let path = PathBuf::from(path);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("claude-live-before-cancel.log"), &live_log).unwrap();
+            std::fs::write(
+                path.join("claude-live-events.json"),
+                serde_json::to_vec_pretty(&events).unwrap(),
+            )
+            .unwrap();
+            std::fs::copy(&log_path, path.join("claude-cancelled-agent.log")).unwrap();
+        }
+        assert!(live_log.contains("Reading the drawing."));
+        assert!(live_log.contains("visible-call"));
+        assert!(live_log.contains("qiyas_read"));
+        assert!(live_log.contains("total"));
+        assert!(live_log.contains("ai.claudeWaiting"));
+        for secret in [
+            "fake-secret-should-not-appear",
+            "private-hidden-thinking",
+            "fake-private-account",
+            "Bearer",
+            "Authorization",
+            SESSION,
+        ] {
+            assert!(!live_log.contains(secret), "log leaked {secret}");
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_fake_cli_agent_turn_logs_text_and_usage() {
+        let (dir, provider) = fixture(success());
+        let session = provider.session.clone();
+        let path = dir.path().join("agent.log");
+        let settings = crate::AgentSettings {
+            provider: "claude_code".into(),
+            model: "opus".into(),
+            effort: "max".into(),
+            ..crate::AgentSettings::default()
+        };
+        let mut agent = crate::Agent::new(Box::new(FakeCliWithoutMcp(provider)), session, settings)
+            .with_log(crate::AgentLog::new(path.clone()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            agent.run_turn("Read the drawing.".into(), tx, CancellationToken::new()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("CLAUDE RESULT"));
+        assert!(text.contains("14 in, 3 out"));
+        assert!(text.contains("Measured."));
+        for forbidden in ["Bearer", "Authorization", SESSION] {
+            assert!(!text.contains(forbidden));
+        }
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::Done { usage } if usage.input_tokens == 14 && usage.output_tokens == 3)));
+        if let Some(path) = std::env::var_os("QIYAS_SUBSCRIPTION_EVIDENCE") {
+            let path = PathBuf::from(path);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::copy(
+                dir.path().join("agent.log"),
+                path.join("claude-complete-agent.log"),
+            )
+            .unwrap();
+            std::fs::write(
+                path.join("claude-complete-agent-events.json"),
+                serde_json::to_vec_pretty(&events).unwrap(),
+            )
+            .unwrap();
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1048,63 +1602,114 @@ mod tests {
 
     #[tokio::test]
     async fn fake_cli_drives_private_mcp_with_readback_and_undo() {
-        let (dir, provider) = fixture(success());
-        *provider.session.lock().unwrap() =
-            Some(Session::new_blank(&dir.path().join("drawing.dxf"), 6));
-        std::fs::write(
-            dir.path().join("scenario.json"),
-            json!({"help":help(),"events":success(),"mcp":true}).to_string(),
-        )
-        .unwrap();
-        provider.begin_turn("Draw a line, check it, then undo it and check again.");
-        let mut events = Vec::new();
-        let result = provider
-            .stream_turn(request(), &mut |e| events.push(e))
+        let _guard = TEST_PROCESS.lock().await;
+        for (unit, unit_code, units_per_metre) in [
+            ("mm", 4, 1000.0),
+            ("cm", 5, 100.0),
+            ("m", 6, 1.0),
+            ("in", 1, 1.0 / 0.0254),
+        ] {
+            let (dir, provider) = fixture(success());
+            *provider.session.lock().unwrap() = Some(Session::new_blank(
+                &dir.path().join("drawing.dxf"),
+                unit_code,
+            ));
+            std::fs::write(
+                dir.path().join("scenario.json"),
+                json!({"help":option_help(),"events":success(),"mcp":true,"stream_tools":true,"units_per_metre":units_per_metre}).to_string(),
+            )
+            .unwrap();
+            let session = provider.session.clone();
+            let log_path = dir.path().join("agent.log");
+            let settings = crate::AgentSettings {
+                provider: "claude_code".into(),
+                model: "sonnet".into(),
+                effort: "high".into(),
+                ..crate::AgentSettings::default()
+            };
+            let mut agent = crate::Agent::new(Box::new(provider), session.clone(), settings)
+                .with_log(crate::AgentLog::new(log_path.clone()));
+            let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+            let result = tokio::time::timeout(
+                Duration::from_secs(60),
+                agent.run_turn(
+                    "Draw a line, check it, then undo it and check again.".into(),
+                    tx,
+                    CancellationToken::new(),
+                ),
+            )
             .await
             .unwrap();
-        assert_eq!(result.stop_reason, StopReason::EndTurn);
-        assert!(provider
-            .session
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .history_steps()
-            .0
-            .is_empty());
-        assert_eq!(events.iter().filter(|e| matches!(e,
-            StreamEvent::Activity(activity) if matches!(activity.as_ref(), AgentEvent::ToolCall { .. })
-        )).count(), 5);
-        let calls = records(dir.path());
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|v| v["argv"]
-                    .as_array()
-                    .is_some_and(|a| a.contains(&json!("-p"))))
-                .count(),
-            1
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|v| v["mcp_request"].is_object())
-                .count(),
-            7
-        );
-        if let Some(path) = std::env::var_os("QIYAS_SUBSCRIPTION_EVIDENCE") {
-            let path = PathBuf::from(path);
-            std::fs::create_dir_all(&path).unwrap();
-            std::fs::copy(
-                dir.path().join("calls.jsonl"),
-                path.join("claude-private-mcp.jsonl"),
-            )
-            .unwrap();
-            std::fs::write(
-                path.join("claude-private-mcp-events.txt"),
-                format!("{events:#?}"),
-            )
-            .unwrap();
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            if let Some(path) = std::env::var_os("QIYAS_SUBSCRIPTION_EVIDENCE") {
+                let path = PathBuf::from(path).join(format!("claude-private-mcp-{unit}"));
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::copy(
+                    dir.path().join("calls.jsonl"),
+                    path.join("transcript.jsonl"),
+                )
+                .unwrap();
+                std::fs::write(
+                    path.join("events.json"),
+                    serde_json::to_vec_pretty(&events).unwrap(),
+                )
+                .unwrap();
+                std::fs::copy(&log_path, path.join("agent.log")).unwrap();
+                std::fs::write(path.join("result.txt"), format!("{result:?}")).unwrap();
+            }
+            result.unwrap();
+            assert!(session
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .history_steps()
+                .0
+                .is_empty());
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, AgentEvent::ToolCall { .. }))
+                    .count(),
+                5
+            );
+            assert_eq!(events.iter().filter(|event| matches!(event, AgentEvent::ToolResult { id, .. } if id != "claude-ui")).count(), 5);
+            assert!(events.iter().any(|event| matches!(event, AgentEvent::Done { usage } if usage.input_tokens == 14 && usage.output_tokens == 3)));
+            let calls = records(dir.path());
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|value| value["argv"]
+                        .as_array()
+                        .is_some_and(|args| args.contains(&json!("-p"))))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|value| value["mcp_request"].is_object())
+                    .count(),
+                7
+            );
+            let log = std::fs::read_to_string(log_path).unwrap();
+            for expected in [
+                "TOOL CALL",
+                "TOOL RESULT",
+                "qiyas_execute",
+                "qiyas_read",
+                "Measured.",
+                "14 in",
+                "3 out",
+            ] {
+                assert!(log.contains(expected), "missing {expected} in {unit} log");
+            }
+            for forbidden in ["Bearer", "Authorization", SESSION] {
+                assert!(!log.contains(forbidden));
+            }
         }
     }
 
@@ -1156,6 +1761,13 @@ mod tests {
             assert!(!e.public_error().message_ar.is_empty());
         }
         assert!(state.read(json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"bad","name":"Bash","input":{}}]}}), &mut |_| {}).is_err());
+        assert!(state.read(json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"bad-partial","name":"Bash","input":{}}}}), &mut |_| panic!("unavailable tools must not produce an activity card")).is_err());
+        let mut failed = Vec::new();
+        assert!(state.read(json!({"type":"result","subtype":"error_during_execution","is_error":true,"result":"fake-secret-terminal-detail"}), &mut |event| failed.push(event)).is_err());
+        assert!(failed.iter().any(
+            |event| matches!(event, StreamEvent::Diagnostic { kind, .. } if kind == "CLAUDE RESULT")
+        ));
+        assert!(!format!("{failed:?}").contains("fake-secret-terminal-detail"));
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ const api = vi.hoisted(() => ({
   aiModels: vi.fn(),
   measurementMethods: vi.fn(),
   chatgptAccount: vi.fn(),
+  chatgptModels: vi.fn(),
   claudeCodeStatus: vi.fn(),
 }));
 
@@ -337,10 +338,46 @@ test("subscription choices never ask for an API key or fetch API models", async 
   expect(screen.getByText("Open a terminal and run claude, then type /login.")).toBeTruthy();
   expect(api.claudeCodeStatus).not.toHaveBeenCalled();
   expect(api.hasApiKey).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText("Model")).toBeNull();
+  api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true, code: null,
+    supports_model: true, model_aliases: ["sonnet"], supports_effort: true, effort_levels: ["low", "high"] });
+  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  await screen.findByLabelText("Model");
   fireEvent.change(screen.getByLabelText("Model"), { target: { value: "sonnet" } });
+  fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "high" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalled());
   expect(api.aiModels).not.toHaveBeenCalled();
   expect(api.setApiKey).not.toHaveBeenCalled();
   expect(api.setSettings.mock.calls[0][0].providers.claude_code.model).toBe("sonnet");
+  expect(api.setSettings.mock.calls[0][0].providers.claude_code.effort).toBe("high");
+});
+
+test("ChatGPT automatic model and advertised effort are kept on Save", async () => {
+  setup();
+  api.chatgptAccount.mockResolvedValue({ signed_in: true, plan_granted: true });
+  api.chatgptModels.mockResolvedValue([{ id: "plan-first", label: "First account model", reasoning_efforts: ["low", "high"] }]);
+  fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "chatgpt_plan" } });
+  const model = await screen.findByRole("option", { name: "First account model" });
+  expect((model.parentElement as HTMLSelectElement).value).toBe("plan-first");
+  expect((screen.getByLabelText("Effort") as HTMLSelectElement).value).toBe("");
+  fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "high" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalled());
+  expect(api.setSettings.mock.calls[0][0].providers.chatgpt_plan).toEqual({ model: "plan-first", effort: "high" });
+});
+
+test("Claude Other accepts a full model name and Default omits effort", async () => {
+  setup();
+  api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true, code: null,
+    supports_model: true, model_aliases: ["opus"], supports_effort: true, effort_levels: ["max"] });
+  fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "claude_code" } });
+  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "\u0000other" } });
+  fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "claude-full-1.2:test" } });
+  fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "max" } });
+  fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalled());
+  expect(api.setSettings.mock.calls[0][0].providers.claude_code).toEqual({ model: "claude-full-1.2:test", effort: null });
 });

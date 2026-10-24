@@ -14,6 +14,16 @@ scenario = json.loads((root / "scenario.json").read_text())
 
 
 def record(value):
+    # Keep argv structure for safety assertions without recording the private MCP token.
+    if "argv" in value and "--mcp-config" in value["argv"]:
+        logged = list(value["argv"])
+        index = logged.index("--mcp-config") + 1
+        config = json.loads(logged[index])
+        for server in config.get("mcpServers", {}).values():
+            if "headers" in server:
+                server["headers"] = {name: "[redacted]" for name in server["headers"]}
+        logged[index] = json.dumps(config)
+        value = dict(value, argv=logged)
     with (root / "calls.jsonl").open("a") as file:
         file.write(json.dumps(value) + "\n")
 
@@ -22,6 +32,9 @@ args = sys.argv[1:]
 record({"argv": args, "environment": dict(os.environ), "cwd": os.getcwd()})
 if args == ["--help"]:
     print(scenario["help"])
+    if scenario.get("option_help"):
+        print("  --effort <level> Effort level (low, medium, high, xhigh, max)")
+        print("  --model <model> An alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name")
 elif args == ["--version"]:
     print("2.1.309 (Claude Code)")
 elif args == ["auth", "--help"]:
@@ -30,6 +43,8 @@ elif args == ["auth", "status"]:
     print(json.dumps({"loggedIn": True}))
 elif "-p" in args:
     record({"input": json.loads(sys.stdin.readline())})
+    for event in scenario.get("events_before_wait", []):
+        print(json.dumps(event), flush=True)
     if scenario.get("mcp"):
         config = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["qiyas"]
         assert urllib.parse.urlparse(config["url"]).hostname == "127.0.0.1"
@@ -78,6 +93,15 @@ elif "-p" in args:
         def tool(name, op, arguments):
             value = {"op": op, "args": json.dumps(arguments)}
             identifier = "fake-tool-" + str(sequence)
+            if scenario.get("stream_tools"):
+                for event in [
+                    {"type": "content_block_start", "index": 0, "content_block": {
+                        "type": "tool_use", "id": identifier, "name": "mcp__qiyas__" + name, "input": {}}},
+                    {"type": "content_block_delta", "index": 0, "delta": {
+                        "type": "input_json_delta", "partial_json": json.dumps(value)}},
+                    {"type": "content_block_stop", "index": 0},
+                ]:
+                    print(json.dumps({"type": "stream_event", "event": event}), flush=True)
             print(json.dumps({"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "id": identifier, "name": "mcp__qiyas__" + name, "input": value}
             ]}}), flush=True)
@@ -89,8 +113,12 @@ elif "-p" in args:
             return json.loads(next(part["text"] for part in result["content"] if part["type"] == "text"))
 
         assert tool("qiyas_read", "records", {"collection": "entities"})["total"] == 0
-        tool("qiyas_execute", "run", {"command": {"type": "draw", "kind": "line", "a": [0, 0], "b": [3, 0]}})
-        assert tool("qiyas_read", "records", {"collection": "entities"})["total"] == 1
+        units_per_metre = scenario.get("units_per_metre", 1)
+        tool("qiyas_execute", "run", {"layer": "Provider check", "command": {
+            "type": "draw", "kind": "line", "a": [0, 0], "b": [3 * units_per_metre, 0]}})
+        readback = tool("qiyas_read", "records", {"collection": "entities", "fields": ["length"]})
+        assert readback["total"] == 1
+        assert abs(readback["records"][0]["fields"]["length"] / units_per_metre - 3) < 1e-7
         tool("qiyas_execute", "undo_own", {})
         assert tool("qiyas_read", "records", {"collection": "entities"})["total"] == 0
     if scenario.get("wait"):

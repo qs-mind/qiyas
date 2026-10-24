@@ -43,6 +43,28 @@ fn defaults_when_missing() {
 }
 
 #[test]
+fn subscription_effort_is_default_until_explicitly_selected() {
+    for provider in [Provider::ChatgptPlan, Provider::ClaudeCode] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("settings.json"),
+            format!(r#"{{"provider":"{}","effort":"high"}}"#, provider.name()),
+        )
+        .unwrap();
+        let mut saved = settings::load(dir.path());
+        assert_eq!(saved.profile().effort, None);
+        assert_eq!(saved.effective_effort(), "none");
+        saved.profile_mut().effort = Some("high".into());
+        settings::save(dir.path(), &saved).unwrap();
+        assert_eq!(settings::load(dir.path()).effective_effort(), "high");
+        saved.profile_mut().effort = None;
+        settings::save(dir.path(), &saved).unwrap();
+        assert_eq!(settings::load(dir.path()).profile().effort, None);
+        assert_eq!(settings::load(dir.path()).effective_effort(), "none");
+    }
+}
+
+#[test]
 fn round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let s = Settings {

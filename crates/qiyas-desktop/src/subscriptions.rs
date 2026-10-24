@@ -1,16 +1,18 @@
 //! Subscription account commands. Only Qiyas's ChatGPT entry is read from the keychain.
 //! Claude credentials and authentication are entirely owned by the installed Claude Code.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use keyring_core::{Entry, Error};
-use qiyas_ai::chatgpt_plan::{self, oauth, Account, TokenStore, Vault};
+use qiyas_ai::chatgpt_plan::{self, oauth, Account, PlanModel, TokenStore, Vault};
 use qiyas_ai::{AiError, Provider};
 use serde::Serialize;
 use tauri::{AppHandle, Runtime, State};
 use tokio_util::sync::CancellationToken;
 
+use crate::settings::{self, Settings};
 use crate::state::AppState;
 
 static PENDING: Mutex<Option<CancellationToken>> = Mutex::new(None);
@@ -75,8 +77,85 @@ pub async fn chatgpt_account() -> Result<AccountStatus, String> {
 }
 
 #[tauri::command]
-pub async fn chatgpt_models() -> Result<Vec<qiyas_ai::models::ModelInfo>, String> {
-    plan_provider().models().await.map_err(|e| e.for_window())
+pub async fn chatgpt_models<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<Vec<PlanModel>, String> {
+    let models = plan_provider().models().await.map_err(|e| e.for_window())?;
+    if remember_plan_model(&state.settings, &state.config_dir, &models)? {
+        crate::commands::new_conversation(&app, &state);
+    }
+    Ok(models)
+}
+
+/// Save before updating the cache, so closing Settings cannot lose the automatic choice.
+fn remember_plan_model(
+    cached: &Mutex<Settings>,
+    config_dir: &Path,
+    models: &[PlanModel],
+) -> Result<bool, String> {
+    let mut cached = cached.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut next = cached.clone();
+    let profile = &mut next.providers.chatgpt_plan;
+    if models.iter().any(|model| model.id == profile.model) {
+        return Ok(false);
+    }
+    let selected = models.first();
+    profile.model = selected.map_or_else(String::new, |model| model.id.clone());
+    if profile.effort.as_ref().is_some_and(|effort| {
+        selected.is_none_or(|model| !model.reasoning_efforts.contains(effort))
+    }) {
+        profile.effort = None;
+    }
+    if *cached == next {
+        return Ok(false);
+    }
+    settings::save(config_dir, &next)
+        .map_err(|e| format!("The settings could not be saved: {e}"))?;
+    let changed = crate::ai::answerer_changed(&cached, &next);
+    *cached = next;
+    Ok(changed)
+}
+
+/// Sign-in remains successful when model discovery is temporarily unavailable.
+async fn account_with_default_model(state: &AppState) -> Result<AccountStatus, String> {
+    remember_plan_model(&state.settings, &state.config_dir, &[])?;
+    let mut status = chatgpt_account().await?;
+    if status.account.signed_in && status.account.plan_granted && !status.account.paused {
+        match plan_provider().models().await {
+            Ok(models) => {
+                remember_plan_model(&state.settings, &state.config_dir, &models)?;
+            }
+            Err(error) => {
+                // Discovery may have paused the account after a plan limit.
+                status = chatgpt_account().await?;
+                status.notice = Some(error.code());
+            }
+        }
+    }
+    Ok(status)
+}
+
+/// Older Settings files may still have no model when the first message is sent.
+pub async fn ensure_plan_model(state: &AppState, draft: &mut Settings) -> Result<(), String> {
+    if draft.provider != settings::Provider::ChatgptPlan
+        || !draft.providers.chatgpt_plan.model.is_empty()
+    {
+        return Ok(());
+    }
+    let models = plan_provider().models().await.map_err(|e| e.for_window())?;
+    if models.is_empty() {
+        return Err(AiError::Subscription("chatgpt_model").for_window());
+    }
+    remember_plan_model(&state.settings, &state.config_dir, &models)?;
+    draft.providers.chatgpt_plan = state
+        .settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .providers
+        .chatgpt_plan
+        .clone();
+    Ok(())
 }
 
 #[tauri::command]
@@ -127,7 +206,7 @@ pub async fn chatgpt_select_account<R: Runtime>(
             .await
             .map_err(|e| e.for_window())?;
     }
-    chatgpt_account().await
+    account_with_default_model(&state).await
 }
 
 /// Only an explicit user action resumes requests after a plan limit.
@@ -169,6 +248,7 @@ pub async fn chatgpt_sign_out<R: Runtime>(
             .map_err(|e| e.for_window())?;
     }
     let mut status = chatgpt_account().await?;
+    remember_plan_model(&state.settings, &state.config_dir, &[])?;
     if !confirmed {
         status.notice = Some("chatgpt_revocation_unconfirmed");
     }
@@ -188,7 +268,7 @@ pub async fn chatgpt_sign_in<R: Runtime>(
     )
     .await
     .map_err(|e| e.for_window())?;
-    chatgpt_account().await
+    account_with_default_model(&state).await
 }
 
 async fn sign_in(
@@ -276,6 +356,77 @@ pub fn subscription_link(link: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovered_default_model_is_saved_and_explicit_choices_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = Settings {
+            provider: settings::Provider::ChatgptPlan,
+            ..Settings::default()
+        };
+        let cached = Mutex::new(initial);
+        let models = vec![
+            PlanModel {
+                id: "first-plan-model".into(),
+                label: "First model".into(),
+                reasoning_efforts: vec!["low".into(), "high".into()],
+            },
+            PlanModel {
+                id: "second-plan-model".into(),
+                label: "Second model".into(),
+                reasoning_efforts: vec![],
+            },
+        ];
+        assert!(remember_plan_model(&cached, dir.path(), &models).unwrap());
+        assert_eq!(
+            settings::load(dir.path()).providers.chatgpt_plan.model,
+            "first-plan-model"
+        );
+        assert_eq!(
+            cached.lock().unwrap().providers.chatgpt_plan.model,
+            "first-plan-model"
+        );
+
+        {
+            let mut settings = cached.lock().unwrap();
+            settings.providers.chatgpt_plan.model = "second-plan-model".into();
+            settings::save(dir.path(), &settings).unwrap();
+        }
+        assert!(!remember_plan_model(&cached, dir.path(), &models).unwrap());
+        assert_eq!(
+            settings::load(dir.path()).providers.chatgpt_plan.model,
+            "second-plan-model"
+        );
+
+        assert!(remember_plan_model(&cached, dir.path(), &[]).unwrap());
+        assert_eq!(settings::load(dir.path()).providers.chatgpt_plan.model, "");
+        assert!(remember_plan_model(&cached, dir.path(), &models[1..]).unwrap());
+        assert_eq!(
+            settings::load(dir.path()).providers.chatgpt_plan.model,
+            "second-plan-model"
+        );
+    }
+
+    #[test]
+    fn model_discovery_does_not_update_memory_when_settings_cannot_be_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("not-a-directory");
+        std::fs::write(&blocked, "test").unwrap();
+        let cached = Mutex::new(Settings::default());
+        let model = PlanModel {
+            id: "first-plan-model".into(),
+            label: "First model".into(),
+            reasoning_efforts: vec![],
+        };
+        assert!(remember_plan_model(&cached, &blocked, &[model]).is_err());
+        assert!(cached
+            .lock()
+            .unwrap()
+            .providers
+            .chatgpt_plan
+            .model
+            .is_empty());
+    }
+
     #[test]
     fn vault_lives_only_in_the_dedicated_mock_keychain_and_host_survives_sign_out() {
         keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());

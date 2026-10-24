@@ -864,7 +864,7 @@ pub async fn ai_send<R: Runtime>(
         state: &state,
         generation,
         armed: true,
-        kept: None,
+        kept,
     };
     // Start this job on the sheet the user was viewing; later browsing is independent.
     {
@@ -874,12 +874,15 @@ pub async fn ai_send<R: Runtime>(
         }
     }
     let language = ai_run(&state).language();
-    let settings = state
+    let mut settings = state
         .settings
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
-    let mut agent = match kept {
+    if ai::mock_provider(&state.session).is_none() {
+        crate::subscriptions::ensure_plan_model(&state, &mut settings).await?;
+    }
+    let mut agent = match claim.kept.take() {
         Some(agent) => agent,
         // Its file tools run on the app's tabs.
         None => new_agent(&state, &settings, language, None)
@@ -1150,11 +1153,14 @@ pub async fn ai_resume<R: Runtime>(
         transcript: conversation.transcript.clone(),
         drawing: conversation.drawing.clone(),
     };
-    let settings = state
+    let mut settings = state
         .settings
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
+    if ai::mock_provider(&state.session).is_none() {
+        crate::subscriptions::ensure_plan_model(&state, &mut settings).await?;
+    }
     let agent = new_agent(&state, &settings, language, Some(conversation))
         .await?
         .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() }));

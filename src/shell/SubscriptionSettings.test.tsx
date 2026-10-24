@@ -109,3 +109,100 @@ test("Arabic uses the reviewed Continue with ChatGPT label", async () => {
   await waitFor(() => expect((screen.getByRole("button", { name: "المتابعة باستخدام ChatGPT" }) as HTMLButtonElement).disabled).toBe(false));
   expect(api.chatgptSignIn).not.toHaveBeenCalled();
 });
+
+test("ChatGPT chooses the first account model when no model was saved", async () => {
+  api.chatgptAccount.mockResolvedValue({ signed_in: true, plan_granted: true });
+  const onModel = vi.fn();
+  render(<SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} model="" onModel={onModel} />);
+  await screen.findByRole("option", { name: "Mock model" });
+  await waitFor(() => expect(onModel).toHaveBeenCalledWith("mock-slug"));
+  expect((screen.getByRole("combobox", { name: "Model available with your ChatGPT plan" }) as HTMLSelectElement).value).toBe("mock-slug");
+});
+
+test.each(["en", "ar"])("Claude shows only help-listed model and effort choices in %s", async (language) => {
+  localStorage.setItem("qiyas.lang", language);
+  api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true, version: "2.1.309", code: null,
+    supports_model: true, supports_effort: true, model_aliases: ["fable", "opus", "sonnet"], effort_levels: ["low", "medium", "high", "xhigh", "max"] });
+  const onModel = vi.fn();
+  render(<LanguageProvider><SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} model="" onModel={onModel} /></LanguageProvider>);
+  const modelLabel = language === "en" ? "Model" : "النموذج";
+  expect(screen.queryByRole("combobox", { name: modelLabel })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: language === "en" ? "Check Claude Code" : "تحقق من Claude Code" }));
+  const model = await screen.findByRole("combobox", { name: modelLabel }) as HTMLSelectElement;
+  expect(Array.from(model.options, (o) => o.value)).toEqual(["", "fable", "opus", "sonnet", "\u0000other"]);
+  expect(Array.from((screen.getByRole("combobox", { name: language === "en" ? "Effort" : "مستوى الجهد" }) as HTMLSelectElement).options, (o) => o.value))
+    .toEqual(["", "low", "medium", "high", "xhigh", "max"]);
+  fireEvent.change(model, { target: { value: "sonnet" } });
+  expect(onModel).toHaveBeenLastCalledWith("sonnet");
+});
+
+test.each(["en", "ar"])("ChatGPT effort follows the chosen model in %s", async (language) => {
+  localStorage.setItem("qiyas.lang", language);
+  api.chatgptAccount.mockResolvedValue({ signed_in: true, plan_granted: true });
+  api.chatgptModels.mockResolvedValue([
+    { id: "reasoning", label: "Reasoning model", reasoning_efforts: ["low", "high"] },
+    { id: "plain", label: "Plain model" },
+  ]);
+  const onEffort = vi.fn();
+  const props = { provider: "chatgpt_plan" as const, executable: "", onExecutable: () => {}, model: "reasoning", effort: "high", onEffort };
+  const { rerender } = render(<LanguageProvider><SubscriptionSettings {...props} /></LanguageProvider>);
+  const label = language === "en" ? "Effort" : "مستوى الجهد";
+  const select = await screen.findByRole("combobox", { name: label }) as HTMLSelectElement;
+  expect(Array.from(select.options, (o) => o.value)).toEqual(["", "low", "high"]);
+  expect(select.value).toBe("high");
+  fireEvent.change(select, { target: { value: "low" } });
+  expect(onEffort).toHaveBeenLastCalledWith("low");
+  fireEvent.change(select, { target: { value: "" } });
+  expect(onEffort).toHaveBeenLastCalledWith(null);
+  fireEvent.change(screen.getByRole("option", { name: "Plain model" }).parentElement!, { target: { value: "plain" } });
+  expect(onEffort).toHaveBeenLastCalledWith(null);
+  rerender(<LanguageProvider><SubscriptionSettings {...props} model="plain" effort={null} /></LanguageProvider>);
+  expect(screen.queryByRole("combobox", { name: label })).toBeNull();
+});
+
+test("Claude hides unsupported flags and forgets capabilities when the program changes", async () => {
+  api.claudeCodeStatus.mockResolvedValueOnce({ installed: true, compatible: true, signed_in: true, code: null,
+    supports_model: false, supports_effort: false, model_aliases: [], effort_levels: [] })
+    .mockResolvedValueOnce({ installed: true, compatible: true, signed_in: true, code: null,
+      supports_model: true, supports_effort: true, model_aliases: ["fable"], effort_levels: ["high"] });
+  render(<SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  await screen.findByText("Claude Code is ready.");
+  expect(screen.queryByLabelText("Model")).toBeNull();
+  expect(screen.queryByLabelText("Effort")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  await screen.findByLabelText("Effort");
+  fireEvent.change(screen.getByLabelText("Claude Code program (optional)"), { target: { value: "/test/claude" } });
+  expect(screen.queryByLabelText("Model")).toBeNull();
+  expect(screen.queryByLabelText("Effort")).toBeNull();
+  expect(api.claudeCodeStatus).toHaveBeenCalledTimes(2);
+});
+
+
+test("checking an older Claude program clears choices its help no longer supports", async () => {
+  api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true,
+    supports_model: false, supports_effort: false, model_aliases: [], effort_levels: [] });
+  const onModel = vi.fn();
+  const onEffort = vi.fn();
+  render(<SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} model="sonnet" effort="high" onModel={onModel} onEffort={onEffort} />);
+  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  await waitFor(() => expect(onModel).toHaveBeenCalledWith(""));
+  expect(onEffort).toHaveBeenCalledWith(null);
+  expect(screen.queryByLabelText("Model")).toBeNull();
+  expect(screen.queryByLabelText("Effort")).toBeNull();
+});
+
+
+test("a late Claude status cannot change the newly selected provider", async () => {
+  let resolve!: (value: unknown) => void;
+  api.claudeCodeStatus.mockReturnValue(new Promise((done) => { resolve = done; }));
+  const onModel = vi.fn();
+  const props = { executable: "", onExecutable: () => {}, model: "sonnet", onModel };
+  const { rerender } = render(<SubscriptionSettings {...props} provider="claude_code" />);
+  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  rerender(<SubscriptionSettings {...props} provider="chatgpt_plan" />);
+  resolve({ installed: true, compatible: true, supports_model: false, supports_effort: false });
+  await screen.findByRole("button", { name: "Continue with ChatGPT" });
+  await waitFor(() => expect(api.chatgptAccount).toHaveBeenCalled());
+  expect(onModel).not.toHaveBeenCalled();
+});
