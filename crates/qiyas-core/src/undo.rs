@@ -582,6 +582,27 @@ impl History {
         }
     }
 
+    pub(crate) fn undo_added_handles(&self, source: Source) -> Vec<u64> {
+        fn collect(step: &Step, out: &mut Vec<u64>) {
+            match step {
+                Step::Document(change) => out.extend(change.added.iter().map(|h| h.value())),
+                Step::Group(steps, _) => {
+                    for step in steps {
+                        collect(step, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        if self.undo.len() > self.floor {
+            if let Some(entry) = self.undo.last().filter(|e| e.source == source) {
+                collect(&entry.step, &mut out);
+            }
+        }
+        out
+    }
+
     /// What can be undone (oldest first) and redone (next first): each step's label and who
     /// made it.
     pub(crate) fn labels(&self) -> (Vec<HistoryStep>, Vec<HistoryStep>) {

@@ -47,6 +47,8 @@ pub use surface::tools as catalogue;
 pub use tools::ToolSpec;
 pub use window::{is_window_tool, run_window};
 
+mod churn;
+mod normalise;
 mod surface_args;
 
 mod document;

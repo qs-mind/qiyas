@@ -2156,6 +2156,14 @@ impl Session {
                 });
             }
             Command::SetDescription { id, text } => {
+                if self
+                    .takeoff
+                    .items
+                    .iter()
+                    .any(|m| m.id == id && m.unit == "markup")
+                {
+                    self.check_quantity_note(&text, source)?;
+                }
                 return Ok(match self.takeoff.items.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         m.description = text;
@@ -2202,6 +2210,9 @@ impl Session {
                 note,
                 empty_item,
             } => {
+                if unit.as_deref() == Some("markup") {
+                    self.check_quantity_note(&format!("{description}\n{note}"), source)?;
+                }
                 if matches!(source, Source::Ai | Source::Mcp)
                     && kind == Kind::Item
                     && points.is_empty()
@@ -2258,6 +2269,14 @@ impl Session {
                 });
             }
             Command::SetNote { id, text } => {
+                if self
+                    .takeoff
+                    .items
+                    .iter()
+                    .any(|m| m.id == id && m.unit == "markup")
+                {
+                    self.check_quantity_note(&text, source)?;
+                }
                 return self.edit(&id, |m| {
                     m.note = text;
                     Ok(())
@@ -2442,6 +2461,13 @@ impl Session {
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::EditText { target, value, tag } => {
+                if self
+                    .list_comments()
+                    .iter()
+                    .any(|c| c.label == Some(target.handle))
+                {
+                    self.check_quantity_note(&value, source)?;
+                }
                 self.edit_text(&target, &value, tag.as_deref())?;
                 return Ok(Outcome::Changed);
             }
@@ -2475,6 +2501,7 @@ impl Session {
                 text,
                 arc_len,
             } => {
+                self.check_quantity_note(&text, source)?;
                 let handles = self.add_comment(points.into(), &text, arc_len)?;
                 return Ok(Outcome::Added { handles });
             }
@@ -2904,6 +2931,7 @@ impl Session {
                 language,
             } => return self.label_spaces(&query, layer, height, decimals, language, source),
             Command::AddMarkup { kind, points, text } => {
+                self.check_quantity_note(&text, source)?;
                 let (note, least) = match kind {
                     MarkupKind::Cloud => ("cloud", 3),
                     MarkupKind::Note => ("note", 1),

@@ -114,7 +114,10 @@ impl Session {
         let mut input = raw.clone();
         crate::registry::canonicalize(&mut input);
         self.resolve_input_handles(&mut input)?;
-        let report = self.validate_input(&input);
+        let mut report = self.validate_input(&input);
+        report
+            .warnings
+            .extend(crate::registry::normalization_warnings(raw));
         let parsed = serde_path_to_error::deserialize::<_, Command>(input.clone());
         if !report.valid {
             let mut message = report.message();

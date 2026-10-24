@@ -308,23 +308,22 @@ impl Session {
                     let [[x0, y0], [x1, y1]] = bounds;
                     let text =
                         format!("RFI {}\n{}\n{}", c.id, query.question_en, query.question_ar);
-                    let outcome = s.run_as(
-                        Command::Comment {
-                            points: vec![
-                                [x0 - pad, y0 - pad],
-                                [x1 + pad, y0 - pad],
-                                [x1 + pad, y1 + pad],
-                                [x0 - pad, y1 + pad],
-                            ]
-                            .into(),
-                            text,
-                            arc_len: None,
-                        },
-                        source,
-                    )?;
-                    if let Outcome::Added { handles } = outcome {
-                        query.clouds.push(handles[0]);
-                    }
+                    // This text is derived by the check engine, with evidence in the query.
+                    // User-supplied AI/MCP comments still require a take-off citation.
+                    let handles =
+                        s.record_document_change(source, "comment", true, false, |s| {
+                            s.add_comment(
+                                vec![
+                                    [x0 - pad, y0 - pad],
+                                    [x1 + pad, y0 - pad],
+                                    [x1 + pad, y1 + pad],
+                                    [x0 - pad, y1 + pad],
+                                ],
+                                &text,
+                                None,
+                            )
+                        })?;
+                    query.clouds.push(handles[0]);
                 }
             }
             s.set_sheet(&original_sheet)?;

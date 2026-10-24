@@ -309,8 +309,8 @@ pub enum PlanStatus {
 
 pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
     let plan: Plan = read_args(args, "plan")?;
-    if plan.phases.is_empty() || plan.phases.len() > 24 {
-        return Err(bad("plan needs 1 to 24 phases"));
+    if plan.phases.len() < 2 || plan.phases.len() > 24 {
+        return Err(bad("Use 2 to 24 small phases, not one phase for the whole job: grid, walls, openings, rooms, dimensions, sheet as needed. Use one batch per phase, then capture and check; fix by handle."));
     }
     let mut ids = std::collections::BTreeSet::new();
     let mut active = 0;
@@ -338,13 +338,13 @@ pub(super) fn plan_info() -> Value {
         "name": "plan",
         "tool": EXECUTE,
         "op": "plan",
-        "doc": "State the task's phases in the user's language before drawing. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
+        "doc": "State at least two small phases in the user's language before drawing: grid, walls, openings, rooms, dimensions, sheet as needed. Use one batch per phase and fix by handle. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
         "changes": false,
         "undo": false,
         "schema": {
             "type": "object", "additionalProperties": false, "required": ["phases"],
             "properties": {"phases": {
-                "type": "array", "minItems": 1, "maxItems": 24,
+                "type": "array", "minItems": 2, "maxItems": 24,
                 "items": {"type": "object", "additionalProperties": false,
                     "required": ["id", "title", "status"],
                     "properties": {
@@ -479,6 +479,9 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
     if !is_surface_tool(name) {
         return Err(format!("No tool named {name}"));
     }
+    let (normalized, _) =
+        crate::normalise::envelope(name, input).map_err(|e| e.json().to_string())?;
+    let input = &normalized;
     let field = if name == CAPTURE { "source" } else { "op" };
     let mut envelope = tools()
         .into_iter()
@@ -512,7 +515,9 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
         .to_string();
     let args = read_handle_values(&args);
     if let Some(entry) = operation(name, &op) {
-        crate::surface_args::validate(name, &op, &args)
+        let (normalized, _) =
+            crate::normalise::args(name, &op, &args).map_err(|e| e.json().to_string())?;
+        crate::surface_args::validate(name, &op, &normalized)
             .map_err(|error| error.json().to_string())?;
         if matches!(name, READ | EXECUTE) && op == "run" && args["command"]["type"] == "project" {
             let command = qiyas_core::registry::parse_command(args["command"].clone())?;
@@ -713,9 +718,12 @@ pub fn run_session_with_method(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
-    session.with_automation_sheet(|session| {
-        run_working_session(session, tool, op, args, source, method)
-    })
+    let (args, warnings) = crate::normalise::args(tool, op, args)?;
+    session
+        .with_automation_sheet(|session| {
+            run_working_session(session, tool, op, &args, source, method)
+        })
+        .map(|out| crate::normalise::output(out, &warnings))
 }
 
 fn run_working_session(
@@ -1239,7 +1247,11 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
     if let Some(map) = rest.as_object_mut() {
         map.remove("kind");
     }
-    match kind {
+    let limit = rest
+        .as_object_mut()
+        .and_then(|o| o.remove("limit"))
+        .and_then(|v| v.as_u64());
+    let result = match kind {
         "near" => {
             let p: [f64; 2] = read_args(&args["point"], "query near: point")?;
             let r = args["radius"]
@@ -1295,7 +1307,32 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             "query has no kind {other}: {}",
             QUERY_KINDS.join(", ")
         ))),
-    }
+    };
+    result.map(|mut result| {
+        if !matches!(kind, "near" | "window") {
+            if let (Some(limit), ToolOutput::Json(v)) = (limit, &mut result) {
+                if let Some(rows) = v["rows"].as_array_mut() {
+                    rows.truncate(limit.min(500) as usize);
+                    let end = args["offset"].as_u64().unwrap_or(0) + rows.len() as u64;
+                    v["next_offset"] = if end < v["total"].as_u64().unwrap_or(0) && limit > 0 {
+                        json!(end)
+                    } else {
+                        Value::Null
+                    };
+                    crate::normalise::append(
+                        v,
+                        &[qiyas_core::validation::InputIssue {
+                            code: "normalised_input".into(),
+                            pointer: "/args/limit".into(),
+                            message: "Normalised query limit to a page size (at most 500 rows)."
+                                .into(),
+                        }],
+                    );
+                }
+            }
+        }
+        result
+    })
 }
 
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
