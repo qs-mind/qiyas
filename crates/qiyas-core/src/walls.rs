@@ -1124,7 +1124,13 @@ impl Session {
         let mut reuse = BTreeMap::new();
         for group in old {
             for &(handle, ref role, _) in &group.members {
-                let candidates = &result.handle_map[&handle];
+                // Only a member still in the drawing can lend its handle to its replacement.
+                if self.drawing.doc.get_entity(Handle::new(handle)).is_none() {
+                    continue;
+                }
+                let Some(candidates) = result.handle_map.get(&handle) else {
+                    continue;
+                };
                 if matches!(role.as_str(), "run" | "opening") && candidates.len() == 1 {
                     reuse.entry(candidates[0]).or_insert(handle);
                 }
@@ -1136,24 +1142,26 @@ impl Session {
                 for &(handle, ref role, _) in &group.members {
                     if matches!(role.as_str(), "run" | "opening")
                         || reuse.values().any(|h| *h == handle)
+                        || self.drawing.doc.get_entity(Handle::new(handle)).is_none()
                     {
                         continue;
                     }
+                    // A member an earlier undo or edit already removed has no shape to
+                    // compare: it simply cannot be matched exactly (it used to panic).
                     let shape = |h| {
-                        crate::net_effect::geometry_state(
-                            self.drawing
-                                .doc
-                                .get_entity(Handle::new(h))
-                                .expect("wall member"),
-                        )
+                        self.drawing
+                            .doc
+                            .get_entity(Handle::new(h))
+                            .map(crate::net_effect::geometry_state)
                     };
-                    if let Some(&new) = result.handle_map[&handle].iter().find(|h| {
+                    let Some(replacements) = result.handle_map.get(&handle) else {
+                        continue;
+                    };
+                    if let Some(&new) = replacements.iter().find(|h| {
                         !reuse.contains_key(h)
                             && (!exact
-                                || crate::net_effect::same_geometry_state(
-                                    &shape(**h),
-                                    &shape(handle),
-                                ))
+                                || matches!((shape(**h), shape(handle)), (Some(a), Some(b))
+                                    if crate::net_effect::same_geometry_state(&a, &b)))
                     }) {
                         reuse.insert(new, handle);
                     }
