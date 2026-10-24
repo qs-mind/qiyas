@@ -453,7 +453,9 @@ impl Provider for LivePattern {
                 .messages
                 .iter()
                 .flat_map(|m| &m.content)
-                .any(|b| matches!(b,ContentBlock::Text{text} if text.contains("[finish now]")));
+                // The agent passes the budget on as advice (Goal L); this scripted model decides
+                // to finish when it sees it.
+                .any(|b| matches!(b,ContentBlock::Text{text} if text.contains("[finish now]") || text.contains("[cost advice]")));
             // Both estimates include identical budget notices; only old tool evidence differs.
             let input_tokens = replay_tokens(&req);
             let mut trace = self.trace.lock().unwrap();
@@ -620,14 +622,17 @@ async fn live_pattern_has_bounded_history_finishes_at_eighty_percent_and_scores_
             trace.before,
             trace.after
         );
+        // Goal L's read revision (five short fields, about 40 tokens) rides on every retained
+        // result; the history stays bounded, so the peak moved from about 19.9k to 20.3k.
         assert!(
-            trace.after.iter().max().unwrap() < &20_000,
+            trace.after.iter().max().unwrap() < &21_000,
             "{:?}",
             trace.after
         );
         let usage = totals.lock().unwrap();
         if finish {
-            assert!(usage.estimated_usd < 0.25, "{}", usage.estimated_usd);
+            // About 3% above the earlier 0.25 bound: the read revision on every result (Goal L).
+            assert!(usage.estimated_usd < 0.27, "{}", usage.estimated_usd);
         }
         let evidence = json!({"run":name,"before":trace.before,"after":trace.after,"estimated_usd":usage.estimated_usd,"status":status,
             "counting":"UTF-8 bytes / 4, 1024 tokens per image; same calls and outputs, before retains all history","score":score.rates});

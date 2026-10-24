@@ -2312,14 +2312,15 @@ impl Session {
                 return Ok(Outcome::Changed);
             }
             Command::ResolveConflict { id, status, note } => {
-                return Ok(match self.conflicts.iter_mut().find(|c| c.id == id) {
-                    Some(c) => {
-                        c.status = status;
-                        c.note = note;
-                        Outcome::Changed
-                    }
-                    None => Outcome::Nothing,
-                });
+                // A conflict that does not exist is a fact to report, not a silent no-op.
+                let Some(c) = self.conflicts.iter_mut().find(|c| c.id == id) else {
+                    return Err(CoreError::InvalidCommand(format!(
+                        "No conflict with id {id}; read the conflicts list for the current ids"
+                    )));
+                };
+                c.status = status;
+                c.note = note;
+                return Ok(Outcome::Changed);
             }
             Command::ImportPdf {
                 path,

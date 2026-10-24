@@ -1114,14 +1114,19 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
             "DONE\n",
             "ERROR\n    The AI service answered 400: The request was rejected",
             "INVALID_ARGUMENT",
-            // A 4xx logs what was sent, so the next refusal can be read in the log.
-            "\n    The request: {",
+            // A 4xx logs what was sent (its last 4,000 characters after "…" when longer),
+            // so the next refusal can be read in the log.
+            "\n    The request: ",
             r#""content":"","role":"assistant","tool_calls":["#,
             r#""role":"tool","tool_call_id":"f3""#,
             " tools: ",
-            "<system prompt, ",
         ] {
             assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
+        }
+        // The system prompt's stand-in sits at the front of the request, which a long request's
+        // 4,000-character tail leaves out.
+        if text.contains("\n    The request: {") {
+            assert!(text.contains("<system prompt, "), "the log lacks the system prompt's length");
         }
         assert_eq!(text.matches("TOOL qiyas_read (").count(), 3);
         assert!(!text.contains(KEY));
