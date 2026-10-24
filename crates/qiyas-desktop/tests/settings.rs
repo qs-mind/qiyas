@@ -491,3 +491,21 @@ fn effort_is_per_provider_with_responsive_defaults_and_legacy_migration() {
     assert_eq!(migrated.effective_effort(), "medium");
     assert!(settings::validate(&migrated).is_ok());
 }
+
+#[test]
+fn technical_details_are_opt_in_and_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = settings::load(dir.path());
+    assert!(!settings.show_technical_details);
+    for enabled in [true, false] {
+        settings.show_technical_details = enabled;
+        settings::save(dir.path(), &settings).unwrap();
+        assert_eq!(settings::load(dir.path()).show_technical_details, enabled);
+    }
+    let mut old = serde_json::to_value(&settings).unwrap();
+    old.as_object_mut()
+        .unwrap()
+        .remove("show_technical_details");
+    let restored: Settings = serde_json::from_value(old).unwrap();
+    assert!(!restored.show_technical_details);
+}

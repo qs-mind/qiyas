@@ -1369,6 +1369,8 @@ export type ProviderProfile = { effort?: Effort | null; model: string; base_url?
 
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
+  /** Support details in Mizan; off unless explicitly enabled. */
+  show_technical_details?: boolean;
   provider: Provider;
   providers: Record<ApiProvider, ProviderProfile> & Partial<Record<"chatgpt_plan" | "claude_code", ProviderProfile>>;
   claude_executable?: string | null;

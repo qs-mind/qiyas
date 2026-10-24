@@ -43,3 +43,24 @@
   font-display: swap;
   src: url("./thmanyah/thmanyahsans-Bold.otf") format("opentype");
 }
+
+/* Arabic prose uses a complete face so WebKit need not split a marked Arabic run
+   across Unicode-range font subsets. Latin identifiers keep the Latin UI face. */
+@font-face {
+  font-family: "Thmanyah Arabic";
+  font-weight: 400;
+  font-display: swap;
+  src: url("./thmanyah/thmanyahsans-Regular.otf") format("opentype");
+}
+@font-face {
+  font-family: "Thmanyah Arabic";
+  font-weight: 500;
+  font-display: swap;
+  src: url("./thmanyah/thmanyahsans-Medium.otf") format("opentype");
+}
+@font-face {
+  font-family: "Thmanyah Arabic";
+  font-weight: 700;
+  font-display: swap;
+  src: url("./thmanyah/thmanyahsans-Bold.otf") format("opentype");
+}

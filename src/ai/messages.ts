@@ -210,10 +210,14 @@ export function startNewOffered(t: Transcript): boolean {
   return last?.kind === "refused" || (last?.kind === "stopped" && last.reason === TOO_LONG);
 }
 
-/** Recovery belongs to this user turn; a later unrelated request cannot recover an older step. */
+/** Presentation only: a successful retry of this operation can resolve its earlier error.
+ * An unrelated successful read or a later user request cannot resolve a failed edit. */
 export function recoveringCard(items: Item[], index: number, busy: boolean): boolean {
+  const failed = items[index];
+  if (failed?.kind !== "tool" || failed.status !== "error") return false;
   const rest = items.slice(index + 1);
   const nextTurn = rest.findIndex((item) => item.kind === "user");
   return (busy && nextTurn < 0) || (nextTurn < 0 ? rest : rest.slice(0, nextTurn))
-    .some((item) => item.kind === "tool" && item.status === "done");
+    .some((item) => item.kind === "tool" && item.status === "done" && !!failed.label
+      && item.name === failed.name && item.label === failed.label);
 }

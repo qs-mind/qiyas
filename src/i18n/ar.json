@@ -1784,5 +1784,10 @@
   "ai.error.chatgpt_account_mismatch": "تسجيل الدخول هذا لحساب مختلف. اختر إضافة حساب في الإعدادات.",
   "ai.error.chatgpt_revocation_unconfirmed": "تم تسجيل الخروج على هذا الجهاز. تعذّر تأكيد فصل الاتصال لدى ChatGPT؛ أزل قياس من إعدادات ChatGPT.",
   "ai.error.chatgpt_incomplete": "لم يُكمل ChatGPT إجابته. أرسل رسالتك مجددًا.",
-  "ai.error.chatgpt_failed": "تعذّر على ChatGPT إكمال الطلب. راجعه وحاول مجددًا."
+  "ai.error.chatgpt_failed": "تعذّر على ChatGPT إكمال الطلب. راجعه وحاول مجددًا.",
+  "takeoff.note": "ملاحظة",
+  "takeoff.notes": "ملاحظات",
+  "settings.showTechnicalDetails": "إظهار التفاصيل التقنية",
+  "activity.recovered": "تم حل مشكلة.",
+  "grid.actions": "إجراءات"
 }

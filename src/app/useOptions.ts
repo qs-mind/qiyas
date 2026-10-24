@@ -13,6 +13,7 @@ const KNOWN = new Set(SHORTCUT_COMMANDS.map(([c]) => c));
 type Deps = Pick<Shell, "setError"> & { t: T; info: DrawingInfo | null };
 
 export function useOptions({ t, info, setError }: Deps) {
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [aliasesOpen, setAliasesOpen] = useState(false);
@@ -35,6 +36,7 @@ export function useOptions({ t, info, setError }: Deps) {
 
   /** Takes the options from the settings (as read, or as a dialog saved them). */
   function takeSettings(s: Settings) {
+    setShowTechnicalDetails(s.show_technical_details ?? false);
     setDisplayPrecision(s.display_precision ?? 3);
     setPx({ snap: s.snap_aperture_px ?? 10, pick: s.pick_box_px ?? 6 });
     setUserShortcuts(s.shortcuts ?? {});
@@ -62,6 +64,7 @@ export function useOptions({ t, info, setError }: Deps) {
   }, []);
 
   return {
+    showTechnicalDetails,
     optionsOpen,
     setOptionsOpen,
     customizeOpen,

@@ -18,8 +18,9 @@ import {
   type ColumnDef,
   type SortFn,
 } from "@tanstack/react-table";
-import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import { measureElement, observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -29,16 +30,20 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
+import { clearTextWidths, textWidth } from "./textWidth";
 import { useLanguage, useT } from "../i18n";
 
 export type GridColumn<Row extends object> = {
   id: string;
   /** The column's title (text: it names the column for the screen reader and the resize edge). */
   header: string;
-  /** The width in pixels it starts at; a column that `grow`s gives way down to its `minSize`. */
+  /** Initial width until rendered content can be measured. */
   size: number;
   /** The narrowest the user can drag it to. */
   minSize?: number;
+  /** Automatic text width cap; long text wraps. User widths can exceed it. */
+  maxAutoSize?: number;
   /** Takes the room left over (one or two of a grid's columns: a description, a note). */
   grow?: boolean;
   /** Numbers: at the end of the cell, in tabular figures. */
@@ -50,7 +55,7 @@ export type GridColumn<Row extends object> = {
   title?(row: Row): string | undefined;
   /** A class on the cell: a muted value, a flagged difference. */
   cellClass?(row: Row): string | undefined;
-  /** Wraps to two lines, not one (a sentence): the grid's `rowHeight` must be tall enough. */
+  /** Explicitly marks prose; all cells can wrap without clipping. */
   wrap?: boolean;
   /** A click in the cell is not a click on the row (a cell that is edited in place). */
   isolate?: boolean;
@@ -76,15 +81,15 @@ export type GridProps<Row extends object> = {
   /** A row that cannot be clicked (an item with no code to link). */
   isDisabled?(row: Row): boolean;
   rowClass?(row: Row): string | undefined;
-  /** Buttons at the end of the row that show while it is hovered, focused or the current one. */
+  /** Buttons in a reserved final column, visible on hover, focus or the current row. */
   actions?(row: Row): ReactNode;
   /** Names the grid's remembered column widths; without it they last for this session. */
   storageKey?: string;
   /** What shows instead of the rows when there are none. */
   empty?: ReactNode;
-  /** A row's height in pixels; 27 by default. */
+  /** Initial row estimate and minimum; 27 px by default, then measured after wrapping. */
   rowHeight?: number;
-  /** Measure each row after wrapping; rowHeight is the initial estimate and minimum. */
+  /** Retained for callers; all rows now measure after wrapping. */
   autoRowHeight?: boolean;
 };
 
@@ -134,6 +139,8 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
   const { lang } = useLanguage();
   const rtl = lang === "ar";
 
+  const [actionsWidth, setActionsWidth] = useState(actions ? 32 : 0);
+  const [autoSizes, setAutoSizes] = useState<Record<string, number>>({});
   const defs = useMemo<ColumnDef<typeof features, Row>[]>(
     () =>
       columns.map((c) => ({
@@ -144,11 +151,11 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
         sortDescFirst: c.align === "end",
         sortFn: compare as unknown as SortFn<typeof features, Row>,
         sortUndefined: "last" as const,
-        size: c.size,
+        size: autoSizes[c.id] ?? c.size,
         minSize: c.minSize ?? 40,
         maxSize: 1200,
       })),
-    [columns],
+    [columns, autoSizes],
   );
   const table = useTable({
     features,
@@ -170,8 +177,8 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
   }, [sizing, storageKey]);
 
   // The rows in the order shown: sorted, and gathered under their sections.
-  const sorted = table.getRowModel().rows.map((r) => r.original);
   const items = useMemo<Item<Row>[]>(() => {
+    const sorted = table.getRowModel().rows.map((r) => r.original);
     if (!section) return sorted.map((row) => ({ kind: "row", key: rowKey(row), row }));
     const order: string[] = [];
     const by = new Map<string, Row[]>();
@@ -191,41 +198,89 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
       for (const row of inside) out.push({ kind: "row", key: rowKey(row), row });
     }
     return out;
-    // `sorted` is new on every render; what it depends on is the rows and the sorting.
+    // Row order changes with the data or sorting, not with scroll position or column widths.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, table.state.sorting, section, rowKey]);
 
   const scroller = useRef<HTMLDivElement>(null);
+  // Stable keys let the virtualiser reuse its 10,000-row index while only the viewport changes.
+  const itemKey = useCallback((i: number) => items[i].key, [items]);
   const virtual = useVirtualizer({
     count: items.length,
+    getItemKey: itemKey,
     getScrollElement: () => scroller.current,
     // Section heads are always one line.
     estimateSize: (i) => (items[i]?.kind === "section" ? ROW_HEIGHT : rowHeight),
     overscan: 10,
     initialRect: { width: 600, height: 600 },
     observeElementRect: observeRect,
+    measureElement: (element, entry, instance) => measureElement(element, entry, instance) || rowHeight,
   });
 
   // The columns' widths: the one that grows takes what is left (`1fr`); in a narrow panel it gives
   // way down to its `minSize` before the grid scrolls sideways.
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const byId = new Map(columns.map((c) => [c.id, c]));
-  const floor = (h: (typeof headers)[number]) => {
-    const c = byId.get(h.column.id);
-    return c?.grow ? Math.min(h.getSize(), c.minSize ?? h.getSize()) : h.getSize();
+  const growing = headers.filter((h) => byId.get(h.column.id)?.grow && sizing[h.column.id] === undefined);
+  const natural = headers.reduce((sum, h) => sum + h.getSize(), 0) + actionsWidth;
+  const room = virtual.scrollRect?.width ?? 600;
+  const shrinkable = growing.reduce((sum, h) => sum + Math.max(0, h.getSize() - (byId.get(h.column.id)?.minSize ?? h.getSize())), 0);
+  const shrink = Math.min(shrinkable, Math.max(0, natural - room));
+  const actual = (h: (typeof headers)[number]) => {
+    const c = byId.get(h.column.id)!;
+    const spare = Math.max(0, h.getSize() - (c.minSize ?? h.getSize()));
+    return growing.includes(h) && shrinkable ? Math.ceil(h.getSize() - shrink * spare / shrinkable) : h.getSize();
   };
-  const template = headers
-    .map((h) => (byId.get(h.column.id)?.grow ? `minmax(${floor(h)}px, 1fr)` : `${h.getSize()}px`))
-    .join(" ");
-  const total = headers.reduce((sum, h) => sum + floor(h), 0);
+  const template = [...headers.map((h) => growing.includes(h) ? `minmax(${actual(h)}px, 1fr)` : `${h.getSize()}px`), ...(actions ? [`${actionsWidth}px`] : [])].join(" ");
+  const total = headers.reduce((sum, h) => sum + actual(h), 0) + actionsWidth;
   const style = { "--cols": template, minWidth: total } as CSSProperties;
+
+  // Text measurement only visits mounted cells, never the complete row set. The canvas cache
+  // avoids reshaping the same strings while scrolling. Font loading invalidates those widths.
+  useLayoutEffect(() => { setAutoSizes({}); }, [rows, lang]);
+  useEffect(() => {
+    const loaded = () => { clearTextWidths(); setAutoSizes({}); virtual.measure(); };
+    document.fonts?.addEventListener("loadingdone", loaded);
+    return () => document.fonts?.removeEventListener("loadingdone", loaded);
+  }, [virtual]);
+  useLayoutEffect(() => {
+    if (actions) {
+      const widths = Array.from(scroller.current?.querySelectorAll<HTMLElement>(".grid-actions") ?? [], (element) => element.offsetWidth);
+      setActionsWidth((old) => Math.max(old, ...widths));
+    }
+    const measured: Record<string, number> = {};
+    scroller.current?.querySelectorAll<HTMLElement>("[data-column]").forEach((element) => {
+      const id = element.dataset.column!;
+      const column = byId.get(id)!;
+      const css = getComputedStyle(element);
+      const control = element.querySelector("input, select, textarea");
+      // Native controls keep their visible value outside textContent; unchosen options are hidden.
+      const text = control instanceof HTMLSelectElement
+        ? Array.from(control.selectedOptions, (option) => option.textContent ?? "").join(" ")
+        : control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
+          ? control.value : element.textContent ?? "";
+      const width = textWidth(text, css);
+      if (!width) return;
+      const padding = (parseFloat(css.paddingLeft) || 6) + (parseFloat(css.paddingRight) || 6);
+      const extra = element.getAttribute("role") === "columnheader" ? 14 : element.querySelector("select, svg") ? 22 : 2;
+      measured[id] = Math.max(measured[id] ?? 0, Math.min(column.maxAutoSize ?? 360, Math.ceil(width + padding + extra)), column.minSize ?? 40);
+    });
+    setAutoSizes((old) => {
+      const next = { ...old };
+      let changed = false;
+      for (const [id, width] of Object.entries(measured)) {
+        if (old[id] === undefined || width > old[id]) { next[id] = width; changed = true; }
+      }
+      return changed ? next : old;
+    });
+  });
 
   // Rows by the keyboard: the arrows, Home and End move between them, even those scrolled out of
   // view (the list scrolls to them first); one row is the tab stop.
   const [stop, setStop] = useState<string | null>(null);
   const wanted = useRef<string | null>(null);
-  const rowItems = items.filter((i) => i.kind === "row");
-  const tabStop = rowItems.some((i) => i.key === stop) ? stop : (rowItems[0]?.key ?? null);
+  const rowItems = useMemo(() => items.filter((i) => i.kind === "row"), [items]);
+  const tabStop = stop !== null && rowItems.some((i) => i.key === stop) ? stop : (rowItems[0]?.key ?? null);
   useLayoutEffect(() => {
     const key = wanted.current;
     if (key === null) return;
@@ -266,7 +321,7 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
       role="table"
       aria-label={label}
       aria-rowcount={items.length + 1}
-      aria-colcount={columns.length}
+      aria-colcount={columns.length + (actions ? 1 : 0)}
     >
       <div className="grid-inner" style={style}>
         <div className="grid-head" role="row" aria-rowindex={1}>
@@ -278,6 +333,7 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
               <div
                 key={h.id}
                 role="columnheader"
+                data-column={h.column.id}
                 className={c.align === "end" ? "grid-th end" : "grid-th"}
                 aria-sort={sort === "asc" ? "ascending" : sort === "desc" ? "descending" : sortable ? "none" : undefined}
               >
@@ -302,22 +358,33 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
                     aria-valuenow={h.getSize()}
                     aria-valuemin={c.minSize ?? 40}
                     tabIndex={0}
-                    onMouseDown={h.getResizeHandler()}
-                    onTouchStart={h.getResizeHandler()}
-                    onDoubleClick={() => h.column.resetSize()}
+                    onMouseDown={(event) => {
+                      const width = event.currentTarget.parentElement?.getBoundingClientRect().width;
+                      if (width) flushSync(() => table.setColumnSizing((old) => ({ ...old, [h.column.id]: width })));
+                      h.getResizeHandler()(event);
+                    }}
+                    onTouchStart={(event) => {
+                      const width = event.currentTarget.parentElement?.getBoundingClientRect().width;
+                      if (width) flushSync(() => table.setColumnSizing((old) => ({ ...old, [h.column.id]: width })));
+                      h.getResizeHandler()(event);
+                    }}
+                    onDoubleClick={() => table.setColumnSizing((old) => {
+                      const next = { ...old }; delete next[h.column.id]; return next;
+                    })}
                     onKeyDown={(e) => {
                       const grow = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
                       if (grow === 0) return;
                       e.preventDefault();
                       // Right widens a column in English; in Arabic the column is on the other side.
                       const by = (rtl ? -grow : grow) * 16;
-                      table.setColumnSizing((was) => ({ ...was, [h.column.id]: Math.max(c.minSize ?? 40, h.getSize() + by) }));
+                      table.setColumnSizing((was) => ({ ...was, [h.column.id]: Math.max(c.minSize ?? 40, (e.currentTarget.parentElement?.getBoundingClientRect().width || h.getSize()) + by) }));
                     }}
                   />
                 )}
               </div>
             );
           })}
+          {actions && <div role="columnheader" aria-label={t("grid.actions")} />}
         </div>
         {items.length === 0 ? (
           empty
@@ -325,11 +392,11 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
           <div className="grid-body" style={{ height: virtual.getTotalSize() }}>
             {virtual.getVirtualItems().map((v) => {
               const item = items[v.index];
-              const at = { transform: `translateY(${v.start}px)`, ...(props.autoRowHeight && item.kind === "row" ? { minHeight: rowHeight } : { height: v.size }) };
+              const at = { transform: `translateY(${v.start}px)`, ...(item.kind === "row" ? { minHeight: rowHeight } : { height: v.size }) };
               if (item.kind === "section") {
                 return (
                   <div key={item.key} className="grid-row grid-section" role="row" aria-rowindex={v.index + 2} style={at}>
-                    <div role="rowheader" className="grid-sectionname" title={item.label} aria-colspan={columns.length}>
+                    <div role="rowheader" className="grid-sectionname" title={item.label} aria-colspan={columns.length + (actions ? 1 : 0)}>
                       {item.label}
                       {sectionCount && (
                         <>
@@ -353,7 +420,7 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
                   aria-current={current || undefined}
                   aria-disabled={disabled || undefined}
                   data-index={v.index}
-                  ref={props.autoRowHeight ? virtual.measureElement : undefined}
+                  ref={virtual.measureElement}
                   data-row-key={item.key}
                   tabIndex={item.key === tabStop ? 0 : -1}
                   style={at}
@@ -368,6 +435,7 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
                       <div
                         key={h.column.id}
                         role="cell"
+                        data-column={h.column.id}
                         className={`grid-cell${c.align === "end" ? " end" : ""}${c.wrap ? " wrap" : ""}${extra ? ` ${extra}` : ""}`}
                         title={c.title?.(row)}
                         onClick={c.isolate || c.onDoubleClick ? (e) => e.stopPropagation() : undefined}
