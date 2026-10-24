@@ -1871,7 +1871,11 @@ impl Session {
                 Step::Conflicts(self.conflicts.clone(), self.schedules.clone())
             }
         };
-        let outcome = match self.execute(cmd, source) {
+        let executed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(cmd, source)))
+            .unwrap_or_else(|_| Err(CoreError::InvalidCommand(
+                "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
+            )));
+        let outcome = match executed {
             Ok(outcome) => outcome,
             Err(e) => {
                 // A command that failed half way leaves its part as it was.
@@ -1961,7 +1965,11 @@ impl Session {
         // extra structure copy to these commands, preserving ordinary large-drawing edit cost.
         let failed_structure = matches!(
             label,
-            "define_object_type"
+            "walls"
+                | "add_wall_openings"
+                | "edit_wall_opening"
+                | "remove_wall_openings"
+                | "define_object_type"
                 | "redefine_object_type"
                 | "delete_object_type"
                 | "place_objects"
@@ -1981,7 +1989,10 @@ impl Session {
         .transpose()?;
         let recorder = self.drawing.doc.begin_entity_change_recording();
         let mut before = Vec::new();
-        let done = f(self).and_then(|value| {
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            f(self).and_then(|value| {
+                #[cfg(any(test, feature = "fixtures"))]
+                crate::fixtures::panic_after_document_edit();
             before = recorder.take_before_images();
             let unchanged = before.iter().all(|(handle, old)| {
                 match (old.as_deref(), self.drawing.doc.get_entity(*handle)) {
@@ -2002,7 +2013,11 @@ impl Session {
                 crate::net_effect::RequestedChanges::capture(&self.drawing.doc, &before);
             self.rederive(derived_inputs.as_ref(), &mut requested)?;
             Ok(value)
-        });
+            })
+        }))
+        .unwrap_or_else(|_| Err(CoreError::InvalidCommand(
+            "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
+        )));
         self.drawing.doc.end_entity_change_recording();
         let touched: std::collections::BTreeSet<_> = before.iter().map(|(h, _)| *h).collect();
         before.extend(

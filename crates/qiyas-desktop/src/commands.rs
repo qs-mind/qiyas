@@ -31,13 +31,15 @@ pub(crate) fn with_session<R>(
     state: &AppState,
     f: impl FnOnce(&mut Session) -> Result<R, CoreError>,
 ) -> Result<R, String> {
-    // A panic in an earlier command leaves the session as it was; keep using it.
+    // Core edits roll back before returning an error. Recover older poisoned locks too.
     let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
     let session = guard.as_mut().ok_or("No drawing is open")?;
     session
         .automation_sheet
         .get_or_insert_with(|| session.sheet.clone());
-    f(session).map_err(|e| e.to_string())
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(session)))
+        .map_err(|_| "The command stopped unexpectedly. You can keep working.".to_string())?
+        .map_err(|e| e.to_string())
 }
 
 /// Opens a drawing in a new tab, or shows its tab when the file is open already; the assistant
@@ -2559,5 +2561,60 @@ mod tests {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod panic_recovery_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_panicking_desktop_edit_releases_the_session_and_keeps_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::new(dir.path().join("config")));
+        *state.session.lock().unwrap() = Some(Session::new_blank(&dir.path().join("panic.dxf"), 6));
+        let worker = state.clone();
+        let error = std::thread::spawn(move || {
+            with_session(&worker, |s| {
+                qiyas_core::fixtures::panic_on_document_edit(2);
+                s.run_input(
+                    &json!({"type":"batch","commands":[
+                        {"type":"draw","kind":"line","a":[0,0],"b":[1,0]},
+                        {"type":"draw","kind":"line","a":[0,1],"b":[1,1]}
+                    ]}),
+                    Source::User,
+                )
+            })
+            .unwrap_err()
+        })
+        .join()
+        .expect("desktop command returned normally");
+        assert!(error.contains("rolled back"), "{error}");
+        {
+            let guard = state.session.try_lock().expect("released and not poisoned");
+            let s = guard.as_ref().unwrap();
+            assert_eq!(s.drawing.doc.entities().count(), 0);
+            assert!(s.history_steps().0.is_empty());
+        }
+        with_session(&state, |s| {
+            s.run_input(
+                &json!({"type":"draw","kind":"line","a":[0,0],"b":[1,0]}),
+                Source::User,
+            )?;
+            assert_eq!(s.drawing.doc.entities().count(), 1);
+            assert!(s.undo());
+            assert_eq!(s.drawing.doc.entities().count(), 0);
+            assert!(s.redo());
+            s.save_project()?;
+            Ok(())
+        })
+        .unwrap();
+        let error = with_session::<()>(&state, |_| panic!("injected host panic")).unwrap_err();
+        assert!(error.contains("keep working"));
+        assert!(
+            state.session.try_lock().is_ok(),
+            "host panic must not poison the session"
+        );
     }
 }

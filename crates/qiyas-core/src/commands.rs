@@ -528,7 +528,9 @@ pub enum Command {
     /// another batch). With `layer` the commands draw on that layer (made when missing) and with
     /// `color` in that colour ("ByLayer", "ACI n", "#rrggbb"); the current state is put back
     /// after, and undo puts back a current state the commands changed. `Outcome::Batch`: each
-    /// command's outcome and every entity added.
+    /// command's outcome and every entity added. A batch consisting only of independent
+    /// opening additions validates each input in order and rebuilds each wall once; those
+    /// outcomes share the final wall state. Mixed commands and step references stay sequential.
     #[schemars(extend("x-category" = "draw", "x-batch" = false))]
     #[schemars(example = json!({"type": "batch", "commands": [{"type": "new_layer", "name": "A-WALL"}, {"type": "set_current", "current": {"layer": "A-WALL"}}, {"type": "draw", "kind": "rectangle", "a": [0, 0], "b": [5, 4]}]}))]
     #[schemars(example = json!({"type": "batch", "layer": "A-DOOR", "commands": [{"type": "draw", "kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}, {"type": "draw", "kind": "line", "a": [0, 0], "b": [0.9, 0]}]}))]
