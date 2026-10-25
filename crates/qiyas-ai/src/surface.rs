@@ -1264,7 +1264,8 @@ fn finish_kit(kit: &mut Value) {
     let (schema, args) = crate::surface_args::contract(READ, "takeoff_check");
     kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
     // Reserve room for the read revision by avoiding duplicate prose in this compact kit.
-    kit["end_report"] = json!({"BOQ":"measurement.report.items","method":"measurement.report.selection"});
+    kit["end_report"] =
+        json!({"BOQ":"measurement.report.items","method":"measurement.report.selection"});
     kit["measurement_rules"] = json!("basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).");
 }
 
