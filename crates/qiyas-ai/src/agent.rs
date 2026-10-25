@@ -131,7 +131,7 @@ impl Default for AgentSettings {
             language: Lang::En,
             autonomy: Autonomy::Autonomous,
             measurement_method: MeasurementMethod::default(),
-            image_input: Some(true),
+            image_input: None,
         }
     }
 }

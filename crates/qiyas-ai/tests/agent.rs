@@ -1123,7 +1123,8 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
             // A 4xx logs what was sent (its last 4,000 characters after "…" when longer),
             // so the next refusal can be read in the log.
             "\n    The request: ",
-            r#""content":"","role":"assistant","tool_calls":["#,
+            // The tail can start inside the assistant message; openai.rs tests its empty content.
+            r#""id":"f3","type":"function"}]}"#,
             r#""role":"tool","tool_call_id":"f3""#,
             " tools: ",
         ] {
