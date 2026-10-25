@@ -221,7 +221,7 @@ impl Provider for Workflow {
                             _ => {}
                         }
                     }
-                    commands.push(kit["commands"]["check"]["example"].clone());
+                    commands.push(kit["commands"]["discrepancy_check"]["example"].clone());
                     ("qiyas_execute", "batch", batch)
                 },
                 4 => ("qiyas_read", "takeoff_check", json!({})),
