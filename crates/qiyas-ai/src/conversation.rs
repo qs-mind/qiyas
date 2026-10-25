@@ -110,13 +110,21 @@ pub(crate) fn append(transcript: &mut Vec<TranscriptEntry>, entry: TranscriptEnt
             }
         }
     ) {
-        while matches!(
-            transcript.last(),
-            Some(TranscriptEntry::Event {
-                event: AgentEvent::Text { .. } | AgentEvent::Thinking { .. }
-            })
-        ) {
-            transcript.pop();
+        // Cache totals belong to the turn, even when its partial answer is discarded.
+        let mut at = transcript.len();
+        while at > 0 {
+            match &transcript[at - 1] {
+                TranscriptEntry::Event {
+                    event: AgentEvent::CacheUsage { .. },
+                } => at -= 1,
+                TranscriptEntry::Event {
+                    event: AgentEvent::Text { .. } | AgentEvent::Thinking { .. },
+                } => {
+                    at -= 1;
+                    transcript.remove(at);
+                }
+                _ => break,
+            }
         }
     }
     match (transcript.last_mut(), &entry) {

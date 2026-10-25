@@ -49,7 +49,7 @@ request("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
 server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
 server.stdin.flush()
 tool("qiyas_read", "digest", {})
-kit = tool("qiyas_read", "takeoff_kit", {})
+kit = tool("qiyas_read", "takeoff_kit", {"detail": "full"})
 if method:
     assert kit["measurement_method"]["name"] == method
     assert "Write rules from your knowledge" in kit["measurement_method"]["instruction"]

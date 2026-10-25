@@ -33,6 +33,7 @@ export type ToolCardItem = {
 export type Attached = { pointed?: string[]; images?: string[] };
 
 export type Item =
+  | { kind: "cache_usage"; cached: number; total: number }
   | { kind: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { kind: "provider_status"; code: string }
   | ({ kind: "user"; text: string } & Attached)
@@ -117,8 +118,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
       let kept = items;
       if (action.discard_partial) {
         let end = kept.length;
-        while (end > 0 && ["assistant", "thinking"].includes(kept[end - 1].kind)) end--;
-        kept = kept.slice(0, end);
+        while (end > 0 && ["assistant", "thinking", "cache_usage"].includes(kept[end - 1].kind)) end--;
+        kept = [...kept.slice(0, end), ...kept.slice(end).filter((item) => item.kind === "cache_usage")];
       }
       return { items: [...kept, { kind: "retrying", seconds: action.seconds, code: action.code }] };
     }
@@ -172,8 +173,19 @@ export function reduce(state: Transcript, action: Action): Transcript {
       };
     case "stopped":
       return { items: [...finishText(items), { kind: "stopped", reason: action.reason }] };
-    case "done":
-      return { items: finishText(items) };
+    case "cache_usage":
+    case "done": {
+      const cached = action.usage.cache_read_input_tokens ?? 0;
+      const total = (action.usage.input_tokens ?? 0) + cached + (action.usage.cache_creation_input_tokens ?? 0);
+      const finished = action.type === "done" ? finishText(items) : items;
+      if (total === 0) return { items: finished };
+      let start = finished.length;
+      while (start > 0 && finished[start - 1].kind !== "user") start--;
+      const at = finished.slice(start).findIndex((item) => item.kind === "cache_usage");
+      const cache: Item = { kind: "cache_usage", cached, total };
+      return { items: at < 0 ? [...finished, cache]
+        : finished.map((item, i) => i === start + at ? cache : item) };
+    }
     case "end":
       // A turn that failed may leave a card running; it never will finish now.
       return {

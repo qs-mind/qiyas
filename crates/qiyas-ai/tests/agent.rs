@@ -332,14 +332,14 @@ async fn text_stream_is_forwarded_in_order() {
         assert_eq!(b["system"][0]["type"], "text");
         assert_eq!(
             b["system"][0]["cache_control"],
-            json!({"type": "ephemeral"})
+            json!({"type": "ephemeral", "ttl": "1h"})
         );
         assert!(b["system"][0]["text"].as_str().unwrap().contains("Qiyas"));
         let tools = b["tools"].as_array().unwrap();
         assert!(tools.iter().all(|t| t["strict"] == true));
         assert_eq!(
             tools.last().unwrap()["cache_control"],
-            json!({"type": "ephemeral"})
+            json!({"type": "ephemeral", "ttl": "1h"})
         );
         assert!(tools[..tools.len() - 1]
             .iter()
@@ -619,23 +619,28 @@ async fn identical_malformed_input_stops_on_sixth_attempt() {
     .expect("test identical_malformed_input_stops_on_sixth_attempt timed out after 60 seconds");
 }
 
-/// User requests and evidence stay unchanged; job-specific guidance expires at a new turn.
+/// Cache-control markers are transport metadata; every content byte, including old guidance,
+/// must stay unchanged between trims.
 fn serialised(body: &Value) -> Vec<String> {
+    fn without_markers(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.remove("cache_control");
+                for value in map.values_mut() {
+                    without_markers(value);
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(without_markers),
+            _ => {}
+        }
+    }
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
         .map(|message| {
             let mut message = message.clone();
-            if let Some(blocks) = message["content"].as_array_mut() {
-                blocks.retain(|b| {
-                    !b["text"].as_str().is_some_and(|text| {
-                        text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
-                            || text
-                                == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar)
-                    })
-                });
-            }
+            without_markers(&mut message);
             message.to_string()
         })
         .collect()
@@ -674,7 +679,7 @@ async fn history_is_append_only_and_system_prompt_is_stable() {
             "no live take-off in the system prompt"
         );
 
-        // Evidence and user messages only append; expired job guidance is excluded.
+        // Evidence, user messages and old job guidance only append.
         for pair in reqs.windows(2) {
             let (before, after) = (serialised(&pair[0].body), serialised(&pair[1].body));
             assert!(after.len() > before.len());
@@ -906,6 +911,7 @@ async fn api_key_absent_from_logs_and_errors() {
         .await;
         let provider = mock.anthropic().with_strict_budget();
         let req = TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "s".into(),
             messages: vec![qiyas_ai::Message::user(vec![
                 qiyas_ai::ContentBlock::Text { text: "hi".into() },
@@ -1316,6 +1322,11 @@ async fn view_image_stops_when_the_image_budget_is_used() {
                     "qiyas_capture",
                     &[r#"{"source":"picture","args":{"width":64}}"#],
                 ),
+                (
+                    "toolu_3",
+                    "qiyas_capture",
+                    &[r#"{"source":"picture","args":{"width":65}}"#],
+                ),
             ]),
             _ => text_turn(&["Looked."]),
         })
@@ -1333,9 +1344,12 @@ async fn view_image_stops_when_the_image_budget_is_used() {
         let results = body["messages"][2]["content"].as_array().unwrap();
         assert!(results[0].get("is_error").is_none(), "{}", results[0]);
         assert_eq!(results[0]["content"][1]["type"], "image");
-        assert_eq!(results[1]["is_error"], true);
-        let error: Value =
+        let unchanged: Value =
             serde_json::from_str(results[1]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(unchanged["status"], "unchanged");
+        assert_eq!(results[2]["is_error"], true);
+        let error: Value =
+            serde_json::from_str(results[2]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(error["code"], "budget");
         assert_eq!(
             error["message"],
@@ -1903,10 +1917,9 @@ async fn attached_pictures_go_before_the_words() {
     .expect("test attached_pictures_go_before_the_words timed out after 60 seconds");
 }
 
-/// Old pictures give way to a line of text, so a long look round the drawing keeps working; the
-/// newest stay.
+/// Identical captures keep their first picture and append unchanged replies.
 #[tokio::test]
-async fn old_pictures_give_way_to_a_line() {
+async fn identical_pictures_keep_the_prefix_and_do_not_resend_images() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let calls: Vec<String> = (0..15).map(|k| format!("toolu_{k}")).collect();
         let mock = serve(move |n| {
@@ -1933,22 +1946,20 @@ async fn old_pictures_give_way_to_a_line() {
         let body = &requests.last().unwrap().body;
         let text = body.to_string();
         let images = text.matches("\"type\":\"image\"").count();
-        // History trimming keeps only the newest tool results whole, so at most MAX_PICTURES and
-        // at least the newest one remain; older ones give way to a line of text.
-        assert!(
-            (1..=qiyas_ai::agent::MAX_PICTURES).contains(&images),
-            "{images} pictures sent"
-        );
-        // Fifteen pictures were taken; the older ones are no longer sent whole (removed or
-        // trimmed with their tool results).
-        assert!(images < 15, "{images} pictures sent");
-        // The newest picture is still there.
+        assert_eq!(images, 1, "the same PNG is sent once");
         let messages = body["messages"].as_array().unwrap();
         let newest = &messages[messages.len() - 1]["content"][0]["content"];
-        assert_eq!(newest[1]["type"], "image");
+        let value: Value = serde_json::from_str(newest[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(value["status"], "unchanged");
+        assert_eq!(newest.as_array().unwrap().len(),1);
+        for pair in requests.windows(2) {
+            let before=serialised(&pair[0].body);
+            let after=serialised(&pair[1].body);
+            assert_eq!(&after[..before.len()],&before);
+        }
     })
     .await
-    .expect("test old_pictures_give_way_to_a_line timed out after 60 seconds");
+    .expect("test identical_pictures_keep_the_prefix_and_do_not_resend_images timed out after 60 seconds");
 }
 
 /// The effort reaches an OpenAI-compatible service; one that refuses `reasoning_effort` gets the
@@ -2192,6 +2203,7 @@ async fn invalid_output_value_keeps_the_cap_and_does_not_retry() {
     let mock = serve(|_| Reply::Status(400, vec![], json!({"error":{"message":"Invalid max_completion_tokens value, the valid range is [1, 8192]"}}).to_string())).await;
     let provider = OpenAiCompatible::new(&mock.base, None);
     let req = TurnRequest {
+        cache_key: "offline-test-conversation".into(),
         system: "s".into(),
         messages: vec![],
         tools: vec![],
@@ -2230,6 +2242,7 @@ async fn partial_usage_chunks_retain_prior_counts_through_the_http_adapter() {
         "[DONE]".into(),
     ])).await;
     let req = TurnRequest {
+        cache_key: "offline-test-conversation".into(),
         system: "s".into(),
         messages: vec![],
         tools: vec![],
@@ -2312,4 +2325,59 @@ async fn provider_failure_after_a_real_drawing_edit_preserves_work_without_a_tak
             "events":events,"error":error.public_error(),"entities_before":before,"entities_after":count(),"transcript":agent.snapshot().transcript,
         })).unwrap()).unwrap();
     }
+}
+
+#[tokio::test]
+async fn mock_openai_keeps_cache_identity_prefix_and_exact_deepseek_reasoning() {
+    use qiyas_ai::{ContentBlock, Message, ResultPart};
+    let mock = serve(|n| Reply::Data(if n == 0 { vec![
+        json!({"choices":[{"delta":{"reasoning_content":"Exact thinking\nأفكار"}}]}).to_string(),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read-1","function":{"name":"qiyas_read","arguments":"{\"op\":\"state\",\"args\":\"{}\"}"}}]},"finish_reason":"tool_calls"}]}).to_string(),
+        "[DONE]".into(),
+    ] } else { vec![json!({"choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}).to_string(),"[DONE]".into()] })).await;
+    let provider = OpenAiCompatible::new(&mock.base, None);
+    let mut request = TurnRequest {
+        cache_key: "mock-conversation".into(),
+        system: "Stable rules".into(),
+        tools: qiyas_ai::catalogue(),
+        messages: vec![Message::user(vec![ContentBlock::Text {
+            text: "Measure accurately".into(),
+        }])],
+        model: "mock-model".into(),
+        effort: "high".into(),
+        max_tokens: 1000,
+    };
+    let result = provider
+        .stream_turn(request.clone(), &mut |_| {})
+        .await
+        .unwrap();
+    request.messages.push(Message::assistant(result.content));
+    request
+        .messages
+        .push(Message::user(vec![ContentBlock::ToolResult {
+            tool_use_id: "read-1".into(),
+            content: vec![ResultPart::Text("{}".into())],
+            is_error: false,
+        }]));
+    provider.stream_turn(request, &mut |_| {}).await.unwrap();
+    let requests = mock.requests();
+    let (first, next) = (&requests[0].body, &requests[1].body);
+    assert_eq!(first["prompt_cache_key"], "mock-conversation");
+    assert_eq!(first["prompt_cache_key"], next["prompt_cache_key"]);
+    assert_eq!(first["tools"], next["tools"]);
+    for (a, b) in first["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(next["messages"].as_array().unwrap())
+    {
+        assert_eq!(a.to_string(), b.to_string());
+    }
+    let assistant = next["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .unwrap();
+    assert_eq!(assistant["reasoning_content"], "Exact thinking\nأفكار");
 }

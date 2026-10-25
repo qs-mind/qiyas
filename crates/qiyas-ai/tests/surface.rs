@@ -808,6 +808,17 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
                     "plan" => {
                         json!({"phases":[{"id":"sizes","title":"Check sizes","status":"active"},{"id":"review","title":"Review","status":"pending"}]})
                     }
+                    "artifact" => {
+                        let raw = surface::run_without_drawing(READ, "commands", &json!({}), None)
+                            .unwrap()
+                            .unwrap();
+                        let qiyas_ai::ToolOutput::Json(envelope) =
+                            surface::format_result(READ, "commands", &json!({}), raw).unwrap()
+                        else {
+                            panic!("JSON envelope")
+                        };
+                        json!({"id": envelope["artifact"], "offset": 0})
+                    }
                     "record_schema" => json!({"name":"line"}),
                     "validate" => {
                         json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}})
@@ -2375,7 +2386,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
         Box::new(Script::steps(
             vec![
                 (READ, json!({"op":"state","args":{}})).into(),
-                (READ, json!({"op":"takeoff_kit","args":{}})).into(),
+                (READ, json!({"op":"takeoff_kit","args":{"detail":"full"}})).into(),
                 scripted::ScriptCall::FromHistory(author_from_kit),
                 (
                     READ,
@@ -2660,16 +2671,21 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
         if takeoff {
             events_for(&mut agent, "Draw a bracket in this drawing, drawing only.").await;
             let reqs = requests.lock().unwrap();
+            let latest = reqs.last().unwrap();
+            let previous = &reqs[reqs.len() - 2];
+            assert_eq!(
+                &latest.messages[..previous.messages.len()],
+                previous.messages.as_slice(),
+                "earlier guidance stays byte-stable until a token trim"
+            );
             assert!(
-                !reqs
-                    .last()
-                    .unwrap()
-                    .messages
+                !latest.messages[previous.messages.len()..]
                     .iter()
                     .flat_map(|m| &m.content)
                     .any(|b| matches!(b, qiyas_ai::ContentBlock::Text { text }
                     if text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
-                        || text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar)))
+                        || text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar))),
+                "a drawing-only turn does not append take-off guidance"
             );
         }
     }

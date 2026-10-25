@@ -108,6 +108,7 @@ async fn provider_busy_retries_back_off_honor_retry_after_and_charge_only_succes
         let result = provider
             .stream_turn(
                 TurnRequest {
+                    cache_key: "offline-test-conversation".into(),
                     system: "offline".into(),
                     messages: vec![],
                     tools: vec![],
@@ -158,6 +159,10 @@ fn has_boq(value: &Value) -> bool {
     }
 }
 impl Provider for Workflow {
+    fn image_input(&self, _model: &str) -> Option<bool> {
+        Some(true)
+    }
+
     fn stream_turn<'a>(
         &'a self,
         req: TurnRequest,
@@ -225,7 +230,7 @@ impl Provider for Workflow {
             } else {
                 None
             };
-            let (tool, op, args) = if let Some(step) = kit_step {
+            let (tool, op, mut args) = if let Some(step) = kit_step {
                 step
             } else {
                 match index {
@@ -256,6 +261,10 @@ impl Provider for Workflow {
                 _=>return Ok(TurnResult{content:vec![ContentBlock::Text{text:"BOQ generated from recognised boundaries using the geometric method. Unmeasured symbols, paths, annotations and low-confidence interpretations are listed in the end report; review is optional.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
             }
             };
+            // This scripted author inspects complete kits, reports and candidate queues.
+            if tool != "qiyas_capture" {
+                args["detail"] = json!("full");
+            }
             Ok(TurnResult {
                 content: vec![ContentBlock::ToolUse {
                     id: format!("workflow-{index}"),
@@ -381,6 +390,7 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
 #[test]
 fn reservation_is_per_request_and_leaves_room_after_twenty_three_cents() {
     let req = TurnRequest {
+        cache_key: "offline-test-conversation".into(),
         system: "Read the digest. ".repeat(18000),
         messages: Vec::new(),
         tools: Vec::new(),
@@ -443,6 +453,10 @@ struct LivePattern {
     finish: bool,
 }
 impl Provider for LivePattern {
+    fn image_input(&self, _model: &str) -> Option<bool> {
+        Some(true)
+    }
+
     fn stream_turn<'a>(
         &'a self,
         mut req: TurnRequest,
@@ -555,8 +569,7 @@ async fn live_pattern_has_bounded_history_finishes_at_eighty_percent_and_scores_
     for (name, finish, max_requests, max_cost) in [
         ("finish", true, 25, 1.0),
         ("request-cap", false, 25, 1.0),
-        // Let the retained recent evidence window fill before comparing long-history savings.
-        // The same cost-limit, twofold reduction and 20,000-token assertions still apply.
+        // Exercise budget advice while remaining below the batched-trim watermark.
         ("cost-cap", false, 40, 0.30),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -616,23 +629,26 @@ async fn live_pattern_has_bounded_history_finishes_at_eighty_percent_and_scores_
         let trace = trace.lock().unwrap();
         assert!(trace.finish_seen);
         assert!(trace.after.len() > 8);
-        assert!(
-            trace.after.last().unwrap() * 2 < *trace.before.last().unwrap(),
-            "before {:?}; after {:?}",
-            trace.before,
-            trace.after
+        // This short job stays below C's 100k high watermark. Old moving trims would
+        // have rewritten it at 20 results; now every retained reply must stay exact.
+        assert_eq!(
+            trace.after, trace.before,
+            "no rewrites below the token watermark"
         );
-        // Goal L's read revision (five short fields, about 40 tokens) rides on every retained
-        // result; the history stays bounded, so the peak moved from about 19.9k to 20.3k.
+        // This harness estimates bytes / 4; the history policy conservatively uses / 3.
         assert!(
-            trace.after.iter().max().unwrap() < &21_000,
+            trace.after.iter().max().unwrap() < &75_000,
             "{:?}",
             trace.after
         );
         let usage = totals.lock().unwrap();
         if finish {
-            // About 3% above the earlier 0.25 bound: the read revision on every result (Goal L).
-            assert!(usage.estimated_usd < 0.27, "{}", usage.estimated_usd);
+            // Finish before the reserved final 20% is consumed, without moving history trims.
+            assert!(
+                usage.estimated_usd < max_cost * 0.8,
+                "{}",
+                usage.estimated_usd
+            );
         }
         let evidence = json!({"run":name,"before":trace.before,"after":trace.after,"estimated_usd":usage.estimated_usd,"status":status,
             "counting":"UTF-8 bytes / 4, 1024 tokens per image; same calls and outputs, before retains all history","score":score.rates});

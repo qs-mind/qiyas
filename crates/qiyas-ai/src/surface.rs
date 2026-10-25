@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use qiyas_core::registry::{effect_of, registry, Effect};
 use qiyas_core::{Command, CoreError, Outcome, Session, Source};
 
-use crate::execute::{execute, ToolError, ToolOutput};
+use crate::execute::{execute_full as execute, ToolError, ToolOutput};
 use crate::tools::ToolSpec;
 
 pub const READ: &str = "qiyas_read";
@@ -32,7 +32,8 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 23] = [
+pub const READ_OPS: [&str; 24] = [
+    "artifact",
     "explain",
     "digest",
     "takeoff_kit",
@@ -110,6 +111,7 @@ macro_rules! operations {
     (@runner) => {None};
 }
 operations![
+    (READ, "artifact", [Nothing]),
     (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
     (READ, "explain", [Nothing]),
@@ -221,7 +223,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
+            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?}, paged UTF-8 JSON with next_offset and its original revision. commands and takeoff_kit use offset for pages; repeated contracts are referenced by name/version/artifact. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -268,6 +270,28 @@ pub fn tools() -> Vec<ToolSpec> {
 /// Whether `name` is one of the three tools.
 pub fn is_surface_tool(name: &str) -> bool {
     matches!(name, READ | EXECUTE | CAPTURE)
+}
+
+/// Model-facing formatting shared by the native agent and every MCP transport.
+/// Native Rust callers and atomic step references retain their full results.
+pub fn format_result(
+    tool: &str,
+    op: &str,
+    args: &Value,
+    output: ToolOutput,
+) -> Result<ToolOutput, ToolError> {
+    crate::result::format(tool, op, args, output)
+}
+
+pub(crate) fn execution_args(op: &str, args: &Value) -> Value {
+    let mut args = args.clone();
+    if op != "records" {
+        if let Some(object) = args.as_object_mut() {
+            object.remove("detail");
+            object.remove("fields");
+        }
+    }
+    args
 }
 
 /// The operation's label for the window's tool card.
@@ -326,6 +350,7 @@ pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
     let mut args = args.clone();
     if let Some(map) = args.as_object_mut() {
         map.remove("expected_revision");
+        map.remove("detail");
     }
     let plan: Plan = read_args(&args, "plan")?;
     if plan.phases.is_empty() || plan.phases.len() > 24 {
@@ -553,8 +578,14 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
             });
         }
         return Ok(match (entry.needs.first(), entry.runner) {
-            (Some(Need::Host), Some(tool)) => Route::Host { tool, input: args },
-            (Some(Need::Window), Some(tool)) => Route::Window { tool, input: args },
+            (Some(Need::Host), Some(tool)) => Route::Host {
+                tool,
+                input: execution_args(&op, &args),
+            },
+            (Some(Need::Window), Some(tool)) => Route::Window {
+                tool,
+                input: execution_args(&op, &args),
+            },
             _ => Route::Session {
                 tool: name.into(),
                 op,
@@ -580,8 +611,6 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
 
 // ---- On the session ----
 
-/// Most findings of the check a change answers with.
-const CHECK_FINDINGS: usize = 8;
 /// A sheet with more entities than this is not checked after every change (ask for the check).
 const CHECK_UP_TO: usize = 20_000;
 /// Most commands one batch takes.
@@ -608,6 +637,8 @@ pub fn run_without_drawing(
     if let Err(error) = crate::surface_args::validate(tool, op, args) {
         return Some(Err(error));
     }
+    let execution = execution_args(op, args);
+    let args = &execution;
     if tool == EXECUTE && op == "plan" {
         if let Err(error) = crate::revision::check(None, args) {
             return Some(Err(error));
@@ -628,6 +659,7 @@ pub fn run_without_drawing(
         return None;
     }
     let value = match op {
+        "artifact" => crate::artifact::read(args),
         "explain" if args["project"].is_string() => qiyas_core::trust::explain_project(
             args["project"].as_str().unwrap(),
             args["item"].as_str().unwrap_or_default(),
@@ -766,10 +798,28 @@ pub fn run_session_with_method(
                 run_working_session(session, tool, op, &args, source, method)
             })
             .map(|out| crate::normalise::output(out, &warnings));
+        let changed = before.document_revision != session.document_revision();
         if result.is_ok() {
             session.record_tool_revision(before);
         }
-        result
+        result.map(|mut output| {
+            // Undo and other session operations also report their real entity changes.
+            if tool == EXECUTE && changed {
+                if let ToolOutput::Json(value) = &mut output {
+                    let change = session.last_change();
+                    for (field, handles) in [
+                        ("added", &change.added),
+                        ("changed", &change.changed),
+                        ("removed", &change.removed),
+                    ] {
+                        if value.get(field).is_none() {
+                            value[field] = json!(handles);
+                        }
+                    }
+                }
+            }
+            output
+        })
     }))
     .unwrap_or_else(|_| {
         Err(ToolError::Failed(
@@ -790,6 +840,8 @@ fn run_working_session(
     let normalized = read_handle_values(args);
     let args = &normalized;
     let argument_warnings = crate::surface_args::validate(tool, op, args)?;
+    let execution = execution_args(op, args);
+    let args = &execution;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
     }
@@ -926,8 +978,35 @@ fn run_working_session(
         (READ, "capabilities") => json(capabilities()),
         (READ, "commands") => json(commands(args)?),
         (READ, "records") => {
-            let query: qiyas_core::records::RecordQuery = read_args(args, "records")?;
-            json(serde_json::to_value(session.records(&query)?).unwrap_or_default())
+            let mut query: qiyas_core::records::RecordQuery = read_args(args, "records")?;
+            let mut page = session.records(&query)?;
+            if query.detail == qiyas_core::records::Detail::Full
+                && query.fields.is_empty()
+                && !page.records.is_empty()
+            {
+                // Native record presentation clips long arrays. Field reads retain exact data;
+                // project the discovered fields to recover complete geometry without changing
+                // the core's ordinary summary behavior or the caller's record shape.
+                query.fields = page
+                    .records
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .flat_map(|record| record.keys().cloned())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                query.limit = Some(page.records.len());
+                page = session.records(&query)?;
+                for record in &mut page.records {
+                    if let Some(fields) = record
+                        .as_object_mut()
+                        .and_then(|record| record.remove("fields"))
+                    {
+                        *record = fields;
+                    }
+                }
+            }
+            json(serde_json::to_value(page).unwrap_or_default())
         }
         (READ, "record_schema") => {
             let name = args["name"]
@@ -1976,7 +2055,7 @@ fn changed(
             "layout_findings": counts.iter().filter(|(rule, _)| qiyas_core::check::layout_rule(rule)).map(|(_, n)| n).sum::<usize>(),
             "counts": counts,
             "not_checked": not_checked,
-            "findings": findings.iter().take(CHECK_FINDINGS).collect::<Vec<_>>(),
+            "findings": findings,
         });
         let visible: Vec<_> = touched
             .iter()
@@ -2239,5 +2318,7 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
         qiyas_boq::report::export_conflicts(&path, &session.conflicts)
             .map_err(|e| ToolError::Failed(e.to_string()))?;
     }
-    Ok(json!({ "written": path.to_string_lossy() }))
+    Ok(
+        json!({ "written": path.to_string_lossy(), "rows": if op == "export_takeoff" { session.takeoff.items.len() } else { session.conflicts.len() } }),
+    )
 }

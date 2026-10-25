@@ -2,6 +2,8 @@
 //! (`GET /v1/models`, paged) or an OpenAI-compatible service's `GET {base_url}/models`. When the
 //! service can't be asked, Claude's current models are the built-in list.
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -33,6 +35,54 @@ pub struct ModelInfo {
     pub label: String,
     /// None means the service supplied no image capability.
     pub image_input: Option<bool>,
+}
+
+type Capabilities = BTreeMap<(String, String), bool>;
+static IMAGE_INPUT: OnceLock<Mutex<Capabilities>> = OnceLock::new();
+
+pub(crate) fn known_image_input(endpoint: &str, model: &str) -> Option<bool> {
+    IMAGE_INPUT
+        .get()?
+        .lock()
+        .ok()?
+        .get(&(crate::endpoint::normalize(endpoint).ok()?, model.into()))
+        .copied()
+}
+
+pub(crate) fn remember(endpoint: &str, models: &[ModelInfo]) {
+    let mut known = IMAGE_INPUT
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for model in models {
+        let key = (endpoint.trim_end_matches('/').to_owned(), model.id.clone());
+        if let Some(vision) = model.image_input {
+            known.insert(key, vision);
+        } else {
+            known.remove(&key);
+        }
+    }
+}
+
+/// Absence is unknown. An explicit modalities list or capability is authoritative.
+pub fn image_input(model: &Value) -> Option<bool> {
+    for path in [
+        "/capabilities/vision",
+        "/capabilities/image_input",
+        "/supports_image_input",
+    ] {
+        if let Some(value) = model.pointer(path) {
+            if let Some(flag) = value.as_bool().or_else(|| value["supported"].as_bool()) {
+                return Some(flag);
+            }
+        }
+    }
+    for path in ["/architecture/input_modalities", "/input_modalities"] {
+        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
+            return Some(modalities.iter().any(|m| m == "image"));
+        }
+    }
+    None
 }
 
 /// Where the list comes from.
@@ -97,6 +147,7 @@ pub async fn list_models(
                     None => break,
                 }
             }
+            remember(crate::anthropic::API_URL, &models);
             Ok(models)
         }
         ModelSource::OpenAiCompatible { base_url } => {
@@ -116,7 +167,9 @@ pub async fn list_models(
                 &mut |_| {},
             )
             .await?;
-            Ok(parse_openai_models(&read_json(response, secret).await?))
+            let models = parse_openai_models(&read_json(response, secret).await?);
+            remember(&base, &models);
+            Ok(models)
         }
     }
 }
@@ -141,10 +194,16 @@ pub fn parse_anthropic_page(page: &Value) -> (Vec<ModelInfo>, Option<String>) {
             }
             let id = m["id"].as_str()?.to_string();
             let label = m["display_name"].as_str().unwrap_or(&id).to_string();
+            let image_input = image_input(m).or_else(|| {
+                CLAUDE_MODELS
+                    .iter()
+                    .any(|(known, _)| *known == id)
+                    .then_some(true)
+            });
             Some(ModelInfo {
                 id,
                 label,
-                image_input: image_input(m),
+                image_input,
             })
         })
         .collect();
@@ -199,20 +258,6 @@ fn supports_assistant(model: &Value) -> bool {
         }
     }
     true
-}
-
-/// An explicit capability or complete input list is evidence; a model name is not.
-pub fn image_input(model: &Value) -> Option<bool> {
-    let cap = &model["capabilities"]["vision"];
-    if let Some(value) = cap.as_bool().or_else(|| cap["supported"].as_bool()) {
-        return Some(value);
-    }
-    for path in ["/architecture/input_modalities", "/input_modalities"] {
-        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
-            return Some(modalities.iter().any(|m| m == "image"));
-        }
-    }
-    None
 }
 
 pub(crate) fn image_state(supported: Option<bool>) -> Value {
@@ -302,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_tools_are_excluded_but_blind_models_have_explicit_capabilities() {
+    fn text_only_models_are_offered_with_explicit_image_capability() {
         let models = parse_openai_models(&json!({"data":[
             {"id":"image-only","supported_parameters":[],"architecture":{"input_modalities":["text","image"]}},
             {"id":"text-only","supported_parameters":["tools"],"architecture":{"input_modalities":["text"]}},

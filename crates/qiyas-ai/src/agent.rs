@@ -30,17 +30,12 @@ use crate::{catalogue, ToolError, ToolOutput};
 pub const MAX_TOOL_CALLS: usize = 40;
 /// Drawing-work threshold for cost guidance.
 pub const MAX_DRAWING_CALLS: usize = 120;
-/// Longest conversation sent. The history is append-only (the API ties the model's thinking to
-/// everything before it; only old pictures give way, see `trim_pictures`), so instead of
-/// trimming, a longer one asks for a new conversation.
-pub const MAX_MESSAGES: usize = 400;
-/// Why the agent stops at `MAX_MESSAGES`: only when compaction could not make room.
+/// Token limits use a conservative local estimate; providers report exact usage afterwards.
+pub const MAX_INPUT_TOKENS: usize = 250_000;
+pub const COMPACT_AT: usize = 150_000;
+/// Keep at least four complete call/result pairs during token compaction.
+pub const KEEP_RECENT: usize = 8;
 pub const TOO_LONG: &str = "conversation is long, start a new one";
-/// Past this many messages the conversation is compacted (`compact`) down to `COMPACT_TO`.
-pub const COMPACT_AT: usize = 300;
-pub const COMPACT_TO: usize = 160;
-/// The newest messages compaction always keeps whole (30 steps).
-pub const KEEP_RECENT: usize = 60;
 /// Marks the note compaction puts at the start of the history.
 const COMPACTED: &str = "[earlier work, compacted to make room]";
 /// Most base64 bytes of pictures Mizan draws in one conversation (the user's own count too).
@@ -209,6 +204,10 @@ pub enum AgentEvent {
     Stopped {
         reason: String,
     },
+    /// Running turn totals, also retained if a later request fails or the user stops.
+    CacheUsage {
+        usage: Usage,
+    },
     /// The model finished its answer.
     Done {
         usage: Usage,
@@ -246,6 +245,10 @@ pub struct Agent {
     /// Metadata captured while the session is locked on a blocking worker.
     phase_epoch: Option<u64>,
     churn: Arc<Mutex<crate::churn::Guard>>,
+    last_picture: Option<String>,
+    last_request: Option<Instant>,
+    rebuild: Option<String>,
+    known_contracts: BTreeMap<String, Value>,
 }
 
 /// What a user turn starts from: the `[state]` block, the session's epoch (none without a
@@ -282,6 +285,14 @@ impl TurnCounts {
 }
 
 impl Agent {
+    /// Whether this model takes pictures: the profile's explicit or discovered choice first,
+    /// then what the provider knows. None is unknown, and pictures are sent only when true.
+    fn vision(&self) -> Option<bool> {
+        self.settings
+            .image_input
+            .or_else(|| self.provider.image_input(&self.settings.model))
+    }
+
     pub fn new(
         provider: Box<dyn Provider>,
         session: Arc<Mutex<Option<Session>>>,
@@ -312,6 +323,10 @@ impl Agent {
             phase_state: PhaseState::default(),
             phase_epoch: None,
             churn: Arc::default(),
+            last_picture: None,
+            last_request: None,
+            rebuild: None,
+            known_contracts: BTreeMap::new(),
         }
     }
 
@@ -430,6 +445,24 @@ impl Agent {
         agent.created = conv.created;
         agent.system = conv.system;
         agent.history = conv.history;
+        agent.rebuild =
+            Some("resumed conversation; saved pictures or provider settings may differ".into());
+        for block in agent.history.iter().flat_map(|m| &m.content) {
+            if let ContentBlock::ToolResult {
+                content,
+                is_error: false,
+                ..
+            } = block
+            {
+                for part in content {
+                    if let ResultPart::Text(text) = part {
+                        if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                            crate::result::deduplicate(&mut value, &mut agent.known_contracts);
+                        }
+                    }
+                }
+            }
+        }
         let mut pending = BTreeMap::new();
         for entry in &conv.transcript {
             match entry {
@@ -555,11 +588,16 @@ impl Agent {
 
     /// Starts a new conversation: the next turn builds a new system prompt.
     pub fn clear(&mut self) {
+        self.provider.restore_state(Value::Null);
         self.history.clear();
         self.job = Job::Drawing;
         self.system = None;
         self.image_bytes = 0;
         self.id.clear();
+        self.last_picture = None;
+        self.last_request = None;
+        self.rebuild = None;
+        self.known_contracts.clear();
         self.title.clear();
         self.created = 0;
         self.transcript
@@ -581,6 +619,16 @@ impl Agent {
     /// The new settings apply to the next request; the language of the system prompt changes
     /// only with a new conversation.
     pub fn set_settings(&mut self, settings: AgentSettings) {
+        if self.settings.provider != settings.provider
+            || self.settings.model != settings.model
+            || self.settings.effort != settings.effort
+            || self.settings.max_tokens != settings.max_tokens
+        {
+            self.rebuild = Some("setting change".into());
+            self.log("CACHE REBUILD", || {
+                "Expected rebuild: provider, model, effort or output limit changed".into()
+            });
+        }
         self.settings = settings;
     }
 
@@ -665,21 +713,7 @@ impl Agent {
                 churn.set_phase(active_phase(plan).unwrap_or(""));
             }
         }
-        if self.settings.image_input != Some(true) {
-            self.emit(
-                &events,
-                AgentEvent::ProviderStatus {
-                    code: if self.settings.image_input == Some(false) {
-                        "ai.noVision"
-                    } else {
-                        "ai.unknownVision"
-                    }
-                    .into(),
-                },
-            )
-            .await;
-        }
-        if self.settings.image_input == Some(false) {
+        if self.vision() == Some(false) {
             // Settings can change during a conversation. Earlier pictures must not
             // be sent to a model which explicitly cannot accept them either.
             for message in &mut self.history {
@@ -702,7 +736,7 @@ impl Agent {
         }
         let pointed_destination = !pointed.selection.is_empty() || pointed.region.is_some();
         self.compact();
-        if self.history.len() >= MAX_MESSAGES {
+        if crate::history::tokens(&self.history) >= MAX_INPUT_TOKENS {
             return self.stop(&events, TOO_LONG).await;
         }
         if let Some(why) = images.iter().find_map(context::UserImage::refused) {
@@ -726,14 +760,6 @@ impl Agent {
         let system = self.system.clone().unwrap_or_default();
         self.job = Job::request(&user_text, self.job);
         self.chat_language = judgement::language(&user_text, self.chat_language);
-        // Guidance belongs to this job and language; preserve the user's actual requests.
-        for message in &mut self.history {
-            message.content.retain(|block| {
-                !matches!(block, ContentBlock::Text { text }
-                if text == crate::prompt::takeoff_workflow(Lang::En)
-                    || text == crate::prompt::takeoff_workflow(Lang::Ar))
-            });
-        }
         self.turn_text = user_text.clone();
         let destination_advice =
             has_content && !pointed_destination && judgement::new_design(&user_text);
@@ -747,25 +773,57 @@ impl Agent {
         if std::mem::take(&mut self.resumed) {
             content.push(ContentBlock::Text { text: "[resumed] This conversation continues after a pause; the drawing may have changed: read it before acting.".into() });
         }
-        if let Some((png, caption)) = picture {
-            let data = png_base64(&png);
-            if self.image_bytes + data.len() <= self.image_budget {
-                self.image_bytes += data.len();
+        let vision = self.vision();
+        let vision_text = if vision == Some(true) {
+            "[image input] This model accepts pictures."
+        } else {
+            "[image input] Pictures are unavailable for this model (unsupported or unconfirmed metadata). Use exact queries and checks. Do not claim to have inspected a picture."
+        };
+        if let ContentBlock::Text { text } = &mut content[0] {
+            text.push('\n');
+            text.push_str(vision_text);
+        }
+        if vision != Some(true) {
+            self.emit(
+                &events,
+                AgentEvent::ProviderStatus {
+                    code: if vision == Some(false) {
+                        "ai.visionUnavailable"
+                    } else {
+                        "ai.visionUnknown"
+                    }
+                    .into(),
+                },
+            )
+            .await;
+        }
+        if let Some((png, caption)) = picture.filter(|_| vision == Some(true)) {
+            let hash = crate::artifact::hash(&png);
+            if self.last_picture.as_ref() == Some(&hash) {
                 content.push(ContentBlock::Text {
-                    text: format!("[picture of what the user points at] {caption}"),
+                    text: "[picture] unchanged".into(),
                 });
-                content.push(ContentBlock::Image {
-                    media_type: "image/png".into(),
-                    data,
-                });
+            } else {
+                let data = png_base64(&png);
+                if self.image_bytes + data.len() <= self.image_budget {
+                    self.image_bytes += data.len();
+                    self.last_picture = Some(hash);
+                    content.push(ContentBlock::Text {
+                        text: format!("[picture of what the user points at] {caption}"),
+                    });
+                    content.push(ContentBlock::Image {
+                        media_type: "image/png".into(),
+                        data,
+                    });
+                }
             }
         }
-        if self.settings.image_input == Some(false) && !images.is_empty() {
+        if vision != Some(true) && !images.is_empty() {
             content.push(ContentBlock::Text { text: format!("{} attached pictures were not sent: this model cannot see images. Use exact drawing checks, or ask for the missing facts.", images.len()) });
         }
         for image in images
             .into_iter()
-            .filter(|_| self.settings.image_input != Some(false))
+            .filter(|_| vision == Some(true))
             .take(context::MAX_USER_IMAGES)
         {
             self.image_bytes += image.data.len();
@@ -779,14 +837,18 @@ impl Agent {
             .iter()
             .any(|b| matches!(b, ContentBlock::Image { .. }))
             && user_text.trim().is_empty();
-        if !pictures_only {
+        if !pictures_only && !user_text.trim().is_empty() {
             content.push(ContentBlock::Text { text: user_text });
         }
         if destination_advice {
             content.push(ContentBlock::Text { text: "[advice] This drawing already contains work. Consider whether a new drawing or a destination question is appropriate. Mizan decides.".into() });
         }
+        if self.job == Job::Takeoff {
+            content.push(ContentBlock::Text {
+                text: crate::prompt::takeoff_workflow(self.chat_language).into(),
+            });
+        }
         self.push_user(content);
-        self.trim_pictures();
         self.update_checkpoint();
         self.provider.begin_turn(&self.turn_text);
         let tools = catalogue();
@@ -797,7 +859,6 @@ impl Agent {
             ),
             ..TurnCounts::default()
         };
-        let mut workflow_sent = false;
         let mut usage = Usage::default();
         let mut requests = 0;
         let mut context_retried = false;
@@ -808,22 +869,19 @@ impl Agent {
                 return self.stop(&events, "cancelled").await;
             }
             self.compact();
-            crate::history::trim(&mut self.history);
-            if self.history.len() > MAX_MESSAGES {
-                return self.stop(&events, TOO_LONG).await;
+            if let Some(trim) = crate::history::trim(&mut self.history) {
+                self.rebuild = Some("trim".into());
+                self.log("CACHE REBUILD", || {
+                    format!(
+                        "Expected rebuild: trimmed {} results; estimated tokens {} -> {}",
+                        trim.results, trim.before, trim.after
+                    )
+                });
+                self.trim_pictures();
+                self.last_picture = None;
             }
-            let mut messages = self.history.clone();
-            if self.job == Job::Takeoff && !workflow_sent {
-                let workflow = ContentBlock::Text {
-                    text: crate::prompt::takeoff_workflow(self.chat_language).into(),
-                };
-                if let Some(last) = self.history.last_mut() {
-                    last.content.push(workflow.clone());
-                }
-                if let Some(last) = messages.last_mut() {
-                    last.content.push(workflow);
-                }
-                workflow_sent = true;
+            if crate::history::tokens(&self.history) > MAX_INPUT_TOKENS {
+                return self.stop(&events, TOO_LONG).await;
             }
             let provider_notice = self.provider.budget_notice();
             let near_limit = counts.calls * 5 >= counts.limit() * 4
@@ -831,10 +889,15 @@ impl Agent {
                     .as_ref()
                     .is_some_and(|n| n.contains("[finish now]"));
             let notice = near_limit.then(|| self.job.budget(self.chat_language).to_string());
-            if let (Some(last), Some(text)) = (messages.last_mut(), notice) {
-                last.content.push(ContentBlock::Text { text });
+            if let Some(text) = notice {
+                self.push_user(vec![ContentBlock::Text { text }]);
             }
+            if let Some(text) = provider_notice {
+                self.push_user(vec![ContentBlock::Text { text }]);
+            }
+            let messages = self.history.clone();
             let req = TurnRequest {
+                cache_key: self.id.clone(),
                 system: system.clone(),
                 messages,
                 tools: tools.clone(),
@@ -844,6 +907,17 @@ impl Agent {
             };
             requests += 1;
             let started = Instant::now();
+            let cache_cause = self
+                .rebuild
+                .take()
+                .unwrap_or_else(|| match self.last_request {
+                    None => "cold start".into(),
+                    Some(last) if last.elapsed().as_secs() >= 300 => {
+                        "long pause; cache TTL may have expired".into()
+                    }
+                    _ => "no local rebuild; provider cache residency is unknown".into(),
+                });
+            self.last_request = Some(started);
             let Some(turn) = self.stream(req, requests, &events, &cancel).await else {
                 // The partial answer is dropped; the next user message joins this turn's.
                 return self.stop(&events, "cancelled").await;
@@ -896,7 +970,14 @@ impl Agent {
                 ),
                 || answer_entry(&turn),
             );
+            self.log("CACHE", || format!("total input: {}, cached input: {}, cache writes: {}, output: {}, reasoning: {}; hit: {}; {}",
+                turn.usage.total_input(), turn.usage.cache_read_input_tokens, turn.usage.cache_creation_input_tokens,
+                turn.usage.output_tokens, turn.usage.reasoning_tokens,
+                turn.usage.cache_percent().map_or_else(|| "not reported".into(), |p| format!("{p:.1}%")),
+                if turn.usage.cache_percent().is_some_and(|p| p < 70.0) { format!("below 70%: {cache_cause}") } else { cache_cause.clone() }));
             usage.add(turn.usage);
+            self.log("TURN CACHE", || tokens(&usage));
+            self.emit(&events, AgentEvent::CacheUsage { usage }).await;
             match turn.stop_reason {
                 StopReason::Refusal { category, text } => {
                     // A refusal can cut a tool call off; nothing of it is kept or run.
@@ -922,7 +1003,6 @@ impl Agent {
                     {
                         return self.stop(&events, &why).await;
                     }
-                    self.trim_pictures();
                     if let Some(plan) = counts.awaiting.take() {
                         self.emit(&events, AgentEvent::AwaitingApproval { plan })
                             .await;
@@ -938,6 +1018,7 @@ impl Agent {
                         && max_tokens < MAX_TOKENS_CAP =>
                 {
                     max_tokens = (max_tokens.max(1) * 2).min(MAX_TOKENS_CAP);
+                    self.rebuild = Some("output setting changed".into());
                     self.log("RETRY", || {
                         format!("the answer was cut off before it said anything; asking again with max_tokens {max_tokens}")
                     });
@@ -1585,17 +1666,10 @@ impl Agent {
         mutating: bool,
     ) -> (ContentBlock, AgentEvent, bool) {
         let (name, op) = operation;
-        if name == surface::CAPTURE && self.image_bytes >= self.image_budget {
-            return (
-                error_result(id, NO_IMAGE_BUDGET),
-                error_event(id, NO_IMAGE_BUDGET),
-                false,
-            );
-        }
         let session = self.session.clone();
         let (tool, op, args) = (name.to_string(), op.to_string(), input.clone());
         let method = self.settings.measurement_method.clone();
-        let image_input = self.settings.image_input;
+        let image_input = self.vision();
         let cancel = cancel.clone();
         let mut phase = self.phase_state.clone();
         let churn = self.churn.clone();
@@ -1680,12 +1754,6 @@ impl Agent {
         cancel: &CancellationToken,
         epoch: Option<u64>,
     ) -> (ContentBlock, AgentEvent) {
-        if name == "view_screen" && self.image_bytes >= self.image_budget {
-            return (
-                error_result(id, NO_IMAGE_BUDGET),
-                error_event(id, NO_IMAGE_BUDGET),
-            );
-        }
         let Some(host) = self.host.clone() else {
             return (error_result(id, NO_WINDOW), error_event(id, NO_WINDOW));
         };
@@ -1733,16 +1801,52 @@ impl Agent {
     ) -> (ContentBlock, AgentEvent) {
         match output {
             Err(why) => (error_result(id, &why), error_event(id, &why)),
-            Ok(ToolOutput::Json(value)) => json_result(id, &value),
-            Ok(ToolOutput::Image { png: _, caption })
-                if self.settings.image_input == Some(false) =>
-            {
-                json_result(
-                    id,
-                    &serde_json::json!({"caption":caption,"image_input":crate::models::image_state(Some(false)),"image_sent":false}),
-                )
+            Ok(ToolOutput::Json(value)) => {
+                let event = json_result(id, &value).1;
+                let call = self
+                    .history
+                    .iter()
+                    .flat_map(Message::tool_uses)
+                    .find(|(call_id, _, _)| *call_id == id)
+                    .map(|(_, name, input)| {
+                        (
+                            name.to_owned(),
+                            input["op"].as_str().unwrap_or_default().to_owned(),
+                            surface::args_of(input).unwrap_or_default(),
+                        )
+                    });
+                let (tool, op, args) = call.unwrap_or_else(|| {
+                    (surface::READ.into(), String::new(), serde_json::json!({}))
+                });
+                match surface::format_result(&tool, &op, &args, ToolOutput::Json(value)) {
+                    Ok(ToolOutput::Json(mut value)) => {
+                        if args["detail"] != "full" {
+                            crate::result::deduplicate(&mut value, &mut self.known_contracts);
+                        }
+                        (json_result(id, &value).0, event)
+                    }
+                    Err(error) => (
+                        error_result(id, &error.json().to_string()),
+                        error_event(id, &error.to_string()),
+                    ),
+                    _ => unreachable!("JSON formatting keeps JSON"),
+                }
             }
             Ok(ToolOutput::Image { png, caption }) => {
+                let vision = self.vision();
+                if vision != Some(true) {
+                    return json_result(
+                        id,
+                        &serde_json::json!({"status":"unavailable","image_input":crate::models::image_state(vision),"image_sent":false,"message":"Pictures are unsupported or unconfirmed for this model. Use exact queries and checks; no picture was sent."}),
+                    );
+                }
+                let hash = crate::artifact::hash(&png);
+                if self.last_picture.as_ref() == Some(&hash) {
+                    return json_result(
+                        id,
+                        &serde_json::json!({"status":"unchanged","image_hash":hash,"caption":caption}),
+                    );
+                }
                 let data = png_base64(&png);
                 if self.image_bytes + data.len() > self.image_budget {
                     return (
@@ -1751,6 +1855,7 @@ impl Agent {
                     );
                 }
                 self.image_bytes += data.len();
+                self.last_picture = Some(hash);
                 let event = AgentEvent::ToolResult {
                     id: id.to_string(),
                     summary: caption.clone(),
@@ -1812,7 +1917,7 @@ impl Agent {
         match ran {
             Ok(Ok((value, drawing, epoch))) => {
                 self.refresh_phase_drawing(drawing, epoch);
-                json_result(id, &value)
+                self.output_result(id, Ok(ToolOutput::Json(value)))
             }
             Ok(Err(why)) => (error_result(id, &why), error_event(id, &why)),
             Err(e) => {
@@ -1832,6 +1937,8 @@ impl Agent {
         let session = self.session.clone();
         let settings = self.settings.clone();
         let build_system = self.system.is_none();
+        let image_input = self.vision();
+        let vision = image_input == Some(true);
         let cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1847,7 +1954,7 @@ impl Agent {
             });
             let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
             let mut text = state_block(lang, &state);
-            text.push_str(&format!("Model image input: {}\n", crate::models::image_state(settings.image_input)));
+            text.push_str(&format!("Model image input: {}\n", crate::models::image_state(image_input)));
             let method = guard.as_ref().map_or_else(
                 || Ok(settings.measurement_method.clone()),
                 |session| MeasurementMethod::for_session(session, &settings.measurement_method),
@@ -1872,7 +1979,7 @@ impl Agent {
                 }
                 text.push_str(&format!("revision: {}\n", serde_json::json!(session.revision())));
                 text.push_str(&context::describe(session, &pointed, lang));
-                if settings.image_input != Some(false) { picture = context::picture(session, &pointed); }
+                if vision { picture = context::picture(session, &pointed); }
             }
             check_turn(guard.as_ref(), &cancel, epoch)?;
             Ok(Opening {
@@ -1945,52 +2052,65 @@ impl Agent {
     /// A context refusal gets one smaller request. User words, tool ids and result pairing
     /// stay intact. The ordinary history policy belongs to the conversation workflow.
     fn make_context_room(&mut self) -> bool {
-        let mut changed = false;
-        for message in &mut self.history {
-            for block in &mut message.content {
-                match block {
-                    ContentBlock::ToolResult { content, .. } => {
-                        for part in content {
-                            match part {
-                                ResultPart::Png(_) => {
-                                    *part = ResultPart::Text(
-                                        "[Picture removed to make room. Capture again if needed.]"
-                                            .into(),
-                                    );
-                                    changed = true;
-                                }
-                                ResultPart::Text(text) if text.len() > 1000 => {
-                                    *text = format!("{} [Result shortened to make room. Read the drawing for full details.]", text.chars().take(400).collect::<String>());
-                                    changed = true;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    ContentBlock::Image { .. } => {
-                        *block = ContentBlock::Text {
-                            text: "[Picture removed to make room. Ask for it again if needed.]"
-                                .into(),
-                        };
-                        changed = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        changed
+        let Some(trim) = crate::history::context_refusal(&mut self.history) else {
+            return false;
+        };
+        self.rebuild = Some("context-limit trim".into());
+        self.last_picture = None;
+        self.log("CACHE REBUILD", || format!("Provider context refusal: retired {} results into artifacts; estimated tokens {} → {}",trim.results,trim.before,trim.after));
+        true
     }
 
-    /// Keep the newest 160 messages and complete call/result pairs. Older requests survive
+    /// Keep a token-sized recent window and complete call/result pairs. Older requests survive
     /// word for word in a memory note, alongside outcomes and discovered command contracts.
     fn compact(&mut self) {
-        if self.history.len() <= COMPACT_AT {
+        if crate::history::tokens(&self.history) < COMPACT_AT {
             return;
         }
         let before = self.history.len();
-        let contracts = crate::history::contracts(&self.history);
-        let (mut requests, mut steps) = take_note(&mut self.history);
-        let mut cut = self.history.len().saturating_sub(COMPACT_TO);
+        let mut contracts = crate::history::contracts(&self.history);
+        // A prior watermark trim may have retired the original discovery replies.
+        // Keep their versioned identities as well as contracts still present in history.
+        contracts.extend(self.known_contracts.iter().map(|(key, artifact)| {
+            let (name, version) = key.rsplit_once(':').unwrap_or((key, ""));
+            serde_json::json!({"name":name,"version":version,"artifact":artifact}).to_string()
+        }));
+        contracts.sort();
+        contracts.dedup();
+        let digest_id = self
+            .history
+            .iter()
+            .flat_map(Message::tool_uses)
+            .find(|(_, name, input)| *name == surface::READ && input["op"] == "digest")
+            .map(|(id, _, _)| id.to_owned());
+        let digest = self
+            .history
+            .iter()
+            .flat_map(|m| &m.content)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } if Some(tool_use_id) == digest_id.as_ref() => {
+                    Some(serde_json::to_string(content).unwrap())
+                }
+                ContentBlock::Text { text } if text.starts_with("[first digest]\n") => {
+                    Some(text[15..].to_owned())
+                }
+                _ => None,
+            });
+        let (mut requests, mut steps) = take_note(&self.history);
+        let mut tail_tokens = 0;
+        let mut keep = 0;
+        for message in self.history.iter().rev() {
+            if keep >= KEEP_RECENT && tail_tokens >= crate::history::LOW_TOKENS {
+                break;
+            }
+            tail_tokens += crate::history::message_tokens(message);
+            keep += 1;
+        }
+        let mut cut = self.history.len().saturating_sub(keep);
         // Never orphan tool results or cut the tail below the promised recent window.
         while cut > 0
             && (self.history[cut].role != Role::Assistant
@@ -2001,11 +2121,43 @@ impl Agent {
         if cut == 0 {
             return;
         }
+        let evidence = match crate::history::evidence(&self.history[..cut]) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                self.log("CONTEXT", || {
+                    format!("Kept old context because its evidence could not be saved: {error}")
+                });
+                return;
+            }
+        };
         for message in &self.history[..cut] {
             requests.extend(user_words(message));
         }
+        // The transcript knows provenance: a user's literal "[state]" or "[cost advice]"
+        // must not be mistaken for generated guidance. Preserve repeated requests too.
+        let mut included = BTreeMap::<String, usize>::new();
+        for request in &requests {
+            *included.entry(request.clone()).or_default() += 1;
+        }
+        let mut spoken = BTreeMap::<String, usize>::new();
+        for entry in self
+            .transcript
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            if let TranscriptEntry::User { text, .. } = entry {
+                let count = spoken.entry(text.clone()).or_default();
+                *count += 1;
+                if *count > included.get(text).copied().unwrap_or(0) {
+                    requests.push(text.clone());
+                }
+            }
+        }
         steps.extend(step_lines(&self.history[..cut]));
         self.history.drain(..cut);
+        // A removed picture must be sent again even when the next capture has the same hash.
+        self.last_picture = None;
         let mut note = vec![ContentBlock::Text {
             text: compaction_note(&requests, &steps),
         }];
@@ -2017,8 +2169,27 @@ impl Agent {
                 ),
             });
         }
+        if !evidence.is_empty() {
+            note.push(ContentBlock::Text {
+                text: format!(
+                    "[evidence artifacts]\n{}",
+                    serde_json::to_string(&evidence).unwrap()
+                ),
+            });
+        }
+        if let Some(digest) = digest {
+            note.push(ContentBlock::Text {
+                text: format!("[first digest]\n{digest}"),
+            });
+        }
+        if let Some(plan) = &self.plan {
+            note.push(ContentBlock::Text {
+                text: format!("[open tasks]\n{}", serde_json::to_string(plan).unwrap()),
+            });
+        }
         self.history.insert(0, Message::user(note));
-        self.log("COMPACTED", || {
+        self.rebuild = Some("token compaction".into());
+        self.log("CACHE REBUILD (COMPACTED)", || {
             format!(
                 "{before} messages became {}; {} steps noted",
                 self.history.len(),
@@ -2027,16 +2198,9 @@ impl Agent {
         });
     }
 
-    /// Adds user content. A user message already last (after a cancel, an error or a refusal,
-    /// or tool results at the step limit) is the latest turn, not yet answered; the new content
-    /// goes after what it holds, so tool results stay first and roles keep alternating.
+    /// Append even after a cancellation; old messages must remain byte-for-byte stable.
     fn push_user(&mut self, content: Vec<ContentBlock>) {
-        match self.history.last_mut() {
-            Some(last) if last.role == Role::User && !self.provider.owns_turn() => {
-                last.content.extend(content)
-            }
-            _ => self.history.push(Message::user(content)),
-        }
+        self.history.push(Message::user(content));
     }
 }
 
@@ -2099,9 +2263,15 @@ fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
         ui: value.get("ui").cloned(),
         is_error: false,
     };
+    let mut wire = value.clone();
+    if let Some(object) = wire.as_object_mut() {
+        object.remove("ui");
+    }
     let block = ContentBlock::ToolResult {
         tool_use_id: id.to_string(),
-        content: vec![ResultPart::Text(value.to_string())],
+        content: vec![ResultPart::Text(
+            crate::artifact::canonical(&wire).to_string(),
+        )],
         is_error: false,
     };
     (block, event)
@@ -2138,8 +2308,16 @@ fn user_words(message: &Message) -> Vec<String> {
                 if !text.starts_with("[state]")
                     && !text.starts_with("[resumed]")
                     && !text.starts_with("[reply language]")
-                    && !text.starts_with("[picture of")
+                    && !text.starts_with("[picture")
+                    && !text.starts_with("[budget")
+                    && !text.starts_with("[finish now]")
+                    && !text.starts_with("[advice]")
+                    && !text.starts_with("[cost advice]")
+                    && !text.starts_with("[image input]")
+                    && !text.starts_with("[open tasks]")
+                    && !text.starts_with("[first digest]")
                     && !text.starts_with("[known contracts]")
+                    && !text.starts_with("[evidence artifacts]")
                     && !text.starts_with("[drawing check]")
                     && !text.starts_with(COMPACTED)
                     && !text.trim().is_empty()
@@ -2191,9 +2369,9 @@ fn step_lines(messages: &[Message]) -> Vec<String> {
         .collect()
 }
 
-/// Takes an earlier compaction's note off the first message: its requests and steps.
-fn take_note(history: &mut [Message]) -> (Vec<String>, Vec<String>) {
-    let Some(first) = history.first_mut() else {
+/// Read an earlier note without changing history before a new compaction is ready.
+fn take_note(history: &[Message]) -> (Vec<String>, Vec<String>) {
+    let Some(first) = history.first() else {
         return (Vec::new(), Vec::new());
     };
     let Some(ContentBlock::Text { text }) = first.content.first() else {
@@ -2215,7 +2393,6 @@ fn take_note(history: &mut [Message]) -> (Vec<String>, Vec<String>) {
             }
         }
     }
-    first.content.remove(0);
     (requests, steps)
 }
 
@@ -2232,6 +2409,12 @@ fn compaction_note(requests: &[String], steps: &[String]) -> String {
     }
     note.push_str("Steps and outcomes:\n");
     let skip = steps.len().saturating_sub(80);
+    for step in steps[..skip]
+        .iter()
+        .filter(|step| step.ends_with(": failed"))
+    {
+        note.push_str(&format!("- {step}\n"));
+    }
     if skip > 0 {
         note.push_str(&format!("- ({skip} earlier steps)\n"));
     }
@@ -2338,19 +2521,22 @@ fn tool_entry(id: &str, input: &Value, block: &ContentBlock) -> String {
 
 fn tokens(usage: &Usage) -> String {
     format!(
-        "tokens: {} in, {} out ({} thinking), {} cache read, {} cache written",
-        usage.input_tokens,
+        "tokens: {} total input, {} out ({} thinking), {} cache read, {} cache written; cache hit {}",
+        usage.total_input(),
         usage.output_tokens,
         usage.reasoning_tokens,
         usage.cache_read_input_tokens,
-        usage.cache_creation_input_tokens
+        usage.cache_creation_input_tokens,
+        usage.cache_percent().map_or_else(|| "not reported".into(), |p| format!("{p:.1}%"))
     )
 }
 
 fn error_result(id: &str, why: &str) -> ContentBlock {
     ContentBlock::ToolResult {
         tool_use_id: id.to_string(),
-        content: vec![ResultPart::Text(crate::errors::json_error(why).to_string())],
+        content: vec![ResultPart::Text(
+            crate::result::error(crate::errors::json_error(why)).to_string(),
+        )],
         is_error: true,
     }
 }
@@ -2474,6 +2660,9 @@ mod tests {
     }
 
     impl Provider for Recording {
+        fn image_input(&self, _model: &str) -> Option<bool> {
+            Some(true)
+        }
         fn save_state(&self) -> Value {
             self.state.lock().unwrap().clone()
         }
@@ -2675,6 +2864,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn later_turns_append_without_removing_earlier_workflow_or_changing_the_cache_key() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            Box::new(Recording {
+                requests: requests.clone(),
+                ..Default::default()
+            }),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        record_turn(
+            &mut agent,
+            "Quantify this drawing and prepare a bill of quantities.",
+        )
+        .await;
+        record_turn(
+            &mut agent,
+            "Now draw a bracket. Keep my earlier request word for word.",
+        )
+        .await;
+        let sent = requests.lock().unwrap();
+        assert!(!sent[0].cache_key.is_empty());
+        assert_eq!(sent[0].cache_key, sent[1].cache_key);
+        assert_eq!(sent[0].system, sent[1].system);
+        assert_eq!(sent[0].tools.len(), sent[1].tools.len());
+        for (a, b) in sent[0].tools.iter().zip(&sent[1].tools) {
+            assert_eq!(
+                (a.name, a.description, &a.input_schema),
+                (b.name, b.description, &b.input_schema)
+            );
+        }
+        assert_eq!(
+            sent[0].messages,
+            &sent[1].messages[..sent[0].messages.len()]
+        );
+        assert!(serde_json::to_string(&sent[1].messages)
+            .unwrap()
+            .contains("Quantify this drawing"));
+    }
+
+    #[tokio::test]
+    async fn compaction_preserves_user_words_that_look_like_generated_guidance() {
+        let mut agent = Agent::new(
+            Box::<Recording>::default(),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        let words = "[state] This is my own instruction. Keep the literal \\n and راجع المساحات.";
+        record_turn(&mut agent, words).await;
+        agent.known_contracts.insert(
+            "draw.line:version-one".into(),
+            serde_json::json!("earlier-schema-artifact"),
+        );
+        agent.last_picture = Some("retired-picture".into());
+        for i in 0..200 {
+            step(&mut agent.history, i);
+        }
+        agent.compact();
+        let (requests, _) = take_note(&agent.history);
+        assert!(requests.iter().any(|r| r == words));
+        let contracts = crate::history::contracts(&agent.history).join("\n");
+        assert!(contracts.contains("draw.line") && contracts.contains("earlier-schema-artifact"));
+        assert!(agent.last_picture.is_none());
+    }
+
+    #[test]
+    fn identical_captures_are_unchanged_and_unknown_models_receive_no_image() {
+        let picture = || {
+            Ok(ToolOutput::Image {
+                png: vec![1, 2, 3],
+                caption: "A picture".into(),
+            })
+        };
+        let mut known = Agent::new(
+            Box::<Recording>::default(),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        let first = known.output_result("a", picture()).0;
+        known.image_budget = known.image_bytes;
+        let second = known.output_result("b", picture()).0;
+        assert!(is_error(
+            &known
+                .output_result(
+                    "new",
+                    Ok(ToolOutput::Image {
+                        png: vec![4, 5, 6],
+                        caption: "Different picture".into()
+                    })
+                )
+                .0
+        ));
+        assert!(
+            matches!(first,ContentBlock::ToolResult { content,.. } if content.iter().any(|p|matches!(p,ResultPart::Png(_))))
+        );
+        assert!(serde_json::to_string(&second)
+            .unwrap()
+            .contains("unchanged"));
+        assert!(!serde_json::to_string(&second).unwrap().contains("png"));
+        let mut unknown = Agent::new(
+            Box::new(Counting(Arc::new(AtomicUsize::new(0)))),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        let result = unknown.output_result("c", picture()).0;
+        assert!(serde_json::to_string(&result)
+            .unwrap()
+            .contains("unavailable"));
+        assert!(!serde_json::to_string(&result).unwrap().contains("png"));
+    }
+
+    #[tokio::test]
     async fn snapshot_removes_every_picture_but_keeps_accounting_and_pointed_labels() {
         let session = Arc::new(Mutex::new(None));
         let mut agent = Agent::new(
@@ -2784,7 +3085,10 @@ mod tests {
         }]));
         history.push(Message::user(vec![ContentBlock::ToolResult {
             tool_use_id: id,
-            content: vec![ResultPart::Text(format!("ok {i}"))],
+            content: vec![ResultPart::Text(format!(
+                "ok {i}: {}",
+                "evidence ".repeat(600)
+            ))],
             is_error: false,
         }]));
     }
@@ -2793,7 +3097,10 @@ mod tests {
     fn assert_well_formed(history: &[Message]) {
         assert_eq!(history[0].role, Role::User);
         for (i, w) in history.windows(2).enumerate() {
-            assert_ne!(w[0].role, w[1].role, "roles alternate at {i}");
+            assert!(
+                !(w[0].role == Role::Assistant && w[1].role == Role::Assistant),
+                "consecutive assistant messages at {i}"
+            );
         }
         for (i, m) in history.iter().enumerate() {
             for b in &m.content {
@@ -2848,7 +3155,7 @@ mod tests {
             "the request is sent, not refused"
         );
         assert!(
-            agent.history.len() <= COMPACT_TO + 4,
+            crate::history::tokens(&agent.history) < COMPACT_AT,
             "{}",
             agent.history.len()
         );
@@ -2891,7 +3198,7 @@ mod tests {
         let newest = agent.history[agent.history.len() - KEEP_RECENT..].to_vec();
         agent.compact();
         assert!(
-            agent.history.len() <= COMPACT_TO + 1,
+            crate::history::tokens(&agent.history) < COMPACT_AT,
             "{}",
             agent.history.len()
         );
@@ -2916,7 +3223,7 @@ mod tests {
         )));
     }
     #[test]
-    fn compaction_keeps_160_recent_messages_all_requests_and_failed_outcomes() {
+    fn token_compaction_keeps_recent_pairs_all_requests_and_failed_outcomes() {
         let mut agent = Agent::new(
             Box::new(Counting(Arc::new(AtomicUsize::new(0)))),
             Arc::new(Mutex::new(None)),
@@ -2944,12 +3251,12 @@ mod tests {
         agent
             .history
             .push(text(Role::User, "Continue the same work"));
-        let recent = agent.history[agent.history.len() - COMPACT_TO..].to_vec();
+        let recent = agent.history[agent.history.len() - KEEP_RECENT..].to_vec();
         agent.compact();
-        assert!(agent.history.len() >= COMPACT_TO);
-        assert_eq!(&agent.history[agent.history.len() - COMPACT_TO..], &recent);
+        assert!(agent.history.len() >= KEEP_RECENT);
+        assert_eq!(&agent.history[agent.history.len() - KEEP_RECENT..], &recent);
         assert_well_formed(&agent.history);
-        let (requests, steps) = take_note(&mut agent.history);
+        let (requests, steps) = take_note(&agent.history);
         assert!(requests.contains(&brief));
         assert!(requests.contains(&"Correction: keep the original layer.".into()));
         assert!(steps[0].ends_with("failed"), "{steps:?}");

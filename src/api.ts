@@ -1777,6 +1777,7 @@ export type AgentEvent =
     }
   | { type: "refused"; category: string | null; text: string }
   | { type: "stopped"; reason: string }
+  | { type: "cache_usage"; usage: Record<string, number> }
   | { type: "done"; usage: Record<string, number> };
 
 /** Sent as `ai:done` when a turn has ended. */

@@ -158,6 +158,26 @@ pub fn execute(
     input: &Value,
     source: Source,
 ) -> Result<ToolOutput, ToolError> {
+    execute_with_detail(session, name, input, source, false)
+}
+
+/// The public surface keeps exact evidence; legacy private tools retain their old display format.
+pub(crate) fn execute_full(
+    session: &mut Session,
+    name: &str,
+    input: &Value,
+    source: Source,
+) -> Result<ToolOutput, ToolError> {
+    execute_with_detail(session, name, input, source, true)
+}
+
+fn execute_with_detail(
+    session: &mut Session,
+    name: &str,
+    input: &Value,
+    source: Source,
+    full: bool,
+) -> Result<ToolOutput, ToolError> {
     let empty = json!({});
     let input = if input.is_null() { &empty } else { input };
     let (value, offset) = match name {
@@ -384,7 +404,11 @@ pub fn execute(
         "view_image" => return view_image(session, parse(input)?),
         _ => return Err(ToolError::UnknownTool(name.to_string())),
     };
-    Ok(ToolOutput::Json(capped(rounded(value), offset)))
+    Ok(ToolOutput::Json(if full {
+        value
+    } else {
+        capped(rounded(value), offset)
+    }))
 }
 
 // ---- Inputs. Unknown fields are refused, so a misspelt filter is never silently ignored. ----
