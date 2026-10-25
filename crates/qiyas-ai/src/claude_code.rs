@@ -1429,7 +1429,11 @@ mod tests {
             "Authorization",
             SESSION,
         ] {
-            assert!(!live_log.contains(secret), "log leaked {secret}");
+            // The message names no value: a leaked one must not reach the test log either.
+            assert!(
+                !live_log.contains(secret),
+                "the agent log holds a value it must never hold"
+            );
         }
     }
 
