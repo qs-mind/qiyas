@@ -75,7 +75,7 @@ fn export_conflicts_is_readable_by_calamine() {
             "جدول الكميات يذكر 120.000 م²",
             "120",
             "",
-            "m2",
+            "m²",
             "FF Plan, GF Plan",
             "Resolved",
             "Checked",

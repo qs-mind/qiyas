@@ -2294,9 +2294,8 @@ fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_the
                 .contains("<standard> clause <n>"));
         }
         if op == "takeoff_kit" {
-            assert!(
-                serde_json::to_vec(&value).unwrap().len() <= qiyas_core::takeoff_kit::MAX_BYTES
-            );
+            let bytes = serde_json::to_vec(&value).unwrap().len();
+            assert!(bytes <= qiyas_core::takeoff_kit::MAX_BYTES, "{bytes}");
             let command = value["batch"]["commands"]
                 .as_array()
                 .unwrap()
@@ -2866,4 +2865,112 @@ fn goal_c_operation_discovery_and_scoped_text_queries() {
             assert!(v["example"].is_object(), "{name}: {v}");
         }
     }
+}
+
+#[test]
+fn u11_read_check_refusal_points_to_drawing_check_and_the_comparison_name() {
+    let (_dir, mut s) = sample();
+    let error = call(
+        &mut s,
+        READ,
+        json!({"op":"run","args":{"command":{"type":"check"}}}),
+    )
+    .unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.contains("qiyas_read")
+            && text.contains("op check")
+            && text.contains("discrepancy_check"),
+        "{text}"
+    );
+}
+
+#[test]
+fn u15_surface_batch_targets_another_sheet_and_rolls_back_without_switching_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("sheets.dxf"), 6);
+    let made = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{"type":"text","value":"Before","at":[0,0]}}}),
+    )
+    .unwrap();
+    let handle = made["added"][0].as_u64().unwrap();
+    call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{"type":"new_layout","name":"Issued","paper":"ISO A3"}}})).unwrap();
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|s| s.name == "Issued")
+        .unwrap()
+        .block;
+    s.set_sheet(&block).unwrap();
+    let command = json!({"type":"edit_text","target":{"handle":handle},"value":"After"});
+    call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"batch","args":{"sheet":"Model","commands":[command.clone()]}}),
+    )
+    .unwrap();
+    assert_eq!(s.sheet, block);
+    assert_eq!(
+        s.entity_info(handle, &[]).unwrap().text.as_deref(),
+        Some("After")
+    );
+    assert!(s.undo());
+    assert_eq!(s.sheet, block);
+    let before = s.history_steps();
+    assert!(call(&mut s, EXECUTE, json!({"op":"batch","args":{"sheet":"Model","commands":[command,{"type":"edit_text","target":{"handle":999999999},"value":"Missing"}]}})).is_err());
+    assert_eq!(s.sheet, block);
+    assert_eq!(s.history_steps(), before);
+    assert_eq!(
+        s.entity_info(handle, &[]).unwrap().text.as_deref(),
+        Some("Before")
+    );
+}
+
+#[test]
+fn u5_change_reports_all_label_collisions_and_u15_checks_the_edited_sheet() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("labels.dxf"), 6);
+    let commands: Vec<_> = (0..12)
+        .map(|_| json!({"type":"text","value":"Room name","at":[0,0],"height":0.2}))
+        .collect();
+    let made = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":commands}}),
+    )
+    .unwrap();
+    assert!(
+        made["check"]["counts"]["text_overlaps_text"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 48,
+        "{made}"
+    );
+    let handle = made["added"][0].as_u64().unwrap();
+    call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{"type":"new_layout","name":"Issued","paper":"ISO A3"}}})).unwrap();
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sheet| sheet.name == "Issued")
+        .unwrap()
+        .block;
+    s.set_sheet(&block).unwrap();
+    let edited = call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{"type":"edit_text","target":{"handle":handle},"value":"Changed room","sheet":"Model"}}})).unwrap();
+    assert_eq!(s.sheet, block);
+    assert_eq!(edited["check"]["sheets"], json!(["*Model_Space"]));
+    assert!(
+        edited["check"]["counts"]["text_overlaps_text"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "{edited}"
+    );
+    assert_ne!(
+        edited["ui"]["action"], "reveal",
+        "An edit elsewhere must not reveal on the visible sheet"
+    );
 }

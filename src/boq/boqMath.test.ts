@@ -57,3 +57,11 @@ test("search keeps Arabic-Indic digits", () => {
   expect(matches(item, "٢")).toBe(true);
   expect(matches(item, "٣")).toBe(false);
 });
+
+test("view-only geometry keeps its link but contributes no quantity", () => {
+  const item = boqItem("A", "Walls", "m", 20);
+  const takeoff = [row("measured", 5, "m", "A"), { ...row("detail", 20, "m", "A"), view_only: true }];
+  const result = measuredFor(item, takeoff);
+  expect(result.sum).toBe(5);
+  expect(result.links.map((r) => r.id)).toEqual(["measured", "detail"]);
+});

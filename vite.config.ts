@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: { ignored: ["**/.local/**", "**/target/**"] },
   },
   test: {
     passWithNoTests: true,

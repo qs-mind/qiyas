@@ -7,7 +7,8 @@
 //! These are candidate areas only: geometry cannot grant professional approval, so
 //! every room says `measurement_basis` "unapproved_net" and `net_accuracy_eligible` false, and
 //! `Command::LabelSpaces` writes them as "Area 58.28 m²" (Arabic when asked, or
-//! when the room's name is Arabic).
+//! when an existing room-name text in a supplied drawing is Arabic). New drawing text defaults
+//! to English regardless of the chat language or a seed's name.
 
 use std::collections::HashSet;
 
@@ -176,12 +177,7 @@ pub(crate) fn ring_area(ring: &[[f64; 2]], bulges: &[f64]) -> f64 {
 /// A text that is an area or a number, not a room's name.
 pub(crate) fn looks_like_a_label(text: &str) -> bool {
     let t = text.trim();
-    let lower = t.to_lowercase();
-    t.parse::<f64>().is_ok()
-        || lower.ends_with("m²")
-        || lower.ends_with("m2")
-        || t.ends_with("م²")
-        || t.ends_with("م2")
+    crate::numbers::parse(t).is_some() || crate::numbers::area_text(t).is_some()
 }
 
 fn bounds_of(points: &[[f64; 2]]) -> [[f64; 2]; 2] {
@@ -286,7 +282,7 @@ impl Session {
             ),
         };
         let language = language.unwrap_or_else(|| {
-            let arabic = room.name.as_deref().unwrap_or_default().chars().any(|c| {
+            let arabic = !self.is_untitled() && room.from_text.is_some() && room.name.as_deref().unwrap_or_default().chars().any(|c| {
                 matches!(c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')
             });
             if arabic { LabelLanguage::Ar } else { LabelLanguage::En }
@@ -316,7 +312,8 @@ impl Session {
     /// `Command::LabelSpaces`: the rooms of `q`, each with its candidate area written as a text
     /// just under its name (or at its seed point), on `layer` (made when missing; the current
     /// layer when none), `height` metres tall (the name's height, else 2.5 mm at the annotation
-    /// scale), to `decimals` places, in `language` (the name's when none). One undo step.
+    /// scale), to `decimals` places, in English by default; supplied Arabic room-name text
+    /// may keep its language. One undo step.
     pub(crate) fn label_spaces(
         &mut self,
         q: &RoomsQuery,

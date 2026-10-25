@@ -10,6 +10,7 @@ export class UserFacingError extends Error { toString() { return this.message; }
 export const userError = (message: string) => new UserFacingError(message);
 const known: [RegExp, string][] = [
   [/workspace_busy|mizan_working/, "workspace.working"],
+  [/selection includes view-only geometry/i, "err.viewOnly"],
   [/could not be read|can.?t (?:be opened|read)|unreadable|bad header|not a .*file/i, "err.open"],
   [/api key.*refused|unauthori[sz]ed|authentication/i, "err.auth"],
   [/signature.*match/i, "err.signature"],
@@ -55,6 +56,11 @@ export function uiError(error: unknown, lang: Lang = typeof document !== "undefi
   if ([...Object.values(en), ...Object.values(ar)].includes(raw)) return raw;
   if (failures.at(-1) !== raw) failures.push(raw);
   if (failures.length > 50) failures.shift();
+  const targetSheet = /Set "sheet":("(?:\\.|[^"\\])*") on the edit command/.exec(raw);
+  if (targetSheet) {
+    try { return translate(lang, "err.otherSheet", { sheet: JSON.parse(targetSheet[1]) }); }
+    catch { /* An incomplete diagnostic falls back to the usual error. */ }
+  }
   const key = known.find(([pattern]) => pattern.test(raw))?.[1] ?? "err.unknown";
   return translate(lang, key);
 }

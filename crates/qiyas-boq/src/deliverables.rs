@@ -93,10 +93,9 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
                 }
             }
         }
-        for (i, w) in report.warnings.iter().enumerate() {
-            sheet.write_string((rows.len() + i + 1) as u32, 0, w)?;
-        }
+        // Internal diagnostics remain lossless, but never become client print pages.
         let record = book.add_worksheet().set_name("Qiyas record")?;
+        record.set_hidden(true);
         let text =
             serde_json::to_string(report).map_err(|e| crate::BoqError::Xlsx(e.to_string()))?;
         for (i, chunk) in text.chars().collect::<Vec<_>>().chunks(16000).enumerate() {

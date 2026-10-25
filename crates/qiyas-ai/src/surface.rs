@@ -939,6 +939,9 @@ fn run_working_session(
         (READ, "measure") => json(measure(session, args)?),
         (READ, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
+            if matches!(command, Command::Check { .. }) {
+                return Err(bad("For drawing checks, use qiyas_read with op check. For the BOQ comparison, use qiyas_execute run with discrepancy_check."));
+            }
             if effect_of(&command) != Effect::Read {
                 return Err(bad(format!(
                     "{} changes things: run it with qiyas_execute run",
@@ -1926,22 +1929,62 @@ fn changed(
     });
     copy_input_metadata(&mut out);
     if !touched.is_empty() {
-        if session.drawing.entities_in(&session.sheet).count() <= CHECK_UP_TO {
+        let mut sheets = std::collections::BTreeMap::<&str, Vec<u64>>::new();
+        for &handle in &touched {
+            if let Some(sheet) = session.entity_sheet(handle) {
+                sheets.entry(sheet).or_default().push(handle);
+            }
+        }
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        let mut findings = Vec::new();
+        let mut not_checked = Vec::new();
+        let mut lines = Vec::new();
+        let mut complete = true;
+        for (sheet, handles) in &sheets {
+            if session
+                .drawing
+                .entities_in(sheet)
+                .take(CHECK_UP_TO + 1)
+                .count()
+                > CHECK_UP_TO
+            {
+                complete = false;
+                not_checked.extend(handles);
+                lines.push(
+                    "Not checked: a large sheet. Read check with its sheet and handles."
+                        .to_string(),
+                );
+                continue;
+            }
             let report = session.check_drawing(&qiyas_core::check::CheckScope {
-                handles: touched.clone(),
+                sheet: Some((*sheet).into()),
+                handles: handles.clone(),
                 ..Default::default()
             });
-            out["check"] = json!({
-                "line": report.line,
-                "complete": report.complete,
-                "layout_findings": report.counts.iter().filter(|(r,_)| qiyas_core::check::layout_rule(r)).map(|(_,n)| n).sum::<usize>(),
-                "not_checked": report.not_checked,
-                "findings": report.findings.iter().take(CHECK_FINDINGS).collect::<Vec<_>>(),
-            });
-        } else {
-            out["check"] = json!({ "complete": false, "line": "Not checked: a large sheet. qiyas_read check {\"handles\": […]} checks what you changed" });
+            complete &= report.complete;
+            for (rule, count) in report.counts {
+                *counts.entry(rule).or_default() += count;
+            }
+            not_checked.extend(report.not_checked);
+            findings.extend(report.findings);
+            lines.push(report.line);
         }
-        out["ui"] = json!({ "action": "reveal", "sheet": session.sheet, "handles": touched });
+        out["check"] = json!({
+            "line": lines.join("; "),
+            "complete": complete,
+            "sheets": sheets.keys().collect::<Vec<_>>(),
+            "layout_findings": counts.iter().filter(|(rule, _)| qiyas_core::check::layout_rule(rule)).map(|(_, n)| n).sum::<usize>(),
+            "counts": counts,
+            "not_checked": not_checked,
+            "findings": findings.iter().take(CHECK_FINDINGS).collect::<Vec<_>>(),
+        });
+        let visible: Vec<_> = touched
+            .iter()
+            .filter(|&&handle| session.entity_sheet(handle) == Some(session.sheet.as_str()))
+            .collect();
+        if !visible.is_empty() {
+            out["ui"] = json!({ "action": "reveal", "sheet": session.sheet, "handles": visible });
+        }
     } else if !change.removed.is_empty() || effect == Effect::View {
         out["ui"] = json!({ "action": "redraw" });
     }
@@ -1995,7 +2038,13 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
     let view = ViewState::of(session);
     let mut answers: Vec<Value> = Vec::new();
     let ran = session.batch_with(source, "batch", layer, color, |s| {
-        if let Some(grouped) = s.run_opening_batch(&commands, source) {
+        if let Some(grouped) = args
+            .get("sheet")
+            .filter(|sheet| !sheet.is_null())
+            .is_none()
+            .then(|| s.run_opening_batch(&commands, source))
+            .flatten()
+        {
             let grouped = grouped?;
             let change = s.last_change().clone();
             for outcome in grouped {
@@ -2021,6 +2070,13 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
                     details: json!({}),
                 })
             })?;
+            if raw.get("sheet").is_none()
+                && command_info(&raw).is_some_and(|info| info.effect == Effect::Edit)
+            {
+                if let Some(sheet) = args.get("sheet").filter(|sheet| !sheet.is_null()) {
+                    raw["sheet"] = sheet.clone();
+                }
+            }
             let (command, input) = prepare_command(s, &raw).map_err(input_error)?;
             let label = command.label();
             let (outcome, change) = s
@@ -2155,7 +2211,17 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
         format!("{stem} conflicts.xlsx")
     };
     let name = args.get("path").and_then(Value::as_str).unwrap_or(&default);
-    let path = crate::execute::resolve_in_drawing_folder(session, name)?;
+    let path = if session.export_folder()
+        == session
+            .drawing
+            .path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+    {
+        crate::execute::resolve_in_drawing_folder(session, name)?
+    } else {
+        qiyas_core::deliverables::confined(&session.export_source(), name)?
+    };
     if op == "export_takeoff" {
         let totals = session.takeoff.totals();
         qiyas_boq::export_takeoff_with_queries(

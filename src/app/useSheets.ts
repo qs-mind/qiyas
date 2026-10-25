@@ -18,7 +18,7 @@ import {
   type PaperView,
 } from "../api";
 import { isStale } from "../shell/switcher";
-import { matchBounds } from "../tools/overlay";
+import { handlesBounds, matchBounds } from "../tools/overlay";
 import { fetchPictures, parseAtlas, parseBatch, type AtlasPage, type Batch, type HeldPicture } from "../viewport/batch";
 import type { Bounds } from "../viewport/camera";
 import { refreshSheet, type HeldSheet } from "../viewport/inset";
@@ -87,6 +87,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   const fitNext = useRef(false);
   const restoredView = useRef<Bounds | null>(null);
   function restoreView(bounds: Bounds) { restoredView.current = bounds; }
+  /** The first content needs a useful view even after an empty drawing was fitted. */
+  const contentShown = useRef(false);
   /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
   const fitIds = useRef<string[] | null>(null);
   /** The find match the next fit shows (Find next on another sheet). */
@@ -150,6 +152,10 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   }
 
   async function showBatch(next: HeldSheet, fit = false) {
+    if (next.batch.ranges.length > 0 && !contentShown.current) {
+      contentShown.current = true;
+      fit = true;
+    }
     if (next.batch === batchHeld.current) {
       if (fit) {
         fitNext.current = true;
@@ -214,6 +220,13 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
         const next = await fetched;
         if (!next || stale()) return;
         const plan = planReveal(next.batch, handles);
+        // Only the visible sheet reaches this queue. Fit before the overlay starts, including
+        // reduced motion; fitExtents here would still see the previous (possibly empty) batch.
+        const revealedBounds = handlesBounds(handles, next.batch);
+        if (revealedBounds) {
+          viewport.current?.fitTo(revealedBounds);
+          contentShown.current = true;
+        }
         if (plan && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
           await new Promise<void>((resolve) => {
             let frame = 0;
@@ -417,6 +430,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
       // Read back the canonical window sheet; automation restores it after every tool call.
       const next = await drawingInfo();
       setSheetBlock(next.sheet);
+      contentShown.current = false;
       // The layers panel's VP freeze column lists this sheet's viewports.
       setInfo(next);
       measure.current?.cancel();
@@ -447,6 +461,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     drawRequest.current += 1;
     batchVersionRef.current = null;
     batchHeld.current = null;
+    contentShown.current = false;
     insetHeld.current = null;
     setInset(null);
     setSplit(false);

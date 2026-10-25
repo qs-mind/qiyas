@@ -114,11 +114,18 @@ pub(crate) fn insunits_of(units: &str) -> Result<i16, String> {
 #[tauri::command]
 pub async fn new_drawing<R: Runtime>(
     units: String,
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    let units = insunits_of(&units)?;
+    if let Some(id) = tabs::reusable_blank(&state, units) {
+        tabs::activate(&app, &state, id, false)?;
+        let state = state.scoped(Some(id))?;
+        return with_session(&state, |s| Ok(s.info()));
+    }
     let state = state.scoped(None)?;
-    let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(&units)?);
+    let mut session = Session::new_blank(&tabs::untitled_path(&state)?, units);
+    tabs::set_untitled_export_folder(&app, &mut session)?;
     let id = tabs::add(&state, session)?;
     let state = state.scoped(Some(id))?;
     with_session(&state, |s| Ok(s.info()))

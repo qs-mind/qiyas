@@ -331,10 +331,12 @@ impl Session {
         let name = check_layer_name(name)?;
         let doc = &mut self.drawing.doc;
         if let Some(old) = doc.layers.get(name) {
-            return Err(invalid(format!(
-                "The drawing has a layer {} already",
-                old.name
-            )));
+            self.last_advice.push(serde_json::json!({
+                "code":"already_exists", "name":old.name,
+                "message":format!("Layer {} already exists; its properties are unchanged.", old.name),
+                "message_ar":format!("الطبقة {} موجودة بالفعل؛ خصائصها لم تتغير.", old.name),
+            }));
+            return Ok(());
         }
         let mut layer = Layer::new(name);
         layer.handle = doc.allocate_handle();

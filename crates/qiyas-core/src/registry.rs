@@ -16,6 +16,8 @@
 //! - `x-prompts`: ordered field names or objects with `field` and `prompt`, overriding the
 //!   schema's argument order and prompt text for the typed command line.
 //!
+//! Generic edit routing fields are JSON-only and do not add typed prompts.
+//!
 //! A command whose payload is another tagged enum (`Draw(DrawSpec)`) has kinds: `draw.line`,
 //! `draw.circle`, each described and exampled on its own.
 
@@ -64,6 +66,9 @@ pub struct CommandInfo {
     pub words: Vec<String>,
     /// Ordered prompt overrides from `x-prompts`; the schema supplies omitted field details.
     pub prompts: Vec<Value>,
+    /// Routing fields added by the registry, omitted from typed command prompts.
+    #[serde(skip)]
+    pub json_only_fields: Vec<String>,
     pub effect: Effect,
     /// The part of the session its undo step keeps ("takeoff", "boq", "conflicts", "drawing",
     /// "drawing+tables", "drawing+tables+takeoff"), worked out from its first example; none when
@@ -321,6 +326,7 @@ impl Registry {
                 doc,
                 words: words_of(&variant),
                 prompts: prompts_of(&variant),
+                json_only_fields: Vec::new(),
                 takeoff_step: variant["x-takeoff-step"].as_str().map(str::to_owned),
                 takeoff_kit: variant.get("x-takeoff-kit").cloned(),
                 effect: effect(&meta, &examples),
@@ -371,6 +377,7 @@ impl Registry {
                     doc,
                     words: words_of(&kind),
                     prompts: prompts_of(&kind),
+                    json_only_fields: Vec::new(),
                     takeoff_step: kind["x-takeoff-step"].as_str().map(str::to_owned),
                     takeoff_kit: kind.get("x-takeoff-kit").cloned(),
                     effect: effect(&meta, &examples),
@@ -388,6 +395,18 @@ impl Registry {
             }
         }
         for c in &mut commands {
+            if c.effect == Effect::Edit || c.name == "batch" {
+                let props = c.schema["properties"]
+                    .as_object_mut()
+                    .expect("command properties");
+                if !props.contains_key("sheet") {
+                    props.insert("sheet".into(), json!({
+                        "type":["string","null"],
+                        "description":"Target sheet name or block, such as Model or Sheet A. The user's visible sheet stays unchanged. Omit to use the working sheet."
+                    }));
+                    c.json_only_fields.push("sheet".into());
+                }
+            }
             if c.name == "set_layer" {
                 let props = c.schema["properties"]
                     .as_object_mut()
@@ -461,7 +480,12 @@ impl Registry {
     /// A command by its wire name (`draw`, `draw.line`), in any case, `-` or `_` alike.
     pub fn get(&self, name: &str) -> Option<&CommandInfo> {
         let key = name.trim().to_ascii_lowercase().replace('-', "_");
-        self.by_name.get(&key).map(|&i| &self.commands[i])
+        let key = if key == "check" {
+            "discrepancy_check"
+        } else {
+            &key
+        };
+        self.by_name.get(key).map(|&i| &self.commands[i])
     }
 
     /// A command by one of its command-line words or aliases, in any case.

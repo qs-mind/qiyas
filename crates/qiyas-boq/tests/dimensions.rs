@@ -34,11 +34,20 @@ fn workbook_preserves_bilingual_boq_exact_dimension_arithmetic_and_references() 
             dimensions.get((i + 1, 9)),
             Some(&Data::String("export-test".into()))
         );
-        assert!(dimensions
-            .get((i + 1, 11))
-            .unwrap()
-            .to_string()
-            .contains("*Model_Space"));
+        let reference = dimensions.get((i + 1, 11)).unwrap().to_string();
+        assert!(reference.contains("Model"));
+        assert!(!reference.contains("*Model_Space"));
+        assert_eq!(
+            reference,
+            line.sources
+                .iter()
+                .map(|source| format!(
+                    "Model / {}",
+                    source.grid.as_deref().unwrap_or("No grid reference")
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
         assert!(dimensions
             .get((i + 1, 10))
             .unwrap()

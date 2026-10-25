@@ -211,7 +211,12 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
     let mappings: Vec<Mapping> = read(s, "mappings")?;
     // A name-only method has no numeric expressions to evaluate. Keep source/validity
     // warnings, but do not solve every assembly's quantities merely to report missing rules.
-    let objects = s.object_records(&ObjectFilter::default(), !method.rules.is_empty())?;
+    let exclusions = s.measurement_exclusions()?;
+    let objects: Vec<_> = s
+        .object_records(&ObjectFilter::default(), !method.rules.is_empty())?
+        .into_iter()
+        .filter(|o| !exclusions.entity(s, o.instance.id))
+        .collect();
     let evidence = s.recognition_evidence()?;
     let mut items = BTreeMap::<String, GeneratedItem>::new();
     for object in &objects {

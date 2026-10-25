@@ -236,7 +236,7 @@ impl Session {
         schedules: Vec<crate::Schedule>,
         source: Source,
     ) -> Result<(), CoreError> {
-        self.transaction(source, "check", |s| {
+        self.transaction(source, "discrepancy_check", |s| {
             let original_sheet = s.sheet.clone();
             let comments = s.list_comments();
             let old_clouds: Vec<_> = s

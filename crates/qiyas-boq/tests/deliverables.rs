@@ -256,7 +256,10 @@ fn visible_variation_is_readable_and_records_remain_lossless() {
         assert!(visible.contains("1.32"));
         assert!(visible.contains("1.33"));
         assert!(!visible.contains("1.326"));
-        assert!(visible.contains("98"));
+        assert!(
+            !visible.contains("98"),
+            "client references omit internal handles; the lossless record retains them"
+        );
         assert!(!visible.contains("/private"));
         assert!(!visible.contains("b_handles"));
         assert!(!visible.contains("000000000000"));

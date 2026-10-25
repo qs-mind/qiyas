@@ -235,10 +235,19 @@ fn rename_is_one_step_and_taken_names_are_refused_without_changes() {
     let blocks = s.drawing.doc.block_records.clone();
     let count = s.drawing.doc.entity_count();
     let steps = s.history_steps().0.len();
+    s.run(Command::NewLayout {
+        name: "GROUND".into(),
+        paper: "ISO A1".into(),
+        orientation: LayoutOrientation::Portrait,
+    })
+    .unwrap();
+    assert_eq!(s.drawing.doc.objects, objects);
+    assert_eq!(s.drawing.doc.block_records, blocks);
+    assert_eq!(s.history_steps().0.len(), steps);
     for command in [
         Command::NewLayout {
             name: "GROUND".into(),
-            paper: "ISO A1".into(),
+            paper: "ISO A4".into(),
             orientation: LayoutOrientation::Portrait,
         },
         Command::RenameLayout {

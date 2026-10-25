@@ -651,6 +651,31 @@ impl Session {
         entities: Vec<NewEntity>,
     ) -> Result<Vec<u64>, CoreError> {
         finite(&base)?;
+        if let Some(old) = self.drawing.doc.block_records.get(name.trim()) {
+            let old = named_block(&self.drawing.doc, &old.name)?;
+            let existing: Vec<_> = self.drawing.doc.entities_in_block(&old.name).collect();
+            let mut same = old.base_point == v3(base)
+                && existing.len() == entities.len()
+                && !entities.is_empty();
+            for (index, (wanted, stored)) in entities.iter().zip(&existing).enumerate() {
+                let (mut candidate, _) = self.prepare_record_entity(wanted, index)?;
+                if matches!(candidate, EntityType::Text(_) | EntityType::MText(_)) {
+                    crate::text::mark_logical(candidate.common_mut());
+                }
+                // Identity and owner are allocated by the document; all requested properties
+                // and geometry still have to match before the create can be reused.
+                candidate.common_mut().handle = stored.common().handle;
+                candidate.common_mut().owner_handle = stored.common().owner_handle;
+                same &= serde_json::to_value(&candidate).map_err(|e| invalid(e.to_string()))?
+                    == serde_json::to_value(stored).map_err(|e| invalid(e.to_string()))?;
+            }
+            if same {
+                let handles = existing.iter().map(|e| e.common().handle.value()).collect();
+                self.last_advice.push(serde_json::json!({"code":"already_exists", "message":format!("Block {} already exists with this geometry.", old.name), "message_ar":format!("الكتلة {} موجودة بهذه الأشكال والخصائص.", old.name)}));
+                return Ok(handles);
+            }
+            return Err(invalid(format!("Block {} already exists with different geometry or properties. Choose another name or edit its definition.", old.name)));
+        }
         let name = check_new_name(&self.drawing.doc, name)?;
         if entities.is_empty() {
             return Err(invalid("Give at least one entity"));

@@ -65,12 +65,12 @@ pub enum DimSpec {
         p2: [f64; 2],
         arc_point: [f64; 2],
     },
-    /// The radius of a circle or arc, toward `point`.
-    #[schemars(example = json!({"kind": "radius", "target": {"handle": 1234}, "point": [1, 1]}))]
+    /// The radius of a circle or arc, with its text at `point`. Pick clear space outside the curve.
+    #[schemars(example = json!({"kind": "radius", "target": {"handle": 1234}, "point": [3, 3]}))]
     #[schemars(extend("x-words" = ["DIMRADIUS", "DRA"]))]
     Radius { target: Target, point: [f64; 2] },
-    /// The diameter of a circle or arc, through `point`'s direction.
-    #[schemars(example = json!({"kind": "diameter", "target": {"handle": 1234}, "point": [1, 1]}))]
+    /// The diameter of a circle or arc, with its text at `point` along that direction.
+    #[schemars(example = json!({"kind": "diameter", "target": {"handle": 1234}, "point": [3, 3]}))]
     #[schemars(extend("x-words" = ["DIMDIAMETER", "DDI"]))]
     Diameter { target: Target, point: [f64; 2] },
     /// The length of an arc, its dimension arc through `point`.
@@ -698,7 +698,10 @@ impl Session {
                 let (c, r, _) = self.round(&target)?;
                 let u = unit(sub(point, c)).unwrap_or([1.0, 0.0]);
                 let on = [c[0] + u[0] * r, c[1] + u[1] * r];
-                vec![Dimension::Radius(DimensionRadius::new(v3(c), v3(on)))]
+                let mut dimension = DimensionRadius::new(v3(c), v3(on));
+                dimension.base.text_middle_point = v3(point);
+                dimension.base.text_user_positioned = true;
+                vec![Dimension::Radius(dimension)]
             }
             DimSpec::Diameter { target, point } => {
                 finite(&[point])?;
@@ -706,7 +709,10 @@ impl Session {
                 let u = unit(sub(point, c)).unwrap_or([1.0, 0.0]);
                 let a = [c[0] - u[0] * r, c[1] - u[1] * r];
                 let b = [c[0] + u[0] * r, c[1] + u[1] * r];
-                vec![Dimension::Diameter(DimensionDiameter::new(v3(a), v3(b)))]
+                let mut dimension = DimensionDiameter::new(v3(a), v3(b));
+                dimension.base.text_middle_point = v3(point);
+                dimension.base.text_user_positioned = true;
+                vec![Dimension::Diameter(dimension)]
             }
             DimSpec::ArcLength { target, point } => {
                 finite(&[point])?;

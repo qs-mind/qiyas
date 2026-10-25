@@ -98,6 +98,49 @@ pub(crate) fn find_path(state: &AppState, path: &Path) -> Option<u32> {
         .map(|t| t.id)
 }
 
+/// An empty untitled drawing with matching units can serve another new-drawing request.
+/// The drawing on screen is tried first. A drawing Mizan is working in is never reused.
+pub(crate) fn reusable_blank(state: &AppState, units: i16) -> Option<u32> {
+    let (active, mut workspaces) = {
+        let tabs = lock(&state.tabs);
+        (
+            tabs.active,
+            tabs.order
+                .iter()
+                .filter_map(|id| tabs.workspaces.get(id).cloned())
+                .collect::<Vec<_>>(),
+        )
+    };
+    workspaces.sort_by_key(|w| Some(w.id) != active);
+    workspaces
+        .into_iter()
+        .find(|w| {
+            !lock(&w.ai).busy()
+                && w.session
+                    .try_lock()
+                    .ok()
+                    .is_some_and(|s| s.as_ref().is_some_and(|s| s.is_reusable_blank(units)))
+        })
+        .map(|w| w.id)
+}
+
+/// Choose a visible export folder while the drawing still has no saved file.
+pub(crate) fn set_untitled_export_folder<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &mut Session,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let directory = app
+        .path()
+        .document_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))
+        .map_err(|e| format!("Choose a location with Save As before exporting: {e}"))?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("The Documents folder cannot be opened: {e}"))?;
+    session.set_export_directory(directory);
+    Ok(())
+}
+
 pub(crate) fn add(state: &AppState, session: Session) -> Result<u32, String> {
     add_checked(state, session, None)
 }

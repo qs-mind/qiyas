@@ -492,9 +492,18 @@ fn invalid_object_data_is_refused_without_partial_drivers_graphics_or_undo_steps
     let wall = object_record(&mut s, "Blockwork")["id"].as_u64().unwrap();
     let before = serde_json::to_value(&s.drawing.doc).unwrap();
     let before_steps = s.history_steps().0.len();
+    command(
+        &mut s,
+        json!({"type":"define_object_type","definition":element_type_examples()[0]}),
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_value(&s.drawing.doc).unwrap(), before);
+    assert_eq!(s.history_steps().0.len(), before_steps);
+    let mut conflicting = element_type_examples()[0].clone();
+    conflicting["category"] = json!("Changed definition");
     for input in [
         json!({"type":"delete_object_type","name":"Blockwork"}),
-        json!({"type":"define_object_type","definition":element_type_examples()[0]}),
+        json!({"type":"define_object_type","definition":conflicting}),
         json!({"type":"set_object_props","targets":[wall],"props":{"thickness":-1}}),
         json!({"type":"set_object_props","targets":[wall],"props":{"grade":"missing"}}),
         json!({"type":"place_objects","objects":[{"type":"Column","points":[[20,0]]},{"type":"Blockwork","points":[[0,30],[10,30]],"props":{"thickness":-1}}]}),
@@ -1392,7 +1401,7 @@ fn candidate_labels_follow_request_language_without_net_approval() {
     for (name, language, expected) in [
         ("LIVING", Some("ar"), "المساحة ٥١٫٢١ م²"),
         ("غرفة", Some("en"), "Area 51.21 m²"),
-        ("غرفة", None, "المساحة ٥١٫٢١ م²"),
+        ("غرفة", None, "Area 51.21 m²"),
         ("LIVING", None, "Area 51.21 m²"),
     ] {
         let (_dir, mut s) = test_plan();

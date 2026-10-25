@@ -364,13 +364,14 @@ pub async fn untitled_autosaves(state: State<'_, AppState>) -> Result<Vec<String
 #[tauri::command]
 pub async fn recover_autosave<R: Runtime>(
     path: String,
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
     let state = state.scoped(None)?;
     let mut session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
     if Path::new(&path).starts_with(state.config_dir.join("untitled")) {
         session.mark_untitled();
+        tabs::set_untitled_export_folder(&app, &mut session)?;
     }
     let recovered = session.drawing.path.clone();
     let id = tabs::add(&state, session)?;

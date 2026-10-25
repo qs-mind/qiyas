@@ -283,6 +283,7 @@ pub(crate) fn full(s: &mut Session) -> Result<(), CoreError> {
     s.migrate_object_schedules()?;
     s.refresh_object_schedules()?;
     s.refresh_measurement()?;
+    s.refresh_measurement_scope()?;
     s.follow_fields()
 }
 impl Session {
@@ -302,6 +303,13 @@ impl Session {
                 .app_ids
                 .contains(crate::objects::OBJECT_APP)
             || self.drawing.doc.app_ids.contains(crate::WALL_APP);
+        let exists = exists
+            || crate::knowledge::get(
+                &self.drawing.doc,
+                crate::knowledge::Kind::Measurement,
+                "view_only",
+            )
+            .is_ok_and(|entry| entry.is_some());
         (exists, exists)
     }
     pub(crate) fn rederive(
@@ -356,9 +364,14 @@ impl Session {
             self.refresh_object_schedules_scoped(if all { None } else { Some(&schedules) })?;
         }
         requested.observe(&self.drawing.doc, "live schedules");
-        if all || !object_ids.is_empty() || before.measurement != now.measurement {
+        if all
+            || !object_ids.is_empty()
+            || before.measurement != now.measurement
+            || self.has_measurement_scope()
+        {
             self.refresh_measurement()?;
         }
+        self.refresh_measurement_scope()?;
         requested.observe(&self.drawing.doc, "measurement rules");
         let now = Inputs::capture(self)?;
         let mut dirty = before.changed(&now);

@@ -45,6 +45,16 @@ function setup(transcript: Transcript = EMPTY, busy = false, error: string | nul
   return { assistant, onShow, onUndo };
 }
 
+test("a lost connection keeps completed work and offers Continue", () => {
+  const { assistant } = setup({ items: [card] }, false,
+    JSON.stringify({ code: "ai.error.network", message: "Connection failed", message_ar: "انقطع الاتصال" }));
+  expect(screen.getByText("Connection lost")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(assistant.send).toHaveBeenCalledWith("Continue from the last completed step. Keep the finished work.");
+  expect(assistant.clear).not.toHaveBeenCalled();
+  expect(document.querySelectorAll(".tool-card")).toHaveLength(1);
+});
+
 test("empty state offers three examples; one fills the box", () => {
   setup();
   const examples = screen.getAllByRole("listitem");

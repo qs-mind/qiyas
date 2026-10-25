@@ -246,6 +246,11 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     let mut handles = Vec::new();
     if let Some(prepared) = record_fixtures::prepare(session, name, example) {
         handles = prepared;
+    } else if name == "set_measurement_scope" {
+        handles = added_by(
+            session,
+            json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[5,4]}),
+        );
     } else if matches!(name, "carry_knowledge" | "variation_report") {
         let path = session
             .drawing

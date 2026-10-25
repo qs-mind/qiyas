@@ -1,6 +1,7 @@
 //! Bilingual quantities and lossless variation records. Long JSON is split across cells.
 use crate::BoqError;
 use calamine::{open_workbook_auto, Reader};
+use qiyas_core::deliverables::{display_sheet, display_unit, Language};
 use qiyas_core::revisions::VariationReport;
 use rust_xlsxwriter::{Format, Workbook};
 use std::path::Path;
@@ -31,24 +32,26 @@ pub(crate) fn write(book: &mut Workbook, report: Option<&VariationReport>) -> Re
         sheet.write_string(row, 0, &item.code)?;
         sheet.write_string(row, 1, &item.description_en)?;
         sheet.write_string(row, 2, &item.description_ar)?;
-        sheet.write_string(row, 3, &item.unit)?;
+        sheet.write_string(row, 3, display_unit(&item.unit))?;
         for (column, value) in [(4, item.a_quantity), (5, item.b_quantity), (6, item.delta)] {
             sheet.write_number(row, column, value)?;
         }
         let evidence = item
             .elements
             .iter()
-            .map(|e| {
-                format!(
-                    "{}: A {:?}; B {:?}; {}",
-                    e.identity, e.a_handles, e.b_handles, e.delta
-                )
-            })
+            .map(|e| display_sheet(&e.sheet, Language::En))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>()
             .join("; ");
         // Full evidence is retained in the record cells even for very large statements.
         sheet.write_string(row, 7, evidence.chars().take(30000).collect::<String>())?;
     }
+    sheet.set_column_hidden(8)?;
+    for column in [1, 2, 7] {
+        sheet.set_column_format(column, &Format::new().set_text_wrap())?;
+    }
+    sheet.set_print_area(0, 0, report.items.len() as u32, 7)?;
     let text = serde_json::to_string(report).map_err(|e| BoqError::Xlsx(e.to_string()))?;
     let chars: Vec<_> = text.chars().collect();
     for (i, chunk) in chars.chunks(8000).enumerate() {

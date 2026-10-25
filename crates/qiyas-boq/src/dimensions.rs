@@ -1,4 +1,5 @@
 //! Values are calculated by qiyas-param, never by an Excel locale or a handwritten quantity.
+use qiyas_core::deliverables::{display_sheet, display_unit, Language};
 use qiyas_core::measurement::MeasurementReport;
 use rust_xlsxwriter::{Format, Workbook, XlsxError};
 
@@ -34,12 +35,16 @@ pub(crate) fn write_contents(
     )?;
     sheet.set_column_width(1, 45)?;
     sheet.set_column_width(2, 45)?;
+    for column in [1, 2, 7, 8, 9, 10] {
+        sheet.set_column_format(column, &Format::new().set_text_wrap())?;
+    }
+    sheet.set_print_area(0, 0, report.items.len() as u32, 10)?;
     for (index, item) in report.items.iter().enumerate() {
         let row = (index + 1) as u32;
         sheet.write_string(row, 0, &item.code)?;
         sheet.write_string(row, 1, &item.description_en)?;
         sheet.write_string(row, 2, &item.description_ar)?;
-        sheet.write_string(row, 3, &item.unit)?;
+        sheet.write_string(row, 3, display_unit(&item.unit))?;
         sheet.write_number(row, 4, item.quantity)?;
         sheet.write_string(row, 5, &item.section)?;
         sheet.write_string(row, 6, &item.trade)?;
@@ -49,6 +54,8 @@ pub(crate) fn write_contents(
             item.mapping_citations
                 .iter()
                 .map(|c| format!("{} / {}", c.source, c.clause))
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>()
                 .join("; "),
         )?;
@@ -58,6 +65,8 @@ pub(crate) fn write_contents(
             item.coverage
                 .iter()
                 .map(|n| format!("{} [{} / {}]", n.text, n.citation.source, n.citation.clause))
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>()
                 .join("; "),
         )?;
@@ -68,6 +77,8 @@ pub(crate) fn write_contents(
             item.rule_citations()
                 .iter()
                 .map(|c| format!("{} / {}", c.source, c.clause))
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>()
                 .join("; "),
         )?;
@@ -88,7 +99,7 @@ pub(crate) fn write_contents(
             "Unit",
             "Method",
             "Source / clause",
-            "Handles / sheet / grid",
+            "Sheet / grid",
             "Decision",
             "Source expressions",
             "Drawing evidence",
@@ -117,7 +128,7 @@ pub(crate) fn write_contents(
             sheet.write_string(row, 5, &line.expression)?;
             sheet.write_number(row, 6, line.value)?;
             sheet.write_boolean(row, 7, line.included)?;
-            sheet.write_string(row, 8, &line.unit)?;
+            sheet.write_string(row, 8, display_unit(&line.unit))?;
             sheet.write_string(row, 9, &line.method)?;
             sheet.write_string(
                 row,
@@ -135,10 +146,9 @@ pub(crate) fn write_contents(
                     .iter()
                     .map(|s| {
                         format!(
-                            "{:X} / {} / {}",
-                            s.handle,
-                            s.sheet,
-                            s.grid.as_deref().unwrap_or("unassigned")
+                            "{} / {}",
+                            display_sheet(&s.sheet, Language::En),
+                            s.grid.as_deref().unwrap_or("No grid reference")
                         )
                     })
                     .collect::<Vec<_>>()
@@ -166,7 +176,15 @@ pub(crate) fn write_contents(
             row += 1;
         }
     }
+    sheet.set_column_hidden(13)?;
+    sheet.set_column_hidden(14)?;
+    for column in [1, 4, 5, 9, 10, 11, 12] {
+        sheet.set_column_format(column, &Format::new().set_text_wrap())?;
+    }
+    sheet.set_print_area(0, 0, row.saturating_sub(1), 12)?;
     let sheet = book.add_worksheet().set_name("Measurement review")?;
+    // Full diagnostics remain available for audit, outside the client printout.
+    sheet.set_hidden(true);
     sheet.write_string_with_format(0, 0, "Review notes", &bold)?;
     for (i, warning) in report.warnings.iter().enumerate() {
         sheet.write_string((i + 1) as u32, 0, warning)?;

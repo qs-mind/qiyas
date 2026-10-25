@@ -340,6 +340,9 @@ impl Pending {
                 values.insert(name.into(), value.clone());
                 continue;
             }
+            if info.json_only_fields.iter().any(|field| field == name) {
+                continue;
+            }
             let required = metadata
                 .get("required")
                 .and_then(Value::as_bool)

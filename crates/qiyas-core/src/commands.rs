@@ -64,7 +64,8 @@ pub enum Command {
     /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
     #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
-    #[schemars(example = json!({"type":"check"}))]
+    #[serde(rename = "discrepancy_check", alias = "check")]
+    #[schemars(example = json!({"type":"discrepancy_check"}))]
     #[schemars(extend("x-takeoff-kit" = {"order":80,"example":0}))]
     Check {
         #[serde(default)]
@@ -258,6 +259,17 @@ pub enum Command {
         handle: u64,
         #[serde(default)]
         chain: Vec<u64>,
+    },
+    /// Mark a closed region or named group as measured or view only. View-only geometry
+    /// stays editable but is excluded from manual and generated quantities.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type":"set_measurement_scope","region":{"handle":1234},"measured":false}))]
+    SetMeasurementScope {
+        #[serde(default)]
+        region: Option<Target>,
+        #[serde(default)]
+        group: Option<String>,
+        measured: bool,
     },
     /// Block references of `block_name` on the current sheet, on visible layers only
     /// (and only on `layer` when given), and those at the top of the sheet's xrefs.
@@ -824,7 +836,8 @@ pub enum Command {
     },
     /// Defines a named block from entities shaped exactly as CreateEntities takes them.
     /// Coordinates are relative to the block's own system; `base` is its insertion base.
-    /// A taken name is refused. One undo step includes the definition and any new layers.
+    /// Reuses a matching definition; conflicting geometry or properties are refused.
+    /// One undo step includes a new definition and any new layers.
     #[schemars(extend("x-category" = "blocks"))]
     #[schemars(example = json!({"type": "define_block", "name": "MARK", "base": [0, 0], "entities": [{"type": "Line", "data": {"start": {"x": 0, "y": 0, "z": 0}, "end": {"x": 100, "y": 0, "z": 0}}}]}))]
     DefineBlock {
@@ -1065,7 +1078,8 @@ pub enum Command {
         height: Option<f64>,
     },
     /// Adds a layout using a paper_catalog name (for example ISO A1), in paper millimetres.
-    /// Refuses an existing name. Use SetSheet to display the new layout. One undo step.
+    /// Reuses matching paper settings; a conflicting name needs SetLayoutPaper or a new name.
+    /// Use SetSheet to display the new layout. One undo step when created.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "new_layout", "name": "Ground floor", "paper": "ISO A1", "orientation": "landscape"}))]
     #[schemars(extend("x-words" = ["NEWLAYOUT"]))]
@@ -1331,7 +1345,8 @@ pub enum Command {
     /// Writes each room's unapproved candidate area ("Area 58.28 m²", or in
     /// Arabic) as a text just under its name, or at its seed: on `layer` (made when missing; the
     /// current layer by default), `height` metres tall (the name's height by default), to
-    /// `decimals` places (2), in `language` (the name's). One undo step. `Outcome::Rooms` with
+    /// `decimals` places (2), in English unless `language` is given. Existing Arabic names in
+    /// a supplied drawing may keep Arabic. One undo step. `Outcome::Rooms` with
     /// each label's handle.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
@@ -1571,6 +1586,7 @@ impl Command {
             | Command::SpatialQuery(..)
             | Command::Verify { .. }
             | Command::ListComments => None,
+            Command::SetMeasurementScope { .. } => Some(Part::Document { tables: true, takeoff: true }),
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -2178,6 +2194,14 @@ impl Session {
                     empty_fields,
                 });
             }
+            Command::SetMeasurementScope {
+                region,
+                group,
+                measured,
+            } => {
+                self.set_measurement_scope(region, group, measured)?;
+                return Ok(Outcome::Changed);
+            }
             Command::MeasureDistance { points } => {
                 if points.len() < 2 {
                     return Err(invalid("A distance needs at least 2 points"));
@@ -2212,7 +2236,7 @@ impl Session {
                 m
             }
             Command::CountBlock { block_name, layer } => {
-                let mut m = self.count_block(block_name, layer);
+                let mut m = self.count_block(block_name, layer)?;
                 m.auto_description = true;
                 m
             }
@@ -3092,6 +3116,7 @@ impl Session {
                 });
             }
         };
+        self.require_measured(&measurement)?;
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());
         Ok(Outcome::Measured {
@@ -3296,7 +3321,18 @@ impl Session {
     /// A dynamic block's anonymous copies count as the dynamic block. References at the top of
     /// the sheet's xrefs count too (on their `XREF|LAYER`): they are kept as their points, since
     /// their handles are the xref drawing's.
-    fn count_block(&self, block_name: String, layer: Option<String>) -> Measurement {
+    fn count_block(
+        &self,
+        block_name: String,
+        layer: Option<String>,
+    ) -> Result<Measurement, CoreError> {
+        let exclusions = self.measurement_exclusions()?;
+        let owner = self
+            .drawing
+            .doc
+            .block_records
+            .get(&self.sheet)
+            .map_or(Handle::NULL, |b| b.handle);
         let block = normalize_name(&block_name);
         let only_on = layer.as_deref().map(normalize_name);
         let wanted = |layer: &str| only_on.as_ref().is_none_or(|l| *l == normalize_name(layer));
@@ -3309,8 +3345,11 @@ impl Session {
             if let Some(xf) = xf {
                 let p = insert.insert_point;
                 let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
-                points.push(xf.apply(on_plan));
-            } else {
+                let point = xf.apply(on_plan);
+                if !exclusions.points(owner, &[point]) {
+                    points.push(point);
+                }
+            } else if !exclusions.entity(self, insert.common.handle.value()) {
                 handles.push(insert.common.handle.value());
             }
         });
@@ -3326,7 +3365,7 @@ impl Session {
         m.block_name = Some(block_name);
         m.count_scope = Some(crate::INSERT_COUNT_SCOPE.to_string());
         m.note = crate::INSERT_COUNT_LIMITATIONS.to_string();
-        m
+        Ok(m)
     }
 
     /// Removes the entities `targets` from the sheet on screen, once every one is found at its
@@ -3439,8 +3478,21 @@ impl Session {
                 .get_entity(Handle::new(*h))
                 .ok_or(CoreError::NoSuchEntity(*h))?;
             if Some(entity.common().owner_handle) != sheet {
+                let owner = entity.common().owner_handle;
+                let name = self
+                    .drawing
+                    .sheets()
+                    .into_iter()
+                    .find(|sheet| {
+                        doc.block_records
+                            .get(&sheet.block)
+                            .is_some_and(|block| block.handle == owner)
+                    })
+                    .map(|sheet| sheet.name)
+                    .unwrap_or_else(|| "another block".into());
+                let target = serde_json::to_string(&name).unwrap_or_default();
                 return Err(CoreError::InvalidCommand(format!(
-                    "Entity {h} is not on this sheet"
+                    "Entity {h} is on sheet {name}. Set \"sheet\":{target} on the edit command to target it without switching the view."
                 )));
             }
             if let Some(edit) = self.block_edit.as_ref().filter(|e| e.outside.contains(h)) {

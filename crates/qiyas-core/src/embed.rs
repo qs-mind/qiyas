@@ -241,6 +241,8 @@ fn record(m: &Measurement, record_only: bool, room_boundary: Option<u64>) -> Ext
             "source": m.source,
             "record_only": record_only,
             "quantity_valid": m.available(),
+            // An excluded row retains its source and value so unmarking works after reopen.
+            "view_only_row": m.view_only.then_some(m),
             "room_boundary": room_boundary,
         })
         .to_string(),
@@ -383,6 +385,13 @@ fn parse(record: &ExtendedDataRecord, units: Units) -> Option<Measurement> {
         ("item", Some(XDataValue::String(_))) => Kind::Item,
         _ => return None,
     };
+    if let Some(row) = metadata
+        .as_ref()
+        .and_then(|meta| meta.get("view_only_row"))
+        .filter(|row| !row.is_null())
+    {
+        return serde_json::from_value(row.clone()).ok();
+    }
     let mut m = Measurement::new(
         kind,
         *value,
