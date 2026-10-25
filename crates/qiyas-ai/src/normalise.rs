@@ -114,10 +114,15 @@ pub(crate) fn args(
         && ((op == "query" && v["kind"] == "entity") || op == "measure")
         && v.get("handles").is_some()
     {
-        if v.get("handle").is_some() || v["handles"].as_array().is_none_or(|a| a.len() != 1) {
+        if v.get("handle").is_some() {
             return Err(ToolError::BadInput(
                 "Choose one handle; do not supply both handle and handles.".into(),
             ));
+        }
+        if v["handles"].as_array().is_none_or(|a| a.len() != 1) {
+            return Err(ToolError::BadInput(format!(
+                "{op} reads one handle; for several use records with handles [..]."
+            )));
         }
         v["handle"] = v["handles"][0].clone();
         v.as_object_mut().unwrap().remove("handles");

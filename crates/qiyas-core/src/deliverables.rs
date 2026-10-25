@@ -575,6 +575,19 @@ fn query_rows(queries: &[crate::Conflict]) -> Vec<Value> {
         })
         .collect()
 }
+fn layout_missing(name: &str, stored: &[String], session: &Session) -> CoreError {
+    let sheet = session
+        .drawing
+        .sheets()
+        .iter()
+        .any(|l| l.name.eq_ignore_ascii_case(name));
+    invalid(format!(
+        "No report layout named {name}{}. Stored report layouts: {}. Leave out layout for the default.",
+        if sheet { " (that is a drawing sheet, not a report layout)" } else { "" },
+        if stored.is_empty() { "none".into() } else { stored.join(", ") }
+    ))
+}
+
 pub fn drawing(
     session: &Session,
     kind: Kind,
@@ -584,7 +597,12 @@ pub fn drawing(
     let layout: Layout = match layout {
         Some(name) => serde_json::from_value(
             knowledge::get(&session.drawing.doc, knowledge::Kind::Reports, name)?
-                .ok_or_else(|| invalid("Report layout not found"))?
+                .ok_or_else(|| {
+                    let stored = knowledge::list(&session.drawing.doc, knowledge::Kind::Reports)
+                        .map(|l| l.into_iter().map(|e| e.name).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    layout_missing(name, &stored, session)
+                })?
                 .data,
         )
         .map_err(|e| invalid(e.to_string()))?,
@@ -671,7 +689,13 @@ pub fn project(
             .reports
             .get(name)
             .cloned()
-            .ok_or_else(|| invalid("Report layout not found"))?,
+            .ok_or_else(|| {
+                let stored = p.reports.keys().cloned().collect::<Vec<_>>();
+                invalid(format!(
+                    "No report layout named {name}. Stored report layouts: {}. Leave out layout for the default.",
+                    if stored.is_empty() { "none".into() } else { stored.join(", ") }
+                ))
+            })?,
         None => default_layout(kind),
     };
     let mut rows = match kind {

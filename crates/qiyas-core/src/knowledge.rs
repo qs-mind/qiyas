@@ -263,7 +263,7 @@ fn read_entry(doc: &CadDocument, name: &str, handle: Handle) -> Result<Entry, Co
         }
         text.push_str(value);
     }
-    let envelope: Envelope = serde_json::from_str(&text)
+    let envelope: Envelope = serde_json::from_str(&crate::xdata::decode_legacy_unicode(&text))
         .map_err(|e| invalid(format!("Knowledge entry {name} contains invalid JSON: {e}")))?;
     if envelope.version != VERSION {
         return Err(invalid(format!(
@@ -371,6 +371,7 @@ pub fn put(doc: &mut CadDocument, kind: Kind, name: &str, data: &Value) -> Resul
         data: data.clone(),
     })
     .map_err(|e| invalid(format!("Invalid knowledge JSON: {e}")))?;
+    let text = crate::xdata::ascii_json(&text);
     if text.len() > MAX_BYTES {
         return Err(invalid("Knowledge entry exceeds 4 MiB"));
     }
@@ -464,6 +465,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn arabic_knowledge_survives_save_and_reopen_in_every_dwg_version() {
+        use opencadcodec::types::DxfVersion;
+        let text = "مغاسل دورات المياه 🏠 \\U+0645 literal \"quoted\"";
+        for version in [
+            DxfVersion::AC1015,
+            DxfVersion::AC1018,
+            DxfVersion::AC1021,
+            DxfVersion::AC1024,
+            DxfVersion::AC1027,
+            DxfVersion::AC1032,
+        ] {
+            for extension in ["dwg", "dxf"] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join(format!("arabic.{extension}"));
+                let mut s = Session::new_blank(&path, 4);
+                s.drawing.doc.version = version;
+                put(
+                    &mut s.drawing.doc,
+                    Kind::Mappings,
+                    "boq",
+                    &json!({"text": text}),
+                )
+                .unwrap();
+                s.save_as(&path).unwrap();
+                let s = Session::open(&path).unwrap();
+                let entry = get(&s.drawing.doc, Kind::Mappings, "boq").unwrap().unwrap();
+                assert_eq!(entry.data["text"], text, "{version:?} {extension}");
+            }
+        }
+    }
+
+    #[test]
+    fn agents_cannot_write_computed_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("computed.dxf"), 4);
+        for (kind, name) in [(Kind::Revisions, "result"), (Kind::Queries, "Result")] {
+            let cmd = crate::Command::SetKnowledge {
+                kind,
+                name: name.into(),
+                data: json!({"items": [{"delta": 3.0}]}),
+            };
+            let err = s.run_as(cmd.clone(), Source::Mcp).unwrap_err().to_string();
+            assert!(err.contains("computed by Qiyas"), "{err}");
+            assert!(get(&s.drawing.doc, kind, name).unwrap().is_none());
+        }
+        // The cloud layer is ordinary data and stays writable.
+        s.run_as(
+            crate::Command::SetKnowledge {
+                kind: Kind::Revisions,
+                name: "cloud_layer".into(),
+                data: json!("VARIATION"),
+            },
+            Source::Ai,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn old_dwg_unicode_escapes_are_read_back() {
+        let x = crate::xdata::decode_legacy_unicode;
+        assert_eq!(x(r#"{"a":"\U+0645\U+063A"}"#), r#"{"a":"مغ"}"#);
+        assert_eq!(x(r"\U+D83C\U+DFE0"), "🏠");
+        // A JSON-escaped backslash before U+ is literal text, not an escape.
+        assert_eq!(x(r#""\\U+0645""#), r#""\\U+0645""#);
+        assert_eq!(x(r"\U+GGGG"), r"\U+GGGG");
     }
 
     #[test]

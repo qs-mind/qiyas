@@ -2076,6 +2076,23 @@ impl Session {
                 });
             }
             Command::SetKnowledge { kind, name, data } => {
+                // Computed results: typed numbers here would read as measured quantities.
+                let computed = match kind {
+                    crate::knowledge::Kind::Revisions => ["result", "baseline", "identities"]
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&name))
+                        .then_some("carry_knowledge, then variation_report"),
+                    crate::knowledge::Kind::Queries => name
+                        .eq_ignore_ascii_case("result")
+                        .then_some("discrepancy_check"),
+                    _ => None,
+                };
+                if let (Some(via), Source::Ai | Source::Mcp) = (computed, source) {
+                    return Err(CoreError::InvalidCommand(format!(
+                        "{}/{name} is computed by Qiyas, not written: run {via}",
+                        kind.as_str()
+                    )));
+                }
                 if matches!(
                     kind,
                     crate::knowledge::Kind::Types
@@ -2312,6 +2329,14 @@ impl Session {
                     && !empty_item
                 {
                     self.last_advice.push(serde_json::json!({"code":"unmeasured_item","message":"This item has no geometry or measured quantity. Consider a note or measure its source before reporting it as a quantity."}));
+                }
+                if matches!(source, Source::Ai | Source::Mcp)
+                    && kind == Kind::Item
+                    && points.is_empty()
+                    && handles.is_empty()
+                    && value.is_some_and(|v| v != 0.0)
+                {
+                    self.last_advice.push(serde_json::json!({"code":"typed_quantity","message":"This quantity was typed, not measured: nothing in the drawing backs it. Measure the drawn handles, or derive it from measurement rules, so it traces to the drawing."}));
                 }
                 let value = value.or((kind == Kind::Item
                     && (empty_item
