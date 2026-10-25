@@ -1,8 +1,15 @@
 import { expect, test } from "vitest";
-import type { AgentEvent } from "../api";
+import type { AgentEvent, TranscriptEntry } from "../api";
 import { EMPTY, reduce, startNewOffered, undoableCard, type Action, type Transcript } from "./messages";
 
 const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
+
+test("cache percentage includes cold input, cache reads and cache writes", () => {
+  const transcript = run([{ type: "done", usage: { input_tokens: 100, cache_read_input_tokens: 800, cache_creation_input_tokens: 100 } }]);
+  expect(transcript.items).toEqual([{ kind: "cache_usage", cached: 800, total: 1000 }]);
+  expect(run([{ type: "restore", entries: [{ type: "event", event: { type: "done", usage: { input_tokens: 200, cache_read_input_tokens: 800 } } }] }]).items)
+    .toEqual([{ kind: "cache_usage", cached: 800, total: 1000 }]);
+});
 
 const call = (id: string, label = "measure_area", mutating = true): AgentEvent => ({
   type: "tool_call",
@@ -220,4 +227,33 @@ test("completion keeps open findings with the answer and restores them from Hist
   expect(transcript.items[1]).toMatchObject({ text: "Done.", finished: true });
   const restored = run([{ type: "restore", entries: [{ type: "user", text: "Finish", pointed: [], images: [] }, { type: "event", event: { type: "text", text: "Done." } }, { type: "event", event: findings }, { type: "event", event: { type: "done", usage: {} } }] }]);
   expect(restored.items).toEqual(transcript.items);
+});
+
+
+test("cache totals survive a stopped turn and update without duplicate rows", () => {
+  const entries: TranscriptEntry[] = [
+    { type: "user", text: "Measure", pointed: [], images: [] },
+    { type: "event", event: { type: "cache_usage", usage: { input_tokens: 20, cache_read_input_tokens: 80 } } },
+    { type: "event", event: { type: "cache_usage", usage: { input_tokens: 30, cache_read_input_tokens: 170, cache_creation_input_tokens: 50 } } },
+    { type: "event", event: { type: "stopped", reason: "cancelled" } },
+  ];
+  const restored = reduce(EMPTY, { type: "restore", entries });
+  expect(restored.items.filter((item) => item.kind === "cache_usage")).toEqual([{ kind: "cache_usage", cached: 170, total: 250 }]);
+  expect(restored.items.at(-1)).toEqual({ kind: "stopped", reason: "cancelled" });
+  let state = reduce(restored, { type: "user", text: "Continue" });
+  state = reduce(state, { type: "cache_usage", usage: { input_tokens: 10, cache_read_input_tokens: 90 } });
+  state = reduce(state, { type: "done", usage: { input_tokens: 10, cache_read_input_tokens: 90 } });
+  expect(state.items.filter((item) => item.kind === "cache_usage")).toHaveLength(2);
+});
+
+
+test("retry discards unfinished thinking across cache telemetry and keeps its usage", () => {
+  const transcript = run([
+    { type: "user", text: "Continue" },
+    { type: "thinking", text: "unfinished thinking" },
+    { type: "cache_usage", usage: { input_tokens: 100, cache_read_input_tokens: 900 } },
+    { type: "retrying", seconds: 0, code: "ai.error.output_limit", discard_partial: true },
+  ]);
+  expect(transcript.items.map((item) => item.kind)).toEqual(["user", "cache_usage", "retrying"]);
+  expect(transcript.items[1]).toEqual({ kind: "cache_usage", cached: 900, total: 1000 });
 });

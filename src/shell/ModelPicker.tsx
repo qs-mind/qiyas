@@ -74,6 +74,8 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, load
 
   return (
     <div className="model-picker">
+      {!!value && !loading && list && models.find((m) => m.id === value)?.image_input !== true &&
+        <p className="muted" role="note">{t(models.find((m) => m.id === value)?.image_input === false ? "ai.visionUnavailable" : "ai.visionUnknown")}</p>}
       {models.length > FILTER_FROM && (
         <input
           type="search"

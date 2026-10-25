@@ -66,6 +66,7 @@ pub(crate) async fn serve_agent(
     session: Arc<Mutex<Option<Session>>>,
     host: Option<Arc<dyn DrawingHost>>,
     user_text: String,
+    evidence: (EvidenceCache, Option<bool>),
     token: String,
     shutdown: CancellationToken,
     on_ui: OnUi,
@@ -73,6 +74,9 @@ pub(crate) async fn serve_agent(
     let mut handler = Qiyas::new(session, host, Arc::new(|| {}), on_ui);
     handler.source = Source::Ai;
     handler.user_text = Some(user_text);
+    handler.known_contracts = evidence.0.contracts;
+    handler.last_picture = evidence.0.picture;
+    handler.image_input = Some(evidence.1 == Some(true));
     serve_handler(handler, 0, token, shutdown).await
 }
 
@@ -163,6 +167,27 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Native CLI turns reconnect to MCP but keep the same conversation's discovery and image state.
+#[derive(Clone, Default)]
+pub(crate) struct EvidenceCache {
+    contracts: Arc<Mutex<std::collections::BTreeMap<String, Value>>>,
+    picture: Arc<Mutex<Option<String>>>,
+}
+impl EvidenceCache {
+    pub(crate) fn state(&self) -> Value {
+        serde_json::json!({"contracts":*self.contracts.lock().unwrap_or_else(PoisonError::into_inner),"picture":*self.picture.lock().unwrap_or_else(PoisonError::into_inner)})
+    }
+    pub(crate) fn restore(&self, state: &Value) {
+        *self
+            .contracts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            serde_json::from_value(state["contracts"].clone()).unwrap_or_default();
+        *self.picture.lock().unwrap_or_else(PoisonError::into_inner) =
+            state["picture"].as_str().map(str::to_owned);
+    }
+}
+
 /// The MCP handler: the catalogue's tools on the shared session.
 #[derive(Clone)]
 pub struct Qiyas {
@@ -174,8 +199,11 @@ pub struct Qiyas {
     retries: Arc<Mutex<VecDeque<Retry>>>,
     ineffective: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
     churn: Arc<Mutex<crate::churn::Guard>>,
+    known_contracts: Arc<Mutex<std::collections::BTreeMap<String, Value>>>,
+    last_picture: Arc<Mutex<Option<String>>>,
     source: Source,
     user_text: Option<String>,
+    image_input: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -231,8 +259,11 @@ impl Qiyas {
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
             churn: Arc::default(),
+            known_contracts: Arc::default(),
+            last_picture: Arc::default(),
             source: Source::Mcp,
             user_text: None,
+            image_input: None,
         }
     }
 
@@ -241,6 +272,16 @@ impl Qiyas {
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
             churn: Arc::default(),
+            known_contracts: if self.source == Source::Ai {
+                self.known_contracts.clone()
+            } else {
+                Arc::default()
+            },
+            last_picture: if self.source == Source::Ai {
+                self.last_picture.clone()
+            } else {
+                Arc::default()
+            },
             ..self.clone()
         }
     }
@@ -362,12 +403,45 @@ impl Qiyas {
     fn run_checked(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let (normalized, warnings) = crate::normalise::envelope(name, input)?;
         let input = &normalized;
-        self.run_normalized(name, input)
-            .map(|output| crate::normalise::output(output, &warnings))
+        let output = self
+            .run_normalized(name, input)
+            .map(|output| crate::normalise::output(output, &warnings))?;
+        let args = surface::args_of(input).map_err(ToolError::BadInput)?;
+        let op = input["op"].as_str().unwrap_or_default();
+        let mut output = surface::format_result(name, op, &args, output)?;
+        match &mut output {
+            ToolOutput::Json(value) if args["detail"] != "full" => crate::result::deduplicate(
+                value,
+                &mut self
+                    .known_contracts
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+            ),
+            ToolOutput::Image { png, caption } => {
+                let hash = crate::artifact::hash(png);
+                let mut last = self
+                    .last_picture
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if last.as_ref() == Some(&hash) {
+                    return Ok(ToolOutput::Json(
+                        serde_json::json!({"status":"unchanged","image_hash":hash,"caption":caption}),
+                    ));
+                }
+                *last = Some(hash);
+            }
+            _ => {}
+        }
+        Ok(output)
     }
 
     fn run_normalized(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
+        if name == surface::CAPTURE && self.image_input == Some(false) {
+            return Ok(ToolOutput::Json(
+                serde_json::json!({"status":"unavailable","message":"Picture support is unsupported or unconfirmed for this model. Use exact queries and checks; no picture was sent."}),
+            ));
+        }
         if let Some(host) = self.host.as_deref() {
             host.before_tool(name, input).map_err(ToolError::Failed)?;
         }
@@ -516,9 +590,11 @@ impl ServerHandler for Qiyas {
             };
         let mut ui = None;
         let result = match output {
-            Ok(ToolOutput::Json(value)) => {
-                ui = value.get("ui").cloned();
-                CallToolResult::success(vec![ContentBlock::text(value.to_string())])
+            Ok(ToolOutput::Json(mut value)) => {
+                ui = value.as_object_mut().and_then(|object| object.remove("ui"));
+                CallToolResult::success(vec![ContentBlock::text(
+                    crate::artifact::canonical(&value).to_string(),
+                )])
             }
             Ok(ToolOutput::Image { png, caption }) => CallToolResult::success(vec![
                 ContentBlock::image(png_base64(&png), "image/png"),
@@ -534,9 +610,10 @@ impl ServerHandler for Qiyas {
                         .as_ref()
                         .map(Session::revision));
                 }
-                return Ok(
-                    CallToolResult::error(vec![ContentBlock::text(value.to_string())]).into(),
-                );
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    crate::result::error(value).to_string(),
+                )])
+                .into());
             }
         };
         if !replayed {
@@ -620,9 +697,12 @@ mod tests {
         let ToolOutput::Json(out) = out.unwrap() else {
             panic!("JSON")
         };
+        let artifact = out["artifact"].as_str().expect("full plan evidence");
+        assert_eq!(artifact.len(), 64);
         assert_eq!(
             out,
-            serde_json::json!({"plan":{"phases":phases},"revision":null})
+            serde_json::json!({"plan":{"phases":phases},"revision":null,"status":"ok","artifact":artifact,
+                "added":[],"added_count":0,"changed":[],"changed_count":0,"removed":[],"removed_count":0})
         );
         assert!(server.run_cached(surface::EXECUTE, &input).1);
     }
@@ -849,5 +929,44 @@ mod tests {
         assert!(!same(b"Bearer abd", b"Bearer abc"));
         assert!(!same(b"Bearer ab", b"Bearer abc"));
         assert!(!same(b"", b"Bearer abc"));
+    }
+
+    #[test]
+    fn native_conversation_keeps_discovery_references_and_blocks_unknown_pictures() {
+        let mut server = test_server();
+        server.source = Source::Ai;
+        server.image_input = Some(false);
+        let call = serde_json::json!({"op":"commands","args":{"name":"draw.line"}});
+        let ToolOutput::Json(first) = server.run(surface::READ, &call).unwrap() else {
+            panic!("JSON")
+        };
+        let next = server.new_connection();
+        let ToolOutput::Json(again) = next.run(surface::READ, &call).unwrap() else {
+            panic!("JSON")
+        };
+        assert_eq!(again["known"], true);
+        assert_eq!(first["artifact"], again["artifact"]);
+        let ToolOutput::Json(picture) = next
+            .run(
+                surface::CAPTURE,
+                &serde_json::json!({"source":"picture","args":{}}),
+            )
+            .unwrap()
+        else {
+            panic!("no image without confirmed support")
+        };
+        assert_eq!(picture["status"], "unavailable");
+        let cache = EvidenceCache {
+            contracts: server.known_contracts.clone(),
+            picture: server.last_picture.clone(),
+        };
+        let restored = EvidenceCache::default();
+        restored.restore(&cache.state());
+        assert_eq!(restored.state(), cache.state());
+        restored.restore(&Value::Null);
+        assert_eq!(
+            restored.state(),
+            serde_json::json!({"contracts":{},"picture":null})
+        );
     }
 }

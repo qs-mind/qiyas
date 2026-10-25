@@ -171,6 +171,11 @@ fn pointed_at(req: &TurnRequest) -> Vec<u64> {
 }
 
 impl Provider for Mock {
+    fn image_input(&self, _model: &str) -> Option<bool> {
+        // This local visual fixture accepts the same captures as a confirmed image model.
+        Some(true)
+    }
+
     fn stream_turn<'a>(
         &'a self,
         req: TurnRequest,
@@ -275,6 +280,7 @@ mod tests {
             ))));
             let mock = Mock::new(session.clone());
             let mut req = TurnRequest {
+                cache_key: "offline-test-conversation".into(),
                 system: String::new(),
                 messages: vec![Message::user(vec![ContentBlock::Text {
                     text: "draw a demo".into(),

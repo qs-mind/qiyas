@@ -242,6 +242,8 @@ pub struct PlanModel {
     pub id: String,
     pub label: String,
     pub reasoning_efforts: Vec<String>,
+    #[serde(default)]
+    pub image_input: Option<bool>,
 }
 
 pub type Reauthorize = Arc<dyn Fn() -> BoxFuture<'static, Result<(), AiError>> + Send + Sync>;
@@ -418,6 +420,24 @@ impl ChatgptPlan {
     }
 }
 impl Provider for ChatgptPlan {
+    fn image_input(&self, model: &str) -> Option<bool> {
+        self.models
+            .lock()
+            .ok()
+            .and_then(|models| {
+                models
+                    .as_ref()
+                    .and_then(|(_, models)| {
+                        if model.trim().is_empty() {
+                            models.first()
+                        } else {
+                            models.iter().find(|m| m.id == model)
+                        }
+                    })
+                    .and_then(|m| m.image_input)
+            })
+            .or_else(|| crate::models::known_image_input(&self.protocol.models, model))
+    }
     fn save_state(&self) -> serde_json::Value {
         let refused = self
             .refused_effort
@@ -452,7 +472,11 @@ impl Provider for ChatgptPlan {
             let (id, tokens, cancel) = self.tokens().await?;
             let result = tokio::select! {
                 result = async {
+                    let previous = (req.model.clone(), req.effort.clone());
                     self.configure(&id, &tokens, &mut req).await?;
+                    if previous != (req.model.clone(), req.effort.clone()) {
+                        sink(crate::StreamEvent::Diagnostic { kind:"CACHE REBUILD".into(), text:"Expected rebuild: model discovery selected the model or supported effort.".into() });
+                    }
                     responses::stream(&self.protocol.responses, &tokens, req, &self.refused_effort, sink).await
                 } => result,
                 () = cancel.cancelled() => Err(AiError::Subscription("chatgpt_cancelled")),

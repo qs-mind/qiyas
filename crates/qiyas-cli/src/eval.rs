@@ -303,6 +303,10 @@ struct Metered {
 }
 
 impl Provider for Metered {
+    fn image_input(&self, model: &str) -> Option<bool> {
+        self.inner.image_input(model)
+    }
+
     fn budget_notice(&self) -> Option<String> {
         let totals = self.totals.lock().ok()?;
         let remaining = (self.max_cost - totals.estimated_usd).max(0.0);

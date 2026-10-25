@@ -1842,7 +1842,10 @@ mod tests {
 
                 let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
                 let first_call = kinds.iter().position(|k| *k == "tool_call").unwrap();
-                assert!(kinds[..first_call].iter().all(|k| *k == "text"));
+                assert!(kinds[..first_call]
+                    .iter()
+                    .all(|k| matches!(*k, "text" | "cache_usage")));
+                assert!(kinds[..first_call].contains(&"cache_usage"));
                 assert_eq!(kinds[first_call + 1], "tool_result");
                 assert_eq!(kinds.last(), Some(&"done"));
                 let call = &events[first_call];

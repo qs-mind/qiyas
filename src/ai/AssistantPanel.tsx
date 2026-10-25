@@ -174,6 +174,11 @@ export const AssistantPanel = memo(function AssistantPanel({
       {item.code === "ai.error.context_retry" ? t(item.code) : t("ai.error.retrying", { seconds: item.seconds })}
     </p>;
     switch (item.kind) {
+      case "cache_usage":
+        return showTechnicalDetails ? <details key={i} className="technical-details">
+          <summary>{t("technical.details")}</summary>
+          <p>{t("ai.cacheUsage", { percent: (100 * item.cached / item.total).toFixed(1), cached: item.cached, total: item.total })}</p>
+        </details> : null;
       case "plan":
         return <PlanChecklist key={i} phases={item.phases} language={chatLang} showTechnicalDetails={showTechnicalDetails}
           onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")

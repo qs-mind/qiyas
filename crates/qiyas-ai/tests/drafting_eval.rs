@@ -31,7 +31,9 @@ const LAYERS: [&str; 6] = [
     "A-ROOM-NAME",
 ];
 
-fn input(op: &str, args: Value) -> Value {
+fn input(op: &str, mut args: Value) -> Value {
+    // Drafting decisions below inspect complete geometry and verification reports.
+    args["detail"] = json!("full");
     // Exercise the provider-facing, strict string form, including command payloads.
     json!({"op": op, "args": args.to_string()})
 }

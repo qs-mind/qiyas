@@ -101,6 +101,11 @@ pub(super) async fn stream(
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .insert(req.model.clone());
                 }
+                sink(StreamEvent::Diagnostic {
+                    kind: "CACHE REBUILD".into(),
+                    text: "Expected rebuild: the provider refused an optional request setting."
+                        .into(),
+                });
                 adaptations += 1;
                 let notice = AiError::Subscription("chatgpt_capability_removed").public_error();
                 sink(StreamEvent::Retrying {
@@ -171,6 +176,7 @@ fn drop_capability(body: &mut Value, param: &str) -> bool {
                 | "include"
                 | "max_output_tokens"
                 | "parallel_tool_calls"
+                | "prompt_cache_key"
         )
     ) {
         return false;
@@ -225,7 +231,19 @@ pub(super) async fn models(endpoint: &str, tokens: &Tokens) -> Result<Vec<PlanMo
                     .json()
                     .await
                     .map_err(|_| AiError::Subscription("chatgpt_failed"))?;
-                return visible_models(value);
+                let models = visible_models(value)?;
+                crate::models::remember(
+                    endpoint,
+                    &models
+                        .iter()
+                        .map(|model| crate::models::ModelInfo {
+                            id: model.id.clone(),
+                            label: model.label.clone(),
+                            image_input: model.image_input,
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                return Ok(models);
             }
             Ok(r) => {
                 let status = r.status().as_u16();
@@ -256,6 +274,7 @@ fn visible_models(value: Value) -> Result<Vec<PlanModel>, AiError> {
             (!id.is_empty() && !label.is_empty()).then(|| PlanModel {
                 id: id.into(),
                 label: label.into(),
+                image_input: crate::models::image_input(m),
                 // Unknown metadata is not permission to send an optional field.
                 reasoning_efforts: m["supported_reasoning_levels"]
                     .as_array()
@@ -306,7 +325,7 @@ fn request(req: &TurnRequest) -> Result<Value, AiError> {
                     "role":"user","content":[{"type":"input_image","image_url":format!("data:{media_type};base64,{data}")}]
                 })),
                 ContentBlock::ToolUse { id, name, input: args } => input.push(json!({
-                    "type":"function_call","call_id":id,"name":name,"arguments":args.to_string()
+                    "type":"function_call","call_id":id,"name":name,"arguments":crate::artifact::canonical(args).to_string()
                 })),
                 ContentBlock::ToolResult { tool_use_id, content, .. } => {
                     let output: Vec<_> = content.iter().map(|part| match part {
@@ -335,6 +354,7 @@ fn request(req: &TurnRequest) -> Result<Value, AiError> {
         "model":req.model, "instructions":req.system, "input":input, "tools":tools,
         "store":false, "stream":true, "max_output_tokens":req.max_tokens,
         "include":["reasoning.encrypted_content"],
+        "prompt_cache_key":req.cache_key,
     });
     if !req.effort.is_empty() && req.effort != "none" {
         body["reasoning"] = json!({"effort":req.effort});
@@ -348,11 +368,32 @@ use streamed::Events;
 #[cfg(test)]
 mod tests {
     use super::super::PLAN_SCOPE;
+
+    #[test]
+    fn cache_key_and_reasoning_prefix_are_stable() {
+        let mut req = req();
+        req.messages.push(Message::assistant(vec![ContentBlock::Raw(
+            json!({"type":"reasoning","encrypted_content":"opaque+/="}),
+        )]));
+        let first = request(&req).unwrap();
+        req.messages.push(Message::user(vec![ContentBlock::Text {
+            text: "Continue".into(),
+        }]));
+        let next = request(&req).unwrap();
+        assert_eq!(first["prompt_cache_key"], next["prompt_cache_key"]);
+        assert_eq!(
+            first["input"].as_array().unwrap(),
+            &next["input"].as_array().unwrap()[..first["input"].as_array().unwrap().len()]
+        );
+        assert_eq!(first["tools"], next["tools"]);
+        assert_eq!(first["instructions"], next["instructions"]);
+    }
     use super::*;
     use crate::Message;
 
     fn req() -> TurnRequest {
         TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "You are Mizan.".into(),
             model: "mock-model".into(),
             effort: "none".into(),
@@ -497,6 +538,7 @@ mod tests {
         assert_eq!(
             models,
             vec![PlanModel {
+                image_input: None,
                 id: "visible-slug".into(),
                 reasoning_efforts: Vec::new(),
                 label: "Visible model".into()
@@ -732,6 +774,7 @@ mod capability_regressions {
             display_name: "Fake".into(),
         };
         let req = TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "Mizan".into(),
             messages: vec![crate::Message::user(vec![ContentBlock::Text {
                 text: "Hi".into(),

@@ -14,6 +14,7 @@
 mod advice;
 pub mod agent;
 pub mod anthropic;
+mod artifact;
 pub mod chatgpt_plan;
 pub mod claude_code;
 pub mod context;
@@ -29,6 +30,7 @@ pub mod models;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+mod result;
 mod revision;
 pub mod surface;
 mod tools;
@@ -63,3 +65,6 @@ pub mod activity;
 pub mod endpoint;
 
 pub mod provider_error;
+
+#[cfg(test)]
+mod cache_replay;

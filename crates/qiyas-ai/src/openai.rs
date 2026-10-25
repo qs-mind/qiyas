@@ -30,10 +30,11 @@ pub struct OpenAiCompatible {
 /// The request fields some services refuse with a 400: `reasoning_effort` (a model that doesn't
 /// reason), `max_completion_tokens` (an older server: `max_tokens` is sent instead),
 /// `stream_options` (a server without usage in streams). Asked for first, dropped when refused.
-pub const OPTIONAL_FIELDS: [&str; 3] = [
+pub const OPTIONAL_FIELDS: [&str; 4] = [
     "reasoning_effort",
     "max_completion_tokens",
     "stream_options",
+    "prompt_cache_key",
 ];
 
 impl OpenAiCompatible {
@@ -57,6 +58,9 @@ impl OpenAiCompatible {
 }
 
 impl Provider for OpenAiCompatible {
+    fn image_input(&self, model: &str) -> Option<bool> {
+        crate::models::known_image_input(&self.base_url, model)
+    }
     fn save_state(&self) -> Value {
         json!({
             "extras": self.extras.lock().map(|v| v.clone()).unwrap_or_default(),
@@ -136,6 +140,7 @@ impl Provider for OpenAiCompatible {
                                 if let Ok(mut r) = self.refused.lock() {
                                     r.insert(field);
                                 }
+                                sink(StreamEvent::Diagnostic { kind:"CACHE REBUILD".into(), text:format!("Expected rebuild: service refused optional setting {field}") });
                                 sink(StreamEvent::Retrying {
                                     seconds: 0,
                                     code: "ai.error.service_error".into(),
@@ -279,6 +284,9 @@ pub fn request_body(
         "stream": true,
         "messages": messages,
     });
+    if !refused.contains("prompt_cache_key") && !req.cache_key.is_empty() {
+        body["prompt_cache_key"] = json!(req.cache_key);
+    }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
         body["tool_choice"] = json!("auto");
@@ -319,7 +327,7 @@ fn push_messages(out: &mut Vec<Value>, m: &Message, extras: &HashMap<String, Val
                     // An input that was not valid JSON goes back as an empty object (its tool
                     // result says so): services refuse the whole request over bad arguments.
                     let arguments = if input.is_object() {
-                        input.to_string()
+                        crate::artifact::arguments(input).to_string()
                     } else {
                         "{}".to_string()
                     };
@@ -338,6 +346,14 @@ fn push_messages(out: &mut Vec<Value>, m: &Message, extras: &HashMap<String, Val
             // there, but Gemini's OpenAI-compatible endpoint (and Runware in front of it) refuses
             // it, and some services refuse a missing content; every one of them takes "".
             let mut msg = json!({ "role": "assistant", "content": text });
+            if let Some(reasoning) = m.content.iter().find_map(|block| match block {
+                ContentBlock::Raw(value) if value["type"] == "reasoning_content" => {
+                    value["reasoning_content"].as_str()
+                }
+                _ => None,
+            }) {
+                msg["reasoning_content"] = json!(reasoning);
+            }
             if !calls.is_empty() {
                 msg["tool_calls"] = Value::Array(calls);
             }
@@ -405,6 +421,7 @@ struct Call {
 #[derive(Default)]
 struct Turn {
     text: String,
+    reasoning: Option<String>,
     /// In the order they began.
     calls: Vec<Call>,
     /// The stream's `index` of each call to the newest call in `calls` with it.
@@ -443,8 +460,16 @@ impl Turn {
             {
                 self.usage.cache_read_input_tokens = cached;
             }
+            if let Some(written) = u["cache_creation_input_tokens"]
+                .as_u64()
+                .or_else(|| u["prompt_tokens_details"]["cache_write_tokens"].as_u64())
+            {
+                self.usage.cache_creation_input_tokens = written;
+            }
             if let Some(prompt) = self.prompt_tokens {
-                self.usage.input_tokens = prompt.saturating_sub(self.usage.cache_read_input_tokens);
+                self.usage.input_tokens = prompt
+                    .saturating_sub(self.usage.cache_read_input_tokens)
+                    .saturating_sub(self.usage.cache_creation_input_tokens);
             } else if let Some(missed) = u["prompt_cache_miss_tokens"].as_u64() {
                 self.usage.input_tokens = missed;
             }
@@ -465,6 +490,10 @@ impl Turn {
         }
         let choice = &e["choices"][0];
         let delta = &choice["delta"];
+        if let Some(reasoning) = delta["reasoning_content"].as_str() {
+            self.reasoning.get_or_insert_default().push_str(reasoning);
+            sink(StreamEvent::Thinking(reasoning.to_owned()));
+        }
         if let Some(text) = delta["content"].as_str().filter(|t| !t.is_empty()) {
             self.text.push_str(text);
             sink(StreamEvent::TextDelta(text.to_string()));
@@ -553,6 +582,11 @@ impl Turn {
 
     fn finish(self, sink: Sink<'_>) -> TurnResult {
         let mut content = Vec::new();
+        if let Some(reasoning) = self.reasoning {
+            content.push(ContentBlock::Raw(
+                json!({"type":"reasoning_content","reasoning_content":reasoning}),
+            ));
+        }
         if !self.text.is_empty() {
             content.push(ContentBlock::Text {
                 text: self.text.clone(),
@@ -612,6 +646,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deepseek_reasoning_and_cache_identity_survive_followup() {
+        let mut turn = Turn::default();
+        for piece in ["first ", "second\\n", "أفكار"] {
+            turn.on_event(
+                &json!({"choices":[{"delta":{"reasoning_content":piece}}]}).to_string(),
+                &mut |_| {},
+            )
+            .unwrap();
+        }
+        turn.on_event(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"qiyas_read","arguments":"{\"op\":\"state\",\"args\":\"{}\"}"}}]},"finish_reason":"tool_calls"}]}).to_string(), &mut |_| {}).unwrap();
+        let result = turn.finish(&mut |_| {});
+        let mut request = request("high", 1000);
+        request.messages.push(Message::assistant(result.content));
+        request
+            .messages
+            .push(Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: "call-1".into(),
+                content: vec![ResultPart::Text("{}".into())],
+                is_error: false,
+            }]));
+        let first = request_body(&request, &HashMap::new(), &HashSet::new());
+        let assistant = first["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["reasoning_content"], "first second\\nأفكار");
+        request
+            .messages
+            .push(Message::user(vec![ContentBlock::Text {
+                text: "Continue".into(),
+            }]));
+        let next = request_body(&request, &HashMap::new(), &HashSet::new());
+        assert_eq!(first["prompt_cache_key"], next["prompt_cache_key"]);
+        assert_eq!(
+            first["messages"].as_array().unwrap(),
+            &next["messages"].as_array().unwrap()[..first["messages"].as_array().unwrap().len()]
+        );
+        request.cache_key = "different-conversation".into();
+        assert_ne!(
+            first["prompt_cache_key"],
+            request_body(&request, &HashMap::new(), &HashSet::new())["prompt_cache_key"]
+        );
+    }
+
+    #[test]
     fn resumed_calls_keep_gemini_extras_and_refused_fields() {
         let original = OpenAiCompatible::new("http://localhost/v1", None);
         let signature = json!({"google":{"thought_signature":"opaque+/=\r\n"}});
@@ -625,6 +706,7 @@ mod tests {
         let resumed = OpenAiCompatible::new("http://localhost/v1", None);
         resumed.restore_state(serde_json::from_slice(&saved).unwrap());
         let request = TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "Unchanged".into(),
             messages: vec![Message::assistant(vec![ContentBlock::ToolUse {
                 id: "c1".into(),
@@ -651,6 +733,7 @@ mod tests {
 
     fn request(effort: &str, max_tokens: u32) -> TurnRequest {
         TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "s".into(),
             messages: vec![Message::user(vec![ContentBlock::Text {
                 text: "hi".into(),

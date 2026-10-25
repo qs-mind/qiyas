@@ -348,6 +348,7 @@ pub struct ClaudeCode {
     session: Arc<Mutex<Option<Session>>>,
     host: Option<Arc<dyn DrawingHost>>,
     session_id: Mutex<Option<String>>,
+    evidence: crate::mcp::EvidenceCache,
     user_text: Mutex<String>,
 }
 
@@ -366,6 +367,7 @@ impl ClaudeCode {
             session,
             host: None,
             session_id: Mutex::new(None),
+            evidence: crate::mcp::EvidenceCache::default(),
             user_text: Mutex::new(String::new()),
         })
     }
@@ -571,6 +573,12 @@ impl Drop for ServerLifetime {
 }
 
 impl Provider for ClaudeCode {
+    fn image_input(&self, model: &str) -> Option<bool> {
+        crate::models::CLAUDE_MODELS
+            .iter()
+            .any(|(id, _)| *id == model)
+            .then_some(true)
+    }
     fn owns_turn(&self) -> bool {
         true
     }
@@ -583,9 +591,22 @@ impl Provider for ClaudeCode {
         }
     }
     fn save_state(&self) -> Value {
-        json!({"session_id": self.session_id.lock().ok().and_then(|id| id.clone())})
+        {
+            let mut state =
+                json!({"session_id": self.session_id.lock().ok().and_then(|id| id.clone())});
+            let evidence = self.evidence.state();
+            if evidence["contracts"]
+                .as_object()
+                .is_some_and(|m| !m.is_empty())
+                || evidence["picture"].is_string()
+            {
+                state["evidence"] = evidence;
+            }
+            state
+        }
     }
     fn restore_state(&self, state: Value) {
+        self.evidence.restore(&state["evidence"]);
         let id = state["session_id"]
             .as_str()
             .filter(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -624,6 +645,7 @@ impl Provider for ClaudeCode {
                 self.session.clone(),
                 self.host.clone(),
                 user_text,
+                (self.evidence.clone(), self.image_input(&req.model)),
                 token.clone(),
                 shutdown.0.clone(),
                 Arc::new(move |ui| {
@@ -950,6 +972,7 @@ mod tests {
     }
     fn request() -> TurnRequest {
         TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "You are Mizan. Use Qiyas only.".into(),
             messages: vec![crate::Message::user(vec![ContentBlock::Text {
                 text: "Measure this drawing".into(),

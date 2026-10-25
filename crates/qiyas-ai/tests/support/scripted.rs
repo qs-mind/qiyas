@@ -54,6 +54,10 @@ impl Script {
 }
 
 impl Provider for Script {
+    fn image_input(&self, _model: &str) -> Option<bool> {
+        Some(true)
+    }
+
     fn stream_turn<'a>(
         &'a self,
         request: TurnRequest,

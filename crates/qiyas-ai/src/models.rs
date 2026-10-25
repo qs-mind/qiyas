@@ -2,6 +2,8 @@
 //! (`GET /v1/models`, paged) or an OpenAI-compatible service's `GET {base_url}/models`. When the
 //! service can't be asked, Claude's current models are the built-in list.
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -31,6 +33,55 @@ pub const CLAUDE_MODELS: [(&str, &str); 4] = [
 pub struct ModelInfo {
     pub id: String,
     pub label: String,
+    pub image_input: Option<bool>,
+}
+
+type Capabilities = BTreeMap<(String, String), bool>;
+static IMAGE_INPUT: OnceLock<Mutex<Capabilities>> = OnceLock::new();
+
+pub(crate) fn known_image_input(endpoint: &str, model: &str) -> Option<bool> {
+    IMAGE_INPUT
+        .get()?
+        .lock()
+        .ok()?
+        .get(&(crate::endpoint::normalize(endpoint).ok()?, model.into()))
+        .copied()
+}
+
+pub(crate) fn remember(endpoint: &str, models: &[ModelInfo]) {
+    let mut known = IMAGE_INPUT
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for model in models {
+        let key = (endpoint.trim_end_matches('/').to_owned(), model.id.clone());
+        if let Some(vision) = model.image_input {
+            known.insert(key, vision);
+        } else {
+            known.remove(&key);
+        }
+    }
+}
+
+/// Absence is unknown. An explicit modalities list or capability is authoritative.
+pub(crate) fn image_input(model: &Value) -> Option<bool> {
+    for path in [
+        "/capabilities/vision",
+        "/capabilities/image_input",
+        "/supports_image_input",
+    ] {
+        if let Some(value) = model.pointer(path) {
+            if let Some(flag) = value.as_bool().or_else(|| value["supported"].as_bool()) {
+                return Some(flag);
+            }
+        }
+    }
+    for path in ["/architecture/input_modalities", "/input_modalities"] {
+        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
+            return Some(modalities.iter().any(|m| m == "image"));
+        }
+    }
+    None
 }
 
 /// Where the list comes from.
@@ -49,6 +100,7 @@ pub fn builtin_models(source: ModelSource) -> Vec<ModelInfo> {
             .map(|(id, label)| ModelInfo {
                 id: (*id).to_string(),
                 label: (*label).to_string(),
+                image_input: Some(true),
             })
             .collect(),
         ModelSource::OpenAiCompatible { .. } => Vec::new(),
@@ -94,6 +146,7 @@ pub async fn list_models(
                     None => break,
                 }
             }
+            remember(crate::anthropic::API_URL, &models);
             Ok(models)
         }
         ModelSource::OpenAiCompatible { base_url } => {
@@ -113,7 +166,9 @@ pub async fn list_models(
                 &mut |_| {},
             )
             .await?;
-            Ok(parse_openai_models(&read_json(response, secret).await?))
+            let models = parse_openai_models(&read_json(response, secret).await?);
+            remember(&base, &models);
+            Ok(models)
         }
     }
 }
@@ -138,7 +193,17 @@ pub fn parse_anthropic_page(page: &Value) -> (Vec<ModelInfo>, Option<String>) {
             }
             let id = m["id"].as_str()?.to_string();
             let label = m["display_name"].as_str().unwrap_or(&id).to_string();
-            Some(ModelInfo { id, label })
+            let image_input = image_input(m).or_else(|| {
+                CLAUDE_MODELS
+                    .iter()
+                    .any(|(known, _)| *known == id)
+                    .then_some(true)
+            });
+            Some(ModelInfo {
+                id,
+                label,
+                image_input,
+            })
         })
         .collect();
     let next = page["has_more"]
@@ -162,7 +227,11 @@ pub fn parse_openai_models(answer: &Value) -> Vec<ModelInfo> {
             }
             let id = m["id"].as_str()?.to_string();
             let label = m["name"].as_str().unwrap_or(&id).to_string();
-            Some(ModelInfo { id, label })
+            Some(ModelInfo {
+                id,
+                label,
+                image_input: image_input(m),
+            })
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -173,17 +242,10 @@ pub fn parse_openai_models(answer: &Value) -> Vec<ModelInfo> {
 /// A missing capability is unknown; an explicit refusal is never offered to Mizan.
 /// OpenRouter and compatible servers describe both input modalities and tool parameters.
 fn supports_assistant(model: &Value) -> bool {
-    for key in ["tools", "tool_calling", "function_calling", "vision"] {
+    for key in ["tools", "tool_calling", "function_calling"] {
         let cap = &model["capabilities"][key];
         if cap.as_bool() == Some(false) || cap["supported"].as_bool() == Some(false) {
             return false;
-        }
-    }
-    for path in ["/architecture/input_modalities", "/input_modalities"] {
-        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
-            if !modalities.iter().any(|m| m == "image") {
-                return false;
-            }
         }
     }
     if let Some(parameters) = model["supported_parameters"].as_array() {
@@ -276,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_missing_tools_or_vision_are_not_offered() {
+    fn text_only_models_are_offered_with_explicit_image_capability() {
         let models = parse_openai_models(&json!({"data":[
             {"id":"image-only","supported_parameters":[],"architecture":{"input_modalities":["text","image"]}},
             {"id":"text-only","supported_parameters":["tools"],"architecture":{"input_modalities":["text"]}},
@@ -287,7 +349,11 @@ mod tests {
         ]}));
         assert_eq!(
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            ["suitable", "unknown"]
+            ["no-vision", "suitable", "text-only", "unknown"]
+        );
+        assert_eq!(
+            models.iter().map(|m| m.image_input).collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(false), None]
         );
     }
 

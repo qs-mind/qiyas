@@ -1770,6 +1770,7 @@ export type AgentEvent =
     }
   | { type: "refused"; category: string | null; text: string }
   | { type: "stopped"; reason: string }
+  | { type: "cache_usage"; usage: Record<string, number> }
   | { type: "done"; usage: Record<string, number> };
 
 /** Sent as `ai:done` when a turn has ended. */
@@ -1853,7 +1854,7 @@ export const aiClear = () => invoke<void>("ai_clear");
 export const aiStatus = () => invoke<AiStatus>("ai_status");
 
 /** One model a provider offers: its id, as the API takes it, and a name to show. */
-export type ModelInfo = { id: string; label: string };
+export type ModelInfo = { id: string; label: string; image_input?: boolean | null };
 /** The models a provider offers (`qiyas_ai::models::ModelList`): from the service, or the
  *  built-in list with why (`error`; "no_base_url" when there is no address to ask). */
 export type ModelList = { models: ModelInfo[]; from_service: boolean; error: string | null };

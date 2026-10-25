@@ -31,6 +31,25 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
     if tool == EXECUTE {
         schema["properties"]["expected_revision"] = qiyas_core::revision_schema();
     }
+    fn options(schema: &mut Value, tool: &str) {
+        for union in ["anyOf", "oneOf"] {
+            if let Some(variants) = schema.get_mut(union).and_then(Value::as_array_mut) {
+                for variant in variants {
+                    options(variant, tool);
+                }
+            }
+        }
+        if schema["properties"].is_object() {
+            schema["properties"]["detail"] =
+                json!({"type":"string","enum":["summary","full"],"default":"summary"});
+            if tool == READ {
+                schema["properties"]["fields"] = json!({"type":"array","items":{"type":"string"}});
+            }
+        }
+    }
+    if tool == READ || tool == EXECUTE {
+        options(&mut schema, tool);
+    }
     (schema, example)
 }
 
@@ -47,6 +66,13 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "artifact") => (
+            object(
+                json!({"id":string,"offset":{"type":"integer","minimum":0}}),
+                &["id"],
+            ),
+            json!({"id":"artifact id from a result","offset":0}),
+        ),
         (READ, "explain") => (
             object(json!({"item":string,"project":string}), &["item"]),
             json!({"item":"generated:A"}),
@@ -95,7 +121,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (READ, "commands") => (
             object(
-                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":16,"items":string},"search":nullable(&string),"category":nullable(&string)}),
+                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":16,"items":string},"search":nullable(&string),"category":nullable(&string),"offset":{"type":"integer","minimum":0}}),
                 &[],
             ),
             json!({"name":"draw.line"}),

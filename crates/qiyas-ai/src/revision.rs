@@ -11,7 +11,13 @@ pub(crate) fn stamp(
             if !value.is_object() {
                 value = json!({"value":value});
             }
-            value["revision"] = revision;
+            if let Some(original) = value.get("artifact_revision").cloned() {
+                // A historical artifact must never grant authority over the current drawing.
+                value["revision"] = original;
+                value["current_revision"] = revision;
+            } else {
+                value["revision"] = revision;
+            }
             Ok(ToolOutput::Json(value))
         }
         Ok(ToolOutput::Image { png, caption }) => Ok(ToolOutput::Image {

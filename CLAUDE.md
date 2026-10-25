@@ -2140,8 +2140,9 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   Pictures pasted, dropped or attached (`src/ai/pictures.ts`: png, jpeg, webp, gif, at most 4, at
   most 1600 px a side, 6 MB of base64 each) go before the words as `ContentBlock::Image`
   (Claude: an image block; OpenAI-compatible: an `image_url` data URL) and show as thumbnails
-  in the bubble. The history keeps at most 12 pictures or 16 MB of them: past either, the
-  oldest give way to a line of text until 8 within 10 MB are left (`trim_pictures`); a
+  in the bubble. At a token-watermark trim, more than 12 pictures or 16 MB makes the
+  oldest give way to a line of text until 8 within 10 MB are left (`trim_pictures`); between
+  trims the prefix stays unchanged. Identical captures return `unchanged`; a
   conversation may make 40 MB of pictures (`IMAGE_BUDGET`).
 - The panel's header has New chat (`ai.newChat`, `assistant.clear`): a new conversation, disabled
   while Mizan works or the thread is empty.
@@ -2199,13 +2200,16 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
   room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
   for each live run.
-- Past `COMPACT_AT` (300), compaction retains the newest 160 messages, rounding out to a
-  complete call/result boundary, plus a first user note. It does not discard all earlier turns.
-  The note preserves every user request block, including merged interrupted requests and long
-  briefs, without clipping. Requests are JSON-escaped reversibly. The newest 80 removed call
-  summaries distinguish successful returns, failures and incomplete calls; success is not
-  described as verified work. Discovered contracts survive in a separate memory block. Log line `COMPACTED`. `MAX_MESSAGES` (400) stops only if compaction can't
-  make room. It replaced a hard stop at 400 that ended a design-package run mid-task.
+- Context maintenance counts estimated tokens, not messages. At 100,000 tokens, result
+  trimming targets 55,000 and requires at least 30,000 tokens cleared in one batch. It keeps
+  the first digest, newest four detailed results, calls, signatures and user words. Full
+  compaction starts at 150,000 estimated tokens, keeps a recent window of about 55,000 tokens
+  and at least eight messages, and respects complete call/result boundaries. Its local note
+  retains user requests word for word, failed outcomes, recent steps, the first digest,
+  open tasks, discovered contract references and an index of full-evidence artifacts. It
+  makes no separate summary model call;
+  the next request uses the same system prompt and tools. `MAX_INPUT_TOKENS` (250,000)
+  stops only when this cannot make room. Every rewrite logs an expected cache rebuild.
 - An answer cut off by its length limit before it wrote text or a call (its room went on
   thinking: Gemini through Runware once thought 94 s and wrote nothing) is asked again with
   twice `max_tokens`, up to `MAX_TOKENS_CAP` (64,000), the empty answer dropped; past the cap
@@ -3055,3 +3059,55 @@ Take-off kit revision workflow examples are named `revision_commands`; `revision
 Wire array/scalar reads are wrapped as `{value, revision}`; object reads keep their existing fields. Compact kit prose reserves space for revision metadata without increasing its byte limit. A repeated-failure stop still produces the local interrupted take-off summary in the chat language.
 
 New untitled drawings skip placeholder names already present in chat history or a recovery/Save As path family, so a new drawing cannot inherit a previous drawing's conversations. A mixed move whose retained room is restored by derivation keeps the unrelated move, reports the room override, preserves measured area and remains one undo step.
+
+
+## Goal C: AI context, evidence and cache reuse (25 October 2026)
+
+- Provider history only appends between token-watermark trims. Duplicate reads, old workflow
+  text, pictures and schema discovery never move or disappear during an ordinary request.
+  Cost and workflow guidance enter new messages. Fixed result placeholders keep the call id,
+  operation, important handles and ids, errors and an artifact pointer. A storage failure
+  keeps the original evidence instead of discarding it. After an explicit provider context
+  refusal, one logged recovery trim may retire even recent results into artifacts; it still
+  preserves user words, call/result pairs and signatures. The unmodified native Claude CLI
+  owns its private inner history; Qiyas controls its MCP evidence and outer conversation.
+- Model-facing results pass through `surface::format_result` after execution and before
+  Agent/MCP serialization. Core execution and batch bindings retain full results. Execute
+  replies report status, revision, handle counts with samples, grouped check findings and
+  advice once per rule. UI events keep full handle lists. Reads accept `detail: summary|full`
+  and `fields`; record reads retain their existing row pagination and field semantics.
+  Explicit full record reads use field projection to recover arrays beyond the native
+  display cap, preserving complete geometry in their artifacts.
+- Full evidence is immutable JSON in the Qiyas data home's `artifacts` directory, named by
+  SHA-256 of canonical JSON. `qiyas_read artifact {id, offset}` returns at most 12,000 UTF-8
+  bytes with `next_offset`, `artifact_revision`, historical `revision` and `current_revision`.
+  An old artifact never acquires permission to edit a newer drawing. Exact quantities are
+  preserved before display rounding; legacy private tool display behavior remains unchanged.
+  Artifacts currently persist; there is no automatic expiry that could break a conversation.
+- Discovery contracts carry a content version and full-evidence pointer. A repeat supplies a
+  reference in the new reply. Command families link qualified names such as `draw.line`;
+  command lists and large take-off kits page with `offset`. The registry index remains in
+  the stable system prompt. Compaction retains contract references, never overlapping full
+  schema lists.
+- Anthropic marks tools, system and a stable history prefix for one hour, with automatic
+  five-minute caching on the newest eligible block (four breakpoints maximum). Signed
+  thinking is never marked or changed. OpenAI-compatible and ChatGPT-plan requests carry
+  the saved conversation id as `prompt_cache_key`. DeepSeek reasoning text is replayed
+  exactly. JSON keys and JSON-encoded argument objects are ordered deterministically.
+  Changes to model/effort/limits or rejected optional features log expected rebuilds.
+- Support logs record total input, cache reads, cache writes, output and reasoning for each
+  successful request, plus the turn hit percentage. Hits below 70% include the known reason
+  (cold start, trim, setting change or possible TTL expiry); unknown provider residency is
+  stated as unknown. Cumulative usage events retain the turn totals after cancellation or
+  a later failed request. Discarding an unfinished answer on retry preserves those totals.
+  Settings' Technical details switch reveals one cache row per turn.
+- Image capability comes from model metadata; known built-in Claude models accept images.
+  Unknown or explicitly unsupported models receive no image bytes and get plain guidance
+  to use exact queries/checks. The model picker explains this in English/Arabic. No billable
+  capability probe runs. Repeated captures compare PNG hashes and return `unchanged`.
+- The ignored `cache_replay::clinic_policy_replay` test consumes local copied clinic fixtures
+  through the production formatter and history policy. Its character-weighted estimate is
+  calibrated to logged input tokens. Missing retired bodies and provider residency are
+  explicit limitations; this is not a live cache-hit measurement. By the founder's revised
+  scope, end-to-end runs and acceptance gates are left to the reviewer's combined run.
+  See the Goal C report for fast-test results and the combined-run checklist.
