@@ -143,8 +143,12 @@ pub async fn pdf_thumbnails(
 /// Attaches page `page` of the PDF at `path` to the sheet on screen at (`x`, `y`), `scale`
 /// drawing units per point: `mode` "underlay" (returns the underlay's handle) or "import"
 /// (returns how many entities were added). One undo step.
+// Keep the existing IPC fields compatible while adding optional workspace addressing.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn attach_pdf(
+    workspace: Option<u32>,
+
     path: String,
     page: u32,
     x: f64,
@@ -153,6 +157,7 @@ pub async fn attach_pdf(
     mode: AttachMode,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    let state = state.scoped(workspace)?;
     // The slow part, reading the page, without the session.
     let prepared = blocking(move || {
         PreparedPdf::read(Path::new(&path), page, scale, mode).map_err(|e| e.to_string())
@@ -167,7 +172,8 @@ pub async fn attach_pdf(
 
 /// True when the drawing itself has changes not saved yet (PDF imports, underlays, calibration).
 #[tauri::command]
-pub async fn is_dirty(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn is_dirty(workspace: Option<u32>, state: State<'_, AppState>) -> Result<bool, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.is_dirty()))
 }
 
@@ -177,6 +183,7 @@ pub async fn is_dirty(state: State<'_, AppState>) -> Result<bool, String> {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn calibrate(
+    workspace: Option<u32>,
     handle: Option<u64>,
     x1: f64,
     y1: f64,
@@ -185,6 +192,7 @@ pub async fn calibrate(
     distance: f64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         let handle = match handle {
             Some(h) => h,
@@ -204,11 +212,14 @@ pub async fn calibrate(
 /// a PDF page.
 #[tauri::command]
 pub async fn underlay_image<R: Runtime>(
+    workspace: Option<u32>,
+
     id: u32,
     px_per_unit: f64,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
+    let state = state.scoped(workspace)?;
     let (picture, epoch) = with_session(&state, |s| {
         Ok((s.underlay_image(id, px_per_unit)?, s.epoch()))
     })?;
@@ -217,9 +228,13 @@ pub async fn underlay_image<R: Runtime>(
         return Ok(Response::new(bytes.as_ref().clone()));
     }
     let emitter = app.clone();
+    let workspace = state.id;
     let bytes = blocking(move || {
         let image = qiyas_core::draw_picture(&picture, |p| {
-            let _ = emitter.emit(PROGRESS, p);
+            let _ = emitter.emit(
+                PROGRESS,
+                serde_json::json!({"workspace":workspace,"progress":p}),
+            );
         })
         .map_err(|e| e.to_string())?;
         let mut out = Vec::with_capacity(8 + image.as_raw().len());
@@ -230,7 +245,7 @@ pub async fn underlay_image<R: Runtime>(
     })
     .await?;
     let bytes = Arc::new(bytes);
-    pictures(&app.state::<AppState>()).put(key, bytes.clone());
+    pictures(&state).put(key, bytes.clone());
     Ok(Response::new(bytes.as_ref().clone()))
 }
 
@@ -244,21 +259,27 @@ pub async fn image_size(path: String) -> Result<(u32, u32), String> {
 /// `width` drawing units wide. Its handle. One undo step.
 #[tauri::command]
 pub async fn attach_image(
+    workspace: Option<u32>,
+
     path: String,
     x: f64,
     y: f64,
     width: f64,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| s.attach_image(Path::new(&path), [x, y], width))
 }
 
 /// The brightness, contrast and fade of the raster image `handle`; null when it is not one.
 #[tauri::command]
 pub async fn image_display(
+    workspace: Option<u32>,
+
     handle: u64,
     state: State<'_, AppState>,
 ) -> Result<Option<ImageDisplay>, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.image_display(handle)))
 }
 

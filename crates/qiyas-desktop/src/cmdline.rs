@@ -76,19 +76,20 @@ pub async fn command_words() -> Vec<CommandWord> {
 /// usual command path, which refreshes the drawing and saves the project.
 #[tauri::command]
 pub async fn cmdline_step(
+    workspace: Option<u32>,
+
     line: String,
     last: Option<[f64; 2]>,
     state: State<'_, AppState>,
     typed: State<'_, CommandLineState>,
 ) -> Result<Reply, String> {
-    let tabs = state.tabs.lock().unwrap_or_else(PoisonError::into_inner);
-    let session = state.session.lock().unwrap_or_else(PoisonError::into_inner);
-    let ucs = session.as_ref().map(|s| s.ucs).unwrap_or_default();
+    let state = state.scoped(workspace)?;
+    let ucs = crate::commands::with_session(&state, |session| Ok(session.ucs))?;
     typed
         .0
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .step(tabs.active, ucs, &line, last)
+        .step(Some(state.id), ucs, &line, last)
 }
 
 #[cfg(test)]

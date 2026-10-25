@@ -37,12 +37,15 @@ const expectToasts = (texts: string[]) => until(() => expect(toasts()).toEqual(t
 
 const core = vi.hoisted(() => ({
   calls: [] as string[],
+  workspaceCalls: [] as { cmd: string; args?: Record<string, unknown> }[],
+  cursor: 0,
   /** The drawings with an autosave newer than them. */
   autosaved: new Set<string>(),
   /** What the Open dialog answers. */
   chosen: "/d/plan.dwg",
   /** The tab on screen; a script's OPEN puts tab 2 there. */
   active: 1,
+  opened: false,
   scriptOpens: false,
   /** While set, run_script waits for it: the script is running. */
   scriptHold: null as Promise<void> | null,
@@ -65,8 +68,13 @@ const core = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
-    core.calls.push(`${cmd} ${JSON.stringify(args ?? null)}`);
+    if (cmd.startsWith("workspace_") || cmd === "ai_status") {
+      core.workspaceCalls.push({ cmd, args });
+    } else core.calls.push(`${cmd} ${JSON.stringify(args ?? null)}`);
     switch (cmd) {
+      case "workspace_attach":
+        return { workspace: args?.workspace ?? core.active, cursor: core.cursor, transcript: [], status: "", error: null,
+          choice: { provider: "anthropic", model: "claude-opus-5-5", effort: null }, context: {} };
       case "aliases":
         return {};
       case "recents":
@@ -101,6 +109,7 @@ vi.mock("@tauri-apps/api/core", () => ({
           .map((drawing) => ({ drawing, autosave: `${drawing}.sv$`, saved_at: 1 }));
       case "open_drawing":
         if (core.openHold) await core.openHold;
+        core.opened = true;
         return info(args!.path as string);
       case "compare":
         if (core.compareHold) await core.compareHold;
@@ -126,6 +135,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "batch_version":
         return core.batchVersion;
       case "tabs":
+        if (!core.opened) return { tabs: [], active: null };
         return {
           tabs: [
             { id: 1, path: PLAN, title: "plan.dwg", dirty: false },
@@ -213,12 +223,16 @@ vi.mock("@tauri-apps/api/core", () => ({
   }),
 }));
 /** The core's events, by name: a test sends one with `emit`. */
-const events = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
-const emit = (name: string, payload: unknown) => act(async () => events.get(name)?.({ payload }));
+const events = vi.hoisted(() => new Map<string, Set<(e: { payload: unknown }) => void>>());
+const emit = (name: string, payload: unknown) => act(async () => {
+  for (const handler of events.get(name) ?? []) handler({ payload });
+});
+const agentEvent = (event: unknown) => emit("workspace:event", { workspace: core.active, cursor: ++core.cursor, event });
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
-    events.set(name, handler);
-    return () => {};
+    const handlers = events.get(name) ?? new Set();
+    handlers.add(handler); events.set(name, handlers);
+    return () => { handlers.delete(handler); };
   }),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -293,12 +307,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   events.clear();
+  core.cursor = 0; core.workspaceCalls = [];
   openDialog.mockImplementation(async () => core.chosen);
   saveDialog.mockResolvedValue(null);
   core.calls.length = 0;
   core.autosaved.clear();
   core.chosen = PLAN;
-  core.active = 1;
+  core.active = 1; core.opened = false;
   core.scriptOpens = false;
   core.scriptHold = null;
   core.openHold = null;
@@ -413,30 +428,30 @@ function manualFrames() {
 }
 
 async function reveal(id: string, handles: number[], sheet = "*Model_Space") {
-  const infoReads = core.calls.filter((call) => call === "drawing_info null").length;
-  await emit("ai:event", {
+  const infoReads = core.calls.filter((call) => call === "drawing_info {\"workspace\":1}").length;
+  await agentEvent({
     type: "tool_call", id, name: "qiyas_execute", label: "draw",
     input: { op: "draw", args: "{}" }, mutating: true,
   });
-  await emit("ai:event", {
+  await agentEvent({
     type: "tool_result", id, is_error: false, summary: "Drawn", handles,
     ui: { action: "reveal", sheet, handles },
   });
-  await until(() => expect(core.calls.filter((call) => call === "drawing_info null").length).toBeGreaterThan(infoReads));
+  await until(() => expect(core.calls.filter((call) => call === "drawing_info {\"workspace\":1}").length).toBeGreaterThan(infoReads));
 }
 
 /** What the drawing's open sends to the core after the core has it: its drafting settings, its
  *  take-off, BOQ and conflicts, then its batch. */
 const SHOWN = [
-  "get_drafting null",
-  "takeoff null",
-  "totals null",
-  "boq null",
-  "conflicts null",
-  "measurement_report null",
-  "batch_version null",
+  "get_drafting {\"workspace\":1}",
+  "takeoff {\"workspace\":1}",
+  "totals {\"workspace\":1}",
+  "boq {\"workspace\":1}",
+  "conflicts {\"workspace\":1}",
+  "measurement_report {\"workspace\":1}",
+  "batch_version {\"workspace\":1}",
   "tabs null",
-  "render_batch {}",
+  "render_batch {\"workspace\":1}",
 ];
 
 test("open → an autosave is asked about first → Discard deletes it, then the drawing opens and shows", async () => {
@@ -455,7 +470,10 @@ test("open → an autosave is asked about first → Discard deletes it, then the
     expect(core.calls).toEqual([
       `discard_autosave {"path":"${PLAN}"}`,
       `open_drawing {"path":"${PLAN}"}`,
+      "tabs null",
+      "tabs null",
       ...SHOWN,
+      'ai_set_language {"lang":"en","workspace":1}',
     ]);
     expect(screen.queryByRole("heading", { name: en["recovery.title"] })).toBeNull();
     // The status bar names the drawing on screen.
@@ -476,10 +494,10 @@ test("DIVIDE 5 answers the divide prompt once: one divide_along for the command,
   const divides = () => core.calls.filter((c) => c.startsWith("run_command"));
   await until(() => {
     expect(divides()).toEqual([
-      `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":5}}`,
+      `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":5},"workspace":1}`,
     ]);
     // Drawn and saved after it.
-    expect(core.calls.slice(-1)).toEqual(["save_project null"]);
+    expect(core.calls.slice(-1)).toEqual(["save_project {\"workspace\":1}"]);
   });
 
   // The next pick asks for its own number.
@@ -530,7 +548,7 @@ test("hooks made before apply and onCommand reach them: TEXT's text, a tool pale
   fireEvent.submit(value.form!);
   await until(() => {
     expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
-      `run_command {"cmd":{"type":"text","at":[20,20],"height":2.5,"rotation":0,"value":"Hi","style":"Standard"}}`,
+      `run_command {"cmd":{"type":"text","at":[20,20],"height":2.5,"rotation":0,"value":"Hi","style":"Standard"},"workspace":1}`,
     ]);
   });
 
@@ -543,7 +561,7 @@ test("hooks made before apply and onCommand reach them: TEXT's text, a tool pale
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
   await until(() => {
     expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
-      `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":3}}`,
+      `run_command {"cmd":{"type":"divide_along","handle":42,"chain":[],"count":3},"workspace":1}`,
     ]);
   });
 });
@@ -590,7 +608,7 @@ test("PLOT: a window clicked in the drawing (usePlot through the command line) i
     lineweights: true,
     output: null,
   };
-  expect(core.calls).toEqual(["drawing_info null", `plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf" })}`]);
+  expect(core.calls).toEqual(["drawing_info {\"workspace\":1}", `plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf", workspace: 1 })}`]);
   await expectToasts(["Plotted to \u2068/d/plan.pdf\u2069 — pictures not plotted: 2"]);
   // The status bar goes back to the drawing's name.
   expect(status()).toBe("plan.dwg");
@@ -618,6 +636,7 @@ test("QUICKPRINT and the Output tab: quick print, print all layouts and the plot
         output: null,
       },
       printer: "Office",
+      workspace: 1,
     },
   ]);
   await expectToasts(["Sent to Office"]);
@@ -650,7 +669,7 @@ test("another sheet cancels the tool in use, which is made after the sheets", as
 
   // useSheets reaches the tool's cancel through the root's measureRef.
   await typeLine("SHEET Layout1");
-  expect(core.calls).toContain(`set_sheet {"block":"*Paper_Space"}`);
+  expect(core.calls).toContain(`set_sheet {"block":"*Paper_Space","workspace":1}`);
   expect(prompt()).toBe(en["draw.prompt.firstPoint"]);
 });
 
@@ -666,20 +685,20 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
     expect(vi.mocked(openDialog)).toHaveBeenLastCalledWith({ defaultPath: "/d/", filters: [{ name: en["script.file"], extensions: ["scr"] }] });
     // The same drawing on screen after it: its info, take-off and batch read again, the take-off saved.
     expect(core.calls).toEqual([
-      "drawing_info null",
+      "drawing_info {\"workspace\":1}",
       "tabs null",
-      `run_script {"path":"/d/count.scr"}`,
+      `run_script {"path":"/d/count.scr","workspace":1}`,
       "tabs null",
-      "drawing_info null",
-      "takeoff null",
-      "totals null",
-      "boq null",
-      "conflicts null",
-      "measurement_report null",
-      "batch_version null",
+      "drawing_info {\"workspace\":1}",
+      "takeoff {\"workspace\":1}",
+      "totals {\"workspace\":1}",
+      "boq {\"workspace\":1}",
+      "conflicts {\"workspace\":1}",
+      "measurement_report {\"workspace\":1}",
+      "batch_version {\"workspace\":1}",
       "tabs null",
-      "render_batch {}",
-      "save_project null",
+      "render_batch {\"workspace\":1}",
+      "save_project {\"workspace\":1}",
     ]);
   });
   const log = screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") });
@@ -695,20 +714,22 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
   core.scriptOpens = true;
   await typeLine("SCR");
   expect(core.calls).toEqual([
-    "drawing_info null",
+    "drawing_info {\"workspace\":1}",
     "tabs null",
-    `run_script {"path":"/d/count.scr"}`,
+    `run_script {"path":"/d/count.scr","workspace":1}`,
     "tabs null",
-    "drawing_info null",
-    ...SHOWN,
-    "save_project null",
+    'drawing_info {"workspace":2}',
+    "tabs null",
+    ...SHOWN.map(call => call.replace('"workspace":1', '"workspace":2')),
+    'save_project {"workspace":2}',
+    'ai_set_language {"lang":"en","workspace":2}',
   ]);
   expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: en["script.close"] }));
   await until(() => expect(screen.queryByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeNull());
   core.calls.length = 0;
   await typeLine("SCRIPT");
-  expect(core.calls.filter((c) => c.startsWith("run_script"))).toEqual([`run_script {"path":"/d/count.scr"}`]);
+  expect(core.calls.filter((c) => c.startsWith("run_script"))).toEqual([`run_script {"path":"/d/count.scr","workspace":2}`]);
 });
 
 test("while a script runs the ribbon and the command line wait, and Stop asks the core to stop it", async () => {
@@ -780,16 +801,16 @@ test("PURGE (PU) and AUDIT: a dry run first, then one change that the window cat
   core.calls.length = 0;
   await typeLine("PU");
   expect(core.calls).toEqual([
-    `run_command {"cmd":{"type":"purge","kinds":["layers","blocks","styles","linetypes","dimstyles","groups"],"dry_run":true}}`,
+    `run_command {"cmd":{"type":"purge","kinds":["layers","blocks","styles","linetypes","dimstyles","groups"],"dry_run":true},"workspace":1}`,
   ]);
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["purge.run"] }));
   await until(() => {
     // Taken out, redrawn, the layers read again, autosaved.
-    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"purge","kinds":["layers"],"dry_run":false}}`);
-    expect(core.calls).toContain("render_batch {}");
-    expect(core.calls).toContain("drawing_info null");
-    expect(core.calls.at(-1)).toBe("save_project null");
+    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"purge","kinds":["layers"],"dry_run":false},"workspace":1}`);
+    expect(core.calls).toContain("render_batch {\"workspace\":1}");
+    expect(core.calls).toContain("drawing_info {\"workspace\":1}");
+    expect(core.calls.at(-1)).toBe("save_project {\"workspace\":1}");
     expect(screen.getByText(en["purge.done"].replace("{n}", "1"))).toBeTruthy();
   });
   fireEvent.click(screen.getByRole("button", { name: en["purge.close"] }));
@@ -799,7 +820,7 @@ test("PURGE (PU) and AUDIT: a dry run first, then one change that the window cat
   goTab(en.manage);
   fireEvent.click(screen.getByRole("button", { name: en["audit.button"] }));
   await until(() => {
-    expect(core.calls).toEqual([`run_command {"cmd":{"type":"audit","fix":false}}`]);
+    expect(core.calls).toEqual([`run_command {"cmd":{"type":"audit","fix":false},"workspace":1}`]);
     expect(screen.getByText(en["audit.clean"])).toBeTruthy();
   });
 });
@@ -822,7 +843,7 @@ test("the options reach the window: the pick box, the ribbon layout and a shortc
   core.calls.length = 0;
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
   await until(() => {
-    expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9}`);
+    expect(core.calls).toContain(`pick {"x":10,"y":10,"tol":9,"workspace":1}`);
     // The canvas draws with the background and highlight colours (the crosshair's waits).
     expect((canvas.props as unknown as { colours: unknown }).colours).toEqual({ background: "#102030", highlight: "#ff8800" });
   });
@@ -860,7 +881,7 @@ test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the
   core.calls.length = 0;
   await typeLine("PAR");
   await until(() => {
-    expect(core.calls).toContain(`run_command {"cmd":{"type":"list_parameters"}}`);
+    expect(core.calls).toContain(`run_command {"cmd":{"type":"list_parameters"},"workspace":1}`);
     expect(screen.getByRole("heading", { name: en["param.manager"] })).toBeTruthy();
     // The bar shows once the manager (or a parametric tool) is used.
     expect(screen.getByRole("toolbar", { name: en["param.bar"] })).toBeTruthy();
@@ -871,9 +892,9 @@ test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the
   fireEvent.change(input, { target: { value: "6" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await until(() => {
-    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"set_parameter","name":"d1","expression":"6"}}`);
-    expect(core.calls).toContain("render_batch {}");
-    expect(core.calls).toContain("save_project null");
+    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"set_parameter","name":"d1","expression":"6"},"workspace":1}`);
+    expect(core.calls).toContain("render_batch {\"workspace\":1}");
+    expect(core.calls).toContain("save_project {\"workspace\":1}");
   });
 
   // The Parametric tab holds the tools; a glyph's click deletes its constraint.
@@ -882,7 +903,7 @@ test("PARAMETERS (PAR) opens the manager; an edit is set, redrawn and saved; the
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: en["param.glyph"].replace("{kind}", en["param.kind.horizontal"]) }));
   await until(() => {
-    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1}}`);
+    expect(core.calls[0]).toBe(`run_command {"cmd":{"type":"delete_constraint","id":1},"workspace":1}`);
   });
 });
 
@@ -936,7 +957,7 @@ test("Delete erases what is selected, and types in a text field as ever", async 
   fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
   await until(() => {
     expect(core.calls.filter((c) => c.startsWith("run_command"))).toEqual([
-      `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
+      `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]},"workspace":1}`,
     ]);
   });
 });
@@ -975,7 +996,7 @@ test("Delete with nothing selected starts ERASE; Delete again erases what was pi
   fireEvent.keyDown(window, { code: "Delete", key: "Delete" });
   await until(() => {
     expect(runs()).toEqual([
-      `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]}}`,
+      `run_command {"cmd":{"type":"delete_entities","targets":[{"handle":42,"chain":[]}]},"workspace":1}`,
     ]);
   });
 });
@@ -1045,11 +1066,11 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
   const panel = within(screen.getByRole("tabpanel", { name: en.conflicts }));
   expect(panel.getByText(en["conflicts.notCompared"])).toBeTruthy();
 
-  await emit("ai:event", {
+  await agentEvent({
     type: "tool_call", id: "compare", name: "qiyas_execute", label: "compare",
     input: { op: "compare", args: "{}" }, mutating: true,
   });
-  await emit("ai:event", {
+  await agentEvent({
     type: "tool_result", id: "compare", is_error: false, summary: "No conflicts",
     handles: [], ui: null,
   });
@@ -1082,8 +1103,8 @@ test("a reveal is queued and layers sync while the previous drawing stays on scr
   await until(() => {
     expect(shownHandles()).toEqual([1]);
     expect(Array.from(canvas.props!.overlay!)).toEqual([70, 0, 75, 0]);
-    expect(core.calls).toContain("takeoff null");
-    expect(core.calls).toContain("drawing_info null");
+    expect(core.calls).toContain("takeoff {\"workspace\":1}");
+    expect(core.calls).toContain("drawing_info {\"workspace\":1}");
   });
 
   await frames.advance(3000);
@@ -1195,7 +1216,7 @@ test("undo cancels the active and queued reveals and keeps the undone drawing", 
   core.undoBatch = drawingBatch([1, 7]);
 
   await typeLine("UNDO");
-  expect(core.calls).toContain("undo null");
+  expect(core.calls).toContain("undo {\"workspace\":1}");
   expect(shownHandles()).toEqual([1, 7]);
   expect(canvas.props!.overlay).toBeNull();
   await frames.advance(3000);
@@ -1246,7 +1267,7 @@ test("an area marked with the area tool reaches Mizan's composer, made after the
     false,
   );
   await until(() => {
-    expect(core.calls).toContain(`pick_polygon {"points":[[0,0],[5000,0],[5000,2000],[0,2000]],"crossing":true}`);
+    expect(core.calls).toContain(`pick_polygon {"points":[[0,0],[5000,0],[5000,2000],[0,2000]],"crossing":true,"workspace":1}`);
     expect(screen.getByText("Area · 5.00 × 2.00 m")).toBeTruthy();
     expect(screen.getByText("1 entities")).toBeTruthy();
   });
@@ -1255,27 +1276,27 @@ test("an area marked with the area tool reaches Mizan's composer, made after the
 test("Mizan selects for the user, and the window says what the user points at", async () => {
   await mount();
   await clickOpen();
-  await emit("ai:select", { handles: [42], zoom: false });
+  await emit("ai:select", { workspace: 1, handles: [42], zoom: false });
   await until(() => {
     expect(screen.getByText("Selection · 1")).toBeTruthy();
   });
   core.calls.length = 0;
-  await emit("ai:pointed", { id: 7 });
+  await emit("ai:pointed", { workspace: 1, id: 7 });
   await until(() => {
     expect(core.calls).toEqual([
-      `ai_window_reply {"id":7,"value":{"selection":[{"handle":42,"chain":[]}],"region":null,"view":null},"error":null}`,
+      `ai_window_reply {"workspace":1,"id":7,"value":{"selection":[{"handle":42,"chain":[]}],"region":null,"view":null},"error":null}`,
     ]);
   });
   // The canvas is faked: no picture, said as an error.
   core.calls.length = 0;
-  await emit("ai:capture", { id: 8, maxSide: 1600 });
+  await emit("ai:capture", { workspace: 1, id: 8, maxSide: 1600 });
   await until(() => {
-    expect(core.calls).toEqual([`ai_window_reply {"id":8,"value":null,"error":"No drawing is on screen"}`]);
+    expect(core.calls).toEqual([`ai_window_reply {"workspace":1,"id":8,"value":null,"error":"No drawing is on screen"}`]);
   });
 });
 
 test("an untitled drawing keeps its own Continue offer through its placeholder path", async () => {
-  core.untitled = true;
+  core.untitled = true; core.opened = true;
   core.savedConversations = [{
     id: "untitled-chat", title: "Draw the new plan", drawing: PLAN,
     drawing_exists: false, updated: 1_792_598_400_000, turns: 1,
@@ -1283,7 +1304,7 @@ test("an untitled drawing keeps its own Continue offer through its placeholder p
   await mount();
   // An existing untitled tab is shown directly; its placeholder is not a file to open.
   await emit("drawing:shown", null);
-  await until(() => expect(core.calls).toContain("render_batch {}"));
+  await until(() => expect(core.calls).toContain("render_batch {\"workspace\":1}"));
   fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
   await until(() => {
     expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();

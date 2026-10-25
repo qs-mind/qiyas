@@ -9,6 +9,7 @@ export class UserFacingError extends Error { toString() { return this.message; }
 /** Preserve messages already translated by the window when they cross another catch. */
 export const userError = (message: string) => new UserFacingError(message);
 const known: [RegExp, string][] = [
+  [/workspace_busy|mizan_working/, "workspace.working"],
   [/could not be read|can.?t (?:be opened|read)|unreadable|bad header|not a .*file/i, "err.open"],
   [/api key.*refused|unauthori[sz]ed|authentication/i, "err.auth"],
   [/signature.*match/i, "err.signature"],

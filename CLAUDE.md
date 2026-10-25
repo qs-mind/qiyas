@@ -1853,13 +1853,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 ## Drawings, tabs, recents and views
 
 - Several drawings open at once, one file tab each above the drawing (title, "•" while the drawing
-  has unsaved changes, × or a middle click closes; Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W). The tab on
-  screen is `AppState::session`, so every IPC command, the assistant and MCP act on it; the others
-  are parked (`AppState::parked`, without their batch and pick index) and swapped in by
-  `activate_tab`. Lock order: `tabs`, `session`,
-  `parked`. Switching or closing the tab on screen starts a new assistant conversation, unless
-  Mizan did it (`keep_conversation`, see the AI section). Opening a file that is open already
-  shows its tab. Closing (or quitting) with unsaved drawing changes asks.
+  has unsaved changes, × or a middle click closes; Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W). Each tab
+  owns a stable drawing workspace and Mizan. Activating a tab changes the visible workspace;
+  it does not move sessions or cancel turns. IPC accepts an optional workspace id, resolving the
+  visible one once when omitted. Bound agents and MCP connections retain their drawing.
+  Lock order: copy and release registry references, then AI, session and published metadata.
+  Never take the registry or AI lock while holding a session lock. Opening an already open file
+  shows its tab. Closing a busy drawing asks to stop Mizan; unsaved changes ask separately.
 - New drawing (quick-access New, Ctrl+N, NEW / QNEW): `NewDrawingDialog` asks metres,
   centimetres or millimetres (the last choice kept in `localStorage` `qiyas.newUnits`), then IPC
   `new_drawing { units }`: `Session::new_blank` (`CadDocument::new()`, INSUNITS 6, 5 or 4) in a
@@ -1906,7 +1906,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   error or panic. Typed commands, batches, reads and picture captures share this boundary.
   Sheet removal falls back to Model. Automatic UI events never change the user's sheet or zoom;
   reveals animate only on the sheet currently visible. User history Undo/Redo and external MCP
-  drawing replacements retain turn protection; switching drawing tabs still cancels the old turn.
+  drawing replacements retain turn protection; switching drawing tabs leaves their turns running.
 
 ## AI assistant and settings
 
@@ -1974,7 +1974,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 - Conversations are app-wide, outside the shared `.qiyas` drawing project: one private JSON
   file per chat in `<app config>/conversations/`, with a small `index.json`. Mizan saves after
-  each turn and before resetting for New chat, another drawing, settings or a failed turn.
+  each turn and before resetting for New chat or a failed turn. Other drawings and Settings
+  defaults do not reset existing chats.
   The store keeps at most 100 chats, removing the least recently updated first. History defaults
   to the drawing on screen; All drawings, individual delete and Delete all are available there.
   An empty panel offers the latest saved chat for the current drawing.
@@ -3055,3 +3056,37 @@ Take-off kit revision workflow examples are named `revision_commands`; `revision
 Wire array/scalar reads are wrapped as `{value, revision}`; object reads keep their existing fields. Compact kit prose reserves space for revision metadata without increasing its byte limit. A repeated-failure stop still produces the local interrupted take-off summary in the chat language.
 
 New untitled drawings skip placeholder names already present in chat history or a recovery/Save As path family, so a new drawing cannot inherit a previous drawing's conversations. A mixed move whose retained room is restored by derivation keeps the unrelated move, reports the room override, preserves measured area and remains one undo step.
+
+
+## Goal W: one workspace per drawing (25 October 2026)
+
+- `DrawingWorkspace` owns its stable session Arc, undo state, Mizan, cancel token, provider
+  profile, transcript, window request channel, pictures and published data. The registry keeps
+  unique tab ids; closed ids are not reused. One canvas displays the active workspace. Hidden
+  workspaces run without canvas redraws. View, selection and composer drafts follow the drawing.
+- Drawing IPC resolves its workspace before awaiting. Agent file tools and each MCP connection
+  remain bound to their original workspace even when they show another tab. MCP callers can
+  explicitly address a workspace; retry ids and callbacks remain local to that drawing.
+  Autosave visits every workspace with try-lock; busy drawings retry on the next tick.
+- Each Mizan panel chooses provider, model and effort. Settings holds defaults for new
+  workspaces. Changing a workspace preserves its conversation through the existing resume
+  compatibility rules. Keys remain in the keychain under provider and service address.
+  Shared autonomy and measurement rules are read again for each turn.
+- Settings `max_concurrent_turns` defaults to three (1–8). Waiting turns are cancellable and
+  visible. Claude turns queue separately, and the existing executable semaphore remains held
+  until the child is reaped. Below 1 GiB available system memory, admission falls to one;
+  existing turns finish. The window explains the reduced concurrency.
+- Busy drawing reads use published metadata/render buffers. Picks retry asynchronously with
+  their original workspace id. Other workspaces never wait on that drawing's session lock.
+  Batches publish after their commit; their intermediate edits remain private. Save dialogs
+  keep the drawing they opened for even if the visible tab changes.
+- A webview subscribes before attaching to the workspace transcript and progress snapshot.
+  Cursor checks remove duplicate or wrong-workspace events. Reload does not clear or cancel
+  turns. Tabs show working, queued, waiting, done or failed; hidden completion retains a short
+  summary when opened. Closing busy work requires explicit Stop and close.
+- `qiyas_read events {after,session?}` exposes the existing bounded commit journal and changed
+  handles. Failed batches add no commit; undo is a new commit. Expired, foreign, future or
+  truncated history requires resync. The window has a separate 512-entry progress journal.
+- Design, measured acceptance results and remaining limitations are in
+  `docs/2026-10-25-qiyas-goal-W-design.md` and `docs/2026-10-25-qiyas-goal-W.md`.
+  No new dependencies, paid calls or changes to the founder's running checkout.

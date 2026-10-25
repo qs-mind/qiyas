@@ -1817,5 +1817,15 @@
   "ai.finding.annotation_overlap": "Annotations overlap.",
   "ai.finding.annotation_over_grid": "An annotation crosses a grid line.",
   "ai.finding.label_outside_room": "A room label is outside its room.",
-  "ai.finding.object_tag_mismatch": "An object label differs from its properties."
+  "ai.finding.object_tag_mismatch": "An object label differs from its properties.",
+  "workspace.provider": "Mizan for this drawing",
+  "workspace.queued": "Waiting for a free Mizan slot…",
+  "workspace.working": "Mizan is working…",
+  "workspace.waiting": "Waiting for you",
+  "workspace.done": "Mizan finished",
+  "workspace.failed": "Mizan stopped with an error",
+  "workspace.away": "While you were away:",
+  "workspace.closeBusy": "Mizan is working on this drawing: stop and close?",
+  "workspace.limit": "Drawings Mizan can work on at once",
+  "workspace.memory": "Memory is low. Mizan will start one drawing at a time."
 }

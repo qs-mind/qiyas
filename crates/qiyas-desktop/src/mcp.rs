@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, PoisonError};
 
-use qiyas_ai::mcp::{serve, OnMutated, OnUi};
+use qiyas_ai::mcp::{serve_workspaces, OnMutated, OnUi, Qiyas};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
@@ -64,29 +64,26 @@ pub fn restart<R: Runtime>(app: &AppHandle<R>) {
     }
     let shutdown = CancellationToken::new();
     run.shutdown = Some(shutdown.clone());
-    let session = state.session.clone();
-    let window = app.clone();
-    let on_mutated: OnMutated = Arc::new(move || {
-        let _ = window.emit(CHANGED, ());
-    });
-    let window = app.clone();
-    let on_ui: OnUi = Arc::new(move |ui| {
-        let _ = window.emit(SESSION_CHANGED, ui);
-    });
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let host: Arc<dyn qiyas_ai::DrawingHost> = Arc::new(crate::drawing_host::AppHost {
-            app: app.clone(),
-            expected_revision: None,
+        let window = app.clone();
+        let resolver: qiyas_ai::mcp::WorkspaceResolver = Arc::new(move |id| {
+            let state = window.state::<AppState>().scoped(Some(id))?;
+            Ok(handler(&window, state))
         });
-        let result = serve(
-            session,
-            Some(host),
+        let window = app.clone();
+        let factory = Arc::new(move || {
+            let state = window
+                .state::<AppState>()
+                .scoped(None)
+                .expect("active workspace exists");
+            handler(&window, state).with_workspaces(resolver.clone())
+        });
+        let result = serve_workspaces(
+            factory,
             settings.mcp_port,
             settings.mcp_token,
             shutdown.clone(),
-            on_mutated,
-            on_ui,
         )
         .await;
         let state = app.state::<AppState>();
@@ -107,6 +104,32 @@ pub fn restart<R: Runtime>(app: &AppHandle<R>) {
             }
         }
     });
+}
+
+fn handler<R: Runtime>(app: &AppHandle<R>, state: AppState) -> Qiyas {
+    let id = state.id;
+    let session = state.session.clone();
+    let window = app.clone();
+    let changed = state.clone();
+    let on_mutated: OnMutated = Arc::new(move || {
+        if let Ok(session) = changed.session.try_lock() {
+            if let Some(session) = session.as_ref() {
+                changed.publish(session);
+            }
+        }
+        let _ = window.emit(CHANGED, serde_json::json!({"workspace":id}));
+    });
+    let window = app.clone();
+    let on_ui: OnUi = Arc::new(move |mut ui| {
+        ui["workspace"] = serde_json::json!(id);
+        let _ = window.emit(SESSION_CHANGED, ui);
+    });
+    let host = Arc::new(crate::drawing_host::AppHost {
+        app: app.clone(),
+        expected_revision: None,
+        binding: Some(state),
+    });
+    Qiyas::new(session, Some(host), on_mutated, on_ui)
 }
 
 #[cfg(test)]

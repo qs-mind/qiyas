@@ -1,9 +1,11 @@
 import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
 import { uiError, userError } from "../i18n/errors";
+import { listen } from "@tauri-apps/api/event";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { aiAttachPdf, type PdfAttachment } from "../api";
 import type { Pointing } from "../app/useAssistantWiring";
 import { translate, useLanguage, useT } from "../i18n";
+import { WorkspacePicker } from "./WorkspacePicker";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
@@ -19,7 +21,7 @@ type Props = {
   assistant: Pick<
     Assistant,
     "transcript" | "busy" | "error" | "send" | "cancel" | "clear"
-  >;
+  > & Partial<Pick<Assistant, "workspace" | "choice" | "choose" | "phase" | "away" | "memoryLimited">>;
   onShow(card: ToolCardItem): void;
   onUndo(card: ToolCardItem): void;
   onSettings(): void;
@@ -51,12 +53,32 @@ export const AssistantPanel = memo(function AssistantPanel({
   const { transcript, busy, error } = assistant;
   const [attaching, setAttaching] = useState(false);
   const unavailable = busy || !!history?.pending || attaching;
-  const [draft, setDraft] = useState("");
+  type Draft = { text: string; pictures: Picture[]; documents: PdfAttachment[] };
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const key = String(assistant.workspace ?? "lobby");
+  const current = drafts[key] ?? { text: "", pictures: [], documents: [] };
+  const draft = current.text;
+  const pictures = current.pictures;
+  const documents = current.documents;
+  function editDraft(change: (before: Draft) => Draft) {
+    setDrafts(all => ({ ...all, [key]: change(all[key] ?? { text: "", pictures: [], documents: [] }) }));
+  }
+  const setDraft = (text: string) => editDraft(before => ({ ...before, text }));
+  const setPictures = (next: Picture[] | ((old: Picture[]) => Picture[])) =>
+    editDraft(before => ({ ...before, pictures: typeof next === "function" ? next(before.pictures) : next }));
+  const setDocuments = (next: PdfAttachment[] | ((old: PdfAttachment[]) => PdfAttachment[])) =>
+    editDraft(before => ({ ...before, documents: typeof next === "function" ? next(before.documents) : next }));
+  useEffect(() => {
+    let gone = false;
+    let off: (() => void) | undefined;
+    void listen<number>("workspace:closed", ({ payload }) => {
+      setDrafts(all => { const kept = { ...all }; delete kept[String(payload)]; return kept; });
+    }).then(unlisten => { if (gone) unlisten(); else off = unlisten; }).catch(() => {});
+    return () => { gone = true; off?.(); };
+  }, []);
   const box = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   /** The pictures to send with the next message. */
-  const [pictures, setPictures] = useState<Picture[]>([]);
-  const [documents, setDocuments] = useState<PdfAttachment[]>([]);
   const [pictureError, setPictureError] = useState<string | null>(null);
 
   // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
@@ -294,6 +316,10 @@ export const AssistantPanel = memo(function AssistantPanel({
           </svg>
         </button>
       </div>
+      {assistant.choice && assistant.choose && <WorkspacePicker choice={assistant.choice} busy={busy} onChange={assistant.choose} />}
+      {assistant.phase === "queued" && <p className="msg notice" role="status">{t("workspace.queued")}</p>}
+      {assistant.memoryLimited && busy && <p className="msg notice" role="status">{t("workspace.memory")}</p>}
+      {assistant.away != null && <p className="msg notice">{t("workspace.away")} {assistant.away || t(`workspace.${assistant.phase || "done"}`)}</p>}
       <p className="sr-only" role="status" aria-live="polite">
         {announce}
       </p>

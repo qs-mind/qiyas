@@ -195,6 +195,11 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
             {subscription && <SubscriptionSettings provider={draft.provider} model={profile.model} onModel={(model) => changeProfile({ model })}
               effort={profile.effort} onEffort={(effort) => changeProfile({ effort })}
               executable={draft.claude_executable ?? ""} onExecutable={(claude_executable) => change({ claude_executable })} />}
+            <label>
+              <span>{t("workspace.limit")}</span>
+              <input type="number" min={1} max={8} value={draft.max_concurrent_turns ?? 3}
+                onChange={event => change({ max_concurrent_turns: Number(event.target.value) })} />
+            </label>
             {!subscription && <div className="field">
               <span>{t("settings.model")}</span>
               <ModelPicker

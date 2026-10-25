@@ -38,8 +38,19 @@ const REQUIRED: [&str; 9] = [
     "--disallowedTools",
     "--append-system-prompt",
 ];
-// Shared by status checks and every conversation. Never queue another subscription session.
+// Shared by status checks and every conversation. Only one executable may run at a time.
 static PROCESS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(1)));
+// Cancellation may finish the agent before its child has been reaped. Wait for the actual
+// process permit too, so the next drawing cannot fail or start a second Claude process.
+async fn process_permit() -> Result<Arc<OwnedSemaphorePermit>, AiError> {
+    Ok(Arc::new(
+        PROCESS
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| error("claude_busy"))?,
+    ))
+}
 
 fn error(code: &'static str) -> AiError {
     AiError::Subscription(code)
@@ -600,12 +611,7 @@ impl Provider for ClaudeCode {
         sink: Sink<'a>,
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
-            let permit = Arc::new(
-                PROCESS
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| error("claude_busy"))?,
-            );
+            let permit = process_permit().await?;
             let cwd = work_directory(&self.home)?;
             let capabilities = Capabilities {
                 help: output(&self.path, &cwd, &["--help"]).await?,
@@ -1006,6 +1012,78 @@ mod tests {
             "{}\n  --effort <level> Effort level (low, medium, high, xhigh, max)\n  --model <model> Model for this session. An alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name.\n",
             help()
         )
+    }
+
+    #[tokio::test]
+    async fn queued_fake_claude_waits_until_cancelled_process_is_reaped() {
+        let _guard = TEST_PROCESS.lock().await;
+        let (dir, first) = fixture(Vec::new());
+        std::fs::write(
+            dir.path().join("scenario.json"),
+            json!({"help":help(),"wait":true}).to_string(),
+        )
+        .unwrap();
+        let (second_dir, second) = fixture(success());
+        let cwd = work_directory(&first.home).unwrap();
+        let capabilities = Capabilities { help: help() };
+        let mut sink = |_| {};
+        let mut running = Box::pin(first.execute(
+            request(),
+            &cwd,
+            &capabilities,
+            config(),
+            process_permit().await.unwrap(),
+            &mut sink,
+        ));
+        let ready = async {
+            while !records(dir.path())
+                .iter()
+                .any(|entry| entry["ready"] == true)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        tokio::select! {
+            _ = &mut running => panic!("first fake must remain running"),
+            result = tokio::time::timeout(Duration::from_secs(5), ready) => result.unwrap(),
+        }
+        let mut waiting = Box::pin(async {
+            let permit = process_permit().await.unwrap();
+            second
+                .execute(
+                    request(),
+                    &work_directory(&second.home).unwrap(),
+                    &capabilities,
+                    config(),
+                    permit,
+                    &mut |_| {},
+                )
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut waiting)
+                .await
+                .is_err()
+        );
+        assert!(
+            records(second_dir.path()).is_empty(),
+            "queued fake has not spawned"
+        );
+        drop(running);
+        tokio::time::timeout(Duration::from_secs(8), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(records(dir.path())
+            .iter()
+            .any(|entry| entry["signal"].is_number()));
+        assert_eq!(
+            records(second_dir.path())
+                .iter()
+                .filter(|entry| entry.get("input").is_some())
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]

@@ -22,7 +22,9 @@ pub mod settings;
 mod state;
 mod subscriptions;
 mod tabs;
+mod turn_queue;
 mod updater;
+mod workspace_view;
 
 use tauri::Manager;
 
@@ -129,6 +131,10 @@ pub fn run() {
             updater::cancel_update,
             launch::take_open_requests,
             commands::ai_send,
+            commands::workspace_attach,
+            commands::workspace_view_state,
+            commands::workspace_events,
+            commands::workspace_provider,
             documents::ai_attach_pdf,
             commands::ai_models,
             commands::claude_code_status,
@@ -185,7 +191,9 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<state::AppState>() {
-                    commands::ai_run(&state).save_logged();
+                    for workspace in state.workspaces() {
+                        state::lock(&workspace.ai).save_logged();
+                    }
                 }
                 files::release_locks(app);
             }

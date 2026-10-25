@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use qiyas_ai::conversation::Conversation;
 use serde::{Deserialize, Serialize};
 
+static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub const MAX_CONVERSATIONS: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +73,9 @@ impl Store {
     /// Once at startup, recover a chat whose file was renamed just before a crash interrupted
     /// its index write. Normal listing never reads conversation bodies.
     pub fn recover(&self) -> Result<(), String> {
+        let _write = WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !self.dir.exists() {
             return Ok(());
         }
@@ -202,6 +207,9 @@ impl Store {
     /// Called after a successful save or recovery, under the assistant's store lock.
     /// Persist separately from chat bodies so a paused checkpoint cannot undo the association.
     pub fn follow_drawing(&self, from: &Path, to: &Path) -> Result<(), String> {
+        let _write = WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if crate::settings::same_file(from, to) {
             return Ok(());
         }
@@ -230,6 +238,9 @@ impl Store {
     }
 
     pub fn save(&self, conversation: &Conversation) -> Result<(), String> {
+        let _write = WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if conversation.id.is_empty() || conversation.transcript.is_empty() {
             return Ok(());
         }
@@ -250,6 +261,9 @@ impl Store {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        let _write = WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.path(id)?;
         let mut entries = self.index()?;
         entries.retain(|entry| entry.id != id);
@@ -262,6 +276,9 @@ impl Store {
     }
 
     pub fn delete_all(&self) -> Result<(), String> {
+        let _write = WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !self.dir.exists() {
             return Ok(());
         }

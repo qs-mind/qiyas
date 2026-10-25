@@ -76,8 +76,34 @@ pub(crate) async fn serve_agent(
     serve_handler(handler, 0, token, shutdown).await
 }
 
+/// Desktop connections bind once; an explicit workspace routes to an independent handler.
+pub type WorkspaceResolver = Arc<dyn Fn(u32) -> Result<Qiyas, String> + Send + Sync>;
+pub async fn serve_workspaces(
+    factory: Arc<dyn Fn() -> Qiyas + Send + Sync>,
+    port: u16,
+    token: String,
+    shutdown: CancellationToken,
+) -> Result<SocketAddr, AiError> {
+    serve_factory(factory, port, token, shutdown).await
+}
+
 async fn serve_handler(
     handler: Qiyas,
+    port: u16,
+    token: String,
+    shutdown: CancellationToken,
+) -> Result<SocketAddr, AiError> {
+    serve_factory(
+        Arc::new(move || handler.new_connection()),
+        port,
+        token,
+        shutdown,
+    )
+    .await
+}
+
+async fn serve_factory(
+    factory: Arc<dyn Fn() -> Qiyas + Send + Sync>,
     port: u16,
     token: String,
     shutdown: CancellationToken,
@@ -99,7 +125,7 @@ async fn serve_handler(
         ])
         .enforce_origin_validation();
     let mcp = StreamableHttpService::new(
-        move || Ok(handler.new_connection()),
+        move || Ok(factory()),
         Arc::new(LocalSessionManager::default()),
         config,
     );
@@ -174,6 +200,8 @@ pub struct Qiyas {
     retries: Arc<Mutex<VecDeque<Retry>>>,
     ineffective: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
     churn: Arc<Mutex<crate::churn::Guard>>,
+    resolver: Option<WorkspaceResolver>,
+    addressed: Arc<Mutex<std::collections::BTreeMap<u32, Qiyas>>>,
     source: Source,
     user_text: Option<String>,
 }
@@ -189,6 +217,8 @@ struct Retry {
 pub fn tools() -> Vec<crate::ToolSpec> {
     let mut specs = catalogue();
     for spec in &mut specs {
+        spec.input_schema["properties"]["workspace"] = serde_json::json!({"type":"integer","minimum":0,
+            "description":"Desktop drawing id. Omit to use this connection’s drawing. Switching the visible tab never changes this binding."});
         if spec.name == surface::EXECUTE {
             // MCP accepts omission; strict provider schemas use a required nullable field.
             spec.input_schema["required"]
@@ -231,9 +261,40 @@ impl Qiyas {
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
             churn: Arc::default(),
+            resolver: None,
+            addressed: Arc::default(),
             source: Source::Mcp,
             user_text: None,
         }
+    }
+
+    pub fn with_workspaces(mut self, resolver: WorkspaceResolver) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
+
+    fn addressed(&self, input: &mut Value) -> Result<Self, ToolError> {
+        let Some(id) = input.get("workspace") else {
+            return Ok(self.clone());
+        };
+        let id = id
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or_else(|| ToolError::Failed("Invalid drawing id".into()))?;
+        let resolver = self.resolver.as_ref().ok_or_else(|| {
+            ToolError::Failed("This server has one drawing; omit workspace".into())
+        })?;
+        input
+            .as_object_mut()
+            .expect("workspace has an object")
+            .remove("workspace");
+        // Resolve on every request so closing a tab never leaves a writable orphan behind.
+        let fresh = resolver(id).map_err(ToolError::Failed)?;
+        let mut targets = self
+            .addressed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Ok(targets.entry(id).or_insert(fresh).clone())
     }
 
     fn new_connection(&self) -> Self {
@@ -241,6 +302,7 @@ impl Qiyas {
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
             churn: Arc::default(),
+            addressed: Arc::default(),
             ..self.clone()
         }
     }
@@ -499,10 +561,19 @@ impl ServerHandler for Qiyas {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.to_string();
-        let input = request.arguments.map_or(Value::Null, Value::Object);
+        let mut input = request.arguments.map_or(Value::Null, Value::Object);
+        let target = match self.addressed(&mut input) {
+            Ok(target) => target,
+            Err(error) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    error.json().to_string(),
+                )])
+                .into())
+            }
+        };
         let mutating = surface::mutating(&name, &input);
         // Tools are synchronous and a picture takes a while to draw: off the async workers.
-        let this = self.clone();
+        let this = target.clone();
         let tool = name.clone();
         let (output, replayed) =
             match tokio::task::spawn_blocking(move || this.run_cached(&tool, &input)).await {
@@ -527,7 +598,7 @@ impl ServerHandler for Qiyas {
             Err(e) => {
                 let mut value = e.json();
                 if value.get("revision").is_none() {
-                    value["revision"] = serde_json::json!(self
+                    value["revision"] = serde_json::json!(target
                         .session
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -541,10 +612,10 @@ impl ServerHandler for Qiyas {
         };
         if !replayed {
             if mutating {
-                (self.on_mutated)();
+                (target.on_mutated)();
             }
             if let Some(ui) = ui {
-                (self.on_ui)(ui);
+                (target.on_ui)(ui);
             }
         }
         Ok(result.into())
@@ -554,6 +625,50 @@ impl ServerHandler for Qiyas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_routing_keeps_sessions_and_retry_ids_independent() {
+        use serde_json::json;
+        let a = test_server();
+        let b = test_server();
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let resolver = {
+            let a = a.clone();
+            let b = b.clone();
+            let open = open.clone();
+            Arc::new(move |id: u32| {
+                if !open.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("Drawing is closed".into());
+                }
+                match id {
+                    1 => Ok(a.clone()),
+                    2 => Ok(b.clone()),
+                    _ => Err("No drawing".into()),
+                }
+            }) as WorkspaceResolver
+        };
+        let server = a.clone().with_workspaces(resolver);
+        for (id, length) in [(1, 3), (2, 7)] {
+            let mut input = json!({"workspace":id,"op":"run","request_id":"same-id","args":{"command":{
+                "type":"draw","kind":"line","a":[0,0],"b":[length,0]}}});
+            let target = server.addressed(&mut input).unwrap();
+            assert!(target.run_cached(surface::EXECUTE, &input).0.is_ok());
+            assert!(target.run_cached(surface::EXECUTE, &input).1);
+        }
+        for (target, x, absent) in [(&a, 2.0, 4.0), (&b, 6.0, 8.0)] {
+            let session = target.session.lock().unwrap();
+            let session = session.as_ref().unwrap();
+            assert!(session.pick([x, 0.0], 0.05).is_some());
+            assert!(session.pick([absent, 0.0], 0.05).is_none());
+            assert_eq!(session.history_steps().0.len(), 1);
+        }
+        open.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(server
+            .addressed(&mut json!({"workspace":2,"op":"state"}))
+            .is_err());
+        assert!(server.addressed(&mut json!({"workspace":-1})).is_err());
+        assert!(a.addressed(&mut json!({"workspace":1})).is_err());
+    }
 
     #[test]
     fn revisions_refuse_stale_edits_and_request_ids_still_deduplicate() {

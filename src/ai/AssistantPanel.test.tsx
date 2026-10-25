@@ -535,3 +535,16 @@ test("open findings remain visible beside a completed answer without technical d
   expect(screen.getByText("Text overlaps other text. (1)")).toBeTruthy();
   expect(screen.queryByText("Entities 2 and 3 overlap")).toBeNull();
 });
+
+
+test("composer drafts belong to their drawing", () => {
+  const assistant = { transcript: EMPTY, busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn() };
+  const panel = (workspace: number) => <AssistantPanel assistant={{ ...assistant, workspace }} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />;
+  const { rerender } = render(panel(1));
+  fireEvent.change(screen.getByLabelText("Type your request…"), { target: { value: "First drawing draft" } });
+  rerender(panel(2));
+  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe("");
+  fireEvent.change(screen.getByLabelText("Type your request…"), { target: { value: "Second drawing draft" } });
+  rerender(panel(1));
+  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe("First drawing draft");
+});
