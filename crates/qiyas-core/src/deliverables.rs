@@ -549,7 +549,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
     items
         .iter()
         .flat_map(|item| {
-            item.lines.iter().map(move |line| {
+            printed_lines(item).into_iter().map(move |line| {
                 let mut row = json!(line);
                 row["code"] = json!(item.code);
                 row["section"] = json!(item.section);
@@ -564,6 +564,19 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
             })
         })
         .collect()
+}
+/// The dimension lines worth printing: a rule evaluated on an object it does not apply to
+/// gives `1 × 0 = 0`, and a sheet of those hides the real working. An item whose lines all
+/// give nothing keeps its first line, so the item is still explained.
+pub fn printed_lines(
+    item: &crate::measurement::GeneratedItem,
+) -> Vec<&crate::measurement::DimensionLine> {
+    let kept: Vec<_> = item.lines.iter().filter(|l| l.value != 0.0).collect();
+    if kept.is_empty() {
+        item.lines.iter().take(1).collect()
+    } else {
+        kept
+    }
 }
 fn query_rows(queries: &[crate::Conflict]) -> Vec<Value> {
     queries

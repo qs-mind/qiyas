@@ -232,11 +232,30 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
         )
         .unwrap();
         eprintln!("DONE {label} call={i} seconds={seconds:.6} error={} entities={} rollback={rollback_equal:?}",error.as_ref().map(|e|e.to_string()).unwrap_or_default(),s.drawing.doc.entities().count());
-        assert_eq!(
-            error.is_some(),
-            expected_error,
-            "unexpected replay outcome at call {i}"
-        );
+        // A recorded refusal of the input's shape alone (fields the registry did not know at
+        // the time) may now be normalised and accepted: Goal A wraps top-level command fields.
+        let shape_refusal = call["error"]
+            .as_str()
+            .and_then(|e| serde_json::from_str::<Value>(e).ok())
+            .is_some_and(|e| {
+                e["errors"].as_array().is_some_and(|errs| {
+                    !errs.is_empty()
+                        && errs.iter().all(|x| {
+                            matches!(x["code"].as_str(), Some("missing_field" | "unknown_field"))
+                        })
+                })
+            });
+        if error.is_none() && expected_error && shape_refusal {
+            eprintln!(
+                "NOTE call {i}: the recorded input-shape refusal is now normalised and accepted"
+            );
+        } else {
+            assert_eq!(
+                error.is_some(),
+                expected_error,
+                "unexpected replay outcome at call {i}"
+            );
+        }
         assert_ne!(
             rollback_equal,
             Some(false),

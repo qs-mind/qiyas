@@ -106,13 +106,13 @@ fn candidates() -> Vec<PathBuf> {
     {
         out.push(exe_dir.join("resources").join("pdfium").join(&name));
     }
-    if cfg!(debug_assertions) {
-        out.push(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../qiyas-desktop/resources/pdfium")
-                .join(&name),
-        );
-    }
+    // The repository's copy (`scripts/pdfium.sh`): debug builds and a release `qiyas-cli` run
+    // from `target/`; an installed app has it beside the program and never this path.
+    out.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../qiyas-desktop/resources/pdfium")
+            .join(&name),
+    );
     out
 }
 

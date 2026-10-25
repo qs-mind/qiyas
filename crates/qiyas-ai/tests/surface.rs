@@ -2990,3 +2990,40 @@ fn u5_change_reports_all_label_collisions_and_u15_checks_the_edited_sheet() {
         "An edit elsewhere must not reveal on the visible sheet"
     );
 }
+
+#[test]
+fn plot_writes_the_sheet_as_a_pdf_beside_the_drawing() {
+    let (dir, mut s) = sample();
+    let out = call(&mut s, EXECUTE, json!({"op":"plot","args":{}})).unwrap();
+    let written = std::path::PathBuf::from(out["written"].as_str().unwrap());
+    assert_eq!(
+        written.parent().unwrap().canonicalize().unwrap(),
+        dir.path().canonicalize().unwrap()
+    );
+    assert_eq!(written.extension().unwrap(), "pdf");
+    let bytes = std::fs::read(&written).unwrap();
+    assert!(bytes.starts_with(b"%PDF"), "{written:?}");
+    assert_eq!(out["sheet"], "Model");
+    let named = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"plot","args":{"sheet":"Model","paper":"ISO A3","scale":"1:100","path":"plans/model.pdf"}}),
+    )
+    .unwrap();
+    assert!(dir.path().join("plans/model.pdf").exists(), "{named}");
+    let error = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"plot","args":{"sheet":"A-999"}}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("No sheet A-999") && error.contains("Model"),
+        "{error}"
+    );
+    let error = call(&mut s, EXECUTE, json!({"op":"plot","args":{"scale":"big"}}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("1:50"), "{error}");
+}

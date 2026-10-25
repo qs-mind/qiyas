@@ -42,6 +42,8 @@ pub trait DrawingHost: Send + Sync {
     fn before_tool(&self, _name: &str, _input: &Value) -> Result<(), String> {
         Ok(())
     }
+    /// Record a finished tool call: whether it succeeded and how long Qiyas took.
+    fn after_tool(&self, _name: &str, _input: &Value, _ok: bool, _took: std::time::Duration) {}
     /// Hosts check expected_revision again while holding the lock which applies the change.
     fn run_file(
         &self,

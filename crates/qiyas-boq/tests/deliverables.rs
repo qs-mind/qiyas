@@ -285,3 +285,22 @@ fn visible_variation_is_readable_and_records_remain_lossless() {
         }
     }
 }
+
+#[test]
+fn dimension_sheets_leave_out_lines_that_add_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = test_session(&dir.path().join("zero.dxf"));
+    let report = s.measurement_report().unwrap();
+    let mut item = report.items[0].clone();
+    let mut zero = item.lines[0].clone();
+    zero.value = 0.0;
+    zero.expression = "(1) * (0)".into();
+    let worth_printing = item.lines.iter().filter(|l| l.value != 0.0).count();
+    assert!(worth_printing > 0);
+    item.lines.insert(0, zero.clone());
+    let printed = deliverables::printed_lines(&item);
+    assert!(printed.iter().all(|l| l.value != 0.0));
+    assert_eq!(printed.len(), worth_printing);
+    item.lines = vec![zero.clone(), zero];
+    assert_eq!(deliverables::printed_lines(&item).len(), 1);
+}

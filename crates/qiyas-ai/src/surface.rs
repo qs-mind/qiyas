@@ -59,7 +59,7 @@ pub const READ_OPS: [&str; 24] = [
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 20] = [
+pub const EXECUTE_OPS: [&str; 21] = [
     "plan",
     "finish",
     "run",
@@ -80,6 +80,7 @@ pub const EXECUTE_OPS: [&str; 20] = [
     "compare",
     "export_takeoff",
     "export_conflicts",
+    "plot",
 ];
 
 /// Every operation declares its environment here, shared by Mizan and MCP.
@@ -148,6 +149,7 @@ operations![
     (EXECUTE, "compare", [Drawing]),
     (EXECUTE, "export_takeoff", [Drawing]),
     (EXECUTE, "export_conflicts", [Drawing]),
+    (EXECUTE, "plot", [Drawing]),
     (EXECUTE, "select", [Window, Drawing], "select_entities"),
     (EXECUTE, "new_drawing", [Host], "new_drawing"),
     (EXECUTE, "open_drawing", [Host], "open_drawing"),
@@ -237,7 +239,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted); plot ({sheet?, paper?, orientation?, scale?, path?}: one sheet as a PDF in the drawing's folder, as printed; a layout plots its own paper at 1:1, Model fits ISO A1; scale is fit or 1:50). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1185,6 +1187,7 @@ fn run_working_session(
         (EXECUTE, "export_takeoff") | (EXECUTE, "export_conflicts") => {
             json(export(session, op, args)?)
         }
+        (EXECUTE, "plot") => json(plot(session, args)?),
         (CAPTURE, "picture") => execute(session, "view_image", args, source),
         _ => Err(bad(format!("{tool} has no op {op}"))),
     }
@@ -2275,6 +2278,129 @@ fn bind(value: &mut Value, answers: &[Value]) -> Result<(), String> {
         Value::Array(items) => items.iter_mut().try_for_each(|v| bind(v, answers)),
         _ => Ok(()),
     }
+}
+
+/// `plot`: one sheet as a PDF in the drawing's folder, drawn as the Plot dialog prints it.
+fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
+    use qiyas_plot::{Area, Orientation, PlotJob, Scale};
+    let failed = |e: String| ToolError::Failed(e);
+    let sheets = session.drawing.sheets();
+    let wanted = args
+        .get("sheet")
+        .and_then(Value::as_str)
+        .unwrap_or(&session.sheet);
+    let sheet = sheets
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(wanted) || s.block.eq_ignore_ascii_case(wanted))
+        .ok_or_else(|| {
+            bad(format!(
+                "No sheet {wanted}. Sheets: {}",
+                sheets
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?
+        .clone();
+    let catalog = qiyas_core::paper_catalog();
+    let named_paper = match args.get("paper").and_then(Value::as_str) {
+        Some(name) => Some(
+            catalog
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .cloned()
+                .ok_or_else(|| {
+                    bad(format!(
+                        "No paper {name}. Papers: {}",
+                        catalog
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?,
+        ),
+        None => None,
+    };
+    // The layout's own page setup, read without moving the user's view.
+    let layout_paper = if sheet.is_model {
+        None
+    } else {
+        let shown = std::mem::replace(&mut session.sheet, sheet.block.clone());
+        let paper = session.paper();
+        session.sheet = shown;
+        paper
+    };
+    let (paper, orientation) = match (named_paper, layout_paper) {
+        (Some(p), _) => (p, Orientation::Landscape),
+        (None, Some(p)) => (p, Orientation::Portrait),
+        (None, None) => (
+            catalog
+                .iter()
+                .find(|p| p.name == "ISO A1")
+                .cloned()
+                .expect("ISO A1"),
+            Orientation::Landscape,
+        ),
+    };
+    let orientation = match args.get("orientation").and_then(Value::as_str) {
+        Some("portrait") => Orientation::Portrait,
+        Some("landscape") => Orientation::Landscape,
+        Some(other) => {
+            return Err(bad(format!(
+                "orientation is portrait or landscape, not {other}"
+            )))
+        }
+        None => orientation,
+    };
+    let scale = match args.get("scale").and_then(Value::as_str) {
+        None if sheet.is_model => Scale::Fit,
+        None => Scale::Ratio(1.0, 1.0),
+        Some("fit") => Scale::Fit,
+        Some(text) => {
+            let parts: Vec<f64> = text
+                .split(':')
+                .filter_map(|p| p.trim().parse().ok())
+                .collect();
+            match parts.as_slice() {
+                [num, den] if *num > 0.0 && *den > 0.0 => Scale::Ratio(*num, *den),
+                _ => {
+                    return Err(bad(format!(
+                        "scale is fit or num:den such as 1:50, not {text}"
+                    )))
+                }
+            }
+        }
+    };
+    // The same confinement as the exports (symlinks resolved); a subfolder is made for it.
+    let output = match args.get("path").and_then(Value::as_str) {
+        Some(name) => {
+            let full = crate::execute::resolve_in_drawing_folder(session, name)?;
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| failed(e.to_string()))?;
+            }
+            Some(name.to_owned())
+        }
+        None => None,
+    };
+    let job = PlotJob {
+        sheet: sheet.block.clone(),
+        area: if sheet.is_model {
+            Area::Extents
+        } else {
+            Area::Layout
+        },
+        paper,
+        orientation,
+        scale,
+        centre: true,
+        style: None,
+        lineweights: true,
+        output,
+    };
+    let out = qiyas_plot::plot_pdf(session, &job).map_err(|e| failed(e.to_string()))?;
+    Ok(json!({"written": out.path.to_string_lossy(), "sheet": sheet.name, "skipped": out.skipped}))
 }
 
 /// `export_takeoff`, `export_conflicts`: a workbook in the drawing's folder.

@@ -12,6 +12,7 @@ await_holding_lock = "deny"
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 qiyas-pdf = { path = "../qiyas-pdf" }
+qiyas-plot = { path = "../qiyas-plot" }
 qiyas-render = { path = "../qiyas-render" }
 qiyas-takeoff = { path = "../qiyas-takeoff" }
 serde.workspace = true

@@ -1893,13 +1893,14 @@ impl Session {
                 c.status = *status;
                 c.note = note.clone();
                 return self.transaction(source, "resolve_conflict", |s| {
+                    // Qiyas's own write of the computed list (the group keeps `source`).
                     s.run_as(
                         Command::SetKnowledge {
                             kind: crate::knowledge::Kind::Queries,
                             name: "result".into(),
                             data: serde_json::json!(conflicts),
                         },
-                        source,
+                        Source::User,
                     )?;
                     s.run_as(
                         Command::SetConflicts {

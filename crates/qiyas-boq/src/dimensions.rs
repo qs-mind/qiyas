@@ -111,7 +111,7 @@ pub(crate) fn write_contents(
     sheet.set_column_width(11, 45)?;
     let mut row = 1;
     for item in &report.items {
-        for line in &item.lines {
+        for line in qiyas_core::deliverables::printed_lines(item) {
             sheet.write_string(row, 0, &item.code)?;
             sheet.write_string(row, 1, &line.label)?;
             sheet.write_string(row, 2, format!("{:?}", line.operation))?;

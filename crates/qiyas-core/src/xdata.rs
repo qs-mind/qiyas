@@ -61,7 +61,7 @@ pub fn decode_legacy_unicode(text: &str) -> std::borrow::Cow<'_, str> {
     let mut slashes = 0usize;
     let mut i = 0;
     while i < chars.len() {
-        if slashes % 2 == 0 {
+        if slashes.is_multiple_of(2) {
             if let Some(unit) = unit_at(i) {
                 let mut next = i + 7;
                 let decoded = if (0xD800..0xDC00).contains(&unit) {

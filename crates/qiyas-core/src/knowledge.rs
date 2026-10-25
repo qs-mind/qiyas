@@ -513,6 +513,12 @@ mod tests {
             assert!(err.contains("computed by Qiyas"), "{err}");
             assert!(get(&s.drawing.doc, kind, name).unwrap().is_none());
         }
+        // Qiyas's own computations still write their results for an agent.
+        s.run_as(crate::Command::Check { tolerance: None }, Source::Mcp)
+            .unwrap();
+        assert!(get(&s.drawing.doc, Kind::Queries, "result")
+            .unwrap()
+            .is_some());
         // The cloud layer is ordinary data and stays writable.
         s.run_as(
             crate::Command::SetKnowledge {

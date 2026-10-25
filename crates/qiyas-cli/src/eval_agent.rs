@@ -392,7 +392,7 @@ fn run_case(
     }
     let report = json!({"run":output.file_name().unwrap().to_string_lossy(),"case":case,
         "headline":format!("AGENT ALONE ({})",args.agent),"agent":args.agent,"model":args.model,"effort":args.effort,
-        "status":status,"elapsed_ms":elapsed_ms,"tool_calls":mcp_log.lines().count(),"cost":"subscription",
+        "status":status,"elapsed_ms":elapsed_ms,"tool_calls":mcp_log.lines().filter(|l| l.contains("\"input\"")).count(),"cost":"subscription",
         "usage":{"cost":"subscription"},"agent_log":output.join("agent-events.jsonl"),"step_log":output.join("mcp-events.jsonl"),
         "drawing":drawing,"takeoff":submission,"score":score,"contamination":contamination,"report_directory":output});
     crate::bench::write_json(&output.join("report.json"), &report)?;

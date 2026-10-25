@@ -597,12 +597,19 @@ impl Qiyas {
             self.host.as_deref().is_some_and(DrawingHost::has_window),
             self.host.is_some(),
         )?;
-        if self.source == Source::Mcp && surface::needs_sheet_authority(&route) {
-            if let Some(host) = self.host.as_deref() {
-                return host.with_sheet_authority(&mut || self.run_route(route.clone()));
+        let started = std::time::Instant::now();
+        let result = if self.source == Source::Mcp && surface::needs_sheet_authority(&route) {
+            match self.host.as_deref() {
+                Some(host) => host.with_sheet_authority(&mut || self.run_route(route.clone())),
+                None => self.run_route(route),
             }
+        } else {
+            self.run_route(route)
+        };
+        if let Some(host) = self.host.as_deref() {
+            host.after_tool(name, input, result.is_ok(), started.elapsed());
         }
-        self.run_route(route)
+        result
     }
 
     fn run_route(&self, route: Route) -> Result<ToolOutput, ToolError> {

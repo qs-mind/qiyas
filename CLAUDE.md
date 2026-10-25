@@ -403,7 +403,16 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 - `knowledge.rs`: versioned JSON XRecords in `NOD/QIYAS_KNOWLEDGE`, with subdictionaries
   types, levels, tables, rules, sheets, mappings, views and measurement. Objects and the NOD
-  pointer participate in undo; stale DWG raw payloads are cleared on write. `xdata.rs` shares
+  pointer participate in undo; stale DWG raw payloads are cleared on write. Knowledge and
+  metadata JSON is written ASCII-only (`xdata::ascii_json`, `\uXXXX` escapes): DWG 2000 and
+  2004 keep text in a code page and turn other characters into `\U+XXXX`, which broke the JSON
+  on reopen (the clinic run lost its method, mappings and results that way); reads decode
+  those escapes from older files (`decode_legacy_unicode`), tested in every DWG version and
+  DXF with Arabic. `set_knowledge` from Mizan or MCP refuses the computed entries
+  `revisions/{result,baseline,identities}` and `queries/result`: they come from
+  `carry_knowledge`/`variation_report` and `discrepancy_check`. Qiyas's own writes of those
+  (`discrepancy_check`, `resolve_conflict`) run the inner `SetKnowledge` as `Source::User`
+  inside the agent's transaction, which keeps the agent's source for undo. `xdata.rs` shares
   UTF-8 chunking and application-specific raw EED invalidation among walls, rooms and fields.
 - `objects.rs`: `define_object_type`, `redefine_object_type`, `delete_object_type`,
   `place_objects`, `set_object_props`, `object_schedule` and `set_knowledge`. Type properties,
@@ -529,7 +538,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   introduced drawing errors at completion without an approval pause. The Review panel is a
   take-off report with optional corrections, including accepted low-confidence interpretations.
 - Eval submits accepted measured dimension items and their generated BOQ totals. Raw
-  manual rows/candidates are excluded. Engine recipes likewise require accepted elements;
+  manual rows/candidates are excluded. An object with a recognition candidate must be accepted;
+  an object Mizan placed itself (a design drawn from scratch) has no candidate and counts.
+  Engine recipes likewise require accepted elements;
   legacy `include_baseline` no longer appends raw geometry. Shared development mappings live in
   `.local/benchmark/general/`, never in the product or live/scripted Mizan input. PDF label areas
   become typed recognised enclosures before their explicit mapping is submitted.
@@ -805,6 +816,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   project `.qss` data (`project.set_reports`, one undo step). Neutral bilingual defaults ship
   as JSON data. Sections, columns, headings, grouping, totals and page setup are layout data;
   totals separate units. Dimension lines retain timesing, signed deductions and references.
+  Printed dimension sheets (Excel and PDF, `deliverables::printed_lines`) leave out lines that
+  add nothing (`1 × 0 = 0`, a rule evaluated on an object it does not apply to; the clinic
+  working-out was 18,000 lines, 707 of them zero); an item whose lines all give nothing keeps
+  its first line. The measurement report itself keeps every line.
 - Registry `deliverable.export {kind, format, layout?, path, language?, project?}` supports
   dimensions, boq, queries, variation and register, in Excel/PDF, English/Arabic. It is in the
   bounded take-off kit. Core prepares the report; shared `qiyas-boq::deliverables` completes it
@@ -1608,7 +1623,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   nothing. Run it once per machine. Without it the PDF commands
   answer "PDF support is not installed: run scripts/pdfium.sh" and the PDF tests are ignored, so
   `scripts/check.sh` runs them only where the script has been run (no CI checks them).
-- `QIYAS_PDFIUM` (the library or its folder) overrides where it is looked for.
+- `QIYAS_PDFIUM` (the library or its folder) overrides where it is looked for. Without it:
+  beside the program (`resources/pdfium/`, the installed app), then the repository's
+  `crates/qiyas-desktop/resources/pdfium/` (debug and release binaries run from `target/`).
 - Release: run `scripts/pdfium.sh` before `pnpm bundle`; `tauri.bundle.conf.json` ships the
   folder as the resource `resources/pdfium/`.
 - pdfium is not thread-safe: every call runs on one worker thread (`qiyas_pdf`).
@@ -2013,7 +2030,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   only), run (read-only commands), check, history, drawings, selection and rooms. Execute
   operations: plan (conversation progress), run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
   view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
-  compare, export_takeoff and export_conflicts. Capture's source is screen or picture.
+  compare, export_takeoff, export_conflicts and plot. Capture's source is screen or picture.
+  `qiyas_execute {op: "plot", args: {sheet?, paper?, orientation?, scale?, path?}}` plots one
+  sheet to a PDF in the drawing's folder through `qiyas-plot` (qiyas-ai depends on it): a
+  layout plots its own page setup at 1:1 (`Area::Layout`), Model fits ISO A1 landscape;
+  `paper` is a catalog name, `scale` is `fit` or `num:den`. Before it, Mizan had no way to
+  print the A1 sheets it drew.
 - `qiyas_execute {op: "type", args: {"line": "PLINE 0,0 10,0 C"}}` uses the same registry
   machine as scripts and the command line, then the same folder rules, undo attribution,
   drawing check and reveal as `run`. Coordinates use the session's UCS, with relative points
@@ -2244,6 +2266,9 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 
 ## MCP
 
+- `DrawingHost::after_tool(name, input, ok, took)` hears every finished tool call; the
+  headless host appends `{"done", "op", "ok", "elapsed_ms"}` to `mcp-events.jsonl`, so a run's
+  per-step speed can be read (the goal X gate: every step under 3 s in debug, 1 s installed).
 - Headless: `qiyas-cli mcp --drawing PATH [--workdir DIR]` serves the same three tools
   over rmcp stdio, without the desktop, settings or keychain. The workdir defaults to the
   drawing's folder; an outside drawing is copied into it. Only that drawing is opened,
@@ -2257,7 +2282,8 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   `takeoff.json`, `measurement.json`, `takeoff.xlsx`, `self-check.json` and `conflicts.json`.
   Each command/batch keeps its existing single undo boundary, source `mcp`.
 - Headless file paths stay in the workdir; traversal, symlinks, truth, recipes and settings
-  are refused. One server owns one drawing; start another process to open a different drawing.
+  are refused. Only `path`/`*_path` fields are files; a `path` under `updates` or `where` is
+  a JSON pointer and is never checked as a file. One server owns one drawing; start another process to open a different drawing.
   This host does not supply desktop tabs or a project workspace.
 
 Outside AI apps can drive Qiyas through its MCP server. `tools/list` offers exactly the same

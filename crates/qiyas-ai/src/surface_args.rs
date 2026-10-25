@@ -214,6 +214,13 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
             object(json!({"path":string}), &[]),
             json!({"path":"takeoff.xlsx"}),
         ),
+        (EXECUTE, "plot") => (
+            object(
+                json!({"sheet":{"type":["string","null"],"description":"A sheet's name or block; the current sheet when omitted"},"paper":{"type":["string","null"],"description":"A catalog paper such as ISO A1; a layout's own page setup when omitted"},"orientation":{"type":["string","null"],"enum":["portrait","landscape",null]},"scale":{"type":["string","null"],"description":"fit, or num:den such as 1:50; a layout plots 1:1 and Model fits when omitted"},"path":{"type":["string","null"],"description":"The PDF's name in the drawing's folder; <drawing>-<sheet>.pdf when omitted"}}),
+                &[],
+            ),
+            json!({"sheet":"A-101","scale":"1:1"}),
+        ),
         (EXECUTE, "compare") => (
             object(json!({"tolerance":{"type":["number","null"]}}), &[]),
             json!({"tolerance":0.01}),

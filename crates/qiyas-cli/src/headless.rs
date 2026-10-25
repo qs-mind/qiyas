@@ -70,7 +70,8 @@ impl Host {
                             .ok_or("File paths must be literal strings in headless tools")?;
                         confined(&self.root, Path::new(path))?;
                     }
-                    self.check_paths_at(value, key == "updates")?;
+                    // Record updates and `where` filters name JSON pointers, not files.
+                    self.check_paths_at(value, key == "updates" || key == "where")?;
                 }
             }
             Value::Array(values) => {
@@ -115,6 +116,19 @@ impl DrawingHost for Host {
             }
         }
         Ok(())
+    }
+    fn after_tool(&self, name: &str, input: &Value, ok: bool, took: std::time::Duration) {
+        let Ok(path) = confined(&self.root, Path::new("mcp-events.jsonl")) else {
+            return;
+        };
+        if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(path) {
+            let op = input["op"].as_str().or(input["source"].as_str());
+            let _ = writeln!(
+                log,
+                "{}",
+                json!({"done":name,"op":op,"ok":ok,"elapsed_ms":took.as_millis()})
+            );
+        }
     }
     fn list(&self) -> Result<Value, String> {
         let guard = self.session.lock().map_err(|e| e.to_string())?;

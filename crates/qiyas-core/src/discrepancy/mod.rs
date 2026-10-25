@@ -327,13 +327,15 @@ impl Session {
                 }
             }
             s.set_sheet(&original_sheet)?;
+            // Qiyas's own write of the computed result: the agent-source refusal in
+            // `SetKnowledge` is for hand-typed results, and the group keeps `source`.
             s.run_as(
                 Command::SetKnowledge {
                     kind: knowledge::Kind::Queries,
                     name: "result".into(),
                     data: json!(conflicts),
                 },
-                source,
+                Source::User,
             )?;
             s.run_as(
                 Command::SetConflicts {

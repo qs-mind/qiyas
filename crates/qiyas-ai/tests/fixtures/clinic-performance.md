@@ -21,7 +21,10 @@ worktree's `CARGO_TARGET_DIR`). `CLINIC_LABEL` selects the output folder below
 `.local/goal-run/`; use a distinct baseline/after label for each build profile.
 Each call saves its result, duration, full entity/quantity/measurement snapshot,
 and any PNG. Every error verifies entities, document structure, history and revision
-against the before state; every call verifies surviving wall membership.
+against the before state; every call verifies surviving wall membership. A recorded
+refusal of the input's shape alone (`missing_field`/`unknown_field`, such as call 24's
+`run` with the command's fields at the top level) may now succeed: Goal A's normalisation
+wraps those fields, and the replay notes it instead of failing.
 
 For strict comparison, run the after executable with `CLINIC_SESSION_DIR` pointing
 at the baseline output directory and `CLINIC_LABEL=BASELINE_LABEL/AFTER_LABEL`.
