@@ -713,6 +713,8 @@ impl Session {
     }
 
     pub(crate) fn stored_wall_groups(&self) -> Result<Vec<WallGroup>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.stored_wall_groups");
         let mut groups: BTreeMap<u64, WallGroup> = BTreeMap::new();
         for entity in self.drawing.doc.entities_in_block(&self.sheet) {
             if let Some(tag) = wall_tag(entity) {
@@ -872,6 +874,9 @@ impl Session {
 
     /// Reads the editable systems on the current sheet, optionally with opening placement ranges.
     pub fn wall_groups(&self, width: Option<f64>) -> Result<Vec<WallGroupInfo>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.wall_groups");
+        let _read = self.evaluation_read()?;
         self.stored_wall_groups()?
             .into_iter()
             .map(|group| {
@@ -984,6 +989,8 @@ impl Session {
         spec: WallSpec,
         old: &[WallGroup],
     ) -> Result<WallResult, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.rebuild_walls");
         let targets: Vec<_> = old
             .iter()
             .flat_map(|g| g.members.iter())
@@ -1299,6 +1306,9 @@ impl Session {
     /// Whole assemblies need one union. Summing every member's prefix difference would
     /// solve the same union twice per run, even though those differences telescope.
     fn wall_totals(&self, centrelines: &[u64]) -> Result<[f64; 4], CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.wall_totals");
+        let _read = self.evaluation_read()?;
         let mut seen = BTreeSet::new();
         let mut total = [0.0; 4];
         let factor = self.drawing.units.to_metres();
@@ -1318,7 +1328,7 @@ impl Session {
                 || definition.plan.band_faces.is_none()
             {
                 // A retyped or partial assembly retains the general per-object contract.
-                let records = self.objects(&crate::objects::ObjectFilter::default())?;
+                let records = self.objects_for(centrelines)?;
                 return Ok(["length", "gross_area", "net_area", "volume"].map(|name| {
                     records
                         .iter()

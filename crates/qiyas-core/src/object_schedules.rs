@@ -3,13 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use opencadcodec::{EntityType, Handle};
-use qiyas_param::expr::{Expr, Value as ExprValue};
+use qiyas_param::expr::Value as ExprValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::objects::{
-    display, record_value, ObjectFilter, ObjectRecord, ObjectSchedule, SCHEDULE_APP,
-};
+use crate::objects::{display, record_value, ObjectRecord, ObjectSchedule, SCHEDULE_APP};
 use crate::{CoreError, Session};
 
 const STATE_APP: &str = "QIYAS_OBJECT_SCHEDULE_STATE";
@@ -52,7 +50,7 @@ fn typed(value: Value) -> Option<ExprValue> {
     }
 }
 
-fn template(record: &ObjectRecord, text: &str) -> Result<String, CoreError> {
+fn template(session: &Session, record: &ObjectRecord, text: &str) -> Result<String, CoreError> {
     let mut result = String::new();
     let mut remaining = text;
     while let Some(start) = remaining.find('{') {
@@ -66,7 +64,7 @@ fn template(record: &ObjectRecord, text: &str) -> Result<String, CoreError> {
             .rsplit_once(':')
             .filter(|(_, f)| f.trim_end_matches('t').parse::<usize>().is_ok())
             .map_or((token, None), |(e, f)| (e, Some(f)));
-        let expr = Expr::parse(expression).map_err(|e| invalid(e.to_string()))?;
+        let expr = session.evaluation_expression(expression)?;
         let value = expr.eval_with(&|name: &str| {
             if name == "id_hex" {
                 // Keep older stored recipes readable, using the same decimal handle that
@@ -127,7 +125,7 @@ impl Session {
             }
         }
         if let Some(text) = spec.templates.get(name) {
-            return template(record, text).map(|s| Some(Value::String(s)));
+            return template(self, record, text).map(|s| Some(Value::String(s)));
         }
         Ok(record_value(record, name))
     }
@@ -202,6 +200,9 @@ impl Session {
     }
 
     fn object_schedule_data(&self, spec: &ObjectSchedule) -> Result<Vec<Vec<String>>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("object_schedules.object_schedule_data");
+        let _read = self.evaluation_read()?;
         if spec.columns.is_empty() || spec.columns.len() > 100 {
             return Err(invalid("Object schedules need 1 to 100 columns"));
         }
@@ -214,7 +215,7 @@ impl Session {
         if spec.totals.keys().any(|name| !spec.columns.contains(name)) {
             return Err(invalid("Schedule totals must name displayed columns"));
         }
-        let records = self.objects(&spec.filter)?;
+        let records = self.object_records_for(&spec.filter, spec.ids.as_deref(), true)?;
         let selected: Vec<_> = records
             .iter()
             .filter(|r| {
@@ -296,7 +297,9 @@ impl Session {
         name: &str,
         decimals: usize,
     ) -> Option<String> {
-        let records = self.objects(&ObjectFilter::default()).ok()?;
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("object_schedules.object_field_value");
+        let records = self.objects_for(ids).ok()?;
         let mut sum = 0.0;
         for id in ids {
             let record = records.iter().find(|r| r.instance.id == *id)?;
@@ -460,6 +463,9 @@ impl Session {
         &mut self,
         only: Option<&std::collections::BTreeSet<u64>>,
     ) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile =
+            crate::fixtures::profile::span("object_schedules.refresh_object_schedules_scoped");
         if !self.drawing.doc.app_ids.contains(SCHEDULE_APP) {
             return Ok(());
         }

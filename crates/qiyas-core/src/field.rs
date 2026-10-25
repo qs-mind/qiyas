@@ -288,6 +288,35 @@ pub(crate) fn set_cell_fields(t: &mut Table, fields: &[(usize, usize, String)], 
     );
 }
 
+/// Dependencies of persisted field templates, including table cells. Counts depend on
+/// membership rather than a single source; their holders have a separate index bucket.
+pub(crate) fn field_dependencies(entity: &EntityType) -> (std::collections::BTreeSet<u64>, bool) {
+    let codes = match entity {
+        EntityType::Table(table) => cell_fields(table)
+            .into_iter()
+            .map(|(_, _, code)| code)
+            .collect(),
+        _ => text_field(entity.common()).into_iter().collect::<Vec<_>>(),
+    };
+    let mut sources = std::collections::BTreeSet::new();
+    let mut counts = false;
+    for code in codes {
+        for (a, b) in code_spans(&code) {
+            match parse_code(&code[a..b]) {
+                Code::Area(h) | Code::Length(h) => {
+                    sources.insert(h);
+                }
+                Code::Sum { handles, .. }
+                | Code::RoomArea { handles, .. }
+                | Code::ObjectValue(handles, ..) => sources.extend(handles),
+                Code::Count(_) | Code::OpeningCount(..) => counts = true,
+                _ => {}
+            }
+        }
+    }
+    (sources, counts)
+}
+
 impl Session {
     /// True when the drawing has no `FIELD_APP` application yet.
     pub(crate) fn needs_field_app(&self) -> bool {
@@ -306,6 +335,7 @@ impl Session {
     /// `template` with every field code replaced by its value now; `sheet` is the block the text
     /// sits in (counts are counted there).
     pub(crate) fn evaluate_fields(&self, template: &str, sheet: Handle) -> String {
+        let _read = self.evaluation_read().ok();
         let mut out = String::with_capacity(template.len());
         let mut at = 0;
         for (a, b) in code_spans(template) {
@@ -417,6 +447,8 @@ impl Session {
         dirty: Option<&std::collections::BTreeSet<u64>>,
         counts: bool,
     ) -> Result<usize, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("field.update_fields_scoped");
         if self.needs_field_app() {
             return Ok(0);
         }
@@ -438,13 +470,33 @@ impl Session {
                             })
                 })
         };
-        let holders: Vec<Handle> = self
-            .drawing
-            .doc
-            .entities()
-            .filter(|e| e.common().extended_data.get_record(FIELD_APP).is_some())
-            .map(|e| e.common().handle)
-            .collect();
+        let holders: Vec<Handle> = {
+            let _read = self.evaluation_read()?;
+            let cache = self.evaluation.borrow();
+            let index = &cache.index;
+            let mut selected = std::collections::BTreeSet::new();
+            if let Some(dirty) = dirty {
+                for source in dirty {
+                    if index.field_holders.contains(source) {
+                        selected.insert(*source);
+                    }
+                    selected.extend(index.fields.get(source).into_iter().flatten().copied());
+                }
+                if counts {
+                    selected.extend(index.count_fields.iter().copied());
+                }
+            } else {
+                selected.extend(index.field_holders.iter().copied());
+            }
+            // Preserve document order: cell rebuilds can allocate block handles.
+            index
+                .field_order
+                .iter()
+                .copied()
+                .filter(|h| selected.contains(h))
+                .map(Handle::new)
+                .collect()
+        };
         let mut changed = 0;
         for h in holders {
             let e = self.drawing.doc.get_entity(h).expect("listed above");
@@ -513,6 +565,8 @@ impl Session {
         dirty: Option<&std::collections::BTreeSet<u64>>,
         counts: bool,
     ) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("field.follow_fields_scoped");
         // Linked object tags follow their objects in the scoped pass too (Goals C and G).
         self.refresh_object_tags()?;
         self.update_fields_scoped(true, dirty, counts).map(|_| ())

@@ -12,8 +12,11 @@ impl Session {
         _sheet: &str,
         to_m: f64,
         scale: f64,
+        active: &impl Fn(u64) -> bool,
         push: &mut impl FnMut(Finding),
     ) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("check_layout.check_layout_ink");
         let mut seen = HashSet::new();
         let mut report = |rule, a: u64, b: u64, at, message: String| {
             let key = (rule, a.min(b), a.max(b));
@@ -34,6 +37,17 @@ impl Session {
         };
         for a in &ink.pieces {
             if !a.annotation {
+                continue;
+            }
+            if !active(a.owner)
+                && !ink.near(a.bounds).any(|b| active(b.owner))
+                && !self
+                    .room_from_label(&Target {
+                        handle: a.owner,
+                        chain: vec![],
+                    })
+                    .is_ok_and(active)
+            {
                 continue;
             }
             let at = [

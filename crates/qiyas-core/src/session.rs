@@ -97,6 +97,12 @@ static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// The open drawing and what the user is looking at. Tauri-free, so it can be tested directly.
 pub struct Session {
+    pub(crate) ink_cache: RefCell<crate::ink::InkCache>,
+    pub(crate) check_geometry: RefCell<crate::check::GeometryCache>,
+    pub(crate) check_before: std::collections::BTreeMap<u64, std::sync::Arc<EntityType>>,
+    pub(crate) room_cache: RefCell<crate::draw::room_boundary::RoomCache>,
+    pub(crate) evaluation: RefCell<crate::evaluation::Evaluation>,
+    pub(crate) evaluation_depth: std::cell::Cell<usize>,
     pub drawing: Drawing,
     /// Block name of the sheet on screen, e.g. `*Model_Space`.
     pub sheet: String,
@@ -714,6 +720,12 @@ impl Session {
             .or_else(|| Ucs::from_header(&drawing.doc))
             .unwrap_or_default();
         let mut session = Session {
+            ink_cache: RefCell::default(),
+            check_geometry: RefCell::default(),
+            evaluation: RefCell::default(),
+            evaluation_depth: std::cell::Cell::default(),
+            room_cache: RefCell::default(),
+            check_before: Default::default(),
             drawing,
             sheet,
             automation_sheet: None,
@@ -1026,6 +1038,11 @@ impl Session {
     /// Looks for every xref again and reopens it (a changed or newly found file shows).
     pub fn reload_xrefs(&mut self) {
         self.xrefs = XrefSet::load(&self.drawing, &self.xref_overrides, MAX_XREF_DEPTH);
+        // External files can change while every local entity and revision stays the same.
+        self.discard_evaluation();
+        *self.room_cache.get_mut() = Default::default();
+        *self.ink_cache.get_mut() = Default::default();
+        *self.check_geometry.get_mut() = Default::default();
         self.refresh_loaded_derivations();
         *self.cache.get_mut() = None;
     }
@@ -1935,8 +1952,27 @@ impl Session {
     /// Undoes the last take-off, BOQ, conflicts or drawing change. False when there is nothing to
     /// undo.
     pub fn undo(&mut self) -> bool {
+        self.discard_evaluation();
+        *self.room_cache.get_mut() = Default::default();
+        *self.ink_cache.get_mut() = Default::default();
+        *self.check_geometry.get_mut() = Default::default();
         let before = self.revision();
         let change = self.history.swap_change(false);
+        if !change.is_empty() {
+            self.check_before = change
+                .added
+                .iter()
+                .chain(&change.changed)
+                .chain(&change.removed)
+                .filter_map(|id| {
+                    self.drawing
+                        .doc
+                        .get_entity_arc(Handle::new(*id))
+                        .map(|e| (*id, e))
+                })
+                .collect();
+        }
+
         self.last_advice.clear();
         self.handle_replacements.clear();
         let mut doc_changed = false;
@@ -1984,6 +2020,8 @@ impl Session {
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("session.record_document_change");
         self.validate_object_metadata()?;
         let (derived_tables, derived_takeoff) = self.derived_extras();
         let tables = tables || derived_tables;
@@ -2058,6 +2096,10 @@ impl Session {
         let takeoff = takeoff.filter(|before| {
             serde_json::to_value(before).ok() != serde_json::to_value(&self.takeoff).ok()
         });
+        let check_images: Vec<_> = before
+            .iter()
+            .filter_map(|(handle, old)| old.as_ref().map(|old| (handle.value(), old.clone())))
+            .collect();
         let mut change = DocChange::from_before_images(&self.drawing.doc, before, tables, takeoff);
         // Kept only when the change moved it, and then only what it moved, so undoing a step
         // never touches layers hidden or shown since.
@@ -2067,6 +2109,12 @@ impl Session {
         match done {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {
+                    if self.tx_depth == 0 {
+                        self.check_before.clear();
+                    }
+                    for (id, image) in check_images {
+                        self.check_before.entry(id).or_insert(image);
+                    }
                     self.drawing_changed();
                     self.last_change.merge(crate::Change {
                         added: change.added.iter().map(|h| h.value()).collect(),
@@ -2093,6 +2141,10 @@ impl Session {
                     self.drawing.doc.swap_structure(structure);
                 }
                 *self.cache.get_mut() = None;
+                self.discard_evaluation();
+                *self.room_cache.get_mut() = Default::default();
+                *self.ink_cache.get_mut() = Default::default();
+                *self.check_geometry.get_mut() = Default::default();
                 Err(e)
             }
         }
@@ -2132,6 +2184,7 @@ impl Session {
 
     /// The drawing itself changed: the batch is drawn again and its version moves on.
     pub(crate) fn drawing_changed(&mut self) {
+        self.discard_evaluation();
         if !self.drawing.doc.block_records.contains(&self.sheet) {
             // Undoing a newly created layout can remove the sheet currently on screen.
             self.sheet = "*Model_Space".to_string();
@@ -2162,8 +2215,27 @@ impl Session {
     /// Redoes the last undone take-off, BOQ, conflicts or drawing change. False when there is
     /// nothing to redo.
     pub fn redo(&mut self) -> bool {
+        self.discard_evaluation();
+        *self.room_cache.get_mut() = Default::default();
+        *self.ink_cache.get_mut() = Default::default();
+        *self.check_geometry.get_mut() = Default::default();
         let before = self.revision();
         let change = self.history.swap_change(true);
+        if !change.is_empty() {
+            self.check_before = change
+                .added
+                .iter()
+                .chain(&change.changed)
+                .chain(&change.removed)
+                .filter_map(|id| {
+                    self.drawing
+                        .doc
+                        .get_entity_arc(Handle::new(*id))
+                        .map(|e| (*id, e))
+                })
+                .collect();
+        }
+
         self.last_advice.clear();
         self.handle_replacements.clear();
         let mut doc_changed = false;

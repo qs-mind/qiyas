@@ -16,6 +16,10 @@ struct Link {
     last_anchor: [f64; 2],
     last_value: String,
 }
+pub(crate) fn tag_dependency(entity: &EntityType) -> Option<u64> {
+    crate::xdata::read_json::<Link>(entity.common(), APP).map(|link| link.source)
+}
+
 fn invalid(s: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(s.into())
 }
@@ -50,6 +54,26 @@ fn shown(
     })
 }
 impl Session {
+    fn tag_source(&self, link: &Link) -> Option<u64> {
+        if self
+            .drawing
+            .doc
+            .get_entity(Handle::new(link.source))
+            .and_then(crate::objects::instance)
+            .is_some()
+            && self.revision_identity(link.source) == link.identity
+        {
+            return Some(link.source);
+        }
+        // A carried revision can retain an identity under a different local handle.
+        self.drawing
+            .doc
+            .entities()
+            .filter_map(crate::objects::instance)
+            .find(|object| self.revision_identity(object.id) == link.identity)
+            .map(|object| object.id)
+    }
+
     pub(crate) fn object_tags(
         &mut self,
         targets: &[Target],
@@ -61,7 +85,7 @@ impl Session {
         if handles.is_empty() {
             return Err(invalid("Choose objects to label"));
         }
-        let objects = self.objects(&Default::default())?;
+        let objects = self.objects_for(&handles.iter().map(|h| h.value()).collect::<Vec<_>>())?;
         let height = height.unwrap_or_else(|| self.default_text_height());
         let mut added = Vec::new();
         let app = crate::xdata::register(&mut self.drawing.doc, APP);
@@ -165,7 +189,6 @@ impl Session {
         if !self.drawing.doc.app_ids.contains(APP) {
             return Ok(());
         }
-        let objects = self.objects(&Default::default())?;
         let app = crate::xdata::app_handle(&self.drawing.doc, APP);
         let links: Vec<_> = self
             .drawing
@@ -175,6 +198,12 @@ impl Session {
                 crate::xdata::read_json::<Link>(e.common(), APP).map(|l| (e.common().handle, l))
             })
             .collect();
+        let objects = self.objects_for(
+            &links
+                .iter()
+                .filter_map(|(_, link)| self.tag_source(link))
+                .collect::<Vec<_>>(),
+        )?;
         for (h, mut link) in links {
             let Some(o) = objects.iter().find(|o| o.identity == link.identity) else {
                 continue;
@@ -209,22 +238,27 @@ impl Session {
     pub(crate) fn check_object_tags(
         &self,
         sheet: &str,
+        active: &impl Fn(u64) -> bool,
         push: &mut impl FnMut(crate::check::Finding),
     ) {
         if !self.drawing.doc.app_ids.contains(APP) {
             return;
         }
-        let Ok(objects) = self.objects(&Default::default()) else {
+        if self.validate_object_metadata().is_err() {
             return;
-        };
+        }
         for e in self.drawing.doc.entities_in_block(sheet) {
             let Some(link) = crate::xdata::read_json::<Link>(e.common(), APP) else {
                 continue;
             };
-            let expected = objects
-                .iter()
-                .find(|o| o.identity == link.identity)
-                .and_then(|o| shown(&self.drawing.doc, o, &link.property));
+            if !active(e.common().handle.value()) && !active(link.source) {
+                continue;
+            }
+            let expected = self
+                .tag_source(&link)
+                .and_then(|id| self.object_quantity(id).ok().flatten())
+                .filter(|o| o.identity == link.identity)
+                .and_then(|o| shown(&self.drawing.doc, &o, &link.property));
             let actual = match e {
                 EntityType::Text(t) => Some(t.value.clone()),
                 _ => None,

@@ -3055,3 +3055,40 @@ Take-off kit revision workflow examples are named `revision_commands`; `revision
 Wire array/scalar reads are wrapped as `{value, revision}`; object reads keep their existing fields. Compact kit prose reserves space for revision metadata without increasing its byte limit. A repeated-failure stop still produces the local interrupted take-off summary in the chat language.
 
 New untitled drawings skip placeholder names already present in chat history or a recovery/Save As path family, so a new drawing cannot inherit a previous drawing's conversations. A mixed move whose retained room is restored by derivation keeps the unrelated move, reports the room override, preserves measured area and remains one undo step.
+
+## Goal P: quantity evaluation and room reuse (25 October 2026)
+
+- `objects_for(ids)` and `object_quantity(id)` select drivers before evaluating quantities.
+  Fields, tags, explicit schedule IDs, object record selectors and explanations use these
+  narrow reads. Joined bands retain the existing ordered prefix allocation and exact arithmetic.
+- Evaluation caches definitions, parsed expressions, object contexts, band geometry and records.
+  Its generation compares retained entity snapshots plus raw knowledge, units and document
+  tables; it does not rely on `document_revision` advancing inside a transaction. Rollback,
+  undo, redo and external-reference reload discard cached evaluations. Identical metadata,
+  layer, visibility and hosted-frame writes retain unchanged snapshots and recorder first-touch
+  order. A temporary binary encoding compares exact type tags, lengths and float bits without
+  repeatedly escaping knowledge strings. This changes no drawing or API format.
+- Generation-bound indexes cover assembly members, host openings, generated parts, fields,
+  schedules and source-to-region candidates. Derivation uses both previous and current links
+  so removals still update reverse dependencies. Adding an unused type definition does not
+  rederive existing objects; changing a used definition still does.
+- Room queries reuse the source graph, uncut wall footprint and exact-tolerance arrangements.
+  Opening changes preserve that footprint. Topology changes reuse a seeded face only when its
+  ordered source support and effective tolerance are unchanged. Undo, redo and rollback clear
+  this cache. Boundary policy and island meaning remain unchanged.
+- Edit checks select old/current neighbours and reverse dependencies before expensive rules.
+  Primitive geometry and text ink can be reused only while their source snapshots and plotting
+  inputs match. Caller-visible finding filtering remains unchanged; phase and final checks stay
+  full. Old text positions use rendered glyph bounds to find former neighbours. Plain room
+  names without retained regions follow connected enclosure candidates after source edits.
+- Mixed opening edits remain sequential: grouping them changed intermediate results and
+  allocated handles in the MCP differential test. Only the existing Goal K all-addition batch
+  optimization is retained. Broader P5/P6 deferral remains unfinished.
+- Dev builds optimize `qiyas-core` and `qiyas-param` at level 3, retaining debug assertions and
+  normal floating-point semantics. The offline clinic fixture preserves all 85 supplied calls
+  and applies the name-only `POMI (RICS)` method first. Its release guard uses the existing CPU
+  reference. Exact comparison retains quantities, handles, findings and revision counters.
+- Validation and measured gates are recorded in `docs/2026-10-25-qiyas-goal-P.md`.
+  Absolute clinic gates pass with exact results; the stricter relative clinic guard still
+  fails. Local-port AI tests are blocked by sandbox permissions. No new dependencies, model
+  calls or licence changes.

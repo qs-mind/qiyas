@@ -11,6 +11,9 @@ use std::{
 /// Entity snapshots share the codec's immutable storage; only edited entities are copied.
 pub(crate) struct Inputs {
     entities: BTreeMap<u64, Arc<EntityType>>,
+    dependencies: crate::evaluation::Dependencies,
+    types: BTreeMap<String, Value>,
+    legacy_objects: bool,
     objects: Value,
     measurement: Value,
     takeoff: Value,
@@ -19,6 +22,8 @@ pub(crate) struct Inputs {
 }
 impl Inputs {
     pub(crate) fn capture(s: &Session) -> Result<Self, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("derived.capture");
         use crate::knowledge::{self, Kind};
         let entries = |kind| knowledge::list(&s.drawing.doc, kind).map(|rows| json!(rows));
         let mut measurement = knowledge::list(&s.drawing.doc, Kind::Measurement)?;
@@ -29,7 +34,31 @@ impl Inputs {
             .entities()
             .map(|e| e.common().layer.to_lowercase())
             .collect();
+        let dependencies = {
+            let _read = s.evaluation_read()?;
+            s.evaluation.borrow().index.clone()
+        };
+        let legacy_objects = s.drawing.doc.entities().any(|entity| {
+            dependencies
+                .objects
+                .get(&entity.common().handle.value())
+                .map_or_else(
+                    || {
+                        crate::walls::wall_tag(entity)
+                            .is_some_and(|tag| matches!(tag.role.as_str(), "run" | "opening"))
+                            || crate::room_objects::room_object(entity).is_some()
+                    },
+                    |object| object.compatibility.is_some(),
+                )
+        });
+        let types = knowledge::list(&s.drawing.doc, Kind::Types)?
+            .into_iter()
+            .map(|entry| (entry.name.to_ascii_lowercase(), json!(entry)))
+            .collect();
         Ok(Self {
+            dependencies,
+            types,
+            legacy_objects,
             entities: s
                 .drawing
                 .doc
@@ -43,7 +72,6 @@ impl Inputs {
                 })
                 .collect(),
             objects: json!([
-                entries(Kind::Types)?,
                 entries(Kind::Levels)?,
                 entries(Kind::Tables)?,
                 s.drawing.units.to_metres(),
@@ -71,6 +99,21 @@ impl Inputs {
                 .map(|l| (&l.name, l.flags.off, l.flags.frozen))
                 .collect::<Vec<_>>()),
         })
+    }
+    fn types_changed(&self, now: &Self) -> bool {
+        // New unused definitions do not change existing objects. Both catalogues stay
+        // available so placing the first object of an existing type is not a type edit.
+        if self.legacy_objects || now.legacy_objects {
+            return self.types != now.types;
+        }
+        self.dependencies
+            .objects
+            .values()
+            .chain(now.dependencies.objects.values())
+            .any(|object| {
+                let name = object.type_name.to_ascii_lowercase();
+                self.types.get(&name) != now.types.get(&name)
+            })
     }
     fn changed(&self, now: &Self) -> BTreeSet<u64> {
         self.entities
@@ -111,139 +154,122 @@ impl Inputs {
         }
     }
     fn object_scope(&self, now: &Self, s: &Session) -> Result<BTreeSet<u64>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("derived.object_scope");
+        let _read = s.evaluation_read()?;
         let mut dirty = self.changed(now);
         self.expand_blocks(now, &mut dirty);
         let mut ids = BTreeSet::new();
-        let mut objects = Vec::new();
-        for (h, e) in self.entities.iter().chain(&now.entities) {
-            if let Some(o) = crate::objects::instance(e) {
-                if dirty.contains(h) {
+        for h in &dirty {
+            for state in [self, now] {
+                if state.dependencies.objects.contains_key(h) {
                     ids.insert(*h);
                 }
-                objects.push((*h, e.common().owner_handle, o));
-            }
-            if dirty.contains(h) {
-                if let Some(part) = crate::xdata::read_json::<crate::objects::ObjectPart>(
-                    e.common(),
-                    crate::objects::PART_APP,
-                ) {
+                if let Some(part) = state.entities.get(h).and_then(|e| {
+                    crate::xdata::read_json::<crate::objects::ObjectPart>(
+                        e.common(),
+                        crate::objects::PART_APP,
+                    )
+                }) {
                     ids.insert(part.owner);
                 }
             }
         }
-        // Hosted objects and union assemblies are mutual dependencies. Include the old
-        // membership as well, so a deleted or moved member refreshes the group it left.
-        loop {
-            let len = ids.len();
-            for (h, sheet, o) in &objects {
-                if o.host.is_some_and(|host| ids.contains(&host)) {
-                    ids.insert(*h);
+        // Traverse both generations: removals and changed assembly membership also affect
+        // the group left behind. Only true host/assembly edges expand the object scope.
+        let mut pending: Vec<_> = ids.iter().copied().collect();
+        while let Some(id) = pending.pop() {
+            for state in [self, now] {
+                let index = &state.dependencies;
+                let Some(object) = index.objects.get(&id) else {
+                    continue;
+                };
+                let mut neighbours: Vec<_> = index
+                    .openings
+                    .get(&id)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
+                neighbours.extend(object.host);
+                if matches!(
+                    s.object_type(&object.type_name).map(|d| d.join),
+                    Ok(crate::objects::JoinRule::Union)
+                ) {
+                    let owner = index.owners[&id];
+                    let key = crate::evaluation::Dependencies::assembly(owner, object);
+                    neighbours.extend(index.assemblies.get(&key).into_iter().flatten().copied());
                 }
-                if ids.contains(h) {
-                    if let Some(host) = o.host {
-                        ids.insert(host);
-                    }
-                    if matches!(
-                        s.object_type(&o.type_name).map(|d| d.join),
-                        Ok(crate::objects::JoinRule::Union)
-                    ) {
-                        for (other, other_sheet, member) in &objects {
-                            if sheet == other_sheet
-                                && o.type_name.eq_ignore_ascii_case(&member.type_name)
-                                && o.level == member.level
-                                && o.assembly == member.assembly
-                            {
-                                ids.insert(*other);
-                            }
-                        }
+                for neighbour in neighbours {
+                    if ids.insert(neighbour) {
+                        pending.push(neighbour);
                     }
                 }
-            }
-            if ids.len() == len {
-                break;
             }
         }
         Ok(ids)
     }
     fn regions(&self, now: &Self, full: bool) -> BTreeSet<u64> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("derived.regions");
         let mut dirty = self.changed(now);
         self.expand_blocks(now, &mut dirty);
-        let sources: Vec<_> = dirty
-            .iter()
-            .flat_map(|h| [self.entities.get(h), now.entities.get(h)])
+        let mut regions: BTreeSet<_> = now
+            .dependencies
+            .regions
+            .values()
             .flatten()
-            .filter(|e| enclosure_source(e))
+            .filter_map(|(id, _)| (full || dirty.contains(id)).then_some(*id))
             .collect();
-        now.entities
-            .iter()
-            .filter_map(|(h, e)| {
-                let region = crate::object_regions::retained_region(e)?;
-                let sheet = e.common().owner_handle;
-                (full
-                    || dirty.contains(h)
-                    || sources.iter().any(|source| {
-                        let owner = source.common().owner_handle;
-                        owner == sheet
-                            && (matches!(source.as_ref(), EntityType::Insert(_))
-                                || crate::walls::wall_tag(source).is_some()
-                                || region.boundary_layers.accepts(&source.common().layer))
-                    }))
-                .then_some(*h)
-            })
-            .collect()
+        for source in dirty {
+            for index in [&self.dependencies, &now.dependencies] {
+                regions.extend(
+                    index
+                        .source_regions
+                        .get(&source)
+                        .into_iter()
+                        .flatten()
+                        .filter(|id| now.entities.contains_key(*id))
+                        .copied(),
+                );
+            }
+        }
+        regions
     }
+
     fn schedules(
         &self,
         now: &Self,
         object_ids: &BTreeSet<u64>,
         full: bool,
-        s: &Session,
+        _s: &Session,
     ) -> BTreeSet<u64> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("derived.schedules");
         let dirty = self.changed(now);
+        let mut wanted = dirty;
+        for index in [&self.dependencies, &now.dependencies] {
+            for id in object_ids {
+                wanted.extend(index.schedules.get(id).into_iter().flatten().copied());
+            }
+        }
         now.entities
             .iter()
             .filter_map(|(h, e)| {
-                let spec = crate::xdata::read_json::<crate::objects::ObjectSchedule>(
-                    e.common(),
-                    crate::objects::SCHEDULE_APP,
-                )?;
-                let depends = object_ids
-                    .iter()
-                    .flat_map(|id| [self.entities.get(id), now.entities.get(id)])
+                (full || wanted.contains(h))
+                    .then(|| {
+                        crate::xdata::read_json::<crate::objects::ObjectSchedule>(
+                            e.common(),
+                            crate::objects::SCHEDULE_APP,
+                        )
+                    })
                     .flatten()
-                    .any(|entity| {
-                        let Some(o) = crate::objects::instance(entity) else {
-                            return false;
-                        };
-                        spec.ids.as_ref().is_none_or(|ids| ids.contains(&o.id))
-                            && spec
-                                .filter
-                                .type_name
-                                .as_ref()
-                                .is_none_or(|t| t.eq_ignore_ascii_case(&o.type_name))
-                            && spec.filter.level.as_ref().is_none_or(|l| {
-                                o.level.as_ref().is_some_and(|v| v.eq_ignore_ascii_case(l))
-                            })
-                            && spec.filter.category.as_ref().is_none_or(|c| {
-                                s.object_type(&o.type_name)
-                                    .is_ok_and(|t| t.category.eq_ignore_ascii_case(c))
-                            })
-                            && spec.filter.sheet.as_ref().is_none_or(|sheet| {
-                                let block = s.sheet_block(Some(sheet));
-                                self.blocks
-                                    .get(&entity.common().owner_handle.value())
-                                    .or_else(|| {
-                                        now.blocks.get(&entity.common().owner_handle.value())
-                                    })
-                                    .is_some_and(|b| b.eq_ignore_ascii_case(&block))
-                            })
-                    });
-                (full || dirty.contains(h) || depends).then_some(*h)
+                    .map(|_| *h)
             })
             .collect()
     }
 }
-fn enclosure_source(e: &EntityType) -> bool {
+pub(crate) fn enclosure_source(e: &EntityType) -> bool {
     !matches!(
         e,
         EntityType::Text(_)
@@ -269,6 +295,8 @@ fn enclosure_source(e: &EntityType) -> bool {
 
 /// Kept as the reference implementation for opening drawings and differential tests.
 pub(crate) fn full(s: &mut Session) -> Result<(), CoreError> {
+    #[cfg(any(test, feature = "fixtures"))]
+    let _profile = crate::fixtures::profile::span("derived.full");
     s.migrate_legacy_objects()?;
     s.refresh_objects()?;
     if s.has_object_regions() {
@@ -309,6 +337,8 @@ impl Session {
         before: Option<&Inputs>,
         requested: &mut crate::net_effect::RequestedChanges,
     ) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("derived.rederive");
         let Some(before) = before else {
             if self.derived_extras().0 {
                 full(self)?;
@@ -320,7 +350,7 @@ impl Session {
             return Ok(());
         };
         let mut now = Inputs::capture(self)?;
-        let all = before.objects != now.objects;
+        let all = before.objects != now.objects || before.types_changed(&now);
         let mut object_ids = before.object_scope(&now, self)?;
         if all || !object_ids.is_empty() {
             self.migrate_legacy_objects()?;

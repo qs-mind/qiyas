@@ -44,6 +44,8 @@ pub(crate) fn derive_band(
     factor: f64,
     tolerance: f64,
 ) -> Result<BandDerived, CoreError> {
+    #[cfg(any(test, feature = "fixtures"))]
+    let _profile = crate::fixtures::profile::span("object_bands.derive_band");
     if members.is_empty() || !factor.is_finite() || factor <= 0.0 {
         return Err(invalid(
             "A band assembly needs members and valid drawing units",

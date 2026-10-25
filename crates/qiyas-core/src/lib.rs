@@ -166,3 +166,7 @@ mod check_layout;
 mod ink;
 mod object_tags;
 pub mod placement;
+
+mod evaluation;
+
+mod check_scope;

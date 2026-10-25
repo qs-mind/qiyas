@@ -277,6 +277,8 @@ pub(crate) struct RequestedChanges {
 
 impl RequestedChanges {
     pub(crate) fn capture(doc: &CadDocument, before: &[(Handle, Option<Arc<EntityType>>)]) -> Self {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("net_effect.capture");
         let mut requested = Self::default();
         for (handle, image) in before {
             let current = doc.get_entity(*handle);
@@ -312,6 +314,8 @@ impl RequestedChanges {
     }
 
     pub(crate) fn observe(&mut self, doc: &CadDocument, pass: &'static str) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("net_effect.observe");
         for (&handle, &exists) in &self.existence {
             if doc.get_entity(handle).is_some() != exists {
                 self.overwritten_by
@@ -339,6 +343,8 @@ impl RequestedChanges {
     }
 
     pub(crate) fn advice(&self, doc: &CadDocument) -> Vec<Value> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("net_effect.advice");
         let mut advice = Vec::new();
         for (&handle, &exists) in &self.existence {
             if doc.get_entity(handle).is_some() != exists {

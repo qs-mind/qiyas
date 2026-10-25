@@ -110,6 +110,10 @@ impl Session {
         label: &str,
         f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        let check_before = self.check_before.clone();
+        if self.tx_depth == 0 {
+            self.check_before.clear();
+        }
         let before_revision = self.revision();
         let advice = self.last_advice.clone();
         if self.tx_depth == 0 {
@@ -142,6 +146,9 @@ impl Session {
                 let delta = ViewDelta::current_only(current, self.current.clone()).map(Box::new);
                 self.history.commit_group(source, label, delta);
                 let inner = std::mem::replace(&mut self.last_change, change);
+                if inner.is_empty() && self.document_revision == revision {
+                    self.check_before = check_before;
+                }
                 self.last_change.merge(inner);
                 self.record_revision(before_revision);
                 Ok(value)
@@ -166,9 +173,13 @@ impl Session {
                 self.handle_replacements = replacements;
                 self.last_change = change;
                 self.last_advice = advice;
+                self.check_before = check_before;
                 // The drawing is as it was at `revision`: drawn again, and no unsaved change
                 // left by steps that were put back.
                 self.drawing_changed();
+                *self.room_cache.get_mut() = Default::default();
+                *self.ink_cache.get_mut() = Default::default();
+                *self.check_geometry.get_mut() = Default::default();
                 self.document_revision = revision;
                 Err(e)
             }
