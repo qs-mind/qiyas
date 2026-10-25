@@ -131,6 +131,31 @@ impl Session {
         }
     }
 
+    /// Completed commits since a cursor. Batch substeps never appear before their atomic commit.
+    /// A missing interval or truncated handle set requires a full reread.
+    pub fn events_since(&self, after: u64, session: Option<&str>) -> Value {
+        let history = &self.revision_history;
+        let oldest = history
+            .entries
+            .front()
+            .map_or(history.sequence + 1, |entry| entry.after.knowledge_revision);
+        let entries: Vec<_> = history
+            .entries
+            .iter()
+            .filter(|entry| entry.after.knowledge_revision > after)
+            .collect();
+        let resync = session.is_some_and(|id| id != history.session)
+            || after > history.sequence
+            || after.saturating_add(1) < oldest
+            || entries.iter().any(|entry| !entry.complete);
+        json!({"cursor":history.sequence,"session":history.session,"resync":resync,
+            "events":entries.iter().map(|entry| json!({
+                "cursor":entry.after.knowledge_revision,"operation":"commit","status":"completed",
+                "revision":entry.after,"added":entry.change.added,"changed":entry.change.changed,
+                "removed":entry.change.removed,"handle_map":entry.handle_map,
+            })).collect::<Vec<_>>()})
+    }
+
     /// All replacement identities from this edit, including retained and removed handles.
     pub fn handle_map(&self) -> BTreeMap<u64, Vec<u64>> {
         let mut map = self.handle_replacements.clone();

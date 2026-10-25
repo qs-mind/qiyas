@@ -144,6 +144,8 @@ impl Default for ProviderProfiles {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
+    /// Maximum concurrent Mizan turns; Claude Code still has one process at a time.
+    pub max_concurrent_turns: usize,
     pub provider: Provider,
     /// Empty uses the user-installed command on PATH; never downloaded by Qiyas.
     pub claude_executable: Option<String>,
@@ -251,6 +253,7 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            max_concurrent_turns: 3,
             provider: Provider::Anthropic,
             claude_executable: None,
             providers: ProviderProfiles::default(),
@@ -303,6 +306,10 @@ fn valid_token(token: &str) -> bool {
 
 /// Checks settings coming from the window before they are kept.
 pub fn validate(s: &Settings) -> Result<(), String> {
+    if !(1..=8).contains(&s.max_concurrent_turns) {
+        return Err("Mizan can run between 1 and 8 drawings at once".into());
+    }
+
     if let Some(base) = s
         .providers
         .openai_compatible

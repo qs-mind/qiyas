@@ -85,6 +85,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   /** Set when the next batch is a new drawing or sheet, so the view fits it once it is drawn. */
   const fitNext = useRef(false);
+  const restoredView = useRef<Bounds | null>(null);
+  function restoreView(bounds: Bounds) { restoredView.current = bounds; }
   /** Measurements to fit instead of the whole sheet, when a conflict's Show changed the sheet. */
   const fitIds = useRef<string[] | null>(null);
   /** The find match the next fit shows (Find next on another sheet). */
@@ -111,7 +113,10 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     fitMatch.current = null;
     const box =
       match !== null ? matchBounds(match, batch) : ids && unionBounds(items.filter((m) => ids.includes(m.id)), batch);
-    if (box) viewport.current?.fitTo(box);
+    const restored = restoredView.current;
+    restoredView.current = null;
+    if (restored) viewport.current?.fitTo(restored);
+    else if (box) viewport.current?.fitTo(box);
     else viewport.current?.fitExtents();
   }, [batch, fitTick]);
 
@@ -493,6 +498,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     saveView,
     deleteView,
     reset,
+    restoreView,
     clear,
   };
 }

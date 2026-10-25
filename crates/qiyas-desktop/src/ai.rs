@@ -35,6 +35,7 @@ pub struct AiRun {
     /// Cancels the running turn.
     cancel: Option<CancellationToken>,
     busy: bool,
+    rebuild: bool,
     /// Bumped by every new conversation. A turn started in an older one drops its agent and its
     /// events.
     generation: u64,
@@ -129,6 +130,18 @@ impl AiRun {
         self.agent = Some(agent.with_checkpoint(self.checkpoint.clone()));
     }
 
+    pub fn rebuild_provider(&mut self) {
+        self.rebuild = self.busy;
+        self.save_logged();
+        self.agent = None;
+    }
+    pub fn checkpoint_conversation(&self) -> Option<Conversation> {
+        self.checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub fn busy(&self) -> bool {
         self.busy
     }
@@ -213,7 +226,10 @@ impl AiRun {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
             self.save_logged();
             self.messages = agent.history().len();
-            self.agent = Some(agent);
+            if !self.rebuild {
+                self.agent = Some(agent);
+            }
+            self.rebuild = false;
         }
     }
 

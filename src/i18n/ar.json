@@ -1817,5 +1817,15 @@
   "ai.finding.annotation_overlap": "تعليقات الرسم متداخلة.",
   "ai.finding.annotation_over_grid": "تعليق يتقاطع مع خط محور.",
   "ai.finding.label_outside_room": "تسمية غرفة تقع خارجها.",
-  "ai.finding.object_tag_mismatch": "تسمية عنصر تختلف عن خصائصه."
+  "ai.finding.object_tag_mismatch": "تسمية عنصر تختلف عن خصائصه.",
+  "workspace.provider": "ميزان لهذا المخطط",
+  "workspace.queued": "بانتظار انتهاء عمل ميزان في مخطط آخر…",
+  "workspace.working": "ميزان يعمل…",
+  "workspace.waiting": "بانتظارك",
+  "workspace.done": "انتهى ميزان",
+  "workspace.failed": "توقف ميزان بسبب خطأ",
+  "workspace.away": "أثناء غيابك:",
+  "workspace.closeBusy": "ميزان يعمل على هذا المخطط. هل تريد إيقافه وإغلاق المخطط؟",
+  "workspace.limit": "عدد المخططات التي يعمل عليها ميزان معًا",
+  "workspace.memory": "الذاكرة منخفضة. سيبدأ ميزان العمل على مخطط واحد في كل مرة."
 }

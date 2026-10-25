@@ -78,13 +78,11 @@ pub async fn chatgpt_account() -> Result<AccountStatus, String> {
 
 #[tauri::command]
 pub async fn chatgpt_models<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Vec<PlanModel>, String> {
     let models = plan_provider().models().await.map_err(|e| e.for_window())?;
-    if remember_plan_model(&state.settings, &state.config_dir, &models)? {
-        crate::commands::new_conversation(&app, &state);
-    }
+    remember_plan_model(&state.settings, &state.config_dir, &models)?;
     Ok(models)
 }
 
@@ -155,6 +153,12 @@ pub async fn ensure_plan_model(state: &AppState, draft: &mut Settings) -> Result
         .providers
         .chatgpt_plan
         .clone();
+    state
+        .provider
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .providers
+        .chatgpt_plan = draft.providers.chatgpt_plan.clone();
     Ok(())
 }
 
@@ -178,14 +182,12 @@ fn begin_sign_in() -> CancellationToken {
 fn stop<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     cancel_chatgpt_sign_in();
     chatgpt_plan::stop_requests();
-    if state
-        .settings
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .provider
-        == crate::settings::Provider::ChatgptPlan
-    {
-        crate::commands::new_conversation(app, state);
+    for workspace in state.conversations() {
+        if crate::state::lock(&workspace.provider).provider == settings::Provider::ChatgptPlan {
+            if let Ok(bound) = state.scoped(Some(workspace.id)) {
+                crate::commands::new_conversation(app, &bound);
+            }
+        }
     }
 }
 

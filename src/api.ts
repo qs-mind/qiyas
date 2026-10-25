@@ -1,5 +1,5 @@
 /** Thin wrappers over the Tauri commands of qiyas-desktop (crates/qiyas-desktop/src/commands.rs). */
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, setWorkspace, retainWorkspaces } from "./workspaceIpc";
 
 export type Sheet = { name: string; block: string; is_model: boolean };
 
@@ -376,34 +376,38 @@ export type Schedule = {
 export type BlockCount = { block_name: string; layer: string; count: number; attributes: string[] };
 
 /** Opens the drawing in a new tab, or shows its tab when it is open already. */
-export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path });
+export const openDrawing = (path: string) => invoke<DrawingInfo>("open_drawing", { path }).then(async info => { await tabs(); return info; });
 
 /** A new drawing's units: metres, centimetres or millimetres (INSUNITS 6, 5, 4). */
 export type NewUnits = "m" | "cm" | "mm";
 
 /** A new, empty drawing in a new tab, untitled until its first Save As; its info. The assistant
  *  starts a new conversation. */
-export const newDrawing = (units: NewUnits) => invoke<DrawingInfo>("new_drawing", { units });
+export const newDrawing = (units: NewUnits) => invoke<DrawingInfo>("new_drawing", { units }).then(async info => { await tabs(); return info; });
 
 /** One file tab (`qiyas_desktop::tabs::TabInfo`). */
-export type TabInfo = { id: number; path: string; title: string; dirty: boolean; untitled?: boolean };
+export type TabInfo = { id: number; path: string; title: string; dirty: boolean; untitled?: boolean; busy?: boolean; status?: string; away?: string | null };
 
 /** Every open drawing's tab, in order, and the one on screen (null when none is open). */
 export type Tabs = { tabs: TabInfo[]; active: number | null };
 
-export const tabs = () => invoke<Tabs>("tabs");
+export const tabs = async () => {
+  const result = await invoke<Tabs>("tabs");
+  if (result) { setWorkspace(result.active); retainWorkspaces(result.tabs.map(tab => tab.id)); }
+  return result;
+};
 
 /** Shows the drawing of tab `id`; its info. The assistant starts a new conversation, unless
  *  `keepConversation` (Mizan asked to close it, and it is shown first). */
 export const activateTab = (id: number, keepConversation = false) =>
-  invoke<DrawingInfo>("activate_tab", { id, keepConversation });
+  invoke<DrawingInfo>("activate_tab", { id, keepConversation }).then(info => { setWorkspace(id); return info; });
 
 /** What `closeTab` refuses with for a drawing with unsaved changes, without `force`. */
 export const UNSAVED = "unsaved";
 
 /** Closes tab `id`; the tabs left. `keepConversation` as for `activateTab`. */
 export const closeTab = (id: number, force = false, keepConversation = false) =>
-  invoke<Tabs>("close_tab", { id, force, keepConversation });
+  invoke<Tabs>("close_tab", { id, force, keepConversation }).then(result => { setWorkspace(result.active); retainWorkspaces(result.tabs.map(tab => tab.id)); return result; });
 
 /** A drawing opened or saved lately. */
 export type Recent = { path: string; name: string; folder: string; missing: boolean };
@@ -422,7 +426,7 @@ export type NamedView = { name: string; bounds: [[number, number], [number, numb
 
 export const views = () => invoke<NamedView[]>("views");
 
-export const drawingInfo = () => invoke<DrawingInfo>("drawing_info");
+export const drawingInfo = (workspace?: number | null) => invoke<DrawingInfo>("drawing_info", workspace == null ? undefined : { workspace });
 
 export const setSheet = (block: string) => invoke<void>("set_sheet", { block });
 
@@ -1321,10 +1325,10 @@ export const totals = () => invoke<Total[]>("totals");
 export const saveProject = () => invoke<string>("save_project");
 
 /** Saves the drawing over its own file with the measurements embedded, and its project file. */
-export const saveDrawing = () => invoke<void>("save_drawing");
+export const saveDrawing = (workspace?: number | null) => invoke<void>("save_drawing", workspace == null ? undefined : { workspace });
 
 /** Saves the drawing to `path` (.dwg or .dxf); from then on the open drawing is that file. */
-export const saveDrawingAs = (path: string) => invoke<void>("save_drawing_as", { path });
+export const saveDrawingAs = (path: string, workspace?: number | null) => invoke<void>("save_drawing_as", { path, ...(workspace == null ? {} : { workspace }) });
 
 /** Writes the take-off and its totals to an Excel workbook at `path`. */
 export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });
@@ -1391,6 +1395,7 @@ export type Settings = {
   tool_palette?: PaletteItem[];
   /** Minutes between autosaves of drawings with unsaved changes; 0 off (5 when left out). */
   autosave_minutes?: number;
+  max_concurrent_turns?: number;
   /** Decimals of values shown where no drawing is open (2 to 4, 3); a drawing's own drafting
    *  precision wins while it is open. */
   display_precision?: number;
@@ -1461,7 +1466,7 @@ export const recoverableDrawings = (paths: string[]) =>
   invoke<Recoverable[]>("recoverable_drawings", { paths });
 
 /** Opens the autosave of the drawing `path` in a new tab, as a new unsaved drawing beside it. */
-export const recoverAutosave = (path: string) => invoke<DrawingInfo>("recover_autosave", { path });
+export const recoverAutosave = (path: string) => invoke<DrawingInfo>("recover_autosave", { path }).then(async info => { await tabs(); return info; });
 
 /** Deletes the autosave of the drawing `path`. */
 export const discardAutosave = (path: string) => invoke<void>("discard_autosave", { path });
@@ -1803,8 +1808,8 @@ export type AiImage = { media_type: string; data: string };
 
 /** Starts a turn and returns at once; events follow as `ai:event`, then `ai:done`. Rejects with
  *  "busy", "no_api_key" or "no_base_url". */
-export const aiSend = (text: string, context?: AiContext, images?: AiImage[], pointed?: string[]) =>
-  invoke<void>("ai_send", { text, context: context ?? null, images: images ?? null, pointed: pointed ?? null });
+export const aiSend = (text: string, context?: AiContext, images?: AiImage[], pointed?: string[], workspace?: number | null) =>
+  invoke<void>("ai_send", { ...(workspace == null ? {} : {workspace}), text, context: context ?? null, images: images ?? null, pointed: pointed ?? null });
 
 export type TranscriptEntry =
   | { type: "user"; text: string; pointed: string[]; images: string[] }
@@ -1822,8 +1827,8 @@ export type ConversationSummary = {
 
 export const aiConversations = (drawing?: string) =>
   invoke<ConversationSummary[]>("ai_conversations", { drawing: drawing ?? null });
-export const aiResume = (id: string) =>
-  invoke<{ transcript: TranscriptEntry[]; drawing: string | null }>("ai_resume", { id });
+export const aiResume = (id: string, workspace?: number | null) =>
+  invoke<{ transcript: TranscriptEntry[]; drawing: string | null }>("ai_resume", { id, ...(workspace == null ? {} : {workspace}) });
 export const aiDeleteConversation = (id: string) => invoke<void>("ai_delete_conversation", { id });
 export const aiDeleteConversations = () => invoke<void>("ai_delete_conversations");
 
@@ -1838,19 +1843,20 @@ export const AI_SELECT = "ai:select";
 
 /** The window's answer to the core's question `id` (`ai:capture`, `ai:pointed`), or why it has
  *  none. */
-export const aiWindowReply = (id: number, answer: { value: unknown } | { error: string }) =>
+export const aiWindowReply = (id: number, answer: { value: unknown } | { error: string }, workspace?: number) =>
   invoke<void>("ai_window_reply", {
+    ...(workspace === undefined ? {} : { workspace }),
     id,
     value: "value" in answer ? answer.value : null,
     error: "error" in answer ? answer.error : null,
   });
 
-export const aiCancel = () => invoke<void>("ai_cancel");
+export const aiCancel = (workspace?: number) => invoke<void>("ai_cancel", workspace === undefined ? undefined : { workspace });
 
 /** Starts a new conversation; `ai:cleared` follows. */
-export const aiClear = () => invoke<void>("ai_clear");
+export const aiClear = (workspace?: number | null) => invoke<void>("ai_clear", workspace == null ? undefined : {workspace});
 
-export const aiStatus = () => invoke<AiStatus>("ai_status");
+export const aiStatus = (workspace?: number | null) => invoke<AiStatus>("ai_status", workspace == null ? undefined : {workspace});
 
 /** One model a provider offers: its id, as the API takes it, and a name to show. */
 export type ModelInfo = { id: string; label: string };
@@ -1873,7 +1879,7 @@ export const aiLog = () => invoke<AiLog>("ai_log");
 export const aiUndo = () => invoke<boolean>("ai_undo");
 
 /** The assistant answers in this language; a change starts a new conversation. */
-export const aiSetLanguage = (lang: "en" | "ar") => invoke<void>("ai_set_language", { lang });
+export const aiSetLanguage = (lang: "en" | "ar", workspace?: number | null) => invoke<void>("ai_set_language", { lang, ...(workspace == null ? {} : {workspace}) });
 
 /** The clipboard's text for a paste into a text field, or null (`files::clipboard_read_text`). */
 export const clipboardReadText = () => invoke<string | null>("clipboard_read_text");
@@ -1962,3 +1968,15 @@ export type PlanModel = ModelInfo & { reasoning_efforts?: string[] };
 export const chatgptModels = () => invoke<PlanModel[]>("chatgpt_models");
 export const cancelChatgptSignIn = () => invoke<void>("cancel_chatgpt_sign_in");
 export const subscriptionLink = (link: "claude_install" | "chatgpt_limits") => invoke<void>("subscription_link", { link });
+
+export type WorkspaceChoice = { provider: Provider; model: string; effort: string | null; base_url?: string | null };
+export type WorkspaceSnapshot = {
+  workspace: number; cursor: number; transcript: TranscriptEntry[];
+  status: string; error: string | null; away: string | null;
+  choice: WorkspaceChoice; memory_limited: boolean; context?: AiContext;
+};
+export type WorkspaceEvent = { workspace: number; cursor: number; event: AgentEvent | { type: "queued"; text: string; pointed: string[]; memory_limited?: boolean } | { type: "working" } | { type: "end"; status: string; error: string | null } | { type: "clear" } };
+export const workspaceAttach = (workspace?: number | null) => invoke<WorkspaceSnapshot>("workspace_attach", { workspace });
+export const workspaceProvider = (choice: WorkspaceChoice, workspace?: number | null) => invoke<void>("workspace_provider", { ...choice, workspace });
+
+export const workspaceViewState = (workspace: number, context: AiContext) => invoke<void>("workspace_view_state", { workspace, context });

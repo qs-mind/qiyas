@@ -1,3 +1,4 @@
+import { displayedWorkspace } from "../workspaceIpc";
 import { extractAll } from "./extractRows";
 import { uiError, userError } from "../i18n/errors";
 /** Drawings as files: the open drawings' tabs, the project autosave switch, and opening, showing,
@@ -8,6 +9,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, message as messageDialog, open, save } from "../fileDialogs";
 import {
   activateTab,
+  aiCancel,
+  workspaceAttach,
+  workspaceViewState,
   autosaveDrawings,
   closeTab,
   discardAutosave,
@@ -49,6 +53,7 @@ import {
   type ReadReport,
   type ScriptResult,
   type TabInfo,
+  type WorkspaceEvent,
 } from "../api";
 import { useLanguage } from "../i18n";
 import { cycleTab } from "../shell/FileTabs";
@@ -80,6 +85,15 @@ export function useFileTabs() {
     }
   }
 
+  useEffect(() => {
+    let gone = false;
+    let off: (() => void) | undefined;
+    void listen<WorkspaceEvent>("workspace:event", ({payload}) => {
+      if (["queued", "working", "end", "clear", "awaiting_approval", "tool_result"].includes(payload.event.type)) void refreshTabs();
+    }).then(unlisten => { if (gone) unlisten(); else off = unlisten; });
+    void refreshTabs();
+    return () => { gone = true; off?.(); };
+  }, []);
   return { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs };
 }
 
@@ -119,11 +133,13 @@ type Deps = Pick<Shell, "run" | "setError" | "setNotice" | "settingsOpen"> &
     autosave(): Promise<void>;
     setDraftingState(drafting: Drafting | null): void;
     /** What `resetDrawingView` and `showNoDrawing` forget, per hook. */
-    sheets: Pick<Sheets, "reset" | "clear">;
+    sheets: Pick<Sheets, "reset" | "clear"> & Partial<Pick<Sheets, "restoreView">>;
     takeoffState: Pick<TakeoffState, "reset" | "clear">;
     attach: Pick<Attach, "reset">;
     /** The tool in use: another drawing cancels it. */
-    measure: { cancel(): void };
+    measure: { cancel(): void; picks?: number[]; select?(handles: number[]): void };
+    viewport?: Shell["viewport"];
+    shownWorkspace?: RefObject<number | null>;
   };
 
 /** Opening, showing, switching and closing drawings (one at a time, in the order asked), saving
@@ -155,8 +171,12 @@ export function useDrawings({
   preset,
   lastPoint,
   measure,
+  viewport,
+  shownWorkspace: sharedShownWorkspace,
 }: Deps) {
   /** Autosaves to offer back (on launch, or before opening `then`), one question at a time. */
+  const localShownWorkspace = useRef<number | null>(null);
+  const shownWorkspace = sharedShownWorkspace ?? localShownWorkspace;
   const [recoveries, setRecoveries] = useState<RecoveryAsk[]>([]);
   /** The app's language: the recovery notice writes its time in it. */
   const { lang } = useLanguage();
@@ -196,6 +216,7 @@ export function useDrawings({
    *  has unsaved changes, and saves when told to. False when the user cancels. */
   async function leaveOpenDrawing(): Promise<boolean> {
     if (!info) return true;
+    const workspace = displayedWorkspace();
     let saveTo: string | null = null;
     const labels = { yes: t("unsaved.yes"), no: t("unsaved.no"), cancel: t("unsaved.cancel") };
     return leaveDrawing({
@@ -211,25 +232,27 @@ export function useDrawings({
         );
         // Don't Save: its autosave goes too (the window closing, or the tab). The drawing on
         // screen now: closing the window shows each drawing before asking.
-        if (choice === "discard") await discardAutosave((await drawingInfo()).path).catch(() => {});
+        if (choice === "discard") await discardAutosave((await drawingInfo(workspace)).path).catch(() => {});
         return choice;
       },
       // The drawing on screen now: closing the window shows each drawing before asking. A new
       // drawing has no file yet: it asks where to save it, and cancelling that keeps it open.
       confirmSave: async () => {
-        const now = await drawingInfo();
+        const now = await drawingInfo(workspace);
         if (!now.untitled) return confirmRecoveredSave(now);
         saveTo = await askSavePath(now);
         return saveTo !== null;
       },
-      save: () => (saveTo ? saveDrawingAs(saveTo) : saveDrawing()),
+      save: () => (saveTo ? saveDrawingAs(saveTo, workspace) : saveDrawing(workspace)),
     });
   }
   /** Before the window closes: asks about each open drawing with unsaved changes in turn, showing
    *  it first. False when the user cancels one. */
   async function leaveAllDrawings(): Promise<boolean> {
     const { tabs: open } = await readTabs();
-    for (const tab of open.filter((f) => f.dirty)) {
+    for (const tab of open) if (!(await stopForClose(tab))) return false;
+    const settled = await readTabs();
+    for (const tab of settled.tabs.filter((f) => f.dirty)) {
       if (!(await switchTab(tab.id))) return false;
       if (!(await leaveOpenDrawing())) return false;
     }
@@ -268,6 +291,16 @@ export function useDrawings({
       const found = atLaunch(await recoverableDrawings(paths));
       if (found.length > 0) setRecoveries((q) => enqueue(q, found, null, true));
     })().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let gone = false;
+    void readTabs().then(async now => {
+      if (gone || now?.active == null) return;
+      const next = await drawingInfo();
+      if (!gone) await showDrawing(next, beginShow());
+    }).catch(() => {});
+    return () => { gone = true; };
   }, []);
 
   // Autosave: every few minutes (settings, 5 by default, 0 off) the drawings with unsaved changes
@@ -318,21 +351,31 @@ export function useDrawings({
    *  keeps it: its sheet, hidden layers, take-off, BOQ and conflicts. `gen` is `beginShow`'s; a
    *  later drawing change stops it at the next step. */
   async function showDrawing(next: DrawingInfo, gen: number) {
+    shownWorkspace.current = null;
     resetDrawingView();
     setArabicReversed(next.arabic_reversed);
     setInfo(next);
     setSheetBlock(next.sheet);
     setHidden(new Set(next.hidden_layers));
+    const current = await readTabs();
+    if (current?.active != null) {
+      const saved = await workspaceAttach(current.active).catch(() => null);
+      if (isStale(gen, switchGen.current)) return;
+      if (saved?.context?.view) sheets.restoreView?.(saved.context.view);
+      if (saved?.context?.selection) measure.select?.(saved.context.selection.map(item => item.handle));
+    }
     const drafting = await getDrafting();
     if (isStale(gen, switchGen.current)) return;
     setDraftingState(drafting);
     await refreshTakeoffAndBoq();
     if (isStale(gen, switchGen.current)) return;
     await redraw(true);
+    if (!isStale(gen, switchGen.current)) shownWorkspace.current = current?.active ?? null;
   }
 
   /** After the last tab closed: an empty window. */
   function showNoDrawing() {
+    shownWorkspace.current = null;
     beginShow();
     resetDrawingView();
     sheets.clear();
@@ -346,7 +389,16 @@ export function useDrawings({
   async function drawingChange<T>(job: () => Promise<T>): Promise<T> {
     switching.current += 1;
     try {
-      return await inTurn(job);
+      return await inTurn(async () => {
+        if (viewport?.current && infoRef.current) {
+          const outgoing = shownWorkspace.current;
+          if (outgoing != null) await workspaceViewState(outgoing, {
+            selection: (measure.picks ?? []).map(handle => ({ handle, chain: [] })),
+            region: null, view: viewport.current.visible(), picture: false,
+          }).catch(() => {});
+        }
+        return job();
+      });
     } finally {
       switching.current -= 1;
     }
@@ -410,7 +462,7 @@ export function useDrawings({
 
   // Mizan (or an MCP client) chose the drawing on screen, or asked the window to save or close
   // one where the user decides: the listeners are set once and call the latest code through this.
-  const fromMizan = useRef({ shown: async () => {}, save: async () => {}, close: async (_id: number) => {} });
+  const fromMizan = useRef({ shown: async () => {}, save: async (_id: number) => {}, close: async (_id: number) => {} });
   fromMizan.current = {
     shown: () =>
       drawingChange(() =>
@@ -422,7 +474,12 @@ export function useDrawings({
           else await showDrawing(await drawingInfo(), beginShow());
         }),
       ),
-    save: saveFile,
+    save: async (id) => {
+      if (!(await switchTab(id))) return;
+      const drawing = await drawingInfo(id);
+      if (drawing.untitled) await saveAs(drawing, id);
+      else if (await confirmRecoveredSave(drawing)) await saveWith(() => saveDrawing(id), id);
+    },
     close: (id) => closeFileTab(id, true),
   };
   useEffect(() => {
@@ -430,7 +487,7 @@ export function useDrawings({
     const offs: (() => void)[] = [];
     const keep = (unlisten: () => void) => (gone ? unlisten() : offs.push(unlisten));
     listen(DRAWING_SHOWN, () => fromMizan.current.shown()).then(keep, () => {});
-    listen(DRAWING_SAVE, () => fromMizan.current.save()).then(keep, () => {});
+    listen<number>(DRAWING_SAVE, (e) => fromMizan.current.save(e.payload)).then(keep, () => {});
     listen<number>(DRAWING_CLOSE, (e) => fromMizan.current.close(e.payload)).then(keep, () => {});
     return () => {
       gone = true;
@@ -607,11 +664,25 @@ export function useDrawings({
   /** Closes tab `id` (the one on screen when null). A drawing with unsaved changes is shown first
    *  and asks "Save changes to the drawing?"; Cancel keeps it open. `keepConversation`: Mizan
    *  asked to close it, its conversation goes on. */
-  const closeFileTab = (id: number | null, keepConversation = false) =>
-    drawingChange(async () => {
-      const now = await readTabs().catch(() => null);
-      const tab = now?.tabs.find((f) => f.id === (id ?? now.active));
-      if (!now || !tab) return;
+  async function stopForClose(tab: TabInfo): Promise<boolean> {
+    if (!tab.busy) return true;
+    if (!(await ask(t("workspace.closeBusy"), { title: t("appName"), kind: "warning" }))) return false;
+    await aiCancel(tab.id);
+    // Waiting for a committing tool does not occupy the tab-switch queue.
+    while ((await readTabs()).tabs.find(item => item.id === tab.id)?.busy) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return true;
+  }
+
+  async function closeFileTab(id: number | null, keepConversation = false) {
+    const requested = await readTabs().catch(() => null);
+    const target = requested?.tabs.find(tab => tab.id === (id ?? requested.active));
+    if (!target || !(await stopForClose(target))) return;
+    await drawingChange(async () => {
+      const now = await readTabs();
+      const tab = now.tabs.find(tab => tab.id === target.id);
+      if (!tab) return;
       try {
         if (tab.dirty && (!(await activate(tab.id, keepConversation)) || !(await leaveOpenDrawing()))) return;
       } catch (e) {
@@ -619,7 +690,6 @@ export function useDrawings({
         return;
       }
       await run(async () => {
-        // On screen before the close: shown above when it had unsaved changes.
         const shown = tab.dirty ? tab.id : now.active;
         const left = await closeTab(tab.id, tab.dirty, keepConversation);
         setFileTabs(left.tabs);
@@ -632,9 +702,10 @@ export function useDrawings({
         }
       });
     });
+  }
 
   /** Writes the drawing with `write`, then shows its new layers and entities. */
-  async function saveWith(write: () => Promise<void>): Promise<boolean> {
+  async function saveWith(write: () => Promise<void>, workspace = displayedWorkspace()): Promise<boolean> {
     const gen = switchGen.current;
     let saved = false;
     await run(async () => {
@@ -645,12 +716,12 @@ export function useDrawings({
         });
       } finally {
         // Even a failed save may have written the drawing and moved to its new path.
-        next = await drawingInfo().catch(() => null);
-        if (next && !isStale(gen, switchGen.current)) setInfo(next);
+        next = await drawingInfo(workspace).catch(() => null);
+        if (next && workspace === displayedWorkspace() && !isStale(gen, switchGen.current)) setInfo(next);
       }
       // The save wrote the project file too: autosave can try again.
       autosaveOff.current = false;
-      await redraw();
+      if (workspace === displayedWorkspace()) await redraw();
       setNotice(t("save.done", { path: next?.path ?? "" }));
       saved = true;
     });
@@ -671,12 +742,13 @@ export function useDrawings({
    *  so it asks where (Save As). */
   async function saveFile() {
     if (!info) return;
+    const workspace = displayedWorkspace();
     if (info.untitled) {
-      await saveAs(info);
+      await saveAs(info, workspace);
       return;
     }
     if (!(await confirmRecoveredSave(info))) return;
-    await saveWith(saveDrawing);
+    await saveWith(() => saveDrawing(workspace), workspace);
   }
 
   /** Shows the xrefs as the core now has them (their layers, problems and drawing) and saves the
@@ -700,10 +772,10 @@ export function useDrawings({
   }
 
   /** Save As for `of`, the drawing on screen (given, as one just recovered is not in `info` yet). */
-  async function saveAs(of: DrawingInfo): Promise<string | null> {
+  async function saveAs(of: DrawingInfo, workspace = displayedWorkspace()): Promise<string | null> {
     const path = await askSavePath(of);
     if (!path) return null;
-    return (await saveWith(() => saveDrawingAs(path))) ? path : null;
+    return (await saveWith(() => saveDrawingAs(path, workspace), workspace)) ? path : null;
   }
 
   /** Keeps the offered name; the shared picker chooses a folder for untitled drawings. */

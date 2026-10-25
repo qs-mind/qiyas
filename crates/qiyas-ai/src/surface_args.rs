@@ -47,6 +47,13 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "events") => (
+            object(
+                json!({"after":{"type":"integer","minimum":0},"session":{"type":"string"}}),
+                &[],
+            ),
+            json!({"after":0}),
+        ),
         (READ, "explain") => (
             object(json!({"item":string,"project":string}), &["item"]),
             json!({"item":"generated:A"}),

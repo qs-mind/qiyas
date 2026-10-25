@@ -3666,3 +3666,13 @@ code, kbd, .chip { unicode-bidi: isolate; }
   font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
 }
 .md h4 { font-feature-settings: "swsh"; }
+
+.workspace-status { margin-inline-start: 0.4rem; color: var(--muted); font-size: 0.65rem; }
+.workspace-status.working, .workspace-status.queued { color: var(--accent); }
+.workspace-status.failed { color: var(--danger); }
+.workspace-picker { padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--border); }
+.workspace-picker summary { cursor: pointer; }
+.workspace-picker fieldset { border: 0; padding: 0.5rem 0; display: grid; gap: 0.4rem; }
+.workspace-picker label { display: flex; justify-content: space-between; gap: 0.5rem; }
+
+.workspace-caption { color: var(--muted); font-size: 0.8em; margin-inline-start: 0.5em; }

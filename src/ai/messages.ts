@@ -58,6 +58,7 @@ export type Action =
   | { type: "undone"; id: string }
   | { type: "undo_stale"; id: string }
   | { type: "restore"; entries: TranscriptEntry[] }
+  | { type: "reattach"; entries: TranscriptEntry[] }
   | { type: "clear" };
 
 export const EMPTY: Transcript = { items: [] };
@@ -184,6 +185,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
       return EMPTY;
     case "restore":
       return replay(action.entries);
+    case "reattach":
+      return action.entries.reduce((state, entry) => reduce(state, entry.type === "event" ? entry.event : entry), EMPTY);
   }
 }
 
