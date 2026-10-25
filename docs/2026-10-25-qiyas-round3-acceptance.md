@@ -99,7 +99,9 @@ Found in this run:
   the workbook test for R9 (it iterates the printed lines), the agent-eval test for R7 (it
   counts call lines, not the new `done` lines).
 - Release guards: pick index, fills, solver, walls, villa openings and the clinic replay all
-  pass. The clinic replay reports three recorded input-shape refusals (calls 24, 52 and 70)
+  pass locally (the clinic guard at 4.5× the CPU reference). On the GitHub runner the same
+  replay measured 6.19× against a 6× limit, so the limit is 8× until P5/P6 lands; the gate
+  that matters is the one in the goal (2×), and it is not met yet. The clinic replay reports three recorded input-shape refusals (calls 24, 52 and 70)
   that Goal A's normalisation now accepts; the replay notes them instead of failing.
 - `pnpm typecheck`: clean. `pnpm test`: 938 of 939 passed; the one failure was a
   `waitFor` timeout in `XrefManager.test.tsx` under the 127-worker start-up, and the three
