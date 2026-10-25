@@ -543,7 +543,12 @@ mod tests {
             binding: None,
         };
         let made = host.new_drawing("m").unwrap();
-        let documents = app.path().document_dir().unwrap();
+        // A runner without user folders (CI) gets the app's fallback, home/Documents.
+        let documents = app
+            .path()
+            .document_dir()
+            .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))
+            .unwrap();
         assert_eq!(
             made["drawing"]["export_folder"],
             documents.display().to_string()
