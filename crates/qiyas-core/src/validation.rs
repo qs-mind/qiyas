@@ -160,6 +160,9 @@ fn batch_context_notes(report: &mut ValidationReport) {
 impl Session {
     /// The same dry input check with the current drawing's sizes and annotation scale.
     pub fn validate_input(&self, input: &Value) -> ValidationReport {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("validation.validate_input");
+        let _read = self.evaluation_read().ok();
         let mut canonical = input.clone();
         crate::registry::canonicalize(&mut canonical);
         let mut report = validate_command(input, Some(self.drawing.units));
@@ -233,6 +236,8 @@ impl Session {
     }
 
     fn resolve_input_defaults(&self, input: &Value, prefix: &str, defaults: &mut Vec<DefaultUsed>) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("validation.resolve_input_defaults");
         resolve_defaults(
             input,
             prefix,

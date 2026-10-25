@@ -229,8 +229,8 @@ impl Session {
                                 .ok_or_else(|| invalid("The host has no band faces"))?;
                             band.geometry
                                 .regions
-                                .into_iter()
-                                .flat_map(|r| std::iter::once(r.outer).chain(r.holes))
+                                .iter()
+                                .flat_map(|r| std::iter::once(&r.outer).chain(&r.holes))
                                 .flat_map(|ring| {
                                     let mut lines = Vec::new();
                                     for i in 0..ring.len() {

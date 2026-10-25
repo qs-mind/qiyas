@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use opencadcodec::Handle;
-use qiyas_param::expr::{Expr, Resolver, Value as EValue};
+use qiyas_param::expr::{Resolver, Value as EValue};
 
 use super::*;
 use crate::objects::{ObjectFilter, ObjectRecord};
@@ -36,8 +36,10 @@ impl Resolver for Context<'_> {
 }
 impl Context<'_> {
     fn value(&self, expression: &str) -> Result<EValue, CoreError> {
-        Expr::parse(expression)
-            .and_then(|e| e.eval_with(self))
+        self.session
+            .evaluation_expression(expression)
+            .map_err(|e| invalid(format!("Measurement expression {expression}: {e}")))?
+            .eval_with(self)
             .map_err(|e| invalid(format!("Measurement expression {expression}: {e}")))
     }
     fn number(&self, expression: &str) -> Result<f64, CoreError> {
@@ -198,6 +200,9 @@ fn template(template: &str, context: &Context<'_>) -> Result<String, CoreError> 
 }
 
 pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
+    #[cfg(any(test, feature = "fixtures"))]
+    let _profile = crate::fixtures::profile::span("measurement.evaluate.derive");
+    let _read = s.evaluation_read()?;
     let selection = s.measurement_selection()?;
     let mut report = MeasurementReport {
         selection: selection.clone(),

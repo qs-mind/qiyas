@@ -509,6 +509,8 @@ impl Session {
         Ok(json!({"changed":true}))
     }
     pub(crate) fn refresh_measurement(&mut self) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("measurement.refresh_measurement");
         if knowledge::get(&self.drawing.doc, Kind::Measurement, "selection")?.is_none() {
             return Ok(());
         }

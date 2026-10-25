@@ -26,5 +26,7 @@ cargo test -p qiyas-param --release --test solver_speed
 cargo test -p qiyas-geom --release walls_speed
 # Release-only end-to-end wall-opening guard against the fixed CPU reference.
 cargo test -p qiyas-ai --release --test villa_openings villa_speed -- --ignored --nocapture
+# Release-only full clinic guard, including labels, fields, schedules and failed batches.
+cargo test -p qiyas-ai --release --test clinic_performance clinic_speed -- --ignored --nocapture
 pnpm typecheck
 pnpm test

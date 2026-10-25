@@ -295,6 +295,8 @@ impl Session {
         &self,
         query: &RoomsQuery,
     ) -> Result<Vec<RoomLabelDefault>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("rooms.room_label_defaults");
         let (rooms, _) = self.find_rooms(query)?;
         Ok(rooms
             .iter()
@@ -323,6 +325,8 @@ impl Session {
         language: Option<LabelLanguage>,
         source: Source,
     ) -> Result<Outcome, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("rooms.label_spaces");
         let decimals = decimals.unwrap_or(2);
         if decimals > 6 {
             return Err(invalid("decimals is 0 to 6"));
@@ -502,6 +506,9 @@ impl Session {
 
     /// The spaces round the seeds, and the seeds that found none.
     fn find_rooms(&self, q: &RoomsQuery) -> Result<(Vec<Room>, Vec<SkippedRoom>), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("rooms.find_rooms");
+        let _read = self.evaluation_read()?;
         let (seeds, mut skipped) = self.room_seeds(q)?;
         if seeds.is_empty() {
             let mut candidates = std::collections::BTreeMap::<String, usize>::new();

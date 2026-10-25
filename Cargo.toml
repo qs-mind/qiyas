@@ -39,11 +39,19 @@ unicode-bidi = "0.3"
 
 # Dependencies (the DWG reader above all) and the two hot crates that flatten and batch the
 # drawing are optimised in dev builds too, so `pnpm tauri dev` draws big drawings in about a second
-# instead of 20 s. The other Qiyas crates stay debug.
+# instead of 20 s. Quantity evaluation and expressions use the same optimisation level.
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.dev.package.qiyas-geom]
+opt-level = 3
+
+# Quantity expressions and dependency evaluation are on the interactive edit path.
+# Debug assertions remain enabled; no floating-point semantics are relaxed.
+[profile.dev.package.qiyas-core]
+opt-level = 3
+
+[profile.dev.package.qiyas-param]
 opt-level = 3
 
 [profile.dev.package.qiyas-render]

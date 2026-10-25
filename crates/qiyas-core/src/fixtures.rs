@@ -282,3 +282,6 @@ pub(crate) fn panic_after_document_edit() {
         None => {}
     }
 }
+
+/// Nested timers enabled explicitly by offline performance fixtures.
+pub mod profile;

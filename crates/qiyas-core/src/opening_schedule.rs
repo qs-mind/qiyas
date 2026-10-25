@@ -185,6 +185,8 @@ impl Session {
 
     /// Only old mark metadata needs a compatibility projection; table rendering is shared.
     pub(crate) fn refresh_opening_schedules(&mut self) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("opening_schedule.refresh_opening_schedules");
         if !self.drawing.doc.app_ids.contains(SCHEDULE_APP) {
             return Ok(());
         }

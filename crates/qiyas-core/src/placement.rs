@@ -59,6 +59,8 @@ impl Session {
         mm * 0.001 * scale / to_m
     }
     pub fn free_space(&self, q: &SpaceQuery) -> Result<SpaceReport, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("placement.free_space");
         let sheet = self.sheet_block(q.sheet.as_deref());
         if !self.drawing.doc.block_records.contains(&sheet) {
             return Err(invalid("The drawing has no such sheet"));
@@ -294,7 +296,9 @@ impl Session {
             .ok_or_else(|| invalid("Placed annotation has no visible geometry"))?;
             let mut findings = Vec::new();
             let (to_m, scale) = self.check_space(&self.sheet);
-            self.check_layout_ink(&ink, &self.sheet, to_m, scale, &mut |f| findings.push(f));
+            self.check_layout_ink(&ink, &self.sheet, to_m, scale, &|_| true, &mut |f| {
+                findings.push(f)
+            });
             let mut collisions: Vec<_> = findings
                 .into_iter()
                 .filter(|f| f.rule != "text_height_vs_scale" && f.handles.contains(&handle.value()))
@@ -350,6 +354,8 @@ impl Session {
         boundary: &crate::Boundary,
         near: [f64; 2],
     ) -> Result<([f64; 2], bool), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("placement.fit_room_label");
         let crate::Boundary::Ring {
             ring,
             holes,

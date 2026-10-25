@@ -2,7 +2,10 @@
 use crate::Session;
 use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{Paint, Xform};
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 pub(crate) type Bounds = [[f64; 2]; 2];
 #[derive(Clone)]
@@ -27,6 +30,28 @@ pub(crate) struct SheetInk {
     large: Vec<usize>,
     cell: f64,
 }
+/// Individual primitive shapes survive unrelated edits. References use the normal path,
+/// since their dependencies include block and external drawing contents.
+#[derive(Default)]
+pub(crate) struct InkCache {
+    context: String,
+    entities: BTreeMap<u64, CachedInk>,
+}
+type CachedInk = (Arc<EntityType>, Vec<Ink>, Vec<u64>);
+fn cacheable(entity: &EntityType) -> bool {
+    matches!(
+        entity,
+        EntityType::Line(_)
+            | EntityType::Arc(_)
+            | EntityType::Circle(_)
+            | EntityType::Ellipse(_)
+            | EntityType::LwPolyline(_)
+            | EntityType::Polyline2D(_)
+            | EntityType::Spline(_)
+            | EntityType::Text(_)
+            | EntityType::MText(_)
+    )
+}
 impl Session {
     pub(crate) fn layout_ring(&self, points: &[[f64; 2]], bulges: &[f64]) -> Vec<[f64; 2]> {
         let entity = EntityType::LwPolyline(crate::object_regions::region_polyline(points, bulges));
@@ -43,6 +68,8 @@ impl Session {
         .unwrap_or_default()
     }
     pub(crate) fn sheet_ink(&self, sheet: &str) -> SheetInk {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("ink.sheet_ink");
         let mut out = SheetInk::default();
         let doc = &self.drawing.doc;
         let xrefs = self.xref_docs();
@@ -52,12 +79,44 @@ impl Session {
                 .is_none_or(|l| l.is_plottable && !l.flags.off && !l.flags.frozen)
         };
         let tol = 0.0002 / self.check_space(sheet).0;
+        let mut header = doc.header.clone();
+        // Allocation is not a plotting input. Every other header setting stays in the key.
+        header.handle_seed = 0;
+        let context = serde_json::json!([
+            header,
+            doc.layers.iter().collect::<Vec<_>>(),
+            doc.text_styles.iter().collect::<Vec<_>>(),
+            doc.line_types.iter().collect::<Vec<_>>(),
+            doc.objects,
+            doc.context_scales,
+            self.arabic_reversed,
+            tol
+        ])
+        .to_string();
+        let mut cache = self.ink_cache.borrow_mut();
+        if cache.context != context {
+            *cache = InkCache {
+                context,
+                ..Default::default()
+            };
+        }
+        cache
+            .entities
+            .retain(|id, _| doc.get_entity(Handle::new(*id)).is_some());
         for entity in doc.entities_in_block(sheet) {
             let common = entity.common();
             if common.invisible || !plotted(&common.layer) {
                 continue;
             }
             let owner = common.handle.value();
+            if let Some((previous, pieces, incomplete)) = cache.entities.get(&owner) {
+                if std::ptr::eq(Arc::as_ptr(previous), entity) {
+                    out.pieces.extend(pieces.iter().cloned());
+                    out.incomplete.extend(incomplete);
+                    continue;
+                }
+            }
+            let cache_start = (out.pieces.len(), out.incomplete.len());
             let grid = common
                 .extended_data
                 .get_record(crate::conventions::GRID_APP)
@@ -166,6 +225,16 @@ impl Session {
                     grid: false,
                     table: true,
                 });
+            }
+            if cacheable(entity) {
+                cache.entities.insert(
+                    owner,
+                    (
+                        doc.get_entity_arc(common.handle).expect("listed entity"),
+                        out.pieces[cache_start.0..].to_vec(),
+                        out.incomplete[cache_start.1..].to_vec(),
+                    ),
+                );
             }
         }
         out.pieces

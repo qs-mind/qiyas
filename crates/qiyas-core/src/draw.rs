@@ -1171,6 +1171,7 @@ impl Session {
 }
 
 /// A circle, or an arc of one (counter-clockwise from `start`), drawn near a hatch's point.
+#[derive(Clone, PartialEq)]
 struct Round {
     centre: [f64; 2],
     radius: f64,
@@ -1266,6 +1267,15 @@ fn region_around(
     // Weld points a millionth of the box apart.
     let tol = (radius * 1e-6).max(1e-6);
     let faces = bounded_faces(&lines, Tolerance::new(tol));
+    region_from_faces(&faces, p, lo, hi)
+}
+
+fn region_from_faces(
+    faces: &[Vec<[f64; 2]>],
+    p: [f64; 2],
+    lo: [f64; 2],
+    hi: [f64; 2],
+) -> Option<Boundary> {
     let (at, ring) = faces
         .iter()
         .enumerate()

@@ -504,7 +504,12 @@ impl Session {
         Ok(measurement)
     }
 
-    pub(crate) fn check_room_areas(&self, sheet: &str, push: &mut impl FnMut(Finding)) {
+    pub(crate) fn check_room_areas(
+        &self,
+        sheet: &str,
+        active: &impl Fn(u64) -> bool,
+        push: &mut impl FnMut(Finding),
+    ) {
         let mismatch = |handles: Vec<u64>, message: String, push: &mut dyn FnMut(Finding)| {
             push(Finding {
                 rule: "room_area_mismatch",
@@ -516,6 +521,15 @@ impl Session {
             });
         };
         for entity in self.drawing.doc.entities_in_block(sheet) {
+            if !active(entity.common().handle.value())
+                && !get_data::<RoomLabel>(entity.common(), LABEL_APP)
+                    .is_some_and(|label| active(label.boundary))
+                && !get_data::<RoomSchedule>(entity.common(), SCHEDULE_APP)
+                    .is_some_and(|schedule| schedule.rooms.iter().any(|id| active(*id)))
+            {
+                continue;
+            }
+
             if let Some(label) = get_data::<RoomLabel>(entity.common(), LABEL_APP) {
                 let text = match entity {
                     EntityType::Text(t) => t.value.clone(),
