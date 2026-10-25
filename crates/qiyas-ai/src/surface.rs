@@ -32,7 +32,7 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 22] = [
+pub const READ_OPS: [&str; 23] = [
     "explain",
     "digest",
     "takeoff_kit",

@@ -29,10 +29,14 @@ pub(crate) struct RevisionChange {
     change: Change,
     handle_map: BTreeMap<u64, Vec<u64>>,
     complete: bool,
+    /// Position in the commit journal; one step per recorded change.
+    cursor: u64,
 }
 
 pub(crate) struct RevisionHistory {
     session: String,
+    /// Commit journal cursor: one step per recorded change, whatever kind it was.
+    sequence: u64,
     geometry: u64,
     knowledge: u64,
     selection: u64,
@@ -45,6 +49,7 @@ impl Default for RevisionHistory {
     fn default() -> Self {
         Self {
             session: uuid::Uuid::new_v4().to_string(),
+            sequence: 0,
             geometry: 0,
             knowledge: 0,
             selection: 0,
@@ -214,12 +219,14 @@ impl Session {
                 true
             }
         });
+        self.revision_history.sequence += 1;
         self.revision_history.entries.push_back(RevisionChange {
             before,
             after,
             change,
             handle_map,
             complete,
+            cursor: self.revision_history.sequence,
         });
         while self.revision_history.entries.len() > KEEP_REVISIONS {
             self.revision_history.entries.pop_front();
@@ -233,11 +240,11 @@ impl Session {
         let oldest = history
             .entries
             .front()
-            .map_or(history.sequence + 1, |entry| entry.after.knowledge_revision);
+            .map_or(history.sequence + 1, |entry| entry.cursor);
         let entries: Vec<_> = history
             .entries
             .iter()
-            .filter(|entry| entry.after.knowledge_revision > after)
+            .filter(|entry| entry.cursor > after)
             .collect();
         let resync = session.is_some_and(|id| id != history.session)
             || after > history.sequence
@@ -245,7 +252,7 @@ impl Session {
             || entries.iter().any(|entry| !entry.complete);
         json!({"cursor":history.sequence,"session":history.session,"resync":resync,
             "events":entries.iter().map(|entry| json!({
-                "cursor":entry.after.knowledge_revision,"operation":"commit","status":"completed",
+                "cursor":entry.cursor,"operation":"commit","status":"completed",
                 "revision":entry.after,"added":entry.change.added,"changed":entry.change.changed,
                 "removed":entry.change.removed,"handle_map":entry.handle_map,
             })).collect::<Vec<_>>()})
