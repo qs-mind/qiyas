@@ -116,6 +116,39 @@ pub(crate) fn find_path(state: &AppState, path: &Path) -> Option<u32> {
         .map(|p| p.id)
 }
 
+/// An empty untitled drawing with matching units can serve another new-drawing request.
+pub(crate) fn reusable_blank(state: &AppState, units: i16) -> Option<u32> {
+    let list = lock(&state.tabs);
+    let session = lock(&state.session);
+    let parked = lock(&state.parked);
+    if let (Some(id), Some(session)) = (list.active, session.as_ref()) {
+        if session.is_reusable_blank(units) {
+            return Some(id);
+        }
+    }
+    parked
+        .iter()
+        .find(|p| p.session.is_reusable_blank(units))
+        .map(|p| p.id)
+}
+
+/// Choose a visible export folder while the drawing still has no saved file.
+pub(crate) fn set_untitled_export_folder<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &mut Session,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let directory = app
+        .path()
+        .document_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))
+        .map_err(|e| format!("Choose a location with Save As before exporting: {e}"))?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("The Documents folder cannot be opened: {e}"))?;
+    session.set_export_directory(directory);
+    Ok(())
+}
+
 /// Puts `session` on screen in a new tab after the others; the drawing on screen before is
 /// parked. Returns the new tab's id.
 pub(crate) fn add(state: &AppState, session: Session) -> Result<u32, String> {

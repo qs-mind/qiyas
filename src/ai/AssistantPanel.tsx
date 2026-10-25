@@ -33,6 +33,15 @@ type Props = {
 
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
 
+function connectionLost(error: string): boolean {
+  try {
+    return ["ai.error.network", "ai.error.timeout", "ai.error.stream", "ai.error.service_error", "ai.error.chatgpt_temporary"]
+      .includes(JSON.parse(error).code);
+  } catch {
+    return false;
+  }
+}
+
 /** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
  *  Memoised: the app re-renders on every pointer move. */
 export const AssistantPanel = memo(function AssistantPanel({
@@ -142,6 +151,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   }
 
   function errorText(e: string) {
+    if (connectionLost(e)) return t("ai.connectionLost");
     if (e === "busy") return t("ai.busy");
     if (e === "no_api_key") return t("ai.noKey");
     if (e === "no_base_url") return t("ai.noBaseUrl");
@@ -350,6 +360,8 @@ export const AssistantPanel = memo(function AssistantPanel({
       {error && (
         <div className="error" role="alert">
           {errorText(error)}
+          {connectionLost(error) && <button type="button" disabled={busy}
+            onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>}
           <button type="button" className="link" onClick={onSettings}>{t(showTechnicalDetails ? "support.details" : "settings")}</button>
         </div>
       )}

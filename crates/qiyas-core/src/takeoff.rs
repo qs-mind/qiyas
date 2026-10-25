@@ -97,6 +97,9 @@ pub struct Measurement {
     /// False when the source enclosure is unavailable. Unavailable values serialize as null.
     #[serde(default = "valid_quantity")]
     pub quantity_valid: bool,
+    /// The source is marked for display only. Its retained value is excluded from totals.
+    #[serde(default)]
+    pub view_only: bool,
     /// Unscored manual measurements retain 0.5; generated adapters copy derived confidence.
     #[serde(default = "crate::trust::unscored")]
     pub confidence: f64,
@@ -162,7 +165,7 @@ fn read_quantity<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error
 }
 impl Measurement {
     pub fn available(&self) -> bool {
-        self.quantity_valid && self.value.is_finite() && self.shown.is_finite()
+        self.quantity_valid && !self.view_only && self.value.is_finite() && self.shown.is_finite()
     }
 
     /// A new user measurement made now, converted to metres with `units`. The caller
@@ -179,6 +182,7 @@ impl Measurement {
         let (unit, shown) = in_metres(kind, value, units);
         Measurement {
             quantity_valid: true,
+            view_only: false,
             confidence: crate::trust::unscored(),
             id: uuid::Uuid::new_v4().to_string(),
             kind,

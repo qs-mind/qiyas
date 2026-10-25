@@ -689,7 +689,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Discrepancies and queries (Phase 19)
 
-- The registry command `check` compares the imported client BOQ with mapped element quantities
+- The registry command `discrepancy_check` (legacy alias `check`) compares the imported client BOQ with mapped element quantities
   and manual take-off, evaluates drawing knowledge kind `checks`, and raises queries and Comment
   clouds as one transaction. `qiyas-takeoff::compare` and `compare_session` retain their public
   API; the shared comparison implementation now lives in `qiyas-core/src/discrepancy/` so the
@@ -709,11 +709,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   notes on repeated checks. The drawing's `queries/result` XRecord stores the list; standalone
   DWG/DXF reopen restores it without a sidecar. Resolution and comparison are each one undo
   step. Rechecking replaces owned clouds without accumulating duplicates. Findings describe
-  the last check; run `check` again after repairs.
+  the last check; run `discrepancy_check` again after repairs.
 - The conflicts panel shows query questions, severity and evidence; Compare redraws the clouds.
   Take-off exports from all hosts add `Queries`, with readable bilingual columns and lossless
   records. `qiyas_boq::queries::import_queries` reads them back. No rates are exported here.
-- Mizan's registry workflow gains `check` after BOQ generation; it authors cited rules, runs
+- Mizan's registry workflow gains `discrepancy_check` after BOQ generation; it authors cited rules, runs
   comparison and reports uncertainties without requiring a human step. Scripted workflow tests
   exercise this command through the production generic tool surface.
 - Benchmark prediction now reads client inputs and shared check interpretations from `.local/`,
@@ -1862,8 +1862,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   shows its tab. Closing (or quitting) with unsaved drawing changes asks.
 - New drawing (quick-access New, Ctrl+N, NEW / QNEW): `NewDrawingDialog` asks metres,
   centimetres or millimetres (the last choice kept in `localStorage` `qiyas.newUnits`), then IPC
-  `new_drawing { units }`: `Session::new_blank` (`CadDocument::new()`, INSUNITS 6, 5 or 4) in a
-  new tab at a placeholder `<config>/untitled/Untitled-N.dwg` (`tabs::untitled_path`: the
+  `new_drawing { units }` first reuses an empty untitled tab with matching units; otherwise
+  `Session::new_blank` (`CadDocument::new()`, INSUNITS 6, 5 or 4) creates a new tab at a placeholder `<config>/untitled/Untitled-N.dwg` (`tabs::untitled_path`: the
   smallest N no tab uses and no autosave holds). It is clean until it changes (closing it untouched
   asks nothing) and untitled (`is_untitled`, `DrawingInfo`/`TabInfo` `untitled`): `save()` is
   refused (`UNTITLED`), so the window's Save, and the save of "Save changes?", go through Save As
@@ -3055,3 +3055,47 @@ Take-off kit revision workflow examples are named `revision_commands`; `revision
 Wire array/scalar reads are wrapped as `{value, revision}`; object reads keep their existing fields. Compact kit prose reserves space for revision metadata without increasing its byte limit. A repeated-failure stop still produces the local interrupted take-off summary in the chat language.
 
 New untitled drawings skip placeholder names already present in chat history or a recovery/Save As path family, so a new drawing cannot inherit a previous drawing's conversations. A mixed move whose retained room is restored by derivation keeps the unrelated move, reports the room override, preserves measured area and remains one undo step.
+
+## Goal U: clinic app fixes (25 October 2026)
+
+- A drawing that was empty fits its first visible content once. Mizan's reveal frames the
+  new handles on the visible sheet, including when reduced motion is enabled.
+- Local evidence and nested worktrees belong under `.local/` (`.local/wt/` for worktrees).
+  They must never reload the app. Vite ignores `**/.local/**` and `**/target/**`;
+  `.taurignore` excludes the same folders. Apply watcher changes while the founder is idle.
+- After a connection failure, the assistant panel retains completed work and offers
+  **Continue**, using the existing conversation. It does not clear the conversation.
+- The glib iterator alert remains tracked in `docs/glib-variant-iterator.md`; its offline
+  source guard must be rerun when Tauri/GTK dependencies change.
+
+- `new_drawing` reuses an empty untitled drawing with matching units, including a parked
+  tab. Untitled desktop exports use Documents; saved drawings export beside their file.
+  File-tool summaries include the export folder and export results include the file path.
+- Client PDF and Excel pages omit internal diagnostics and entity handles. Full diagnostics
+  remain in the lossless record (hidden sheets/columns in Excel, attached JSON in PDF).
+  Citations are deduplicated; long cells wrap and quantities use consistent SI symbols.
+- Room-name and area placement searches inside the room, avoids plotted ink, and tries
+  wrapping then a quarter-turn without reducing text height. Drawing-check results include
+  complete per-rule counts even when only a short sample of findings is returned.
+- New drawing annotations default to English. `label_spaces` may match existing Arabic room
+  names from a supplied drawing; explicit `language` wins. Arabic/Persian digits and the
+  Arabic decimal separator are accepted by area checks and numeric field readers.
+- Block symbols are not room islands by default. Explicit geometry and object types with
+  `room_void:true` can define voids; room results retain the list of deducted islands.
+- `set_measurement_scope` marks a closed region or named group with `measured:false` (view
+  only); `measured:true` removes that marker. Manual take-off and generated quantities
+  respect the marker, which persists in the drawing and follows undo/redo. Possible enlarged
+  duplicate details are advice until Mizan or the engineer explicitly marks them.
+- The BOQ comparison command is `discrepancy_check`; `check` remains its legacy command
+  alias. Drawing checks are the read operation `check` (native `check_drawing`). Matching
+  named layer, layout, object-type, block-definition and group creates return an existing-item
+  note without adding an undo step; conflicting definitions require an explicit change.
+- Edit commands accept `sheet` by display name or block name without switching the visible
+  sheet. This JSON routing field adds no positional typed-command prompt. Wrong-sheet
+  errors name the owner and how to target it. Edit results check the
+  edited sheet and reveal only entities on the visible sheet. Batches remain all or nothing.
+- Radius and diameter text follows the picked point, including outside the circle, with a
+  leader ending clear of the text. Regression geometry uses mm, cm, m and inches.
+- Fast checks and the reviewer's combined end-to-end checklist are recorded in
+  `docs/2026-10-25-qiyas-goal-U.md`. Goal U does not run separate clinic/MCP replays under
+  the founder's revised acceptance scope.

@@ -518,12 +518,15 @@ impl Session {
         for entity in self.drawing.doc.entities_in_block(sheet) {
             if let Some(label) = get_data::<RoomLabel>(entity.common(), LABEL_APP) {
                 let text = match entity {
-                    EntityType::Text(t) => t.value.as_str(),
-                    EntityType::MText(t) => t.value.as_str(),
+                    EntityType::Text(t) => t.value.clone(),
+                    EntityType::MText(t) => {
+                        opencadcodec::entities::mtext_format::parse_mtext(&t.value, true)
+                            .to_plain_text()
+                    }
                     _ => continue,
                 };
                 let expected = self.room_field_value(&[label.boundary], label.decimals);
-                let actual = numeric_words(text).last().copied();
+                let actual = numeric_words(&text).last().copied();
                 if !same_number(actual, expected.as_deref(), label.decimals) {
                     mismatch(
                         vec![entity.common().handle.value(), label.boundary],
@@ -538,18 +541,25 @@ impl Session {
             if get_data::<RoomLabel>(entity.common(), LABEL_APP).is_none() {
                 let literal = match entity {
                     EntityType::Text(t) => {
-                        Some((t.value.as_str(), [t.insertion_point.x, t.insertion_point.y]))
+                        Some((t.value.clone(), [t.insertion_point.x, t.insertion_point.y]))
                     }
-                    EntityType::MText(t) => {
-                        Some((t.value.as_str(), [t.insertion_point.x, t.insertion_point.y]))
-                    }
+                    EntityType::MText(t) => Some((
+                        opencadcodec::entities::mtext_format::parse_mtext(&t.value, true)
+                            .to_plain_text(),
+                        [t.insertion_point.x, t.insertion_point.y],
+                    )),
                     _ => None,
                 };
-                if let Some((text, at)) = literal.filter(|(text, _)| text.trim().ends_with("m²")) {
+                if let Some((text, at)) =
+                    literal.filter(|(text, _)| crate::numbers::area_text(text).is_some())
+                {
                     if let Some((boundary, _)) = self.room_at(sheet, at) {
                         let expected = self.room_field_value(&[boundary], 2);
-                        if !same_number(numeric_words(text).last().copied(), expected.as_deref(), 2)
-                        {
+                        if !same_number(
+                            numeric_words(&text).last().copied(),
+                            expected.as_deref(),
+                            2,
+                        ) {
                             mismatch(vec![entity.common().handle.value(), boundary], "Literal room area label differs from its retained room; use label_spaces for a live field".into(), push);
                         }
                     }
@@ -568,7 +578,7 @@ impl Session {
                     let expected = self.room_field_value(&handles, schedule.decimals);
                     let actual = table
                         .cell_text(index + 1, 1)
-                        .and_then(|s| s.parse::<f64>().ok());
+                        .and_then(crate::numbers::parse);
                     if !same_number(actual, expected.as_deref(), schedule.decimals) {
                         let mut linked = vec![entity.common().handle.value()];
                         linked.extend(handles);
@@ -629,13 +639,11 @@ fn inside(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
 }
 
 fn numeric_words(text: &str) -> Vec<f64> {
-    text.split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
-        .filter_map(|s| s.parse().ok())
-        .collect()
+    crate::numbers::words(crate::numbers::area_text(text).unwrap_or(text))
 }
 
 fn same_number(actual: Option<f64>, expected: Option<&str>, decimals: usize) -> bool {
     actual
-        .zip(expected.and_then(|s| s.parse::<f64>().ok()))
+        .zip(expected.and_then(crate::numbers::parse))
         .is_some_and(|(a, b)| (a - b).abs() < 0.5 * 10f64.powi(-(decimals as i32)))
 }

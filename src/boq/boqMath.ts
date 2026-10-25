@@ -7,7 +7,7 @@ export const DEFAULT_TOLERANCE = 5;
 
 /** Linked rows whose unit is not the item's: their sum in their own unit. */
 export type OtherUnit = { unit: string; sum: number };
-export type QuantityLink = Pick<Measurement, "id" | "boq_code" | "unit" | "shown">;
+export type QuantityLink = Pick<Measurement, "id" | "boq_code" | "unit" | "shown" | "view_only">;
 
 export type Measured = {
   /** The take-off rows linked to the item, whatever their unit. */
@@ -29,7 +29,7 @@ export function measuredFor(item: BoqItem, takeoff: QuantityLink[]): Measured {
   let sum: number | null = null;
   const other = new Map<string, number>();
   for (const m of links) {
-    if (m.shown === null) continue;
+    if (m.shown === null || m.view_only) continue;
     if (unitKey(m.unit) === unitKey(item.unit)) sum = (sum ?? 0) + m.shown;
     else other.set(m.unit, (other.get(m.unit) ?? 0) + m.shown);
   }

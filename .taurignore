@@ -1,0 +1,5 @@
+# Local evidence and nested worktrees must never restart the running app.
+.local/
+**/.local/**
+target/
+**/target/**

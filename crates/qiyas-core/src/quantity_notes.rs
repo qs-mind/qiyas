@@ -54,7 +54,7 @@ impl Session {
         }
         let cited = self.takeoff.items.iter().any(|row| {
             row.unit != "markup"
-                && row.quantity_valid
+                && row.available()
                 && (!row.handles.is_empty() || row.points.len() >= 2 || row.block_name.is_some())
                 && text
                     .match_indices(&format!("takeoff:{}", row.id))

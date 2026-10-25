@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use qiyas_core::deliverables::{display_sheet, display_unit, Language};
 use qiyas_core::{Conflict, ConflictKind, ConflictStatus};
 use rust_xlsxwriter::{Format, RowNum, Workbook};
 
@@ -48,13 +49,26 @@ pub fn export_conflicts(path: &Path, conflicts: &[Conflict]) -> Result<(), BoqEr
                 sheet.write_number_with_format(row, col, v, &number)?;
             }
         }
-        sheet.write_string(row, 7, &c.unit)?;
-        sheet.write_string(row, 8, c.sheets.join(", "))?;
+        sheet.write_string(row, 7, display_unit(&c.unit))?;
+        sheet.write_string(
+            row,
+            8,
+            c.sheets
+                .iter()
+                .map(|s| display_sheet(s, Language::En))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )?;
         sheet.write_string(row, 9, status_name(c.status))?;
         sheet.write_string(row, 10, &c.note)?;
         sheet.write_string(row, 11, &c.id)?;
     }
 
+    sheet.set_column_hidden(11)?;
+    for column in [3, 4, 10] {
+        sheet.set_column_format(column, &Format::new().set_text_wrap())?;
+    }
+    sheet.set_print_area(0, 0, conflicts.len() as u32, 10)?;
     let sheet = book.add_worksheet().set_name("Summary")?;
     sheet.set_column_width(0, 20)?;
     sheet.write_row_with_format(0, 0, ["Kind", "Count"], &bold)?;

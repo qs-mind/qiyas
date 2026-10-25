@@ -242,6 +242,17 @@ impl Session {
                         .collect(),
                 };
                 self.fit_room_label(handle.value(), &boundary, near.unwrap_or(metadata.seed))?;
+            } else if let Some((boundary, point)) = match e {
+                EntityType::Text(t) => Some([t.insertion_point.x, t.insertion_point.y]),
+                EntityType::MText(t) => Some([t.insertion_point.x, t.insertion_point.y]),
+                _ => None,
+            }
+            .and_then(|point| {
+                let point = near.unwrap_or(point);
+                let boundary = self.room_boundary_in(&self.sheet, point, &Default::default());
+                matches!(boundary, crate::Boundary::Ring { .. }).then_some((boundary, point))
+            }) {
+                self.fit_room_label(handle.value(), &boundary, point)?;
             } else if matches!(e, EntityType::Dimension(_)) {
                 self.place_dimension_clear(handle, clearance_mm.unwrap_or(2.5))?;
             } else {
@@ -361,66 +372,81 @@ impl Session {
             .ok_or_else(|| invalid("Label not found"))?
             .clone();
         let b = ink::bounds(&ring);
-        let width = b[1][0] - b[0][0] - self.paper_distance(2.0);
-        for fraction in [0.0, 1.0, 0.75, 0.5, 0.3] {
-            if fraction > 0.0 {
-                let mut m = match &original {
-                    EntityType::Text(t) => {
-                        let mut m = opencadcodec::MText::with_value(
-                            crate::text::escape_mtext(&t.value),
-                            t.insertion_point,
-                        )
-                        .with_height(t.height);
-                        m.common = t.common.clone();
-                        m.style = t.style.clone();
-                        m
-                    }
-                    EntityType::MText(m) => m.clone(),
-                    _ => return Err(invalid("Choose a text label")),
-                };
-                m.rectangle_width = (width * fraction).max(m.height * 2.0);
-                // Keep a live field's value and following unit together when wrapping.
-                if let Some(code) = crate::field::text_field(&m.common) {
-                    let code = code.replace(">% ", ">%\u{00a0}");
-                    m.value = crate::text::escape_mtext(
-                        &self.evaluate_fields(&code, m.common.owner_handle),
-                    );
-                    crate::field::set_text_field(
-                        &mut m.common,
-                        Some(&code),
-                        crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
-                    );
-                }
-                *self.drawing.doc.get_entity_mut(h).expect("label exists") = EntityType::MText(m);
+        // Try both directions without shrinking the text. A narrow room can have
+        // enough clear space along its length even when a word cannot wrap across it.
+        for turn in [0.0, std::f64::consts::FRAC_PI_2] {
+            let mut original = original.clone();
+            match &mut original {
+                EntityType::Text(text) => text.rotation += turn,
+                EntityType::MText(text) => text.rotation += turn,
+                _ => return Err(invalid("Choose a text label")),
             }
-            let report = self.free_space(&SpaceQuery {
-                entity: Some(handle),
-                near: Some(near),
-                within: Some(ring.clone()),
-                clearance_mm: Some(1.0),
-                ..Default::default()
-            })?;
-            if let Some(best) = report.positions.iter().find(|p| {
-                crate::check_layout::polygon_inside(&ink::corners(p.bounds), &ring, &holes)
-            }) {
-                self.modify(crate::modify::ModifySpec::Move {
-                    targets: vec![Target {
-                        handle,
-                        chain: vec![],
-                    }],
-                    delta: best.delta.unwrap(),
+            *self.drawing.doc.get_entity_mut(h).expect("label exists") = original.clone();
+            let axis = usize::from(turn != 0.0);
+            let width = b[1][axis] - b[0][axis] - self.paper_distance(2.0);
+            for fraction in [0.0, 1.0, 0.75, 0.5, 0.3] {
+                if fraction > 0.0 {
+                    let mut m = match &original {
+                        EntityType::Text(t) => {
+                            let mut m = opencadcodec::MText::with_value(
+                                crate::text::escape_mtext(&t.value),
+                                t.insertion_point,
+                            )
+                            .with_height(t.height);
+                            m.common = t.common.clone();
+                            m.style = t.style.clone();
+                            m.rotation = t.rotation;
+                            m
+                        }
+                        EntityType::MText(m) => m.clone(),
+                        _ => return Err(invalid("Choose a text label")),
+                    };
+                    m.rectangle_width = (width * fraction).max(m.height * 2.0);
+                    // Keep a live field's value and following unit together when wrapping.
+                    if let Some(code) = crate::field::text_field(&m.common) {
+                        let code = code.replace(">% ", ">%\u{00a0}");
+                        m.value = crate::text::escape_mtext(
+                            &self.evaluate_fields(&code, m.common.owner_handle),
+                        );
+                        crate::field::set_text_field(
+                            &mut m.common,
+                            Some(&code),
+                            crate::xdata::app_handle(&self.drawing.doc, crate::field::FIELD_APP),
+                        );
+                    }
+                    *self.drawing.doc.get_entity_mut(h).expect("label exists") =
+                        EntityType::MText(m);
+                }
+                let report = self.free_space(&SpaceQuery {
+                    entity: Some(handle),
+                    near: Some(near),
+                    within: Some(ring.clone()),
+                    clearance_mm: Some(1.0),
+                    ..Default::default()
                 })?;
-                let at = match self.drawing.doc.get_entity(h).expect("label exists") {
-                    EntityType::Text(t) => [t.insertion_point.x, t.insertion_point.y],
-                    EntityType::MText(t) => [t.insertion_point.x, t.insertion_point.y],
-                    _ => best.at,
-                };
-                return Ok((
-                    at,
-                    fraction > 0.0 || matches!(original, EntityType::MText(_)),
-                ));
+                if let Some(best) = report.positions.iter().find(|p| {
+                    crate::check_layout::polygon_inside(&ink::corners(p.bounds), &ring, &holes)
+                }) {
+                    self.modify(crate::modify::ModifySpec::Move {
+                        targets: vec![Target {
+                            handle,
+                            chain: vec![],
+                        }],
+                        delta: best.delta.unwrap(),
+                    })?;
+                    let at = match self.drawing.doc.get_entity(h).expect("label exists") {
+                        EntityType::Text(t) => [t.insertion_point.x, t.insertion_point.y],
+                        EntityType::MText(t) => [t.insertion_point.x, t.insertion_point.y],
+                        _ => best.at,
+                    };
+                    return Ok((
+                        at,
+                        fraction > 0.0 || matches!(original, EntityType::MText(_)),
+                    ));
+                }
             }
         }
-        Err(invalid("The room is too small for a readable area label. Use a larger drawing scale or place a linked note outside the room"))
+        *self.drawing.doc.get_entity_mut(h).expect("label exists") = original;
+        Err(invalid("The room is too small for this label at its current height. Use a larger drawing scale or place a linked note outside the room"))
     }
 }

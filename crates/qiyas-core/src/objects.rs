@@ -117,6 +117,10 @@ pub struct ObjectType {
     #[serde(default)]
     pub property_bindings: BTreeMap<String, String>,
     pub geometry: GeometryKind,
+    /// Explicitly permits this type's closed graphics to remove floor area as room islands.
+    /// Fixture and furniture blocks are not voids by default.
+    #[serde(default)]
+    pub room_void: bool,
     #[serde(default)]
     pub vertical: Vertical,
     #[serde(default)]
@@ -583,7 +587,17 @@ impl Session {
         redefine: bool,
     ) -> Result<(), CoreError> {
         definition.validate()?;
-        let exists = knowledge::get(&self.drawing.doc, Kind::Types, &definition.name)?.is_some();
+        let previous = knowledge::get(&self.drawing.doc, Kind::Types, &definition.name)?;
+        let exists = previous.is_some();
+        if let Some(previous) = previous.filter(|_| !redefine) {
+            let mut old: ObjectType =
+                serde_json::from_value(previous.data).map_err(|e| invalid(e.to_string()))?;
+            old.name.clone_from(&definition.name);
+            if json!(old) == json!(definition) {
+                self.last_advice.push(json!({"code":"already_exists", "message":format!("Object type {} already exists with this definition.", definition.name), "message_ar":format!("نوع العنصر {} موجود بهذه الخصائص.", definition.name)}));
+                return Ok(());
+            }
+        }
         if exists != redefine {
             return Err(invalid(if exists {
                 "This type exists; use redefine_object_type"

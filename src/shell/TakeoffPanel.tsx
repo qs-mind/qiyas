@@ -126,8 +126,8 @@ export const TakeoffPanel = memo(function TakeoffPanel({
         header: t("quantity"),
         size: 64,
         align: "end",
-        sortValue: (m) => m.unit === "markup" ? null : m.shown,
-        cell: (m) => m.unit === "markup" ? t("takeoff.note") : m.shown === null ? t("takeoff.unavailable") : qty(m.shown, m.kind, precision),
+        sortValue: (m) => m.unit === "markup" || m.view_only ? null : m.shown,
+        cell: (m) => m.unit === "markup" ? t("takeoff.note") : m.view_only ? t("takeoff.viewOnly") : m.shown === null ? t("takeoff.unavailable") : qty(m.shown, m.kind, precision),
       },
       {
         id: "unit",

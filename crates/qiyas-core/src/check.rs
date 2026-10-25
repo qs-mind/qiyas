@@ -1196,7 +1196,9 @@ pub(crate) fn size_label(text: &str) -> Option<(f64, f64)> {
         Some((value, unit))
     }
 
-    let lower = text.to_lowercase().replace(['×', '*'], "x");
+    let lower = crate::numbers::western(text)
+        .to_lowercase()
+        .replace(['×', '*'], "x");
     for line in lower.lines() {
         for (at, _) in line.match_indices('x') {
             let (left, right) = (&line[..at], &line[at + 1..]);
@@ -1230,6 +1232,7 @@ pub(crate) fn size_label(text: &str) -> Option<(f64, f64)> {
 
 /// The first number of a dimension override and its stated unit, when it has one.
 fn dimension_number(text: &str) -> Option<(f64, Option<f64>)> {
+    let text = crate::numbers::western(text);
     let at = text.find(|c: char| c.is_ascii_digit())?;
     let value = &text[at..];
     let digits: String = value

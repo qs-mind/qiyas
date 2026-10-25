@@ -83,7 +83,13 @@ pub async fn new_drawing<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
-    let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(&units)?);
+    let units = insunits_of(&units)?;
+    if let Some(id) = tabs::reusable_blank(&state, units) {
+        tabs::activate(&app, &state, id, false)?;
+        return with_session(&state, |s| Ok(s.info()));
+    }
+    let mut session = Session::new_blank(&tabs::untitled_path(&state)?, units);
+    tabs::set_untitled_export_folder(&app, &mut session)?;
     new_conversation(&app, &state);
     tabs::add(&state, session)?;
     with_session(&state, |s| Ok(s.info()))

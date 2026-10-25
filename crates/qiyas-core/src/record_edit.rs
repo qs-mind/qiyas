@@ -712,6 +712,44 @@ impl Session {
         self.create_entities_in_block(entities, &block)
     }
 
+    /// Resolve the same record defaults for creation and comparison with an existing block.
+    pub(crate) fn prepare_record_entity(
+        &self,
+        wanted: &NewEntity,
+        index: usize,
+    ) -> Result<(EntityType, String), CoreError> {
+        let what = format!("Entity {index} ({})", wanted.kind);
+        let base = default_entity(&wanted.kind)?;
+        let kind = variant_name(&base);
+        let mut data = entity_data(&base);
+        {
+            // The current state first; what the caller gives wins.
+            let c = &self.current;
+            let common = &mut data["common"];
+            common["layer"] = json!(c.layer);
+            common["color"] =
+                serde_json::to_value(crate::draw::parse_color(&c.color).unwrap_or(Color::ByLayer))
+                    .unwrap_or_default();
+            common["linetype"] = json!(if c.linetype.eq_ignore_ascii_case("ByLayer") {
+                String::new()
+            } else {
+                c.linetype.clone()
+            });
+            common["line_weight"] =
+                serde_json::to_value(opencadcodec::LineWeight::from_value(c.lineweight))
+                    .unwrap_or_default();
+        }
+        if let Some(given) = wanted.data.get("common").and_then(Value::as_object) {
+            for key in given.keys() {
+                let path = format!("/common/{key}");
+                refuse(entity_rule(&kind, &path), &what, &path)?;
+            }
+        }
+        merge(&mut data, &wanted.data);
+        let entity: EntityType = read_back(json!({ kind.clone(): data }), &what)?;
+        Ok((entity, what))
+    }
+
     /// Creates the supplied record entities directly in `block`, preserving the same defaults
     /// and validation whether the owner is a sheet or a named block definition.
     pub(crate) fn create_entities_in_block(
@@ -731,36 +769,7 @@ impl Session {
             .ok_or_else(|| CoreError::NoSuchSheet(block.to_string()))?;
         let mut handles = Vec::with_capacity(entities.len());
         for (index, wanted) in entities.into_iter().enumerate() {
-            let what = format!("Entity {index} ({})", wanted.kind);
-            let base = default_entity(&wanted.kind)?;
-            let kind = variant_name(&base);
-            let mut data = entity_data(&base);
-            {
-                // The current state first; what the caller gives wins.
-                let c = &self.current;
-                let common = &mut data["common"];
-                common["layer"] = json!(c.layer);
-                common["color"] = serde_json::to_value(
-                    crate::draw::parse_color(&c.color).unwrap_or(Color::ByLayer),
-                )
-                .unwrap_or_default();
-                common["linetype"] = json!(if c.linetype.eq_ignore_ascii_case("ByLayer") {
-                    String::new()
-                } else {
-                    c.linetype.clone()
-                });
-                common["line_weight"] =
-                    serde_json::to_value(opencadcodec::LineWeight::from_value(c.lineweight))
-                        .unwrap_or_default();
-            }
-            if let Some(given) = wanted.data.get("common").and_then(Value::as_object) {
-                for key in given.keys() {
-                    let path = format!("/common/{key}");
-                    refuse(entity_rule(&kind, &path), &what, &path)?;
-                }
-            }
-            merge(&mut data, &wanted.data);
-            let mut entity: EntityType = read_back(json!({ kind.clone(): data }), &what)?;
+            let (mut entity, what) = self.prepare_record_entity(&wanted, index)?;
             let layer = entity.common().layer.trim().to_string();
             if layer.contains('|') {
                 return Err(invalid(format!(

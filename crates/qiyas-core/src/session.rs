@@ -149,6 +149,8 @@ pub struct Session {
     /// A new drawing never saved yet (`Session::new_blank`): its path is a placeholder, Save goes
     /// through Save As and no project file is written beside it.
     untitled: bool,
+    /// A host-selected visible folder for exports until the drawing has its first saved file.
+    export_directory: Option<PathBuf>,
     /// The curve tolerance of the sheet on screen when zoomed in past `batch_tol` (`zoom_tol`);
     /// `None` draws at `batch_tol`.
     zoom_tol: std::cell::Cell<Option<f64>>,
@@ -740,6 +742,7 @@ impl Session {
             recovered_from: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             untitled: false,
+            export_directory: None,
             zoom_tol: std::cell::Cell::new(None),
             document_revision: 0,
             saved_revision: 0,
@@ -853,6 +856,50 @@ impl Session {
     /// A new drawing never saved yet (see `new_blank`).
     pub fn is_untitled(&self) -> bool {
         self.untitled
+    }
+
+    /// Reuse an untitled drawing only when every sheet and its take-off are empty.
+    /// Named layers, block definitions and selected methods are useful setup, not content.
+    pub fn is_reusable_blank(&self, insunits: i16) -> bool {
+        self.is_untitled()
+            && self.drawing.doc.header.insertion_units == insunits
+            && self.takeoff.items.is_empty()
+            && self.boq.is_none()
+            && self.conflicts.is_empty()
+            && self.drawing.sheets().iter().all(|sheet| {
+                self.drawing
+                    .doc
+                    .entities_in_block(&sheet.block)
+                    .next()
+                    .is_none()
+            })
+    }
+
+    /// Desktop hosts select Documents; headless hosts keep their isolated drawing folder.
+    pub fn set_export_directory(&mut self, directory: PathBuf) {
+        self.export_directory = Some(directory);
+    }
+
+    pub fn export_folder(&self) -> &Path {
+        if let Some(folder) = self
+            .export_directory
+            .as_deref()
+            .filter(|_| self.is_untitled())
+        {
+            folder
+        } else {
+            self.drawing
+                .path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+        }
+    }
+
+    /// A path anchor for existing export confinement, without changing the autosave location.
+    pub fn export_source(&self) -> PathBuf {
+        self.export_folder()
+            .join(self.drawing.path.file_name().unwrap_or_default())
     }
 
     /// The project file's contents for the session as it is.
@@ -1515,6 +1562,22 @@ impl Session {
         } else {
             self.with_sheet(sheet, None, |batch| near(batch, &PickIndex::new(batch)))
         }
+    }
+
+    /// The block containing a top-level entity, for checks and reveals after an edit.
+    pub fn entity_sheet(&self, handle: u64) -> Option<&str> {
+        let owner = self
+            .drawing
+            .doc
+            .get_entity(Handle::new(handle))?
+            .common()
+            .owner_handle;
+        self.drawing
+            .doc
+            .block_records
+            .iter()
+            .find(|block| block.handle == owner)
+            .map(|block| block.name.as_str())
     }
 
     /// The entity `handle` inside the block references `chain` (outermost first; empty for an

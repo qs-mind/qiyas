@@ -644,6 +644,7 @@ export type Source = "user" | "ai" | "mcp";
  */
 export type Measurement = {
   quantity_valid?: boolean;
+  view_only?: boolean;
   area_origin?: "unspecified" | "existing_boundary" | "wall_face" | "manual_or_entity";
   measurement_basis?: "unspecified" | "gross" | "wall_face" | "unapproved_net" | "approved_net";
   count_scope?: string | null;

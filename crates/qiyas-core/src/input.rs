@@ -119,6 +119,52 @@ impl Session {
     /// Validates the complete raw input, reads a plain command, resolves omitted defaults in
     /// the current session, and executes it. Every JSON boundary uses this entry point.
     pub fn run_input(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
+        let mut input = raw.clone();
+        crate::registry::canonicalize(&mut input);
+        let targeted = input["sheet"]
+            .as_str()
+            .filter(|_| {
+                input["type"] == "batch"
+                    || input["type"]
+                        .as_str()
+                        .and_then(|name| crate::registry::registry().get(name))
+                        .is_some_and(|info| info.effect == crate::registry::Effect::Edit)
+            })
+            .map(str::to_owned);
+        let Some(sheet) = targeted else {
+            return self.run_input_here(raw, source);
+        };
+        // The read token describes the caller's context, before the temporary edit sheet.
+        if let Some(expected) = input
+            .as_object_mut()
+            .and_then(|o| o.remove("expected_revision"))
+        {
+            self.check_revision(&expected)?;
+        }
+        let block = self.sheet_block(Some(&sheet));
+        if self.block_edit.is_some() && !block.eq_ignore_ascii_case(&self.sheet) {
+            return Err(CoreError::InvalidCommand(
+                "Finish editing the block before targeting another sheet.".into(),
+            ));
+        }
+        let previous = self.sheet.clone();
+        self.set_sheet(&block)?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_input_here(&input, source)
+        }));
+        if self.set_sheet(&previous).is_err() {
+            let _ = self.set_sheet("*Model_Space");
+        }
+        match result {
+            Ok(result) => result.map(|mut report| {
+                report.revision = self.revision();
+                report
+            }),
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    fn run_input_here(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
             self.last_advice.clear();
@@ -194,10 +240,11 @@ impl Session {
     ) -> Option<Result<Vec<Reported>, CoreError>> {
         if inputs.len() < 2
             || inputs.iter().any(|input| {
-                input["type"].as_str().is_none_or(|name| {
-                    !name.eq_ignore_ascii_case("add_wall_openings")
-                        && !name.eq_ignore_ascii_case("add-wall-openings")
-                })
+                input.get("sheet").is_some_and(|sheet| !sheet.is_null())
+                    || input["type"].as_str().is_none_or(|name| {
+                        !name.eq_ignore_ascii_case("add_wall_openings")
+                            && !name.eq_ignore_ascii_case("add-wall-openings")
+                    })
             })
         {
             return None;

@@ -119,6 +119,7 @@ fn summary(s: &Session) -> Value {
     json!({
         "file": facts.file,
         "untitled": s.is_untitled(),
+        "export_folder": s.export_folder(),
         "units": facts.units,
         "sheets": facts.sheets,
         "sheet_shown": facts.sheet,
@@ -192,7 +193,13 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
 
     fn new_drawing(&self, units: &str) -> Result<Value, String> {
         let state = self.state();
-        let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(units)?);
+        let units = insunits_of(units)?;
+        if let Some(id) = tabs::reusable_blank(&state, units) {
+            tabs::activate_checked(&self.app, &state, id, true, self.expected_revision.as_ref())?;
+            return self.shown("Using the open empty drawing with the same units.".to_string());
+        }
+        let mut session = Session::new_blank(&tabs::untitled_path(&state)?, units);
+        tabs::set_untitled_export_folder(&self.app, &mut session)?;
         let title = session
             .drawing
             .path
@@ -438,6 +445,55 @@ mod tests {
         })
         .unwrap();
         assert!(state.ai.try_lock().is_ok());
+    }
+
+    #[test]
+    fn u2_new_drawing_reuses_empty_untitled_tabs_with_matching_units() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+        };
+        let state = app.state::<AppState>();
+        host.new_drawing("mm").unwrap();
+        let first = tabs::snapshot(&state).active;
+        let again = host.new_drawing("mm").unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs.len(), 1);
+        assert_eq!(tabs::snapshot(&state).active, first);
+        assert!(again["message"].as_str().unwrap().contains("empty"));
+        host.new_drawing("m").unwrap();
+        host.new_drawing("mm").unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs.len(), 2);
+        assert_eq!(tabs::snapshot(&state).active, first);
+        with_session(&state, |s| {
+            s.run(Command::Draw(DrawSpec::Line {
+                a: [0.0, 0.0],
+                b: [1000.0, 0.0],
+            }))
+        })
+        .unwrap();
+        host.new_drawing("mm").unwrap();
+        assert_eq!(
+            tabs::snapshot(&state).tabs.len(),
+            3,
+            "a drawing with work must not be reused"
+        );
+    }
+
+    #[test]
+    fn u6_untitled_exports_have_a_visible_documents_destination() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+        };
+        let made = host.new_drawing("m").unwrap();
+        let documents = app.path().document_dir().unwrap();
+        assert_eq!(
+            made["drawing"]["export_folder"],
+            documents.display().to_string()
+        );
+        assert!(!documents.starts_with(&app.state::<AppState>().config_dir));
     }
 
     #[test]
