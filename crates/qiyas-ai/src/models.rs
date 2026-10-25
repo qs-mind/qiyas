@@ -31,6 +31,8 @@ pub const CLAUDE_MODELS: [(&str, &str); 4] = [
 pub struct ModelInfo {
     pub id: String,
     pub label: String,
+    /// None means the service supplied no image capability.
+    pub image_input: Option<bool>,
 }
 
 /// Where the list comes from.
@@ -49,6 +51,7 @@ pub fn builtin_models(source: ModelSource) -> Vec<ModelInfo> {
             .map(|(id, label)| ModelInfo {
                 id: (*id).to_string(),
                 label: (*label).to_string(),
+                image_input: Some(true),
             })
             .collect(),
         ModelSource::OpenAiCompatible { .. } => Vec::new(),
@@ -138,7 +141,11 @@ pub fn parse_anthropic_page(page: &Value) -> (Vec<ModelInfo>, Option<String>) {
             }
             let id = m["id"].as_str()?.to_string();
             let label = m["display_name"].as_str().unwrap_or(&id).to_string();
-            Some(ModelInfo { id, label })
+            Some(ModelInfo {
+                id,
+                label,
+                image_input: image_input(m),
+            })
         })
         .collect();
     let next = page["has_more"]
@@ -162,7 +169,11 @@ pub fn parse_openai_models(answer: &Value) -> Vec<ModelInfo> {
             }
             let id = m["id"].as_str()?.to_string();
             let label = m["name"].as_str().unwrap_or(&id).to_string();
-            Some(ModelInfo { id, label })
+            Some(ModelInfo {
+                id,
+                label,
+                image_input: image_input(m),
+            })
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -173,17 +184,10 @@ pub fn parse_openai_models(answer: &Value) -> Vec<ModelInfo> {
 /// A missing capability is unknown; an explicit refusal is never offered to Mizan.
 /// OpenRouter and compatible servers describe both input modalities and tool parameters.
 fn supports_assistant(model: &Value) -> bool {
-    for key in ["tools", "tool_calling", "function_calling", "vision"] {
+    for key in ["tools", "tool_calling", "function_calling"] {
         let cap = &model["capabilities"][key];
         if cap.as_bool() == Some(false) || cap["supported"].as_bool() == Some(false) {
             return false;
-        }
-    }
-    for path in ["/architecture/input_modalities", "/input_modalities"] {
-        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
-            if !modalities.iter().any(|m| m == "image") {
-                return false;
-            }
         }
     }
     if let Some(parameters) = model["supported_parameters"].as_array() {
@@ -195,6 +199,28 @@ fn supports_assistant(model: &Value) -> bool {
         }
     }
     true
+}
+
+/// An explicit capability or complete input list is evidence; a model name is not.
+pub fn image_input(model: &Value) -> Option<bool> {
+    let cap = &model["capabilities"]["vision"];
+    if let Some(value) = cap.as_bool().or_else(|| cap["supported"].as_bool()) {
+        return Some(value);
+    }
+    for path in ["/architecture/input_modalities", "/input_modalities"] {
+        if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
+            return Some(modalities.iter().any(|m| m == "image"));
+        }
+    }
+    None
+}
+
+pub(crate) fn image_state(supported: Option<bool>) -> Value {
+    serde_json::json!({"supported":supported,"instruction":match supported {
+        Some(true) => "Images are supported. Verify exact geometry first, then inspect pictures.",
+        Some(false) => "This model cannot see images. Use exact queries and checks. Never claim to have inspected a picture.",
+        None => "Image capability is unknown. Use exact queries and checks; do not claim visual inspection without confirmed image support.",
+    }})
 }
 
 /// What the settings show: the service's list, or the built-in one with why.
@@ -276,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_missing_tools_or_vision_are_not_offered() {
+    fn missing_tools_are_excluded_but_blind_models_have_explicit_capabilities() {
         let models = parse_openai_models(&json!({"data":[
             {"id":"image-only","supported_parameters":[],"architecture":{"input_modalities":["text","image"]}},
             {"id":"text-only","supported_parameters":["tools"],"architecture":{"input_modalities":["text"]}},
@@ -287,7 +313,11 @@ mod tests {
         ]}));
         assert_eq!(
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            ["suitable", "unknown"]
+            ["no-vision", "suitable", "text-only", "unknown"]
+        );
+        assert_eq!(
+            models.iter().map(|m| m.image_input).collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(false), None]
         );
     }
 

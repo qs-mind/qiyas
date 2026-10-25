@@ -184,7 +184,34 @@
         }
       ],
       "symbols_in_driver": true,
-      "host_layer_property": "doors_layer"
+      "host_layer_property": "doors_layer",
+      "zones": {
+        "swing": [
+          {
+            "kind": "polyline",
+            "points": [
+              [
+                0,
+                0
+              ],
+              [
+                "=width/unit",
+                0
+              ],
+              [
+                0,
+                "=width/unit"
+              ]
+            ],
+            "bulges": [
+              0,
+              0.41421356237309503,
+              0
+            ],
+            "closed": true
+          }
+        ]
+      }
     },
     "property_bindings": {
       "host_width": "host.band_width"

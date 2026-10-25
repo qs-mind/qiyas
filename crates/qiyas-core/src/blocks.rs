@@ -996,6 +996,7 @@ impl Session {
                     &mut self.drawing.doc,
                     &mut self.takeoff,
                     &mut crate::undo::ViewRefs {
+                        ucs: &mut self.ucs,
                         current: &mut self.current,
                         hidden: &mut self.visibility.hidden_layers,
                         state_hidden: &mut self.state_hidden,

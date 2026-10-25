@@ -175,7 +175,7 @@ export const AssistantPanel = memo(function AssistantPanel({
     </p>;
     switch (item.kind) {
       case "plan":
-        return <PlanChecklist key={i} phases={item.phases} language={chatLang} showTechnicalDetails={showTechnicalDetails}
+        return <PlanChecklist key={i} phases={item.phases} stale={item.stale} language={chatLang} showTechnicalDetails={showTechnicalDetails}
           onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
             ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;

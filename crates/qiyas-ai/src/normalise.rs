@@ -64,6 +64,45 @@ pub(crate) fn args(
 ) -> Result<(Value, Vec<InputIssue>), ToolError> {
     let mut v = input.clone();
     let mut warnings = vec![];
+    if matches!(tool, READ | EXECUTE) && op == "run" && v.get("type").is_some() {
+        if v.get("command").is_some() || v.get("commands").is_some() {
+            return Err(ToolError::BadInput(
+                "Supply command fields or command, not both forms.".into(),
+            ));
+        }
+        let expected = v
+            .as_object_mut()
+            .and_then(|m| m.remove("expected_revision"));
+        v = json!({"command":v});
+        if let Some(expected) = expected {
+            v["expected_revision"] = expected;
+        }
+        warnings.push(warning(
+            "/args/command",
+            "Wrapped top-level command fields in command.",
+        ));
+    }
+    if tool == READ && op == "query" {
+        if v.get("bounds").is_some_and(|v| !v.is_null())
+            && v.get("within").is_some_and(|v| !v.is_null())
+        {
+            return Err(ToolError::BadInput(
+                "Supply bounds or within, not both.".into(),
+            ));
+        }
+        if v.get("bounds").is_some_and(|v| !v.is_null()) {
+            v["within"] = v["bounds"].clone();
+            v.as_object_mut().unwrap().remove("bounds");
+            warnings.push(warning(
+                "/args/within",
+                "Normalised bounds to the query's within filter.",
+            ));
+        } else if v["bounds"].is_null() {
+            if let Some(map) = v.as_object_mut() {
+                map.remove("bounds");
+            }
+        }
+    }
     if tool == READ && op == "records" && v["where"].is_object() {
         v["where"] = json!([v["where"]]);
         warnings.push(warning(
@@ -92,17 +131,21 @@ pub(crate) fn args(
         && v["kind"] == "window"
         && (v.get("corner1").is_some() || v.get("corner2").is_some())
     {
-        if v.get("bounds").is_some() || v.get("corner1").is_none() || v.get("corner2").is_none() {
+        if v.get("within").is_some()
+            || v.get("bounds").is_some()
+            || v.get("corner1").is_none()
+            || v.get("corner2").is_none()
+        {
             return Err(ToolError::BadInput(
                 "Supply bounds or both corner1 and corner2, not both forms.".into(),
             ));
         }
-        v["bounds"] = json!([v["corner1"], v["corner2"]]);
+        v["within"] = json!([v["corner1"], v["corner2"]]);
         v.as_object_mut().unwrap().remove("corner1");
         v.as_object_mut().unwrap().remove("corner2");
         warnings.push(warning(
-            "/args/bounds",
-            "Normalised corner1 and corner2 to bounds.",
+            "/args/within",
+            "Normalised corner1 and corner2 to within.",
         ));
     }
     if matches!(op, "run" | "batch") {

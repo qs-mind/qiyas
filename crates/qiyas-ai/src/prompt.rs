@@ -352,7 +352,7 @@ mod tests {
             "checked against the user's numbers, before drawing",
             "qiyas_execute plan",
             "pending, active, done or skipped",
-            "After each phase look with qiyas_capture and read the check",
+            "After each phase use exact checks first",
             "Never draw trial geometry and undo it",
             "qiyas_read validate",
             "qiyas_read run wall_groups",
@@ -366,7 +366,7 @@ mod tests {
     fn the_prompt_says_how_to_look_and_what_the_user_points_at() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
-            "Look at the whole sheet with qiyas_capture source picture, then zoom with bounds",
+            "look at the whole sheet with qiyas_capture source picture, then zoom with bounds",
             "source screen shows the drawing canvas only; read panel_state",
             "marks on a capture name the handles",
             "Never guess handles from a picture",

@@ -36,6 +36,9 @@ pub struct PhaseState {
     pub drawing: Option<PathBuf>,
     pub baseline_errors: Option<std::collections::BTreeSet<String>>,
     pub touched: std::collections::BTreeSet<u64>,
+    /// The user's checkable brief survives context trimming and a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_check: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

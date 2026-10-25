@@ -83,6 +83,8 @@ pub struct PlanRecipe {
     pub centreline: bool,
     /// DrawSpec JSON in local drawing coordinates. Strings beginning '=' are expressions.
     pub symbols: Vec<Value>,
+    /// Named local DrawSpec regions used by optional placement checks; no trade semantics.
+    pub zones: BTreeMap<String, Vec<Value>>,
     /// Store local symbol entities in an INSERT driver's block.
     pub symbols_in_driver: bool,
     pub label_template: Option<String>,
@@ -98,6 +100,9 @@ pub enum JoinRule {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HostCut {
+    /// False attaches the object without removing material from its host.
+    #[serde(default = "cuts_host_by_default")]
+    pub cuts_host: bool,
     pub width: String,
     pub at: String,
     #[serde(default)]
@@ -431,7 +436,12 @@ impl ObjectType {
         if self.plan.symbols.len() > 10000 {
             return Err(invalid("Too many symbol entities"));
         }
-        for symbol in &self.plan.symbols {
+        for symbol in self
+            .plan
+            .symbols
+            .iter()
+            .chain(self.plan.zones.values().flatten())
+        {
             let mut checked = symbol.clone();
             validate_symbol(&mut checked, &known)?;
             serde_json::from_value::<DrawSpec>(checked)
@@ -658,8 +668,15 @@ impl Session {
             return Err(invalid("Place at least one object"));
         }
         let mut out = Vec::new();
-        for p in placements {
+        for mut p in placements {
             let definition = self.object_type(&p.type_name)?;
+            if p.driver.is_none()
+                && p.points.is_empty()
+                && p.host.is_some()
+                && definition.geometry == GeometryKind::Hosted
+            {
+                p.points.push([0., 0.]);
+            }
             let mut supplied = p.props.clone();
             for (role, property) in &definition.plan.layer_properties {
                 if let Some(layer) = p.layers.get(role) {
@@ -1387,8 +1404,22 @@ impl Session {
             .entities()
             .filter_map(instance)
             .filter(|o| o.host.is_some_and(|host| ids.contains(&host)))
-            .map(|o| self.band_cut(&o, &self.object_type(&o.type_name)?))
-            .collect::<Result<Vec<_>, CoreError>>()?;
+            .map(|o| {
+                let definition = self.object_type(&o.type_name)?;
+                if definition
+                    .host_cut
+                    .as_ref()
+                    .is_some_and(|cut| !cut.cuts_host)
+                {
+                    Ok(None)
+                } else {
+                    self.band_cut(&o, &definition).map(Some)
+                }
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         // Entity storage uses swap removal. Its iteration order must not decide the order
         // of boolean cuts: driver identities and geometric positions are stable instead.
         cuts.sort_by(|a, b| {
@@ -1765,6 +1796,66 @@ impl Session {
         }
         Ok(result)
     }
+    /// Evaluate check regions in the same physical frame as the object's drawn symbol.
+    pub(crate) fn object_zone_entities(
+        &self,
+        object: &ObjectInstance,
+        definition: &ObjectType,
+    ) -> Result<BTreeMap<String, Vec<EntityType>>, CoreError> {
+        let driver = self
+            .drawing
+            .doc
+            .get_entity(Handle::new(object.id))
+            .ok_or_else(|| invalid("Missing object driver"))?;
+        let context = self.object_context(object, definition)?;
+        let pos = driver_position(driver);
+        let placing = crate::modify::Placing::plain(
+            opencadcodec::types::Transform::from_rotation(
+                opencadcodec::Vector3::UNIT_Z,
+                driver_rotation(driver),
+            )
+            .then(&opencadcodec::types::Transform::from_translation(
+                opencadcodec::Vector3::new(pos[0], pos[1], 0.),
+            )),
+        );
+        let mirrored_x = match driver {
+            EntityType::Point(p) => p.normal.z < 0.,
+            EntityType::Insert(i) => i.x_scale() < 0.,
+            _ => false,
+        };
+        let mirrored_y = matches!(driver, EntityType::Insert(i) if i.y_scale() < 0.);
+        let mut zones = BTreeMap::new();
+        for (name, recipes) in &definition.plan.zones {
+            let mut entities = Vec::new();
+            for spec in evaluated_symbol_specs(recipes, &context)? {
+                for mut entity in self.draw_entities(spec)? {
+                    if mirrored_x {
+                        crate::modify::place(
+                            &mut entity,
+                            &crate::modify::Placing::mirror(
+                                opencadcodec::types::Transform::from_mirror_y(),
+                                0.,
+                            ),
+                        );
+                    }
+                    if mirrored_y {
+                        crate::modify::place(
+                            &mut entity,
+                            &crate::modify::Placing::mirror(
+                                opencadcodec::types::Transform::from_mirror_x(),
+                                std::f64::consts::FRAC_PI_2,
+                            ),
+                        );
+                    }
+                    crate::modify::place(&mut entity, &placing);
+                    entities.push(entity);
+                }
+            }
+            zones.insert(name.clone(), entities);
+        }
+        Ok(zones)
+    }
+
     pub(crate) fn move_hosted_object(
         &mut self,
         handle: Handle,
@@ -1845,17 +1936,46 @@ impl Session {
             let host_definition = self.object_type(&host.type_name)?;
             let member = self.band_member(&host, &host_definition)?;
             let evaluated = self.band_cut(&object, &definition)?;
-            let built = crate::object_bands::derive_band(
-                &[member],
-                &[evaluated],
-                self.drawing.units.to_metres(),
-                self.measure_tol(),
-            )?;
-            let placed = built
-                .geometry
-                .openings
-                .first()
-                .ok_or_else(|| invalid("Missing hosted position"))?;
+            let (centre, direction) = if cut.cuts_host {
+                let built = crate::object_bands::derive_band(
+                    &[member],
+                    &[evaluated],
+                    self.drawing.units.to_metres(),
+                    self.measure_tol(),
+                )?;
+                let placed = built
+                    .geometry
+                    .openings
+                    .first()
+                    .ok_or_else(|| invalid("Missing hosted position"))?;
+                (placed.centre, placed.dir)
+            } else {
+                let mut station = evaluated.at_m / self.drawing.units.to_metres();
+                let mut points = member.points;
+                if member.closed {
+                    points.push(points[0]);
+                }
+                let mut placement = None;
+                for edge in points.windows(2) {
+                    let length = (edge[1][0] - edge[0][0]).hypot(edge[1][1] - edge[0][1]);
+                    if length <= 0. {
+                        continue;
+                    }
+                    if station >= 0. && station <= length {
+                        let dir = [
+                            (edge[1][0] - edge[0][0]) / length,
+                            (edge[1][1] - edge[0][1]) / length,
+                        ];
+                        placement = Some((
+                            [edge[0][0] + station * dir[0], edge[0][1] + station * dir[1]],
+                            dir,
+                        ));
+                        break;
+                    }
+                    station -= length;
+                }
+                placement.ok_or_else(|| invalid("The placement station is outside its host"))?
+            };
             let context = self.object_context(&object, &definition)?;
             let factor = self.drawing.units.to_metres();
             let along = cut
@@ -1882,10 +2002,10 @@ impl Session {
                         .map_err(|e| invalid(e.to_string()))
                 })
                 .transpose()?;
-            let [dx, dy] = placed.dir;
+            let [dx, dy] = direction;
             let at = [
-                placed.centre[0] + dx * along - dy * normal,
-                placed.centre[1] + dy * along + dx * normal,
+                centre[0] + dx * along - dy * normal,
+                centre[1] + dy * along + dx * normal,
             ];
             let angle = dy.atan2(dx).rem_euclid(std::f64::consts::TAU);
             let entity = self
@@ -2358,4 +2478,8 @@ pub(crate) fn display(value: &Value) -> String {
         Value::String(s) => s.clone(),
         _ => value.to_string(),
     }
+}
+
+fn cuts_host_by_default() -> bool {
+    true
 }

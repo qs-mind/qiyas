@@ -47,6 +47,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "brief_check") => crate::brief_check::contract(),
         (READ, "explain") => (
             object(json!({"item":string,"project":string}), &["item"]),
             json!({"item":"generated:A"}),
@@ -200,11 +201,13 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
             let variants: Vec<_> = surface::QUERY_KINDS
                 .iter()
                 .map(|kind| {
-                    let mut props = json!({"kind":{"const":kind}});
+                    let mut props = json!({"kind":{"const":kind},"within":nullable(&bounds),"bounds":nullable(&bounds)});
                     let mut required = vec!["kind"];
                     match *kind {
                         "near" => {
                             props["point"] = point.clone();
+                            props["sheet"] = nullable(&string);
+                            props["offset"] = nullable(&handle);
                             props["radius"] = nullable(&number);
                             props["layer"] = nullable(&string);
                             props["type"] = nullable(&string);
@@ -380,6 +383,7 @@ mod tests {
             json!({"kind":"entity","handle":1,"chain":[]}),
             json!({"kind":"texts","sheet":null,"within":null,"offset":0}),
             json!({"kind":"tables","sheet":null,"offset":0}),
+            json!({"kind":"tables","within":[[0,0],[1,1]]}),
             json!({"kind":"dimensions","sheet":null,"offset":0}),
             json!({"kind":"blocks","sheet":null,"offset":0}),
             json!({"kind":"boundary","point":[0,0]}),
@@ -392,8 +396,8 @@ mod tests {
             (json!({"kind":"texts","contains":"Room"}), "/args/contains"),
             (json!({"kind":"blocks","name":"DOOR"}), "/args/name"),
             (
-                json!({"kind":"tables","within":[[0,0],[1,1]]}),
-                "/args/within",
+                json!({"kind":"tables","within_typo":[[0,0],[1,1]]}),
+                "/args/within_typo",
             ),
             (json!({"kind":"dimensions","layer":"A-DIMS"}), "/args/layer"),
             (

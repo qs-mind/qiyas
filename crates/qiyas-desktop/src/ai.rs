@@ -236,6 +236,7 @@ pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
     AgentSettings {
         provider: provider_identity(s),
         model: s.profile().model.clone(),
+        image_input: s.profile().image_input,
         effort: s.effective_effort().to_string(),
         language,
         autonomy: s.autonomy,
@@ -384,6 +385,7 @@ mod tests {
             providers: settings::ProviderProfiles {
                 openai_compatible: settings::ProviderProfile {
                     effort: None,
+                    image_input: None,
                     base_url: Some("https://api.runware.ai/v1".into()),
                     model: "google:gemini@3.8-flash".into(),
                 },

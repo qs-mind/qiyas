@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 22] = [
+pub const RULES: [&str; 23] = [
+    "placement",
     "literal_newline",
     "duplicate",
     "overlap",
@@ -48,6 +49,7 @@ pub const RULES: [&str; 22] = [
 /// The pack that owns a drawing check rule.
 pub fn rule_pack(rule: &str) -> &'static str {
     match rule {
+        "placement" => "placement",
         "room_open" | "room_size_text_differs" | "room_area_mismatch" | "unlinked_takeoff" => {
             "construction"
         }
@@ -81,10 +83,10 @@ pub struct CheckScope {
     /// Only findings that involve one of these entities (what a change touched); every finding
     /// when empty.
     pub handles: Vec<u64>,
-    /// Packs to check: "general" and "construction". Empty selects general, plus construction
+    /// Packs to check: "general", "construction" and optional data-owned "placement". Empty selects general, plus construction
     /// when the drawing has retained rooms, take-off rows or enclosure geometry. Explicit rule
     /// requests run regardless of that inference; an explicit pack remains binding.
-    #[schemars(extend("items" = serde_json::json!({"type":"string","enum":["general","construction"]})))]
+    #[schemars(extend("items" = serde_json::json!({"type":"string","enum":["general","construction","placement"]})))]
     pub packs: Vec<String>,
     /// Only these rules; every rule when empty: literal_newline, duplicate, overlap,
     /// dangling_end, overshoot, tiny_segment, room_open, room_size_text_differs,
@@ -321,10 +323,15 @@ impl Session {
                     EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_)
                 )
             });
+        let placement = self.has_placement_pack();
         let wanted = |rule: &str| {
             let pack = rule_pack(rule);
             let enabled = if scope.packs.is_empty() {
-                pack == "general" || construction || !scope.rules.is_empty()
+                if pack == "placement" {
+                    placement || scope.rules.iter().any(|r| r == rule)
+                } else {
+                    pack == "general" || construction || !scope.rules.is_empty()
+                }
             } else {
                 scope.packs.iter().any(|p| p == pack)
             };
@@ -667,6 +674,23 @@ impl Session {
             }
         }
 
+        let mut placement_complete = true;
+        if wanted("placement") {
+            match self.placement_findings(&sheet) {
+                Ok(findings) => found.extend(findings),
+                Err(error) => {
+                    placement_complete = false;
+                    found.push(Finding {
+                        rule: "placement",
+                        pack: "placement",
+                        severity: Severity::Warning,
+                        handles: vec![],
+                        at: None,
+                        message: format!("Placement checks are incomplete: {error}"),
+                    });
+                }
+            }
+        }
         // Only what the scope asks about, errors first.
         found.retain(|f| wanted(f.rule));
         if !scope.handles.is_empty() {
@@ -694,7 +718,7 @@ impl Session {
         found.truncate(limit);
         not_checked.sort_unstable();
         not_checked.dedup();
-        let complete = not_checked.is_empty();
+        let complete = not_checked.is_empty() && placement_complete;
         let mut line = check_line(errors, warnings, found.len(), &counts);
         if !complete {
             line = format!(
@@ -1365,10 +1389,10 @@ impl CheckScope {
         if let Some(pack) = self
             .packs
             .iter()
-            .find(|p| !["general", "construction"].contains(&p.as_str()))
+            .find(|p| !["general", "construction", "placement"].contains(&p.as_str()))
         {
             return Err(crate::CoreError::InvalidCommand(format!(
-                "Unknown check pack {pack}. Choose general or construction"
+                "Unknown check pack {pack}. Choose general, construction or placement"
             )));
         }
         Ok(())

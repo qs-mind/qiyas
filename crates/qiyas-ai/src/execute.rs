@@ -1519,6 +1519,27 @@ fn page<T: serde::Serialize>(rows: Vec<T>, offset: usize) -> Value {
     json!({ "rows": rows, "total": total })
 }
 
+/// Spatial filtering happens before grouping/paging, with the same result metadata as a full read.
+pub(super) fn filtered_query_page(
+    session: &Session,
+    kind: &str,
+    sheet: Option<&str>,
+    rows: Vec<Value>,
+    offset: usize,
+) -> Result<ToolOutput, ToolError> {
+    let block = sheet_block(session, sheet)?;
+    let mut out = page(rows, offset);
+    if matches!(kind, "dimensions" | "near" | "window") {
+        out = with_units(session, &block, out);
+    }
+    if kind == "blocks" {
+        out["count_scope"] = json!(qiyas_core::INSERT_COUNT_SCOPE);
+        out["visibility_policy"] = json!("as_shown");
+        out["limitations"] = json!(qiyas_core::INSERT_COUNT_LIMITATIONS);
+    }
+    Ok(ToolOutput::Json(capped(rounded(out), offset)))
+}
+
 /// `conflicts` from `offset` on, with the counts of all of them per kind and per status.
 fn conflicts_page(conflicts: &[qiyas_core::Conflict], offset: usize) -> Value {
     let mut by_kind = serde_json::Map::new();

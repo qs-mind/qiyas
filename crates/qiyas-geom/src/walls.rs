@@ -583,7 +583,21 @@ fn fit_message(
     unit: f64,
 ) -> String {
     let opening = &openings[index];
+    if !opening.width.is_finite() || opening.width <= tol {
+        return format!(
+            "; choose a finite width greater than {} drawing units",
+            tol * unit
+        );
+    }
     let centres = free_centres(segments, openings, index, tol);
+    let nearest = centres
+        .iter()
+        .filter_map(|&(a, a_ok, b, b_ok)| {
+            let a = if a_ok { a } else { a + tol };
+            let b = if b_ok { b } else { b - tol };
+            (a <= b && opening.at.is_finite()).then(|| opening.at.clamp(a, b))
+        })
+        .min_by(|a, b| (a - opening.at).abs().total_cmp(&(b - opening.at).abs()));
     let shown: Vec<String> = centres
         .iter()
         .filter_map(|&(a, a_ok, b, b_ok)| {
@@ -593,7 +607,7 @@ fn fit_message(
             (a <= b).then(|| format!("{} to {}", number(a), number(b)))
         })
         .collect();
-    if shown.is_empty() {
+    if nearest.is_none() {
         return format!(
             "; an opening {} wide fits nowhere on run {}: make it narrower or put it on another run",
             number(opening.width * unit),
@@ -601,10 +615,11 @@ fn fit_message(
         );
     }
     format!(
-        "; an opening {} wide fits on run {} with its `at` from {}",
+        "; an opening {} wide fits on run {} with its `at` from {}; nearest valid `at`: {} (drawing units). This is advice; no opening was moved",
         number(opening.width * unit),
         opening.run,
-        shown.join(", or from ")
+        if shown.is_empty() { (nearest.unwrap() * unit).to_string() } else { shown.join(", or from ") },
+        nearest.unwrap() * unit
     )
 }
 

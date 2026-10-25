@@ -13,6 +13,11 @@ pub struct Revision {
     pub session: String,
     pub document_revision: u64,
     pub knowledge_revision: u64,
+    pub geometry_revision: u64,
+    pub selection_revision: u64,
+    pub sheet_revision: u64,
+    #[serde(skip)]
+    knowledge_state: u64,
     pub sheet: String,
     pub context: u64,
 }
@@ -28,7 +33,11 @@ pub(crate) struct RevisionChange {
 
 pub(crate) struct RevisionHistory {
     session: String,
-    sequence: u64,
+    geometry: u64,
+    knowledge: u64,
+    selection: u64,
+    selected: Vec<crate::Target>,
+    knowledge_cache: std::sync::Mutex<Option<(u64, u64, u64)>>,
     entries: VecDeque<RevisionChange>,
 }
 
@@ -36,7 +45,11 @@ impl Default for RevisionHistory {
     fn default() -> Self {
         Self {
             session: uuid::Uuid::new_v4().to_string(),
-            sequence: 0,
+            geometry: 0,
+            knowledge: 0,
+            selection: 0,
+            selected: Vec::new(),
+            knowledge_cache: std::sync::Mutex::new(None),
             entries: VecDeque::new(),
         }
     }
@@ -44,13 +57,40 @@ impl Default for RevisionHistory {
 
 pub fn revision_schema() -> Value {
     json!({"type":"object","additionalProperties":false,
-        "required":["session","document_revision","knowledge_revision","sheet","context"],
-        "properties":{"session":{"type":"string"},"document_revision":{"type":"integer","minimum":0},
-        "knowledge_revision":{"type":"integer","minimum":0},"sheet":{"type":"string"},"context":{"type":"integer","minimum":0}}})
+        "properties":{"session":{"type":["string","null"]},"document_revision":{"type":["integer","null"],"minimum":0},
+        "sheet_revision":{"type":["integer","null"],"minimum":0},"geometry_revision":{"type":["integer","null"],"minimum":0},"selection_revision":{"type":["integer","null"],"minimum":0},
+        "knowledge_revision":{"type":["integer","null"],"minimum":0},"sheet":{"type":["string","null"]},"context":{"type":["integer","null"],"minimum":0}}})
+}
+
+fn matches(expected: &Value, current: &Revision) -> bool {
+    let current = json!(current);
+    expected.as_object().is_some_and(|fields| {
+        fields
+            .iter()
+            .all(|(key, value)| value.is_null() || current.get(key) == Some(value))
+    })
 }
 
 impl Session {
     pub fn revision(&self) -> Revision {
+        // Several reads can report the same revision. Hash knowledge once per committed
+        // document/history version, without making geometry edits increment its part.
+        let knowledge_state = {
+            let mut cache = self
+                .revision_history
+                .knowledge_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let key = (self.document_revision(), self.history_revision());
+            match *cache {
+                Some((document, history, fingerprint)) if (document, history) == key => fingerprint,
+                _ => {
+                    let fingerprint = crate::knowledge::revision_fingerprint(&self.drawing.doc);
+                    *cache = Some((key.0, key.1, fingerprint));
+                    fingerprint
+                }
+            }
+        };
         // This includes non-entity choices which affect defaults and reads. Knowledge and
         // definitions live in the document; table-only edits also move the history revision.
         let context = json!([
@@ -67,16 +107,52 @@ impl Session {
         for byte in context.to_string().bytes() {
             hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
         }
+        let mut sheets = self
+            .drawing
+            .doc
+            .objects
+            .iter()
+            .filter(|(_, object)| matches!(object, opencadcodec::objects::ObjectType::Layout(_)))
+            .map(|(handle, object)| (handle.value(), format!("{object:?}")))
+            .collect::<Vec<_>>();
+        sheets.sort_by_key(|(handle, _)| *handle);
+        let sheet_state = json!([
+            self.automation_sheet.as_deref().unwrap_or(&self.sheet),
+            self.drawing.sheets(),
+            self.annotation_scale(),
+            sheets
+        ]);
+        let sheet_revision = sheet_state
+            .to_string()
+            .bytes()
+            .fold(0xcbf29ce484222325u64, |hash, b| {
+                (hash ^ u64::from(b)).wrapping_mul(0x100000001b3)
+            })
+            & ((1 << 53) - 1);
         Revision {
+            sheet_revision,
             session: self.revision_history.session.clone(),
             document_revision: self.document_revision(),
-            knowledge_revision: self.revision_history.sequence,
+            knowledge_revision: self.revision_history.knowledge,
+            geometry_revision: self.revision_history.geometry,
+            selection_revision: self.revision_history.selection,
+            knowledge_state,
             sheet: self
                 .automation_sheet
                 .as_deref()
                 .unwrap_or(&self.sheet)
                 .into(),
             context: hash & ((1 << 53) - 1),
+        }
+    }
+
+    /// Hosts report the live selection independently of drawing edits.
+    pub fn set_read_selection(&mut self, targets: &[crate::Target]) {
+        if self.revision_history.selected != targets {
+            let before = self.revision();
+            self.revision_history.selected = targets.to_vec();
+            self.revision_history.selection += 1;
+            self.record_revision(before);
         }
     }
 
@@ -99,10 +175,29 @@ impl Session {
         {
             return;
         }
-        self.revision_history.sequence += 1;
-        after.knowledge_revision = self.revision_history.sequence;
-        let mut change = self.last_change.clone();
-        let mut handle_map = self.handle_map();
+        if before.knowledge_state != after.knowledge_state {
+            self.revision_history.knowledge += 1;
+        }
+        if before.document_revision != after.document_revision
+            && (!self.last_change.added.is_empty()
+                || !self.last_change.changed.is_empty()
+                || !self.last_change.removed.is_empty())
+        {
+            self.revision_history.geometry += 1;
+        }
+        after.knowledge_revision = self.revision_history.knowledge;
+        after.geometry_revision = self.revision_history.geometry;
+        let drawing_changed = before.document_revision != after.document_revision;
+        let mut change = if drawing_changed {
+            self.last_change.clone()
+        } else {
+            Change::default()
+        };
+        let mut handle_map = if drawing_changed {
+            self.handle_map()
+        } else {
+            BTreeMap::new()
+        };
         let mut left = KEEP_HANDLES;
         let mut complete = true;
         for handles in [&mut change.added, &mut change.changed, &mut change.removed] {
@@ -144,13 +239,15 @@ impl Session {
     }
 
     pub fn check_revision(&self, expected: &Value) -> Result<(), CoreError> {
-        let expected: Revision = serde_json::from_value(expected.clone()).map_err(|e| {
-            CoreError::InvalidCommand(format!(
-                "expected_revision must be the complete revision from a read: {e}"
-            ))
-        })?;
+        let report = crate::validation::validate_schema(&revision_schema(), expected);
+        if !report.valid || !report.warnings.is_empty() {
+            return Err(CoreError::InvalidCommand(format!(
+                "expected_revision accepts any subset of the revision parts: {}",
+                report.message()
+            )));
+        }
         let current = self.revision();
-        if expected == current {
+        if matches(expected, &current) {
             return Ok(());
         }
         let mut added = BTreeSet::<u64>::new();
@@ -158,14 +255,22 @@ impl Session {
         let mut removed = BTreeSet::<u64>::new();
         let mut maps = Vec::new();
         let mut replacements = BTreeMap::<u64, Vec<u64>>::new();
-        let same_session = expected.session == current.session;
-        let entries: Vec<_> = self
-            .revision_history
-            .entries
-            .iter()
-            .filter(|e| same_session && e.after.knowledge_revision > expected.knowledge_revision)
-            .collect();
-        let complete = entries.first().is_some_and(|e| e.before == expected)
+        let same_session = expected
+            .get("session")
+            .filter(|v| !v.is_null())
+            .is_none_or(|v| v == &json!(current.session));
+        let start = same_session
+            .then(|| {
+                self.revision_history
+                    .entries
+                    .iter()
+                    .position(|e| matches(expected, &e.before))
+            })
+            .flatten();
+        let entries: Vec<_> = start
+            .map(|start| self.revision_history.entries.iter().skip(start).collect())
+            .unwrap_or_default();
+        let complete = start.is_some()
             && entries.iter().all(|e| e.complete)
             && entries
                 .windows(2)
@@ -191,20 +296,24 @@ impl Session {
             }
         }
         let mut components = Vec::new();
-        if !same_session {
-            components.push("drawing");
-        }
-        if expected.document_revision != current.document_revision {
-            components.push("document");
-        }
-        if expected.knowledge_revision != current.knowledge_revision {
-            components.push("knowledge_or_tables");
-        }
-        if expected.sheet != current.sheet {
-            components.push("sheet");
-        }
-        if expected.context != current.context {
-            components.push("working_context");
+        let now = json!(current);
+        for (field, part) in [
+            ("session", "drawing"),
+            ("document_revision", "document"),
+            ("geometry_revision", "geometry"),
+            ("knowledge_revision", "knowledge"),
+            ("sheet", "sheet"),
+            ("selection_revision", "selection"),
+            ("sheet_revision", "sheet"),
+            ("context", "working_context"),
+        ] {
+            if expected
+                .get(field)
+                .is_some_and(|v| !v.is_null() && v != &now[field])
+                && !components.contains(&part)
+            {
+                components.push(part);
+            }
         }
         Err(CoreError::StaleRead {
             details: json!({"revision":current,"expected_revision":expected,

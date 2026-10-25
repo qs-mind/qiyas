@@ -26,7 +26,7 @@ fn arabic_rules_use_the_three_tools_and_preserve_measurement_safeguards() {
         "qiyas_execute plan",
         "pending أو active أو done أو skipped",
         "batch واحد لكل مرحلة، لا لكل العمل",
-        "بعد كل مرحلة انظر بـ qiyas_capture واقرأ المراجعة",
+        "بعد كل مرحلة تحقّق بدقة أولًا",
         "لا ترسم أشكالًا تجريبية وتتراجع عنها لتتعلم",
         "qiyas_read validate",
         "qiyas_read run wall_groups",

@@ -32,12 +32,13 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 21] = [
+pub const READ_OPS: [&str; 22] = [
     "explain",
     "digest",
     "takeoff_kit",
     "workflow",
     "takeoff_check",
+    "brief_check",
     "document",
     "state",
     "capabilities",
@@ -126,6 +127,7 @@ operations![
     (READ, "check", [Drawing]),
     (READ, "history", [Drawing]),
     (READ, "rooms", [Drawing]),
+    (READ, "brief_check", [Drawing]),
     (READ, "drawings", [Host], "list_drawings"),
     (READ, "selection", [Window, Drawing], "get_selection"),
     (READ, "panel_state", [Window], "panel_state"),
@@ -205,6 +207,11 @@ pub fn tools() -> Vec<ToolSpec> {
     for field in revision["properties"].as_object_mut().unwrap().values_mut() {
         field.as_object_mut().unwrap().remove("minimum");
     }
+    revision["required"] = json!(revision["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect::<Vec<_>>());
     let args = json!({
         "type": "string",
         "description": "The op's arguments as a JSON object written as a string, e.g. \"{\\\"name\\\": \\\"draw.line\\\"}\"; \"{}\" for none."
@@ -212,7 +219,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -828,6 +835,7 @@ fn run_working_session(
                 session.explain(item)?
             })
         }
+        (READ, "brief_check") => json(crate::brief_check::run(session, args, source)?),
         (READ, "document") => json(crate::document::read(args)?),
         (CAPTURE, "document") => crate::document::capture(args),
         (READ, "digest") => {
@@ -1101,6 +1109,7 @@ fn state(session: &Session) -> Value {
     let (scale, factor) = session.annotation_scale();
     let to_m = session.drawing.units.to_metres();
     json!({
+        "image_input": crate::models::image_state(None),
         "local_date": chrono::Local::now().format("%Y-%m-%d").to_string(),
         "file": session.drawing.path.file_name().map(|f| f.to_string_lossy().to_string()),
         "units": info.units,
@@ -1154,7 +1163,7 @@ fn capabilities() -> Value {
         },
         "capture": ["screen", "picture"],
         "query_kinds": QUERY_KINDS,
-        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters", "objects", "object_types", "knowledge_types", "knowledge_levels", "knowledge_tables", "knowledge_rules", "knowledge_sheets", "knowledge_mappings", "knowledge_views", "knowledge_measurement", "knowledge_checks", "knowledge_queries", "knowledge_reports"],
+        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters", "objects", "object_types", "knowledge_types", "knowledge_levels", "knowledge_tables", "knowledge_rules", "knowledge_sheets", "knowledge_mappings", "knowledge_views", "knowledge_measurement", "knowledge_checks", "knowledge_queries", "knowledge_reports", "knowledge_placement"],
         "creatable_entity_types": qiyas_core::record_edit::CREATABLE,
         "check_rules": qiyas_core::check::RULES,
         "commands_by_category": categories,
@@ -1168,7 +1177,7 @@ fn finish_kit(kit: &mut Value) {
     kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
     // Reserve room for the read revision by avoiding duplicate prose in this compact kit.
     kit["end_report"] = json!({"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved":"takeoff_check"});
-    kit["measurement_rules"] = json!("count/length/area/volume; basis geometric or rule:<cited note name>. Apply cited factors to named_handles. Counts are whole numbers. Report Exclude <handle>: <reason> (note <handle>). Review takeoff_check.");
+    kit["measurement_rules"] = json!("basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).");
 }
 
 fn commands(args: &Value) -> Result<Value, ToolError> {
@@ -1297,14 +1306,41 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
         .as_object_mut()
         .and_then(|o| o.remove("limit"))
         .and_then(|v| v.as_u64());
+    let within: Option<[[f64; 2]; 2]> = args
+        .get("within")
+        .filter(|v| !v.is_null())
+        .map(|v| read_args(v, "query within"))
+        .transpose()?;
+    if kind != "texts" {
+        rest.as_object_mut().unwrap().remove("within");
+    }
+    let inside = |p: [f64; 2]| {
+        within.is_none_or(|b| {
+            (0..2).all(|i| p[i] >= b[0][i].min(b[1][i]) && p[i] <= b[0][i].max(b[1][i]))
+        })
+    };
+    let page = |session: &Session, rows: Vec<Value>| {
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+        crate::execute::filtered_query_page(session, kind, args["sheet"].as_str(), rows, offset)
+    };
     let result = match kind {
         "near" => {
             let p: [f64; 2] = read_args(&args["point"], "query near: point")?;
             let r = args["radius"]
                 .as_f64()
                 .unwrap_or(0.5 / crate::execute::sheet_metres_per_unit(session));
-            let mut find = json!({ "within": [[p[0] - r, p[1] - r], [p[0] + r, p[1] + r]] });
-            for k in ["layer", "type", "limit"] {
+            let mut box_ = [[p[0] - r, p[1] - r], [p[0] + r, p[1] + r]];
+            if let Some(b) = within {
+                for i in 0..2 {
+                    box_[0][i] = box_[0][i].max(b[0][i].min(b[1][i]));
+                    box_[1][i] = box_[1][i].min(b[0][i].max(b[1][i]));
+                }
+                if (0..2).any(|i| box_[0][i] > box_[1][i]) {
+                    return page(session, vec![]);
+                }
+            }
+            let mut find = json!({ "within": box_ });
+            for k in ["layer", "type", "limit", "sheet", "offset"] {
                 if let Some(v) = args.get(k) {
                     find[if k == "type" { "kind" } else { k }] = v.clone();
                 }
@@ -1312,7 +1348,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             execute(session, "find_entities", &find, source)
         }
         "window" => {
-            let mut find = json!({ "within": args.get("bounds").cloned().unwrap_or(Value::Null) });
+            let mut find = json!({ "within": within });
             for k in ["layer", "type", "limit", "offset", "sheet"] {
                 if let Some(v) = args.get(k) {
                     find[if k == "type" { "kind" } else { k }] = v.clone();
@@ -1320,14 +1356,81 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             }
             execute(session, "find_entities", &find, source)
         }
-        "entity" => execute(session, "get_entity", &rest, source),
+        "entity" => {
+            let handle = args["handle"].as_u64().unwrap();
+            let chain: Vec<u64> = args
+                .get("chain")
+                .map(|v| read_args(v, "chain"))
+                .transpose()?
+                .unwrap_or_default();
+            if within
+                .map(|b| session.entity_in_query_box(handle, &chain, b))
+                .transpose()?
+                .is_some_and(|inside| !inside)
+            {
+                Ok(ToolOutput::Json(json!({"entity":null,"matched":false})))
+            } else {
+                execute(session, "get_entity", &rest, source)
+            }
+        }
         "texts" => execute(session, "read_text", &rest, source),
+        "tables" if within.is_some() => page(
+            session,
+            session
+                .read_tables_within(args["sheet"].as_str(), within)
+                .into_iter()
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        "dimensions" if within.is_some() => page(
+            session,
+            session
+                .read_dimensions(args["sheet"].as_str())
+                .into_iter()
+                .filter(|r| inside(r.at))
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        "blocks" if within.is_some() => page(
+            session,
+            session
+                .block_summary_within(args["sheet"].as_str(), within.unwrap())
+                .into_iter()
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        "layers" if within.is_some() => {
+            let mut filter = qiyas_core::EntityFilter {
+                within,
+                limit: 500,
+                ..Default::default()
+            };
+            let mut names = std::collections::BTreeSet::new();
+            loop {
+                let found = session.find_entities(&filter);
+                names.extend(found.rows.into_iter().map(|r| r.layer.to_lowercase()));
+                let Some(next) = found.next_offset else { break };
+                filter.offset = next;
+            }
+            page(
+                session,
+                session
+                    .layers()
+                    .into_iter()
+                    .filter(|l| names.contains(&l.name.to_lowercase()))
+                    .map(|l| json!(l))
+                    .collect(),
+            )
+        }
         "tables" => execute(session, "read_tables", &rest, source),
         "dimensions" => execute(session, "read_dimensions", &rest, source),
         "blocks" => execute(session, "block_summary", &rest, source),
         "layers" => execute(session, "list_layers", &rest, source),
         "boundary" => {
             let p: [f64; 2] = read_args(&args["point"], "query boundary: point")?;
+            if !inside(p) {
+                return Ok(ToolOutput::Json(json!({"ring":null,"matched":false})));
+            }
             let to_m = crate::execute::sheet_metres_per_unit(session);
             match session.boundary_at(p, 1.0 / to_m) {
                 qiyas_core::Boundary::Ring {
@@ -1599,7 +1702,13 @@ fn close_commands(name: &str) -> Vec<&'static str> {
         .commands()
         .iter()
         .filter(|command| !command.internal)
-        .map(|command| (distance(&name, &command.name), command.name.as_str()))
+        .map(|command| {
+            let short = command.name.rsplit('.').next().unwrap_or(&command.name);
+            (
+                distance(&name, &command.name).min(distance(&name, short)),
+                command.name.as_str(),
+            )
+        })
         .collect();
     ranked.extend(OPERATIONS.iter().map(|o| (distance(&name, o.op), o.op)));
     ranked.sort_unstable();

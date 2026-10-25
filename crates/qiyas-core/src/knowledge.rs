@@ -13,6 +13,39 @@ pub const DICTIONARY: &str = "QIYAS_KNOWLEDGE";
 pub const VERSION: u32 = 1;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
+/// Fingerprint only the drawing's knowledge subtree, without parsing its JSON recipes.
+/// Used at read/commit boundaries; ordinary entity edits cannot masquerade as knowledge edits.
+pub(crate) fn revision_fingerprint(doc: &CadDocument) -> u64 {
+    fn walk(
+        doc: &CadDocument,
+        h: Handle,
+        hash: &mut u64,
+        seen: &mut std::collections::BTreeSet<Handle>,
+    ) {
+        if !seen.insert(h) {
+            return;
+        }
+        let Some(object) = doc.objects.get(&h) else {
+            return;
+        };
+        for b in format!("{object:?}").bytes() {
+            *hash = (*hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
+        }
+        if let ObjectType::Dictionary(d) = object {
+            let mut children = d.entries.clone();
+            children.sort_by(|a, b| a.0.cmp(&b.0));
+            for (_, h) in children {
+                walk(doc, h, hash, seen);
+            }
+        }
+    }
+    let mut hash = 0xcbf29ce484222325;
+    if let Ok(Some(root)) = child(doc, doc.header.named_objects_dict_handle, DICTIONARY) {
+        walk(doc, root, &mut hash, &mut std::collections::BTreeSet::new());
+    }
+    hash
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -29,10 +62,11 @@ pub enum Kind {
     Queries,
     Revisions,
     Reports,
+    Placement,
 }
 
 impl Kind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Types,
         Self::Levels,
         Self::Tables,
@@ -46,6 +80,7 @@ impl Kind {
         Self::Queries,
         Self::Revisions,
         Self::Reports,
+        Self::Placement,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -63,6 +98,7 @@ impl Kind {
             Self::Queries => "queries",
             Self::Revisions => "revisions",
             Self::Reports => "reports",
+            Self::Placement => "placement",
         }
     }
 }
@@ -316,7 +352,11 @@ fn ensure_kind_dictionary(doc: &mut CadDocument, kind: Kind) -> Result<Handle, C
         }
     }
     for k in Kind::ALL {
-        if child(doc, knowledge, k.as_str())?.is_none() {
+        // Optional pack storage is created on first use. Other edits must not allocate
+        // new handles just because an unused pack collection is available.
+        if (k != Kind::Placement || kind == Kind::Placement)
+            && child(doc, knowledge, k.as_str())?.is_none()
+        {
             add_dictionary(doc, knowledge, k.as_str());
         }
     }

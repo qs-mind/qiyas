@@ -155,6 +155,7 @@ impl Session {
                     schedules: &mut self.schedules,
                     doc: &mut self.drawing.doc,
                     view: ViewRefs {
+                        ucs: &mut self.ucs,
                         current: &mut self.current,
                         hidden: &mut self.visibility.hidden_layers,
                         state_hidden: &mut self.state_hidden,

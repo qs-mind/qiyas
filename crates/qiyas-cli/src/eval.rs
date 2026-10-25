@@ -412,6 +412,7 @@ impl Provider for Metered {
 }
 
 struct SavedProvider {
+    image_input: Option<bool>,
     name: String,
     model: String,
     base_url: Option<String>,
@@ -635,6 +636,7 @@ impl SavedProvider {
             return Err("Provider addresses containing credentials, queries or fragments cannot be used for evaluation".into());
         }
         Ok(Self {
+            image_input: profile["image_input"].as_bool(),
             name: name.into(),
             model: model.into(),
             base_url,
@@ -656,6 +658,7 @@ impl SavedProvider {
 
     fn settings(&self, max_tokens: u32) -> AgentSettings {
         AgentSettings {
+            image_input: self.image_input,
             provider: self.name.clone(),
             model: self.model.clone(),
             effort: self.effort.clone(),

@@ -22,11 +22,12 @@ type Props = {
   value: string;
   typedKey?: string;
   onChange(model: string): void;
+  onImageInputChange?(supported: boolean | null): void;
   /** Reads the list (tests give their own). */
   load?: typeof aiModels;
 };
 
-export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, load = aiModels }: Props) {
+export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onImageInputChange, load = aiModels }: Props) {
   const t = useT();
   const [list, setList] = useState<ModelList | null>(null);
   const [loading, setLoading] = useState(false);
@@ -64,6 +65,11 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, load
   }, [provider, baseUrl, typedKey]);
 
   const models = list?.models ?? [];
+  const selectedCapability = models.find((m) => m.id === value)?.image_input;
+  useEffect(() => {
+    // Missing service metadata must not erase the user's saved capability choice.
+    if (selectedCapability != null) onImageInputChange?.(selectedCapability);
+  }, [list, value, selectedCapability]);
   const known = models.some((m) => m.id === value);
   // The model chosen stays listed whatever the filter, so the list never loses its value.
   const shown = models.filter((m) => {
