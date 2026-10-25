@@ -1136,6 +1136,50 @@ pub enum Command {
         #[serde(default)]
         target: Option<Target>,
     },
+    /// Reads an optional editable object/check pack, including its citations. Available: interiors.
+    /// No types or checks are installed until install_object_pack is called.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"read_object_pack","name":"interiors"}))]
+    ReadObjectPack { name: String },
+    /// Installs an optional pack as one undo step. Supply name for a shipped pack or data for
+    /// an edited pack. Values and checks are drawing-owned data; no compliance is implied.
+    #[schemars(extend("x-category" = "objects"))]
+    #[schemars(example = json!({"type":"install_object_pack","name":"interiors"}))]
+    InstallObjectPack {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+    },
+    /// Reads evaluated back, clearance and other named regions from object recipe data.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"object_zones","targets":[{"handle":1234}]}))]
+    ObjectZones { targets: Vec<Target> },
+    /// Places the selected model-space geometry at survey coordinates, keeping its size.
+    /// base_point is its current anchor; site_point is the destination, both in drawing units.
+    /// x_axis is the destination direction of the old positive X axis (default [1,0]).
+    /// Omitted targets mean all model-space entities. An empty list only sets the UCS/base point.
+    /// Establishes the UCS and exported drawing base point in the same undo step.
+    /// JSON command points remain world/site coordinates; typed points use this UCS.
+    #[schemars(extend("x-category" = "modify", "x-words" = ["SETSITEORIGIN"]))]
+    #[schemars(example = json!({"type":"set_site_origin","base_point":[0,0],"site_point":[674250000,2734180000u64],"x_axis":[1,0]}))]
+    SetSiteOrigin {
+        base_point: [f64; 2],
+        site_point: [f64; 2],
+        #[serde(default = "site_x_axis")]
+        x_axis: [f64; 2],
+        #[serde(default)]
+        targets: Option<Vec<Target>>,
+    },
+    /// Exact defining points in site (world) coordinates and local UCS coordinates. Curves
+    /// report their centre, lines their ends and polylines their vertices; no sampled points.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"site_coordinates","targets":[{"handle":1234}]}))]
+    SiteCoordinates { targets: Vec<Target> },
+    /// Exact containment, nearest point or intersections on drawn geometry. Points use drawing units.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"spatial_query","kind":"nearest","targets":[{"handle":1234}],"point":[0,0]}))]
+    SpatialQuery(crate::spatial::Query),
     /// The user coordinate system becomes the one at `origin` with its x axis along `x_axis`
     /// (`[1, 0]` from `[0, 0]` is the world's). View state: not an undo step (see `crate::ucs`).
     #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
@@ -1521,6 +1565,10 @@ impl Command {
             | Command::Rooms { .. }
             | Command::FreeSpace { .. }
             | Command::CheckDrawing { .. }
+            | Command::ReadObjectPack { .. }
+            | Command::ObjectZones { .. }
+            | Command::SiteCoordinates { .. }
+            | Command::SpatialQuery(..)
             | Command::Verify { .. }
             | Command::ListComments => None,
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
@@ -1571,6 +1619,8 @@ impl Command {
             | Command::PlaceObjects { .. }
             | Command::SetObjectProps { .. }
             | Command::ObjectSchedule(_)
+            | Command::InstallObjectPack { .. }
+            | Command::SetSiteOrigin { .. }
             | Command::SetKnowledge { .. }
             | Command::Walls(_)
             | Command::OpeningSchedule { .. }
@@ -1750,6 +1800,18 @@ pub enum Outcome {
     /// What `Command::CheckDrawing` found.
     Checked {
         report: Box<crate::check::CheckReport>,
+    },
+    SiteCoordinates {
+        report: serde_json::Value,
+    },
+    SpatialQuery {
+        report: serde_json::Value,
+    },
+    ObjectPack {
+        data: serde_json::Value,
+    },
+    ObjectZones {
+        report: serde_json::Value,
     },
     /// Pass/fail, measurement and tolerance for every stated expectation.
     Verified {
@@ -2012,6 +2074,9 @@ impl Session {
                     let layout: crate::deliverables::Layout = serde_json::from_value(data.clone())
                         .map_err(|e| invalid(&e.to_string()))?;
                     layout.validate()?;
+                }
+                if kind == crate::knowledge::Kind::Placement {
+                    crate::placement_pack::validate_checks(&data)?;
                 }
                 if kind == crate::knowledge::Kind::Checks {
                     let rule: crate::discrepancy::CheckRule = serde_json::from_value(data.clone())
@@ -2743,6 +2808,44 @@ impl Session {
                 self.match_properties(&source, &targets, &props)?;
                 return Ok(Outcome::Changed);
             }
+            Command::ReadObjectPack { name } => {
+                return Ok(Outcome::ObjectPack {
+                    data: crate::placement_pack::shipped_pack(&name)?,
+                });
+            }
+            Command::ObjectZones { targets } => {
+                return Ok(Outcome::ObjectZones {
+                    report: self.object_zones(&targets)?,
+                });
+            }
+            Command::InstallObjectPack { name, data } => {
+                let data = match (name, data) {
+                    (Some(name), None) => crate::placement_pack::shipped_pack(&name)?,
+                    (None, Some(data)) => data,
+                    _ => return Err(invalid("Supply exactly one pack name or data")),
+                };
+                self.install_object_pack(data)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SetSiteOrigin {
+                base_point,
+                site_point,
+                x_axis,
+                targets,
+            } => {
+                self.set_site_origin(base_point, site_point, x_axis, targets)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SpatialQuery(query) => {
+                return Ok(Outcome::SpatialQuery {
+                    report: self.spatial_query(&query)?,
+                });
+            }
+            Command::SiteCoordinates { targets } => {
+                return Ok(Outcome::SiteCoordinates {
+                    report: self.site_coordinates(&targets)?,
+                });
+            }
             Command::Ucs { origin, x_axis } => {
                 self.ucs = crate::Ucs::new(origin, x_axis)?;
                 return Ok(Outcome::Changed);
@@ -3376,4 +3479,8 @@ fn check_height(height: f64) -> Result<(), CoreError> {
 
 fn invalid(why: &str) -> CoreError {
     CoreError::InvalidCommand(why.to_string())
+}
+
+fn site_x_axis() -> [f64; 2] {
+    [1., 0.]
 }

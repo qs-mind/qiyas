@@ -94,3 +94,23 @@ test("works in Arabic", async () => {
   expect(screen.getByRole("option", { name: "آخر…" })).toBeTruthy();
   localStorage.removeItem("qiyas.lang");
 });
+
+
+test("keeps a blind model selectable and reports its explicit image capability", async () => {
+  const capability = vi.fn();
+  const onChange = vi.fn();
+  render(<ModelPicker provider="anthropic" baseUrl={null} value="text-model" onChange={onChange} onImageInputChange={capability}
+    load={vi.fn().mockResolvedValue({ from_service: true, error: null, models: [{ id: "text-model", label: "Text model", image_input: false }] })} />);
+  await settle();
+  expect(screen.getByRole("option", { name: "Text model — text-model" })).toBeTruthy();
+  expect(capability).toHaveBeenLastCalledWith(false);
+});
+
+test("missing model metadata preserves the user's saved image capability", async () => {
+  const capability = vi.fn();
+  render(<ModelPicker provider="anthropic" baseUrl={null} value="claude-opus-5-5" onChange={() => {}} onImageInputChange={capability}
+    load={vi.fn().mockResolvedValue(claude)} />);
+  await settle();
+  expect(screen.getByRole("option", { name: "Claude Opus 5.5 — claude-opus-5-5" })).toBeTruthy();
+  expect(capability).not.toHaveBeenCalled();
+});

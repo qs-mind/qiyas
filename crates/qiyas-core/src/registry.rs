@@ -534,7 +534,7 @@ impl Registry {
             let entry = if c.kinds.is_empty() {
                 c.name.clone()
             } else {
-                format!("{} ({})", c.name, c.kinds.join(", "))
+                format!("{} ({})", c.name, c.kinds.join(" "))
             };
             by_category.entry(&c.category).or_default().push(entry);
         }

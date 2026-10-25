@@ -71,6 +71,7 @@ fn round_trip() {
         provider: Provider::OpenaiCompatible,
         providers: settings::ProviderProfiles {
             openai_compatible: settings::ProviderProfile {
+                image_input: Some(false),
                 effort: None,
                 model: "my-model".into(),
                 base_url: Some("http://localhost:11434/v1".into()),

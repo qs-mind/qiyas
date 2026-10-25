@@ -36,6 +36,15 @@ impl Session {
     /// and loose text at the top of the sheet's xrefs count as on the sheet. Text inside blocks is
     /// not used for grids.
     pub fn read_tables(&self, sheet: Option<&str>) -> Vec<Schedule> {
+        self.read_tables_within(sheet, None)
+    }
+
+    /// Filter table and loose-text insertion points before detecting and paging schedules.
+    pub fn read_tables_within(
+        &self,
+        sheet: Option<&str>,
+        within: Option<[[f64; 2]; 2]>,
+    ) -> Vec<Schedule> {
         let sheet = self.sheet_block(sheet);
         let mut schedules = Vec::new();
         let mut texts = Vec::new();
@@ -50,6 +59,18 @@ impl Session {
                     .flat_map(|x| x.doc.entities_in_block("*Model_Space").map(|e| (e, x.xf))),
             );
         for (e, xf) in placed {
+            let at = match e {
+                EntityType::Table(t) => Some(t.insertion_point),
+                EntityType::Text(t) => Some(t.insertion_point),
+                EntityType::MText(t) => Some(t.insertion_point),
+                _ => None,
+            };
+            if let (Some(at), Some(b)) = (at, within) {
+                let p = xf.apply([at.x, at.y]);
+                if !(0..2).all(|i| p[i] >= b[0][i].min(b[1][i]) && p[i] <= b[0][i].max(b[1][i])) {
+                    continue;
+                }
+            }
             let cell = |at: &Vector3, height: f64, text: String| {
                 let [x, y] = xf.apply([at.x, at.y]);
                 let [x0, y0] = xf.apply([0.0, 0.0]);

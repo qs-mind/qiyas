@@ -39,7 +39,7 @@ export type Item =
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
-  | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean }
+  | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean; stale?: boolean }
   | { kind: "retrying"; seconds: number; code: string }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
@@ -99,6 +99,10 @@ export function reduce(state: Transcript, action: Action): Transcript {
         return { items: items.map((item, i) => i === previous ? plan : item) };
       }
       return { items: [...items.slice(0, start), plan, ...items.slice(start)] };
+    }
+    case "plan_progress": {
+      const last = items.map((item) => item.kind).lastIndexOf("plan");
+      return { items: items.map((item, index) => index === last && item.kind === "plan" ? { ...item, stale: action.stale } : item) };
     }
     case "awaiting_approval": {
       const next = reduce(state, { type: "plan", phases: action.plan.phases });

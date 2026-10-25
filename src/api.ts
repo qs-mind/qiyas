@@ -1369,7 +1369,7 @@ export const EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as cons
 export type Effort = (typeof EFFORTS)[number];
 
 /** A provider keeps its model and service address when another provider is chosen. */
-export type ProviderProfile = { effort?: string | null; model: string; base_url?: string | null };
+export type ProviderProfile = { image_input?: boolean | null; effort?: string | null; model: string; base_url?: string | null };
 
 /** The app settings (`settings.json`). The API key is not here: it is in the OS keychain. */
 export type Settings = {
@@ -1762,6 +1762,7 @@ export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "plan"; phases: PlanPhase[] }
+  | { type: "plan_progress"; mutations_since_update: number; stale: boolean }
   | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
   | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null }
   | {
@@ -1859,7 +1860,7 @@ export const aiClear = (workspace?: number | null) => invoke<void>("ai_clear", w
 export const aiStatus = (workspace?: number | null) => invoke<AiStatus>("ai_status", workspace == null ? undefined : {workspace});
 
 /** One model a provider offers: its id, as the API takes it, and a name to show. */
-export type ModelInfo = { id: string; label: string };
+export type ModelInfo = { id: string; label: string; image_input?: boolean | null };
 /** The models a provider offers (`qiyas_ai::models::ModelList`): from the service, or the
  *  built-in list with why (`error`; "no_base_url" when there is no address to ask). */
 export type ModelList = { models: ModelInfo[]; from_service: boolean; error: string | null };

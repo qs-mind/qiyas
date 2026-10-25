@@ -202,6 +202,8 @@ pub struct Qiyas {
     churn: Arc<Mutex<crate::churn::Guard>>,
     resolver: Option<WorkspaceResolver>,
     addressed: Arc<Mutex<std::collections::BTreeMap<u32, Qiyas>>>,
+    plan_watch: Arc<Mutex<crate::plan_watch::PlanWatch>>,
+    brief_watch: Arc<Mutex<crate::brief_check::Watch>>,
     source: Source,
     user_text: Option<String>,
 }
@@ -263,6 +265,8 @@ impl Qiyas {
             churn: Arc::default(),
             resolver: None,
             addressed: Arc::default(),
+            plan_watch: Arc::default(),
+            brief_watch: Arc::default(),
             source: Source::Mcp,
             user_text: None,
         }
@@ -303,6 +307,8 @@ impl Qiyas {
             ineffective: Arc::default(),
             churn: Arc::default(),
             addressed: Arc::default(),
+            plan_watch: Arc::default(),
+            brief_watch: Arc::default(),
             ..self.clone()
         }
     }
@@ -423,12 +429,78 @@ impl Qiyas {
 
     fn run_checked(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let (normalized, warnings) = crate::normalise::envelope(name, input)?;
+        let mut normalized = normalized;
+        if name == surface::EXECUTE && normalized["op"] == "finish" {
+            let mut args = surface::args_of(&normalized).map_err(ToolError::BadInput)?;
+            let answer = args["answer"].as_str().unwrap_or_default().to_string();
+            let language = crate::judgement::language(
+                self.user_text.as_deref().unwrap_or(&answer),
+                crate::prompt::Lang::En,
+            );
+            let notes = [
+                self.plan_watch
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .final_text(language),
+                self.brief_watch
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .final_text(language),
+            ];
+            if let Some(text) = notes.into_iter().flatten().reduce(|a, b| a + &b) {
+                args["answer"] = serde_json::json!(format!("{answer}{text}"));
+                normalized["args"] = args;
+            }
+        }
         let input = &normalized;
-        self.run_normalized(name, input)
-            .map(|output| crate::normalise::output(output, &warnings))
+        let before = self
+            .session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(Session::revision);
+        let mut output = self.run_normalized(name, input);
+        if output.is_ok() {
+            let after = self
+                .session
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .map(Session::revision);
+            let mut watch = self
+                .plan_watch
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if name == surface::EXECUTE && input["op"] == "plan" {
+                watch.update(surface::read_plan(
+                    &surface::args_of(input).map_err(ToolError::BadInput)?,
+                )?);
+            } else if surface::mutating(name, input) && before != after {
+                watch.changed();
+                self.brief_watch
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .changed();
+            }
+            if name == surface::READ && input["op"] == "brief_check" {
+                if let Ok(ToolOutput::Json(value)) = &output {
+                    self.brief_watch
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .checked(value.clone());
+                }
+            }
+            if let Some(advice) = watch.advice() {
+                output = crate::advice::result(output, advice);
+            }
+        }
+        output.map(|output| crate::normalise::output(output, &warnings))
     }
 
     fn run_normalized(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
+        if let Some(host) = self.host.as_deref() {
+            crate::window::sync_selection(host, &self.session);
+        }
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
         if let Some(host) = self.host.as_deref() {
             host.before_tool(name, input).map_err(ToolError::Failed)?;
@@ -538,7 +610,7 @@ impl ServerHandler for Qiyas {
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
                 "{}\n\nCommands by category:\n{}",
-                "Follow the user's request and latest message language. Arabic is simple Modern Standard Arabic unless that message uses a dialect. For a new design on a populated drawing, consider the destination and ask when unclear. Use small phases, one batch per phase, capture and check, and edit by handle; rebuilding returns cost advice. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs no BOQ or finish call. Read panel_state for questions about the window. Read back changes; after repeated ineffective edits, weigh the advice; an identical input that fails five times is stopped on its sixth attempt. Report open findings when finishing; Qiyas attaches them to the turn record. Advice is information and Mizan decides. Quote the revision of the read you act on as expected_revision. On stale_read, read the changed handles again; never retry blindly. Save only when asked; finish does not save.",
+                "Follow the user's request and latest message language. Arabic is simple Modern Standard Arabic unless that message uses a dialect. For a new design on a populated drawing, consider the destination and ask when unclear. Use phases from the brief, one batch per phase, exact spatial/room/clearance checks before pictures, and edit by handle; rebuilding returns cost advice. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs the deliverables the user requested; never add an unrequested BOQ. Read panel_state for questions about the window. Read back changes; after repeated ineffective edits, weigh the advice; an identical input that fails five times is stopped on its sixth attempt. Report open findings when finishing; Qiyas attaches them to the turn record. Advice is information and Mizan decides. Quote revision from the latest result, including your own edits, as expected_revision. On stale_read, read the changed handles again; never retry blindly. Use brief_check to measure every requirement and deliverable before finishing; list every unmet item and unfinished phase. State reports image capability; without confirmed vision, never claim to have inspected a picture. Save only when asked; finish does not save.",
                 crate::prompt::command_index()
             ))
     }

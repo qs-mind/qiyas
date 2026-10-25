@@ -1,0 +1,155 @@
+{
+  "source": "clinic.log lines 169-170, 24 October 2026; coordinates in mm",
+  "command": {
+    "height": 3.6,
+    "openings": [
+      {
+        "at": 2800,
+        "kind": "window",
+        "run": 0,
+        "width": 2400
+      },
+      {
+        "at": 9013,
+        "kind": "window",
+        "run": 0,
+        "width": 1800
+      },
+      {
+        "at": 15113,
+        "kind": "window",
+        "run": 0,
+        "width": 1800
+      },
+      {
+        "at": 23000,
+        "kind": "window",
+        "run": 0,
+        "width": 1500
+      },
+      {
+        "at": 1200,
+        "kind": "window",
+        "run": 1,
+        "width": 1800
+      },
+      {
+        "at": 7000,
+        "kind": "window",
+        "run": 1,
+        "sill": 1.5,
+        "width": 1800
+      },
+      {
+        "at": 6400,
+        "kind": "window",
+        "run": 2,
+        "sill": 1.8,
+        "width": 900
+      },
+      {
+        "at": 14000,
+        "kind": "window",
+        "run": 2,
+        "sill": 1.8,
+        "width": 900
+      },
+      {
+        "at": 17000,
+        "kind": "window",
+        "run": 2,
+        "sill": 1.8,
+        "width": 900
+      },
+      {
+        "at": 21000,
+        "kind": "window",
+        "run": 2,
+        "sill": 1.8,
+        "width": 900
+      },
+      {
+        "at": 1000,
+        "kind": "window",
+        "run": 3,
+        "width": 1800
+      },
+      {
+        "at": 9000,
+        "kind": "window",
+        "run": 3,
+        "sill": 1.8,
+        "width": 900
+      }
+    ],
+    "runs": [
+      {
+        "points": [
+          [
+            0,
+            20000
+          ],
+          [
+            6000,
+            18870.6
+          ],
+          [
+            12000,
+            18500
+          ],
+          [
+            18000,
+            18870.6
+          ],
+          [
+            24000,
+            20000
+          ]
+        ],
+        "thickness": 250
+      },
+      {
+        "points": [
+          [
+            0,
+            20000
+          ],
+          [
+            0,
+            32000
+          ]
+        ],
+        "thickness": 250
+      },
+      {
+        "points": [
+          [
+            0,
+            32000
+          ],
+          [
+            24000,
+            32000
+          ]
+        ],
+        "thickness": 250
+      },
+      {
+        "points": [
+          [
+            24000,
+            20000
+          ],
+          [
+            24000,
+            32000
+          ]
+        ],
+        "thickness": 250
+      }
+    ],
+    "thickness": 200,
+    "type": "walls"
+  },
+  "failed_opening": 10
+}

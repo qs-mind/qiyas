@@ -81,6 +81,7 @@ pub enum Collection {
     KnowledgeChecks,
     KnowledgeQueries,
     KnowledgeReports,
+    KnowledgePlacement,
 }
 
 /// How much of each record a page gives.
@@ -465,8 +466,8 @@ impl Session {
             Collection::Constraints => list(self.list_constraints(), "Constraint", "id"),
             Collection::ObjectTypes => list(self.object_types()?, "ObjectType", "name"),
             Collection::Objects => self.objects(&crate::objects::ObjectFilter::default())?.into_iter().map(|o| table(&o.instance.id.to_string(), "Object", json!(o), json!({"name":o.instance.type_name,"category":o.category,"properties":o.instance.props,"quantities":o.quantities}))).collect(),
-            Collection::KnowledgeReports | Collection::KnowledgeChecks | Collection::KnowledgeQueries | Collection::KnowledgeTypes | Collection::KnowledgeLevels | Collection::KnowledgeTables | Collection::KnowledgeRules | Collection::KnowledgeSheets | Collection::KnowledgeMappings | Collection::KnowledgeViews | Collection::KnowledgeMeasurement => {
-                let kind = match collection { Collection::KnowledgeReports => crate::knowledge::Kind::Reports, Collection::KnowledgeChecks => crate::knowledge::Kind::Checks, Collection::KnowledgeQueries => crate::knowledge::Kind::Queries, Collection::KnowledgeTypes => crate::knowledge::Kind::Types, Collection::KnowledgeLevels => crate::knowledge::Kind::Levels, Collection::KnowledgeTables => crate::knowledge::Kind::Tables, Collection::KnowledgeRules => crate::knowledge::Kind::Rules, Collection::KnowledgeSheets => crate::knowledge::Kind::Sheets, Collection::KnowledgeMappings => crate::knowledge::Kind::Mappings, Collection::KnowledgeViews => crate::knowledge::Kind::Views, _ => crate::knowledge::Kind::Measurement };
+            Collection::KnowledgePlacement | Collection::KnowledgeReports | Collection::KnowledgeChecks | Collection::KnowledgeQueries | Collection::KnowledgeTypes | Collection::KnowledgeLevels | Collection::KnowledgeTables | Collection::KnowledgeRules | Collection::KnowledgeSheets | Collection::KnowledgeMappings | Collection::KnowledgeViews | Collection::KnowledgeMeasurement => {
+                let kind = match collection { Collection::KnowledgePlacement => crate::knowledge::Kind::Placement, Collection::KnowledgeReports => crate::knowledge::Kind::Reports, Collection::KnowledgeChecks => crate::knowledge::Kind::Checks, Collection::KnowledgeQueries => crate::knowledge::Kind::Queries, Collection::KnowledgeTypes => crate::knowledge::Kind::Types, Collection::KnowledgeLevels => crate::knowledge::Kind::Levels, Collection::KnowledgeTables => crate::knowledge::Kind::Tables, Collection::KnowledgeRules => crate::knowledge::Kind::Rules, Collection::KnowledgeSheets => crate::knowledge::Kind::Sheets, Collection::KnowledgeMappings => crate::knowledge::Kind::Mappings, Collection::KnowledgeViews => crate::knowledge::Kind::Views, _ => crate::knowledge::Kind::Measurement };
                 list(crate::knowledge::list(doc,kind)?, "Knowledge", "name")
             }
             Collection::Parameters => list(self.list_parameters(), "Parameter", "name"),

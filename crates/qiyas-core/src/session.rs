@@ -1947,6 +1947,7 @@ impl Session {
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
             view: ViewRefs {
+                ucs: &mut self.ucs,
                 current: &mut self.current,
                 hidden: &mut self.visibility.hidden_layers,
                 state_hidden: &mut self.state_hidden,
@@ -2005,6 +2006,8 @@ impl Session {
                 | "set_object_props"
                 | "object_schedule"
                 | "set_knowledge"
+                | "install_object_pack"
+                | "set_site_origin"
         ) || label.starts_with("recognition.")
             || label.starts_with("measurement.");
         let failed_structure = failed_structure.then(|| self.drawing.doc.snapshot_structure());
@@ -2084,6 +2087,7 @@ impl Session {
             Err(e) => {
                 self.handle_replacements = previous_replacements;
                 let mut view = ViewRefs {
+                    ucs: &mut self.ucs,
                     current: &mut self.current,
                     hidden: &mut self.visibility.hidden_layers,
                     state_hidden: &mut self.state_hidden,
@@ -2102,6 +2106,7 @@ impl Session {
     /// put back with a drawing change.
     fn view_refs(&mut self) -> ViewRefs<'_> {
         ViewRefs {
+            ucs: &mut self.ucs,
             current: &mut self.current,
             hidden: &mut self.visibility.hidden_layers,
             state_hidden: &mut self.state_hidden,
@@ -2174,6 +2179,7 @@ impl Session {
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
             view: ViewRefs {
+                ucs: &mut self.ucs,
                 current: &mut self.current,
                 hidden: &mut self.visibility.hidden_layers,
                 state_hidden: &mut self.state_hidden,

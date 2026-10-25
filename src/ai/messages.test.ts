@@ -221,3 +221,12 @@ test("completion keeps open findings with the answer and restores them from Hist
   const restored = run([{ type: "restore", entries: [{ type: "user", text: "Finish", pointed: [], images: [] }, { type: "event", event: { type: "text", text: "Done." } }, { type: "event", event: findings }, { type: "event", event: { type: "done", usage: {} } }] }]);
   expect(restored.items).toEqual(transcript.items);
 });
+
+
+test("stale plan advice marks the latest plan and a changed plan clears it", () => {
+  const phases = [{ id: "rooms", title: "Rooms", status: "active" as const }];
+  const stale = run([{ type: "user", text: "Draw" }, { type: "plan", phases }, { type: "plan_progress", mutations_since_update: 8, stale: true }]);
+  expect(stale.items.find((item) => item.kind === "plan")).toMatchObject({ stale: true, phases });
+  const fresh = run([{ type: "plan", phases: [{ ...phases[0], status: "done" }] }, { type: "plan_progress", mutations_since_update: 0, stale: false }], stale);
+  expect(fresh.items.find((item) => item.kind === "plan")).toMatchObject({ stale: false });
+});

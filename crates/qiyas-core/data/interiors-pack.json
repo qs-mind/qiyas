@@ -1,0 +1,547 @@
+{
+  "name": "Interiors starter",
+  "citations": [
+    "Qiyas editable planning examples, 25 October 2026: fixture body sizes are assumptions, not manufacturer dimensions. Replace them with the selected product data.",
+    "US Access Board, Guide to the ADA Accessibility Standards, Chapter 3, Clear Floor or Ground Space (305.3): 30 by 48 inches. https://www.access-board.gov/ada/guides/chapter-3-clear-floor-or-ground-space-and-turning-space/ The rectangle here is only a starting value; placement and applicability need project review.",
+    "US Access Board, ADA Standards, 603.2.3 Door Swing: exceptions exist. https://www.access-board.gov/ada/chapter/ch06/ The optional no-crossing check is a project assumption, not a compliance decision.",
+    "Project placement assumptions: the full back touches its host; clearance is free of the selected obstacle types; contact counts as a crossing. Tolerance is editable."
+  ],
+  "types": [
+    {
+      "name": "WC",
+      "category": "Fixture",
+      "properties": {
+        "width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.38,
+          "min": 0.001
+        },
+        "depth": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.7,
+          "min": 0.001
+        },
+        "distance": {
+          "kind": "number",
+          "unit": "length",
+          "default": 1,
+          "min": 0
+        },
+        "side": {
+          "kind": "choice",
+          "default": "left",
+          "choices": [
+            "left",
+            "right"
+          ]
+        },
+        "back_gap": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0
+        },
+        "clear_width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.762,
+          "min": 0.001
+        },
+        "clear_depth": {
+          "kind": "number",
+          "unit": "length",
+          "default": 1.2192,
+          "min": 0.001
+        },
+        "host_width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0,
+          "min": 0
+        }
+      },
+      "property_bindings": {
+        "host_width": "host.band_width"
+      },
+      "geometry": "hosted",
+      "host_cut": {
+        "cuts_host": false,
+        "width": "width",
+        "at": "distance",
+        "offset_normal": "if(side == 'left', 1, -1) * (host_width/2 + back_gap)"
+      },
+      "plan": {
+        "symbols": [
+          {
+            "kind": "polyline",
+            "points": [
+              [
+                "=-width/2/unit",
+                0
+              ],
+              [
+                "=width/2/unit",
+                0
+              ],
+              [
+                "=width/2/unit",
+                "=if(side == 'left', 1, -1)*depth/unit"
+              ],
+              [
+                "=-width/2/unit",
+                "=if(side == 'left', 1, -1)*depth/unit"
+              ]
+            ],
+            "closed": true
+          }
+        ],
+        "zones": {
+          "back": [
+            {
+              "kind": "line",
+              "a": [
+                "=-width/2/unit",
+                0
+              ],
+              "b": [
+                "=width/2/unit",
+                0
+              ]
+            }
+          ],
+          "body": [
+            {
+              "kind": "polyline",
+              "points": [
+                [
+                  "=-width/2/unit",
+                  0
+                ],
+                [
+                  "=width/2/unit",
+                  0
+                ],
+                [
+                  "=width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=-width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ]
+              ],
+              "closed": true
+            }
+          ],
+          "clearance": [
+            {
+              "kind": "polyline",
+              "points": [
+                [
+                  "=-clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"
+                ],
+                [
+                  "=-clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"
+                ]
+              ],
+              "closed": true
+            }
+          ]
+        }
+      },
+      "quantities": {
+        "pieces": "count"
+      }
+    },
+    {
+      "name": "Basin",
+      "category": "Fixture",
+      "properties": {
+        "width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.6,
+          "min": 0.001
+        },
+        "depth": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.5,
+          "min": 0.001
+        },
+        "distance": {
+          "kind": "number",
+          "unit": "length",
+          "default": 1,
+          "min": 0
+        },
+        "side": {
+          "kind": "choice",
+          "default": "left",
+          "choices": [
+            "left",
+            "right"
+          ]
+        },
+        "back_gap": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0
+        },
+        "clear_width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.762,
+          "min": 0.001
+        },
+        "clear_depth": {
+          "kind": "number",
+          "unit": "length",
+          "default": 1.2192,
+          "min": 0.001
+        },
+        "host_width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0,
+          "min": 0
+        }
+      },
+      "property_bindings": {
+        "host_width": "host.band_width"
+      },
+      "geometry": "hosted",
+      "host_cut": {
+        "cuts_host": false,
+        "width": "width",
+        "at": "distance",
+        "offset_normal": "if(side == 'left', 1, -1) * (host_width/2 + back_gap)"
+      },
+      "plan": {
+        "symbols": [
+          {
+            "kind": "polyline",
+            "points": [
+              [
+                "=-width/2/unit",
+                0
+              ],
+              [
+                "=width/2/unit",
+                0
+              ],
+              [
+                "=width/2/unit",
+                "=if(side == 'left', 1, -1)*depth/unit"
+              ],
+              [
+                "=-width/2/unit",
+                "=if(side == 'left', 1, -1)*depth/unit"
+              ]
+            ],
+            "closed": true
+          }
+        ],
+        "zones": {
+          "back": [
+            {
+              "kind": "line",
+              "a": [
+                "=-width/2/unit",
+                0
+              ],
+              "b": [
+                "=width/2/unit",
+                0
+              ]
+            }
+          ],
+          "body": [
+            {
+              "kind": "polyline",
+              "points": [
+                [
+                  "=-width/2/unit",
+                  0
+                ],
+                [
+                  "=width/2/unit",
+                  0
+                ],
+                [
+                  "=width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=-width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ]
+              ],
+              "closed": true
+            }
+          ],
+          "clearance": [
+            {
+              "kind": "polyline",
+              "points": [
+                [
+                  "=-clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"
+                ],
+                [
+                  "=-clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"
+                ]
+              ],
+              "closed": true
+            }
+          ]
+        }
+      },
+      "quantities": {
+        "pieces": "count"
+      }
+    },
+    {
+      "name": "Sink",
+      "category": "Fixture",
+      "properties": {
+        "width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.8,
+          "min": 0.001
+        },
+        "depth": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.6,
+          "min": 0.001
+        },
+        "distance": {
+          "kind": "number",
+          "unit": "length",
+          "default": 1,
+          "min": 0
+        },
+        "side": {
+          "kind": "choice",
+          "default": "left",
+          "choices": [
+            "left",
+            "right"
+          ]
+        },
+        "back_gap": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0
+        },
+        "clear_width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0.762,
+          "min": 0.001
+        },
+        "clear_depth": {
+          "kind": "number",
+          "unit": "length",
+          "default": 1.2192,
+          "min": 0.001
+        },
+        "host_width": {
+          "kind": "number",
+          "unit": "length",
+          "default": 0,
+          "min": 0
+        }
+      },
+      "property_bindings": {
+        "host_width": "host.band_width"
+      },
+      "geometry": "hosted",
+      "host_cut": {
+        "cuts_host": false,
+        "width": "width",
+        "at": "distance",
+        "offset_normal": "if(side == 'left', 1, -1) * (host_width/2 + back_gap)"
+      },
+      "plan": {
+        "symbols": [
+          {
+            "kind": "polyline",
+            "points": [
+              [
+                "=-width/2/unit",
+                0
+              ],
+              [
+                "=width/2/unit",
+                0
+              ],
+              [
+                "=width/2/unit",
+                "=if(side == 'left', 1, -1)*depth/unit"
+              ],
+              [
+                "=-width/2/unit",
+                "=if(side == 'left', 1, -1)*depth/unit"
+              ]
+            ],
+            "closed": true
+          }
+        ],
+        "zones": {
+          "back": [
+            {
+              "kind": "line",
+              "a": [
+                "=-width/2/unit",
+                0
+              ],
+              "b": [
+                "=width/2/unit",
+                0
+              ]
+            }
+          ],
+          "body": [
+            {
+              "kind": "polyline",
+              "points": [
+                [
+                  "=-width/2/unit",
+                  0
+                ],
+                [
+                  "=width/2/unit",
+                  0
+                ],
+                [
+                  "=width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=-width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ]
+              ],
+              "closed": true
+            }
+          ],
+          "clearance": [
+            {
+              "kind": "polyline",
+              "points": [
+                [
+                  "=-clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*depth/unit"
+                ],
+                [
+                  "=clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"
+                ],
+                [
+                  "=-clear_width/2/unit",
+                  "=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"
+                ]
+              ],
+              "closed": true
+            }
+          ]
+        }
+      },
+      "quantities": {
+        "pieces": "count"
+      }
+    }
+  ],
+  "zones_for_types": {
+    "Legacy door": {
+      "swing": [
+        {
+          "kind": "polyline",
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              "=width/unit",
+              0
+            ],
+            [
+              0,
+              "=width/unit"
+            ]
+          ],
+          "bulges": [
+            0,
+            0.41421356237309503,
+            0
+          ],
+          "closed": true
+        }
+      ]
+    }
+  },
+  "checks": [
+    {
+      "name": "Back against wall",
+      "citation": "Project placement assumption: full back contact; review against product installation data.",
+      "zone": "back",
+      "relation": "touch_host",
+      "tolerance_m": 0.001
+    },
+    {
+      "name": "Keep clearance free",
+      "citation": "Project placement assumption; starting rectangle from ADA 305.3, subject to applicability review.",
+      "zone": "clearance",
+      "relation": "disjoint",
+      "tolerance_m": 0.001,
+      "against_zones": [
+        "body"
+      ],
+      "against_entities": [
+        "Line",
+        "LwPolyline",
+        "Circle",
+        "Arc"
+      ]
+    },
+    {
+      "name": "Door swing clear of fixtures",
+      "citation": "Project placement assumption inspired by ADA 603.2.3; exceptions and applicability require review.",
+      "zone": "swing",
+      "relation": "disjoint",
+      "tolerance_m": 0.001,
+      "against_zones": [
+        "body",
+        "clearance"
+      ]
+    }
+  ]
+}

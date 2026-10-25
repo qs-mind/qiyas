@@ -126,7 +126,8 @@ async fn stdio_client_uses_shared_tools_instructions_finish_and_eof() {
         // Outside agents get the same take-off workflow as Mizan, then the registry index.
         let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
         assert!(!instructions.contains("Take-off workflow:"));
-        assert!(instructions.contains("Drawing work needs no BOQ or finish call"));
+        assert!(instructions.contains("deliverables the user requested"));
+        assert!(instructions.contains("never add an unrequested BOQ"));
         assert!(instructions.ends_with(qiyas_ai::prompt::command_index().as_str()));
         let tools = client.list_all_tools().await.unwrap();
         assert_eq!(

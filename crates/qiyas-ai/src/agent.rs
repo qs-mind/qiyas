@@ -71,6 +71,7 @@ pub struct AgentSettings {
     pub language: Lang,
     pub autonomy: Autonomy,
     pub measurement_method: MeasurementMethod,
+    pub image_input: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +136,7 @@ impl Default for AgentSettings {
             language: Lang::En,
             autonomy: Autonomy::Autonomous,
             measurement_method: MeasurementMethod::default(),
+            image_input: Some(true),
         }
     }
 }
@@ -164,6 +166,10 @@ pub enum AgentEvent {
     /// The current task's checklist, also kept in the tool result in history.
     Plan {
         phases: Vec<surface::PlanPhase>,
+    },
+    PlanProgress {
+        mutations_since_update: usize,
+        stale: bool,
     },
     AwaitingApproval {
         plan: surface::Plan,
@@ -234,6 +240,8 @@ pub struct Agent {
     checkpoint: Option<Arc<Mutex<Option<Conversation>>>>,
     resumed: bool,
     plan: Option<surface::Plan>,
+    plan_watch: crate::plan_watch::PlanWatch,
+    brief_watch: crate::brief_check::Watch,
     phase_state: PhaseState,
     /// Metadata captured while the session is locked on a blocking worker.
     phase_epoch: Option<u64>,
@@ -299,6 +307,8 @@ impl Agent {
             checkpoint: None,
             resumed: false,
             plan: None,
+            plan_watch: Default::default(),
+            brief_watch: Default::default(),
             phase_state: PhaseState::default(),
             phase_epoch: None,
             churn: Arc::default(),
@@ -315,7 +325,8 @@ impl Agent {
         // Streaming and desktop resets call this while another thread may own the session.
         // Only use metadata returned by the blocking opening/tool steps; never lock it here.
         let drawing = self.phase_state.drawing.clone();
-        let phase_state = self.phase_state.clone();
+        let mut phase_state = self.phase_state.clone();
+        phase_state.brief_check = self.brief_watch.saved();
         let mut history = conversation::history_without_pictures(&self.history);
         // A crash during a group of calls must still leave one result for every call.
         if let Some(index) = history.iter().rposition(|m| m.role == Role::Assistant) {
@@ -367,6 +378,9 @@ impl Agent {
         // those prompts and discard their tied provider signatures, as for a model change.
         let old_workflow = conv.system.as_ref().is_some_and(|s| {
             s.contains("\nTake-off workflow:")
+                || s.contains("Quote the revision of the read you act on")
+                || s.contains("After each phase look with qiyas_capture")
+                || s.contains("بعد كل مرحلة انظر بـ qiyas_capture")
                 || s.contains("repeated rebuilds are refused")
                 || s.contains("تُرفض إعادة البناء المتكررة")
         });
@@ -447,9 +461,34 @@ impl Agent {
         agent.image_bytes = conv.image_bytes;
         agent.transcript = Mutex::new(conv.transcript);
         agent.resumed = true;
+        if let Some(plan) = &plan {
+            agent.plan_watch.update(plan.clone());
+        }
+        agent.plan_watch.mutations = agent
+            .transcript
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                TranscriptEntry::Event {
+                    event:
+                        AgentEvent::PlanProgress {
+                            mutations_since_update,
+                            ..
+                        },
+                } => Some(*mutations_since_update),
+                TranscriptEntry::Event {
+                    event: AgentEvent::Plan { .. },
+                } => Some(0),
+                _ => None,
+            })
+            .unwrap_or_default();
         agent.plan = plan;
         // The first blocking opening validates this saved attribution against its drawing.
         // Epochs are process-local, so a resumed phase is matched by path once.
+        agent.brief_watch =
+            crate::brief_check::Watch::restore(conv.phase_state.brief_check.clone());
         agent.phase_state = conv.phase_state;
         agent.phase_state.drawing = conv.drawing;
         agent
@@ -528,6 +567,8 @@ impl Agent {
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
         self.plan = None;
+        self.plan_watch = Default::default();
+        self.brief_watch = Default::default();
         self.resumed = false;
         self.phase_state = PhaseState::default();
         self.phase_epoch = None;
@@ -624,6 +665,41 @@ impl Agent {
                 churn.set_phase(active_phase(plan).unwrap_or(""));
             }
         }
+        if self.settings.image_input != Some(true) {
+            self.emit(
+                &events,
+                AgentEvent::ProviderStatus {
+                    code: if self.settings.image_input == Some(false) {
+                        "ai.noVision"
+                    } else {
+                        "ai.unknownVision"
+                    }
+                    .into(),
+                },
+            )
+            .await;
+        }
+        if self.settings.image_input == Some(false) {
+            // Settings can change during a conversation. Earlier pictures must not
+            // be sent to a model which explicitly cannot accept them either.
+            for message in &mut self.history {
+                for block in &mut message.content {
+                    match block {
+                        ContentBlock::Image { .. } => *block = ContentBlock::Text {
+                            text: "[Picture withheld: this model cannot see images. Use exact checks.]".into(),
+                        },
+                        ContentBlock::ToolResult { content, .. } => {
+                            for part in content {
+                                if matches!(part, ResultPart::Png(_)) {
+                                    *part = ResultPart::Text("[Picture withheld: this model cannot see images. Use exact checks.]".into());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         let pointed_destination = !pointed.selection.is_empty() || pointed.region.is_some();
         self.compact();
         if self.history.len() >= MAX_MESSAGES {
@@ -684,7 +760,14 @@ impl Agent {
                 });
             }
         }
-        for image in images.into_iter().take(context::MAX_USER_IMAGES) {
+        if self.settings.image_input == Some(false) && !images.is_empty() {
+            content.push(ContentBlock::Text { text: format!("{} attached pictures were not sent: this model cannot see images. Use exact drawing checks, or ask for the missing facts.", images.len()) });
+        }
+        for image in images
+            .into_iter()
+            .filter(|_| self.settings.image_input != Some(false))
+            .take(context::MAX_USER_IMAGES)
+        {
             self.image_bytes += image.data.len();
             content.push(ContentBlock::Image {
                 media_type: image.media_type,
@@ -896,6 +979,26 @@ impl Agent {
                             }
                             if self.job == Job::Takeoff {
                                 self.report_confidence(&events).await;
+                            }
+                            if let Some(text) = self.plan_watch.final_text(self.chat_language) {
+                                if let Some(last) = self
+                                    .history
+                                    .last_mut()
+                                    .filter(|m| m.role == Role::Assistant)
+                                {
+                                    last.content.push(ContentBlock::Text { text: text.clone() });
+                                }
+                                self.emit(&events, AgentEvent::Text { text }).await;
+                            }
+                            if let Some(text) = self.brief_watch.final_text(self.chat_language) {
+                                if let Some(last) = self
+                                    .history
+                                    .last_mut()
+                                    .filter(|m| m.role == Role::Assistant)
+                                {
+                                    last.content.push(ContentBlock::Text { text: text.clone() });
+                                }
+                                self.emit(&events, AgentEvent::Text { text }).await;
                             }
                             self.emit(&events, AgentEvent::Done { usage }).await;
                             Ok(())
@@ -1168,6 +1271,7 @@ impl Agent {
             let repeated = fingerprint
                 .as_ref()
                 .is_some_and(|key| counts.ineffective.get(key).copied().unwrap_or(0) >= 5);
+            let mut edited = false;
             let (mut block, event) = if let Some(why) = stopped.as_deref() {
                 (error_result(id, why), error_event(id, why))
             } else if repeated {
@@ -1228,7 +1332,8 @@ impl Agent {
                             let ran = self.run_host_tool(id, tool, &input, cancel, *epoch).await;
                             if changes_drawing(tool) && !is_error(&ran.0) {
                                 *epoch = self.phase_epoch;
-                                counts.changed_drawing |= before != *epoch;
+                                edited = before != *epoch;
+                                counts.changed_drawing |= edited;
                             }
                             ran
                         }
@@ -1243,6 +1348,7 @@ impl Agent {
                                     surface::mutating(name, input),
                                 )
                                 .await;
+                            edited = changed;
                             counts.changed_drawing |= changed;
                             (block, event)
                         }
@@ -1359,6 +1465,7 @@ impl Agent {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .set_phase(active_phase(&plan).unwrap_or(""));
+                    self.plan_watch.update(plan.clone());
                     self.plan = Some(plan.clone());
                     self.emit(
                         events,
@@ -1368,6 +1475,37 @@ impl Agent {
                     )
                     .await;
                 }
+            }
+            if edited && !is_error(&block) {
+                self.plan_watch.changed();
+                self.brief_watch.changed();
+            }
+            if name == surface::READ && input["op"] == "brief_check" && !is_error(&block) {
+                if let ContentBlock::ToolResult { content, .. } = &block {
+                    for part in content {
+                        if let ResultPart::Text(text) = part {
+                            if let Ok(value) = serde_json::from_str(text) {
+                                self.brief_watch.checked(value);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(advice) = self.plan_watch.advice() {
+                append_advice(&mut block, advice);
+            }
+            if self.plan.is_some()
+                && (edited
+                    || (name == surface::EXECUTE && input["op"] == "plan" && !is_error(&block)))
+            {
+                self.emit(
+                    events,
+                    AgentEvent::PlanProgress {
+                        mutations_since_update: self.plan_watch.mutations,
+                        stale: self.plan_watch.stale(),
+                    },
+                )
+                .await;
             }
             if let Some(last) = self.history.last_mut() {
                 last.content.push(block);
@@ -1457,10 +1595,15 @@ impl Agent {
         let session = self.session.clone();
         let (tool, op, args) = (name.to_string(), op.to_string(), input.clone());
         let method = self.settings.measurement_method.clone();
+        let image_input = self.settings.image_input;
         let cancel = cancel.clone();
         let mut phase = self.phase_state.clone();
         let churn = self.churn.clone();
+        let host = self.host.clone();
         let ran = tokio::task::spawn_blocking(move || {
+            if let Some(host) = host.as_deref() {
+                crate::window::sync_selection(host, &session);
+            }
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             check_turn(guard.as_ref(), &cancel, epoch)?;
             phase.drawing = guard.as_ref().map(|s| s.drawing.path.clone());
@@ -1478,8 +1621,8 @@ impl Agent {
                 phase.baseline_errors = Some(drawing_errors(s, &[]));
             }
             check_turn(Some(s), &cancel, epoch)?;
-            let before = s.document_revision();
-            let output = churn.lock().unwrap_or_else(PoisonError::into_inner).run(
+            let before = (s.document_revision(), s.history_revision());
+            let mut output = churn.lock().unwrap_or_else(PoisonError::into_inner).run(
                 s,
                 &tool,
                 &op,
@@ -1487,7 +1630,12 @@ impl Agent {
                 Source::Ai,
                 &method,
             );
-            let changed = before != s.document_revision();
+            if tool == surface::READ && op == "state" {
+                if let Ok(ToolOutput::Json(value)) = &mut output {
+                    value["image_input"] = crate::models::image_state(image_input);
+                }
+            }
+            let changed = before != (s.document_revision(), s.history_revision());
             if mutating {
                 if let Ok(ToolOutput::Json(value)) = &output {
                     for field in ["added", "changed", "removed"] {
@@ -1545,6 +1693,7 @@ impl Agent {
         let (tool, args, lang) = (name.to_string(), input.clone(), self.settings.language);
         let cancel = cancel.clone();
         let ran = tokio::task::spawn_blocking(move || {
+            crate::window::sync_selection(&*host, &session);
             {
                 let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
                 check_turn(guard.as_ref(), &cancel, epoch)?;
@@ -1585,6 +1734,14 @@ impl Agent {
         match output {
             Err(why) => (error_result(id, &why), error_event(id, &why)),
             Ok(ToolOutput::Json(value)) => json_result(id, &value),
+            Ok(ToolOutput::Image { png: _, caption })
+                if self.settings.image_input == Some(false) =>
+            {
+                json_result(
+                    id,
+                    &serde_json::json!({"caption":caption,"image_input":crate::models::image_state(Some(false)),"image_sent":false}),
+                )
+            }
             Ok(ToolOutput::Image { png, caption }) => {
                 let data = png_base64(&png);
                 if self.image_bytes + data.len() > self.image_budget {
@@ -1677,7 +1834,8 @@ impl Agent {
         let build_system = self.system.is_none();
         let cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(s) = guard.as_mut() { s.set_read_selection(&pointed.selection); }
             let epoch = guard.as_ref().map(Session::epoch);
             check_turn(guard.as_ref(), &cancel, epoch)?;
             let lang = settings.language;
@@ -1689,6 +1847,7 @@ impl Agent {
             });
             let state = guard.as_ref().map_or_else(LiveState::none, LiveState::of);
             let mut text = state_block(lang, &state);
+            text.push_str(&format!("Model image input: {}\n", crate::models::image_state(settings.image_input)));
             let method = guard.as_ref().map_or_else(
                 || Ok(settings.measurement_method.clone()),
                 |session| MeasurementMethod::for_session(session, &settings.measurement_method),
@@ -1713,7 +1872,7 @@ impl Agent {
                 }
                 text.push_str(&format!("revision: {}\n", serde_json::json!(session.revision())));
                 text.push_str(&context::describe(session, &pointed, lang));
-                picture = context::picture(session, &pointed);
+                if settings.image_input != Some(false) { picture = context::picture(session, &pointed); }
             }
             check_turn(guard.as_ref(), &cancel, epoch)?;
             Ok(Opening {

@@ -2859,7 +2859,7 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   `exists` can deliberately test an absent path. Missing properties never satisfy `ne` or
   `not_in`. `in`/`not_in` need arrays and match text without case; ordered comparisons require
   two numbers or two strings. Record lengths, areas and bounds remain in drawing units.
-- Text queries accept `bounds` (the same box as `within`) and a case-insensitive `layer`.
+- All query kinds accept `bounds` (normalised with a warning to `within`); text queries also accept a case-insensitive `layer`.
   Returned text rows include the effective layer, with layer 0 inherited inside blocks and
   the external drawing prefix. Supplying both bounds names is refused as a duplicate.
 - JSON `set_layer` accepts several named properties in one undo step: color, linetype,
@@ -2936,7 +2936,7 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   when the conversation is compacted.
 - Unambiguous input shortcuts report `normalised_input` warnings: one `where` object becomes
   an array; a single `handles` entry becomes `handle` where the schema needs one; a lone
-  command with no execute `op` becomes `run`; query-window `corner1`/`corner2` become `bounds`.
+  command with no execute `op` becomes `run`; query-window `corner1`/`corner2` become `within`.
   Text/table/dimension/block/layer queries accept a page `limit`. Competing forms and multiple
   handles for a single-handle operation remain errors. Registry validation and execution use
   the same canonical forms. Normalization follows the matching schema variant, preserving
@@ -3040,7 +3040,7 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   reports `history_complete:false` and requires a fresh full read. Transaction rollback does
   not advance revision. Undo/redo and knowledge/table/context edits invalidate reads too.
 - Rebuild results always include `handle_map`, including retained and removed identities.
-  Mizan must use its read's revision and reread changed handles after `stale_read`. MCP keeps
+  Mizan must use the latest result's revision, including its own edits, and reread changed handles after `stale_read`. MCP keeps
   request-ID deduplication. Desktop file mutations recheck revision under the applying lock.
 - Final open findings appear beside the answer in short English/Arabic and persist in History.
   Raw rule names and handles appear only with technical details. Arabic headings use the
@@ -3090,3 +3090,61 @@ New untitled drawings skip placeholder names already present in chat history or 
 - Design, measured acceptance results and remaining limitations are in
   `docs/2026-10-25-qiyas-goal-W-design.md` and `docs/2026-10-25-qiyas-goal-W.md`.
   No new dependencies, paid calls or changes to the founder's running checkout.
+
+## Goal A: Mizan's tools and judgement aids (25 October 2026)
+
+- Discovery suggests command kinds as well as command names: `set_method` suggests
+  `measurement.set_method`. `run` accepts command fields directly in `args` and wraps them in
+  `command`, with `normalised_input`. All query kinds accept `within` or `bounds`; the latter
+  produces a warning. Supplying both spatial filters is ambiguous and refused.
+- Opening fit refusals include the nearest valid `at` for that width, when a fit exists. It is
+  advice in drawing units. Nothing moves until the caller submits that placement.
+- `expected_revision` accepts any subset of the returned fields, comparing only non-null
+  supplied parts. `document_revision`, `geometry_revision`, `knowledge_revision`,
+  `sheet_revision`, and `selection_revision` are separate; `session`, `sheet`, and the legacy
+  working `context` remain available. Selection is reported by the window. Stale responses
+  identify changed supplied parts, changed handles, completeness, and the current token.
+- A plan unchanged across eight mutating calls receives advice listing unfinished phases;
+  the panel marks it stale. Reposting the same plan does not reset the count. Pending, active,
+  and skipped phases are listed in the final answer. Plans never prevent a valid edit.
+- `spatial_query` reads exact `contains`, `nearest`, and `intersections` on chosen entities,
+  with measured values and tolerances. It refuses sampled/unsupported geometry and open
+  containment boundaries, rather than asserting a fact it cannot establish.
+- Both prompts stay below 900 words. Phases follow the user's brief. Exact measurements and
+  spatial/room/clearance checks precede pictures. Use the latest revision, including after
+  your own edits. Check rooms, sizes, wall thicknesses, scale, survey point, directions, and
+  all requested deliverables before finishing; state every unmet requirement plainly.
+- Model capability `image_input` is true, false, or unknown. The state and opening context
+  explain it; Settings displays a warning for false or unknown and permits an explicit
+  choice when the provider has no metadata. Text-only tool-capable models remain selectable.
+  A false capability withholds both new and historical images. Unknown capability never
+  licenses a claim to have inspected a picture.
+- Optional data: `read_object_pack {name:"interiors"}` returns the cited, editable JSON starter
+  pack; `install_object_pack {name:"interiors"}` installs it in one undo step. Alternatively
+  supply `data` with your own pack. It defines WC, basin and sink types, back/body/clearance
+  recipes and optional `placement` checks. Dimensions and tolerances live in JSON, never
+  Rust. Starter dimensions are assumptions, not product specifications or certification.
+  `place_objects {objects:[{type:"WC",host:123,props:{distance:2}}]}` places one fixture on
+  wall 123, two metres along it, without cutting the wall. Properties follow their declared
+  units (length properties use metres); command geometry uses drawing units. `object_zones`
+  reads exact regions. `records {collection:"knowledge_placement",detail:"full"}` reads the
+  installed checks; edit their data with `set_knowledge {kind:"placement",name,data}`.
+  Back contact, clearance occupation and door-swing intersections return
+  ordinary findings with citations. Missing/unsupported evidence cannot report a complete
+  clean check. Existing drawings are unchanged until the optional pack is installed.
+- `set_site_origin {base_point:[0,0],site_point:[674250000,2734180000],x_axis:[1,0]}` is the
+  one-step survey placement for a millimetre drawing: move/rotate model geometry, set the UCS
+  and insertion base, and retain site metadata, all undoable together. Optional `targets`
+  restrict the geometry; an empty list sets only the coordinate metadata. JSON commands use
+  world/site coordinates; typed points use the UCS. `site_coordinates {targets:[123]}` reads
+  exact defining points in site units, metres, and local UCS coordinates. Do not add the
+  origin again to the reported site points.
+- `qiyas_read brief_check` takes `expectations:[{id,text,verify:{...}}]` or items with
+  `read:{op,args,pointer,expected,tolerance?,subtract?}`. `verify` uses the existing verifier
+  and must be tied to the drawing. A read selects a measured field with a JSON pointer;
+  `subtract` compares signed change from an earlier observed value. It never runs edits.
+  Each item returns pass/fail, measured value and evidence. The caller supplies the user's
+  actual words and thresholds; the engine has no room, villa or trade-specific brief rules.
+  An `artifact` read checks only existence/size of an export beside the drawing, not contents.
+  Unmet items are appended to the final answer. Later edits mark earlier checks as needing
+  rechecking; the saved checklist survives a conversation restart conservatively.
