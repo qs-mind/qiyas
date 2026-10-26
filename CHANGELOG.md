@@ -7,6 +7,12 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.0.1] - 2026-10-26
+
+First public release, built from `main` on 26 October 2026. Everything below is in it.
+
 ### Added
 
 - Mizan takes off a drawing alone. It reads a one-call drawing digest and a take-off kit, writes
@@ -135,9 +141,7 @@ section below, so add the section before pushing the tag.
 - A new drawing's autosave is offered back after a crash, even before its first save.
 - JOIN, trim and duplicate points work at large survey coordinates.
 
-## [0.0.1] - 2026-10-12
-
-First public release.
+### Earlier in this release (12 and 13 October)
 
 ### Added
 
