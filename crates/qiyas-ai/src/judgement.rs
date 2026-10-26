@@ -120,10 +120,10 @@ impl Job {
 
     pub fn budget(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::Drawing, Lang::En) => "[finish now] The working budget is nearly used. Stop exploring. Check the requested drawing changes, fix new warnings, and briefly say what is complete and what remains. Do not save unless asked.",
-            (Self::Drawing, Lang::Ar) => "[finish now] قاربت ميزانية العمل على النفاد. أوقف الاستكشاف. تحقّق من تعديلات الرسم المطلوبة وصحّح التحذيرات الجديدة، ثم اذكر باختصار ما اكتمل وما بقي. لا تحفظ إلا بطلب المستخدم.",
-            (Self::Takeoff, Lang::En) => "[finish now] The working budget is nearly used. Finish supported BOQ mappings, read measurement.report and takeoff_check, fix measurement errors, and report remaining uncertainty. Stop exploring. Do not save unless asked.",
-            (Self::Takeoff, Lang::Ar) => "[finish now] قاربت ميزانية العمل على النفاد. أكمل ربط الكميات المدعومة بالأدلة، واقرأ measurement.report وtakeoff_check وصحّح أخطاء القياس، ثم اذكر ما بقي غير مؤكد. أوقف الاستكشاف. لا تحفظ إلا بطلب المستخدم.",
+            (Self::Drawing, Lang::En) => "[cost advice] Many calls have run. Consider the remaining drawing changes and checks, and the subscription cost. This is information; Mizan decides whether to continue or finish and explain remaining findings. Do not save unless asked.",
+            (Self::Drawing, Lang::Ar) => "[cost advice] نُفّذت خطوات كثيرة. وازن بين تعديلات الرسم والفحوص المتبقية وتكلفة الاشتراك. هذه معلومات؛ ميزان يقرر المتابعة أو الإنهاء وشرح الملاحظات المتبقية. لا تحفظ إلا بطلب المستخدم.",
+            (Self::Takeoff, Lang::En) => "[cost advice] Many calls have run. Consider the remaining supported BOQ mappings, measurement.report and takeoff_check, and the subscription cost. This is information; Mizan decides whether to continue or finish and explain uncertainty. Do not save unless asked.",
+            (Self::Takeoff, Lang::Ar) => "[cost advice] نُفّذت خطوات كثيرة. وازن بين ربط الكميات المدعومة بالأدلة والفحوص المتبقية وتكلفة الاشتراك. هذه معلومات؛ ميزان يقرر المتابعة أو الإنهاء وشرح ما بقي غير مؤكد. لا تحفظ إلا بطلب المستخدم.",
         }
     }
 }
@@ -138,11 +138,13 @@ pub fn language(text: &str, fallback: Lang) -> Lang {
                 // Match the chat's direction rule: names such as A-WALL are not prose.
                 if word.is_ascii()
                     && word.chars().any(|c| c.is_ascii_uppercase())
-                    && !word.chars().any(|c| c.is_ascii_lowercase())
+                    && word
+                        .chars()
+                        .any(|c| c == '-' || c == '_' || c.is_ascii_digit())
                 {
                     continue;
                 }
-                arabic += word.chars().filter(|c| matches!(*c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')).count();
+                arabic += word.chars().filter(|c| c.is_alphabetic() && matches!(*c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')).count();
                 latin += word.chars().filter(char::is_ascii_alphabetic).count();
             }
         }
@@ -155,6 +157,62 @@ pub fn language(text: &str, fallback: Lang) -> Lang {
     } else {
         fallback
     }
+}
+
+/// A new design with no stated destination needs the user's choice on a populated drawing.
+/// This deliberately avoids inferring a destination from drawing or layer names.
+pub fn new_design(text: &str) -> bool {
+    let text: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|c| !matches!(*c, '\u{064b}'..='\u{065f}' | '\u{0670}'))
+        .collect();
+    if [
+        "this drawing",
+        "current drawing",
+        "existing drawing",
+        "new drawing",
+        "هذا الرسم",
+        "الرسم الحالي",
+        "رسم جديد",
+    ]
+    .iter()
+    .any(|s| text.contains(s))
+        || text.split_whitespace().any(|word| {
+            matches!(
+                word.trim_matches(|c: char| !c.is_alphabetic()),
+                "here" | "هنا"
+            )
+        })
+    {
+        return false;
+    }
+    let request = ["draw a ", "draw an ", "design ", "ارسم ", "صمم ", "صمّم "]
+        .iter()
+        .any(|s| text.contains(s));
+    let small_edit = [
+        "line",
+        "circle",
+        "rectangle",
+        "dimension",
+        "label",
+        "text",
+        "خط",
+        "خطا",
+        "دائرة",
+        "مستطيل",
+        "مستطيلا",
+        "تسمية",
+        "نص",
+        "نصا",
+        "بعدا",
+    ]
+    .iter()
+    .any(|s| {
+        text.split_whitespace()
+            .any(|word| word.trim_matches(|c: char| !c.is_alphabetic()) == *s)
+    });
+    request && !small_edit
 }
 
 #[cfg(test)]

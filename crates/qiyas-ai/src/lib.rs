@@ -11,8 +11,10 @@
 //!
 //! The MCP server for outside AI apps (`mcp`).
 
+mod advice;
 pub mod agent;
 pub mod anthropic;
+mod artifact;
 pub mod chatgpt_plan;
 pub mod claude_code;
 pub mod context;
@@ -28,6 +30,8 @@ pub mod models;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+mod result;
+mod revision;
 pub mod surface;
 mod tools;
 pub mod window;
@@ -47,6 +51,8 @@ pub use surface::tools as catalogue;
 pub use tools::ToolSpec;
 pub use window::{is_window_tool, run_window};
 
+mod churn;
+mod normalise;
 mod surface_args;
 
 mod document;
@@ -59,3 +65,10 @@ pub mod activity;
 pub mod endpoint;
 
 pub mod provider_error;
+
+mod plan_watch;
+
+mod brief_check;
+
+#[cfg(test)]
+mod cache_replay;

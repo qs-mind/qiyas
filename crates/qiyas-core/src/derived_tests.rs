@@ -420,3 +420,33 @@ fn editing_a_wall_copy_preserves_source_part_metadata_and_matches_full() {
         assert!(after.as_array().unwrap().contains(&source));
     }
 }
+
+#[test]
+fn grouped_openings_match_full_derivation_and_undo_in_every_unit() {
+    for unit in [4, 5, 6, 1] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("grouped.dxf"), unit);
+        s.apply_settings_method(Some(&crate::measurement::RuleSet::named("POMI (RICS)")))
+            .unwrap();
+        let k = 1.0 / s.drawing.units.to_metres();
+        let walls = run(
+            &mut s,
+            json!({"type":"walls","thickness":0.2*k,"runs":[
+                {"points":[[0,0],[20.0*k,0]]},{"points":[[20.0*k,0],[20.0*k,12.0*k]]},
+                {"points":[[20.0*k,12.0*k],[0,12.0*k]]},{"points":[[0,12.0*k],[0,0]]},
+                {"points":[[10.0*k,0],[10.0*k,12.0*k]]},{"points":[[0,6.0*k],[20.0*k,6.0*k]]}
+            ]}),
+        );
+        let before = state(&s);
+        let commands: Vec<_> = [0,1,4].into_iter().map(|i| json!({"type":"add_wall_openings",
+            "centreline":walls["centrelines"][i],"openings":[{"at":3.0*k,"width":k,"kind":"door"}]
+        })).collect();
+        run(&mut s, json!({"type":"batch","commands":commands}));
+        let after = state(&s);
+        assert!(s.undo());
+        assert_eq!(state(&s), before);
+        assert!(s.redo());
+        assert_eq!(state(&s), after);
+        equivalent(&mut s, "grouped openings after redo");
+    }
+}

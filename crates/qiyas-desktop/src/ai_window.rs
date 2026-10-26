@@ -32,6 +32,7 @@ const WAIT: Duration = Duration::from_secs(5);
 pub struct AiWindow {
     waiting: Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>,
     next: AtomicU64,
+    workspace: u32,
 }
 
 /// What the window sends for `ai:capture`.
@@ -43,6 +44,12 @@ struct Captured {
 }
 
 impl AiWindow {
+    pub fn new(workspace: u32) -> Self {
+        Self {
+            workspace,
+            ..Default::default()
+        }
+    }
     /// Sends `event` with `payload` and an `id`, and waits (at most `WAIT`) for the window's
     /// reply. Blocks: call it off the async workers.
     fn ask<R: Runtime>(
@@ -53,6 +60,7 @@ impl AiWindow {
     ) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         payload["id"] = json!(id);
+        payload["workspace"] = json!(self.workspace);
         let (tx, rx) = mpsc::channel();
         self.waiting
             .lock()
@@ -110,19 +118,24 @@ impl AiWindow {
         handles: &[u64],
         zoom: bool,
     ) -> Result<(), String> {
-        app.emit(SELECT, json!({ "handles": handles, "zoom": zoom }))
-            .map_err(|e| e.to_string())
+        app.emit(
+            SELECT,
+            json!({ "handles": handles, "zoom": zoom, "workspace":self.workspace }),
+        )
+        .map_err(|e| e.to_string())
     }
 }
 
 /// The window's reply to question `id` (`ai:capture`, `ai:pointed`): `value`, or why it has none.
 #[tauri::command]
 pub async fn ai_window_reply(
+    workspace: Option<u32>,
     id: u64,
     value: Option<Value>,
     error: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     let reply = match (value, error) {
         (_, Some(why)) => Err(why),
         (Some(value), None) => Ok(value),
@@ -165,7 +178,8 @@ mod tests {
             let app = handle.clone();
             std::thread::spawn(move || {
                 let state = app.state::<AppState>();
-                tauri::async_runtime::block_on(ai_window_reply(id, value, error, state)).unwrap();
+                tauri::async_runtime::block_on(ai_window_reply(None, id, value, error, state))
+                    .unwrap();
             });
         });
         (dir, app, asked)

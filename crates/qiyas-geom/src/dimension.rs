@@ -437,6 +437,20 @@ impl Parts<'_> {
         }
     }
 
+    /// End a leader at the text's clearance box, including rotated diameter text.
+    fn leader_to_text(&mut self, from: P, at: P, rotation: f64, text: &str) {
+        let along = polar(rotation);
+        let across = left(along);
+        let delta = sub(at, from);
+        let half_width = self.width(text, self.look.text_height) / 2.0 + self.look.gap;
+        let half_height = self.look.text_height / 2.0 + self.look.gap;
+        let scale =
+            (dot(delta, along).abs() / half_width).max(dot(delta, across).abs() / half_height);
+        if scale > 1.0 {
+            self.line(from, sub(at, mul(delta, 1.0 / scale)));
+        }
+    }
+
     /// A closed filled arrowhead with its tip at `tip`, its body along `back` (a unit vector).
     fn arrow(&mut self, tip: P, back: P) {
         let size = self.look.arrow;
@@ -554,6 +568,14 @@ pub fn dimension_entities_with_width(
                 let mid = mul(add(a, b), 0.5);
                 let up = left(polar(r));
                 let p = placed.unwrap_or(add(mid, mul(up, look.gap + look.text_height / 2.0)));
+                if placed.is_some() {
+                    let end = if len(sub(p, a)) < len(sub(p, b)) {
+                        a
+                    } else {
+                        b
+                    };
+                    parts.leader_to_text(end, p, r, &text);
+                }
                 parts.text(&text, p, r, look.text_height);
                 at = Some(p);
             }
@@ -704,8 +726,21 @@ fn radial(parts: &mut Parts, c: P, p: P, text: &str, placed: Option<P>) -> Optio
     let look = parts.look;
     let e = unit(sub(p, c))?;
     let landing = add(p, mul(e, 2.0 * look.arrow));
-    parts.line(c, landing);
-    parts.arrow(p, mul(e, -1.0));
+    if let Some(at) = placed {
+        parts.line(c, p);
+        parts.leader_to_text(p, at, 0.0, text);
+        parts.arrow(
+            p,
+            if dot(sub(at, p), e) > 0.0 {
+                e
+            } else {
+                mul(e, -1.0)
+            },
+        );
+    } else {
+        parts.line(c, landing);
+        parts.arrow(p, mul(e, -1.0));
+    }
     let w = parts.width(text, look.text_height);
     let side = if e[0] < 0.0 { -1.0 } else { 1.0 };
     let at = placed.unwrap_or(add(landing, [side * (look.gap + w / 2.0), 0.0]));

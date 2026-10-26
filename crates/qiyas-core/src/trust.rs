@@ -1,5 +1,5 @@
 //! Read-only evidence and confidence. Confidence describes an interpretation, never permission.
-use crate::{measurement::DimensionLine, objects::ObjectFilter, CoreError, Session};
+use crate::{measurement::DimensionLine, CoreError, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -149,11 +149,7 @@ impl Session {
                 .iter()
                 .flat_map(|l| l.sources.iter().map(|s| s.handle)),
         );
-        let objects = self
-            .objects(&ObjectFilter::default())?
-            .into_iter()
-            .filter(|o| handles.contains(&o.instance.id))
-            .collect::<Vec<_>>();
+        let objects = self.objects_for(&handles.iter().copied().collect::<Vec<_>>())?;
         let candidates = self
             .recognition_evidence()?
             .into_iter()

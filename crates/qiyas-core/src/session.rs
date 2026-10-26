@@ -97,6 +97,12 @@ static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// The open drawing and what the user is looking at. Tauri-free, so it can be tested directly.
 pub struct Session {
+    pub(crate) ink_cache: RefCell<crate::ink::InkCache>,
+    pub(crate) check_geometry: RefCell<crate::check::GeometryCache>,
+    pub(crate) check_before: std::collections::BTreeMap<u64, std::sync::Arc<EntityType>>,
+    pub(crate) room_cache: RefCell<crate::draw::room_boundary::RoomCache>,
+    pub(crate) evaluation: RefCell<crate::evaluation::Evaluation>,
+    pub(crate) evaluation_depth: std::cell::Cell<usize>,
     pub drawing: Drawing,
     /// Block name of the sheet on screen, e.g. `*Model_Space`.
     pub sheet: String,
@@ -130,6 +136,8 @@ pub struct Session {
     pub(crate) isolated: Option<crate::layers::Isolation>,
     /// What the last command or transaction did to the drawing's entities (`last_change`).
     pub(crate) last_change: crate::Change,
+    pub(crate) last_advice: Vec<serde_json::Value>,
+    pub(crate) revision_history: crate::read_revision::RevisionHistory,
     pub(crate) handle_replacements: std::collections::BTreeMap<u64, Vec<u64>>,
     /// How many transactions are open (`crate::transaction`).
     pub(crate) tx_depth: usize,
@@ -147,6 +155,8 @@ pub struct Session {
     /// A new drawing never saved yet (`Session::new_blank`): its path is a placeholder, Save goes
     /// through Save As and no project file is written beside it.
     untitled: bool,
+    /// A host-selected visible folder for exports until the drawing has its first saved file.
+    export_directory: Option<PathBuf>,
     /// The curve tolerance of the sheet on screen when zoomed in past `batch_tol` (`zoom_tol`);
     /// `None` draws at `batch_tol`.
     zoom_tol: std::cell::Cell<Option<f64>>,
@@ -712,6 +722,12 @@ impl Session {
             .or_else(|| Ucs::from_header(&drawing.doc))
             .unwrap_or_default();
         let mut session = Session {
+            ink_cache: RefCell::default(),
+            check_geometry: RefCell::default(),
+            evaluation: RefCell::default(),
+            evaluation_depth: std::cell::Cell::default(),
+            room_cache: RefCell::default(),
+            check_before: Default::default(),
             drawing,
             sheet,
             automation_sheet: None,
@@ -728,6 +744,8 @@ impl Session {
             state_hidden,
             isolated: None,
             last_change: crate::Change::default(),
+            last_advice: Vec::new(),
+            revision_history: Default::default(),
             handle_replacements: std::collections::BTreeMap::new(),
             tx_depth: 0,
             ucs,
@@ -736,6 +754,7 @@ impl Session {
             recovered_from: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             untitled: false,
+            export_directory: None,
             zoom_tol: std::cell::Cell::new(None),
             document_revision: 0,
             saved_revision: 0,
@@ -849,6 +868,50 @@ impl Session {
     /// A new drawing never saved yet (see `new_blank`).
     pub fn is_untitled(&self) -> bool {
         self.untitled
+    }
+
+    /// Reuse an untitled drawing only when every sheet and its take-off are empty.
+    /// Named layers, block definitions and selected methods are useful setup, not content.
+    pub fn is_reusable_blank(&self, insunits: i16) -> bool {
+        self.is_untitled()
+            && self.drawing.doc.header.insertion_units == insunits
+            && self.takeoff.items.is_empty()
+            && self.boq.is_none()
+            && self.conflicts.is_empty()
+            && self.drawing.sheets().iter().all(|sheet| {
+                self.drawing
+                    .doc
+                    .entities_in_block(&sheet.block)
+                    .next()
+                    .is_none()
+            })
+    }
+
+    /// Desktop hosts select Documents; headless hosts keep their isolated drawing folder.
+    pub fn set_export_directory(&mut self, directory: PathBuf) {
+        self.export_directory = Some(directory);
+    }
+
+    pub fn export_folder(&self) -> &Path {
+        if let Some(folder) = self
+            .export_directory
+            .as_deref()
+            .filter(|_| self.is_untitled())
+        {
+            folder
+        } else {
+            self.drawing
+                .path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+        }
+    }
+
+    /// A path anchor for existing export confinement, without changing the autosave location.
+    pub fn export_source(&self) -> PathBuf {
+        self.export_folder()
+            .join(self.drawing.path.file_name().unwrap_or_default())
     }
 
     /// The project file's contents for the session as it is.
@@ -1022,6 +1085,11 @@ impl Session {
     /// Looks for every xref again and reopens it (a changed or newly found file shows).
     pub fn reload_xrefs(&mut self) {
         self.xrefs = XrefSet::load(&self.drawing, &self.xref_overrides, MAX_XREF_DEPTH);
+        // External files can change while every local entity and revision stays the same.
+        self.discard_evaluation();
+        *self.room_cache.get_mut() = Default::default();
+        *self.ink_cache.get_mut() = Default::default();
+        *self.check_geometry.get_mut() = Default::default();
         self.refresh_loaded_derivations();
         *self.cache.get_mut() = None;
     }
@@ -1513,6 +1581,22 @@ impl Session {
         }
     }
 
+    /// The block containing a top-level entity, for checks and reveals after an edit.
+    pub fn entity_sheet(&self, handle: u64) -> Option<&str> {
+        let owner = self
+            .drawing
+            .doc
+            .get_entity(Handle::new(handle))?
+            .common()
+            .owner_handle;
+        self.drawing
+            .doc
+            .block_records
+            .iter()
+            .find(|block| block.handle == owner)
+            .map(|block| block.name.as_str())
+    }
+
     /// The entity `handle` inside the block references `chain` (outermost first; empty for an
     /// entity on a sheet), measured where those references place it. A chain ending in an xref
     /// reference names an entity of that xref.
@@ -1725,6 +1809,7 @@ impl Session {
     pub fn run_as(&mut self, mut cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
+            self.last_advice.clear();
         }
         let mut raw = serde_json::to_value(&cmd)
             .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
@@ -1746,6 +1831,22 @@ impl Session {
     }
 
     pub(crate) fn run_command(
+        &mut self,
+        cmd: Command,
+        source: Source,
+    ) -> Result<Outcome, CoreError> {
+        let before = self.revision();
+        let advice_before = self.last_advice.len();
+        let result = self.run_command_inner(cmd, source);
+        if result.is_ok() {
+            self.record_revision(before);
+        } else {
+            self.last_advice.truncate(advice_before);
+        }
+        result
+    }
+
+    pub(crate) fn run_command_inner(
         &mut self,
         mut cmd: Command,
         source: Source,
@@ -1792,13 +1893,14 @@ impl Session {
                 c.status = *status;
                 c.note = note.clone();
                 return self.transaction(source, "resolve_conflict", |s| {
+                    // Qiyas's own write of the computed list (the group keeps `source`).
                     s.run_as(
                         Command::SetKnowledge {
                             kind: crate::knowledge::Kind::Queries,
                             name: "result".into(),
                             data: serde_json::json!(conflicts),
                         },
-                        source,
+                        Source::User,
                     )?;
                     s.run_as(
                         Command::SetConflicts {
@@ -1871,7 +1973,11 @@ impl Session {
                 Step::Conflicts(self.conflicts.clone(), self.schedules.clone())
             }
         };
-        let outcome = match self.execute(cmd, source) {
+        let executed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(cmd, source)))
+            .unwrap_or_else(|_| Err(CoreError::InvalidCommand(
+                "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
+            )));
+        let outcome = match executed {
             Ok(outcome) => outcome,
             Err(e) => {
                 // A command that failed half way leaves its part as it was.
@@ -1910,6 +2016,29 @@ impl Session {
     /// Undoes the last take-off, BOQ, conflicts or drawing change. False when there is nothing to
     /// undo.
     pub fn undo(&mut self) -> bool {
+        self.discard_evaluation();
+        *self.room_cache.get_mut() = Default::default();
+        *self.ink_cache.get_mut() = Default::default();
+        *self.check_geometry.get_mut() = Default::default();
+        let before = self.revision();
+        let change = self.history.swap_change(false);
+        if !change.is_empty() {
+            self.check_before = change
+                .added
+                .iter()
+                .chain(&change.changed)
+                .chain(&change.removed)
+                .filter_map(|id| {
+                    self.drawing
+                        .doc
+                        .get_entity_arc(Handle::new(*id))
+                        .map(|e| (*id, e))
+                })
+                .collect();
+        }
+
+        self.last_advice.clear();
+        self.handle_replacements.clear();
         let mut doc_changed = false;
         let undone = self.history.undo(Parts {
             takeoff: &mut self.takeoff,
@@ -1918,6 +2047,7 @@ impl Session {
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
             view: ViewRefs {
+                ucs: &mut self.ucs,
                 current: &mut self.current,
                 hidden: &mut self.visibility.hidden_layers,
                 state_hidden: &mut self.state_hidden,
@@ -1926,6 +2056,10 @@ impl Session {
         });
         if doc_changed {
             self.drawing_changed();
+        }
+        if undone {
+            self.last_change = change;
+            self.record_revision(before);
         }
         undone
     }
@@ -1951,6 +2085,8 @@ impl Session {
         takeoff: bool,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("session.record_document_change");
         self.validate_object_metadata()?;
         let (derived_tables, derived_takeoff) = self.derived_extras();
         let tables = tables || derived_tables;
@@ -1961,13 +2097,19 @@ impl Session {
         // extra structure copy to these commands, preserving ordinary large-drawing edit cost.
         let failed_structure = matches!(
             label,
-            "define_object_type"
+            "walls"
+                | "add_wall_openings"
+                | "edit_wall_opening"
+                | "remove_wall_openings"
+                | "define_object_type"
                 | "redefine_object_type"
                 | "delete_object_type"
                 | "place_objects"
                 | "set_object_props"
                 | "object_schedule"
                 | "set_knowledge"
+                | "install_object_pack"
+                | "set_site_origin"
         ) || label.starts_with("recognition.")
             || label.starts_with("measurement.");
         let failed_structure = failed_structure.then(|| self.drawing.doc.snapshot_structure());
@@ -1981,7 +2123,10 @@ impl Session {
         .transpose()?;
         let recorder = self.drawing.doc.begin_entity_change_recording();
         let mut before = Vec::new();
-        let done = f(self).and_then(|value| {
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            f(self).and_then(|value| {
+                #[cfg(any(test, feature = "fixtures"))]
+                crate::fixtures::panic_after_document_edit();
             before = recorder.take_before_images();
             let unchanged = before.iter().all(|(handle, old)| {
                 match (old.as_deref(), self.drawing.doc.get_entity(*handle)) {
@@ -2002,7 +2147,11 @@ impl Session {
                 crate::net_effect::RequestedChanges::capture(&self.drawing.doc, &before);
             self.rederive(derived_inputs.as_ref(), &mut requested)?;
             Ok(value)
-        });
+            })
+        }))
+        .unwrap_or_else(|_| Err(CoreError::InvalidCommand(
+            "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
+        )));
         self.drawing.doc.end_entity_change_recording();
         let touched: std::collections::BTreeSet<_> = before.iter().map(|(h, _)| *h).collect();
         before.extend(
@@ -2014,6 +2163,10 @@ impl Session {
         let takeoff = takeoff.filter(|before| {
             serde_json::to_value(before).ok() != serde_json::to_value(&self.takeoff).ok()
         });
+        let check_images: Vec<_> = before
+            .iter()
+            .filter_map(|(handle, old)| old.as_ref().map(|old| (handle.value(), old.clone())))
+            .collect();
         let mut change = DocChange::from_before_images(&self.drawing.doc, before, tables, takeoff);
         // Kept only when the change moved it, and then only what it moved, so undoing a step
         // never touches layers hidden or shown since.
@@ -2023,6 +2176,12 @@ impl Session {
         match done {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {
+                    if self.tx_depth == 0 {
+                        self.check_before.clear();
+                    }
+                    for (id, image) in check_images {
+                        self.check_before.entry(id).or_insert(image);
+                    }
                     self.drawing_changed();
                     self.last_change.merge(crate::Change {
                         added: change.added.iter().map(|h| h.value()).collect(),
@@ -2040,6 +2199,7 @@ impl Session {
             Err(e) => {
                 self.handle_replacements = previous_replacements;
                 let mut view = ViewRefs {
+                    ucs: &mut self.ucs,
                     current: &mut self.current,
                     hidden: &mut self.visibility.hidden_layers,
                     state_hidden: &mut self.state_hidden,
@@ -2049,6 +2209,10 @@ impl Session {
                     self.drawing.doc.swap_structure(structure);
                 }
                 *self.cache.get_mut() = None;
+                self.discard_evaluation();
+                *self.room_cache.get_mut() = Default::default();
+                *self.ink_cache.get_mut() = Default::default();
+                *self.check_geometry.get_mut() = Default::default();
                 Err(e)
             }
         }
@@ -2058,6 +2222,7 @@ impl Session {
     /// put back with a drawing change.
     fn view_refs(&mut self) -> ViewRefs<'_> {
         ViewRefs {
+            ucs: &mut self.ucs,
             current: &mut self.current,
             hidden: &mut self.visibility.hidden_layers,
             state_hidden: &mut self.state_hidden,
@@ -2088,6 +2253,7 @@ impl Session {
 
     /// The drawing itself changed: the batch is drawn again and its version moves on.
     pub(crate) fn drawing_changed(&mut self) {
+        self.discard_evaluation();
         if !self.drawing.doc.block_records.contains(&self.sheet) {
             // Undoing a newly created layout can remove the sheet currently on screen.
             self.sheet = "*Model_Space".to_string();
@@ -2118,6 +2284,29 @@ impl Session {
     /// Redoes the last undone take-off, BOQ, conflicts or drawing change. False when there is
     /// nothing to redo.
     pub fn redo(&mut self) -> bool {
+        self.discard_evaluation();
+        *self.room_cache.get_mut() = Default::default();
+        *self.ink_cache.get_mut() = Default::default();
+        *self.check_geometry.get_mut() = Default::default();
+        let before = self.revision();
+        let change = self.history.swap_change(true);
+        if !change.is_empty() {
+            self.check_before = change
+                .added
+                .iter()
+                .chain(&change.changed)
+                .chain(&change.removed)
+                .filter_map(|id| {
+                    self.drawing
+                        .doc
+                        .get_entity_arc(Handle::new(*id))
+                        .map(|e| (*id, e))
+                })
+                .collect();
+        }
+
+        self.last_advice.clear();
+        self.handle_replacements.clear();
         let mut doc_changed = false;
         let redone = self.history.redo(Parts {
             takeoff: &mut self.takeoff,
@@ -2126,6 +2315,7 @@ impl Session {
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
             view: ViewRefs {
+                ucs: &mut self.ucs,
                 current: &mut self.current,
                 hidden: &mut self.visibility.hidden_layers,
                 state_hidden: &mut self.state_hidden,
@@ -2134,6 +2324,10 @@ impl Session {
         });
         if doc_changed {
             self.drawing_changed();
+        }
+        if redone {
+            self.last_change = change;
+            self.record_revision(before);
         }
         redone
     }

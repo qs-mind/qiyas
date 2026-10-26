@@ -160,7 +160,11 @@ fn size_name(mm: f64) -> String {
 
 impl Session {
     /// `Command::Walls`: one recorded change including the layers, blocks and xdata application.
-    fn draw_wall_system(&mut self, mut spec: WallSpec) -> Result<WallResult, CoreError> {
+    fn draw_wall_system(
+        &mut self,
+        mut spec: WallSpec,
+        graphics: bool,
+    ) -> Result<WallResult, CoreError> {
         spec.normalize_runs(self.drawing.units);
         explicit_runs(&mut spec);
         if spec.runs.iter().any(|run| {
@@ -285,6 +289,11 @@ impl Session {
             }
         }
         self.migrate_legacy_objects()?;
+        result.handles.extend(&result.centrelines);
+        result.handles.extend(&result.inserts);
+        if !graphics {
+            return Ok(result);
+        }
         self.refresh_objects()?;
         let mut parts: Vec<_> = self
             .drawing
@@ -323,22 +332,10 @@ impl Session {
             )?;
             result.handles.push(handle);
         }
-        result.handles.extend(&result.centrelines);
-        result.handles.extend(&result.inserts);
-        let records = self.objects(&crate::objects::ObjectFilter::default())?;
-        let records: Vec<_> = records
-            .iter()
-            .filter(|record| result.centrelines.contains(&record.instance.id))
-            .collect();
-        let sum = |name: &str| {
-            records
-                .iter()
-                .filter_map(|record| record.facts.get(name))
-                .sum()
-        };
-        result.gross_area = sum("gross_area");
-        result.net_area = sum("net_area");
-        result.volume = sum("volume");
+        let totals = self.wall_totals(&result.centrelines)?;
+        result.gross_area = totals[1];
+        result.net_area = totals[2];
+        result.volume = totals[3];
         Ok(result)
     }
 
@@ -716,6 +713,8 @@ impl Session {
     }
 
     pub(crate) fn stored_wall_groups(&self) -> Result<Vec<WallGroup>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.stored_wall_groups");
         let mut groups: BTreeMap<u64, WallGroup> = BTreeMap::new();
         for entity in self.drawing.doc.entities_in_block(&self.sheet) {
             if let Some(tag) = wall_tag(entity) {
@@ -875,6 +874,9 @@ impl Session {
 
     /// Reads the editable systems on the current sheet, optionally with opening placement ranges.
     pub fn wall_groups(&self, width: Option<f64>) -> Result<Vec<WallGroupInfo>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.wall_groups");
+        let _read = self.evaluation_read()?;
         self.stored_wall_groups()?
             .into_iter()
             .map(|group| {
@@ -987,6 +989,8 @@ impl Session {
         spec: WallSpec,
         old: &[WallGroup],
     ) -> Result<WallResult, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.rebuild_walls");
         let targets: Vec<_> = old
             .iter()
             .flat_map(|g| g.members.iter())
@@ -998,26 +1002,24 @@ impl Session {
         if !targets.is_empty() {
             self.sheet_targets(&targets)?;
         }
-        let regions = walls::build_walls_justified(
-            &geom_runs(&spec),
-            spec.thickness,
-            &geom_openings(&spec),
-            self.measure_tol(),
-            geom_justification(spec.justification),
-        )
-        .map_err(|e| invalid(e.to_string()))?
-        .regions;
-        let mut result = self.draw_wall_system(spec.clone())?;
+        // Allocate only source drivers for an edit. Generated parts belong to the object
+        // engine, which runs after surviving identities and hosts are in their final places.
+        let mut result = self.draw_wall_system(spec.clone(), old.is_empty())?;
+        if old.is_empty() {
+            return Ok(result);
+        }
+        let old_parts: Vec<_> = old
+            .iter()
+            .flat_map(|g| &g.members)
+            .filter(|(_, role, _)| !matches!(role.as_str(), "run" | "opening"))
+            .filter_map(|(h, role, _)| {
+                self.drawing
+                    .doc
+                    .get_entity(Handle::new(*h))
+                    .map(|e| (*h, role.clone(), self.object_part_region(e)))
+            })
+            .collect();
         for group in old {
-            let old_regions = walls::build_walls_justified(
-                &geom_runs(&group.spec),
-                group.spec.thickness,
-                &geom_openings(&group.spec),
-                self.measure_tol(),
-                geom_justification(group.spec.justification),
-            )
-            .map_err(|e| invalid(e.to_string()))?
-            .regions;
             for &(handle, ref role, index) in &group.members {
                 let replacements = match role.as_str() {
                     "run" => group
@@ -1049,20 +1051,6 @@ impl Session {
                         })
                         .map(|i| vec![result.inserts[i]])
                         .unwrap_or_default(),
-                    "hatch" => old_regions
-                        .get(index)
-                        .map(|before| {
-                            regions
-                                .iter()
-                                .zip(&result.hatches)
-                                .filter(|(after, _)| {
-                                    walls::regions_overlap(before, after, self.measure_tol())
-                                })
-                                .map(|(_, &handle)| handle)
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    "outline" => result.outlines.clone(),
                     _ => Vec::new(),
                 };
                 result.handle_map.insert(handle, replacements);
@@ -1124,39 +1112,15 @@ impl Session {
         let mut reuse = BTreeMap::new();
         for group in old {
             for &(handle, ref role, _) in &group.members {
-                let candidates = &result.handle_map[&handle];
+                // Only a member still in the drawing can lend its handle to its replacement.
+                if self.drawing.doc.get_entity(Handle::new(handle)).is_none() {
+                    continue;
+                }
+                let Some(candidates) = result.handle_map.get(&handle) else {
+                    continue;
+                };
                 if matches!(role.as_str(), "run" | "opening") && candidates.len() == 1 {
                     reuse.entry(candidates[0]).or_insert(handle);
-                }
-            }
-        }
-        // Match unchanged graphics first, then reuse remaining members by role.
-        for exact in [true, false] {
-            for group in old {
-                for &(handle, ref role, _) in &group.members {
-                    if matches!(role.as_str(), "run" | "opening")
-                        || reuse.values().any(|h| *h == handle)
-                    {
-                        continue;
-                    }
-                    let shape = |h| {
-                        crate::net_effect::geometry_state(
-                            self.drawing
-                                .doc
-                                .get_entity(Handle::new(h))
-                                .expect("wall member"),
-                        )
-                    };
-                    if let Some(&new) = result.handle_map[&handle].iter().find(|h| {
-                        !reuse.contains_key(h)
-                            && (!exact
-                                || crate::net_effect::same_geometry_state(
-                                    &shape(**h),
-                                    &shape(handle),
-                                ))
-                    }) {
-                        reuse.insert(new, handle);
-                    }
                 }
             }
         }
@@ -1243,26 +1207,149 @@ impl Session {
         for handles in result.handle_map.values_mut() {
             handles.iter_mut().for_each(|h| *h = remap(*h));
         }
+        let owner = *result.centrelines.iter().min().expect("wall has a run");
+        let wall_app = crate::xdata::app_handle(&self.drawing.doc, WALL_APP);
+        for (handle, _, _) in &old_parts {
+            if let Some(entity) = self.drawing.doc.get_entity_mut(Handle::new(*handle)) {
+                if let Some(mut part) = crate::xdata::read_json::<crate::objects::ObjectPart>(
+                    entity.common(),
+                    crate::objects::PART_APP,
+                ) {
+                    part.owner = owner;
+                    crate::xdata::write_values(entity.common_mut(), WALL_APP, wall_app, None);
+                    crate::xdata::write_json(
+                        entity.common_mut(),
+                        crate::objects::PART_APP,
+                        app,
+                        &part,
+                    )?;
+                }
+            }
+        }
         let removed: Vec<_> = result
             .handle_map
             .keys()
-            .filter(|h| !result.handles.contains(h))
+            .filter(|h| {
+                !result.handles.contains(h) && !old_parts.iter().any(|(part, _, _)| part == *h)
+            })
             .copied()
             .map(Handle::new)
             .collect();
+        for &handle in &removed {
+            self.drawing.doc.remove_entity_arc(handle);
+        }
+        let scope = result
+            .centrelines
+            .iter()
+            .chain(&result.inserts)
+            .copied()
+            .collect();
+        self.refresh_objects_scoped(Some(&scope))?;
+        self.sync_legacy_wall_tags()?;
+        let group = self
+            .stored_wall_groups()?
+            .into_iter()
+            .find(|g| g.id == result.group)
+            .ok_or_else(|| invalid("The rebuilt wall is missing"))?;
+        let mut final_result = self.wall_result(&group)?;
+        let old_outline_count = old_parts
+            .iter()
+            .filter(|(_, role, _)| role == "outline")
+            .count();
+        for (old, role, region) in old_parts {
+            let candidates = if role == "hatch" {
+                &final_result.hatches
+            } else {
+                &final_result.outlines
+            };
+            let replacements = if role == "hatch" {
+                let overlapping: Vec<_> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|h| {
+                        let after = self
+                            .drawing
+                            .doc
+                            .get_entity(Handle::new(*h))
+                            .and_then(|e| self.object_part_region(e));
+                        region
+                            .as_ref()
+                            .zip(after.as_ref())
+                            .is_some_and(|(a, b)| walls::regions_overlap(a, b, self.measure_tol()))
+                    })
+                    .collect();
+                if overlapping.is_empty() && candidates.contains(&old) {
+                    vec![old]
+                } else {
+                    overlapping
+                }
+            } else if candidates.contains(&old) && old_outline_count == candidates.len() {
+                vec![old]
+            } else {
+                candidates.clone()
+            };
+            result.handle_map.insert(old, replacements);
+        }
         let pieces: Vec<_> = result
             .handle_map
             .iter()
             .filter(|(h, into)| into.as_slice() != [**h])
             .map(|(&h, into)| (Handle::new(h), into.clone()))
             .collect();
-        for &handle in &removed {
-            self.drawing.doc.remove_entity_arc(handle);
-        }
         self.follow_edit(&[], &removed, &pieces, &[]);
         self.remap_wall_fields(&result.handle_map)?;
         self.remember_replacements(&result.handle_map)?;
-        Ok(result)
+        final_result.handle_map = result.handle_map;
+        Ok(final_result)
+    }
+
+    /// Whole assemblies need one union. Summing every member's prefix difference would
+    /// solve the same union twice per run, even though those differences telescope.
+    fn wall_totals(&self, centrelines: &[u64]) -> Result<[f64; 4], CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("walls.wall_totals");
+        let _read = self.evaluation_read()?;
+        let mut seen = BTreeSet::new();
+        let mut total = [0.0; 4];
+        let factor = self.drawing.units.to_metres();
+        for &handle in centrelines {
+            if seen.contains(&handle) {
+                continue;
+            }
+            let object = self
+                .drawing
+                .doc
+                .get_entity(Handle::new(handle))
+                .and_then(crate::objects::instance)
+                .ok_or_else(|| invalid("Missing wall driver"))?;
+            let definition = self.object_type(&object.type_name)?;
+            let members = self.band_members(&object, &definition)?;
+            if members.iter().any(|m| !centrelines.contains(&m.id))
+                || definition.plan.band_faces.is_none()
+            {
+                // A retyped or partial assembly retains the general per-object contract.
+                let records = self.objects_for(centrelines)?;
+                return Ok(["length", "gross_area", "net_area", "volume"].map(|name| {
+                    records
+                        .iter()
+                        .filter(|r| centrelines.contains(&r.instance.id))
+                        .filter_map(|r| r.facts.get(name))
+                        .sum()
+                }));
+            }
+            seen.extend(members.iter().map(|m| m.id));
+            if let Some(band) = self.band_geometry(&object, &definition, None)? {
+                for (value, add) in total.iter_mut().zip([
+                    band.geometry.centreline * factor,
+                    band.geometry.gross_area * factor * factor,
+                    band.geometry.net_area * factor * factor,
+                    band.net_volume,
+                ]) {
+                    *value += add;
+                }
+            }
+        }
+        Ok(total)
     }
 
     fn wall_result(&self, group: &WallGroup) -> Result<WallResult, CoreError> {
@@ -1275,24 +1362,17 @@ impl Session {
                 .collect::<Vec<_>>()
         };
         let centrelines = role("run");
-        let records = self.objects(&crate::objects::ObjectFilter::default())?;
-        let sum = |name: &str| {
-            records
-                .iter()
-                .filter(|r| centrelines.contains(&r.instance.id))
-                .filter_map(|r| r.facts.get(name))
-                .sum()
-        };
+        let totals = self.wall_totals(&centrelines)?;
         Ok(WallResult {
             group: group.id,
             handles: group.members.iter().map(|(h, _, _)| *h).collect(),
             outlines: role("outline"),
             hatches: role("hatch"),
             inserts: role("opening"),
-            centreline_length: sum("length"),
-            gross_area: sum("gross_area"),
-            net_area: sum("net_area"),
-            volume: sum("volume"),
+            centreline_length: totals[0],
+            gross_area: totals[1],
+            net_area: totals[2],
+            volume: totals[3],
             centrelines,
             handle_map: BTreeMap::new(),
         })
@@ -1316,6 +1396,93 @@ impl Session {
         Err(invalid(format!(
             "Handle {handle} is not a wall {role}; use wall_groups to read the system"
         )))
+    }
+
+    /// Independent additions can validate in input order and regenerate each assembly once.
+    /// The returned wall results describe the final shared geometry for each input's group.
+    pub(crate) fn add_wall_openings_many(
+        &mut self,
+        commands: &[(u64, Vec<AddedWallOpening>)],
+    ) -> Result<Vec<WallResult>, CoreError> {
+        let groups = self.stored_wall_groups()?;
+        let mut pending = BTreeMap::<u64, (WallGroup, WallSpec, usize)>::new();
+        let mut order = Vec::new();
+        for (index, (handle, openings)) in commands.iter().enumerate() {
+            let step = |error| CoreError::Step {
+                index,
+                label: "add_wall_openings".into(),
+                error: Box::new(error),
+            };
+            if openings.is_empty() {
+                return Err(step(invalid("Add at least one wall opening")));
+            }
+            let (group, run) = groups
+                .iter()
+                .find_map(|g| {
+                    g.members
+                        .iter()
+                        .find(|(h, role, _)| h == handle && role == "run")
+                        .map(|(_, _, run)| (g, *run))
+                })
+                .ok_or_else(|| {
+                    step(invalid(format!(
+                        "Handle {handle} is not a wall run; use wall_groups to read the system"
+                    )))
+                })?;
+            let (_, spec, _) = pending
+                .entry(group.id)
+                .or_insert_with(|| (group.clone(), group.spec.clone(), index));
+            spec.openings.extend(openings.iter().map(|o| WallOpening {
+                run,
+                at: o.at,
+                width: o.width,
+                kind: o.kind,
+                swing: o.swing,
+                sill: o.sill,
+                head: o.head,
+            }));
+            explicit_runs(spec);
+            for opening in &spec.openings {
+                let sill = opening.sill.expect("resolved sill");
+                let head = opening.head.expect("resolved head");
+                if !sill.is_finite()
+                    || !head.is_finite()
+                    || sill < 0.0
+                    || head <= sill
+                    || head > spec.runs[opening.run].height.unwrap_or(spec.height)
+                {
+                    return Err(step(invalid(
+                        "An opening needs 0 <= sill < head <= wall height, in metres",
+                    )));
+                }
+            }
+            // Validate each prefix so an error still names the first failing input and its
+            // fitting ranges. This is geometry only: no temporary objects or full derivation.
+            walls::build_walls_justified(
+                &geom_runs(spec),
+                spec.thickness,
+                &geom_openings(spec),
+                self.measure_tol(),
+                geom_justification(spec.justification),
+            )
+            .map_err(|error| step(invalid(error.to_string())))?;
+            order.push(group.id);
+        }
+        let mut results = BTreeMap::new();
+        // Preserve first-use order even when group handles have been reused or copied.
+        let mut groups: Vec<_> = pending.into_iter().collect();
+        groups.sort_by_key(|(_, (_, _, index))| *index);
+        for (id, (group, spec, index)) in groups {
+            let result = self
+                .rebuild_walls(spec, &[group])
+                .map_err(|error| CoreError::Step {
+                    index,
+                    label: "add_wall_openings".into(),
+                    error: Box::new(error),
+                })?;
+            results.insert(id, result);
+        }
+        Ok(order.into_iter().map(|id| results[&id].clone()).collect())
     }
 
     pub(crate) fn add_wall_openings(

@@ -178,9 +178,9 @@ pub enum MethodScope {
 pub enum MeasurementCommand {
     /// Apply a validated method snapshot. Null clears this scope; project takes precedence.
     /// Quantities, dimension sheets and BOQ re-derive in the same undo step.
-    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","kind":"length","basis":"geometric","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
+    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","kind":"length","basis":"geometric","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
     #[schemars(extend("x-takeoff-step" = "4 apply selected method"))]
-    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"name":"observed","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"count","kind":"count","basis":"geometric","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"insert"}}],"citation":{"source":"drawing","clause":"insert"}}]}}))]
+    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"observed","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"count","kind":"count","basis":"geometric","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"insert"}}],"citation":{"source":"drawing","clause":"insert"}}]}}))]
     #[schemars(extend("x-takeoff-kit" = {"order":50,"example":1,"batch":40}))]
     SetMethod {
         scope: MethodScope,
@@ -355,7 +355,9 @@ impl RuleSet {
 
     pub fn validate(&self) -> Result<(), CoreError> {
         if self.version != 1 {
-            return Err(invalid("Unsupported measurement rule set version"));
+            return Err(invalid(
+                "Unsupported measurement rule set version; supported versions: 1",
+            ));
         }
         text(&self.name)?;
         text(&self.title)?;
@@ -507,6 +509,8 @@ impl Session {
         Ok(json!({"changed":true}))
     }
     pub(crate) fn refresh_measurement(&mut self) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("measurement.refresh_measurement");
         if knowledge::get(&self.drawing.doc, Kind::Measurement, "selection")?.is_none() {
             return Ok(());
         }

@@ -210,20 +210,24 @@ impl Session {
         orientation: LayoutOrientation,
     ) -> Result<(), CoreError> {
         let name = check_name(name)?;
-        let doc = &mut self.drawing.doc;
-        if doc
-            .objects
-            .values()
-            .any(|o| matches!(o, ObjectType::Layout(l) if l.name.eq_ignore_ascii_case(name)))
-        {
-            return Err(invalid(format!(
-                "The drawing already has a layout named {name}"
-            )));
-        }
         let paper = paper_catalog()
             .into_iter()
             .find(|p| p.name.eq_ignore_ascii_case(paper.trim()))
             .ok_or_else(|| invalid(format!("No paper size {paper} in the paper catalog")))?;
+        let doc = &mut self.drawing.doc;
+        if let Some(old) = doc.objects.values().find_map(|o| match o {
+            ObjectType::Layout(layout) if layout.name.eq_ignore_ascii_case(name) => Some(layout),
+            _ => None,
+        }) {
+            if old.paper_width == paper.w_mm
+                && old.paper_height == paper.h_mm
+                && old.plot_rotation == i16::from(orientation == LayoutOrientation::Landscape)
+            {
+                self.last_advice.push(serde_json::json!({"code":"already_exists", "message":format!("Layout {name} already exists with this paper size and orientation."), "message_ar":format!("اللوحة {name} موجودة بهذا المقاس والاتجاه.")}));
+                return Ok(());
+            }
+            return Err(invalid(format!("Layout {name} already exists with different paper settings. Use set_layout_paper to change them.")));
+        }
         // The codec counts paper blocks to choose the next name; an imported drawing may
         // have gaps, so refuse a collision before the codec allocates anything.
         let count = doc

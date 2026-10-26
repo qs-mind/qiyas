@@ -10,6 +10,7 @@ import {
   AI_SELECT,
   aiUndo,
   aiWindowReply,
+  workspaceViewState,
   drawingInfo,
   PDF_PROGRESS,
   pickPolygon,
@@ -40,6 +41,8 @@ type Deps = Pick<Shell, "run" | "setSettingsOpen" | "viewport" | "setSideTab"> &
   Pick<Sheets, "batch" | "sheet" | "chooseSheet" | "queueReveal" | "cancelReveal" | "setSheetBlock" | "setHidden" | "setRenderProgress" | "redraw"> &
   Pick<TakeoffState, "refreshTakeoffAndBoq" | "setCompared" | "setAiHighlight"> &
   Pick<Layers, "syncInfo"> & {
+    workspace?: number | null;
+    shownWorkspace?: RefObject<number | null>;
     t: T;
     lang: Lang;
     switchGen: RefObject<number>;
@@ -73,6 +76,8 @@ export type Pointing = {
 };
 
 export function useAssistantWiring({
+  workspace,
+  shownWorkspace,
   t,
   lang,
   switchGen,
@@ -100,6 +105,10 @@ export function useAssistantWiring({
   chooseTool,
   setSideTab,
 }: Deps) {
+  const visibleWorkspace = useRef(workspace);
+  visibleWorkspace.current = workspace;
+  const belongs = (payload: { workspace?: number } | null | undefined) =>
+    payload?.workspace == null || visibleWorkspace.current == null || payload.workspace === visibleWorkspace.current;
   // Refreshes after mutations (including new_layout) follow the session, never select a tab.
   useEffect(() => {
     if (info?.sheet) setSheetBlock(info.sheet);
@@ -127,6 +136,7 @@ export function useAssistantWiring({
   }
 
   const assistant = useAssistant({
+    workspace,
     lang,
     onMutated: async (label) => {
       if (label === "compare") setCompared(true);
@@ -170,10 +180,13 @@ export function useAssistantWiring({
       if (gone) unlisten();
       else offs.push(unlisten);
     };
-    listen(TAKEOFF_CHANGED, () => onMcpChange.current()).then(keep);
+    listen<{ workspace?: number }>(TAKEOFF_CHANGED, (e) => belongs(e.payload) && onMcpChange.current()).then(keep);
     listen("measurement:changed", () => onMcpChange.current()).then(keep);
-    listen<number>(PDF_PROGRESS, (e) => setRenderProgress(e.payload)).then(keep);
-    listen<AiUi>(SESSION_CHANGED, (e) => onMcpUi.current(e.payload)).then(keep);
+    listen<number | {workspace: number; progress: number}>(PDF_PROGRESS, (e) => {
+      if (typeof e.payload === "number") setRenderProgress(e.payload);
+      else if (belongs(e.payload)) setRenderProgress(e.payload.progress);
+    }).then(keep);
+    listen<AiUi & { workspace?: number }>(SESSION_CHANGED, (e) => belongs(e.payload) && onMcpUi.current(e.payload)).then(keep);
     return () => {
       gone = true;
       offs.forEach((off) => off());
@@ -317,22 +330,22 @@ export function useAssistantWiring({
   // at, and a selection made for the user. The listeners are set up once and call the latest code
   // through this.
   const onWindowAsk = useRef({
-    capture: async (_id: number, _maxSide: number) => {},
+    capture: async (_id: number, _maxSide: number, _workspace?: number) => {},
     pointed: (): Omit<AiContext, "picture"> => ({ selection: [], region: null, view: null }),
     panels: () => readPanelState([]),
     select: (_handles: number[], _zoom: boolean) => {},
   });
   onWindowAsk.current = {
-    capture: async (id, maxSide) => {
+    capture: async (id, maxSide, requestedWorkspace) => {
       const view = viewport.current;
       if (!view || !info) {
-        await aiWindowReply(id, { error: "No drawing is on screen" });
+        await aiWindowReply(id, { error: "No drawing is on screen" }, requestedWorkspace);
         return;
       }
       try {
-        await aiWindowReply(id, { value: await view.capture(maxSide) });
+        await aiWindowReply(id, { value: await view.capture(maxSide) }, requestedWorkspace);
       } catch (e) {
-        await aiWindowReply(id, { error: String(e) });
+        await aiWindowReply(id, { error: String(e) }, requestedWorkspace);
       }
     },
     pointed: () => ({ selection: attached, region, view: viewport.current?.visible() ?? null }),
@@ -354,23 +367,37 @@ export function useAssistantWiring({
       if (gone) unlisten();
       else offs.push(unlisten);
     };
-    listen<{ id: number; maxSide: number }>(AI_CAPTURE, (e) =>
-      onWindowAsk.current.capture(e.payload.id, e.payload.maxSide).catch(() => {}),
+    listen<{ id: number; maxSide: number; workspace?: number }>(AI_CAPTURE, (e) =>
+      belongs(e.payload) && onWindowAsk.current.capture(e.payload.id, e.payload.maxSide, e.payload.workspace).catch(() => {}),
     ).then(keep);
-    listen<{ id: number }>(AI_POINTED, (e) =>
-      aiWindowReply(e.payload.id, { value: onWindowAsk.current.pointed() }).catch(() => {}),
+    listen<{ id: number; workspace?: number }>(AI_POINTED, (e) =>
+      belongs(e.payload) && aiWindowReply(e.payload.id, { value: onWindowAsk.current.pointed() }, e.payload.workspace).catch(() => {}),
     ).then(keep);
-    listen<{ id: number }>("ai:panels", (e) =>
-      aiWindowReply(e.payload.id, { value: onWindowAsk.current.panels() }).catch(() => {}),
+    listen<{ id: number; workspace?: number }>("ai:panels", (e) =>
+      belongs(e.payload) && aiWindowReply(e.payload.id, { value: onWindowAsk.current.panels() }, e.payload.workspace).catch(() => {}),
     ).then(keep);
-    listen<{ handles: number[]; zoom: boolean }>(AI_SELECT, (e) =>
-      onWindowAsk.current.select(e.payload.handles, e.payload.zoom),
+    listen<{ handles: number[]; zoom: boolean; workspace?: number }>(AI_SELECT, (e) =>
+      belongs(e.payload) && onWindowAsk.current.select(e.payload.handles, e.payload.zoom),
     ).then(keep);
     return () => {
       gone = true;
       offs.forEach((off) => off());
     };
   }, []);
+
+  useEffect(() => {
+    if (workspace == null || !info) return;
+    let previous = "";
+    const timer = window.setInterval(() => {
+      if (shownWorkspace && shownWorkspace.current !== workspace) return;
+      const context = onWindowAsk.current.pointed();
+      const encoded = JSON.stringify(context);
+      if (encoded === previous) return;
+      previous = encoded;
+      void workspaceViewState(workspace, { ...context, picture: false }).catch(() => {});
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [workspace, info?.path]);
 
   return { assistant, showCard, undoCard, openSettings, pointing, markRegion };
 }

@@ -1,4 +1,5 @@
 //! Compact drawing evidence and take-off checks. Interpretation remains drawing-owned data.
+mod detail_geometry;
 mod measurement_checks;
 mod note_scope;
 use std::collections::{BTreeMap, BTreeSet};
@@ -285,6 +286,10 @@ impl Session {
                 explained.insert(c.handle);
             }
         }
+        let exclusions = self.measurement_exclusions()?;
+        let mut view_only = 0;
+        let possible_details = detail_geometry::findings(self)?;
+        let possible_detail_count = possible_details.len();
         let mut layer_counts = BTreeMap::<String, (usize, usize)>::new();
         let mut block_counts = BTreeMap::<String, (usize, usize)>::new();
         let mut closed = (0, 0);
@@ -300,6 +305,12 @@ impl Session {
             loop {
                 let found = self.find_entities(&query);
                 for row in found.rows {
+                    if row.xref.is_none()
+                        && exclusions.entity(self, row.chain.first().copied().unwrap_or(row.handle))
+                    {
+                        view_only += 1;
+                        continue;
+                    }
                     if row.xref.is_none()
                         && !rules
                             .iter()
@@ -346,7 +357,7 @@ impl Session {
         };
         let counts =
             |c: (usize, usize)| json!({"total":c.0,"explained":c.1,"share":fraction(c.1,c.0)});
-        let mut detail = Vec::new();
+        let mut detail = possible_details;
         for (name, c) in &layer_counts {
             detail.push(json!({"section":"layers","name":short(name),"coverage":counts(*c)}));
         }
@@ -458,7 +469,7 @@ impl Session {
             detail.push(json!({"section":"expectations","result":result}));
         }
         detail.extend(entries);
-        let overview = json!({"measurement_errors":error_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
+        let overview = json!({"view_only_entities":view_only,"possible_details":possible_detail_count,"measurement_errors":error_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
         Ok(page(overview, detail, offset))
     }
 }

@@ -97,7 +97,7 @@ impl Session {
     }
 
     /// The group `name` (any case): its name as kept and its object's handle.
-    fn find_group(&self, name: &str) -> Result<(String, Handle), CoreError> {
+    pub(crate) fn find_group(&self, name: &str) -> Result<(String, Handle), CoreError> {
         let name = name.trim();
         let doc = &self.drawing.doc;
         self.group_dictionary()
@@ -148,10 +148,16 @@ impl Session {
         {
             return Err(invalid(format!("A group name can't hold \"{c}\"")));
         }
-        if let Ok((old, _)) = self.find_group(name) {
-            return Err(invalid(format!("There is a group named {old} already")));
-        }
         let members = self.sheet_targets_any(targets)?;
+        if let Ok((old, handle)) = self.find_group(name) {
+            let existing: std::collections::BTreeSet<_> =
+                self.group_mut(handle).entities.iter().copied().collect();
+            if existing == members.iter().copied().collect() {
+                self.last_advice.push(serde_json::json!({"code":"already_exists", "message":format!("Group {old} already exists with these members."), "message_ar":format!("المجموعة {old} موجودة بهذه العناصر.")}));
+                return Ok(());
+            }
+            return Err(invalid(format!("Group {old} already exists with different members. Use add_to_group or remove_from_group to change it.")));
+        }
         let dictionary = self.ensure_group_dictionary();
         let doc = &mut self.drawing.doc;
         let mut group = Group::new(name);

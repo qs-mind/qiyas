@@ -43,12 +43,35 @@ fn defaults_when_missing() {
 }
 
 #[test]
+fn subscription_effort_is_default_until_explicitly_selected() {
+    for provider in [Provider::ChatgptPlan, Provider::ClaudeCode] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("settings.json"),
+            format!(r#"{{"provider":"{}","effort":"high"}}"#, provider.name()),
+        )
+        .unwrap();
+        let mut saved = settings::load(dir.path());
+        assert_eq!(saved.profile().effort, None);
+        assert_eq!(saved.effective_effort(), "none");
+        saved.profile_mut().effort = Some("high".into());
+        settings::save(dir.path(), &saved).unwrap();
+        assert_eq!(settings::load(dir.path()).effective_effort(), "high");
+        saved.profile_mut().effort = None;
+        settings::save(dir.path(), &saved).unwrap();
+        assert_eq!(settings::load(dir.path()).profile().effort, None);
+        assert_eq!(settings::load(dir.path()).effective_effort(), "none");
+    }
+}
+
+#[test]
 fn round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let s = Settings {
         provider: Provider::OpenaiCompatible,
         providers: settings::ProviderProfiles {
             openai_compatible: settings::ProviderProfile {
+                image_input: Some(false),
                 effort: None,
                 model: "my-model".into(),
                 base_url: Some("http://localhost:11434/v1".into()),
@@ -490,4 +513,22 @@ fn effort_is_per_provider_with_responsive_defaults_and_legacy_migration() {
     migrated.provider = Provider::Anthropic;
     assert_eq!(migrated.effective_effort(), "medium");
     assert!(settings::validate(&migrated).is_ok());
+}
+
+#[test]
+fn technical_details_are_opt_in_and_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = settings::load(dir.path());
+    assert!(!settings.show_technical_details);
+    for enabled in [true, false] {
+        settings.show_technical_details = enabled;
+        settings::save(dir.path(), &settings).unwrap();
+        assert_eq!(settings::load(dir.path()).show_technical_details, enabled);
+    }
+    let mut old = serde_json::to_value(&settings).unwrap();
+    old.as_object_mut()
+        .unwrap()
+        .remove("show_technical_details");
+    let restored: Settings = serde_json::from_value(old).unwrap();
+    assert!(!restored.show_technical_details);
 }

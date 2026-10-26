@@ -51,7 +51,7 @@ export function mcpSnippets(dir: string, token: string) {
 }
 
 /** Settings: the AI provider, model, effort and API key, and the MCP server for outside AI apps. */
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSaved?(settings: Settings): void }) {
   const t = useT();
   const [draft, setDraft] = useState<Settings | null>(null);
   const [savedAddress, setSavedAddress] = useState<string | null>(null);
@@ -132,6 +132,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         }
       }
       await setSettings(next);
+      onSaved?.(next);
       if (!subscription && key.trim()) await setApiKey(draft.provider, key);
       onClose();
     } catch (e) {
@@ -191,20 +192,36 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </select>
             </label>
             <p>{t(`settings.providerDescription.${draft.provider}`)}</p>
-            {subscription && <SubscriptionSettings provider={draft.provider} model={profile.model} onModel={(model) => changeProfile({ model })} executable={draft.claude_executable ?? ""} onExecutable={(claude_executable) => change({ claude_executable })} />}
-            {draft.provider !== "chatgpt_plan" && <div className="field">
+            {subscription && <SubscriptionSettings provider={draft.provider} model={profile.model} onModel={(model) => changeProfile({ model, image_input: undefined })}
+              effort={profile.effort} onEffort={(effort) => changeProfile({ effort })}
+              executable={draft.claude_executable ?? ""} onExecutable={(claude_executable) => change({ claude_executable })} />}
+            <label>
+              <span>{t("workspace.limit")}</span>
+              <input type="number" min={1} max={8} value={draft.max_concurrent_turns ?? 3}
+                onChange={event => change({ max_concurrent_turns: Number(event.target.value) })} />
+            </label>
+            {!subscription && <div className="field">
               <span>{t("settings.model")}</span>
-              {subscription ? <input aria-label={t("settings.model")} dir="ltr" value={profile.model}
-                placeholder={t("settings.claudeDefaultModel")}
-                onChange={(e) => changeProfile({ model: e.target.value })} /> : <ModelPicker
+              <ModelPicker
                 key={draft.provider}
                 provider={draft.provider}
                 baseUrl={profile.base_url ?? null}
                 value={profile.model}
                 typedKey={key}
-                onChange={(model) => changeProfile({ model })}
-              />}
+                onChange={(model) => changeProfile({ model, image_input: undefined })}
+                onImageInputChange={(image_input) => { if (image_input !== (profile.image_input ?? null)) changeProfile({ image_input }); }}
+              />
             </div>}
+            <label>
+              <span>{t("settings.imageInput")}</span>
+              <select value={profile.image_input == null ? "unknown" : String(profile.image_input)}
+                onChange={(e) => changeProfile({ image_input: e.target.value === "unknown" ? null : e.target.value === "true" })}>
+                <option value="unknown">{t("settings.imageUnknown")}</option>
+                <option value="true">{t("settings.imageSupported")}</option>
+                <option value="false">{t("settings.imageUnsupported")}</option>
+              </select>
+            </label>
+            {profile.image_input !== true && <p className="note">{t(profile.image_input === false ? "ai.noVision" : "ai.unknownVision")}</p>}
             {draft.provider === "openai_compatible" && (
               <label>
                 <span>{t("settings.baseUrl")}</span>
@@ -213,7 +230,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   type="url"
                   placeholder="http://localhost:11434/v1"
                   value={profile.base_url ?? ""}
-                  onChange={(e) => { changeProfile({ base_url: e.target.value || null }); setKey(""); }}
+                  onChange={(e) => { changeProfile({ base_url: e.target.value || null, image_input: null }); setKey(""); }}
                 />
               </label>
             )}
@@ -352,6 +369,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </fieldset>
           </>
         )}
+        {draft && <label className="check">
+          <input type="checkbox" checked={draft.show_technical_details ?? false}
+            onChange={(e) => change({ show_technical_details: e.target.checked })} />
+          <span>{t("settings.showTechnicalDetails")}</span>
+        </label>}
         <SupportLog />
         {error && (
           <p className="error" role="alert">

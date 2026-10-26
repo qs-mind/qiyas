@@ -83,6 +83,8 @@ pub struct PlanRecipe {
     pub centreline: bool,
     /// DrawSpec JSON in local drawing coordinates. Strings beginning '=' are expressions.
     pub symbols: Vec<Value>,
+    /// Named local DrawSpec regions used by optional placement checks; no trade semantics.
+    pub zones: BTreeMap<String, Vec<Value>>,
     /// Store local symbol entities in an INSERT driver's block.
     pub symbols_in_driver: bool,
     pub label_template: Option<String>,
@@ -98,6 +100,9 @@ pub enum JoinRule {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HostCut {
+    /// False attaches the object without removing material from its host.
+    #[serde(default = "cuts_host_by_default")]
+    pub cuts_host: bool,
     pub width: String,
     pub at: String,
     #[serde(default)]
@@ -117,6 +122,10 @@ pub struct ObjectType {
     #[serde(default)]
     pub property_bindings: BTreeMap<String, String>,
     pub geometry: GeometryKind,
+    /// Explicitly permits this type's closed graphics to remove floor area as room islands.
+    /// Fixture and furniture blocks are not voids by default.
+    #[serde(default)]
+    pub room_void: bool,
     #[serde(default)]
     pub vertical: Vertical,
     #[serde(default)]
@@ -431,7 +440,12 @@ impl ObjectType {
         if self.plan.symbols.len() > 10000 {
             return Err(invalid("Too many symbol entities"));
         }
-        for symbol in &self.plan.symbols {
+        for symbol in self
+            .plan
+            .symbols
+            .iter()
+            .chain(self.plan.zones.values().flatten())
+        {
             let mut checked = symbol.clone();
             validate_symbol(&mut checked, &known)?;
             serde_json::from_value::<DrawSpec>(checked)
@@ -556,7 +570,8 @@ impl Resolver for Context<'_> {
 }
 impl Context<'_> {
     fn number(&self, text: &str) -> Result<f64, CoreError> {
-        expression(text)?
+        self.session
+            .evaluation_expression(text)?
             .eval_with(self)
             .and_then(|v| v.as_number())
             .map_err(|e| invalid(format!("{text}: {e}")))
@@ -564,18 +579,39 @@ impl Context<'_> {
 }
 impl Session {
     pub fn object_types(&self) -> Result<Vec<ObjectType>, CoreError> {
+        let _read = self.evaluation_read()?;
         knowledge::list(&self.drawing.doc, Kind::Types)?
             .into_iter()
             .map(|e| {
-                serde_json::from_value(e.data)
-                    .map_err(|e| invalid(format!("Invalid object type: {e}")))
+                let key = e.name.to_ascii_lowercase();
+                if let Some(definition) = self.evaluation.borrow().types.get(&key) {
+                    return Ok(definition.clone());
+                }
+                let definition: ObjectType = serde_json::from_value(e.data)
+                    .map_err(|e| invalid(format!("Invalid object type: {e}")))?;
+                self.evaluation
+                    .borrow_mut()
+                    .types
+                    .insert(key, definition.clone());
+                Ok(definition)
             })
             .collect()
     }
     pub(crate) fn object_type(&self, name: &str) -> Result<ObjectType, CoreError> {
+        let _read = self.evaluation_read()?;
+        let key = name.to_ascii_lowercase();
+        if let Some(definition) = self.evaluation.borrow().types.get(&key) {
+            return Ok(definition.clone());
+        }
         let entry = knowledge::get(&self.drawing.doc, Kind::Types, name)?
             .ok_or_else(|| invalid(format!("There is no object type {name}")))?;
-        serde_json::from_value(entry.data).map_err(|e| invalid(e.to_string()))
+        let definition: ObjectType =
+            serde_json::from_value(entry.data).map_err(|e| invalid(e.to_string()))?;
+        self.evaluation
+            .borrow_mut()
+            .types
+            .insert(key, definition.clone());
+        Ok(definition)
     }
     pub(crate) fn define_object_type(
         &mut self,
@@ -583,7 +619,17 @@ impl Session {
         redefine: bool,
     ) -> Result<(), CoreError> {
         definition.validate()?;
-        let exists = knowledge::get(&self.drawing.doc, Kind::Types, &definition.name)?.is_some();
+        let previous = knowledge::get(&self.drawing.doc, Kind::Types, &definition.name)?;
+        let exists = previous.is_some();
+        if let Some(previous) = previous.filter(|_| !redefine) {
+            let mut old: ObjectType =
+                serde_json::from_value(previous.data).map_err(|e| invalid(e.to_string()))?;
+            old.name.clone_from(&definition.name);
+            if json!(old) == json!(definition) {
+                self.last_advice.push(json!({"code":"already_exists", "message":format!("Object type {} already exists with this definition.", definition.name), "message_ar":format!("نوع العنصر {} موجود بهذه الخصائص.", definition.name)}));
+                return Ok(());
+            }
+        }
         if exists != redefine {
             return Err(invalid(if exists {
                 "This type exists; use redefine_object_type"
@@ -643,12 +689,46 @@ impl Session {
         object: &ObjectInstance,
     ) -> Result<(), CoreError> {
         let app = self.object_app(OBJECT_APP)?;
+        let text = serde_json::to_string(object)
+            .map_err(|e| invalid(format!("Invalid {OBJECT_APP} metadata: {e}")))?;
+        let values = crate::xdata::chunks(&text);
+        if self
+            .drawing
+            .doc
+            .get_entity(Handle::new(h))
+            .is_some_and(|e| {
+                e.common()
+                    .extended_data
+                    .get_record(OBJECT_APP)
+                    .is_some_and(|record| record.values == values)
+            })
+        {
+            self.record_unchanged_driver(h)?;
+            return Ok(());
+        }
         let e = self
             .drawing
             .doc
             .get_entity_mut(Handle::new(h))
             .ok_or_else(|| invalid("Object driver is missing"))?;
-        crate::xdata::write_json(e.common_mut(), OBJECT_APP, app, object)
+        crate::xdata::write_values(e.common_mut(), OBJECT_APP, app, Some(values));
+        Ok(())
+    }
+    /// Keep the recorder's original first-touch order without copying an unchanged driver.
+    /// A loaded verbatim record still has to be cleared, as with ordinary mutable access.
+    fn record_unchanged_driver(&mut self, id: u64) -> Result<(), CoreError> {
+        let handle = Handle::new(id);
+        let image = self
+            .drawing
+            .doc
+            .get_entity_arc(handle)
+            .ok_or(CoreError::NoSuchEntity(id))?;
+        if image.common().raw_record.is_some() {
+            self.drawing.doc.get_entity_mut(handle);
+        } else {
+            self.drawing.doc.replace_entity_arc(handle, image);
+        }
+        Ok(())
     }
     pub(crate) fn place_objects(
         &mut self,
@@ -658,8 +738,15 @@ impl Session {
             return Err(invalid("Place at least one object"));
         }
         let mut out = Vec::new();
-        for p in placements {
+        for mut p in placements {
             let definition = self.object_type(&p.type_name)?;
+            if p.driver.is_none()
+                && p.points.is_empty()
+                && p.host.is_some()
+                && definition.geometry == GeometryKind::Hosted
+            {
+                p.points.push([0., 0.]);
+            }
             let mut supplied = p.props.clone();
             for (role, property) in &definition.plan.layer_properties {
                 if let Some(layer) = p.layers.get(role) {
@@ -862,12 +949,22 @@ impl Session {
             if !self.drawing.doc.layers.contains(&layer) {
                 self.new_layer(&layer)?;
             }
-            self.drawing
+            let handle = Handle::new(object.id);
+            let entity = self
+                .drawing
                 .doc
-                .get_entity_mut(Handle::new(object.id))
-                .ok_or(CoreError::NoSuchEntity(object.id))?
-                .common_mut()
-                .layer = layer;
+                .get_entity(handle)
+                .ok_or(CoreError::NoSuchEntity(object.id))?;
+            if entity.common().layer != layer {
+                self.drawing
+                    .doc
+                    .get_entity_mut(handle)
+                    .expect("object driver")
+                    .common_mut()
+                    .layer = layer;
+            } else {
+                self.record_unchanged_driver(object.id)?;
+            }
         }
         Ok(())
     }
@@ -884,10 +981,20 @@ impl Session {
         definition: &ObjectType,
         depth: usize,
     ) -> Result<Context<'a>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.object_context_depth");
+        let _read = self.evaluation_read()?;
         if depth > 16 {
             return Err(invalid("Object host chain is cyclic or too deep"));
         }
 
+        let key = (json!([object, definition]).to_string(), depth);
+        if let Some(values) = self.evaluation.borrow().contexts.get(&key) {
+            return Ok(Context {
+                session: self,
+                values: values.clone(),
+            });
+        }
         let driver = self
             .drawing
             .doc
@@ -977,7 +1084,7 @@ impl Session {
             let ready: Vec<_> = pending
                 .iter()
                 .filter_map(|(name, text)| {
-                    expression(text)
+                    self.evaluation_expression(text)
                         .ok()
                         .filter(|e| e.names().iter().all(|n| !pending.contains_key(n)))
                         .map(|_| name.clone())
@@ -988,7 +1095,8 @@ impl Session {
             }
             for name in ready {
                 let text = pending.remove(&name).expect("listed binding");
-                let value = expression(&text)?
+                let value = self
+                    .evaluation_expression(&text)?
                     .eval_with(&context)
                     .map_err(|e| invalid(e.to_string()))?;
                 if !definition.properties[&name].accepts(&expr_json(&value)) {
@@ -1017,6 +1125,10 @@ impl Session {
                 .values
                 .insert(format!("geometry.{key}"), ExprValue::Number(n));
         }
+        self.evaluation
+            .borrow_mut()
+            .contexts
+            .insert(key, context.values.clone());
         Ok(context)
     }
     /// Evaluate a local symbol recipe before its insert exists. Local point facts are zero;
@@ -1089,7 +1201,7 @@ impl Session {
             let ready: Vec<_> = pending
                 .iter()
                 .filter_map(|(name, text)| {
-                    let e = expression(text).ok()?;
+                    let e = self.evaluation_expression(text).ok()?;
                     e.names()
                         .iter()
                         .all(|n| !pending.contains_key(n))
@@ -1109,9 +1221,51 @@ impl Session {
         Ok(result)
     }
     pub fn objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRecord>, CoreError> {
+        self.object_records(filter, true)
+    }
+
+    /// Source and validity records suffice when no rule consumes numeric facts.
+    pub(crate) fn object_records(
+        &self,
+        filter: &ObjectFilter,
+        quantities: bool,
+    ) -> Result<Vec<ObjectRecord>, CoreError> {
+        self.object_records_for(filter, None, quantities)
+    }
+
+    /// Read only the requested drivers and their quantity dependencies. Union quantities
+    /// retain the same ordered prefix allocation as a complete object read.
+    pub fn objects_for(&self, ids: &[u64]) -> Result<Vec<ObjectRecord>, CoreError> {
+        self.object_records_for(&ObjectFilter::default(), Some(ids), true)
+    }
+
+    /// One driver's source, facts and named quantities; absent drivers return None.
+    pub fn object_quantity(&self, id: u64) -> Result<Option<ObjectRecord>, CoreError> {
+        Ok(self.objects_for(&[id])?.pop())
+    }
+
+    pub(crate) fn object_records_for(
+        &self,
+        filter: &ObjectFilter,
+        ids: Option<&[u64]>,
+        quantities: bool,
+    ) -> Result<Vec<ObjectRecord>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.object_records_for");
+        let _read = self.evaluation_read()?;
         self.validate_object_metadata()?;
+        let selected: BTreeSet<u64> = ids.unwrap_or_default().iter().copied().collect();
+        let entities: Box<dyn Iterator<Item = &EntityType> + '_> = if ids.is_some() {
+            Box::new(
+                selected
+                    .iter()
+                    .filter_map(|id| self.drawing.doc.get_entity(Handle::new(*id))),
+            )
+        } else {
+            Box::new(self.drawing.doc.entities())
+        };
         let mut out = Vec::new();
-        for entity in self.drawing.doc.entities() {
+        for entity in entities {
             let Some(mut object) = instance(entity) else {
                 continue;
             };
@@ -1145,8 +1299,21 @@ impl Session {
             {
                 continue;
             }
+            if quantities {
+                if let Some(record) = self
+                    .evaluation
+                    .borrow()
+                    .records
+                    .get(&entity.common().handle.value())
+                {
+                    out.push(record.clone());
+                    continue;
+                }
+            }
             let mut context = self.object_context(&object, &definition)?;
-            self.band_facts(&object, &definition, &mut context)?;
+            if quantities {
+                self.band_facts(&object, &definition, &mut context)?;
+            }
             for name in definition.property_bindings.keys() {
                 if let Some(value) = context.values.get(name) {
                     object.props.insert(name.clone(), expr_json(value));
@@ -1161,12 +1328,13 @@ impl Session {
                 })
                 .collect();
             let valid = crate::object_regions::retained_region(entity).is_none_or(|r| r.valid);
-            let quantities = if valid {
+            let cache_record = quantities;
+            let quantities = if valid && quantities {
                 self.quantity_values(&definition, &mut context)?
             } else {
                 BTreeMap::new()
             };
-            out.push(ObjectRecord {
+            let record = ObjectRecord {
                 identity: self.revision_identity(object.id),
                 instance: object,
                 category: definition.category,
@@ -1174,7 +1342,14 @@ impl Session {
                 facts: if valid { facts } else { BTreeMap::new() },
                 quantities,
                 valid,
-            });
+            };
+            if cache_record {
+                self.evaluation
+                    .borrow_mut()
+                    .records
+                    .insert(entity.common().handle.value(), record.clone());
+            }
+            out.push(record);
         }
         out.sort_by_key(|o| o.instance.id);
         Ok(out)
@@ -1224,6 +1399,9 @@ impl Session {
         object: &ObjectInstance,
         definition: &ObjectType,
     ) -> Result<Vec<ObjectInstance>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.band_members");
+        let _read = self.evaluation_read()?;
         if !matches!(definition.join, JoinRule::Union) {
             return Ok(vec![object.clone()]);
         }
@@ -1233,38 +1411,39 @@ impl Session {
             .get_entity(Handle::new(object.id))
             .ok_or_else(|| invalid("Missing driver"))?;
         let owner = driver.common().owner_handle;
-        let context = self.object_context(object, definition)?;
-        let span = [context.number("base")?, context.number("height")?];
+        let span = if object.assembly.is_none() {
+            let context = self.object_context(object, definition)?;
+            Some([context.number("base")?, context.number("height")?])
+        } else {
+            None
+        };
         let mut members = Vec::new();
-        for entity in self.drawing.doc.entities() {
-            if entity.common().owner_handle != owner {
+        let key = crate::evaluation::Dependencies::assembly(owner.value(), object);
+        let candidates: Vec<_> = {
+            let cache = self.evaluation.borrow();
+            cache
+                .index
+                .assemblies
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter_map(|id| cache.index.objects.get(id))
+                .cloned()
+                .collect()
+        };
+        for member in candidates {
+            if member.compatibility.is_some() {
                 continue;
             }
-            let Some(mut member) = instance(entity) else {
-                continue;
-            };
-            if !member.type_name.eq_ignore_ascii_case(&definition.name)
-                || member.compatibility.is_some()
-                || member.assembly != object.assembly
-            {
-                continue;
+            // Explicit assemblies own their vertical grouping. Evaluating every member's
+            // context here made each graphics/quantity request quadratic in assembly size.
+            if let Some(span) = span {
+                let context = self.object_context(&member, definition)?;
+                if [context.number("base")?, context.number("height")?] != span {
+                    continue;
+                }
             }
-            let same_level = match (&object.level, &member.level) {
-                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                (None, None) => true,
-                _ => false,
-            };
-            if !same_level {
-                continue;
-            }
-            // A copy's xdata still carries the old id until the refresh reaches that driver.
-            member.id = entity.common().handle.value();
-            let context = self.object_context(&member, definition)?;
-            if object.assembly.is_some()
-                || [context.number("base")?, context.number("height")?] == span
-            {
-                members.push(member);
-            }
+            members.push(member);
         }
         members.sort_by_key(|member| member.id);
         Ok(members)
@@ -1284,7 +1463,8 @@ impl Session {
                 .ok_or_else(|| invalid("A band requires a width expression"))?,
         )?;
         let justification = if let Some(text) = &definition.plan.band_justification {
-            let value = expression(text)?
+            let value = self
+                .evaluation_expression(text)?
                 .eval_with(&context)
                 .map_err(|e| invalid(e.to_string()))?;
             match value
@@ -1344,40 +1524,82 @@ impl Session {
             height_m: context.number("height")?,
         })
     }
-    fn band_geometry(
+    pub(crate) fn band_geometry(
         &self,
         object: &ObjectInstance,
         definition: &ObjectType,
         through: Option<u64>,
-    ) -> Result<Option<crate::object_bands::BandDerived>, CoreError> {
+    ) -> Result<Option<std::sync::Arc<crate::object_bands::BandDerived>>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.band_geometry");
+        let _read = self.evaluation_read()?;
         if definition.plan.band_faces.is_none() {
             return Ok(None);
         }
-        let members = self
+        let members: Vec<_> = self
             .band_members(object, definition)?
-            .iter()
+            .into_iter()
             .filter(|member| through.is_none_or(|last| member.id <= last))
-            .map(|member| self.band_member(member, definition))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         if members.is_empty() {
             return Ok(None);
         }
+        // Canonical member lists share the prefix for id N with the previous prefix for
+        // id N+1, including sparse handles. Arithmetic stays in the original order.
+        let key = json!([definition, members]).to_string();
+        if let Some(band) = self.evaluation.borrow().bands.get(&key) {
+            return Ok(Some(band.clone()));
+        }
+        let members = members
+            .iter()
+            .map(|member| self.band_member(member, definition))
+            .collect::<Result<Vec<_>, _>>()?;
         let ids: BTreeSet<_> = members.iter().map(|m| m.id).collect();
-        let cuts = self
-            .drawing
-            .doc
-            .entities()
-            .filter_map(instance)
-            .filter(|o| o.host.is_some_and(|host| ids.contains(&host)))
-            .map(|o| self.band_cut(&o, &self.object_type(&o.type_name)?))
-            .collect::<Result<Vec<_>, CoreError>>()?;
-        crate::object_bands::derive_band(
+        let openings: Vec<_> = {
+            let cache = self.evaluation.borrow();
+            ids.iter()
+                .flat_map(|id| cache.index.openings.get(id).into_iter().flatten())
+                .filter_map(|id| cache.index.objects.get(id))
+                .cloned()
+                .collect()
+        };
+        let mut cuts = openings
+            .iter()
+            .map(|o| {
+                let definition = self.object_type(&o.type_name)?;
+                // A hosted fixture can sit on a wall without cutting it.
+                if definition
+                    .host_cut
+                    .as_ref()
+                    .is_some_and(|cut| !cut.cuts_host)
+                {
+                    Ok(None)
+                } else {
+                    self.band_cut(o, &definition).map(Some)
+                }
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        // Entity storage uses swap removal. Its iteration order must not decide the order
+        // of boolean cuts: driver identities and geometric positions are stable instead.
+        cuts.sort_by(|a, b| {
+            a.host
+                .cmp(&b.host)
+                .then_with(|| a.at_m.total_cmp(&b.at_m))
+                .then_with(|| a.width_m.total_cmp(&b.width_m))
+                .then_with(|| a.base_m.total_cmp(&b.base_m))
+                .then_with(|| a.height_m.total_cmp(&b.height_m))
+        });
+        let band = std::sync::Arc::new(crate::object_bands::derive_band(
             &members,
             &cuts,
             self.drawing.units.to_metres(),
             self.measure_tol(),
-        )
-        .map(Some)
+        )?);
+        self.evaluation.borrow_mut().bands.insert(key, band.clone());
+        Ok(Some(band))
     }
     fn band_facts(
         &self,
@@ -1385,6 +1607,8 @@ impl Session {
         definition: &ObjectType,
         context: &mut Context<'_>,
     ) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.band_facts");
         if let Some(band) = self.band_geometry(object, definition, Some(object.id))? {
             let previous = if matches!(definition.join, JoinRule::Union) {
                 self.band_geometry(object, definition, object.id.checked_sub(1))?
@@ -1438,6 +1662,9 @@ impl Session {
         object: &ObjectInstance,
         definition: &ObjectType,
     ) -> Result<Vec<(String, EntityType)>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.object_graphics");
+        let _read = self.evaluation_read()?;
         let driver = self
             .drawing
             .doc
@@ -1495,14 +1722,42 @@ impl Session {
             }
         }
         let mut context = self.object_context(object, definition)?;
-        self.band_facts(object, definition, &mut context)?;
-        self.quantity_values(definition, &mut context)?;
-        let band = self.band_geometry(object, definition, None)?;
+        // Quantities feed symbols and labels. Plain band faces do not need a prefix union
+        // for every member simply to discover that another driver owns their graphics.
+        let computed_quantities = definition.plan.band_faces.is_none()
+            || definition.quantities.values().any(|expression| {
+                !matches!(
+                    expression
+                        .trim()
+                        .strip_prefix("geometry.")
+                        .unwrap_or(expression.trim()),
+                    "length"
+                        | "perimeter"
+                        | "area"
+                        | "gross_area"
+                        | "net_area"
+                        | "volume"
+                        | "gross_volume"
+                        | "count"
+                )
+            });
+        if (!definition.plan.symbols.is_empty() && !definition.plan.symbols_in_driver)
+            || definition.plan.label_template.is_some()
+            || computed_quantities
+        {
+            self.band_facts(object, definition, &mut context)?;
+            self.quantity_values(definition, &mut context)?;
+        }
         let draws_union = !matches!(definition.join, JoinRule::Union)
             || self
                 .band_members(object, definition)?
                 .first()
                 .is_some_and(|member| member.id == object.id);
+        let band = if definition.plan.band_faces.is_some() && draws_union {
+            self.band_geometry(object, definition, None)?
+        } else {
+            None
+        };
         let mut specs = Vec::new();
         if let Some(band) = band {
             if draws_union {
@@ -1518,7 +1773,7 @@ impl Session {
                     false,
                 ));
             }
-        } else {
+        } else if definition.plan.band_faces.is_none() {
             let regions: Vec<_> = if let Some(region) = crate::object_regions::region_graphics(
                 &self.drawing.doc,
                 driver,
@@ -1709,6 +1964,66 @@ impl Session {
         }
         Ok(result)
     }
+    /// Evaluate check regions in the same physical frame as the object's drawn symbol.
+    pub(crate) fn object_zone_entities(
+        &self,
+        object: &ObjectInstance,
+        definition: &ObjectType,
+    ) -> Result<BTreeMap<String, Vec<EntityType>>, CoreError> {
+        let driver = self
+            .drawing
+            .doc
+            .get_entity(Handle::new(object.id))
+            .ok_or_else(|| invalid("Missing object driver"))?;
+        let context = self.object_context(object, definition)?;
+        let pos = driver_position(driver);
+        let placing = crate::modify::Placing::plain(
+            opencadcodec::types::Transform::from_rotation(
+                opencadcodec::Vector3::UNIT_Z,
+                driver_rotation(driver),
+            )
+            .then(&opencadcodec::types::Transform::from_translation(
+                opencadcodec::Vector3::new(pos[0], pos[1], 0.),
+            )),
+        );
+        let mirrored_x = match driver {
+            EntityType::Point(p) => p.normal.z < 0.,
+            EntityType::Insert(i) => i.x_scale() < 0.,
+            _ => false,
+        };
+        let mirrored_y = matches!(driver, EntityType::Insert(i) if i.y_scale() < 0.);
+        let mut zones = BTreeMap::new();
+        for (name, recipes) in &definition.plan.zones {
+            let mut entities = Vec::new();
+            for spec in evaluated_symbol_specs(recipes, &context)? {
+                for mut entity in self.draw_entities(spec)? {
+                    if mirrored_x {
+                        crate::modify::place(
+                            &mut entity,
+                            &crate::modify::Placing::mirror(
+                                opencadcodec::types::Transform::from_mirror_y(),
+                                0.,
+                            ),
+                        );
+                    }
+                    if mirrored_y {
+                        crate::modify::place(
+                            &mut entity,
+                            &crate::modify::Placing::mirror(
+                                opencadcodec::types::Transform::from_mirror_x(),
+                                std::f64::consts::FRAC_PI_2,
+                            ),
+                        );
+                    }
+                    crate::modify::place(&mut entity, &placing);
+                    entities.push(entity);
+                }
+            }
+            zones.insert(name.clone(), entities);
+        }
+        Ok(zones)
+    }
+
     pub(crate) fn move_hosted_object(
         &mut self,
         handle: Handle,
@@ -1765,6 +2080,8 @@ impl Session {
     }
 
     fn refresh_hosted_positions(&mut self, only: Option<&BTreeSet<u64>>) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.refresh_hosted_positions");
         let objects: Vec<_> = self
             .drawing
             .doc
@@ -1777,6 +2094,7 @@ impl Session {
             })
             .collect();
         for object in objects {
+            let read = self.evaluation_read()?;
             let definition = self.object_type(&object.type_name)?;
             let Some(cut) = &definition.host_cut else {
                 continue;
@@ -1789,17 +2107,46 @@ impl Session {
             let host_definition = self.object_type(&host.type_name)?;
             let member = self.band_member(&host, &host_definition)?;
             let evaluated = self.band_cut(&object, &definition)?;
-            let built = crate::object_bands::derive_band(
-                &[member],
-                &[evaluated],
-                self.drawing.units.to_metres(),
-                self.measure_tol(),
-            )?;
-            let placed = built
-                .geometry
-                .openings
-                .first()
-                .ok_or_else(|| invalid("Missing hosted position"))?;
+            let (centre, direction) = if cut.cuts_host {
+                let built = crate::object_bands::derive_band(
+                    &[member],
+                    &[evaluated],
+                    self.drawing.units.to_metres(),
+                    self.measure_tol(),
+                )?;
+                let placed = built
+                    .geometry
+                    .openings
+                    .first()
+                    .ok_or_else(|| invalid("Missing hosted position"))?;
+                (placed.centre, placed.dir)
+            } else {
+                let mut station = evaluated.at_m / self.drawing.units.to_metres();
+                let mut points = member.points;
+                if member.closed {
+                    points.push(points[0]);
+                }
+                let mut placement = None;
+                for edge in points.windows(2) {
+                    let length = (edge[1][0] - edge[0][0]).hypot(edge[1][1] - edge[0][1]);
+                    if length <= 0. {
+                        continue;
+                    }
+                    if station >= 0. && station <= length {
+                        let dir = [
+                            (edge[1][0] - edge[0][0]) / length,
+                            (edge[1][1] - edge[0][1]) / length,
+                        ];
+                        placement = Some((
+                            [edge[0][0] + station * dir[0], edge[0][1] + station * dir[1]],
+                            dir,
+                        ));
+                        break;
+                    }
+                    station -= length;
+                }
+                placement.ok_or_else(|| invalid("The placement station is outside its host"))?
+            };
             let context = self.object_context(&object, &definition)?;
             let factor = self.drawing.units.to_metres();
             let along = cut
@@ -1826,18 +2173,19 @@ impl Session {
                         .map_err(|e| invalid(e.to_string()))
                 })
                 .transpose()?;
-            let [dx, dy] = placed.dir;
+            let [dx, dy] = direction;
             let at = [
-                placed.centre[0] + dx * along - dy * normal,
-                placed.centre[1] + dy * along + dx * normal,
+                centre[0] + dx * along - dy * normal,
+                centre[1] + dy * along + dx * normal,
             ];
             let angle = dy.atan2(dx).rem_euclid(std::f64::consts::TAU);
-            let entity = self
+            let before = self
                 .drawing
                 .doc
-                .get_entity_mut(Handle::new(object.id))
+                .get_entity_arc(Handle::new(object.id))
                 .ok_or_else(|| invalid("Missing hosted driver"))?;
-            match entity {
+            let mut entity = before.as_ref().clone();
+            match &mut entity {
                 EntityType::Point(point) => {
                     point.location.x = at[0];
                     point.location.y = at[1];
@@ -1871,10 +2219,29 @@ impl Session {
             }
             entity.common_mut().raw_record = None;
             entity.common_mut().graphic_data = None;
+            // Hosted refresh often writes the same frame. Preserve its shared snapshot
+            // and recorder order, including signed zero, instead of invalidating every
+            // quantity and dependency after each unchanged opening.
+            let unchanged = before.common().raw_record.is_none()
+                && before.common().graphic_data.is_none()
+                && serde_json::to_vec(before.as_ref()).map_err(|e| invalid(e.to_string()))?
+                    == serde_json::to_vec(&entity).map_err(|e| invalid(e.to_string()))?;
+            drop(read);
+            self.drawing.doc.replace_entity_arc(
+                Handle::new(object.id),
+                if unchanged {
+                    before
+                } else {
+                    std::sync::Arc::new(entity)
+                },
+            );
         }
         Ok(())
     }
-    fn object_part_region(&self, entity: &EntityType) -> Option<qiyas_geom::walls::Region> {
+    pub(crate) fn object_part_region(
+        &self,
+        entity: &EntityType,
+    ) -> Option<qiyas_geom::walls::Region> {
         if !matches!(entity, EntityType::Hatch(_)) {
             return None;
         }
@@ -1901,6 +2268,8 @@ impl Session {
         &mut self,
         only: Option<&BTreeSet<u64>>,
     ) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("objects.refresh_objects_scoped");
         self.validate_object_metadata()?;
         if !self.drawing.doc.app_ids.contains(OBJECT_APP) {
             return Ok(());
@@ -2002,6 +2371,7 @@ impl Session {
                 object.id = handle;
                 self.stamp_object(handle, &object)?;
             }
+            let read = self.evaluation_read()?;
             let definition = self.object_type(&object.type_name)?;
             object.props = definition.properties(&object.props)?;
             let context = self.object_context(&object, &definition)?;
@@ -2010,6 +2380,7 @@ impl Session {
                     object.props.insert(name.clone(), expr_json(value));
                 }
             }
+            drop(read);
             self.apply_object_layers(&mut object, &definition)?;
             self.stamp_object(handle, &object)?;
             for layer in definition
@@ -2029,21 +2400,38 @@ impl Session {
                 let driver = self
                     .drawing
                     .doc
-                    .get_entity_mut(Handle::new(handle))
+                    .get_entity(Handle::new(handle))
                     .ok_or_else(|| invalid("Missing centreline driver"))?;
-                driver.common_mut().invisible = !definition.plan.centreline;
+                if driver.common().invisible == definition.plan.centreline {
+                    self.drawing
+                        .doc
+                        .get_entity_mut(Handle::new(handle))
+                        .expect("centreline driver")
+                        .common_mut()
+                        .invisible = !definition.plan.centreline;
+                } else {
+                    self.record_unchanged_driver(handle)?;
+                }
             }
+            let read = self.evaluation_read()?;
             let wanted = self.object_graphics(&object, &definition)?;
-            let mut old: Vec<_> = self
-                .drawing
-                .doc
-                .entities()
-                .filter_map(|entity| {
-                    crate::xdata::read_json::<ObjectPart>(entity.common(), PART_APP)
-                        .filter(|part| part.owner == handle)
-                        .map(|part| (part, entity.clone()))
-                })
-                .collect();
+            let mut old: Vec<_> = {
+                let _read = self.evaluation_read()?;
+                let cache = self.evaluation.borrow();
+                cache
+                    .index
+                    .parts
+                    .get(&handle)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| self.drawing.doc.get_entity(Handle::new(*id)))
+                    .filter_map(|entity| {
+                        crate::xdata::read_json::<ObjectPart>(entity.common(), PART_APP)
+                            .map(|part| (part, entity.clone()))
+                    })
+                    .collect()
+            };
+            drop(read);
             old.sort_by_key(|(part, entity)| (part.index, entity.common().handle.value()));
             let same_role =
                 |part: &ObjectPart, before: &EntityType, role: &str, after: &EntityType| {
@@ -2299,4 +2687,8 @@ pub(crate) fn display(value: &Value) -> String {
         Value::String(s) => s.clone(),
         _ => value.to_string(),
     }
+}
+
+fn cuts_host_by_default() -> bool {
+    true
 }

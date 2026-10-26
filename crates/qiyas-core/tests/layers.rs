@@ -281,13 +281,14 @@ fn new_and_deleted_layers_and_what_cant_be_deleted() {
     })
     .unwrap();
     assert!(s.drawing.doc.layers.contains("S-COLS"));
-    assert!(refused(
-        &mut s,
-        Command::NewLayer {
-            name: "s-cols".into()
-        }
-    )
-    .contains("S-COLS"));
+    let steps = s.history_steps();
+    let layers = s.drawing.doc.layers.clone();
+    s.run(Command::NewLayer {
+        name: "s-cols".into(),
+    })
+    .unwrap();
+    assert_eq!(s.history_steps(), steps);
+    assert_eq!(s.drawing.doc.layers, layers);
     assert!(refused(&mut s, Command::NewLayer { name: "A|B".into() }).contains("name"));
 
     for name in ["0", "Defpoints", "A-WALL", "NOPE"] {

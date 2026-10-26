@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: { ignored: ["**/.local/**", "**/target/**"] },
   },
   test: {
     passWithNoTests: true,
@@ -14,6 +15,6 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**", ".local/**", "target/**"],
     setupFiles: ["./src/test/setup.ts"],
     // `Ribbon.test.tsx` reads the ribbon's rules from `theme.css?raw` (other CSS stays empty).
-    css: { include: [/theme\.css/] },
+    css: { include: [/theme\.css/, /(?:fonts|markdown)\.css\?raw/] },
   },
 });

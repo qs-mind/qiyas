@@ -101,6 +101,7 @@ impl ToolError {
 impl From<CoreError> for ToolError {
     fn from(e: CoreError) -> Self {
         match e {
+            CoreError::StaleRead { details } => ToolError::Structured { code: "stale_read".into(), message: "The drawing changed since this read. No edit was applied. Read the changed objects and use their current revision.".into(), details },
             CoreError::InputWarnings { error, warnings } => {
                 let underlying = ToolError::from(*error);
                 let mut details = underlying.json();
@@ -156,6 +157,26 @@ pub fn execute(
     name: &str,
     input: &Value,
     source: Source,
+) -> Result<ToolOutput, ToolError> {
+    execute_with_detail(session, name, input, source, false)
+}
+
+/// The public surface keeps exact evidence; legacy private tools retain their old display format.
+pub(crate) fn execute_full(
+    session: &mut Session,
+    name: &str,
+    input: &Value,
+    source: Source,
+) -> Result<ToolOutput, ToolError> {
+    execute_with_detail(session, name, input, source, true)
+}
+
+fn execute_with_detail(
+    session: &mut Session,
+    name: &str,
+    input: &Value,
+    source: Source,
+    full: bool,
 ) -> Result<ToolOutput, ToolError> {
     let empty = json!({});
     let input = if input.is_null() { &empty } else { input };
@@ -383,7 +404,11 @@ pub fn execute(
         "view_image" => return view_image(session, parse(input)?),
         _ => return Err(ToolError::UnknownTool(name.to_string())),
     };
-    Ok(ToolOutput::Json(capped(rounded(value), offset)))
+    Ok(ToolOutput::Json(if full {
+        value
+    } else {
+        capped(rounded(value), offset)
+    }))
 }
 
 // ---- Inputs. Unknown fields are refused, so a misspelt filter is never silently ignored. ----
@@ -1516,6 +1541,27 @@ fn page<T: serde::Serialize>(rows: Vec<T>, offset: usize) -> Value {
     let total = rows.len();
     let rows: Vec<T> = rows.into_iter().skip(offset).collect();
     json!({ "rows": rows, "total": total })
+}
+
+/// Spatial filtering happens before grouping/paging, with the same result metadata as a full read.
+pub(super) fn filtered_query_page(
+    session: &Session,
+    kind: &str,
+    sheet: Option<&str>,
+    rows: Vec<Value>,
+    offset: usize,
+) -> Result<ToolOutput, ToolError> {
+    let block = sheet_block(session, sheet)?;
+    let mut out = page(rows, offset);
+    if matches!(kind, "dimensions" | "near" | "window") {
+        out = with_units(session, &block, out);
+    }
+    if kind == "blocks" {
+        out["count_scope"] = json!(qiyas_core::INSERT_COUNT_SCOPE);
+        out["visibility_policy"] = json!("as_shown");
+        out["limitations"] = json!(qiyas_core::INSERT_COUNT_LIMITATIONS);
+    }
+    Ok(ToolOutput::Json(capped(rounded(out), offset)))
 }
 
 /// `conflicts` from `offset` on, with the counts of all of them per kind and per status.

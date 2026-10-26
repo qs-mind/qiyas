@@ -73,11 +73,15 @@ fn set_conflicts_and_resolve_are_undoable() {
     assert_eq!(session.conflicts[1].note, "Shown on the roof sheet");
     assert_eq!(session.top_step_source(), Some(Source::User));
 
-    // An unknown id changes nothing and is no undo step.
-    let outcome = session
+    // An unknown id is reported as a fact (24 Oct: no silent no-op); it changes nothing and
+    // is no undo step.
+    let error = session
         .run(resolve("nope", ConflictStatus::Resolved, ""))
-        .unwrap();
-    assert!(matches!(outcome, Outcome::Nothing));
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("No conflict with id nope"),
+        "{error}"
+    );
 
     assert!(session.undo());
     assert_eq!(session.conflicts[1].status, ConflictStatus::Open);

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use qiyas_core::deliverables::{display_sheet, display_unit, Language};
 use qiyas_core::{Kind, Measurement, Total};
 use rust_xlsxwriter::{DocProperties, Format, RowNum, Workbook, Worksheet, XlsxError};
 use thiserror::Error;
@@ -96,11 +97,19 @@ pub fn export_takeoff_with_queries(
         if m.available() {
             sheet.write_number_with_format(row, 2, m.shown, &qty(m.kind))?;
         } else {
-            sheet.write_string(row, 2, "Unavailable")?;
+            sheet.write_string(
+                row,
+                2,
+                if m.view_only {
+                    "View only"
+                } else {
+                    "Unavailable"
+                },
+            )?;
         }
-        sheet.write_string(row, 3, &m.unit)?;
+        sheet.write_string(row, 3, display_unit(&m.unit))?;
         sheet.write_string(row, 4, &m.layer)?;
-        sheet.write_string(row, 5, &m.sheet)?;
+        sheet.write_string(row, 5, display_sheet(&m.sheet, Language::En))?;
         sheet.write_string(row, 6, &m.note)?;
         sheet.write_string(row, 7, &m.id)?;
         sheet.write_string(row, 8, m.area_origin.name())?;
@@ -109,6 +118,12 @@ pub fn export_takeoff_with_queries(
         row += 1;
     }
     write_totals(sheet, row + 1, totals, &bold)?;
+    for column in 7..ITEM_HEADER.len() as u16 {
+        sheet.set_column_hidden(column)?;
+    }
+    sheet.set_column_format(0, &Format::new().set_text_wrap())?;
+    sheet.set_column_format(6, &Format::new().set_text_wrap())?;
+    sheet.set_print_area(0, 0, row + totals.len() as u32 + 2, 6)?;
 
     let sheet = book.add_worksheet().set_name("Totals")?;
     for col in 0..TOTAL_HEADER.len() as u16 {
@@ -184,7 +199,7 @@ fn write_totals(
     sheet.write_row_with_format(row, 0, TOTAL_HEADER, bold)?;
     for (t, row) in totals.iter().zip(row + 1..) {
         sheet.write_string(row, 0, kind_name(t.kind))?;
-        sheet.write_string(row, 1, &t.unit)?;
+        sheet.write_string(row, 1, display_unit(&t.unit))?;
         sheet.write_number(row, 2, t.count as f64)?;
         sheet.write_number_with_format(row, 3, t.sum, &qty(t.kind))?;
     }

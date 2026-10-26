@@ -65,12 +65,12 @@ pub enum DimSpec {
         p2: [f64; 2],
         arc_point: [f64; 2],
     },
-    /// The radius of a circle or arc, toward `point`.
-    #[schemars(example = json!({"kind": "radius", "target": {"handle": 1234}, "point": [1, 1]}))]
+    /// The radius of a circle or arc, with its text at `point`. Pick clear space outside the curve.
+    #[schemars(example = json!({"kind": "radius", "target": {"handle": 1234}, "point": [3, 3]}))]
     #[schemars(extend("x-words" = ["DIMRADIUS", "DRA"]))]
     Radius { target: Target, point: [f64; 2] },
-    /// The diameter of a circle or arc, through `point`'s direction.
-    #[schemars(example = json!({"kind": "diameter", "target": {"handle": 1234}, "point": [1, 1]}))]
+    /// The diameter of a circle or arc, with its text at `point` along that direction.
+    #[schemars(example = json!({"kind": "diameter", "target": {"handle": 1234}, "point": [3, 3]}))]
     #[schemars(extend("x-words" = ["DIMDIAMETER", "DDI"]))]
     Diameter { target: Target, point: [f64; 2] },
     /// The length of an arc, its dimension arc through `point`.
@@ -698,7 +698,10 @@ impl Session {
                 let (c, r, _) = self.round(&target)?;
                 let u = unit(sub(point, c)).unwrap_or([1.0, 0.0]);
                 let on = [c[0] + u[0] * r, c[1] + u[1] * r];
-                vec![Dimension::Radius(DimensionRadius::new(v3(c), v3(on)))]
+                let mut dimension = DimensionRadius::new(v3(c), v3(on));
+                dimension.base.text_middle_point = v3(point);
+                dimension.base.text_user_positioned = true;
+                vec![Dimension::Radius(dimension)]
             }
             DimSpec::Diameter { target, point } => {
                 finite(&[point])?;
@@ -706,7 +709,10 @@ impl Session {
                 let u = unit(sub(point, c)).unwrap_or([1.0, 0.0]);
                 let a = [c[0] - u[0] * r, c[1] - u[1] * r];
                 let b = [c[0] + u[0] * r, c[1] + u[1] * r];
-                vec![Dimension::Diameter(DimensionDiameter::new(v3(a), v3(b)))]
+                let mut dimension = DimensionDiameter::new(v3(a), v3(b));
+                dimension.base.text_middle_point = v3(point);
+                dimension.base.text_user_positioned = true;
+                vec![Dimension::Diameter(dimension)]
             }
             DimSpec::ArcLength { target, point } => {
                 finite(&[point])?;
@@ -1375,6 +1381,26 @@ impl Session {
         let normal = [-axis[1], axis[0]];
         let step = self.paper_distance(7.5);
         let clearance = self.paper_distance(clearance_mm);
+        // Parallel chains normally share extension lines. Their lines and arrowheads
+        // may meet there, while their labels must still remain clear of all ink.
+        let tolerance = 0.0002 / self.check_space(&self.sheet).0;
+        let shared_extensions: Vec<_> = self
+            .drawing
+            .entities_in(&self.sheet)
+            .filter_map(|entity| {
+                let EntityType::Dimension(other) = entity else {
+                    return None;
+                };
+                let (a, b, at, direction) = linear_parts(other)?;
+                let parallel = (direction[0] * axis[1] - direction[1] * axis[0]).abs() < 1e-9;
+                let shared = [a, b].iter().any(|a| {
+                    [p1, p2]
+                        .iter()
+                        .any(|b| (a[0] - b[0]).hypot(a[1] - b[1]) <= tolerance)
+                });
+                (parallel && shared).then_some((entity.common().handle.value(), at))
+            })
+            .collect();
         let mid = [(p1[0] + p2[0]) * 0.5, (p1[1] + p2[1]) * 0.5];
         let mut candidates = vec![def];
         for i in 1..=40 {
@@ -1385,10 +1411,28 @@ impl Session {
                 ]);
             }
         }
-        for at in candidates {
+        // Keep a clear manual text position first. If the centre falls on an axis or
+        // another label, also try small text shifts along the dimension line.
+        let candidates =
+            std::iter::once((def, None)).chain(candidates.into_iter().flat_map(|at| {
+                [0.0, -1.0, 1.0, -2.0, 2.0]
+                    .into_iter()
+                    .map(move |along| (at, Some(along * step)))
+            }));
+        for (at, along) in candidates {
             let mut d = original.clone();
             d.set_definition_point(v3(at));
-            d.base_mut().text_user_positioned = false;
+            if let Some(along) = along {
+                d.base_mut().text_user_positioned = false;
+                if along != 0.0 {
+                    if let Some(text_at) = self.measured_dimension(&d).text_at {
+                        let base = d.base_mut();
+                        base.text_middle_point =
+                            v3([text_at[0] + axis[0] * along, text_at[1] + axis[1] * along]);
+                        base.text_user_positioned = true;
+                    }
+                }
+            }
             let geometry = self.measured_dimension(&d);
             let mut clear = true;
             let xrefs = self.xref_docs();
@@ -1417,6 +1461,16 @@ impl Session {
                     let b = crate::ink::expand(crate::ink::bounds(&points), clearance);
                     if ink.near(b).any(|obstacle| {
                         if obstacle.owner == handle.value() {
+                            return false;
+                        }
+                        if !is_text
+                            && obstacle.text.is_none()
+                            && shared_extensions.iter().any(|(owner, other_at)| {
+                                *owner == obstacle.owner
+                                    && dot(sub(at, *other_at), normal).abs()
+                                        >= clearance + self.paper_distance(2.5)
+                            })
+                        {
                             return false;
                         }
                         let bubble = crate::check_layout::grid_bubble(self, &ink, obstacle);

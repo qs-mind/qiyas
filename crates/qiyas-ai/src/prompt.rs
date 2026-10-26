@@ -352,7 +352,7 @@ mod tests {
             "checked against the user's numbers, before drawing",
             "qiyas_execute plan",
             "pending, active, done or skipped",
-            "After each phase look with qiyas_capture and read the check",
+            "After each phase use exact checks first",
             "Never draw trial geometry and undo it",
             "qiyas_read validate",
             "qiyas_read run wall_groups",
@@ -366,7 +366,7 @@ mod tests {
     fn the_prompt_says_how_to_look_and_what_the_user_points_at() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
-            "Look at the whole sheet with qiyas_capture source picture, then zoom with bounds",
+            "look at the whole sheet with qiyas_capture source picture, then zoom with bounds",
             "source screen shows the drawing canvas only; read panel_state",
             "marks on a capture name the handles",
             "Never guess handles from a picture",
@@ -379,6 +379,16 @@ mod tests {
             !en.contains("verdicts"),
             "plain words, no evaluation jargon"
         );
+    }
+
+    #[test]
+    fn advice_and_revision_guidance_is_present_in_both_languages() {
+        for text in [EN, AR] {
+            assert!(text.contains("expected_revision"));
+            assert!(text.contains("stale_read"));
+        }
+        assert!(EN.contains("Advice is information; Mizan decides"));
+        assert!(AR.contains("ميزان يقرر"));
     }
 
     #[test]
@@ -424,10 +434,13 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_says_fix_what_you_drew_never_draw_it_again() {
+    fn the_prompt_recommends_handle_edits_and_leaves_the_decision_to_mizan() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
-        assert!(en.contains("Fix what you drew by changing or erasing it (undo_own takes back your newest step), never by drawing it again"));
-        assert!(en.contains("never hide layers to hide a mistake"));
+        assert!(en.contains("Fix by handle: edit_wall_opening, modify move, set_records, auto_place, dim_space, dim_edit, edit_text"));
+        assert!(en.contains(
+            "Rebuilds return advice and churn counts; choose the appropriate correction."
+        ));
+        assert!(en.contains("Never hide layers to hide a mistake"));
         assert!(en.contains("Dimensions use dimension commands, never lines and text"));
     }
 
@@ -466,7 +479,7 @@ mod tests {
     fn no_drawing_says_so_in_both_languages() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         assert!(en.contains("No drawing was open"));
-        assert!(en.contains("You are Mizan, the AI agent inside Qiyas"));
+        assert!(en.contains("You are Mizan in Qiyas"));
         let state = state_block(Lang::En, &LiveState::none());
         assert!(state.starts_with("[state]"));
         assert!(state.contains("No drawing is open"));

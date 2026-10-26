@@ -13,6 +13,39 @@ pub const DICTIONARY: &str = "QIYAS_KNOWLEDGE";
 pub const VERSION: u32 = 1;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
+/// Fingerprint only the drawing's knowledge subtree, without parsing its JSON recipes.
+/// Used at read/commit boundaries; ordinary entity edits cannot masquerade as knowledge edits.
+pub(crate) fn revision_fingerprint(doc: &CadDocument) -> u64 {
+    fn walk(
+        doc: &CadDocument,
+        h: Handle,
+        hash: &mut u64,
+        seen: &mut std::collections::BTreeSet<Handle>,
+    ) {
+        if !seen.insert(h) {
+            return;
+        }
+        let Some(object) = doc.objects.get(&h) else {
+            return;
+        };
+        for b in format!("{object:?}").bytes() {
+            *hash = (*hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
+        }
+        if let ObjectType::Dictionary(d) = object {
+            let mut children = d.entries.clone();
+            children.sort_by(|a, b| a.0.cmp(&b.0));
+            for (_, h) in children {
+                walk(doc, h, hash, seen);
+            }
+        }
+    }
+    let mut hash = 0xcbf29ce484222325;
+    if let Ok(Some(root)) = child(doc, doc.header.named_objects_dict_handle, DICTIONARY) {
+        walk(doc, root, &mut hash, &mut std::collections::BTreeSet::new());
+    }
+    hash
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -29,10 +62,11 @@ pub enum Kind {
     Queries,
     Revisions,
     Reports,
+    Placement,
 }
 
 impl Kind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Types,
         Self::Levels,
         Self::Tables,
@@ -46,6 +80,7 @@ impl Kind {
         Self::Queries,
         Self::Revisions,
         Self::Reports,
+        Self::Placement,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -63,6 +98,7 @@ impl Kind {
             Self::Queries => "queries",
             Self::Revisions => "revisions",
             Self::Reports => "reports",
+            Self::Placement => "placement",
         }
     }
 }
@@ -227,7 +263,7 @@ fn read_entry(doc: &CadDocument, name: &str, handle: Handle) -> Result<Entry, Co
         }
         text.push_str(value);
     }
-    let envelope: Envelope = serde_json::from_str(&text)
+    let envelope: Envelope = serde_json::from_str(&crate::xdata::decode_legacy_unicode(&text))
         .map_err(|e| invalid(format!("Knowledge entry {name} contains invalid JSON: {e}")))?;
     if envelope.version != VERSION {
         return Err(invalid(format!(
@@ -316,7 +352,11 @@ fn ensure_kind_dictionary(doc: &mut CadDocument, kind: Kind) -> Result<Handle, C
         }
     }
     for k in Kind::ALL {
-        if child(doc, knowledge, k.as_str())?.is_none() {
+        // Optional pack storage is created on first use. Other edits must not allocate
+        // new handles just because an unused pack collection is available.
+        if (k != Kind::Placement || kind == Kind::Placement)
+            && child(doc, knowledge, k.as_str())?.is_none()
+        {
             add_dictionary(doc, knowledge, k.as_str());
         }
     }
@@ -331,6 +371,7 @@ pub fn put(doc: &mut CadDocument, kind: Kind, name: &str, data: &Value) -> Resul
         data: data.clone(),
     })
     .map_err(|e| invalid(format!("Invalid knowledge JSON: {e}")))?;
+    let text = crate::xdata::ascii_json(&text);
     if text.len() > MAX_BYTES {
         return Err(invalid("Knowledge entry exceeds 4 MiB"));
     }
@@ -424,6 +465,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn arabic_knowledge_survives_save_and_reopen_in_every_dwg_version() {
+        use opencadcodec::types::DxfVersion;
+        let text = "مغاسل دورات المياه 🏠 \\U+0645 literal \"quoted\"";
+        for version in [
+            DxfVersion::AC1015,
+            DxfVersion::AC1018,
+            DxfVersion::AC1021,
+            DxfVersion::AC1024,
+            DxfVersion::AC1027,
+            DxfVersion::AC1032,
+        ] {
+            for extension in ["dwg", "dxf"] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join(format!("arabic.{extension}"));
+                let mut s = Session::new_blank(&path, 4);
+                s.drawing.doc.version = version;
+                put(
+                    &mut s.drawing.doc,
+                    Kind::Mappings,
+                    "boq",
+                    &json!({"text": text}),
+                )
+                .unwrap();
+                s.save_as(&path).unwrap();
+                let s = Session::open(&path).unwrap();
+                let entry = get(&s.drawing.doc, Kind::Mappings, "boq").unwrap().unwrap();
+                assert_eq!(entry.data["text"], text, "{version:?} {extension}");
+            }
+        }
+    }
+
+    #[test]
+    fn agents_cannot_write_computed_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("computed.dxf"), 4);
+        for (kind, name) in [(Kind::Revisions, "result"), (Kind::Queries, "Result")] {
+            let cmd = crate::Command::SetKnowledge {
+                kind,
+                name: name.into(),
+                data: json!({"items": [{"delta": 3.0}]}),
+            };
+            let err = s.run_as(cmd.clone(), Source::Mcp).unwrap_err().to_string();
+            assert!(err.contains("computed by Qiyas"), "{err}");
+            assert!(get(&s.drawing.doc, kind, name).unwrap().is_none());
+        }
+        // Qiyas's own computations still write their results for an agent.
+        s.run_as(crate::Command::Check { tolerance: None }, Source::Mcp)
+            .unwrap();
+        assert!(get(&s.drawing.doc, Kind::Queries, "result")
+            .unwrap()
+            .is_some());
+        // The cloud layer is ordinary data and stays writable.
+        s.run_as(
+            crate::Command::SetKnowledge {
+                kind: Kind::Revisions,
+                name: "cloud_layer".into(),
+                data: json!("VARIATION"),
+            },
+            Source::Ai,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn old_dwg_unicode_escapes_are_read_back() {
+        let x = crate::xdata::decode_legacy_unicode;
+        assert_eq!(x(r#"{"a":"\U+0645\U+063A"}"#), r#"{"a":"مغ"}"#);
+        assert_eq!(x(r"\U+D83C\U+DFE0"), "🏠");
+        // A JSON-escaped backslash before U+ is literal text, not an escape.
+        assert_eq!(x(r#""\\U+0645""#), r#""\\U+0645""#);
+        assert_eq!(x(r"\U+GGGG"), r"\U+GGGG");
     }
 
     #[test]

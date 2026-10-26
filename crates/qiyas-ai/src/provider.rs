@@ -20,6 +20,10 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
+    /// Unknown capability means pictures stay local. Metadata, never a paid probe.
+    fn image_input(&self, _model: &str) -> Option<bool> {
+        None
+    }
     /// A local agent owns its tool loop and must never be restarted automatically.
     fn owns_turn(&self) -> bool {
         false
@@ -52,6 +56,8 @@ pub trait Provider: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
+    /// Stable, opaque conversation identity. Never a user name, drawing path or credential.
+    pub cache_key: String,
     pub system: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
@@ -163,6 +169,11 @@ pub enum ResultPart {
 /// What arrives while a turn streams.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// Sanitized provider detail for support logs only, never authentication material.
+    Diagnostic {
+        kind: String,
+        text: String,
+    },
     /// A local agent has already performed this activity through Qiyas's MCP server.
     Activity(Box<crate::AgentEvent>),
     /// The optional fields in an actual HTTP request, including retries after a refusal.
@@ -220,6 +231,14 @@ pub struct Usage {
 }
 
 impl Usage {
+    pub fn total_input(&self) -> u64 {
+        self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens
+    }
+
+    pub fn cache_percent(&self) -> Option<f64> {
+        (self.total_input() > 0)
+            .then(|| 100.0 * self.cache_read_input_tokens as f64 / self.total_input() as f64)
+    }
     pub fn add(&mut self, other: Usage) {
         self.input_tokens += other.input_tokens;
         self.output_tokens += other.output_tokens;

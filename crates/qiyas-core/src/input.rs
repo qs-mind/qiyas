@@ -11,6 +11,9 @@ use crate::{Command, CoreError, Outcome, Session, Source};
 #[derive(Debug, Clone)]
 pub struct Reported {
     pub outcome: Outcome,
+    pub revision: crate::Revision,
+    pub advice: Vec<Value>,
+    pub handle_map: std::collections::BTreeMap<u64, Vec<u64>>,
     pub defaults_used: Vec<DefaultUsed>,
     pub warnings: Vec<InputIssue>,
 }
@@ -42,6 +45,12 @@ impl Reported {
                 .iter()
                 .map(|warning| format!("Warning {}: {}", warning.pointer, warning.message)),
         );
+        notes.extend(
+            self.advice
+                .iter()
+                .filter_map(|a| a["message"].as_str())
+                .map(|m| format!("Advice: {m}")),
+        );
         notes.join("; ")
     }
 }
@@ -50,6 +59,9 @@ impl Serialize for Reported {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut value = serde_json::to_value(&self.outcome).map_err(serde::ser::Error::custom)?;
         metadata(&mut value, &self.defaults_used, &self.warnings);
+        value["revision"] = json!(self.revision);
+        value["advice"] = json!(self.advice);
+        value["handle_map"] = json!(self.handle_map);
         value.serialize(serializer)
     }
 }
@@ -107,14 +119,70 @@ impl Session {
     /// Validates the complete raw input, reads a plain command, resolves omitted defaults in
     /// the current session, and executes it. Every JSON boundary uses this entry point.
     pub fn run_input(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
+        let mut input = raw.clone();
+        crate::registry::canonicalize(&mut input);
+        let targeted = input["sheet"]
+            .as_str()
+            .filter(|_| {
+                input["type"] == "batch"
+                    || input["type"]
+                        .as_str()
+                        .and_then(|name| crate::registry::registry().get(name))
+                        .is_some_and(|info| info.effect == crate::registry::Effect::Edit)
+            })
+            .map(str::to_owned);
+        let Some(sheet) = targeted else {
+            return self.run_input_here(raw, source);
+        };
+        // The read token describes the caller's context, before the temporary edit sheet.
+        if let Some(expected) = input
+            .as_object_mut()
+            .and_then(|o| o.remove("expected_revision"))
+        {
+            self.check_revision(&expected)?;
+        }
+        let block = self.sheet_block(Some(&sheet));
+        if self.block_edit.is_some() && !block.eq_ignore_ascii_case(&self.sheet) {
+            return Err(CoreError::InvalidCommand(
+                "Finish editing the block before targeting another sheet.".into(),
+            ));
+        }
+        let previous = self.sheet.clone();
+        self.set_sheet(&block)?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_input_here(&input, source)
+        }));
+        if self.set_sheet(&previous).is_err() {
+            let _ = self.set_sheet("*Model_Space");
+        }
+        match result {
+            Ok(result) => result.map(|mut report| {
+                report.revision = self.revision();
+                report
+            }),
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    fn run_input_here(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
         if self.tx_depth == 0 {
             self.last_change = crate::Change::default();
+            self.last_advice.clear();
             self.handle_replacements.clear();
         }
         let mut input = raw.clone();
+        if let Some(expected) = input
+            .as_object_mut()
+            .and_then(|o| o.remove("expected_revision"))
+        {
+            self.check_revision(&expected)?;
+        }
         crate::registry::canonicalize(&mut input);
         self.resolve_input_handles(&mut input)?;
-        let report = self.validate_input(&input);
+        let mut report = self.validate_input(&input);
+        report
+            .warnings
+            .extend(crate::registry::normalization_warnings(raw));
         let parsed = serde_path_to_error::deserialize::<_, Command>(input.clone());
         if !report.valid {
             let mut message = report.message();
@@ -144,12 +212,102 @@ impl Session {
                 }
             }
             command => self.run_command(command, source).map(|outcome| Reported {
+                revision: self.revision(),
+                advice: self.last_advice.clone(),
+                handle_map: self.handle_map(),
                 outcome,
                 defaults_used: report.defaults_used,
                 warnings: report.warnings,
             }),
         };
-        result.map_err(|error| with_warnings(error, &warnings))
+        result
+            .map(|mut report| {
+                report.revision = self.revision();
+                report.advice = self.last_advice.clone();
+                report.handle_map = self.handle_map();
+                report
+            })
+            .map_err(|error| with_warnings(error, &warnings))
+    }
+
+    /// Runs a batch consisting solely of literal opening additions. Other batches keep
+    /// ordinary sequential execution, including all step references and mixed edits.
+    /// Each result is the final shared wall state, in the original input order.
+    pub fn run_opening_batch(
+        &mut self,
+        inputs: &[Value],
+        source: Source,
+    ) -> Option<Result<Vec<Reported>, CoreError>> {
+        if inputs.len() < 2
+            || inputs.iter().any(|input| {
+                input.get("sheet").is_some_and(|sheet| !sheet.is_null())
+                    || input["type"].as_str().is_none_or(|name| {
+                        !name.eq_ignore_ascii_case("add_wall_openings")
+                            && !name.eq_ignore_ascii_case("add-wall-openings")
+                    })
+            })
+        {
+            return None;
+        }
+        let original = inputs;
+        let mut inputs = inputs.to_vec();
+        inputs.iter_mut().for_each(crate::registry::canonicalize);
+        if inputs.len() < 2
+            || inputs.iter().any(|input| {
+                input["type"] != "add_wall_openings"
+                    || !input["centreline"].is_u64()
+                    || serde_json::from_value::<Command>(input.clone()).is_err()
+            })
+        {
+            return None;
+        }
+        Some(self.transaction(source, "add_wall_openings", |session| {
+            let mut commands = Vec::new();
+            let mut reports = Vec::new();
+            for (index, input) in inputs.iter().enumerate() {
+                let mut input = input.clone();
+                session.resolve_input_handles(&mut input)?;
+                let mut report = session.validate_input(&input);
+                report
+                    .warnings
+                    .extend(crate::registry::normalization_warnings(&original[index]));
+                if !report.valid {
+                    return Err(CoreError::Step {
+                        index,
+                        label: "add_wall_openings".into(),
+                        error: Box::new(CoreError::InvalidCommand(report.message())),
+                    });
+                }
+                let command: Command = serde_json::from_value(input)
+                    .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
+                session.check_block_edit(&command)?;
+                let Command::AddWallOpenings {
+                    centreline,
+                    openings,
+                } = command
+                else {
+                    unreachable!("checked opening command")
+                };
+                commands.push((centreline, openings));
+                reports.push(report);
+            }
+            let results =
+                session.record_document_change(source, "add_wall_openings", true, true, |s| {
+                    s.add_wall_openings_many(&commands)
+                })?;
+            Ok(results
+                .into_iter()
+                .zip(reports)
+                .map(|(result, report)| Reported {
+                    revision: session.revision(),
+                    advice: session.last_advice.clone(),
+                    handle_map: session.handle_map(),
+                    outcome: Outcome::Walls { result },
+                    defaults_used: report.defaults_used,
+                    warnings: report.warnings,
+                })
+                .collect())
+        }))
     }
 
     fn run_input_batch(
@@ -169,6 +327,11 @@ impl Session {
             .warnings
             .retain(|warning| !warning.pointer.starts_with("/commands/"));
         self.batch_with(source, "batch", layer, color, |session| {
+            let inputs = commands.as_array().expect("validated batch commands");
+            let mut grouped = session
+                .run_opening_batch(inputs, source)
+                .transpose()?
+                .map(Vec::into_iter);
             let mut outcomes = Vec::new();
             for (index, input) in commands
                 .as_array()
@@ -176,14 +339,18 @@ impl Session {
                 .iter()
                 .enumerate()
             {
-                let step = session
-                    .run_input(input, source)
-                    .map_err(|error| CoreError::Step {
-                        index,
-                        label: crate::registry::parse_command(input.clone())
-                            .map_or_else(|_| "input".into(), |command| command.label()),
-                        error: Box::new(error),
-                    })?;
+                let step = if let Some(grouped) = &mut grouped {
+                    grouped.next().expect("one result per input")
+                } else {
+                    session
+                        .run_input(input, source)
+                        .map_err(|error| CoreError::Step {
+                            index,
+                            label: crate::registry::parse_command(input.clone())
+                                .map_or_else(|_| "input".into(), |command| command.label()),
+                            error: Box::new(error),
+                        })?
+                };
                 outcomes.push(step.outcome);
                 report
                     .defaults_used
@@ -199,6 +366,9 @@ impl Session {
                     }));
             }
             Ok(Reported {
+                revision: session.revision(),
+                advice: session.last_advice.clone(),
+                handle_map: session.handle_map(),
                 outcome: Outcome::Batch {
                     outcomes,
                     added: session.last_change.added.clone(),

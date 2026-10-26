@@ -14,7 +14,24 @@ pub struct Workspace {
     pub active: Option<PathBuf>,
 }
 pub fn execute(state: &AppState, input: &Value, source: Source) -> Result<Value, String> {
+    execute_checked(state, input, source, None)
+}
+
+pub(crate) fn execute_checked(
+    state: &AppState,
+    input: &Value,
+    source: Source,
+    expected: Option<&Value>,
+) -> Result<Value, String> {
     let command = qiyas_core::registry::parse_command(input.clone())?;
+    // Keep the drawing used by this read stable through the project operation.
+    let state = state.scoped(None)?;
+    let open = crate::tabs::snapshot(&state);
+    let active = state
+        .session
+        .try_lock()
+        .map_err(|_| "workspace_busy".to_string())?;
+    qiyas_ai::host::check_expected_revision(active.as_ref(), expected)?;
     let Command::Project(_) = command else {
         return Err("Expected a project command".into());
     };
@@ -23,19 +40,13 @@ pub fn execute(state: &AppState, input: &Value, source: Source) -> Result<Value,
             let path = qiyas_core::projects::project_path(path).map_err(|e| e.to_string())?;
             let set = qiyas_core::projects::load(&path).map_err(|e| e.to_string())?;
             let entries = qiyas_core::sheet_set_entries(&path, &set);
-            let _tabs = state.tabs.lock().map_err(|e| e.to_string())?;
-            let active = state.session.lock().map_err(|e| e.to_string())?;
-            let parked = state.parked.lock().map_err(|e| e.to_string())?;
-            for session in active.iter().chain(parked.iter().map(|tab| &tab.session)) {
-                if session.is_dirty()
+            for session in &open.tabs {
+                if session.dirty
                     && entries.iter().any(|e| {
-                        crate::settings::same_file(Path::new(&e.full), &session.drawing.path)
+                        crate::settings::same_file(Path::new(&e.full), Path::new(&session.path))
                     })
                 {
-                    return Err(format!(
-                        "Save {} before running its project",
-                        session.drawing.path.display()
-                    ));
+                    return Err(format!("Save {} before running its project", session.path));
                 }
             }
         }
@@ -64,14 +75,14 @@ pub fn execute(state: &AppState, input: &Value, source: Source) -> Result<Value,
 }
 #[tauri::command]
 pub async fn project_command<R: tauri::Runtime>(
+    workspace: Option<u32>,
     app: tauri::AppHandle<R>,
     command: Value,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        execute(&app.state::<AppState>(), &command, Source::User)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let state = app.state::<AppState>().scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || execute(&state, &command, Source::User))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub fn project_history(state: State<'_, AppState>, redo: bool) -> Result<bool, String> {

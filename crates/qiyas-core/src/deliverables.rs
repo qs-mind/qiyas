@@ -284,7 +284,7 @@ impl Report {
                     .collect();
                 // Never add quantities expressed in different units.
                 if self.layout.columns.iter().any(|c| c.total) {
-                    key.push(display(&row["unit"]));
+                    key.push(display(&present(&row["unit"], "unit", row, self.language)));
                 }
                 groups.entry(key).or_default().push(row);
             }
@@ -357,17 +357,44 @@ fn rounded(n: f64, decimals: usize) -> Value {
     // Formatting and parsing avoids binary tails in the visible sheet; records stay untouched.
     serde_json::from_str(&format!("{n:.decimals$}")).unwrap_or(Value::Null)
 }
+/// SI symbols are consistent in client tables; the stored calculation units stay unchanged.
+pub fn display_unit(unit: &str) -> &str {
+    match unit {
+        "m2" => "m²",
+        "m3" => "m³",
+        other => other,
+    }
+}
+pub fn display_sheet(sheet: &str, language: Language) -> &str {
+    if sheet.eq_ignore_ascii_case("*Model_Space") {
+        if language == Language::Ar {
+            "النموذج"
+        } else {
+            "Model"
+        }
+    } else if sheet.to_ascii_lowercase().starts_with("*paper_space") {
+        if language == Language::Ar {
+            "لوحة"
+        } else {
+            "Layout"
+        }
+    } else {
+        sheet
+    }
+}
 fn filename(s: &str) -> &str {
     s.rsplit(['/', '\\']).next().unwrap_or(s)
 }
 fn reference(v: &Value, language: Language) -> String {
     match v {
-        Value::Array(a) => a
-            .iter()
-            .map(|v| reference(v, language))
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("; "),
+        Value::Array(a) => {
+            let mut seen = std::collections::BTreeSet::new();
+            a.iter()
+                .map(|v| reference(v, language))
+                .filter(|s| !s.is_empty() && seen.insert(s.clone()))
+                .collect::<Vec<_>>()
+                .join("; ")
+        }
         Value::Object(o) => {
             if let (Some(source), Some(clause)) = (
                 o.get("source").and_then(Value::as_str),
@@ -376,31 +403,27 @@ fn reference(v: &Value, language: Language) -> String {
                 return format!("{source} / {clause}");
             }
             let sheet = o.get("sheet").and_then(Value::as_str).unwrap_or("");
-            let sheet = if sheet == "*Model_Space" {
-                if language == Language::Ar {
-                    "النموذج"
-                } else {
-                    "Model"
-                }
-            } else {
-                sheet
-            };
+            let sheet = display_sheet(sheet, language);
             let label = ["mark", "label", "name", "kind"]
                 .iter()
                 .find_map(|k| o.get(*k).and_then(Value::as_str))
                 .unwrap_or("");
-            let handles = ["handle", "a_handles", "b_handles"]
-                .iter()
-                .filter_map(|k| o.get(*k))
-                .map(display)
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ");
-            [sheet.to_string(), label.to_string(), handles]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" / ")
+            let drawing = o
+                .get("drawing")
+                .and_then(Value::as_str)
+                .map(filename)
+                .unwrap_or("");
+            let grid = o.get("grid").and_then(Value::as_str).unwrap_or("");
+            [
+                drawing.to_string(),
+                sheet.to_string(),
+                label.to_string(),
+                grid.to_string(),
+            ]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" / ")
         }
         _ => display(v),
     }
@@ -421,6 +444,12 @@ fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
     let decimals = precision(row, field);
     if let Some(n) = v.as_f64() {
         return rounded(n, decimals);
+    }
+    if field == "unit" {
+        return json!(display_unit(v.as_str().unwrap_or_default()));
+    }
+    if field == "sheet" {
+        return json!(display_sheet(v.as_str().unwrap_or_default(), language));
     }
     if matches!(field, "drawing" | "path" | "file" | "source_path") {
         return json!(filename(v.as_str().unwrap_or_default()));
@@ -520,7 +549,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
     items
         .iter()
         .flat_map(|item| {
-            item.lines.iter().map(move |line| {
+            printed_lines(item).into_iter().map(move |line| {
                 let mut row = json!(line);
                 row["code"] = json!(item.code);
                 row["section"] = json!(item.section);
@@ -528,24 +557,26 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
                 row["reference"] = json!(line
                     .sources
                     .iter()
-                    .map(|s| format!(
-                        "{} / {} / {} / {}",
-                        filename(drawing),
-                        s.handle,
-                        if s.sheet == "*Model_Space" {
-                            "Model"
-                        } else {
-                            &s.sheet
-                        },
-                        s.grid.as_deref().unwrap_or("?")
-                    ))
-                    .collect::<Vec<_>>()
-                    .join("; "));
+                    .map(|s| json!({"drawing":filename(drawing),"sheet":s.sheet,"grid":s.grid}))
+                    .collect::<Vec<_>>());
                 row["squaring"] = json!(if line.included { line.value } else { 0. });
                 row
             })
         })
         .collect()
+}
+/// The dimension lines worth printing: a rule evaluated on an object it does not apply to
+/// gives `1 × 0 = 0`, and a sheet of those hides the real working. An item whose lines all
+/// give nothing keeps its first line, so the item is still explained.
+pub fn printed_lines(
+    item: &crate::measurement::GeneratedItem,
+) -> Vec<&crate::measurement::DimensionLine> {
+    let kept: Vec<_> = item.lines.iter().filter(|l| l.value != 0.0).collect();
+    if kept.is_empty() {
+        item.lines.iter().take(1).collect()
+    } else {
+        kept
+    }
 }
 fn query_rows(queries: &[crate::Conflict]) -> Vec<Value> {
     queries
@@ -557,6 +588,19 @@ fn query_rows(queries: &[crate::Conflict]) -> Vec<Value> {
         })
         .collect()
 }
+fn layout_missing(name: &str, stored: &[String], session: &Session) -> CoreError {
+    let sheet = session
+        .drawing
+        .sheets()
+        .iter()
+        .any(|l| l.name.eq_ignore_ascii_case(name));
+    invalid(format!(
+        "No report layout named {name}{}. Stored report layouts: {}. Leave out layout for the default.",
+        if sheet { " (that is a drawing sheet, not a report layout)" } else { "" },
+        if stored.is_empty() { "none".into() } else { stored.join(", ") }
+    ))
+}
+
 pub fn drawing(
     session: &Session,
     kind: Kind,
@@ -566,7 +610,12 @@ pub fn drawing(
     let layout: Layout = match layout {
         Some(name) => serde_json::from_value(
             knowledge::get(&session.drawing.doc, knowledge::Kind::Reports, name)?
-                .ok_or_else(|| invalid("Report layout not found"))?
+                .ok_or_else(|| {
+                    let stored = knowledge::list(&session.drawing.doc, knowledge::Kind::Reports)
+                        .map(|l| l.into_iter().map(|e| e.name).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    layout_missing(name, &stored, session)
+                })?
                 .data,
         )
         .map_err(|e| invalid(e.to_string()))?,
@@ -653,7 +702,13 @@ pub fn project(
             .reports
             .get(name)
             .cloned()
-            .ok_or_else(|| invalid("Report layout not found"))?,
+            .ok_or_else(|| {
+                let stored = p.reports.keys().cloned().collect::<Vec<_>>();
+                invalid(format!(
+                    "No report layout named {name}. Stored report layouts: {}. Leave out layout for the default.",
+                    if stored.is_empty() { "none".into() } else { stored.join(", ") }
+                ))
+            })?,
         None => default_layout(kind),
     };
     let mut rows = match kind {
@@ -744,10 +799,7 @@ impl Session {
             let report = project(&crate::projects::load(&p)?, kind, language, layout)?;
             (p, report)
         } else {
-            (
-                self.drawing.path.clone(),
-                drawing(self, kind, language, layout)?,
-            )
+            (self.export_source(), drawing(self, kind, language, layout)?)
         };
         let path = confined(&source, path)?;
         let ext = if format == Format::Excel {

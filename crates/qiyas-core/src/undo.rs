@@ -61,6 +61,7 @@ pub(crate) struct DocChange {
 /// Undo applies it backwards, redo forwards; what changed since in the same place is kept.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct ViewDelta {
+    pub ucs: Option<(crate::Ucs, crate::Ucs)>,
     pub current: Option<(Current, Current)>,
     pub hidden_added: Vec<String>,
     pub hidden_removed: Vec<String>,
@@ -82,6 +83,9 @@ impl ViewDelta {
     /// The difference from `before` to `after`; `None` when they are the same.
     pub(crate) fn between(before: &ViewState, after: &ViewState) -> Option<ViewDelta> {
         let mut delta = ViewDelta::default();
+        if before.ucs != after.ucs {
+            delta.ucs = Some((before.ucs, after.ucs));
+        }
         if before.current != after.current {
             delta.current = Some((before.current.clone(), after.current.clone()));
         }
@@ -111,6 +115,11 @@ impl ViewDelta {
     /// or a layer state's hidden layers changed since is left as it is; the hidden layers lose
     /// only what the change hid and get back only what it showed (see `still_hidden`).
     fn undo(self, view: &mut ViewRefs) -> ViewDelta {
+        if let Some((before, after)) = self.ucs {
+            if *view.ucs == after {
+                *view.ucs = before;
+            }
+        }
         if let Some((before, after)) = &self.current {
             if *view.current == *after {
                 *view.current = before.clone();
@@ -148,6 +157,7 @@ impl ViewDelta {
             }
         }
         ViewDelta {
+            ucs: self.ucs.map(|(before, after)| (after, before)),
             current: self.current.map(|(before, after)| (after, before)),
             hidden_added: self.hidden_removed,
             hidden_removed: self.hidden_added,
@@ -164,6 +174,7 @@ impl ViewDelta {
 /// state, the hidden layers and the hidden layers kept with each layer state.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ViewState {
+    pub ucs: crate::Ucs,
     pub current: Current,
     pub hidden: HashSet<String>,
     pub state_hidden: BTreeMap<String, Vec<String>>,
@@ -171,6 +182,7 @@ pub(crate) struct ViewState {
 
 /// The session's live `ViewState`, to put one back.
 pub(crate) struct ViewRefs<'a> {
+    pub ucs: &'a mut crate::Ucs,
     pub current: &'a mut Current,
     pub hidden: &'a mut HashSet<String>,
     pub state_hidden: &'a mut BTreeMap<String, Vec<String>>,
@@ -180,6 +192,7 @@ impl ViewRefs<'_> {
     /// As it is now.
     pub(crate) fn get(&self) -> ViewState {
         ViewState {
+            ucs: *self.ucs,
             current: self.current.clone(),
             hidden: self.hidden.clone(),
             state_hidden: self.state_hidden.clone(),
@@ -210,6 +223,11 @@ pub(crate) struct TablesSnapshot {
 /// grow.
 #[derive(Debug, Clone, PartialEq)]
 struct HeaderBits {
+    site_base: opencadcodec::Vector3,
+    ucs_origin: opencadcodec::Vector3,
+    ucs_x: opencadcodec::Vector3,
+    ucs_y: opencadcodec::Vector3,
+    ucs_name: String,
     named_objects_dict_handle: Handle,
     annotation_scale: String,
     annotation_scale_value: f64,
@@ -237,6 +255,11 @@ impl HeaderBits {
     fn take(doc: &CadDocument) -> HeaderBits {
         let h = &doc.header;
         HeaderBits {
+            site_base: h.model_space_insertion_base,
+            ucs_origin: h.model_space_ucs_origin,
+            ucs_x: h.model_space_ucs_x_axis,
+            ucs_y: h.model_space_ucs_y_axis,
+            ucs_name: h.model_space_ucs_name.clone(),
             named_objects_dict_handle: h.named_objects_dict_handle,
             annotation_scale: h.current_annotation_scale.clone(),
             annotation_scale_value: h.annotation_scale_value,
@@ -270,6 +293,11 @@ impl HeaderBits {
 
     fn put(self, doc: &mut CadDocument) {
         let h = &mut doc.header;
+        h.model_space_insertion_base = self.site_base;
+        h.model_space_ucs_origin = self.ucs_origin;
+        h.model_space_ucs_x_axis = self.ucs_x;
+        h.model_space_ucs_y_axis = self.ucs_y;
+        h.model_space_ucs_name = self.ucs_name;
         h.named_objects_dict_handle = self.named_objects_dict_handle;
         h.current_annotation_scale = self.annotation_scale;
         h.annotation_scale_value = self.annotation_scale_value;
@@ -452,6 +480,7 @@ impl Parts<'_> {
             schedules: &mut *self.schedules,
             doc: &mut *self.doc,
             view: ViewRefs {
+                ucs: &mut *self.view.ucs,
                 current: &mut *self.view.current,
                 hidden: &mut *self.view.hidden,
                 state_hidden: &mut *self.view.state_hidden,
@@ -582,6 +611,59 @@ impl History {
         }
     }
 
+    /// Handles affected by swapping the next undo/redo entry, in execution order.
+    pub(crate) fn swap_change(&self, redo: bool) -> crate::Change {
+        fn collect(step: &Step, out: &mut crate::Change) {
+            match step {
+                Step::Document(change) => out.merge(crate::Change {
+                    added: change
+                        .removed
+                        .iter()
+                        .map(|e| e.common().handle.value())
+                        .collect(),
+                    changed: change.replaced.iter().map(|(h, _)| h.value()).collect(),
+                    removed: change.added.iter().map(|h| h.value()).collect(),
+                }),
+                Step::Group(steps, _) => {
+                    for step in steps {
+                        collect(step, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut result = crate::Change::default();
+        if let Some(entry) = if redo {
+            self.redo.last()
+        } else {
+            self.undo.last().filter(|_| self.undo.len() > self.floor)
+        } {
+            collect(&entry.step, &mut result);
+        }
+        result
+    }
+
+    pub(crate) fn undo_added_handles(&self, source: Source) -> Vec<u64> {
+        fn collect(step: &Step, out: &mut Vec<u64>) {
+            match step {
+                Step::Document(change) => out.extend(change.added.iter().map(|h| h.value())),
+                Step::Group(steps, _) => {
+                    for step in steps {
+                        collect(step, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        if self.undo.len() > self.floor {
+            if let Some(entry) = self.undo.last().filter(|e| e.source == source) {
+                collect(&entry.step, &mut out);
+            }
+        }
+        out
+    }
+
     /// What can be undone (oldest first) and redone (next first): each step's label and who
     /// made it.
     pub(crate) fn labels(&self) -> (Vec<HistoryStep>, Vec<HistoryStep>) {
@@ -704,6 +786,7 @@ mod tests {
         let (mut takeoff, mut boq, mut conflicts, mut schedules) =
             (Takeoff::default(), None, Vec::new(), Vec::new());
         let (mut doc, mut doc_changed) = (CadDocument::new(), false);
+        let mut ucs = crate::Ucs::default();
         let (mut current, mut hidden, mut state_hidden) =
             (Current::default(), HashSet::new(), BTreeMap::new());
         for i in 0..MAX_STEPS + 5 {
@@ -722,6 +805,7 @@ mod tests {
                 schedules: &mut schedules,
                 doc: &mut doc,
                 view: ViewRefs {
+                    ucs: &mut ucs,
                     current: &mut current,
                     hidden: &mut hidden,
                     state_hidden: &mut state_hidden,

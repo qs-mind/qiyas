@@ -59,6 +59,7 @@ export default function App() {
     await shell.run(step);
   };
   const { fileTabs, setFileTabs, activeTab, setActiveTab, refreshTabs } = useFileTabs();
+  const shownWorkspace = useRef<number | null>(null);
   const { autosaveOff, autosave } = useAutosave(t, setError);
   /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
    *  before is stale (`isStale`) and drops its results. */
@@ -215,6 +216,8 @@ export default function App() {
   );
   measureRef.current = measure;
   const ai = useAssistantWiring({
+    workspace: activeTab,
+    shownWorkspace,
     t,
     lang,
     switchGen,
@@ -245,6 +248,7 @@ export default function App() {
   markRegionRef.current = ai.markRegion;
   const { assistant } = ai;
   const drawings = useDrawings({
+    shownWorkspace,
     t,
     switchGen,
     info,
@@ -271,6 +275,7 @@ export default function App() {
     preset,
     lastPoint,
     measure,
+    viewport,
   });
   const conversationHistory = useConversationHistory({
     drawing: info?.path ?? null,
@@ -449,6 +454,7 @@ export default function App() {
           onResize={(w) => panels.resize(rightSlot, w)}
         />
         <SidePanel
+          showTechnicalDetails={options.showTechnicalDetails}
           info={info}
           drafting={drafting}
           shell={shell}

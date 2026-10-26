@@ -73,17 +73,8 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
     let chain = engine.chain(&report.layout.font);
     let mut pages: Vec<Vec<LaidText>> = vec![vec![]];
     let mut y = height - margin - pitch;
-    for row in
-        rows.into_iter().chain(
-            report
-                .warnings
-                .iter()
-                .map(|w| qiyas_core::deliverables::TableRow {
-                    cells: vec![serde_json::json!(w)],
-                    heading: true,
-                }),
-        )
-    {
+    // Warnings stay in the attached lossless record, outside the client pages.
+    for row in rows {
         let wide = row.cells.len() == 1;
         let wrapped: Vec<_> = row
             .cells

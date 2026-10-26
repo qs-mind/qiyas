@@ -160,10 +160,13 @@ fn batch_context_notes(report: &mut ValidationReport) {
 impl Session {
     /// The same dry input check with the current drawing's sizes and annotation scale.
     pub fn validate_input(&self, input: &Value) -> ValidationReport {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("validation.validate_input");
+        let _read = self.evaluation_read().ok();
         let mut canonical = input.clone();
         crate::registry::canonicalize(&mut canonical);
-        let input = &canonical;
         let mut report = validate_command(input, Some(self.drawing.units));
+        let input = &canonical;
         report.append(self.validate_record_inputs(input));
         if report.valid {
             self.validate_batch_knowledge(input, &mut report);
@@ -233,6 +236,8 @@ impl Session {
     }
 
     fn resolve_input_defaults(&self, input: &Value, prefix: &str, defaults: &mut Vec<DefaultUsed>) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("validation.resolve_input_defaults");
         resolve_defaults(
             input,
             prefix,
@@ -425,6 +430,14 @@ fn validate_at(
     let mut canonical = value.clone();
     crate::registry::canonicalize(&mut canonical);
     walk(&info.schema, &canonical, path, step, &mut report);
+    report.warnings.extend(
+        crate::registry::normalization_warnings(value)
+            .into_iter()
+            .map(|mut w| {
+                w.pointer = format!("{path}{}", w.pointer);
+                w
+            }),
+    );
     if info.name == "set_layer" && canonical.get("prop").is_some() {
         for key in [
             "color",

@@ -50,6 +50,14 @@ impl Anthropic {
 }
 
 impl Provider for Anthropic {
+    fn image_input(&self, model: &str) -> Option<bool> {
+        crate::models::known_image_input(API_URL, model).or_else(|| {
+            crate::models::CLAUDE_MODELS
+                .iter()
+                .any(|(id, _)| *id == model)
+                .then_some(true)
+        })
+    }
     fn stream_turn<'a>(
         &'a self,
         req: TurnRequest,
@@ -119,7 +127,7 @@ impl Provider for Anthropic {
 pub fn request_body(req: &TurnRequest) -> Value {
     let mut tools: Vec<Value> = req.tools.iter().map(tool_json).collect();
     if let Some(last) = tools.last_mut() {
-        last["cache_control"] = json!({ "type": "ephemeral" });
+        last["cache_control"] = json!({ "type": "ephemeral", "ttl": "1h" });
     }
     let mut body = json!({
         "model": req.model,
@@ -128,7 +136,7 @@ pub fn request_body(req: &TurnRequest) -> Value {
         "system": [{
             "type": "text",
             "text": req.system,
-            "cache_control": { "type": "ephemeral" }
+            "cache_control": { "type": "ephemeral", "ttl": "1h" }
         }],
         "messages": req.messages.iter().map(message_json).collect::<Vec<_>>(),
         "output_config": { "effort": req.effort },
@@ -142,6 +150,25 @@ pub fn request_body(req: &TurnRequest) -> Value {
     }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
+    }
+    // Three explicit long-lived boundaries, then automatic caching on the newest block
+    // with the default five-minute TTL. Never mark signed thinking as a breakpoint.
+    if let Some(messages) = body["messages"].as_array_mut() {
+        let stable_end = messages.len().saturating_sub(1);
+        if let Some(block) = messages[..stable_end]
+            .iter_mut()
+            .rev()
+            .filter_map(|message| message["content"].as_array_mut())
+            .flat_map(|content| content.iter_mut().rev())
+            .find(|block| {
+                matches!(
+                    block["type"].as_str(),
+                    Some("text" | "tool_result" | "tool_use" | "image")
+                )
+            })
+        {
+            block["cache_control"] = json!({"type":"ephemeral","ttl":"1h"});
+        }
     }
     body
 }
@@ -184,7 +211,7 @@ fn block_json(b: &ContentBlock) -> Value {
             // An input that was not valid JSON goes back as an empty object; its tool_result
             // says it was refused.
             let input = if input.is_object() {
-                input.clone()
+                crate::artifact::arguments(input)
             } else {
                 json!({})
             };
@@ -261,6 +288,12 @@ impl Turn {
             "message_start" => self.read_usage(&e["message"]["usage"]),
             "content_block_start" => {
                 let b = &e["content_block"];
+                if b["type"] == "fallback" {
+                    sink(StreamEvent::Diagnostic {
+                        kind: "CACHE REBUILD".into(),
+                        text: "Expected rebuild: the service selected its fallback model.".into(),
+                    });
+                }
                 let building = match b["type"].as_str().unwrap_or("") {
                     "text" => Building::Text(b["text"].as_str().unwrap_or("").to_string()),
                     "tool_use" => {
@@ -356,6 +389,9 @@ impl Turn {
         };
         set(&mut self.usage.input_tokens, "input_tokens");
         set(&mut self.usage.output_tokens, "output_tokens");
+        if let Some(n) = u["output_tokens_details"]["reasoning_tokens"].as_u64() {
+            self.usage.reasoning_tokens = n;
+        }
         set(
             &mut self.usage.cache_creation_input_tokens,
             "cache_creation_input_tokens",
@@ -446,6 +482,74 @@ fn finish_block(b: Building, sink: Sink<'_>) -> ContentBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_lived_breakpoints_precede_the_newest_default_ttl() {
+        let request = TurnRequest {
+            cache_key: "conversation-1".into(),
+            system: "Stable rules".into(),
+            tools: crate::catalogue(),
+            model: "mock".into(),
+            effort: "high".into(),
+            max_tokens: 100,
+            messages: vec![
+                Message::user(vec![ContentBlock::Text {
+                    text: "First brief".into(),
+                }]),
+                Message::assistant(vec![
+                    ContentBlock::Thinking {
+                        thinking: "reason".into(),
+                        signature: "opaque".into(),
+                    },
+                    ContentBlock::Text {
+                        text: "Answer".into(),
+                    },
+                ]),
+                Message::user(vec![ContentBlock::Text {
+                    text: "Continue".into(),
+                }]),
+            ],
+        };
+        let before = request_body(&request);
+        assert_eq!(before["tools"][2]["cache_control"]["ttl"], "1h");
+        assert_eq!(before["system"][0]["cache_control"]["ttl"], "1h");
+        assert_eq!(
+            before["messages"][1]["content"][1]["cache_control"]["ttl"],
+            "1h"
+        );
+        assert!(before["messages"][1]["content"][0]
+            .get("cache_control")
+            .is_none());
+        assert_eq!(before["cache_control"], json!({"type":"ephemeral"}));
+        assert_eq!(before.to_string().matches("cache_control").count(), 4);
+        let mut next = request.clone();
+        next.messages
+            .push(Message::assistant(vec![ContentBlock::Text {
+                text: "Next".into(),
+            }]));
+        next.messages.push(Message::user(vec![ContentBlock::Text {
+            text: "Again".into(),
+        }]));
+        let after = request_body(&next);
+        assert_eq!(before["system"], after["system"]);
+        assert_eq!(before["tools"], after["tools"]);
+        // Cache markers are transport hints, not prompt tokens. All content bytes stay exact.
+        fn unmark(value: &mut Value) {
+            match value {
+                Value::Object(o) => {
+                    o.remove("cache_control");
+                    o.values_mut().for_each(unmark);
+                }
+                Value::Array(a) => a.iter_mut().for_each(unmark),
+                _ => {}
+            }
+        }
+        let mut before = before["messages"].clone();
+        let mut after = after["messages"].clone();
+        unmark(&mut before);
+        unmark(&mut after);
+        assert_eq!(before.as_array().unwrap(), &after.as_array().unwrap()[..3]);
+    }
 
     fn run(events: &[Value]) -> (TurnResult, Vec<StreamEvent>) {
         let mut turn = Turn::default();

@@ -713,6 +713,9 @@ fn dimension_submission_preserves_rules_handles_and_totals_without_truth() {
     let partial = submission::from_report(&report, &evidence, &s.drawing).unwrap();
     assert!(!partial.items.iter().any(|i| i.id == "TOTAL"));
     assert_eq!(partial.items.len(), 3);
+    // A design Mizan drew itself has no recognition candidates: its objects count.
+    let authored = submission::from_report(&report, &[], &s.drawing).unwrap();
+    assert_eq!(authored.items.len(), submitted.items.len());
 }
 
 #[test]

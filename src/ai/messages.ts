@@ -33,12 +33,14 @@ export type ToolCardItem = {
 export type Attached = { pointed?: string[]; images?: string[] };
 
 export type Item =
+  | { kind: "cache_usage"; cached: number; total: number }
+  | { kind: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { kind: "provider_status"; code: string }
   | ({ kind: "user"; text: string } & Attached)
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
-  | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean }
+  | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean; stale?: boolean }
   | { kind: "retrying"; seconds: number; code: string }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
@@ -57,6 +59,7 @@ export type Action =
   | { type: "undone"; id: string }
   | { type: "undo_stale"; id: string }
   | { type: "restore"; entries: TranscriptEntry[] }
+  | { type: "reattach"; entries: TranscriptEntry[] }
   | { type: "clear" };
 
 export const EMPTY: Transcript = { items: [] };
@@ -79,6 +82,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
   const items = state.items;
   const last = items.at(-1);
   switch (action.type) {
+    case "open_findings":
+      return { items: [...finishText(items), { kind: "open_findings", findings: action.findings, revision: action.revision }] };
     case "user": {
       const { type: _, ...item } = action;
       return { items: [...finishText(items), { ...item, kind: "user" }] };
@@ -96,6 +101,10 @@ export function reduce(state: Transcript, action: Action): Transcript {
       }
       return { items: [...items.slice(0, start), plan, ...items.slice(start)] };
     }
+    case "plan_progress": {
+      const last = items.map((item) => item.kind).lastIndexOf("plan");
+      return { items: items.map((item, index) => index === last && item.kind === "plan" ? { ...item, stale: action.stale } : item) };
+    }
     case "awaiting_approval": {
       const next = reduce(state, { type: "plan", phases: action.plan.phases });
       const plan = next.items.map((item) => item.kind).lastIndexOf("plan");
@@ -109,8 +118,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
       let kept = items;
       if (action.discard_partial) {
         let end = kept.length;
-        while (end > 0 && ["assistant", "thinking"].includes(kept[end - 1].kind)) end--;
-        kept = kept.slice(0, end);
+        while (end > 0 && ["assistant", "thinking", "cache_usage"].includes(kept[end - 1].kind)) end--;
+        kept = [...kept.slice(0, end), ...kept.slice(end).filter((item) => item.kind === "cache_usage")];
       }
       return { items: [...kept, { kind: "retrying", seconds: action.seconds, code: action.code }] };
     }
@@ -164,8 +173,19 @@ export function reduce(state: Transcript, action: Action): Transcript {
       };
     case "stopped":
       return { items: [...finishText(items), { kind: "stopped", reason: action.reason }] };
-    case "done":
-      return { items: finishText(items) };
+    case "cache_usage":
+    case "done": {
+      const cached = action.usage.cache_read_input_tokens ?? 0;
+      const total = (action.usage.input_tokens ?? 0) + cached + (action.usage.cache_creation_input_tokens ?? 0);
+      const finished = action.type === "done" ? finishText(items) : items;
+      if (total === 0) return { items: finished };
+      let start = finished.length;
+      while (start > 0 && finished[start - 1].kind !== "user") start--;
+      const at = finished.slice(start).findIndex((item) => item.kind === "cache_usage");
+      const cache: Item = { kind: "cache_usage", cached, total };
+      return { items: at < 0 ? [...finished, cache]
+        : finished.map((item, i) => i === start + at ? cache : item) };
+    }
     case "end":
       // A turn that failed may leave a card running; it never will finish now.
       return {
@@ -181,6 +201,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
       return EMPTY;
     case "restore":
       return replay(action.entries);
+    case "reattach":
+      return action.entries.reduce((state, entry) => reduce(state, entry.type === "event" ? entry.event : entry), EMPTY);
   }
 }
 
@@ -210,10 +232,14 @@ export function startNewOffered(t: Transcript): boolean {
   return last?.kind === "refused" || (last?.kind === "stopped" && last.reason === TOO_LONG);
 }
 
-/** Recovery belongs to this user turn; a later unrelated request cannot recover an older step. */
+/** Presentation only: a successful retry of this operation can resolve its earlier error.
+ * An unrelated successful read or a later user request cannot resolve a failed edit. */
 export function recoveringCard(items: Item[], index: number, busy: boolean): boolean {
+  const failed = items[index];
+  if (failed?.kind !== "tool" || failed.status !== "error") return false;
   const rest = items.slice(index + 1);
   const nextTurn = rest.findIndex((item) => item.kind === "user");
   return (busy && nextTurn < 0) || (nextTurn < 0 ? rest : rest.slice(0, nextTurn))
-    .some((item) => item.kind === "tool" && item.status === "done");
+    .some((item) => item.kind === "tool" && item.status === "done" && !!failed.label
+      && item.name === failed.name && item.label === failed.label);
 }

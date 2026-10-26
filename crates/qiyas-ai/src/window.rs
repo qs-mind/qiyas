@@ -35,6 +35,21 @@ pub fn is_window_tool(name: &str) -> bool {
     WINDOW_TOOLS.contains(&name)
 }
 
+/// Read the window before locking the session: window callbacks can need that lock.
+pub(crate) fn sync_selection(host: &dyn DrawingHost, session: &Mutex<Option<Session>>) {
+    if host.has_window() {
+        if let Ok(pointed) = host.pointed() {
+            if let Some(s) = session
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_mut()
+            {
+                s.set_read_selection(&pointed.selection);
+            }
+        }
+    }
+}
+
 /// Runs the window tool `name` with `input`: the window first, without the session's lock, then
 /// the session. `lang` is the language of a description.
 pub fn run_window(
@@ -49,8 +64,9 @@ pub fn run_window(
         "view_screen" => view_screen(host, session, input),
         "get_selection" => {
             let pointed = host.pointed()?;
-            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
-            let s = guard.as_ref().ok_or(NO_DRAWING)?;
+            let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            let s = guard.as_mut().ok_or(NO_DRAWING)?;
+            s.set_read_selection(&pointed.selection);
             Ok(ToolOutput::Json(json!({
                 "selection": pointed.selection,
                 "region": pointed.region,
@@ -136,6 +152,20 @@ fn select_entities(
         (ok, refused)
     };
     host.select(&ok, zoom)?;
+    if let Some(s) = session
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_mut()
+    {
+        s.set_read_selection(
+            &ok.iter()
+                .map(|&handle| Target {
+                    handle,
+                    chain: vec![],
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     let mut answer = json!({
         "selected": ok.len(),
         "message": format!("Selected {} entities in the window", ok.len()),

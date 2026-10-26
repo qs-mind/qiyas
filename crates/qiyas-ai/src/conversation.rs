@@ -36,6 +36,9 @@ pub struct PhaseState {
     pub drawing: Option<PathBuf>,
     pub baseline_errors: Option<std::collections::BTreeSet<String>>,
     pub touched: std::collections::BTreeSet<u64>,
+    /// The user's checkable brief survives context trimming and a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_check: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,13 +110,21 @@ pub(crate) fn append(transcript: &mut Vec<TranscriptEntry>, entry: TranscriptEnt
             }
         }
     ) {
-        while matches!(
-            transcript.last(),
-            Some(TranscriptEntry::Event {
-                event: AgentEvent::Text { .. } | AgentEvent::Thinking { .. }
-            })
-        ) {
-            transcript.pop();
+        // Cache totals belong to the turn, even when its partial answer is discarded.
+        let mut at = transcript.len();
+        while at > 0 {
+            match &transcript[at - 1] {
+                TranscriptEntry::Event {
+                    event: AgentEvent::CacheUsage { .. },
+                } => at -= 1,
+                TranscriptEntry::Event {
+                    event: AgentEvent::Text { .. } | AgentEvent::Thinking { .. },
+                } => {
+                    at -= 1;
+                    transcript.remove(at);
+                }
+                _ => break,
+            }
         }
     }
     match (transcript.last_mut(), &entry) {

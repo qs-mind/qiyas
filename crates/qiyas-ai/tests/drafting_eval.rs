@@ -31,7 +31,9 @@ const LAYERS: [&str; 6] = [
     "A-ROOM-NAME",
 ];
 
-fn input(op: &str, args: Value) -> Value {
+fn input(op: &str, mut args: Value) -> Value {
+    // Drafting decisions below inspect complete geometry and verification reports.
+    args["detail"] = json!("full");
     // Exercise the provider-facing, strict string form, including command payloads.
     json!({"op": op, "args": args.to_string()})
 }
@@ -444,8 +446,12 @@ async fn villa_ground_floor_through_mizans_three_tools() {
             Some(EntityType::LwPolyline(p)) if p.is_closed && p.common.layer == "A-ROOM-BOUNDARY"
         ));
     }
+    let mut before_grid = (*room_reports[0]).clone();
+    assert_ne!(before_grid["revision"], after_grid["revision"]);
+    before_grid.as_object_mut().unwrap().remove("revision");
+    after_grid.as_object_mut().unwrap().remove("revision");
     assert_eq!(
-        room_reports[0], &after_grid,
+        before_grid, after_grid,
         "grid must not close or subdivide rooms"
     );
     let labels = command_result(&eval.results, "label_spaces");

@@ -165,10 +165,19 @@ pub fn from_report(
         ..Default::default()
     };
     for q in &report.quantities {
-        let Some(candidate) = evidence.iter().find(|c| {
-            c.object == Some(q.object) && c.state == qiyas_core::recognition::ReviewState::Accepted
-        }) else {
-            continue;
+        // An object with a recognition candidate must be accepted; one Mizan placed itself
+        // (a design drawn from scratch) has no candidate and is accepted by construction.
+        let candidates: Vec<_> = evidence
+            .iter()
+            .filter(|c| c.object == Some(q.object))
+            .collect();
+        let candidate = match candidates
+            .iter()
+            .find(|c| c.state == qiyas_core::recognition::ReviewState::Accepted)
+        {
+            Some(c) => Some(*c),
+            None if candidates.is_empty() => None,
+            None => continue,
         };
         let rule = report
             .selection
@@ -205,7 +214,10 @@ pub fn from_report(
             unit: q.unit.clone(),
             quantity: q.quantity,
             confidence: Some(q.confidence),
-            source_objects: source_objects(candidate),
+            source_objects: match candidate {
+                Some(c) => source_objects(c),
+                None => vec![format!("{:X}", q.object)],
+            },
             basis,
             height_m,
             rule: Some(q.rule.clone()),

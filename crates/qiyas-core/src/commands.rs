@@ -64,7 +64,8 @@ pub enum Command {
     /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
     #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
-    #[schemars(example = json!({"type":"check"}))]
+    #[serde(rename = "discrepancy_check", alias = "check")]
+    #[schemars(example = json!({"type":"discrepancy_check"}))]
     #[schemars(extend("x-takeoff-kit" = {"order":80,"example":0}))]
     Check {
         #[serde(default)]
@@ -258,6 +259,17 @@ pub enum Command {
         handle: u64,
         #[serde(default)]
         chain: Vec<u64>,
+    },
+    /// Mark a closed region or named group as measured or view only. View-only geometry
+    /// stays editable but is excluded from manual and generated quantities.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type":"set_measurement_scope","region":{"handle":1234},"measured":false}))]
+    SetMeasurementScope {
+        #[serde(default)]
+        region: Option<Target>,
+        #[serde(default)]
+        group: Option<String>,
+        measured: bool,
     },
     /// Block references of `block_name` on the current sheet, on visible layers only
     /// (and only on `layer` when given), and those at the top of the sheet's xrefs.
@@ -528,7 +540,9 @@ pub enum Command {
     /// another batch). With `layer` the commands draw on that layer (made when missing) and with
     /// `color` in that colour ("ByLayer", "ACI n", "#rrggbb"); the current state is put back
     /// after, and undo puts back a current state the commands changed. `Outcome::Batch`: each
-    /// command's outcome and every entity added.
+    /// command's outcome and every entity added. A batch consisting only of independent
+    /// opening additions validates each input in order and rebuilds each wall once; those
+    /// outcomes share the final wall state. Mixed commands and step references stay sequential.
     #[schemars(extend("x-category" = "draw", "x-batch" = false))]
     #[schemars(example = json!({"type": "batch", "commands": [{"type": "new_layer", "name": "A-WALL"}, {"type": "set_current", "current": {"layer": "A-WALL"}}, {"type": "draw", "kind": "rectangle", "a": [0, 0], "b": [5, 4]}]}))]
     #[schemars(example = json!({"type": "batch", "layer": "A-DOOR", "commands": [{"type": "draw", "kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}, {"type": "draw", "kind": "line", "a": [0, 0], "b": [0.9, 0]}]}))]
@@ -822,7 +836,8 @@ pub enum Command {
     },
     /// Defines a named block from entities shaped exactly as CreateEntities takes them.
     /// Coordinates are relative to the block's own system; `base` is its insertion base.
-    /// A taken name is refused. One undo step includes the definition and any new layers.
+    /// Reuses a matching definition; conflicting geometry or properties are refused.
+    /// One undo step includes a new definition and any new layers.
     #[schemars(extend("x-category" = "blocks"))]
     #[schemars(example = json!({"type": "define_block", "name": "MARK", "base": [0, 0], "entities": [{"type": "Line", "data": {"start": {"x": 0, "y": 0, "z": 0}, "end": {"x": 100, "y": 0, "z": 0}}}]}))]
     DefineBlock {
@@ -1063,7 +1078,8 @@ pub enum Command {
         height: Option<f64>,
     },
     /// Adds a layout using a paper_catalog name (for example ISO A1), in paper millimetres.
-    /// Refuses an existing name. Use SetSheet to display the new layout. One undo step.
+    /// Reuses matching paper settings; a conflicting name needs SetLayoutPaper or a new name.
+    /// Use SetSheet to display the new layout. One undo step when created.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "new_layout", "name": "Ground floor", "paper": "ISO A1", "orientation": "landscape"}))]
     #[schemars(extend("x-words" = ["NEWLAYOUT"]))]
@@ -1134,6 +1150,50 @@ pub enum Command {
         #[serde(default)]
         target: Option<Target>,
     },
+    /// Reads an optional editable object/check pack, including its citations. Available: interiors.
+    /// No types or checks are installed until install_object_pack is called.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"read_object_pack","name":"interiors"}))]
+    ReadObjectPack { name: String },
+    /// Installs an optional pack as one undo step. Supply name for a shipped pack or data for
+    /// an edited pack. Values and checks are drawing-owned data; no compliance is implied.
+    #[schemars(extend("x-category" = "objects"))]
+    #[schemars(example = json!({"type":"install_object_pack","name":"interiors"}))]
+    InstallObjectPack {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+    },
+    /// Reads evaluated back, clearance and other named regions from object recipe data.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"object_zones","targets":[{"handle":1234}]}))]
+    ObjectZones { targets: Vec<Target> },
+    /// Places the selected model-space geometry at survey coordinates, keeping its size.
+    /// base_point is its current anchor; site_point is the destination, both in drawing units.
+    /// x_axis is the destination direction of the old positive X axis (default [1,0]).
+    /// Omitted targets mean all model-space entities. An empty list only sets the UCS/base point.
+    /// Establishes the UCS and exported drawing base point in the same undo step.
+    /// JSON command points remain world/site coordinates; typed points use this UCS.
+    #[schemars(extend("x-category" = "modify", "x-words" = ["SETSITEORIGIN"]))]
+    #[schemars(example = json!({"type":"set_site_origin","base_point":[0,0],"site_point":[674250000,2734180000u64],"x_axis":[1,0]}))]
+    SetSiteOrigin {
+        base_point: [f64; 2],
+        site_point: [f64; 2],
+        #[serde(default = "site_x_axis")]
+        x_axis: [f64; 2],
+        #[serde(default)]
+        targets: Option<Vec<Target>>,
+    },
+    /// Exact defining points in site (world) coordinates and local UCS coordinates. Curves
+    /// report their centre, lines their ends and polylines their vertices; no sampled points.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"site_coordinates","targets":[{"handle":1234}]}))]
+    SiteCoordinates { targets: Vec<Target> },
+    /// Exact containment, nearest point or intersections on drawn geometry. Points use drawing units.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"spatial_query","kind":"nearest","targets":[{"handle":1234}],"point":[0,0]}))]
+    SpatialQuery(crate::spatial::Query),
     /// The user coordinate system becomes the one at `origin` with its x axis along `x_axis`
     /// (`[1, 0]` from `[0, 0]` is the world's). View state: not an undo step (see `crate::ucs`).
     #[schemars(extend("x-category" = "view", "x-effect" = "view"))]
@@ -1285,7 +1345,8 @@ pub enum Command {
     /// Writes each room's unapproved candidate area ("Area 58.28 m²", or in
     /// Arabic) as a text just under its name, or at its seed: on `layer` (made when missing; the
     /// current layer by default), `height` metres tall (the name's height by default), to
-    /// `decimals` places (2), in `language` (the name's). One undo step. `Outcome::Rooms` with
+    /// `decimals` places (2), in English unless `language` is given. Existing Arabic names in
+    /// a supplied drawing may keep Arabic. One undo step. `Outcome::Rooms` with
     /// each label's handle.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
@@ -1519,8 +1580,13 @@ impl Command {
             | Command::Rooms { .. }
             | Command::FreeSpace { .. }
             | Command::CheckDrawing { .. }
+            | Command::ReadObjectPack { .. }
+            | Command::ObjectZones { .. }
+            | Command::SiteCoordinates { .. }
+            | Command::SpatialQuery(..)
             | Command::Verify { .. }
             | Command::ListComments => None,
+            Command::SetMeasurementScope { .. } => Some(Part::Document { tables: true, takeoff: true }),
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
@@ -1569,6 +1635,8 @@ impl Command {
             | Command::PlaceObjects { .. }
             | Command::SetObjectProps { .. }
             | Command::ObjectSchedule(_)
+            | Command::InstallObjectPack { .. }
+            | Command::SetSiteOrigin { .. }
             | Command::SetKnowledge { .. }
             | Command::Walls(_)
             | Command::OpeningSchedule { .. }
@@ -1748,6 +1816,18 @@ pub enum Outcome {
     /// What `Command::CheckDrawing` found.
     Checked {
         report: Box<crate::check::CheckReport>,
+    },
+    SiteCoordinates {
+        report: serde_json::Value,
+    },
+    SpatialQuery {
+        report: serde_json::Value,
+    },
+    ObjectPack {
+        data: serde_json::Value,
+    },
+    ObjectZones {
+        report: serde_json::Value,
     },
     /// Pass/fail, measurement and tolerance for every stated expectation.
     Verified {
@@ -1996,6 +2076,23 @@ impl Session {
                 });
             }
             Command::SetKnowledge { kind, name, data } => {
+                // Computed results: typed numbers here would read as measured quantities.
+                let computed = match kind {
+                    crate::knowledge::Kind::Revisions => ["result", "baseline", "identities"]
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&name))
+                        .then_some("carry_knowledge, then variation_report"),
+                    crate::knowledge::Kind::Queries => name
+                        .eq_ignore_ascii_case("result")
+                        .then_some("discrepancy_check"),
+                    _ => None,
+                };
+                if let (Some(via), Source::Ai | Source::Mcp) = (computed, source) {
+                    return Err(CoreError::InvalidCommand(format!(
+                        "{}/{name} is computed by Qiyas, not written: run {via}",
+                        kind.as_str()
+                    )));
+                }
                 if matches!(
                     kind,
                     crate::knowledge::Kind::Types
@@ -2010,6 +2107,9 @@ impl Session {
                     let layout: crate::deliverables::Layout = serde_json::from_value(data.clone())
                         .map_err(|e| invalid(&e.to_string()))?;
                     layout.validate()?;
+                }
+                if kind == crate::knowledge::Kind::Placement {
+                    crate::placement_pack::validate_checks(&data)?;
                 }
                 if kind == crate::knowledge::Kind::Checks {
                     let rule: crate::discrepancy::CheckRule = serde_json::from_value(data.clone())
@@ -2111,6 +2211,14 @@ impl Session {
                     empty_fields,
                 });
             }
+            Command::SetMeasurementScope {
+                region,
+                group,
+                measured,
+            } => {
+                self.set_measurement_scope(region, group, measured)?;
+                return Ok(Outcome::Changed);
+            }
             Command::MeasureDistance { points } => {
                 if points.len() < 2 {
                     return Err(invalid("A distance needs at least 2 points"));
@@ -2145,7 +2253,7 @@ impl Session {
                 m
             }
             Command::CountBlock { block_name, layer } => {
-                let mut m = self.count_block(block_name, layer);
+                let mut m = self.count_block(block_name, layer)?;
                 m.auto_description = true;
                 m
             }
@@ -2156,6 +2264,14 @@ impl Session {
                 });
             }
             Command::SetDescription { id, text } => {
+                if self
+                    .takeoff
+                    .items
+                    .iter()
+                    .any(|m| m.id == id && m.unit == "markup")
+                {
+                    self.check_quantity_note(&text, source)?;
+                }
                 return Ok(match self.takeoff.items.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         m.description = text;
@@ -2202,6 +2318,9 @@ impl Session {
                 note,
                 empty_item,
             } => {
+                if unit.as_deref() == Some("markup") {
+                    self.check_quantity_note(&format!("{description}\n{note}"), source)?;
+                }
                 if matches!(source, Source::Ai | Source::Mcp)
                     && kind == Kind::Item
                     && points.is_empty()
@@ -2209,15 +2328,22 @@ impl Session {
                     && value.is_none_or(|v| v == 0.0)
                     && !empty_item
                 {
-                    return Err(invalid(
-                        "A take-off row needs a real measured quantity, and this one has no geometry and a \
-                         quantity of 0, so it was not added. Notes and analysis (room sizes, overall widths, \
-                         comments) are not rows: write them in your answer, or into the drawing with \
-                         text or comment. Only if the user explicitly asked for an empty item, call \
-                         again with empty_item true.",
-                    ));
+                    self.last_advice.push(serde_json::json!({"code":"unmeasured_item","message":"This item has no geometry or measured quantity. Consider a note or measure its source before reporting it as a quantity."}));
                 }
-                let value = value.or((kind == Kind::Item && empty_item).then_some(0.0));
+                if matches!(source, Source::Ai | Source::Mcp)
+                    && kind == Kind::Item
+                    && points.is_empty()
+                    && handles.is_empty()
+                    && value.is_some_and(|v| v != 0.0)
+                {
+                    self.last_advice.push(serde_json::json!({"code":"typed_quantity","message":"This quantity was typed, not measured: nothing in the drawing backs it. Measure the drawn handles, or derive it from measurement rules, so it traces to the drawing."}));
+                }
+                let value = value.or((kind == Kind::Item
+                    && (empty_item
+                        || (matches!(source, Source::Ai | Source::Mcp)
+                            && points.is_empty()
+                            && handles.is_empty())))
+                .then_some(0.0));
                 let mut m = self.add_measurement(
                     kind,
                     value,
@@ -2258,6 +2384,14 @@ impl Session {
                 });
             }
             Command::SetNote { id, text } => {
+                if self
+                    .takeoff
+                    .items
+                    .iter()
+                    .any(|m| m.id == id && m.unit == "markup")
+                {
+                    self.check_quantity_note(&text, source)?;
+                }
                 return self.edit(&id, |m| {
                     m.note = text;
                     Ok(())
@@ -2292,14 +2426,15 @@ impl Session {
                 return Ok(Outcome::Changed);
             }
             Command::ResolveConflict { id, status, note } => {
-                return Ok(match self.conflicts.iter_mut().find(|c| c.id == id) {
-                    Some(c) => {
-                        c.status = status;
-                        c.note = note;
-                        Outcome::Changed
-                    }
-                    None => Outcome::Nothing,
-                });
+                // A conflict that does not exist is a fact to report, not a silent no-op.
+                let Some(c) = self.conflicts.iter_mut().find(|c| c.id == id) else {
+                    return Err(CoreError::InvalidCommand(format!(
+                        "No conflict with id {id}; read the conflicts list for the current ids"
+                    )));
+                };
+                c.status = status;
+                c.note = note;
+                return Ok(Outcome::Changed);
             }
             Command::ImportPdf {
                 path,
@@ -2442,6 +2577,13 @@ impl Session {
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::EditText { target, value, tag } => {
+                if self
+                    .list_comments()
+                    .iter()
+                    .any(|c| c.label == Some(target.handle))
+                {
+                    self.check_quantity_note(&value, source)?;
+                }
                 self.edit_text(&target, &value, tag.as_deref())?;
                 return Ok(Outcome::Changed);
             }
@@ -2475,6 +2617,7 @@ impl Session {
                 text,
                 arc_len,
             } => {
+                self.check_quantity_note(&text, source)?;
                 let handles = self.add_comment(points.into(), &text, arc_len)?;
                 return Ok(Outcome::Added { handles });
             }
@@ -2714,6 +2857,44 @@ impl Session {
                 self.match_properties(&source, &targets, &props)?;
                 return Ok(Outcome::Changed);
             }
+            Command::ReadObjectPack { name } => {
+                return Ok(Outcome::ObjectPack {
+                    data: crate::placement_pack::shipped_pack(&name)?,
+                });
+            }
+            Command::ObjectZones { targets } => {
+                return Ok(Outcome::ObjectZones {
+                    report: self.object_zones(&targets)?,
+                });
+            }
+            Command::InstallObjectPack { name, data } => {
+                let data = match (name, data) {
+                    (Some(name), None) => crate::placement_pack::shipped_pack(&name)?,
+                    (None, Some(data)) => data,
+                    _ => return Err(invalid("Supply exactly one pack name or data")),
+                };
+                self.install_object_pack(data)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SetSiteOrigin {
+                base_point,
+                site_point,
+                x_axis,
+                targets,
+            } => {
+                self.set_site_origin(base_point, site_point, x_axis, targets)?;
+                return Ok(Outcome::Changed);
+            }
+            Command::SpatialQuery(query) => {
+                return Ok(Outcome::SpatialQuery {
+                    report: self.spatial_query(&query)?,
+                });
+            }
+            Command::SiteCoordinates { targets } => {
+                return Ok(Outcome::SiteCoordinates {
+                    report: self.site_coordinates(&targets)?,
+                });
+            }
             Command::Ucs { origin, x_axis } => {
                 self.ucs = crate::Ucs::new(origin, x_axis)?;
                 return Ok(Outcome::Changed);
@@ -2904,6 +3085,7 @@ impl Session {
                 language,
             } => return self.label_spaces(&query, layer, height, decimals, language, source),
             Command::AddMarkup { kind, points, text } => {
+                self.check_quantity_note(&text, source)?;
                 let (note, least) = match kind {
                     MarkupKind::Cloud => ("cloud", 3),
                     MarkupKind::Note => ("note", 1),
@@ -2959,6 +3141,7 @@ impl Session {
                 });
             }
         };
+        self.require_measured(&measurement)?;
         measurement.source = source.name().to_string();
         self.takeoff.add(measurement.clone());
         Ok(Outcome::Measured {
@@ -2981,7 +3164,7 @@ impl Session {
     /// The measurement of an `AddMeasurement`, without its description and note.
     #[allow(clippy::too_many_arguments)]
     fn add_measurement(
-        &self,
+        &mut self,
         kind: Kind,
         value: Option<f64>,
         unit: Option<String>,
@@ -3023,13 +3206,14 @@ impl Session {
             .iter()
             .map(|&h| locate(&self.drawing.doc, &xrefs, h, &chain))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut count_advice = Vec::new();
         if kind == Kind::Count && matches!(source, Source::Ai | Source::Mcp) {
             for (&h, entity) in handles.iter().zip(&entities) {
                 if !matches!(entity.entity, EntityType::Insert(_)) {
-                    return Err(invalid(&format!(
-                        "Handle {h} is a {}, not a block reference; a count takes block references only",
-                        variant_name(entity.entity)
-                    )));
+                    if entity.xref.is_some() {
+                        return Err(invalid(&format!("Handle {h} is inside an external drawing and has no block insertion point to retain this count. Supply count points or count block references.")));
+                    }
+                    count_advice.push(serde_json::json!({"code":"count_non_block","handle":h,"entity_type":variant_name(entity.entity),"message":format!("Handle {h} is a {}. This counts one selected object; confirm that it represents one item. Mizan decides.",variant_name(entity.entity))}));
                 }
             }
         }
@@ -3108,6 +3292,7 @@ impl Session {
             m.points = entities.iter().filter_map(insert_point).collect();
         }
         m.chain = chain;
+        self.last_advice.extend(count_advice);
         Ok(m)
     }
 
@@ -3161,7 +3346,18 @@ impl Session {
     /// A dynamic block's anonymous copies count as the dynamic block. References at the top of
     /// the sheet's xrefs count too (on their `XREF|LAYER`): they are kept as their points, since
     /// their handles are the xref drawing's.
-    fn count_block(&self, block_name: String, layer: Option<String>) -> Measurement {
+    fn count_block(
+        &self,
+        block_name: String,
+        layer: Option<String>,
+    ) -> Result<Measurement, CoreError> {
+        let exclusions = self.measurement_exclusions()?;
+        let owner = self
+            .drawing
+            .doc
+            .block_records
+            .get(&self.sheet)
+            .map_or(Handle::NULL, |b| b.handle);
         let block = normalize_name(&block_name);
         let only_on = layer.as_deref().map(normalize_name);
         let wanted = |layer: &str| only_on.as_ref().is_none_or(|l| *l == normalize_name(layer));
@@ -3174,8 +3370,11 @@ impl Session {
             if let Some(xf) = xf {
                 let p = insert.insert_point;
                 let on_plan = object_to_world(&insert.normal, p.z).apply([p.x, p.y]);
-                points.push(xf.apply(on_plan));
-            } else {
+                let point = xf.apply(on_plan);
+                if !exclusions.points(owner, &[point]) {
+                    points.push(point);
+                }
+            } else if !exclusions.entity(self, insert.common.handle.value()) {
                 handles.push(insert.common.handle.value());
             }
         });
@@ -3191,7 +3390,7 @@ impl Session {
         m.block_name = Some(block_name);
         m.count_scope = Some(crate::INSERT_COUNT_SCOPE.to_string());
         m.note = crate::INSERT_COUNT_LIMITATIONS.to_string();
-        m
+        Ok(m)
     }
 
     /// Removes the entities `targets` from the sheet on screen, once every one is found at its
@@ -3304,8 +3503,21 @@ impl Session {
                 .get_entity(Handle::new(*h))
                 .ok_or(CoreError::NoSuchEntity(*h))?;
             if Some(entity.common().owner_handle) != sheet {
+                let owner = entity.common().owner_handle;
+                let name = self
+                    .drawing
+                    .sheets()
+                    .into_iter()
+                    .find(|sheet| {
+                        doc.block_records
+                            .get(&sheet.block)
+                            .is_some_and(|block| block.handle == owner)
+                    })
+                    .map(|sheet| sheet.name)
+                    .unwrap_or_else(|| "another block".into());
+                let target = serde_json::to_string(&name).unwrap_or_default();
                 return Err(CoreError::InvalidCommand(format!(
-                    "Entity {h} is not on this sheet"
+                    "Entity {h} is on sheet {name}. Set \"sheet\":{target} on the edit command to target it without switching the view."
                 )));
             }
             if let Some(edit) = self.block_edit.as_ref().filter(|e| e.outside.contains(h)) {
@@ -3344,4 +3556,8 @@ fn check_height(height: f64) -> Result<(), CoreError> {
 
 fn invalid(why: &str) -> CoreError {
     CoreError::InvalidCommand(why.to_string())
+}
+
+fn site_x_axis() -> [f64; 2] {
+    [1., 0.]
 }

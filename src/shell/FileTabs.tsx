@@ -51,6 +51,8 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
             onClick={() => onSelect(tab.id)}
           >
             <bdi>{tab.title}</bdi>
+            {tab.status && tab.status !== "idle" && <span className={`workspace-status ${tab.status}`} title={t(`workspace.${tab.status}`)} aria-label={t(`workspace.${tab.status}`)}>●</span>}
+            {tab.busy && tab.id === active && <small className="workspace-caption" aria-hidden="true">{t(tab.status === "queued" ? "workspace.queued" : "workspace.working")}</small>}
             {tab.dirty && (
               <span className="dirty" aria-label={t("tab.unsaved")}>
                 {" •"}

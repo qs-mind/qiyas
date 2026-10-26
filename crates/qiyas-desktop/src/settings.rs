@@ -111,6 +111,9 @@ pub struct ProviderProfile {
     /// Only OpenAI-compatible services use an address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Model capability reported by the service or confirmed in Settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<bool>,
 }
 
 fn anthropic_profile() -> ProviderProfile {
@@ -118,6 +121,7 @@ fn anthropic_profile() -> ProviderProfile {
         effort: None,
         model: "claude-opus-5-5".into(),
         base_url: None,
+        image_input: Some(true),
     }
 }
 
@@ -144,6 +148,8 @@ impl Default for ProviderProfiles {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
+    /// Maximum concurrent Mizan turns; Claude Code still has one process at a time.
+    pub max_concurrent_turns: usize,
     pub provider: Provider,
     /// Empty uses the user-installed command on PATH; never downloaded by Qiyas.
     pub claude_executable: Option<String>,
@@ -155,6 +161,8 @@ pub struct Settings {
     pub autonomy: qiyas_ai::Autonomy,
     /// The selected measurement method name; local rules are optional. None means geometric quantities.
     pub measurement_method: Option<String>,
+    /// Shows diagnostic disclosures in Mizan; ordinary surveying work keeps them hidden.
+    pub show_technical_details: bool,
     pub mcp_enabled: bool,
     pub mcp_port: u16,
     /// 32 hex characters, made once and kept. Empty when missing from the file, so `load` makes
@@ -249,12 +257,14 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            max_concurrent_turns: 3,
             provider: Provider::Anthropic,
             claude_executable: None,
             providers: ProviderProfiles::default(),
             effort: "medium".into(),
             autonomy: qiyas_ai::Autonomy::default(),
             measurement_method: None,
+            show_technical_details: false,
             mcp_enabled: false,
             mcp_port: 48123,
             mcp_token: new_token(),
@@ -300,6 +310,10 @@ fn valid_token(token: &str) -> bool {
 
 /// Checks settings coming from the window before they are kept.
 pub fn validate(s: &Settings) -> Result<(), String> {
+    if !(1..=8).contains(&s.max_concurrent_turns) {
+        return Err("Mizan can run between 1 and 8 drawings at once".into());
+    }
+
     if let Some(base) = s
         .providers
         .openai_compatible
@@ -579,9 +593,12 @@ fn read_settings(text: &str) -> Result<(Settings, bool), serde_json::Error> {
             .as_str()
             .unwrap_or("anthropic")
             .to_string();
-        if value["providers"][&provider]
-            .as_object()
-            .is_none_or(|p| !p.contains_key("effort"))
+        // The legacy effort belonged to API providers. A subscription uses its own
+        // default until the user explicitly chooses a supported level.
+        if matches!(provider.as_str(), "anthropic" | "openai_compatible")
+            && value["providers"][&provider]
+                .as_object()
+                .is_none_or(|p| !p.contains_key("effort"))
         {
             if value["providers"].is_null() {
                 value["providers"] = serde_json::json!({});

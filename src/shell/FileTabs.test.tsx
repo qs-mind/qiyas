@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { LanguageProvider } from "../i18n";
 import type { TabInfo } from "../api";
 import { cycleTab, FileTabs } from "./FileTabs";
 
@@ -61,4 +62,15 @@ test("one tab is in the Tab order and the arrows move between tabs", () => {
   tower.focus();
   fireEvent.keyDown(tower, { key: "ArrowLeft" });
   expect(document.activeElement).toBe(villa);
+});
+
+test("each drawing exposes its own Mizan status", () => {
+  render(<LanguageProvider><FileTabs tabs={[
+    { id: 1, path: "one.dxf", title: "One", dirty: false, status: "working" },
+    { id: 2, path: "two.dxf", title: "Two", dirty: false, status: "queued" },
+    { id: 3, path: "three.dxf", title: "Three", dirty: false, status: "done" },
+  ]} active={1} onSelect={() => {}} onClose={() => {}} /></LanguageProvider>);
+  expect(screen.getByLabelText("Mizan is working…")).toBeTruthy();
+  expect(screen.getByLabelText("Waiting for a free Mizan slot…")).toBeTruthy();
+  expect(screen.getByLabelText("Mizan finished")).toBeTruthy();
 });

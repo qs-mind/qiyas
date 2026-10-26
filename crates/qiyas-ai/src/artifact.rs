@@ -1,0 +1,189 @@
+//! Immutable evidence, kept outside the model's context. Offsets are UTF-8 byte offsets.
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
+
+use crate::ToolError;
+
+pub(crate) const PAGE_BYTES: usize = 12_000;
+
+pub(crate) fn hash(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Sort recursively even when another crate enables serde_json's preserve_order feature.
+pub(crate) fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort();
+            Value::Object(
+                keys.into_iter()
+                    .map(|k| (k.clone(), canonical(&map[k])))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
+        _ => value.clone(),
+    }
+}
+
+/// Tool argument objects sometimes contain a JSON-encoded args/command object.
+pub(crate) fn arguments(value: &Value) -> Value {
+    let mut out = canonical(value);
+    if let Some(object) = out.as_object_mut() {
+        for key in ["args", "command"] {
+            if let Some(text) = object.get(key).and_then(Value::as_str) {
+                if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                    object.insert(key.into(), Value::String(arguments(&parsed).to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn folder() -> Result<PathBuf, ToolError> {
+    let path = qiyas_core::data_home::qiyas_dir()
+        .map_err(ToolError::Failed)?
+        .join("artifacts");
+    std::fs::create_dir_all(&path).map_err(failed)?;
+    Ok(path)
+}
+
+fn failed(error: std::io::Error) -> ToolError {
+    ToolError::Failed(format!("Could not keep or read the full evidence: {error}"))
+}
+
+pub(crate) fn save(value: &Value) -> Result<String, ToolError> {
+    save_in(&folder()?, value)
+}
+
+fn save_in(folder: &Path, value: &Value) -> Result<String, ToolError> {
+    let data = canonical(value).to_string();
+    let id = hash(data.as_bytes());
+    let path = folder.join(format!("{id}.json"));
+    if path.is_file() {
+        return Ok(id);
+    }
+    let temp = folder.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = (|| {
+        let mut file = options.open(&temp)?;
+        writeln!(file, "{}", json!({"revision":value["revision"]}))?;
+        file.write_all(data.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temp, path)
+    })();
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(failed(error));
+    }
+    Ok(id)
+}
+
+pub(crate) fn read(args: &Value) -> Result<Value, ToolError> {
+    read_in(&folder()?, args)
+}
+
+fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
+    let id = args["id"].as_str().unwrap_or_default();
+    if id.len() != 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(ToolError::BadInput(
+            "Use the artifact id from a result.".into(),
+        ));
+    }
+    let path = folder.join(format!("{id}.json"));
+    if std::fs::symlink_metadata(&path)
+        .map_err(failed)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(ToolError::BadInput(
+            "An evidence file cannot be a link.".into(),
+        ));
+    }
+    let mut file = std::fs::File::open(path).map_err(failed)?;
+    let mut header = String::new();
+    std::io::BufReader::new((&mut file).take(4096))
+        .read_line(&mut header)
+        .map_err(failed)?;
+    let metadata: Value = serde_json::from_str(&header)
+        .map_err(|_| ToolError::BadInput("The evidence header could not be read.".into()))?;
+    let total = file
+        .metadata()
+        .map_err(failed)?
+        .len()
+        .saturating_sub(header.len() as u64);
+    let offset = args["offset"].as_u64().unwrap_or(0);
+    if offset > total {
+        return Err(ToolError::BadInput(format!(
+            "Offset must be at most {total}."
+        )));
+    }
+    file.seek(SeekFrom::Start(offset + header.len() as u64))
+        .map_err(failed)?;
+    let mut bytes = Vec::new();
+    file.take(PAGE_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    let end = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.len(),
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        Err(_) => {
+            return Err(ToolError::BadInput(
+                "Offset must be a UTF-8 character boundary; use next_offset.".into(),
+            ))
+        }
+    };
+    let next = offset + end as u64;
+    let data = std::str::from_utf8(&bytes[..end]).expect("checked UTF-8");
+    Ok(
+        json!({"id":id,"format":"json","offset":offset,"total_bytes":total,
+        "next_offset":(next < total).then_some(next),"data":data,"artifact_revision":metadata["revision"],
+        "evidence":"Immutable result at artifact_revision. Later edits do not change it. Read current objects before editing."}),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_reassemble_exact_quantities_and_arabic_and_reject_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let evidence = json!({"revision":{"document_revision":7},"quantity":1.23456789012345,
+            "items":(0..1000).map(|i| json!({"id":i,"label":"المساحة","quantity":2.9876543210987})).collect::<Vec<_>>()});
+        let id = save_in(dir.path(), &evidence).unwrap();
+        assert_eq!(save_in(dir.path(), &evidence).unwrap(), id);
+        let mut offset = 0;
+        let mut whole = String::new();
+        loop {
+            let page = read_in(dir.path(), &json!({"id":id,"offset":offset})).unwrap();
+            assert!(page["data"].as_str().unwrap().len() <= PAGE_BYTES);
+            whole.push_str(page["data"].as_str().unwrap());
+            match page["next_offset"].as_u64() {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(serde_json::from_str::<Value>(&whole).unwrap(), evidence);
+        assert!(read_in(dir.path(), &json!({"id":"../../settings"})).is_err());
+        assert!(read_in(dir.path(), &json!({"id":id,"offset":whole.len()+1})).is_err());
+    }
+}

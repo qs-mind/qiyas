@@ -322,6 +322,7 @@ export function WorkArea({
 }
 
 type SideProps = {
+  showTechnicalDetails?: boolean;
   info: DrawingInfo | null;
   drafting: Drafting | null;
   shell: Pick<Shell, "sideTab" | "setSideTab">;
@@ -335,7 +336,7 @@ type SideProps = {
 
 /** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts, comments and
  *  Mizan panels (all mounted, one shown). */
-export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments, recognition }: SideProps) {
+export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments, recognition }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -372,7 +373,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
     { id: "comments", label: t("comments") },
     { id: "review", label: t("recognition.review") },
     { id: "projects", label: t("projects.title") },
-    { id: "assistant", label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
+    { id: "assistant", pinned: true, label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
   ];
 
   // The BOQ table and the conflicts need more room than the take-off. All the panels stay mounted,
@@ -437,6 +438,7 @@ export function SidePanel({ info, drafting, shell, takeoffState, takeoff, ai, co
       <Tabs.Panel value="projects" keepMounted tabIndex={-1} className="side-panel"><ProjectsPanel active={sideTab === "projects"} /></Tabs.Panel>
       <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
         <AssistantPanel
+          showTechnicalDetails={showTechnicalDetails}
           assistant={assistant}
           history={conversationHistory}
           onShow={showCard}

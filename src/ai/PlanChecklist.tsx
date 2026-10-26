@@ -5,9 +5,11 @@ import "./plan.css";
 const MARK = { pending: "○", active: "●", done: "✓", skipped: "–" };
 
 /** The latest phase snapshot for one turn, kept above that turn's answer. */
-export function PlanChecklist({ phases, onApprove, onChange, language }: {
+export function PlanChecklist({ phases, stale = false, onApprove, onChange, language, showTechnicalDetails = false }: {
   phases: PlanPhase[];
+  stale?: boolean;
   language?: Lang;
+  showTechnicalDetails?: boolean;
   onApprove?(): void;
   onChange?(): void;
 }) {
@@ -21,12 +23,13 @@ export function PlanChecklist({ phases, onApprove, onChange, language }: {
   return (
     <section className="mizan-plan" aria-label={t("ai.plan")}>
       <strong className="heading">{t("ai.plan")}</strong>
+      {stale && <p role="status">{t("ai.plan.stale")}</p>}
       <ol>
         {phases.map((phase) => (
           <li key={phase.id} data-status={phase.status} aria-current={phase.status === "active" ? "step" : undefined}>
             <span className="plan-mark" aria-hidden="true">{MARK[phase.status]}</span>
             <span className="plan-title" dir="auto">{title(phase)}</span>
-            {phase.id === "drawing-check-review" && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{phase.title}</pre></details>}
+            {showTechnicalDetails && phase.id === "drawing-check-review" && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{phase.title}</pre></details>}
             <span className="plan-status">{t(`ai.plan.${phase.status}`)}</span>
           </li>
         ))}

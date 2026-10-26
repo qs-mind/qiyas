@@ -126,15 +126,15 @@ export const TakeoffPanel = memo(function TakeoffPanel({
         header: t("quantity"),
         size: 64,
         align: "end",
-        sortValue: (m) => m.shown,
-        cell: (m) => m.shown === null ? t("takeoff.unavailable") : qty(m.shown, m.kind, precision),
+        sortValue: (m) => m.unit === "markup" || m.view_only ? null : m.shown,
+        cell: (m) => m.unit === "markup" ? t("takeoff.note") : m.view_only ? t("takeoff.viewOnly") : m.shown === null ? t("takeoff.unavailable") : qty(m.shown, m.kind, precision),
       },
       {
         id: "unit",
         header: t("unit"),
         size: 44,
-        sortValue: (m) => t(`qty.${m.unit}`),
-        cell: (m) => t(`qty.${m.unit}`),
+        sortValue: (m) => m.unit === "markup" ? "" : t(`qty.${m.unit}`),
+        cell: (m) => m.unit === "markup" ? "—" : t(`qty.${m.unit}`),
       },
       {
         id: "boq",
@@ -172,7 +172,6 @@ export const TakeoffPanel = memo(function TakeoffPanel({
           rows={items}
           rowKey={rowId}
           storageKey="takeoff"
-          rowHeight={72}
           autoRowHeight
           onRowClick={(m) => onSelect(m.id)}
           isCurrent={(m) => m.id === selectedId}
@@ -247,15 +246,16 @@ export const TakeoffPanel = memo(function TakeoffPanel({
       )}
       <h2 className="heading panel-head">{t("totals")}</h2>
       <ul className="totals" aria-label={t("totals")}>
-        {totals.map((total) => (
+        {totals.filter((total) => total.unit !== "markup").map((total) => (
           <li key={`${total.kind}-${total.unit}`}>
             <span className="kind">{t(total.kind)}</span>
-            <span className="num">{total.count} ×</span>
-            <span className="num">
+            <bdi className="num">{total.count} ×</bdi>
+            <bdi className="num">
               {qty(total.sum, total.kind, precision)} {t(`qty.${total.unit}`)}
-            </span>
+            </bdi>
           </li>
         ))}
+        {items.some((item) => item.unit === "markup") && <li><span className="kind">{t("takeoff.notes")}</span><bdi className="num">{items.filter((item) => item.unit === "markup").length}</bdi></li>}
       </ul>
     </aside>
   );

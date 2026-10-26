@@ -18,17 +18,24 @@ const MARGIN: f64 = 0.08;
 
 /// The drawing's named blocks with their attribute definitions, sorted.
 #[tauri::command]
-pub async fn blocks(state: State<'_, AppState>) -> Result<Vec<BlockInfo>, String> {
+pub async fn blocks(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<BlockInfo>, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.blocks()))
 }
 
 /// A PNG of the block `name`, `px` pixels wide (its lines on white, as the assistant's pictures).
 #[tauri::command]
 pub async fn block_thumbnail(
+    workspace: Option<u32>,
+
     name: String,
     px: u32,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
+    let state = state.scoped(workspace)?;
     let batch = with_session(&state, |s| s.block_batch(&name))?;
     let [lo, hi] = batch.bounds;
     // A block of one point or nothing still gets a square to show.
@@ -64,10 +71,13 @@ pub async fn drawing_layers(path: String) -> Result<Vec<LayerInfo>, String> {
 /// Writes the block `name` to `path`, a .dwg file the user chose in the Save dialog (WBLOCK).
 #[tauri::command]
 pub async fn write_block(
+    workspace: Option<u32>,
+
     name: String,
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| s.write_block(&name, Path::new(&path)))
 }
 

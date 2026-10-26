@@ -27,6 +27,33 @@ fn command_args(name: &str) -> Value {
 
 /// Contracts also appear in capabilities, so clients can discover the exact accepted form.
 pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
+    let (mut schema, example) = base_contract(tool, op);
+    if tool == EXECUTE {
+        schema["properties"]["expected_revision"] = qiyas_core::revision_schema();
+    }
+    fn options(schema: &mut Value, tool: &str) {
+        for union in ["anyOf", "oneOf"] {
+            if let Some(variants) = schema.get_mut(union).and_then(Value::as_array_mut) {
+                for variant in variants {
+                    options(variant, tool);
+                }
+            }
+        }
+        if schema["properties"].is_object() {
+            schema["properties"]["detail"] =
+                json!({"type":"string","enum":["summary","full"],"default":"summary"});
+            if tool == READ {
+                schema["properties"]["fields"] = json!({"type":"array","items":{"type":"string"}});
+            }
+        }
+    }
+    if tool == READ || tool == EXECUTE {
+        options(&mut schema, tool);
+    }
+    (schema, example)
+}
+
+fn base_contract(tool: &str, op: &str) -> (Value, Value) {
     let string = json!({"type":"string"});
     let number = json!({"type":"number"});
     let boolean = json!({"type":"boolean"});
@@ -39,6 +66,21 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
     let command = json!({});
     let commands = json!({"type":"array"});
     match (tool, op) {
+        (READ, "events") => (
+            object(
+                json!({"after":{"type":"integer","minimum":0},"session":{"type":"string"}}),
+                &[],
+            ),
+            json!({"after":0}),
+        ),
+        (READ, "brief_check") => crate::brief_check::contract(),
+        (READ, "artifact") => (
+            object(
+                json!({"id":string,"offset":{"type":"integer","minimum":0}}),
+                &["id"],
+            ),
+            json!({"id":"artifact id from a result","offset":0}),
+        ),
         (READ, "explain") => (
             object(json!({"item":string,"project":string}), &["item"]),
             json!({"item":"generated:A"}),
@@ -87,7 +129,7 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (READ, "commands") => (
             object(
-                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":16,"items":string},"search":nullable(&string),"category":nullable(&string)}),
+                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":16,"items":string},"search":nullable(&string),"category":nullable(&string),"offset":{"type":"integer","minimum":0}}),
                 &[],
             ),
             json!({"name":"draw.line"}),
@@ -172,6 +214,13 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
             object(json!({"path":string}), &[]),
             json!({"path":"takeoff.xlsx"}),
         ),
+        (EXECUTE, "plot") => (
+            object(
+                json!({"sheet":{"type":["string","null"],"description":"A sheet's name or block; the current sheet when omitted"},"paper":{"type":["string","null"],"description":"A catalog paper such as ISO A1; a layout's own page setup when omitted"},"orientation":{"type":["string","null"],"enum":["portrait","landscape",null]},"scale":{"type":["string","null"],"description":"fit, or num:den such as 1:50; a layout plots 1:1 and Model fits when omitted"},"path":{"type":["string","null"],"description":"The PDF's name in the drawing's folder; <drawing>-<sheet>.pdf when omitted"}}),
+                &[],
+            ),
+            json!({"sheet":"A-101","scale":"1:1"}),
+        ),
         (EXECUTE, "compare") => (
             object(json!({"tolerance":{"type":["number","null"]}}), &[]),
             json!({"tolerance":0.01}),
@@ -192,11 +241,13 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
             let variants: Vec<_> = surface::QUERY_KINDS
                 .iter()
                 .map(|kind| {
-                    let mut props = json!({"kind":{"const":kind}});
+                    let mut props = json!({"kind":{"const":kind},"within":nullable(&bounds),"bounds":nullable(&bounds)});
                     let mut required = vec!["kind"];
                     match *kind {
                         "near" => {
                             props["point"] = point.clone();
+                            props["sheet"] = nullable(&string);
+                            props["offset"] = nullable(&handle);
                             props["radius"] = nullable(&number);
                             props["layer"] = nullable(&string);
                             props["type"] = nullable(&string);
@@ -222,16 +273,21 @@ pub(super) fn contract(tool: &str, op: &str) -> (Value, Value) {
                             props["sheet"] = nullable(&string);
                             props["within"] = nullable(&bounds);
                             props["offset"] = handle.clone();
+                            props["limit"] = handle.clone();
                         }
                         "tables" | "dimensions" | "blocks" => {
                             props["sheet"] = nullable(&string);
                             props["offset"] = handle.clone();
+                            props["limit"] = handle.clone();
                         }
                         "boundary" => {
                             props["point"] = point.clone();
                             required.push("point");
                         }
-                        "layers" => {}
+                        "layers" => {
+                            props["offset"] = handle.clone();
+                            props["limit"] = handle.clone();
+                        }
                         _ => unreachable!("QUERY_KINDS lists every query"),
                     }
                     object(props, &required)
@@ -367,10 +423,12 @@ mod tests {
             json!({"kind":"entity","handle":1,"chain":[]}),
             json!({"kind":"texts","sheet":null,"within":null,"offset":0}),
             json!({"kind":"tables","sheet":null,"offset":0}),
+            json!({"kind":"tables","within":[[0,0],[1,1]]}),
             json!({"kind":"dimensions","sheet":null,"offset":0}),
             json!({"kind":"blocks","sheet":null,"offset":0}),
             json!({"kind":"boundary","point":[0,0]}),
-            json!({"kind":"layers"}),
+            json!({"kind":"layers","offset":0,"limit":20}),
+            json!({"kind":"texts","limit":20}),
         ] {
             assert!(validate(READ, "query", &args).is_ok(), "{args}");
         }
@@ -378,11 +436,10 @@ mod tests {
             (json!({"kind":"texts","contains":"Room"}), "/args/contains"),
             (json!({"kind":"blocks","name":"DOOR"}), "/args/name"),
             (
-                json!({"kind":"tables","within":[[0,0],[1,1]]}),
-                "/args/within",
+                json!({"kind":"tables","within_typo":[[0,0],[1,1]]}),
+                "/args/within_typo",
             ),
             (json!({"kind":"dimensions","layer":"A-DIMS"}), "/args/layer"),
-            (json!({"kind":"layers","offset":0}), "/args/offset"),
             (
                 json!({"kind":"entity","handle":1,"sheet":"Model"}),
                 "/args/sheet",

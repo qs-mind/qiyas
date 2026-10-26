@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
+    #[error("The drawing changed since this read. No edit was applied. Read the changed objects and use their current revision.")]
+    StaleRead { details: serde_json::Value },
     #[error("This drawing can't be opened: {0}")]
     Unreadable(String),
     /// The CAD writer could not write the drawing; its own words.

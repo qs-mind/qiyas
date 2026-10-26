@@ -260,3 +260,28 @@ pub fn write_png(dir: &Path, name: &str) -> PathBuf {
     image.save(&path).expect("the PNG is written");
     path
 }
+
+thread_local! {
+    static PANIC_AFTER_EDIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only fault injection on this thread, after the nth document mutation and before
+/// derivation. The hook clears itself before unwinding and cannot be enabled by wire input.
+pub fn panic_on_document_edit(n: usize) {
+    assert!(n > 0);
+    PANIC_AFTER_EDIT.set(Some(n));
+}
+
+pub(crate) fn panic_after_document_edit() {
+    match PANIC_AFTER_EDIT.get() {
+        Some(1) => {
+            PANIC_AFTER_EDIT.set(None);
+            panic!("injected document edit panic");
+        }
+        Some(n) => PANIC_AFTER_EDIT.set(Some(n - 1)),
+        None => {}
+    }
+}
+
+/// Nested timers enabled explicitly by offline performance fixtures.
+pub mod profile;

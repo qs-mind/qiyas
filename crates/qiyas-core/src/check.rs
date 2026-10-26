@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use opencadcodec::{tables::normalize_name, Color, EntityType};
+use opencadcodec::{tables::normalize_name, Color, EntityType, Handle};
 use opencadkernel::geom2d::Curve;
 use qiyas_geom::Xform;
 use schemars::JsonSchema;
@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 22] = [
+pub const RULES: [&str; 23] = [
+    "placement",
     "literal_newline",
     "duplicate",
     "overlap",
@@ -48,6 +49,7 @@ pub const RULES: [&str; 22] = [
 /// The pack that owns a drawing check rule.
 pub fn rule_pack(rule: &str) -> &'static str {
     match rule {
+        "placement" => "placement",
         "room_open" | "room_size_text_differs" | "room_area_mismatch" | "unlinked_takeoff" => {
             "construction"
         }
@@ -78,13 +80,13 @@ const MAX_FINDINGS: usize = 200;
 pub struct CheckScope {
     /// The sheet (its name or block); the sheet on screen when none.
     pub sheet: Option<String>,
-    /// Only findings that involve one of these entities (what a change touched); every finding
-    /// when empty.
+    /// Check these entities, their old/new neighbours and reverse dependencies. Empty checks
+    /// the full sheet. Exact rule predicates still decide the findings.
     pub handles: Vec<u64>,
-    /// Packs to check: "general" and "construction". Empty selects general, plus construction
+    /// Packs to check: "general", "construction" and optional data-owned "placement". Empty selects general, plus construction
     /// when the drawing has retained rooms, take-off rows or enclosure geometry. Explicit rule
     /// requests run regardless of that inference; an explicit pack remains binding.
-    #[schemars(extend("items" = serde_json::json!({"type":"string","enum":["general","construction"]})))]
+    #[schemars(extend("items" = serde_json::json!({"type":"string","enum":["general","construction","placement"]})))]
     pub packs: Vec<String>,
     /// Only these rules; every rule when empty: literal_newline, duplicate, overlap,
     /// dangling_end, overshoot, tiny_segment, room_open, room_size_text_differs,
@@ -138,6 +140,7 @@ pub struct CheckReport {
 }
 
 /// A drawn entity's line work.
+#[derive(Clone)]
 struct Drawn {
     handle: u64,
     layer: String,
@@ -148,6 +151,13 @@ struct Drawn {
     straight: Vec<([f64; 2], [f64; 2])>,
     /// Actual edge lengths; a smooth sampled curve contributes its whole path length.
     lengths: Vec<([f64; 2], f64)>,
+}
+
+#[derive(Default)]
+pub(crate) struct GeometryCache {
+    tolerance: u64,
+    entities: BTreeMap<u64, (std::sync::Arc<EntityType>, Drawn)>,
+    coarse_centres: BTreeMap<u64, (std::sync::Arc<EntityType>, Option<[f64; 2]>)>,
 }
 
 /// One segment of the line work, for the grid.
@@ -309,6 +319,9 @@ impl Session {
     }
 
     fn check_drawing_with_limit(&self, scope: &CheckScope, limit: usize) -> CheckReport {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("check.check_drawing_with_limit");
+        let _read = self.evaluation_read().ok();
         let sheet = self.sheet_block(scope.sheet.as_deref());
         let (to_m, paper_scale) = self.check_space(&sheet);
         let unit = |metres: f64| metres / to_m;
@@ -321,10 +334,15 @@ impl Session {
                     EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_)
                 )
             });
+        let placement = self.has_placement_pack();
         let wanted = |rule: &str| {
             let pack = rule_pack(rule);
             let enabled = if scope.packs.is_empty() {
-                pack == "general" || construction || !scope.rules.is_empty()
+                if pack == "placement" {
+                    placement || scope.rules.iter().any(|r| r == rule)
+                } else {
+                    pack == "general" || construction || !scope.rules.is_empty()
+                }
             } else {
                 scope.packs.iter().any(|p| p == pack)
             };
@@ -353,8 +371,28 @@ impl Session {
             .collect();
 
         let entities: Vec<&EntityType> = self.drawing.entities_in(&sheet).collect();
+        let ink = self.sheet_ink(&sheet);
+        let selected = self.check_scope_handles(scope, &sheet, &ink, unit(NEAR_M));
+        let active = |handle: u64| selected.as_ref().is_none_or(|ids| ids.contains(&handle));
+
         let mut drawn: Vec<Drawn> = Vec::new();
-        for e in &entities {
+        let mut geometry = self.check_geometry.borrow_mut();
+        if geometry.tolerance != tol.to_bits() {
+            *geometry = GeometryCache {
+                tolerance: tol.to_bits(),
+                ..Default::default()
+            };
+        }
+        geometry
+            .entities
+            .retain(|id, _| doc.get_entity(Handle::new(*id)).is_some());
+        geometry
+            .coarse_centres
+            .retain(|id, _| doc.get_entity(Handle::new(*id)).is_some());
+        for e in entities
+            .iter()
+            .filter(|e| active(e.common().handle.value()))
+        {
             if e.common().invisible
                 || doc
                     .layers
@@ -362,6 +400,12 @@ impl Session {
                     .is_some_and(|l| !l.is_plottable || l.flags.off || l.flags.frozen)
             {
                 continue;
+            }
+            if let Some((previous, shape)) = geometry.entities.get(&e.common().handle.value()) {
+                if std::ptr::eq(std::sync::Arc::as_ptr(previous), *e) {
+                    drawn.push(shape.clone());
+                    continue;
+                }
             }
             let open = match e {
                 EntityType::Line(_) | EntityType::Arc(_) => true,
@@ -396,15 +440,25 @@ impl Session {
                     );
                 }
             }
-            drawn.push(Drawn {
+            let shape = Drawn {
                 handle: e.common().handle.value(),
                 layer: normalize_name(&e.common().layer),
                 paths,
                 open,
                 straight,
                 lengths,
-            });
+            };
+            geometry.entities.insert(
+                shape.handle,
+                (
+                    doc.get_entity_arc(e.common().handle)
+                        .expect("listed entity"),
+                    shape.clone(),
+                ),
+            );
+            drawn.push(shape);
         }
+        drop(geometry);
         let mut segs = Vec::new();
         for (owner, d) in drawn.iter().enumerate() {
             for path in &d.paths {
@@ -420,10 +474,10 @@ impl Session {
 
         // Line work.
         if wanted("duplicate") || wanted("overlap") {
-            self.check_repeats(&drawn, &grid, unit(TOUCH_M), &mut push);
+            self.check_repeats(&drawn, &grid, unit(TOUCH_M), &active, &mut push);
         }
         if wanted("dangling_end") || wanted("overshoot") {
-            for (i, d) in drawn.iter().enumerate() {
+            for (i, d) in drawn.iter().enumerate().filter(|(_, d)| active(d.handle)) {
                 if !d.open {
                     continue;
                 }
@@ -457,7 +511,7 @@ impl Session {
             }
         }
         if wanted("tiny_segment") {
-            for d in &drawn {
+            for d in drawn.iter().filter(|d| active(d.handle)) {
                 let tiny = d
                     .lengths
                     .iter()
@@ -480,14 +534,25 @@ impl Session {
             }
         }
         if wanted("missing_center_mark") {
-            missing_center_marks(&entities, doc, &drawn, &grid, unit(TOUCH_M), &mut push);
+            missing_center_marks(
+                &entities,
+                doc,
+                &drawn,
+                &grid,
+                unit(TOUCH_M),
+                &active,
+                &mut push,
+            );
         }
 
         // Text.
         let xrefs = self.xref_docs();
         let texts: Vec<_> = entities
             .iter()
-            .filter(|e| matches!(e, EntityType::Text(_) | EntityType::MText(_)))
+            .filter(|e| {
+                active(e.common().handle.value())
+                    && matches!(e, EntityType::Text(_) | EntityType::MText(_))
+            })
             .map(|e| {
                 self.entity_row(
                     &xrefs,
@@ -503,7 +568,10 @@ impl Session {
             })
             .collect();
         if wanted("literal_newline") {
-            for e in &entities {
+            for e in entities
+                .iter()
+                .filter(|e| active(e.common().handle.value()))
+            {
                 let raw = match e {
                     EntityType::Text(t) => &t.value,
                     EntityType::MText(t) => &t.value,
@@ -522,16 +590,15 @@ impl Session {
                 }
             }
         }
-        let ink = self.sheet_ink(&sheet);
         let mut not_checked = ink.incomplete.clone();
-        self.check_layout_ink(&ink, &sheet, to_m, paper_scale, &mut push);
+        self.check_layout_ink(&ink, &sheet, to_m, paper_scale, &active, &mut push);
 
         if wanted("object_tag_mismatch") {
-            self.check_object_tags(&sheet, &mut push);
+            self.check_object_tags(&sheet, &active, &mut push);
         }
 
         if wanted("room_area_mismatch") {
-            self.check_room_areas(&sheet, &mut push);
+            self.check_room_areas(&sheet, &active, &mut push);
         }
 
         // Rooms.
@@ -541,7 +608,11 @@ impl Session {
 
         // Dimensions.
         if wanted("dim_override_mismatch") {
-            for row in self.read_dimensions(Some(&sheet)) {
+            for row in self
+                .read_dimensions(Some(&sheet))
+                .into_iter()
+                .filter(|row| active(row.handle))
+            {
                 let (Some(text), Some(measured)) = (&row.text_override, row.measurement) else {
                     continue;
                 };
@@ -587,15 +658,19 @@ impl Session {
 
         // The drawing as a whole.
         if wanted("far_off_extents") {
-            far_off(&entities, doc, tol, &mut push);
+            far_off(
+                &entities,
+                doc,
+                tol,
+                &mut self.check_geometry.borrow_mut(),
+                &active,
+                &mut push,
+            );
         }
         if wanted("unlinked_takeoff") {
-            for m in self
-                .takeoff
-                .items
-                .iter()
-                .filter(|m| m.sheet.eq_ignore_ascii_case(&sheet))
-            {
+            for m in self.takeoff.items.iter().filter(|m| {
+                m.sheet.eq_ignore_ascii_case(&sheet) && m.handles.iter().any(|h| active(*h))
+            }) {
                 let gone: Vec<u64> = m
                     .handles
                     .iter()
@@ -627,6 +702,8 @@ impl Session {
                 .any(|s| s.block.eq_ignore_ascii_case(&sheet));
             let mut on_zero = Vec::new();
             let mut coloured = Vec::new();
+            // These two findings aggregate cheap source metadata for their existing
+            // message/count contract. Geometry and quantity rules use the active scope.
             for e in &entities {
                 let c = e.common();
                 if matches!(e, EntityType::Viewport(_)) {
@@ -667,11 +744,27 @@ impl Session {
             }
         }
 
+        let mut placement_complete = true;
+        if wanted("placement") {
+            match self.placement_findings(&sheet) {
+                Ok(findings) => found.extend(findings),
+                Err(error) => {
+                    placement_complete = false;
+                    found.push(Finding {
+                        rule: "placement",
+                        pack: "placement",
+                        severity: Severity::Warning,
+                        handles: vec![],
+                        at: None,
+                        message: format!("Placement checks are incomplete: {error}"),
+                    });
+                }
+            }
+        }
         // Only what the scope asks about, errors first.
         found.retain(|f| wanted(f.rule));
         if !scope.handles.is_empty() {
-            let keep: HashSet<u64> = scope.handles.iter().copied().collect();
-            found.retain(|f| f.handles.iter().any(|h| keep.contains(h)));
+            found.retain(|f| f.handles.iter().any(|h| scope.handles.contains(h)));
         }
         let rank = |rule: &str| RULES.iter().position(|r| *r == rule).unwrap_or(RULES.len());
         found.sort_by(|a, b| {
@@ -694,7 +787,7 @@ impl Session {
         found.truncate(limit);
         not_checked.sort_unstable();
         not_checked.dedup();
-        let complete = not_checked.is_empty();
+        let complete = not_checked.is_empty() && placement_complete;
         let mut line = check_line(errors, warnings, found.len(), &counts);
         if !complete {
             line = format!(
@@ -728,8 +821,11 @@ impl Session {
         drawn: &[Drawn],
         grid: &Grid,
         touch: f64,
+        active: &impl Fn(u64) -> bool,
         push: &mut impl FnMut(Finding),
     ) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("check.check_repeats");
         // Repeats: the same rounded points, in either direction.
         let key = |d: &Drawn| {
             let q = |v: f64| (v / touch).round() as i64;
@@ -765,14 +861,16 @@ impl Session {
             if let Some(&first) = seen.get(&k) {
                 repeated.insert(d.handle, first);
                 repeated.insert(first, first);
-                push(Finding {
-                    rule: "duplicate",
-                    pack: "general",
-                    severity: Severity::Error,
-                    handles: vec![first, d.handle],
-                    at: d.paths.first().and_then(|p| p.points.first().copied()),
-                    message: "drawn twice in the same place".into(),
-                });
+                if active(first) || active(d.handle) {
+                    push(Finding {
+                        rule: "duplicate",
+                        pack: "general",
+                        severity: Severity::Error,
+                        handles: vec![first, d.handle],
+                        at: d.paths.first().and_then(|p| p.points.first().copied()),
+                        message: "drawn twice in the same place".into(),
+                    });
+                }
             } else {
                 seen.insert(k, d.handle);
             }
@@ -787,45 +885,65 @@ impl Session {
         let grid = Grid::new(straight, grid.cell);
         // Overlaps: collinear segments of two entities sharing a stretch.
         let mut pairs: HashSet<(usize, usize)> = HashSet::new();
-        for (i, s) in grid.segs.iter().enumerate() {
+        let candidates: Box<dyn Iterator<Item = (usize, usize)> + '_> =
+            if drawn.iter().all(|d| active(d.handle)) {
+                Box::new(grid.segs.iter().enumerate().flat_map(|(i, s)| {
+                    grid.within(bounds_of(&[s.a, s.b]))
+                        .into_iter()
+                        .filter(move |j| *j > i)
+                        .map(move |j| (i, j))
+                }))
+            } else {
+                let mut candidates = std::collections::BTreeSet::new();
+                for (i, s) in grid
+                    .segs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| active(drawn[s.owner].handle))
+                {
+                    for j in grid.within(bounds_of(&[s.a, s.b])) {
+                        if i != j {
+                            candidates.insert((i.min(j), i.max(j)));
+                        }
+                    }
+                }
+                Box::new(candidates.into_iter())
+            };
+        for (i, j) in candidates {
+            let s = &grid.segs[i];
             let len = dist(s.a, s.b);
             if len <= touch {
                 continue;
             }
-            for j in grid.within(bounds_of(&[s.a, s.b])) {
-                if j <= i {
-                    continue;
-                }
-                let t = grid.segs[j];
-                if t.owner == s.owner || drawn[s.owner].layer != drawn[t.owner].layer {
-                    continue;
-                }
-                let (h1, h2) = (drawn[s.owner].handle, drawn[t.owner].handle);
-                if repeated
-                    .get(&h1)
-                    .is_some_and(|first| repeated.get(&h2) == Some(first))
-                {
-                    continue;
-                }
-                let key = (s.owner.min(t.owner), s.owner.max(t.owner));
-                if pairs.contains(&key) {
-                    continue;
-                }
-                if let Some(shared) = collinear_overlap(*s, t, touch) {
-                    if shared > touch * 10.0 {
-                        pairs.insert(key);
-                        push(Finding {
-                            rule: "overlap",
-                            pack: "general",
-                            severity: Severity::Warning,
-                            handles: vec![h1, h2],
-                            at: Some(midpoint(t.a, t.b)),
-                            message: format!(
-                                "two entities lie on each other for {:.3} drawing units",
-                                shared
-                            ),
-                        });
-                    }
+            let t = grid.segs[j];
+            if t.owner == s.owner || drawn[s.owner].layer != drawn[t.owner].layer {
+                continue;
+            }
+            let (h1, h2) = (drawn[s.owner].handle, drawn[t.owner].handle);
+            if repeated
+                .get(&h1)
+                .is_some_and(|first| repeated.get(&h2) == Some(first))
+            {
+                continue;
+            }
+            let key = (s.owner.min(t.owner), s.owner.max(t.owner));
+            if pairs.contains(&key) {
+                continue;
+            }
+            if let Some(shared) = collinear_overlap(*s, t, touch) {
+                if shared > touch * 10.0 {
+                    pairs.insert(key);
+                    push(Finding {
+                        rule: "overlap",
+                        pack: "general",
+                        severity: Severity::Warning,
+                        handles: vec![h1, h2],
+                        at: Some(midpoint(t.a, t.b)),
+                        message: format!(
+                            "two entities lie on each other for {:.3} drawing units",
+                            shared
+                        ),
+                    });
                 }
             }
         }
@@ -840,6 +958,8 @@ impl Session {
         not_checked: &mut Vec<u64>,
         push: &mut impl FnMut(Finding),
     ) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("check.check_rooms");
         let roomish = |r: &crate::EntityRow| {
             let text = r.text.as_deref().unwrap_or("");
             !text.trim().is_empty()
@@ -913,6 +1033,7 @@ fn missing_center_marks(
     drawn: &[Drawn],
     grid: &Grid,
     touch: f64,
+    active: &impl Fn(u64) -> bool,
     push: &mut impl FnMut(Finding),
 ) {
     // Labels may be on a different layer from the bubble that surrounds them.
@@ -952,7 +1073,10 @@ fn missing_center_marks(
         })
         .map(|e| e.common().handle.value())
         .collect();
-    for e in entities {
+    for e in entities
+        .iter()
+        .filter(|e| active(e.common().handle.value()))
+    {
         let (c, normal, radius) = match e {
             EntityType::Circle(c) => (c.center, c.normal, c.radius),
             EntityType::Arc(a)
@@ -1085,6 +1209,8 @@ fn far_off(
     entities: &[&EntityType],
     doc: &opencadcodec::CadDocument,
     tol: f64,
+    cache: &mut GeometryCache,
+    active: &impl Fn(u64) -> bool,
     push: &mut impl FnMut(Finding),
 ) {
     let mut centres: Vec<(u64, [f64; 2])> = Vec::new();
@@ -1095,16 +1221,46 @@ fn far_off(
         ) {
             continue;
         }
+        let handle = e.common().handle.value();
+        if let Some((old, middle)) = cache.coarse_centres.get(&handle) {
+            if std::ptr::eq(std::sync::Arc::as_ptr(old), *e) {
+                if let Some(middle) = middle {
+                    centres.push((handle, *middle));
+                }
+                continue;
+            }
+        }
         let paths =
             qiyas_geom::flatten(doc, e, &Xform::identity(), tol.max(1e-9) * 100.0).into_paths();
         let pts: Vec<[f64; 2]> = paths
             .iter()
             .flat_map(|p| p.points.iter().copied())
             .collect();
-        if pts.is_empty() {
-            continue;
+        let middle = (!pts.is_empty()).then(|| centre(bounds_of(&pts)));
+        // This coarse sampling has its own exact tolerance. Block references, dimensions
+        // and text are recomputed because they also depend on definition/style records.
+        if matches!(
+            e,
+            EntityType::Line(_)
+                | EntityType::Arc(_)
+                | EntityType::Circle(_)
+                | EntityType::Ellipse(_)
+                | EntityType::LwPolyline(_)
+                | EntityType::Polyline2D(_)
+                | EntityType::Spline(_)
+        ) {
+            cache.coarse_centres.insert(
+                handle,
+                (
+                    doc.get_entity_arc(e.common().handle)
+                        .expect("listed entity"),
+                    middle,
+                ),
+            );
         }
-        centres.push((e.common().handle.value(), centre(bounds_of(&pts))));
+        if let Some(middle) = middle {
+            centres.push((handle, middle));
+        }
     }
     if centres.len() < 10 {
         return;
@@ -1119,7 +1275,7 @@ fn far_off(
         [pick(0, 0.95), pick(1, 0.95)],
     ];
     let size = dist(core[0], core[1]).max(tol * 1e6);
-    for (h, c) in centres {
+    for (h, c) in centres.into_iter().filter(|(h, _)| active(*h)) {
         let outside = [
             core[0][0] - c[0],
             c[0] - core[1][0],
@@ -1196,7 +1352,9 @@ pub(crate) fn size_label(text: &str) -> Option<(f64, f64)> {
         Some((value, unit))
     }
 
-    let lower = text.to_lowercase().replace(['×', '*'], "x");
+    let lower = crate::numbers::western(text)
+        .to_lowercase()
+        .replace(['×', '*'], "x");
     for line in lower.lines() {
         for (at, _) in line.match_indices('x') {
             let (left, right) = (&line[..at], &line[at + 1..]);
@@ -1230,6 +1388,7 @@ pub(crate) fn size_label(text: &str) -> Option<(f64, f64)> {
 
 /// The first number of a dimension override and its stated unit, when it has one.
 fn dimension_number(text: &str) -> Option<(f64, Option<f64>)> {
+    let text = crate::numbers::western(text);
     let at = text.find(|c: char| c.is_ascii_digit())?;
     let value = &text[at..];
     let digits: String = value
@@ -1365,10 +1524,10 @@ impl CheckScope {
         if let Some(pack) = self
             .packs
             .iter()
-            .find(|p| !["general", "construction"].contains(&p.as_str()))
+            .find(|p| !["general", "construction", "placement"].contains(&p.as_str()))
         {
             return Err(crate::CoreError::InvalidCommand(format!(
-                "Unknown check pack {pack}. Choose general or construction"
+                "Unknown check pack {pack}. Choose general, construction or placement"
             )));
         }
         Ok(())

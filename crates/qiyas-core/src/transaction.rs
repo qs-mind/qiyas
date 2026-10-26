@@ -110,10 +110,20 @@ impl Session {
         label: &str,
         f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        let check_before = self.check_before.clone();
+        if self.tx_depth == 0 {
+            self.check_before.clear();
+        }
+        let before_revision = self.revision();
+        let advice = self.last_advice.clone();
+        if self.tx_depth == 0 {
+            self.last_advice.clear();
+        }
         let replacements = self.handle_replacements.clone();
         if self.tx_depth == 0 {
             self.handle_replacements.clear();
         }
+        let structure = self.drawing.doc.snapshot_structure();
         let view = TxView::take(self);
         let current = self.current.clone();
         let revision = self.document_revision;
@@ -126,14 +136,21 @@ impl Session {
         };
         self.tx_depth += 1;
         self.history.begin_group();
-        let done = f(self);
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
+            .unwrap_or_else(|_| Err(CoreError::InvalidCommand(
+                "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
+            )));
         self.tx_depth -= 1;
         match done {
             Ok(value) => {
                 let delta = ViewDelta::current_only(current, self.current.clone()).map(Box::new);
                 self.history.commit_group(source, label, delta);
                 let inner = std::mem::replace(&mut self.last_change, change);
+                if inner.is_empty() && self.document_revision == revision {
+                    self.check_before = check_before;
+                }
                 self.last_change.merge(inner);
+                self.record_revision(before_revision);
                 Ok(value)
             }
             Err(e) => {
@@ -145,18 +162,25 @@ impl Session {
                     schedules: &mut self.schedules,
                     doc: &mut self.drawing.doc,
                     view: ViewRefs {
+                        ucs: &mut self.ucs,
                         current: &mut self.current,
                         hidden: &mut self.visibility.hidden_layers,
                         state_hidden: &mut self.state_hidden,
                     },
                     doc_changed: &mut doc_changed,
                 });
+                self.drawing.doc.swap_structure(structure);
                 view.put_back(self);
                 self.handle_replacements = replacements;
                 self.last_change = change;
+                self.last_advice = advice;
+                self.check_before = check_before;
                 // The drawing is as it was at `revision`: drawn again, and no unsaved change
                 // left by steps that were put back.
                 self.drawing_changed();
+                *self.room_cache.get_mut() = Default::default();
+                *self.ink_cache.get_mut() = Default::default();
+                *self.check_geometry.get_mut() = Default::default();
                 self.document_revision = revision;
                 Err(e)
             }
@@ -215,6 +239,22 @@ impl Session {
         source: Source,
     ) -> Result<Outcome, CoreError> {
         self.batch_with(source, "batch", layer, color, |s| {
+            if commands.len() > 1
+                && commands
+                    .iter()
+                    .all(|command| matches!(command, Command::AddWallOpenings { .. }))
+            {
+                let inputs: Vec<_> = commands
+                    .iter()
+                    .map(|command| serde_json::json!(command))
+                    .collect();
+                if let Some(grouped) = s.run_opening_batch(&inputs, source) {
+                    return Ok(Outcome::Batch {
+                        outcomes: grouped?.into_iter().map(|step| step.outcome).collect(),
+                        added: s.last_change.added.clone(),
+                    });
+                }
+            }
             let mut outcomes = Vec::with_capacity(commands.len());
             for (index, command) in commands.into_iter().enumerate() {
                 let label = command.label();
@@ -249,6 +289,11 @@ impl Session {
     /// Changes when a step is committed, even when the undo stack is full.
     pub fn history_revision(&self) -> u64 {
         self.history.revision()
+    }
+
+    /// Handles added by the caller's newest undo step. Read-only, for automation rebuild checks.
+    pub fn undo_added_handles(&self, source: Source) -> Vec<u64> {
+        self.history.undo_added_handles(source)
     }
 
     /// The steps that can be undone (oldest first) and redone (next first).

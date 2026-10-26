@@ -35,6 +35,10 @@ fn metadata<T: DeserializeOwned>(common: &EntityCommon, app: &str) -> Result<Opt
 
 impl Session {
     pub(crate) fn validate_object_metadata(&self) -> Result<(), CoreError> {
+        let _read = self.evaluation_read()?;
+        if self.evaluation.borrow().metadata_validated {
+            return Ok(());
+        }
         if ![
             OBJECT_APP,
             PART_APP,
@@ -62,6 +66,7 @@ impl Session {
                 }
             }
         }
+        self.evaluation.borrow_mut().metadata_validated = true;
         Ok(())
     }
 }

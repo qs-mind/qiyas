@@ -24,7 +24,7 @@ use qiyas_core::{
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use crate::commands::{new_conversation, remember_recent, with_session};
+use crate::commands::{remember_recent, with_session};
 use crate::state::AppState;
 use crate::tabs;
 
@@ -88,23 +88,27 @@ pub(crate) fn set_clipboard_text(state: &AppState, text: &str) -> Result<(), Str
         .map_err(|e| format!("The clipboard could not be written: {e}"))
 }
 
-/// Runs `f` on every open drawing, the one on screen first, under the lock order of `tabs`:
-/// tabs, session, parked.
-fn with_open<T>(state: &AppState, f: impl FnOnce(Vec<&Session>) -> T) -> T {
-    let _list = lock(&state.tabs);
-    let session = lock(&state.session);
-    let parked = lock(&state.parked);
-    f(session
-        .iter()
-        .chain(parked.iter().map(|p| &p.session))
-        .collect())
+/// Save independently: a busy drawing never blocks another drawing's recovery copy.
+fn autosave_workspaces(state: &AppState, due_only: bool) -> Flushed {
+    let mut result = Flushed {
+        run: AutosaveRun::default(),
+        busy: 0,
+    };
+    for workspace in state.workspaces() {
+        let Some(session) = try_lock(&workspace.session) else {
+            result.busy += 1;
+            continue;
+        };
+        let saved = autosave_all(session.iter().filter(|s| !due_only || s.autosave_due()));
+        result.run.written.extend(saved.written);
+        result.run.failed.extend(saved.failed);
+    }
+    result
 }
 
-/// Autosaves every open drawing with unsaved changes, the one on screen and those parked in
-/// other tabs (see `Session::autosave`).
 #[tauri::command]
 pub async fn autosave_drawings(state: State<'_, AppState>) -> Result<AutosaveRun, String> {
-    Ok(with_open(&state, |open| autosave_all(open)))
+    Ok(autosave_workspaces(&state, false).run)
 }
 
 /// The lock files this app holds beside its open drawings (`qiyas_core::take_lock`), kept in
@@ -181,13 +185,13 @@ const WATCH_EVERY: Duration = Duration::from_secs(1);
 /// files read and written with none of the app's locks held), and a drawing with 20 changes
 /// since it was last saved or autosaved is autosaved (`Session::autosave_due`).
 fn tick(state: &AppState, locks: &Locks) -> AutosaveRun {
-    let paths: Vec<PathBuf> = with_open(state, |open| {
-        open.iter().map(|s| s.drawing.path.clone()).collect()
-    });
+    let paths: Vec<PathBuf> = tabs::snapshot(state)
+        .tabs
+        .into_iter()
+        .map(|tab| PathBuf::from(tab.path))
+        .collect();
     locks.sync(&paths, Instant::now());
-    with_open(state, |open| {
-        autosave_all(open.into_iter().filter(|s| s.autosave_due()))
-    })
+    autosave_workspaces(state, true).run
 }
 
 /// Starts the watch: `tick` every second while Qiyas runs.
@@ -249,8 +253,10 @@ pub(crate) fn install_panic_hook<R: Runtime>(app: AppHandle<R>) {
         let flushed = flush_within(FLUSH_TIMEOUT, move || {
             let _flushing = flushing;
             app.try_state::<AppState>().map(|state| {
-                if let Ok(run) = state.ai.try_lock() {
-                    run.save_if_available();
+                for workspace in state.workspaces() {
+                    if let Ok(run) = workspace.ai.try_lock() {
+                        run.save_if_available();
+                    }
                 }
                 flush_dirty(&state)
             })
@@ -309,15 +315,7 @@ fn try_lock<T>(m: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
 
 /// Autosaves every open drawing with unsaved changes that no other thread holds.
 fn flush_dirty(state: &AppState) -> Flushed {
-    let session = try_lock(&state.session);
-    let parked = try_lock(&state.parked);
-    let busy = usize::from(session.is_none()) + usize::from(parked.is_none());
-    let on_screen = session.as_deref().and_then(Option::as_ref);
-    let others = parked.as_deref().into_iter().flatten().map(|p| &p.session);
-    Flushed {
-        run: autosave_all(on_screen.into_iter().chain(others)),
-        busy,
-    }
+    autosave_workspaces(state, false)
 }
 
 /// The autosaves of `paths` newer than their drawings (the recent drawings at launch, or the
@@ -369,12 +367,24 @@ pub async fn recover_autosave<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    let state = state.scoped(None)?;
     let mut session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
     if Path::new(&path).starts_with(state.config_dir.join("untitled")) {
         session.mark_untitled();
+        tabs::set_untitled_export_folder(&app, &mut session)?;
     }
-    new_conversation(&app, &state);
-    tabs::add(&state, session)?;
+    let recovered = session.drawing.path.clone();
+    let id = tabs::add(&state, session)?;
+    let state = state.scoped(Some(id))?;
+    {
+        let _run = crate::commands::ai_run(&state);
+        let store = crate::conversations::Store::new(&state.config_dir);
+        let source = qiyas_core::autosave_copy_of(Path::new(&path))
+            .unwrap_or_else(|| Path::new(&path).to_path_buf());
+        store.follow_drawing(&source, &recovered)?;
+        store.follow_drawing(&qiyas_core::autosave_path(&source), &recovered)?;
+        store.follow_drawing(Path::new(&path), &recovered)?;
+    }
     with_session(&state, |s| Ok(s.info()))
 }
 
@@ -410,16 +420,17 @@ pub struct Recovered {
 #[tauri::command]
 pub async fn recover_drawing<R: Runtime>(
     path: String,
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Recovered, String> {
+    let state = state.scoped(None)?;
     if tabs::find_path(&state, Path::new(&path)).is_some() {
         return Err("This drawing is open: close its tab first to recover it from the file".into());
     }
     let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
     let report = session.read_report();
-    new_conversation(&app, &state);
-    tabs::add(&state, session)?;
+    let id = tabs::add(&state, session)?;
+    let state = state.scoped(Some(id))?;
     remember_recent(&state, &path);
     with_session(&state, |s| {
         Ok(Recovered {
@@ -471,17 +482,8 @@ fn layouts(s: &Session) -> Vec<String> {
 
 /// The layouts of the drawing at `path`: its open tab's, else read from the file.
 fn layouts_of(state: &AppState, path: &Path) -> Result<Vec<String>, String> {
-    let _list = lock(&state.tabs);
-    if let Some(s) = lock(&state.session).as_ref() {
-        if crate::settings::same_file(&s.drawing.path, path) {
-            return Ok(layouts(s));
-        }
-    }
-    if let Some(p) = lock(&state.parked)
-        .iter()
-        .find(|p| crate::settings::same_file(&p.session.drawing.path, path))
-    {
-        return Ok(layouts(&p.session));
+    if let Some(id) = tabs::find_path(state, path) {
+        return with_session(&state.scoped(Some(id))?, |s| Ok(layouts(s)));
     }
     let drawing = Drawing::open(path).map_err(|e| e.to_string())?;
     Ok(drawing
@@ -529,16 +531,13 @@ pub async fn sheet_set_from_tabs(
         Ok(d) => set.drawings.push(d),
         Err(_) => skipped.push(s.drawing.path.display().to_string()),
     };
-    let list = lock(&state.tabs);
-    let session = lock(&state.session);
-    let parked = lock(&state.parked);
-    for id in &list.order {
-        if list.active == Some(*id) {
-            if let Some(s) = session.as_ref() {
-                add(s);
-            }
-        } else if let Some(p) = parked.iter().find(|p| p.id == *id) {
-            add(&p.session);
+    for workspace in state.workspaces() {
+        let session = workspace
+            .session
+            .try_lock()
+            .map_err(|_| "workspace_busy".to_string())?;
+        if let Some(session) = session.as_ref() {
+            add(session);
         }
     }
     Ok(FromTabs { set, skipped })
@@ -548,15 +547,18 @@ pub async fn sheet_set_from_tabs(
 /// the window draws model space inside each (`Session::paper_views_of`).
 #[tauri::command]
 pub async fn paper_views(
+    workspace: Option<u32>,
+
     sheet: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<qiyas_core::PaperView>, String> {
-    with_session(&state, |s| {
-        Ok(match sheet {
-            Some(sheet) => s.paper_views_of(&sheet),
-            None => s.paper_views(),
-        })
-    })
+) -> Result<serde_json::Value, String> {
+    let state = state.scoped(workspace)?;
+    match sheet {
+        Some(sheet) => with_session(&state, |s| Ok(serde_json::json!(s.paper_views_of(&sheet)))),
+        None => crate::commands::cached_read(&state, "paper_views", |s| {
+            Ok(serde_json::json!(s.paper_views()))
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -588,7 +590,7 @@ mod tests {
         let b = write_drawing(&sample_doc(), &dir.join("b.dwg"));
         tabs::add(&state, Session::open(&a).unwrap()).unwrap();
         tabs::add(&state, Session::open(&b).unwrap()).unwrap();
-        (state, a, b)
+        (state.scoped(None).unwrap(), a, b)
     }
 
     #[test]
@@ -616,6 +618,10 @@ mod tests {
 
         // b's tab closed: its lock goes on the next beat; a's stays.
         *lock(&state.session) = None;
+        let id = state.id;
+        lock(&state.tabs).workspaces.remove(&id);
+        lock(&state.tabs).order.retain(|tab| *tab != id);
+        lock(&state.tabs).active = Some(0);
         tick(&state, &locks);
         assert!(!lock_path(&b).exists());
         assert!(lock_path(&a).exists());
@@ -666,7 +672,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (state, a, b) = two_open(dir.path());
         line(lock(&state.session).as_mut().unwrap(), 1.0);
-        line(&mut lock(&state.parked)[0].session, 1.0);
+        let first = state.workspaces()[0].clone();
+        line(lock(&first.session).as_mut().unwrap(), 1.0);
 
         // The drawing on screen is held (by the command that panicked): skipped, not waited for.
         let held = lock(&state.session);
@@ -750,9 +757,11 @@ mod tests {
         leave_crash_copy(&c);
         leave_crash_copy(&a);
         {
-            let mut parked = lock(&state.parked);
-            line(&mut parked[0].session, 1.0);
-            parked[0].session.autosave().unwrap().unwrap();
+            let workspace = state.workspaces()[0].clone();
+            let mut session = lock(&workspace.session);
+            let session = session.as_mut().unwrap();
+            line(session, 1.0);
+            session.autosave().unwrap().unwrap();
         }
 
         // Don't Save on `a`, open here: its own autosave goes, the crash copy stays.

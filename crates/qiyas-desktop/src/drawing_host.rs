@@ -37,18 +37,39 @@ const MAX_LISTED: usize = 30;
 
 pub struct AppHost<R: Runtime> {
     pub app: AppHandle<R>,
+    pub expected_revision: Option<Value>,
+    pub binding: Option<AppState>,
 }
 
 impl<R: Runtime> AppHost<R> {
-    fn state(&self) -> tauri::State<'_, AppState> {
-        self.app.state::<AppState>()
+    fn state(&self) -> AppState {
+        self.binding.clone().unwrap_or_else(|| {
+            self.app
+                .state::<AppState>()
+                .scoped(None)
+                .expect("active workspace exists")
+        })
+    }
+
+    fn require_visible(&self) -> Result<(), String> {
+        let state = self.state();
+        if crate::state::lock(&state.tabs)
+            .active
+            .is_some_and(|id| id != state.id)
+        {
+            return Err("This drawing is not on screen. Use picture capture to inspect it.".into());
+        }
+        Ok(())
     }
 
     /// The drawing on screen now, summarised for the model, with `message` for the card.
     fn shown(&self, message: String) -> Result<Value, String> {
         let _ = self.app.emit(DRAWING_SHOWN, ());
         let drawing = with_session(&self.state(), |s| Ok(summary(s))).ok();
-        Ok(json!({ "message": message, "drawing": drawing }))
+        Ok(
+            json!({ "message": message, "drawing": drawing, "workspace":self.state().id,
+            "binding":"Subsequent tools still address this Mizan’s original drawing." }),
+        )
     }
 
     /// Whether `path` is an open tab or a recent drawing: the user has opened it before.
@@ -118,6 +139,7 @@ fn summary(s: &Session) -> Value {
     json!({
         "file": facts.file,
         "untitled": s.is_untitled(),
+        "export_folder": s.export_folder(),
         "units": facts.units,
         "sheets": facts.sheets,
         "sheet_shown": facts.sheet,
@@ -127,6 +149,27 @@ fn summary(s: &Session) -> Value {
 }
 
 impl<R: Runtime> DrawingHost for AppHost<R> {
+    fn run_file(
+        &self,
+        name: &str,
+        input: &Value,
+        user_text: Option<&str>,
+    ) -> Result<Value, String> {
+        {
+            let state = self.state();
+            let guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+            qiyas_ai::host::check_expected_revision(
+                guard.as_ref(),
+                input.get("expected_revision"),
+            )?;
+        }
+        let checked = Self {
+            app: self.app.clone(),
+            expected_revision: input.get("expected_revision").cloned(),
+            binding: Some(self.state()),
+        };
+        qiyas_ai::host::dispatch_host(&checked, name, input, user_text)
+    }
     fn has_window(&self) -> bool {
         true
     }
@@ -155,6 +198,7 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
                     "unsaved_changes": t.dirty,
                     "untitled": t.untitled,
                     "on_screen": now.active == Some(t.id),
+                    "mizan": t.status,
                 })
             })
             .collect();
@@ -166,23 +210,34 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
             .iter()
             .map(|p| json!({ "path": p, "exists": Path::new(p).is_file() }))
             .collect();
-        Ok(json!({ "open": open, "recent": recent }))
+        Ok(json!({ "workspace":state.id, "open": open, "recent": recent }))
     }
 
     fn new_drawing(&self, units: &str) -> Result<Value, String> {
         let state = self.state();
-        let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(units)?);
+        let units = insunits_of(units)?;
+        if let Some(id) = tabs::reusable_blank(&state, units) {
+            tabs::activate_checked(&self.app, &state, id, true, self.expected_revision.as_ref())?;
+            return self.shown("Using the open empty drawing with the same units.".to_string());
+        }
+        let mut session = Session::new_blank(&tabs::untitled_path(&state)?, units);
+        tabs::set_untitled_export_folder(&self.app, &mut session)?;
         let title = session
             .drawing
             .path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        tabs::add(&state, session)?;
+        tabs::add_checked(&state, session, self.expected_revision.as_ref())?;
         self.shown(format!("New drawing {title} on screen, unsaved"))
     }
 
     fn project(&self, input: &Value, source: qiyas_core::Source) -> Result<Value, String> {
-        crate::projects::execute(&self.state(), input, source)
+        crate::projects::execute_checked(
+            &self.state(),
+            input,
+            source,
+            self.expected_revision.as_ref(),
+        )
     }
     fn open(&self, path: &str, user_named: bool) -> Result<Value, String> {
         let path = Path::new(path);
@@ -203,13 +258,28 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         {
             return Err(format!("The user did not allow opening {}", path.display()));
         }
-        let what = crate::script::open(&self.app, &self.state(), path, true)?;
+        let what = crate::script::open_checked(
+            &self.app,
+            &self.state(),
+            path,
+            true,
+            self.expected_revision.as_ref(),
+        )?;
         self.shown(what)
     }
 
     fn switch(&self, id: u32) -> Result<Value, String> {
-        tabs::activate(&self.app, &self.state(), id, true)?;
-        self.shown(format!("Tab {id} on screen"))
+        tabs::activate_checked(
+            &self.app,
+            &self.state(),
+            id,
+            true,
+            self.expected_revision.as_ref(),
+        )?;
+        self.shown(format!(
+            "Tab {id} on screen. Your tools remain bound to drawing {}.",
+            self.state().id
+        ))
     }
 
     fn save(&self) -> Result<Value, String> {
@@ -217,29 +287,39 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         let (untitled, repaired) =
             with_session(&state, |s| Ok((s.is_untitled(), read_problems(s) > 0)))?;
         if untitled || repaired {
-            let _ = self.app.emit(DRAWING_SAVE, ());
+            let _ = self.app.emit(DRAWING_SAVE, state.id);
             return Ok(asked(if untitled {
                 "The drawing has no file yet: the Save dialog is open for the user to choose where"
             } else {
                 "The drawing was repaired when it opened: Qiyas asks the user before saving over it"
             }));
         }
-        let path = with_session(&state, |s| {
-            s.save()?;
-            Ok(s.drawing.path.display().to_string())
-        })?;
+        let path = {
+            let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+            qiyas_ai::host::check_expected_revision(
+                guard.as_ref(),
+                self.expected_revision.as_ref(),
+            )?;
+            let session = guard.as_mut().ok_or("No drawing is open")?;
+            session.save().map_err(|e| e.to_string())?;
+            session.drawing.path.display().to_string()
+        };
         Ok(json!({ "message": format!("Saved {path}"), "ui": { "action": "redraw" } }))
     }
 
     fn close(&self, id: Option<u32>) -> Result<Value, String> {
         let state = self.state();
         let now = tabs::snapshot(&state);
-        let id = id.or(now.active).ok_or("No drawing is open")?;
+        let id = id.or(Some(state.id)).ok_or("No drawing is open")?;
         let tab = now
             .tabs
             .iter()
             .find(|t| t.id == id)
             .ok_or_else(|| format!("No tab {id}"))?;
+        if tab.busy {
+            let _ = self.app.emit(DRAWING_CLOSE, id);
+            return Ok(asked("Mizan is working on this drawing: stop and close?"));
+        }
         if tab.dirty {
             let _ = self.app.emit(DRAWING_CLOSE, id);
             return Ok(asked(&format!(
@@ -248,24 +328,48 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
             )));
         }
         let title = tab.title.clone();
-        tabs::close(&self.app, &state, id, false, true)?;
+        tabs::close_checked(
+            &self.app,
+            &state,
+            id,
+            false,
+            true,
+            self.expected_revision.as_ref(),
+        )?;
         self.shown(format!("Closed {title}"))
     }
 
     fn capture_screen(&self, max_side: u32) -> Result<Screen, String> {
+        self.require_visible()?;
         self.state().ai_window.capture(&self.app, max_side)
     }
 
     fn select(&self, handles: &[u64], zoom: bool) -> Result<(), String> {
-        self.state().ai_window.select(&self.app, handles, zoom)
+        let state = self.state();
+        crate::state::lock(&state.context).selection = handles
+            .iter()
+            .map(|handle| qiyas_core::Target {
+                handle: *handle,
+                chain: Vec::new(),
+            })
+            .collect();
+        if self.require_visible().is_err() {
+            return Ok(());
+        }
+        state.ai_window.select(&self.app, handles, zoom)
     }
 
     fn panel_state(&self) -> Result<Value, String> {
+        self.require_visible()?;
         self.state().ai_window.panels(&self.app)
     }
 
     fn pointed(&self) -> Result<TurnContext, String> {
-        self.state().ai_window.pointed(&self.app)
+        let state = self.state();
+        if self.require_visible().is_err() {
+            return Ok(crate::state::lock(&state.context).clone());
+        }
+        state.ai_window.pointed(&self.app)
     }
 }
 
@@ -275,6 +379,7 @@ mod tests {
 
     use qiyas_ai::DrawingHost;
     use qiyas_core::{Command, DrawSpec};
+    use serde_json::{json, Value};
     use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
     use tauri::{App, Manager};
 
@@ -299,10 +404,70 @@ mod tests {
     }
 
     #[test]
-    fn external_sheet_authority_holds_the_turn_lock_through_host_changes() {
+    fn checked_file_operations_refuse_stale_drawings_under_the_mutation_lock() {
         let (_dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
+        };
+        host.new_drawing("m").unwrap();
+        let state = app.state::<AppState>();
+        let expected = with_session(&state, |s| Ok(json!(s.revision()))).unwrap();
+        with_session(&state, |s| {
+            s.run_input(
+                &json!({"type":"draw","kind":"line","a":[0,0],"b":[5,0]}),
+                qiyas_core::Source::User,
+            )
+        })
+        .unwrap();
+        let before = json!(tabs::snapshot(&state));
+        // Call the checked host directly as well as its public dispatch: these are the
+        // second checks, after the tool's earlier read/validation released its lock.
+        let checked = AppHost {
+            app: app.handle().clone(),
+            expected_revision: Some(expected.clone()),
+            binding: None,
+        };
+        for error in [
+            checked.new_drawing("m").unwrap_err(),
+            checked
+                .switch(before["active"].as_u64().unwrap() as u32)
+                .unwrap_err(),
+        ] {
+            let error: Value = serde_json::from_str(&error).unwrap();
+            assert_eq!(error["code"], "stale_read");
+        }
+        for (name, args) in [
+            ("new_drawing", json!({"units":"m"})),
+            ("save_drawing", json!({})),
+            ("close_drawing", json!({})),
+        ] {
+            let mut args = args;
+            args["expected_revision"] = expected.clone();
+            let error = qiyas_ai::host::run_host(&host, name, &args, None).unwrap_err();
+            let error: Value = serde_json::from_str(&error).unwrap();
+            assert_eq!(error["code"], "stale_read");
+            assert_eq!(json!(tabs::snapshot(&state)), before);
+        }
+        let fresh = with_session(&state, |s| Ok(json!(s.revision()))).unwrap();
+        qiyas_ai::host::run_host(
+            &host,
+            "new_drawing",
+            &json!({"units":"cm","expected_revision":fresh}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs.len(), 2);
+    }
+
+    #[test]
+    fn external_sheet_authority_excludes_turn_start_without_holding_status() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
         };
         let state = app.state::<AppState>();
         let (_, generation) = state.ai.lock().unwrap().reserve().unwrap();
@@ -315,9 +480,13 @@ mod tests {
 
         host.with_sheet_authority(&mut || {
             assert!(matches!(
-                state.ai.try_lock(),
+                state.sheet_authority.try_lock(),
                 Err(std::sync::TryLockError::WouldBlock)
             ));
+            assert!(
+                state.ai.try_lock().is_ok(),
+                "status remains readable during external work"
+            );
             host.new_drawing("m").map_err(qiyas_ai::ToolError::Failed)?;
             let first = tabs::snapshot(&state).active.unwrap();
             host.new_drawing("mm")
@@ -332,10 +501,68 @@ mod tests {
     }
 
     #[test]
+    fn u2_new_drawing_reuses_empty_untitled_tabs_with_matching_units() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
+        };
+        let state = app.state::<AppState>();
+        host.new_drawing("mm").unwrap();
+        let first = tabs::snapshot(&state).active;
+        let again = host.new_drawing("mm").unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs.len(), 1);
+        assert_eq!(tabs::snapshot(&state).active, first);
+        assert!(again["message"].as_str().unwrap().contains("empty"));
+        host.new_drawing("m").unwrap();
+        host.new_drawing("mm").unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs.len(), 2);
+        assert_eq!(tabs::snapshot(&state).active, first);
+        with_session(&state, |s| {
+            s.run(Command::Draw(DrawSpec::Line {
+                a: [0.0, 0.0],
+                b: [1000.0, 0.0],
+            }))
+        })
+        .unwrap();
+        host.new_drawing("mm").unwrap();
+        assert_eq!(
+            tabs::snapshot(&state).tabs.len(),
+            3,
+            "a drawing with work must not be reused"
+        );
+    }
+
+    #[test]
+    fn u6_untitled_exports_have_a_visible_documents_destination() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
+        };
+        let made = host.new_drawing("m").unwrap();
+        // A runner without user folders (CI) gets the app's fallback, home/Documents.
+        let documents = app
+            .path()
+            .document_dir()
+            .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))
+            .unwrap();
+        assert_eq!(
+            made["drawing"]["export_folder"],
+            documents.display().to_string()
+        );
+        assert!(!documents.starts_with(&app.state::<AppState>().config_dir));
+    }
+
+    #[test]
     fn new_open_switch_save_and_close_keep_the_conversation() {
         let (dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
         };
         let state = app.state::<AppState>();
         let before = generation(&app);
@@ -405,6 +632,8 @@ mod tests {
         let (dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
         };
         host.new_drawing("m").unwrap();
         let state = app.state::<AppState>();
@@ -440,6 +669,8 @@ mod tests {
         let (_dir, app) = app();
         let host = AppHost {
             app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
         };
         host.new_drawing("m").unwrap();
         let state = app.state::<AppState>();

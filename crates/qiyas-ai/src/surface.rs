@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use qiyas_core::registry::{effect_of, registry, Effect};
 use qiyas_core::{Command, CoreError, Outcome, Session, Source};
 
-use crate::execute::{execute, ToolError, ToolOutput};
+use crate::execute::{execute_full as execute, ToolError, ToolOutput};
 use crate::tools::ToolSpec;
 
 pub const READ: &str = "qiyas_read";
@@ -32,12 +32,14 @@ pub const EXECUTE: &str = "qiyas_execute";
 pub const CAPTURE: &str = "qiyas_capture";
 
 /// The read ops, in the order the schema lists them.
-pub const READ_OPS: [&str; 21] = [
+pub const READ_OPS: [&str; 24] = [
+    "artifact",
     "explain",
     "digest",
     "takeoff_kit",
     "workflow",
     "takeoff_check",
+    "brief_check",
     "document",
     "state",
     "capabilities",
@@ -50,13 +52,14 @@ pub const READ_OPS: [&str; 21] = [
     "run",
     "check",
     "history",
+    "events",
     "drawings",
     "selection",
     "panel_state",
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 20] = [
+pub const EXECUTE_OPS: [&str; 21] = [
     "plan",
     "finish",
     "run",
@@ -77,6 +80,7 @@ pub const EXECUTE_OPS: [&str; 20] = [
     "compare",
     "export_takeoff",
     "export_conflicts",
+    "plot",
 ];
 
 /// Every operation declares its environment here, shared by Mizan and MCP.
@@ -108,6 +112,7 @@ macro_rules! operations {
     (@runner) => {None};
 }
 operations![
+    (READ, "artifact", [Nothing]),
     (READ, "document", [Nothing]),
     (READ, "state", [Drawing]),
     (READ, "explain", [Nothing]),
@@ -125,7 +130,9 @@ operations![
     (READ, "run", [Drawing]),
     (READ, "check", [Drawing]),
     (READ, "history", [Drawing]),
+    (READ, "events", [Drawing]),
     (READ, "rooms", [Drawing]),
+    (READ, "brief_check", [Drawing]),
     (READ, "drawings", [Host], "list_drawings"),
     (READ, "selection", [Window, Drawing], "get_selection"),
     (READ, "panel_state", [Window], "panel_state"),
@@ -142,6 +149,7 @@ operations![
     (EXECUTE, "compare", [Drawing]),
     (EXECUTE, "export_takeoff", [Drawing]),
     (EXECUTE, "export_conflicts", [Drawing]),
+    (EXECUTE, "plot", [Drawing]),
     (EXECUTE, "select", [Window, Drawing], "select_entities"),
     (EXECUTE, "new_drawing", [Host], "new_drawing"),
     (EXECUTE, "open_drawing", [Host], "open_drawing"),
@@ -200,6 +208,16 @@ pub const QUERY_KINDS: [&str; 9] = [
 
 /// The three tools.
 pub fn tools() -> Vec<ToolSpec> {
+    let mut revision = qiyas_core::revision_schema();
+    // Provider strict mode omits numeric bounds; native validation still checks them.
+    for field in revision["properties"].as_object_mut().unwrap().values_mut() {
+        field.as_object_mut().unwrap().remove("minimum");
+    }
+    revision["required"] = json!(revision["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect::<Vec<_>>());
     let args = json!({
         "type": "string",
         "description": "The op's arguments as a JSON object written as a string, e.g. \"{\\\"name\\\": \\\"draw.line\\\"}\"; \"{}\" for none."
@@ -207,7 +225,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}).",
+            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?}, paged UTF-8 JSON with next_offset and its original revision. commands and takeoff_kit use offset for pages; repeated contracts are referenced by name/version/artifact. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -221,14 +239,15 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted). Core edits are undoable and answer with what they added, changed and removed and a check of what they touched.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted); plot ({sheet?, paper?, orientation?, scale?, path?}: one sheet as a PDF in the drawing's folder, as printed; a layout plots its own paper at 1:1, Model fits ISO A1; scale is fit or 1:50). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "op": { "type": "string", "enum": EXECUTE_OPS },
+                    "expected_revision": {"anyOf": [revision, {"type":"null"}]},
                     "args": args,
                 },
-                "required": ["op", "args"],
+                "required": ["op", "args", "expected_revision"],
                 "additionalProperties": false,
             }),
             mutating: true,
@@ -253,6 +272,28 @@ pub fn tools() -> Vec<ToolSpec> {
 /// Whether `name` is one of the three tools.
 pub fn is_surface_tool(name: &str) -> bool {
     matches!(name, READ | EXECUTE | CAPTURE)
+}
+
+/// Model-facing formatting shared by the native agent and every MCP transport.
+/// Native Rust callers and atomic step references retain their full results.
+pub fn format_result(
+    tool: &str,
+    op: &str,
+    args: &Value,
+    output: ToolOutput,
+) -> Result<ToolOutput, ToolError> {
+    crate::result::format(tool, op, args, output)
+}
+
+pub(crate) fn execution_args(op: &str, args: &Value) -> Value {
+    let mut args = args.clone();
+    if op != "records" {
+        if let Some(object) = args.as_object_mut() {
+            object.remove("detail");
+            object.remove("fields");
+        }
+    }
+    args
 }
 
 /// The operation's label for the window's tool card.
@@ -308,9 +349,14 @@ pub enum PlanStatus {
 }
 
 pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
-    let plan: Plan = read_args(args, "plan")?;
+    let mut args = args.clone();
+    if let Some(map) = args.as_object_mut() {
+        map.remove("expected_revision");
+        map.remove("detail");
+    }
+    let plan: Plan = read_args(&args, "plan")?;
     if plan.phases.is_empty() || plan.phases.len() > 24 {
-        return Err(bad("plan needs 1 to 24 phases"));
+        return Err(bad("A plan needs 1 to 24 phases."));
     }
     let mut ids = std::collections::BTreeSet::new();
     let mut active = 0;
@@ -338,7 +384,7 @@ pub(super) fn plan_info() -> Value {
         "name": "plan",
         "tool": EXECUTE,
         "op": "plan",
-        "doc": "State the task's phases in the user's language before drawing. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
+        "doc": "Consider small phases in the user's language before drawing: grid, walls, openings, rooms, dimensions, sheet as needed. Use one batch per phase and fix by handle. Send the full list with stable ids on each update; at most one phase is active. Capture and check a phase before marking it done. The conversation keeps the plan; no drawing change or undo step.",
         "changes": false,
         "undo": false,
         "schema": {
@@ -479,6 +525,9 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
     if !is_surface_tool(name) {
         return Err(format!("No tool named {name}"));
     }
+    let (normalized, _) =
+        crate::normalise::envelope(name, input).map_err(|e| e.json().to_string())?;
+    let input = &normalized;
     let field = if name == CAPTURE { "source" } else { "op" };
     let mut envelope = tools()
         .into_iter()
@@ -512,21 +561,33 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
         .to_string();
     let args = read_handle_values(&args);
     if let Some(entry) = operation(name, &op) {
-        crate::surface_args::validate(name, &op, &args)
+        let (normalized, _) =
+            crate::normalise::args(name, &op, &args).map_err(|e| e.json().to_string())?;
+        crate::surface_args::validate(name, &op, &normalized)
             .map_err(|error| error.json().to_string())?;
         if matches!(name, READ | EXECUTE) && op == "run" && args["command"]["type"] == "project" {
             let command = qiyas_core::registry::parse_command(args["command"].clone())?;
             if name == READ && effect_of(&command) != Effect::Read {
                 return Err("Use qiyas_execute for a project edit".into());
             }
+            let mut input = args["command"].clone();
+            if let Some(expected) = args.get("expected_revision") {
+                input["expected_revision"] = expected.clone();
+            }
             return Ok(Route::Host {
                 tool: "project",
-                input: args["command"].clone(),
+                input,
             });
         }
         return Ok(match (entry.needs.first(), entry.runner) {
-            (Some(Need::Host), Some(tool)) => Route::Host { tool, input: args },
-            (Some(Need::Window), Some(tool)) => Route::Window { tool, input: args },
+            (Some(Need::Host), Some(tool)) => Route::Host {
+                tool,
+                input: execution_args(&op, &args),
+            },
+            (Some(Need::Window), Some(tool)) => Route::Window {
+                tool,
+                input: execution_args(&op, &args),
+            },
             _ => Route::Session {
                 tool: name.into(),
                 op,
@@ -552,8 +613,6 @@ pub fn route(name: &str, input: &Value) -> Result<Route, String> {
 
 // ---- On the session ----
 
-/// Most findings of the check a change answers with.
-const CHECK_FINDINGS: usize = 8;
 /// A sheet with more entities than this is not checked after every change (ask for the check).
 const CHECK_UP_TO: usize = 20_000;
 /// Most commands one batch takes.
@@ -580,16 +639,29 @@ pub fn run_without_drawing(
     if let Err(error) = crate::surface_args::validate(tool, op, args) {
         return Some(Err(error));
     }
+    let execution = execution_args(op, args);
+    let args = &execution;
     if tool == EXECUTE && op == "plan" {
-        return Some(read_plan(args).map(|plan| ToolOutput::Json(json!({"plan": plan}))));
+        if let Err(error) = crate::revision::check(None, args) {
+            return Some(Err(error));
+        }
+        return Some(read_plan(args).map(|plan| {
+            let mut out = json!({"plan":plan,"revision":null});
+            if plan.phases.len() == 1 { crate::advice::append(&mut out, json!({"code":"small_phases","message":"Consider smaller phases with a capture and check after each. Mizan decides the plan."})); }
+            ToolOutput::Json(out)
+        }));
     }
     if tool == CAPTURE && op == "document" {
-        return Some(crate::document::capture(args));
+        return Some(crate::revision::stamp(
+            crate::document::capture(args),
+            Value::Null,
+        ));
     }
     if tool != READ {
         return None;
     }
     let value = match op {
+        "artifact" => crate::artifact::read(args),
         "explain" if args["project"].is_string() => qiyas_core::trust::explain_project(
             args["project"].as_str().unwrap(),
             args["item"].as_str().unwrap_or_default(),
@@ -613,7 +685,10 @@ pub fn run_without_drawing(
         "validate" => validate(args, units, None),
         _ => return None,
     };
-    Some(value.map(ToolOutput::Json))
+    Some(crate::revision::stamp(
+        value.map(ToolOutput::Json),
+        Value::Null,
+    ))
 }
 
 fn batch_commands_schema() -> Value {
@@ -713,9 +788,47 @@ pub fn run_session_with_method(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
-    session.with_automation_sheet(|session| {
-        run_working_session(session, tool, op, args, source, method)
-    })
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (mut args, warnings) = crate::normalise::args(tool, op, args)?;
+        let before = session.revision();
+        let result = session
+            .with_automation_sheet(|session| {
+                if tool == EXECUTE {
+                    crate::revision::check(Some(session), &args)?;
+                    args.as_object_mut().unwrap().remove("expected_revision");
+                }
+                run_working_session(session, tool, op, &args, source, method)
+            })
+            .map(|out| crate::normalise::output(out, &warnings));
+        let changed = before.document_revision != session.document_revision();
+        if result.is_ok() {
+            session.record_tool_revision(before);
+        }
+        result.map(|mut output| {
+            // Undo and other session operations also report their real entity changes.
+            if tool == EXECUTE && changed {
+                if let ToolOutput::Json(value) = &mut output {
+                    let change = session.last_change();
+                    for (field, handles) in [
+                        ("added", &change.added),
+                        ("changed", &change.changed),
+                        ("removed", &change.removed),
+                    ] {
+                        if value.get(field).is_none() {
+                            value[field] = json!(handles);
+                        }
+                    }
+                }
+            }
+            output
+        })
+    }))
+    .unwrap_or_else(|_| {
+        Err(ToolError::Failed(
+            "The tool stopped unexpectedly. You can keep working.".into(),
+        ))
+    });
+    crate::revision::stamp(result, json!(session.revision()))
 }
 
 fn run_working_session(
@@ -729,6 +842,8 @@ fn run_working_session(
     let normalized = read_handle_values(args);
     let args = &normalized;
     let argument_warnings = crate::surface_args::validate(tool, op, args)?;
+    let execution = execution_args(op, args);
+    let args = &execution;
     if tool == READ && op == "validate" {
         return validate(args, Some(session.drawing.units), Some(session)).map(ToolOutput::Json);
     }
@@ -776,6 +891,7 @@ fn run_working_session(
                 session.explain(item)?
             })
         }
+        (READ, "brief_check") => json(crate::brief_check::run(session, args, source)?),
         (READ, "document") => json(crate::document::read(args)?),
         (CAPTURE, "document") => crate::document::capture(args),
         (READ, "digest") => {
@@ -864,8 +980,35 @@ fn run_working_session(
         (READ, "capabilities") => json(capabilities()),
         (READ, "commands") => json(commands(args)?),
         (READ, "records") => {
-            let query: qiyas_core::records::RecordQuery = read_args(args, "records")?;
-            json(serde_json::to_value(session.records(&query)?).unwrap_or_default())
+            let mut query: qiyas_core::records::RecordQuery = read_args(args, "records")?;
+            let mut page = session.records(&query)?;
+            if query.detail == qiyas_core::records::Detail::Full
+                && query.fields.is_empty()
+                && !page.records.is_empty()
+            {
+                // Native record presentation clips long arrays. Field reads retain exact data;
+                // project the discovered fields to recover complete geometry without changing
+                // the core's ordinary summary behavior or the caller's record shape.
+                query.fields = page
+                    .records
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .flat_map(|record| record.keys().cloned())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                query.limit = Some(page.records.len());
+                page = session.records(&query)?;
+                for record in &mut page.records {
+                    if let Some(fields) = record
+                        .as_object_mut()
+                        .and_then(|record| record.remove("fields"))
+                    {
+                        *record = fields;
+                    }
+                }
+            }
+            json(serde_json::to_value(page).unwrap_or_default())
         }
         (READ, "record_schema") => {
             let name = args["name"]
@@ -877,6 +1020,9 @@ fn run_working_session(
         (READ, "measure") => json(measure(session, args)?),
         (READ, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
+            if matches!(command, Command::Check { .. }) {
+                return Err(bad("For drawing checks, use qiyas_read with op check. For the BOQ comparison, use qiyas_execute run with discrepancy_check."));
+            }
             if effect_of(&command) != Effect::Read {
                 return Err(bad(format!(
                     "{} changes things: run it with qiyas_execute run",
@@ -899,6 +1045,10 @@ fn run_working_session(
             };
             json(json!(report))
         }
+        (READ, "events") => json(session.events_since(
+            args["after"].as_u64().unwrap_or(0),
+            args["session"].as_str(),
+        )),
         (READ, "history") => {
             let (undo, redo) = session.history_steps();
             json(json!({ "undo": undo, "redo": redo }))
@@ -1037,6 +1187,7 @@ fn run_working_session(
         (EXECUTE, "export_takeoff") | (EXECUTE, "export_conflicts") => {
             json(export(session, op, args)?)
         }
+        (EXECUTE, "plot") => json(plot(session, args)?),
         (CAPTURE, "picture") => execute(session, "view_image", args, source),
         _ => Err(bad(format!("{tool} has no op {op}"))),
     }
@@ -1049,6 +1200,7 @@ fn state(session: &Session) -> Value {
     let (scale, factor) = session.annotation_scale();
     let to_m = session.drawing.units.to_metres();
     json!({
+        "image_input": crate::models::image_state(None),
         "local_date": chrono::Local::now().format("%Y-%m-%d").to_string(),
         "file": session.drawing.path.file_name().map(|f| f.to_string_lossy().to_string()),
         "units": info.units,
@@ -1102,7 +1254,7 @@ fn capabilities() -> Value {
         },
         "capture": ["screen", "picture"],
         "query_kinds": QUERY_KINDS,
-        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters", "objects", "object_types", "knowledge_types", "knowledge_levels", "knowledge_tables", "knowledge_rules", "knowledge_sheets", "knowledge_mappings", "knowledge_views", "knowledge_measurement", "knowledge_checks", "knowledge_queries", "knowledge_reports"],
+        "record_collections": ["entities", "layers", "linetypes", "text_styles", "dim_styles", "blocks", "layouts", "viewports", "groups", "views", "header", "layer_states", "xrefs", "takeoff", "boq", "conflicts", "schedules", "comments", "constraints", "parameters", "objects", "object_types", "knowledge_types", "knowledge_levels", "knowledge_tables", "knowledge_rules", "knowledge_sheets", "knowledge_mappings", "knowledge_views", "knowledge_measurement", "knowledge_checks", "knowledge_queries", "knowledge_reports", "knowledge_placement"],
         "creatable_entity_types": qiyas_core::record_edit::CREATABLE,
         "check_rules": qiyas_core::check::RULES,
         "commands_by_category": categories,
@@ -1114,7 +1266,10 @@ fn capabilities() -> Value {
 fn finish_kit(kit: &mut Value) {
     let (schema, args) = crate::surface_args::contract(READ, "takeoff_check");
     kit["self_check"] = json!({"required":schema["required"],"example":{"tool":READ,"op":"takeoff_check","args":args}});
-    kit["end_report"] = json!({"action":"final answer","example":{"BOQ":"measurement.report.items","method":"measurement.report.selection","unresolved and low-confidence scope":"takeoff_check"}});
+    // Reserve room for the read revision by avoiding duplicate prose in this compact kit.
+    kit["end_report"] =
+        json!({"BOQ":"measurement.report.items","method":"measurement.report.selection"});
+    kit["measurement_rules"] = json!("basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).");
 }
 
 fn commands(args: &Value) -> Result<Value, ToolError> {
@@ -1239,14 +1394,45 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
     if let Some(map) = rest.as_object_mut() {
         map.remove("kind");
     }
-    match kind {
+    let limit = rest
+        .as_object_mut()
+        .and_then(|o| o.remove("limit"))
+        .and_then(|v| v.as_u64());
+    let within: Option<[[f64; 2]; 2]> = args
+        .get("within")
+        .filter(|v| !v.is_null())
+        .map(|v| read_args(v, "query within"))
+        .transpose()?;
+    if kind != "texts" {
+        rest.as_object_mut().unwrap().remove("within");
+    }
+    let inside = |p: [f64; 2]| {
+        within.is_none_or(|b| {
+            (0..2).all(|i| p[i] >= b[0][i].min(b[1][i]) && p[i] <= b[0][i].max(b[1][i]))
+        })
+    };
+    let page = |session: &Session, rows: Vec<Value>| {
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+        crate::execute::filtered_query_page(session, kind, args["sheet"].as_str(), rows, offset)
+    };
+    let result = match kind {
         "near" => {
             let p: [f64; 2] = read_args(&args["point"], "query near: point")?;
             let r = args["radius"]
                 .as_f64()
                 .unwrap_or(0.5 / crate::execute::sheet_metres_per_unit(session));
-            let mut find = json!({ "within": [[p[0] - r, p[1] - r], [p[0] + r, p[1] + r]] });
-            for k in ["layer", "type", "limit"] {
+            let mut box_ = [[p[0] - r, p[1] - r], [p[0] + r, p[1] + r]];
+            if let Some(b) = within {
+                for i in 0..2 {
+                    box_[0][i] = box_[0][i].max(b[0][i].min(b[1][i]));
+                    box_[1][i] = box_[1][i].min(b[0][i].max(b[1][i]));
+                }
+                if (0..2).any(|i| box_[0][i] > box_[1][i]) {
+                    return page(session, vec![]);
+                }
+            }
+            let mut find = json!({ "within": box_ });
+            for k in ["layer", "type", "limit", "sheet", "offset"] {
                 if let Some(v) = args.get(k) {
                     find[if k == "type" { "kind" } else { k }] = v.clone();
                 }
@@ -1254,7 +1440,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             execute(session, "find_entities", &find, source)
         }
         "window" => {
-            let mut find = json!({ "within": args.get("bounds").cloned().unwrap_or(Value::Null) });
+            let mut find = json!({ "within": within });
             for k in ["layer", "type", "limit", "offset", "sheet"] {
                 if let Some(v) = args.get(k) {
                     find[if k == "type" { "kind" } else { k }] = v.clone();
@@ -1262,14 +1448,81 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             }
             execute(session, "find_entities", &find, source)
         }
-        "entity" => execute(session, "get_entity", &rest, source),
+        "entity" => {
+            let handle = args["handle"].as_u64().unwrap();
+            let chain: Vec<u64> = args
+                .get("chain")
+                .map(|v| read_args(v, "chain"))
+                .transpose()?
+                .unwrap_or_default();
+            if within
+                .map(|b| session.entity_in_query_box(handle, &chain, b))
+                .transpose()?
+                .is_some_and(|inside| !inside)
+            {
+                Ok(ToolOutput::Json(json!({"entity":null,"matched":false})))
+            } else {
+                execute(session, "get_entity", &rest, source)
+            }
+        }
         "texts" => execute(session, "read_text", &rest, source),
+        "tables" if within.is_some() => page(
+            session,
+            session
+                .read_tables_within(args["sheet"].as_str(), within)
+                .into_iter()
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        "dimensions" if within.is_some() => page(
+            session,
+            session
+                .read_dimensions(args["sheet"].as_str())
+                .into_iter()
+                .filter(|r| inside(r.at))
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        "blocks" if within.is_some() => page(
+            session,
+            session
+                .block_summary_within(args["sheet"].as_str(), within.unwrap())
+                .into_iter()
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        "layers" if within.is_some() => {
+            let mut filter = qiyas_core::EntityFilter {
+                within,
+                limit: 500,
+                ..Default::default()
+            };
+            let mut names = std::collections::BTreeSet::new();
+            loop {
+                let found = session.find_entities(&filter);
+                names.extend(found.rows.into_iter().map(|r| r.layer.to_lowercase()));
+                let Some(next) = found.next_offset else { break };
+                filter.offset = next;
+            }
+            page(
+                session,
+                session
+                    .layers()
+                    .into_iter()
+                    .filter(|l| names.contains(&l.name.to_lowercase()))
+                    .map(|l| json!(l))
+                    .collect(),
+            )
+        }
         "tables" => execute(session, "read_tables", &rest, source),
         "dimensions" => execute(session, "read_dimensions", &rest, source),
         "blocks" => execute(session, "block_summary", &rest, source),
         "layers" => execute(session, "list_layers", &rest, source),
         "boundary" => {
             let p: [f64; 2] = read_args(&args["point"], "query boundary: point")?;
+            if !inside(p) {
+                return Ok(ToolOutput::Json(json!({"ring":null,"matched":false})));
+            }
             let to_m = crate::execute::sheet_metres_per_unit(session);
             match session.boundary_at(p, 1.0 / to_m) {
                 qiyas_core::Boundary::Ring {
@@ -1295,7 +1548,32 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             "query has no kind {other}: {}",
             QUERY_KINDS.join(", ")
         ))),
-    }
+    };
+    result.map(|mut result| {
+        if !matches!(kind, "near" | "window") {
+            if let (Some(limit), ToolOutput::Json(v)) = (limit, &mut result) {
+                if let Some(rows) = v["rows"].as_array_mut() {
+                    rows.truncate(limit.min(500) as usize);
+                    let end = args["offset"].as_u64().unwrap_or(0) + rows.len() as u64;
+                    v["next_offset"] = if end < v["total"].as_u64().unwrap_or(0) && limit > 0 {
+                        json!(end)
+                    } else {
+                        Value::Null
+                    };
+                    crate::normalise::append(
+                        v,
+                        &[qiyas_core::validation::InputIssue {
+                            code: "normalised_input".into(),
+                            pointer: "/args/limit".into(),
+                            message: "Normalised query limit to a page size (at most 500 rows)."
+                                .into(),
+                        }],
+                    );
+                }
+            }
+        }
+        result
+    })
 }
 
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
@@ -1516,7 +1794,13 @@ fn close_commands(name: &str) -> Vec<&'static str> {
         .commands()
         .iter()
         .filter(|command| !command.internal)
-        .map(|command| (distance(&name, &command.name), command.name.as_str()))
+        .map(|command| {
+            let short = command.name.rsplit('.').next().unwrap_or(&command.name);
+            (
+                distance(&name, &command.name).min(distance(&name, short)),
+                command.name.as_str(),
+            )
+        })
         .collect();
     ranked.extend(OPERATIONS.iter().map(|o| (distance(&name, o.op), o.op)));
     ranked.sort_unstable();
@@ -1687,7 +1971,7 @@ fn run_one(
 }
 
 fn copy_input_metadata(out: &mut Value) {
-    for field in ["defaults_used", "warnings"] {
+    for field in ["defaults_used", "warnings", "advice"] {
         if let Some(value) = out["outcome"].get(field).cloned() {
             out[field] = value;
         }
@@ -1720,6 +2004,7 @@ fn changed(
         "no_change": effect == Effect::Edit && session.history_revision() == history_before,
         "effect": effect,
         "outcome": outcome,
+        "handle_map": session.handle_map(),
         "added": change.added,
         "changed": change.changed,
         "removed": change.removed,
@@ -1727,22 +2012,62 @@ fn changed(
     });
     copy_input_metadata(&mut out);
     if !touched.is_empty() {
-        if session.drawing.entities_in(&session.sheet).count() <= CHECK_UP_TO {
+        let mut sheets = std::collections::BTreeMap::<&str, Vec<u64>>::new();
+        for &handle in &touched {
+            if let Some(sheet) = session.entity_sheet(handle) {
+                sheets.entry(sheet).or_default().push(handle);
+            }
+        }
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        let mut findings = Vec::new();
+        let mut not_checked = Vec::new();
+        let mut lines = Vec::new();
+        let mut complete = true;
+        for (sheet, handles) in &sheets {
+            if session
+                .drawing
+                .entities_in(sheet)
+                .take(CHECK_UP_TO + 1)
+                .count()
+                > CHECK_UP_TO
+            {
+                complete = false;
+                not_checked.extend(handles);
+                lines.push(
+                    "Not checked: a large sheet. Read check with its sheet and handles."
+                        .to_string(),
+                );
+                continue;
+            }
             let report = session.check_drawing(&qiyas_core::check::CheckScope {
-                handles: touched.clone(),
+                sheet: Some((*sheet).into()),
+                handles: handles.clone(),
                 ..Default::default()
             });
-            out["check"] = json!({
-                "line": report.line,
-                "complete": report.complete,
-                "layout_findings": report.counts.iter().filter(|(r,_)| qiyas_core::check::layout_rule(r)).map(|(_,n)| n).sum::<usize>(),
-                "not_checked": report.not_checked,
-                "findings": report.findings.iter().take(CHECK_FINDINGS).collect::<Vec<_>>(),
-            });
-        } else {
-            out["check"] = json!({ "complete": false, "line": "Not checked: a large sheet. qiyas_read check {\"handles\": […]} checks what you changed" });
+            complete &= report.complete;
+            for (rule, count) in report.counts {
+                *counts.entry(rule).or_default() += count;
+            }
+            not_checked.extend(report.not_checked);
+            findings.extend(report.findings);
+            lines.push(report.line);
         }
-        out["ui"] = json!({ "action": "reveal", "sheet": session.sheet, "handles": touched });
+        out["check"] = json!({
+            "line": lines.join("; "),
+            "complete": complete,
+            "sheets": sheets.keys().collect::<Vec<_>>(),
+            "layout_findings": counts.iter().filter(|(rule, _)| qiyas_core::check::layout_rule(rule)).map(|(_, n)| n).sum::<usize>(),
+            "counts": counts,
+            "not_checked": not_checked,
+            "findings": findings,
+        });
+        let visible: Vec<_> = touched
+            .iter()
+            .filter(|&&handle| session.entity_sheet(handle) == Some(session.sheet.as_str()))
+            .collect();
+        if !visible.is_empty() {
+            out["ui"] = json!({ "action": "reveal", "sheet": session.sheet, "handles": visible });
+        }
     } else if !change.removed.is_empty() || effect == Effect::View {
         out["ui"] = json!({ "action": "redraw" });
     }
@@ -1796,6 +2121,24 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
     let view = ViewState::of(session);
     let mut answers: Vec<Value> = Vec::new();
     let ran = session.batch_with(source, "batch", layer, color, |s| {
+        if let Some(grouped) = args
+            .get("sheet")
+            .filter(|sheet| !sheet.is_null())
+            .is_none()
+            .then(|| s.run_opening_batch(&commands, source))
+            .flatten()
+        {
+            let grouped = grouped?;
+            let change = s.last_change().clone();
+            for outcome in grouped {
+                answers.push(json!({
+                    "command":"add_wall_openings", "outcome":outcome,
+                    "shared_wall_result":true,
+                    "added":change.added, "changed":change.changed, "removed":change.removed,
+                }));
+            }
+            return Ok(());
+        }
         for (i, raw) in commands.iter().enumerate() {
             let input_error = |error: ToolError| CoreError::Step {
                 index: i,
@@ -1810,6 +2153,13 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
                     details: json!({}),
                 })
             })?;
+            if raw.get("sheet").is_none()
+                && command_info(&raw).is_some_and(|info| info.effect == Effect::Edit)
+            {
+                if let Some(sheet) = args.get("sheet").filter(|sheet| !sheet.is_null()) {
+                    raw["sheet"] = sheet.clone();
+                }
+            }
             let (command, input) = prepare_command(s, &raw).map_err(input_error)?;
             let label = command.label();
             let (outcome, change) = s
@@ -1930,6 +2280,129 @@ fn bind(value: &mut Value, answers: &[Value]) -> Result<(), String> {
     }
 }
 
+/// `plot`: one sheet as a PDF in the drawing's folder, drawn as the Plot dialog prints it.
+fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
+    use qiyas_plot::{Area, Orientation, PlotJob, Scale};
+    let failed = |e: String| ToolError::Failed(e);
+    let sheets = session.drawing.sheets();
+    let wanted = args
+        .get("sheet")
+        .and_then(Value::as_str)
+        .unwrap_or(&session.sheet);
+    let sheet = sheets
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(wanted) || s.block.eq_ignore_ascii_case(wanted))
+        .ok_or_else(|| {
+            bad(format!(
+                "No sheet {wanted}. Sheets: {}",
+                sheets
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?
+        .clone();
+    let catalog = qiyas_core::paper_catalog();
+    let named_paper = match args.get("paper").and_then(Value::as_str) {
+        Some(name) => Some(
+            catalog
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .cloned()
+                .ok_or_else(|| {
+                    bad(format!(
+                        "No paper {name}. Papers: {}",
+                        catalog
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?,
+        ),
+        None => None,
+    };
+    // The layout's own page setup, read without moving the user's view.
+    let layout_paper = if sheet.is_model {
+        None
+    } else {
+        let shown = std::mem::replace(&mut session.sheet, sheet.block.clone());
+        let paper = session.paper();
+        session.sheet = shown;
+        paper
+    };
+    let (paper, orientation) = match (named_paper, layout_paper) {
+        (Some(p), _) => (p, Orientation::Landscape),
+        (None, Some(p)) => (p, Orientation::Portrait),
+        (None, None) => (
+            catalog
+                .iter()
+                .find(|p| p.name == "ISO A1")
+                .cloned()
+                .expect("ISO A1"),
+            Orientation::Landscape,
+        ),
+    };
+    let orientation = match args.get("orientation").and_then(Value::as_str) {
+        Some("portrait") => Orientation::Portrait,
+        Some("landscape") => Orientation::Landscape,
+        Some(other) => {
+            return Err(bad(format!(
+                "orientation is portrait or landscape, not {other}"
+            )))
+        }
+        None => orientation,
+    };
+    let scale = match args.get("scale").and_then(Value::as_str) {
+        None if sheet.is_model => Scale::Fit,
+        None => Scale::Ratio(1.0, 1.0),
+        Some("fit") => Scale::Fit,
+        Some(text) => {
+            let parts: Vec<f64> = text
+                .split(':')
+                .filter_map(|p| p.trim().parse().ok())
+                .collect();
+            match parts.as_slice() {
+                [num, den] if *num > 0.0 && *den > 0.0 => Scale::Ratio(*num, *den),
+                _ => {
+                    return Err(bad(format!(
+                        "scale is fit or num:den such as 1:50, not {text}"
+                    )))
+                }
+            }
+        }
+    };
+    // The same confinement as the exports (symlinks resolved); a subfolder is made for it.
+    let output = match args.get("path").and_then(Value::as_str) {
+        Some(name) => {
+            let full = crate::execute::resolve_in_drawing_folder(session, name)?;
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| failed(e.to_string()))?;
+            }
+            Some(name.to_owned())
+        }
+        None => None,
+    };
+    let job = PlotJob {
+        sheet: sheet.block.clone(),
+        area: if sheet.is_model {
+            Area::Extents
+        } else {
+            Area::Layout
+        },
+        paper,
+        orientation,
+        scale,
+        centre: true,
+        style: None,
+        lineweights: true,
+        output,
+    };
+    let out = qiyas_plot::plot_pdf(session, &job).map_err(|e| failed(e.to_string()))?;
+    Ok(json!({"written": out.path.to_string_lossy(), "sheet": sheet.name, "skipped": out.skipped}))
+}
+
 /// `export_takeoff`, `export_conflicts`: a workbook in the drawing's folder.
 fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError> {
     let stem = session
@@ -1944,7 +2417,17 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
         format!("{stem} conflicts.xlsx")
     };
     let name = args.get("path").and_then(Value::as_str).unwrap_or(&default);
-    let path = crate::execute::resolve_in_drawing_folder(session, name)?;
+    let path = if session.export_folder()
+        == session
+            .drawing
+            .path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+    {
+        crate::execute::resolve_in_drawing_folder(session, name)?
+    } else {
+        qiyas_core::deliverables::confined(&session.export_source(), name)?
+    };
     if op == "export_takeoff" {
         let totals = session.takeoff.totals();
         qiyas_boq::export_takeoff_with_queries(
@@ -1962,5 +2445,7 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
         qiyas_boq::report::export_conflicts(&path, &session.conflicts)
             .map_err(|e| ToolError::Failed(e.to_string()))?;
     }
-    Ok(json!({ "written": path.to_string_lossy() }))
+    Ok(
+        json!({ "written": path.to_string_lossy(), "rows": if op == "export_takeoff" { session.takeoff.items.len() } else { session.conflicts.len() } }),
+    )
 }

@@ -1,0 +1,65 @@
+[
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{\"commands\": [{\"type\": \"annotation_scale\", \"name\": \"1:100\"}, {\"type\": \"new_layer\", \"name\": \"A2-WALL\"}, {\"type\": \"new_layer\", \"name\": \"A2-DOOR\"}, {\"type\": \"new_layer\", \"name\": \"A2-WINDOW\"}, {\"type\": \"new_layer\", \"name\": \"A2-ROOM\"}, {\"type\": \"new_layer\", \"name\": \"A2-TEXT\"}, {\"type\": \"new_layer\", \"name\": \"A2-DIM\"}]}",
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{\"layer\": \"A2-WALL\", \"commands\": [{\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [16, 0], \"b\": [18.8, 0.2]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [19.8, 0], \"b\": [25, 0.2]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [16, 6.8], \"b\": [17.5, 7]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [19.4, 6.8], \"b\": [21.3, 7]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [23.1, 6.8], \"b\": [25, 7]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [16, 0], \"b\": [16.2, 1.3]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [16, 2.5], \"b\": [16.2, 4.3]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [16, 5.2], \"b\": [16.2, 7]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [24.8, 0], \"b\": [25, 1]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [24.8, 2.8], \"b\": [25, 4.3]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [24.8, 6.1], \"b\": [25, 7]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [20.55, 0.2], \"b\": [20.65, 2.2]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [20.55, 3.1], \"b\": [20.65, 4]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [20.55, 4.9], \"b\": [20.65, 6.8]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [16.2, 3.55], \"b\": [19.4, 3.65]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [20.4, 3.55], \"b\": [20.55, 3.65]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [18.3, 0.2], \"b\": [18.4, 2.5]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [18.3, 3.4], \"b\": [18.4, 3.55]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [18.4, 1.8], \"b\": [19.3, 1.9]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [20.2, 1.8], \"b\": [20.55, 1.9]}, {\"type\": \"draw\", \"kind\": \"rectangle\", \"a\": [20.65, 3.25], \"b\": [24.8, 3.35]}]}",
+      "op": "batch"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{}",
+      "op": "undo_own"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{\"command\": {\"type\": \"walls\", \"height\": 3, \"thickness\": 0.2, \"layers\": {\"outline\": \"A2-WALL\", \"hatch\": \"A2-WALL-PATT\", \"centreline\": \"A2-WALL-CNTR\", \"doors\": \"A2-DOOR\", \"windows\": \"A2-WINDOW\"}, \"runs\": [{\"closed\": true, \"points\": [[16.1, 0.1], [24.9, 0.1], [24.9, 6.9], [16.1, 6.9]], \"thickness\": 0.2}, {\"points\": [[20.6, 0.1], [20.6, 6.9]], \"thickness\": 0.1}, {\"points\": [[16.1, 3.6], [20.6, 3.6]], \"thickness\": 0.1}, {\"points\": [[18.35, 0.1], [18.35, 3.6]], \"thickness\": 0.1}, {\"points\": [[18.35, 1.85], [20.6, 1.85]], \"thickness\": 0.1}, {\"points\": [[20.6, 3.3], [24.9, 3.3]], \"thickness\": 0.1}], \"openings\": [{\"run\": 0, \"at\": 3.2, \"width\": 1, \"kind\": \"window\"}, {\"run\": 0, \"at\": 10.6, \"width\": 1.8, \"kind\": \"window\"}, {\"run\": 0, \"at\": 13.9, \"width\": 1.8, \"kind\": \"window\"}, {\"run\": 0, \"at\": 22.05, \"width\": 1.9, \"kind\": \"window\"}, {\"run\": 0, \"at\": 18.3, \"width\": 1.8, \"kind\": \"window\"}, {\"run\": 0, \"at\": 26.55, \"width\": 0.9, \"kind\": \"door\", \"swing\": \"left\"}, {\"run\": 0, \"at\": 29.4, \"width\": 1.2, \"kind\": \"window\"}, {\"run\": 1, \"at\": 2.55, \"width\": 0.9, \"kind\": \"door\", \"swing\": \"right\"}, {\"run\": 1, \"at\": 4.35, \"width\": 0.9, \"kind\": \"door\", \"swing\": \"right\"}, {\"run\": 2, \"at\": 3.45, \"width\": 0.9, \"kind\": \"door\", \"swing\": \"left\"}, {\"run\": 3, \"at\": 2.85, \"width\": 0.9, \"kind\": \"door\", \"swing\": \"left\"}, {\"run\": 4, \"at\": 1.4, \"width\": 0.9, \"kind\": \"door\", \"swing\": \"right\"}]}}",
+      "op": "run"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{}",
+      "op": "undo_own"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{}",
+      "op": "undo_own"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{\"command\": {\"height\": 3, \"layers\": {\"centreline\": \"A2-WALL-CNTR\", \"doors\": \"A2-DOOR\", \"hatch\": \"A2-WALL-PATT\", \"outline\": \"A2-WALL\", \"windows\": \"A2-WINDOW\"}, \"openings\": [{\"at\": 1.5, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 4.5, \"kind\": \"door\", \"run\": 0, \"swing\": \"left\", \"width\": 1}, {\"at\": 6, \"kind\": \"window\", \"run\": 0, \"width\": 1.4}, {\"at\": 11.8, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 14.1, \"kind\": \"window\", \"run\": 0, \"width\": 1}, {\"at\": 16.7, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 22, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 25.3, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 1.2, \"kind\": \"door\", \"run\": 1, \"swing\": \"right\", \"width\": 0.9}, {\"at\": 5, \"kind\": \"door\", \"run\": 1, \"swing\": \"right\", \"width\": 0.9}, {\"at\": 1, \"kind\": \"door\", \"run\": 3, \"swing\": \"right\", \"width\": 0.9}, {\"at\": 0.8, \"kind\": \"door\", \"run\": 5, \"swing\": \"left\", \"width\": 0.9}], \"runs\": [{\"closed\": true, \"points\": [[16.1, 0.1], [24.7, 0.1], [24.7, 6.7], [16.1, 6.7]], \"thickness\": 0.2}, {\"points\": [[19.95, 0.2], [19.95, 6.6]], \"thickness\": 0.1}, {\"points\": [[16.2, 3.6], [19.9, 3.6]], \"thickness\": 0.1}, {\"points\": [[23, 0.2], [23, 2.15]], \"thickness\": 0.1}, {\"points\": [[23, 2.2], [24.6, 2.2]], \"thickness\": 0.1}, {\"points\": [[21.6, 4.4], [24.6, 4.4]], \"thickness\": 0.1}, {\"points\": [[21.6, 4.4], [21.6, 6.6]], \"thickness\": 0.1}], \"thickness\": 0.2, \"type\": \"walls\"}}",
+      "op": "run"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{}",
+      "op": "undo_own"
+    }
+  },
+  {
+    "tool": "qiyas_execute",
+    "input": {
+      "args": "{\"command\": {\"height\": 3, \"layers\": {\"centreline\": \"A2-WALL-CNTR\", \"doors\": \"A2-DOOR\", \"hatch\": \"A2-WALL-PATT\", \"outline\": \"A2-WALL\", \"windows\": \"A2-WINDOW\"}, \"openings\": [{\"at\": 1.5, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 4.5, \"kind\": \"door\", \"run\": 0, \"swing\": \"left\", \"width\": 1}, {\"at\": 6, \"kind\": \"window\", \"run\": 0, \"width\": 1.4}, {\"at\": 11.8, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 14.1, \"kind\": \"window\", \"run\": 0, \"width\": 1}, {\"at\": 16.7, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 22, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 25.3, \"kind\": \"window\", \"run\": 0, \"width\": 1.5}, {\"at\": 1.2, \"kind\": \"door\", \"run\": 1, \"swing\": \"right\", \"width\": 0.9}, {\"at\": 5, \"kind\": \"door\", \"run\": 1, \"swing\": \"right\", \"width\": 0.9}, {\"at\": 1, \"kind\": \"door\", \"run\": 3, \"swing\": \"right\", \"width\": 0.9}, {\"at\": 0.8, \"kind\": \"door\", \"run\": 5, \"swing\": \"left\", \"width\": 0.9}], \"runs\": [{\"closed\": true, \"points\": [[16.1, 0.1], [24.7, 0.1], [24.7, 6.7], [16.1, 6.7]], \"thickness\": 0.2}, {\"points\": [[19.95, 0.1], [19.95, 6.7]], \"thickness\": 0.1}, {\"points\": [[16.1, 3.6], [19.95, 3.6]], \"thickness\": 0.1}, {\"points\": [[23, 0.1], [23, 2.2]], \"thickness\": 0.1}, {\"points\": [[23, 2.2], [24.7, 2.2]], \"thickness\": 0.1}, {\"points\": [[21.6, 4.4], [24.7, 4.4]], \"thickness\": 0.1}, {\"points\": [[21.6, 4.4], [21.6, 6.7]], \"thickness\": 0.1}], \"thickness\": 0.2, \"type\": \"walls\"}}",
+      "op": "run"
+    }
+  }
+]

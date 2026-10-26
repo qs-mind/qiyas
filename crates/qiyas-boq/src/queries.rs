@@ -1,6 +1,7 @@
 //! Human-readable queries plus a lossless JSON record for workbook round trips.
 use crate::BoqError;
 use calamine::{open_workbook_auto, Reader};
+use qiyas_core::deliverables::{display_sheet, Language};
 use qiyas_core::Conflict;
 use rust_xlsxwriter::{Format, Workbook};
 use std::path::Path;
@@ -36,7 +37,11 @@ pub(crate) fn write(book: &mut Workbook, queries: &[Conflict]) -> Result<(), Boq
                 .unwrap_or_else(|| c.reason.clone()),
             q.map(|q| q.question_ar.clone())
                 .unwrap_or_else(|| c.reason_ar.clone()),
-            c.sheets.join(", "),
+            c.sheets
+                .iter()
+                .map(|s| display_sheet(s, Language::En))
+                .collect::<Vec<_>>()
+                .join(", "),
             q.map(|q| {
                 q.references
                     .iter()
@@ -85,6 +90,13 @@ pub(crate) fn write(book: &mut Workbook, queries: &[Conflict]) -> Result<(), Boq
     }
     sheet.set_column_range_width(0, 12, 22.)?;
     sheet.set_column_range_width(3, 4, 60.)?;
+    for column in [0, 6, 11, 12] {
+        sheet.set_column_hidden(column)?;
+    }
+    for column in [3, 4, 8, 10] {
+        sheet.set_column_format(column, &Format::new().set_text_wrap())?;
+    }
+    sheet.set_print_area(0, 1, queries.len() as u32, 10)?;
     Ok(())
 }
 pub fn import_queries(path: &Path) -> Result<Vec<Conflict>, BoqError> {

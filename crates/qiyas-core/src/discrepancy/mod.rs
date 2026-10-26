@@ -236,7 +236,7 @@ impl Session {
         schedules: Vec<crate::Schedule>,
         source: Source,
     ) -> Result<(), CoreError> {
-        self.transaction(source, "check", |s| {
+        self.transaction(source, "discrepancy_check", |s| {
             let original_sheet = s.sheet.clone();
             let comments = s.list_comments();
             let old_clouds: Vec<_> = s
@@ -308,33 +308,34 @@ impl Session {
                     let [[x0, y0], [x1, y1]] = bounds;
                     let text =
                         format!("RFI {}\n{}\n{}", c.id, query.question_en, query.question_ar);
-                    let outcome = s.run_as(
-                        Command::Comment {
-                            points: vec![
-                                [x0 - pad, y0 - pad],
-                                [x1 + pad, y0 - pad],
-                                [x1 + pad, y1 + pad],
-                                [x0 - pad, y1 + pad],
-                            ]
-                            .into(),
-                            text,
-                            arc_len: None,
-                        },
-                        source,
-                    )?;
-                    if let Outcome::Added { handles } = outcome {
-                        query.clouds.push(handles[0]);
-                    }
+                    // This text is derived by the check engine, with evidence in the query.
+                    // User-supplied AI/MCP comments still require a take-off citation.
+                    let handles =
+                        s.record_document_change(source, "comment", true, false, |s| {
+                            s.add_comment(
+                                vec![
+                                    [x0 - pad, y0 - pad],
+                                    [x1 + pad, y0 - pad],
+                                    [x1 + pad, y1 + pad],
+                                    [x0 - pad, y1 + pad],
+                                ],
+                                &text,
+                                None,
+                            )
+                        })?;
+                    query.clouds.push(handles[0]);
                 }
             }
             s.set_sheet(&original_sheet)?;
+            // Qiyas's own write of the computed result: the agent-source refusal in
+            // `SetKnowledge` is for hand-typed results, and the group keeps `source`.
             s.run_as(
                 Command::SetKnowledge {
                     kind: knowledge::Kind::Queries,
                     name: "result".into(),
                     data: json!(conflicts),
                 },
-                source,
+                Source::User,
             )?;
             s.run_as(
                 Command::SetConflicts {

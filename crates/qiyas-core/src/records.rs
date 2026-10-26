@@ -81,6 +81,7 @@ pub enum Collection {
     KnowledgeChecks,
     KnowledgeQueries,
     KnowledgeReports,
+    KnowledgePlacement,
 }
 
 /// How much of each record a page gives.
@@ -179,15 +180,69 @@ pub struct RecordPage {
 impl Session {
     /// The records of `q.collection` that match `q`, one page.
     pub fn records(&self, q: &RecordQuery) -> Result<RecordPage, CoreError> {
+        let _read = self.evaluation_read()?;
         let detail = if q.fields.is_empty() && q.conditions.is_empty() {
             q.detail
         } else {
             Detail::Full
         };
+        // Object keys are driver IDs. Push a named-object selection down before quantities
+        // are evaluated, retaining the normal key and condition filtering below.
+        let mut object_ids =
+            (q.collection == Collection::Objects && !q.names.is_empty()).then(|| {
+                q.names
+                    .iter()
+                    .filter_map(|name| name.parse::<u64>().ok())
+                    .collect::<BTreeSet<_>>()
+            });
+        if q.collection == Collection::Objects {
+            for condition in &q.conditions {
+                if !matches!(
+                    condition.path.as_str(),
+                    "key" | "handle" | "id" | "/key" | "/id"
+                ) {
+                    continue;
+                }
+                let candidates = match condition.op {
+                    WhereOp::Eq => Some(vec![&condition.value]),
+                    WhereOp::In => condition
+                        .value
+                        .as_array()
+                        .map(|values| values.iter().collect()),
+                    _ => None,
+                };
+                if let Some(values) = candidates {
+                    let selected: Option<BTreeSet<u64>> = values
+                        .into_iter()
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .and_then(|value| value.parse().ok())
+                                .or_else(|| {
+                                    let number = value.as_f64()?;
+                                    // Record numeric comparison uses f64. Above its exact integer
+                                    // range, several handles can compare equal; retain the full path.
+                                    (number >= 0.0
+                                        && number < (1u64 << 53) as f64
+                                        && number.fract() == 0.0)
+                                        .then_some(number as u64)
+                                })
+                        })
+                        .collect();
+                    if let Some(selected) = selected {
+                        object_ids = Some(object_ids.map_or_else(
+                            || selected.clone(),
+                            |ids| ids.intersection(&selected).copied().collect(),
+                        ));
+                    }
+                }
+            }
+        }
+        let object_ids = object_ids.map(|ids| ids.into_iter().collect::<Vec<_>>());
         let all = match q.collection {
             Collection::Entities => self.entity_records(q, detail, None)?,
             Collection::Viewports => self.viewport_records(q, detail)?,
-            other => self.other_records(other, detail)?,
+            other => self.other_records(other, detail, object_ids.as_deref())?,
         };
         let mut warnings = validate_paths(&all, q)?;
         let names: Vec<String> = q.names.iter().map(|n| normalize_name(n)).collect();
@@ -348,6 +403,7 @@ impl Session {
         &self,
         collection: Collection,
         detail: Detail,
+        object_ids: Option<&[u64]>,
     ) -> Result<Vec<Value>, CoreError> {
         let doc = &self.drawing.doc;
         let full = detail == Detail::Full;
@@ -464,9 +520,9 @@ impl Session {
             Collection::Comments => list(self.list_comments(), "Comment", "id"),
             Collection::Constraints => list(self.list_constraints(), "Constraint", "id"),
             Collection::ObjectTypes => list(self.object_types()?, "ObjectType", "name"),
-            Collection::Objects => self.objects(&crate::objects::ObjectFilter::default())?.into_iter().map(|o| table(&o.instance.id.to_string(), "Object", json!(o), json!({"name":o.instance.type_name,"category":o.category,"properties":o.instance.props,"quantities":o.quantities}))).collect(),
-            Collection::KnowledgeReports | Collection::KnowledgeChecks | Collection::KnowledgeQueries | Collection::KnowledgeTypes | Collection::KnowledgeLevels | Collection::KnowledgeTables | Collection::KnowledgeRules | Collection::KnowledgeSheets | Collection::KnowledgeMappings | Collection::KnowledgeViews | Collection::KnowledgeMeasurement => {
-                let kind = match collection { Collection::KnowledgeReports => crate::knowledge::Kind::Reports, Collection::KnowledgeChecks => crate::knowledge::Kind::Checks, Collection::KnowledgeQueries => crate::knowledge::Kind::Queries, Collection::KnowledgeTypes => crate::knowledge::Kind::Types, Collection::KnowledgeLevels => crate::knowledge::Kind::Levels, Collection::KnowledgeTables => crate::knowledge::Kind::Tables, Collection::KnowledgeRules => crate::knowledge::Kind::Rules, Collection::KnowledgeSheets => crate::knowledge::Kind::Sheets, Collection::KnowledgeMappings => crate::knowledge::Kind::Mappings, Collection::KnowledgeViews => crate::knowledge::Kind::Views, _ => crate::knowledge::Kind::Measurement };
+            Collection::Objects => self.object_records_for(&crate::objects::ObjectFilter::default(), object_ids, true)?.into_iter().map(|o| table(&o.instance.id.to_string(), "Object", json!(o), json!({"name":o.instance.type_name,"category":o.category,"properties":o.instance.props,"quantities":o.quantities}))).collect(),
+            Collection::KnowledgePlacement | Collection::KnowledgeReports | Collection::KnowledgeChecks | Collection::KnowledgeQueries | Collection::KnowledgeTypes | Collection::KnowledgeLevels | Collection::KnowledgeTables | Collection::KnowledgeRules | Collection::KnowledgeSheets | Collection::KnowledgeMappings | Collection::KnowledgeViews | Collection::KnowledgeMeasurement => {
+                let kind = match collection { Collection::KnowledgePlacement => crate::knowledge::Kind::Placement, Collection::KnowledgeReports => crate::knowledge::Kind::Reports, Collection::KnowledgeChecks => crate::knowledge::Kind::Checks, Collection::KnowledgeQueries => crate::knowledge::Kind::Queries, Collection::KnowledgeTypes => crate::knowledge::Kind::Types, Collection::KnowledgeLevels => crate::knowledge::Kind::Levels, Collection::KnowledgeTables => crate::knowledge::Kind::Tables, Collection::KnowledgeRules => crate::knowledge::Kind::Rules, Collection::KnowledgeSheets => crate::knowledge::Kind::Sheets, Collection::KnowledgeMappings => crate::knowledge::Kind::Mappings, Collection::KnowledgeViews => crate::knowledge::Kind::Views, _ => crate::knowledge::Kind::Measurement };
                 list(crate::knowledge::list(doc,kind)?, "Knowledge", "name")
             }
             Collection::Parameters => list(self.list_parameters(), "Parameter", "name"),

@@ -171,6 +171,28 @@ pub(crate) struct Candidate<'a> {
 }
 
 impl Session {
+    /// Spatial filter for an entity read, including a nested block's placement.
+    pub fn entity_in_query_box(
+        &self,
+        handle: u64,
+        chain: &[u64],
+        within: [[f64; 2]; 2],
+    ) -> Result<bool, crate::CoreError> {
+        let xrefs = self.xref_docs();
+        let located = crate::session::locate(&self.drawing.doc, &xrefs, handle, chain)?;
+        let c = Candidate {
+            entity: located.entity,
+            doc: located.doc,
+            xf: located.xf,
+            layer: Cow::Borrowed(&located.entity.common().layer),
+            chain: chain.to_vec(),
+            xref: None,
+        };
+        let b = bounds(&self.points_of(&xrefs, &c));
+        let within = normalized_box(within);
+        Ok((0..2).all(|i| b[0][i] <= within[1][i] && b[1][i] >= within[0][i]))
+    }
+
     /// The references on `sheet` (top level, not invisible) to loaded xrefs.
     pub(crate) fn sheet_xrefs(&self, sheet: &str) -> Vec<XrefAt<'_>> {
         let host = &self.drawing.doc;
@@ -326,7 +348,16 @@ impl Session {
     /// block's anonymous copies count as the dynamic block. References at the top of the sheet's
     /// xrefs count on their `XREF|LAYER`.
     pub fn block_summary(&self, sheet: Option<&str>) -> Vec<BlockCount> {
-        self.block_counts(sheet, true)
+        self.block_counts(sheet, true, None)
+    }
+
+    /// Count only references whose insertion is in the spatial filter, before grouping.
+    pub fn block_summary_within(
+        &self,
+        sheet: Option<&str>,
+        within: [[f64; 2]; 2],
+    ) -> Vec<BlockCount> {
+        self.block_counts(sheet, true, Some(normalized_box(within)))
     }
 
     /// Block references on a sheet as the file has them: layers the user has hidden count, only
@@ -334,7 +365,7 @@ impl Session {
     /// values, so the references tagged "D1" are counted apart from those tagged "D2". Used by
     /// the comparison, which must not change with what the user is looking at.
     pub fn block_summary_in_file(&self, sheet: Option<&str>) -> Vec<BlockCount> {
-        self.block_counts(sheet, false)
+        self.block_counts(sheet, false, None)
     }
 
     /// Shared bounded enumeration. An array INSERT is one record, not its visible cells.
@@ -377,11 +408,21 @@ impl Session {
     }
 
     /// `block_summary` when `as_shown`, else `block_summary_in_file`.
-    fn block_counts(&self, sheet: Option<&str>, as_shown: bool) -> Vec<BlockCount> {
+    fn block_counts(
+        &self,
+        sheet: Option<&str>,
+        as_shown: bool,
+        within: Option<[[f64; 2]; 2]>,
+    ) -> Vec<BlockCount> {
         // (block, layer, attribute values when split by them) -> (count, attribute values).
         type Key = (String, String, Vec<String>);
         let mut counts: HashMap<Key, (usize, BTreeSet<String>)> = HashMap::new();
-        self.visit_countable_inserts(sheet, as_shown, |insert, doc, layer, _| {
+        self.visit_countable_inserts(sheet, as_shown, |insert, doc, layer, xf| {
+            let at = [insert.insert_point.x, insert.insert_point.y];
+            let at = xf.map_or(at, |xf| xf.apply(at));
+            if within.is_some_and(|b| !inside(at, b)) {
+                return;
+            }
             let values: BTreeSet<String> = insert
                 .attributes
                 .iter()

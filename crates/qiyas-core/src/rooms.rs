@@ -7,7 +7,8 @@
 //! These are candidate areas only: geometry cannot grant professional approval, so
 //! every room says `measurement_basis` "unapproved_net" and `net_accuracy_eligible` false, and
 //! `Command::LabelSpaces` writes them as "Area 58.28 m²" (Arabic when asked, or
-//! when the room's name is Arabic).
+//! when an existing room-name text in a supplied drawing is Arabic). New drawing text defaults
+//! to English regardless of the chat language or a seed's name.
 
 use std::collections::HashSet;
 
@@ -176,12 +177,7 @@ pub(crate) fn ring_area(ring: &[[f64; 2]], bulges: &[f64]) -> f64 {
 /// A text that is an area or a number, not a room's name.
 pub(crate) fn looks_like_a_label(text: &str) -> bool {
     let t = text.trim();
-    let lower = t.to_lowercase();
-    t.parse::<f64>().is_ok()
-        || lower.ends_with("m²")
-        || lower.ends_with("m2")
-        || t.ends_with("م²")
-        || t.ends_with("م2")
+    crate::numbers::parse(t).is_some() || crate::numbers::area_text(t).is_some()
 }
 
 fn bounds_of(points: &[[f64; 2]]) -> [[f64; 2]; 2] {
@@ -286,7 +282,7 @@ impl Session {
             ),
         };
         let language = language.unwrap_or_else(|| {
-            let arabic = room.name.as_deref().unwrap_or_default().chars().any(|c| {
+            let arabic = !self.is_untitled() && room.from_text.is_some() && room.name.as_deref().unwrap_or_default().chars().any(|c| {
                 matches!(c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')
             });
             if arabic { LabelLanguage::Ar } else { LabelLanguage::En }
@@ -299,6 +295,8 @@ impl Session {
         &self,
         query: &RoomsQuery,
     ) -> Result<Vec<RoomLabelDefault>, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("rooms.room_label_defaults");
         let (rooms, _) = self.find_rooms(query)?;
         Ok(rooms
             .iter()
@@ -316,7 +314,8 @@ impl Session {
     /// `Command::LabelSpaces`: the rooms of `q`, each with its candidate area written as a text
     /// just under its name (or at its seed point), on `layer` (made when missing; the current
     /// layer when none), `height` metres tall (the name's height, else 2.5 mm at the annotation
-    /// scale), to `decimals` places, in `language` (the name's when none). One undo step.
+    /// scale), to `decimals` places, in English by default; supplied Arabic room-name text
+    /// may keep its language. One undo step.
     pub(crate) fn label_spaces(
         &mut self,
         q: &RoomsQuery,
@@ -326,6 +325,8 @@ impl Session {
         language: Option<LabelLanguage>,
         source: Source,
     ) -> Result<Outcome, CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("rooms.label_spaces");
         let decimals = decimals.unwrap_or(2);
         if decimals > 6 {
             return Err(invalid("decimals is 0 to 6"));
@@ -423,9 +424,7 @@ impl Session {
                         .iter()
                         .any(|l| l.name.eq_ignore_ascii_case(layer));
                 if !known {
-                    return Err(invalid(format!(
-                        "No layer named {layer}; the layers list gives the names"
-                    )));
+                    return Ok((Vec::new(), skipped));
                 }
                 let mut handles = HashSet::new();
                 for kind in ["Text", "MText"] {
@@ -507,11 +506,49 @@ impl Session {
 
     /// The spaces round the seeds, and the seeds that found none.
     fn find_rooms(&self, q: &RoomsQuery) -> Result<(Vec<Room>, Vec<SkippedRoom>), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("rooms.find_rooms");
+        let _read = self.evaluation_read()?;
         let (seeds, mut skipped) = self.room_seeds(q)?;
         if seeds.is_empty() {
-            return Err(invalid(
-                "No room names found to start from: give seeds, or check text_layer and names (the texts list shows them)",
-            ));
+            let mut candidates = std::collections::BTreeMap::<String, usize>::new();
+            for row in self.read_text(Some(&self.sheet), q.within) {
+                let text = row.text.trim();
+                if row.xref.is_some()
+                    || row.inside_block.is_some()
+                    || text.is_empty()
+                    || text.chars().count() > 80
+                    || looks_like_a_label(text)
+                {
+                    continue;
+                }
+                if self
+                    .drawing
+                    .doc
+                    .get_entity(opencadcodec::Handle::new(row.handle))
+                    .is_some_and(|e| {
+                        crate::draw::room_boundary::is_grid(e) || crate::object_tags::is_tag(e)
+                    })
+                {
+                    continue;
+                }
+                if matches!(
+                    self.room_boundary_in(&self.sheet, row.at, &q.boundary_layers),
+                    Boundary::Ring { .. }
+                ) {
+                    *candidates.entry(row.layer).or_default() += 1;
+                }
+            }
+            let candidates = if candidates.is_empty() {
+                "none; give a seed point inside each room".into()
+            } else {
+                candidates
+                    .into_iter()
+                    .map(|(layer, count)| format!("{layer} ({count})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(invalid(format!("No room names found. Candidate text layers (short texts inside closed regions): {candidates}. Retry text_layer or give seeds.")));
         }
         let subtract = q.subtract_islands.unwrap_or(true);
         let mut rooms: Vec<Room> = Vec::new();

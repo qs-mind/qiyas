@@ -29,7 +29,7 @@ const card: ToolCardItem = {
   stale: false,
 };
 
-function setup(transcript: Transcript = EMPTY, busy = false, error: string | null = null) {
+function setup(transcript: Transcript = EMPTY, busy = false, error: string | null = null, showTechnicalDetails = false) {
   const assistant = {
     transcript,
     busy,
@@ -41,9 +41,19 @@ function setup(transcript: Transcript = EMPTY, busy = false, error: string | nul
   };
   const onShow = vi.fn();
   const onUndo = vi.fn();
-  render(<AssistantPanel assistant={assistant} onShow={onShow} onUndo={onUndo} onSettings={() => {}} />);
+  render(<AssistantPanel showTechnicalDetails={showTechnicalDetails} assistant={assistant} onShow={onShow} onUndo={onUndo} onSettings={() => {}} />);
   return { assistant, onShow, onUndo };
 }
+
+test("a lost connection keeps completed work and offers Continue", () => {
+  const { assistant } = setup({ items: [card] }, false,
+    JSON.stringify({ code: "ai.error.network", message: "Connection failed", message_ar: "انقطع الاتصال" }));
+  expect(screen.getByText("Connection lost")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(assistant.send).toHaveBeenCalledWith("Continue from the last completed step. Keep the finished work.");
+  expect(assistant.clear).not.toHaveBeenCalled();
+  expect(document.querySelectorAll(".tool-card")).toHaveLength(1);
+});
 
 test("empty state offers three examples; one fills the box", () => {
   setup();
@@ -90,7 +100,7 @@ test("the checklist translates all states into Arabic and follows the page direc
       ] }] },
       busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn(),
     };
-    render(<LanguageProvider><AssistantPanel assistant={assistant} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} /></LanguageProvider>);
+    render(<LanguageProvider><AssistantPanel showTechnicalDetails assistant={assistant} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} /></LanguageProvider>);
     expect(screen.getByRole("region", { name: ar["ai.plan"] })).toBeTruthy();
     for (const key of ["ai.plan.pending", "ai.plan.active", "ai.plan.done", "ai.plan.skipped"] as const) expect(screen.getByText(ar[key])).toBeTruthy();
     expect(document.documentElement.dir).toBe("rtl");
@@ -133,8 +143,7 @@ test("a transcript shows messages, Markdown and a tool card with Show and Undo",
   expect(screen.getByText(/two/).closest("li")?.textContent).toBe("two <b>x</b>");
   expect(document.querySelector(".msg b")).toBeNull();
   expect(screen.getByText("Updated measurements.")).toBeTruthy();
-  expect(document.querySelector(".technical-details pre")?.textContent).toContain("12.000 m2: wall");
-  expect(document.querySelector(".technical-details")?.hasAttribute("open")).toBe(false);
+  expect(document.querySelector(".technical-details")).toBeNull();
   fireEvent.click(screen.getByText("Show"));
   expect(onShow).toHaveBeenCalledWith(card);
   fireEvent.click(screen.getByText("Undo"));
@@ -185,7 +194,7 @@ test("after an undo the card before it can be undone; a stale card says why", ()
 
 test("a crash says so and offers a new conversation; the status line announces the end", () => {
   const { assistant } = setup({ items: [{ kind: "user", text: "hi" }] }, false, "crashed");
-  expect(screen.getByRole("alert").textContent).toBe("Mizan crashed; start a new conversation.Technical details (for support)");
+  expect(screen.getByRole("alert").textContent).toBe("Mizan crashed; start a new conversation.Settings");
   fireEvent.click(screen.getByText("Start a new conversation"));
   expect(assistant.clear).toHaveBeenCalled();
   expect(screen.getByRole("status").textContent).toBe("");
@@ -481,4 +490,71 @@ test("PDF attachments are retained with page provenance and sent without a drawi
   await waitFor(() => expect(assistant.send).toHaveBeenCalledWith('[PDF attachment: "schedule.pdf"; 3 pages; path: "/local/attachments/schedule.pdf"]'));
   expect(assistant.send.mock.calls[0][0]).toContain("/local/attachments/schedule.pdf");
   await waitFor(() => expect(screen.queryByText("schedule.pdf · 3 pages")).toBeNull());
+});
+
+ test("support details are hidden by default and available when explicitly enabled", () => {
+  setup({ items: [card] });
+  expect(document.querySelector("details.technical-details")).toBeNull();
+  cleanup();
+  setup({ items: [card] }, false, null, true);
+  expect(document.querySelector("details.technical-details pre")?.textContent).toContain(card.summary);
+  expect(document.querySelector("details.technical-details")?.hasAttribute("open")).toBe(false);
+});
+
+test("recovered failures give one calm line per turn; unresolved errors and support records remain", () => {
+  const failed = {...card, status: "error" as const, summary: "First diagnostic"};
+  const items: Transcript["items"] = [
+    {kind: "user", text: "First job"}, failed, {...failed, id: "f2", summary: "Second diagnostic"}, card,
+    {kind: "user", text: "Second job"}, {...failed, id: "f3"}, card,
+    {kind: "user", text: "Last job"}, {...failed, id: "unresolved"},
+  ];
+  setup({items});
+  expect(screen.getAllByText("A problem was resolved.")).toHaveLength(2);
+  expect(document.querySelectorAll(".tool-card.error")).toHaveLength(1);
+  expect(document.querySelector(".recovery-summary")?.textContent).not.toContain("diagnostic");
+  cleanup();
+  setup({items}, false, null, true);
+  expect(document.querySelector(".recovery-summary pre")?.textContent).toContain("First diagnostic");
+  expect(document.querySelector(".recovery-summary pre")?.textContent).toContain("Second diagnostic");
+});
+
+test("running recovery stays one calm line and becomes an unresolved card if the turn stops", () => {
+  const items: Transcript["items"] = [{kind: "user", text: "Check"}, {...card, status: "error"}, {...card, id: "f2", status: "error"}];
+  setup({items}, true);
+  expect(screen.getAllByText("Fixing a problem…")).toHaveLength(1);
+  expect(document.querySelectorAll(".tool-card.error")).toHaveLength(0);
+  cleanup();
+  setup({items});
+  expect(document.querySelectorAll(".tool-card.error")).toHaveLength(2);
+});
+
+
+test("a later successful read does not hide an unresolved edit", () => {
+  setup({items: [{kind: "user", text: "Measure the wall"}, {...card, status: "error"}, {...card, name: "qiyas_read", label: "query", mutating: false}]});
+  expect(document.querySelectorAll(".tool-card.error")).toHaveLength(1);
+  expect(document.querySelector(".recovery-summary")).toBeNull();
+});
+
+test("open findings remain visible beside a completed answer without technical details", () => {
+  setup({ items: [
+    { kind: "assistant", text: "The drawing is ready for review.", finished: true },
+    { kind: "open_findings", findings: [{ rule: "text_overlaps_text", message: "Entities 2 and 3 overlap", handles: [2, 3] }], revision: { document_revision: 7 } },
+  ] });
+  expect(screen.getByText("The drawing is ready for review.")).toBeTruthy();
+  expect(screen.getByText("Open drawing findings")).toBeTruthy();
+  expect(screen.getByText("Text overlaps other text. (1)")).toBeTruthy();
+  expect(screen.queryByText("Entities 2 and 3 overlap")).toBeNull();
+});
+
+
+test("composer drafts belong to their drawing", () => {
+  const assistant = { transcript: EMPTY, busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn() };
+  const panel = (workspace: number) => <AssistantPanel assistant={{ ...assistant, workspace }} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />;
+  const { rerender } = render(panel(1));
+  fireEvent.change(screen.getByLabelText("Type your request…"), { target: { value: "First drawing draft" } });
+  rerender(panel(2));
+  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe("");
+  fireEvent.change(screen.getByLabelText("Type your request…"), { target: { value: "Second drawing draft" } });
+  rerender(panel(1));
+  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe("First drawing draft");
 });

@@ -4,6 +4,7 @@
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { useRef, useState, type SetStateAction } from "react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { setWorkspace } from "../workspaceIpc";
 import type { DrawingInfo, Recoverable } from "../api";
 import { LanguageProvider, useT } from "../i18n";
 import { enqueue, laterOpens, localTime } from "../shell/recoveryQueue";
@@ -16,6 +17,9 @@ const UNTITLED = "/home/qs/.config/com.qsmind.qiyas/untitled/Untitled-1.dwg";
 
 const core = vi.hoisted(() => ({
   calls: [] as string[],
+  busy: false,
+  active: 2,
+  keepBusy: false,
   /** What `discard_autosave` refuses with (a live lock), or null. */
   refuseDiscard: null as string | null,
 }));
@@ -41,11 +45,14 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "new_drawing":
         return { ...info(UNTITLED), untitled: true };
       case "tabs":
-        return { tabs: [{ id: 2, path: VILLA, title: "villa.dwg", dirty: true }], active: 2 };
+        return { tabs: [{ id: 2, path: VILLA, title: "villa.dwg", dirty: true, busy: core.busy }], active: core.active };
       case "drawing_info":
         return info(VILLA);
       case "activate_tab":
         return info(VILLA);
+      case "ai_cancel":
+        if (!core.keepBusy) core.busy = false;
+        return null;
       case "close_tab":
         return { tabs: [], active: null };
       case "discard_autosave":
@@ -91,6 +98,7 @@ afterEach(() => {
   core.calls.length = 0;
   localStorage.removeItem("qiyas.files.lastFolder");
   core.refuseDiscard = null;
+  core.busy = false; core.active = 2; core.keepBusy = false; vi.useRealTimers();
   recoverable.recents = [];
   recoverable.found = [];
   recoverable.untitled = [];
@@ -122,7 +130,7 @@ const item = (more: Partial<Recoverable> = {}): Recoverable => ({
 });
 
 /** `useDrawings` with the window around it reduced to state and no-ops; nothing open at first. */
-function useWindow(notices: string[]) {
+function useWindow(notices: string[], viewport?: Parameters<typeof useDrawings>[0]["viewport"]) {
   const [info, setInfo] = useState<DrawingInfo | null>(null);
   const switchGen = useRef(0);
   const autosaveOff = useRef(false);
@@ -159,6 +167,7 @@ function useWindow(notices: string[]) {
     preset,
     lastPoint,
     measure: { cancel: nothing },
+    viewport,
   });
 }
 
@@ -179,7 +188,7 @@ test("at launch an untitled drawing's crash autosave is asked about with the rec
 test("Mizan's requests: a drawing it put on screen is shown; closing unsaved work asks, keeping its conversation", async () => {
   const { result } = await launch();
   await act(async () => events.handlers.get("drawing:shown")!({ payload: null }));
-  expect(core.calls).toContain("drawing_info null");
+  expect(core.calls).toContain('drawing_info {"workspace":2}');
 
   core.calls.length = 0;
   // Don't Save (the faked dialog answers No): the tab closes, the conversation goes on.
@@ -202,7 +211,7 @@ test("New makes an untitled drawing in the units chosen; its Save starts in Docu
 
   dialogs.save.mockResolvedValueOnce("/jobs/new.dwg");
   await act(() => result.current.saveFile());
-  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/new.dwg"}`);
+  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/new.dwg","workspace":2}`);
 });
 
 test("Recover at launch, nothing open: Save As is offered with the recovered drawing's name; cancelled, the notice says where it came from", async () => {
@@ -227,7 +236,7 @@ test("Recover then a real Save As: the notice says both where it came from and w
 
   await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
 
-  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/villa-fixed.dwg"}`);
+  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/villa-fixed.dwg","workspace":2}`);
   expect(notices.at(-1)).toBe(
     `Recovered from autosave of ⁨${localTime(1_760_000_000, "en")}⁩; saved to ⁨/jobs/villa-fixed.dwg⁩`,
   );
@@ -414,4 +423,55 @@ test("a missing chat drawing continues on screen with a notice and an open tab k
   expect(core.calls.some((call) => call.startsWith("open_drawing"))).toBe(false);
   await act(async () => { expect(await result.current.prepareConversation({ ...chat, drawing: null, drawing_exists: false })).toBe(true); });
   expect(notices).toContain("The original drawing is unavailable. Continuing on the drawing on screen.");
+});
+
+
+test("closing a busy drawing asks first; waiting for its tool leaves tab switching usable", async () => {
+  vi.useFakeTimers();
+  core.busy = true; core.keepBusy = true;
+  const { result } = await launch();
+  const { ask } = await import("../fileDialogs");
+  vi.mocked(ask).mockResolvedValueOnce(false);
+  await act(async () => result.current.closeFileTab(2));
+  expect(ask).toHaveBeenCalledWith("Mizan is working on this drawing: stop and close?", expect.anything());
+  expect(core.calls.some(call => call.startsWith("ai_cancel"))).toBe(false);
+  let close!: Promise<void>;
+  act(() => { close = result.current.closeFileTab(2); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+  expect(core.calls).toContain('ai_cancel {"workspace":2}');
+  for (let second = 0; second < 60; second++) {
+    await act(async () => { expect(await result.current.switchTab(2)).toBe(true); });
+    expect(core.calls.some(call => call.startsWith("close_tab"))).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  }
+  core.busy = false;
+  await act(async () => { await vi.advanceTimersByTimeAsync(50); await close; });
+  expect(core.calls.some(call => call.startsWith("close_tab"))).toBe(true);
+});
+
+
+test("Save As keeps its workspace when the visible tab changes during the file dialog", async () => {
+  const { result } = await launch();
+  await act(() => result.current.newDrawing("cm"));
+  let choose!: (path: string) => void;
+  dialogs.save.mockImplementationOnce(() => new Promise(resolve => { choose = resolve; }));
+  let saving!: Promise<void>;
+  await act(async () => { saving = result.current.saveFileAs(); });
+  setWorkspace(3);
+  await act(async () => { choose("/jobs/original.dwg"); await saving; });
+  expect(core.calls).toContain('save_drawing_as {"path":"/jobs/original.dwg","workspace":2}');
+  expect(core.calls).not.toContain('save_drawing_as {"path":"/jobs/original.dwg","workspace":3}');
+  expect(core.calls).toContain('drawing_info {"workspace":2}');
+});
+
+
+test("a file tool's tab switch saves the outgoing canvas view to its original workspace", async () => {
+  const viewport = { current: { visible: () => [[10, 20], [30, 40]] } } as unknown as Parameters<typeof useDrawings>[0]["viewport"];
+  renderHook(() => useWindow([], viewport), { wrapper: LanguageProvider });
+  await act(async () => {});
+  core.calls.length = 0;
+  core.active = 3; // The native file tool switches before notifying the webview.
+  await act(async () => events.handlers.get("drawing:shown")!({ payload: null }));
+  const views = core.calls.filter(call => call.startsWith("workspace_view_state ")).map(call => JSON.parse(call.slice("workspace_view_state ".length)));
+  expect(views).toEqual([{ workspace: 2, context: { selection: [], region: null, view: [[10, 20], [30, 40]], picture: false } }]);
 });

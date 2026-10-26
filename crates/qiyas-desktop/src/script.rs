@@ -23,7 +23,7 @@ use qiyas_core::{Command, Current, Kind, LayerProp, Outcome, Reported, Session, 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
-use crate::commands::{new_conversation, remember_recent, with_session};
+use crate::commands::{remember_recent, with_session};
 use crate::settings::same_file;
 use crate::state::AppState;
 use crate::tabs;
@@ -96,24 +96,37 @@ fn wait(ms: u64, cap: u64, stop: &AtomicBool) -> Result<String, String> {
 /// or a block is edited in place.
 #[tauri::command]
 pub async fn run_script<R: Runtime>(
+    workspace: Option<u32>,
     path: String,
     app: AppHandle<R>,
 ) -> Result<ScriptResult, String> {
     // DELAY sleeps and steps read and write files: off the async runtime's threads.
-    tauri::async_runtime::spawn_blocking(move || run_file(&app, Path::new(&path)))
+    let state = app.state::<AppState>().scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || run_file_bound(&app, Path::new(&path), state))
         .await
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(test)]
 fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult, String> {
+    run_file_bound(app, path, app.state::<AppState>().scoped(None)?)
+}
+fn run_file_bound<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &Path,
+    mut state: AppState,
+) -> Result<ScriptResult, String> {
     let started = Instant::now();
-    let state = app.state::<AppState>();
     let control = app.state::<ScriptControl>();
     control.stop.store(false, Ordering::Relaxed);
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("The script {} could not be read: {e}", path.display()))?;
     let drawing = {
-        let session = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+        let current = state.scoped(None)?;
+        let session = current
+            .session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some(name) = session.as_ref().and_then(Session::block_edit_name) {
             return Err(format!(
                 "Block {name} is being edited in place: save or discard the edit first (REFCLOSE), then run the script"
@@ -203,6 +216,7 @@ fn run_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<ScriptResult,
                             _ => unsaved || change,
                         };
                         if let Action::Open(_) = step.action {
+                            state = app.state::<AppState>().scoped(None)?;
                             pinned = on_screen_tab(&state);
                         }
                         repaired = match step.action {
@@ -273,7 +287,7 @@ fn run_step<R: Runtime>(
         Action::Zoom => ("zoom: nothing to do in a script".to_string(), false),
         Action::Open(path) => (open(app, state, path, false)?, true),
         Action::SaveAs(path) => {
-            with_session(state, |s| s.save_as(path))?;
+            crate::commands::save_as_with_history(state, path)?;
             remember_recent(state, &path.display().to_string());
             (format!("saved {}", path.display()), true)
         }
@@ -352,9 +366,19 @@ pub(crate) fn open<R: Runtime>(
     path: &Path,
     keep_conversation: bool,
 ) -> Result<String, String> {
+    open_checked(app, state, path, keep_conversation, None)
+}
+
+pub(crate) fn open_checked<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    path: &Path,
+    keep_conversation: bool,
+    expected: Option<&serde_json::Value>,
+) -> Result<String, String> {
     let shown = path.display().to_string();
     if let Some(id) = tabs::find_path(state, path) {
-        tabs::activate(app, state, id, keep_conversation)?;
+        tabs::activate_checked(app, state, id, keep_conversation, expected)?;
         remember_recent(state, &shown);
         return Ok(format!("showed {shown}, open already"));
     }
@@ -387,10 +411,7 @@ pub(crate) fn open<R: Runtime>(
     }
     let session = Session::open(path).map_err(|e| e.to_string())?;
     let problems = read_problems(&session);
-    if !keep_conversation {
-        new_conversation(app, state);
-    }
-    tabs::add(state, session)?;
+    tabs::add_checked(state, session, expected)?;
     remember_recent(state, &shown);
     Ok(match problems {
         0 => format!("opened {shown}"),

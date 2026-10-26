@@ -1,6 +1,6 @@
 use super::*;
 use crate::{ContentBlock, Message};
-use serde_json::json;
+use serde_json::{json, Value};
 
 // Sign-out and plan pauses act on the whole app (process-wide state), so these tests take turns.
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -34,6 +34,7 @@ fn tokens(scopes: &[&str]) -> Tokens {
 }
 fn request() -> TurnRequest {
     TurnRequest {
+        cache_key: "offline-test-conversation".into(),
         system: "Mizan".into(),
         model: "mock-model".into(),
         effort: "none".into(),
@@ -714,4 +715,135 @@ async fn mock_cancelled_rotation_commits_before_another_account_operation() {
         3,
         "cancellation never starts inference"
     );
+}
+
+#[tokio::test]
+async fn first_account_model_is_automatic_and_effort_requires_explicit_model_support() {
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    *provider.models.lock().unwrap() = Some((
+        "registration".into(),
+        vec![
+            PlanModel {
+                image_input: None,
+                id: "first".into(),
+                label: "First".into(),
+                reasoning_efforts: vec!["low".into(), "high".into()],
+            },
+            PlanModel {
+                image_input: None,
+                id: "plain".into(),
+                label: "Plain".into(),
+                reasoning_efforts: Vec::new(),
+            },
+        ],
+    ));
+    let mut req = request();
+    req.model.clear();
+    req.effort = "high".into();
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.model, "first");
+    assert_eq!(req.effort, "high");
+    req.model = "plain".into();
+    req.effort = "high".into();
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.effort, "none");
+    req.model = "first".into();
+    req.effort = "max".into();
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.effort, "none");
+}
+
+#[test]
+fn refused_reasoning_survives_conversation_state_without_account_material() {
+    let first = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    first
+        .refused_effort
+        .lock()
+        .unwrap()
+        .insert("model-one".into());
+    let state = first.save_state();
+    assert_eq!(state, json!({"refused_effort":["model-one"]}));
+    let resumed = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    resumed.restore_state(state.clone());
+    assert_eq!(resumed.save_state(), state);
+}
+
+#[tokio::test]
+#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
+async fn mock_cache_key_and_prefix_survive_plan_followup() {
+    let _serial = SERIAL.lock().await;
+    let done = json!({"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Measured."}]}],"usage":{}}});
+    let reply = json!(format!("data: {done}\n\n"));
+    let (base, server) = mock_server(vec![(200, reply.clone()), (200, reply)]).await;
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+    let mut request = request();
+    let result = provider
+        .stream_turn(request.clone(), &mut |_| {})
+        .await
+        .unwrap();
+    request.messages.push(Message::assistant(result.content));
+    request
+        .messages
+        .push(Message::user(vec![ContentBlock::Text {
+            text: "Continue".into(),
+        }]));
+    provider.stream_turn(request, &mut |_| {}).await.unwrap();
+    let requests = server.await.unwrap();
+    let bodies: Vec<Value> = requests
+        .iter()
+        .map(|r| serde_json::from_str(r.split_once("\r\n\r\n").unwrap().1).unwrap())
+        .collect();
+    assert_eq!(bodies[0]["prompt_cache_key"], "offline-test-conversation");
+    assert_eq!(bodies[0]["prompt_cache_key"], bodies[1]["prompt_cache_key"]);
+    for field in ["instructions", "tools", "model", "reasoning"] {
+        assert_eq!(bodies[0][field], bodies[1][field]);
+    }
+    for (a, b) in bodies[0]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(bodies[1]["input"].as_array().unwrap())
+    {
+        assert_eq!(a.to_string(), b.to_string());
+    }
+}
+
+#[test]
+fn model_picture_metadata_is_shared_with_the_conversation_without_a_probe() {
+    let endpoint = "http://localhost:44771/models";
+    crate::models::remember(
+        endpoint,
+        &[crate::models::ModelInfo {
+            id: "picture-model".into(),
+            label: "Model".into(),
+            image_input: Some(true),
+        }],
+    );
+    let provider = ChatgptPlan::new(
+        memory(tokens(&[PLAN_SCOPE])),
+        oauth::Protocol {
+            models: endpoint.into(),
+            ..protocol()
+        },
+    );
+    assert_eq!(provider.image_input("picture-model"), Some(true));
+    assert_eq!(provider.image_input("unconfirmed"), None);
+    crate::models::remember(
+        endpoint,
+        &[crate::models::ModelInfo {
+            id: "picture-model".into(),
+            label: "Model".into(),
+            image_input: Some(false),
+        }],
+    );
+    assert_eq!(provider.image_input("picture-model"), Some(false));
 }

@@ -274,6 +274,9 @@ impl Session {
         &mut self,
         only: Option<&std::collections::BTreeSet<u64>>,
     ) -> Result<(), CoreError> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile =
+            crate::fixtures::profile::span("object_regions.refresh_object_regions_scoped");
         if !self.has_object_regions() {
             return Ok(());
         }

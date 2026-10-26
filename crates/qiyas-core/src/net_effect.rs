@@ -4,8 +4,6 @@ use std::{collections::BTreeMap, sync::Arc};
 use opencadcodec::{CadDocument, EntityType, Handle};
 use serde_json::Value;
 
-use crate::CoreError;
-
 pub(crate) fn same_entity(a: &EntityType, b: &EntityType) -> bool {
     if a == b {
         return true;
@@ -279,6 +277,8 @@ pub(crate) struct RequestedChanges {
 
 impl RequestedChanges {
     pub(crate) fn capture(doc: &CadDocument, before: &[(Handle, Option<Arc<EntityType>>)]) -> Self {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("net_effect.capture");
         let mut requested = Self::default();
         for (handle, image) in before {
             let current = doc.get_entity(*handle);
@@ -314,6 +314,8 @@ impl RequestedChanges {
     }
 
     pub(crate) fn observe(&mut self, doc: &CadDocument, pass: &'static str) {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("net_effect.observe");
         for (&handle, &exists) in &self.existence {
             if doc.get_entity(handle).is_some() != exists {
                 self.overwritten_by
@@ -340,7 +342,10 @@ impl RequestedChanges {
         }
     }
 
-    pub(crate) fn verify(&self, doc: &CadDocument) -> Result<(), CoreError> {
+    pub(crate) fn advice(&self, doc: &CadDocument) -> Vec<Value> {
+        #[cfg(any(test, feature = "fixtures"))]
+        let _profile = crate::fixtures::profile::span("net_effect.advice");
+        let mut advice = Vec::new();
         for (&handle, &exists) in &self.existence {
             if doc.get_entity(handle).is_some() != exists {
                 let pass = self
@@ -348,7 +353,7 @@ impl RequestedChanges {
                     .get(&(handle, String::new()))
                     .copied()
                     .unwrap_or("automatic drawing updates");
-                return Err(CoreError::InvalidCommand(format!("Entity {} was {} by {pass}. The edit was cancelled; change its owning object instead.", handle.value(), if exists { "removed" } else { "restored" })));
+                advice.push(serde_json::json!({"code":"derived_value_changed","handle":handle.value(),"path":"/exists","requested":exists,"actual":doc.get_entity(handle).is_some(),"reason":pass,"message":format!("Entity {} was {} by {pass}. Edit its owning object to change this result.",handle.value(), if exists {"removed"} else {"restored"})}));
             }
         }
         for (&handle, fields) in &self.fields {
@@ -363,13 +368,10 @@ impl RequestedChanges {
                         .get(&(handle, path.clone()))
                         .copied()
                         .unwrap_or("automatic drawing updates");
-                    return Err(CoreError::InvalidCommand(format!(
-                        "Change to entity {} ({path}) was overridden by {pass}. The edit was cancelled. Change the owning object's properties, the enclosing walls, or the schedule source instead.",
-                        handle.value()
-                    )));
+                    advice.push(serde_json::json!({"code":"derived_value_changed","handle":handle.value(),"path":path,"requested":value,"actual":state.pointer(path).unwrap_or(&Value::Null),"reason":pass,"message":format!("Automatic updates changed entity {} ({path}): {pass}. Edit the owning object's properties, enclosing walls or schedule source to change this result.",handle.value())}));
                 }
             }
         }
-        Ok(())
+        advice
     }
 }

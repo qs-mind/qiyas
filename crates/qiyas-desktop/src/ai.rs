@@ -35,6 +35,7 @@ pub struct AiRun {
     /// Cancels the running turn.
     cancel: Option<CancellationToken>,
     busy: bool,
+    rebuild: bool,
     /// Bumped by every new conversation. A turn started in an older one drops its agent and its
     /// events.
     generation: u64,
@@ -129,6 +130,18 @@ impl AiRun {
         self.agent = Some(agent.with_checkpoint(self.checkpoint.clone()));
     }
 
+    pub fn rebuild_provider(&mut self) {
+        self.rebuild = self.busy;
+        self.save_logged();
+        self.agent = None;
+    }
+    pub fn checkpoint_conversation(&self) -> Option<Conversation> {
+        self.checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub fn busy(&self) -> bool {
         self.busy
     }
@@ -213,7 +226,10 @@ impl AiRun {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
             self.save_logged();
             self.messages = agent.history().len();
-            self.agent = Some(agent);
+            if !self.rebuild {
+                self.agent = Some(agent);
+            }
+            self.rebuild = false;
         }
     }
 
@@ -236,6 +252,7 @@ pub fn agent_settings(s: &Settings, language: Lang) -> AgentSettings {
     AgentSettings {
         provider: provider_identity(s),
         model: s.profile().model.clone(),
+        image_input: s.profile().image_input,
         effort: s.effective_effort().to_string(),
         language,
         autonomy: s.autonomy,
@@ -384,6 +401,7 @@ mod tests {
             providers: settings::ProviderProfiles {
                 openai_compatible: settings::ProviderProfile {
                     effort: None,
+                    image_input: None,
                     base_url: Some("https://api.runware.ai/v1".into()),
                     model: "google:gemini@3.8-flash".into(),
                 },

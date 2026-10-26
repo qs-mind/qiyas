@@ -21,7 +21,12 @@ pub async fn paper_catalog() -> Vec<Paper> {
 /// `<drawing>-<sheet>.pdf` beside the drawing); the file and what was left out. The session is
 /// held only while the plot's data is read; the PDF is written on a blocking thread.
 #[tauri::command]
-pub async fn plot_pdf(job: PlotJob, state: State<'_, AppState>) -> Result<PlotOutput, String> {
+pub async fn plot_pdf(
+    workspace: Option<u32>,
+    job: PlotJob,
+    state: State<'_, AppState>,
+) -> Result<PlotOutput, String> {
+    let state = state.scoped(workspace)?;
     let (path, snapshot) = with_session(&state, |s| {
         Ok(qiyas_plot::output_path(s, &job)
             .and_then(|path| Ok((path, qiyas_plot::plot_snapshot(s, &job)?))))
@@ -39,10 +44,13 @@ pub async fn plot_pdf(job: PlotJob, state: State<'_, AppState>) -> Result<PlotOu
 /// Only the dialog calls this; scripts, the AI and typed commands go through `plot_pdf`.
 #[tauri::command]
 pub async fn plot_pdf_to(
+    workspace: Option<u32>,
+
     job: PlotJob,
     path: String,
     state: State<'_, AppState>,
 ) -> Result<PlotOutput, String> {
+    let state = state.scoped(workspace)?;
     let path = save_dialog_pdf(&path)?;
     let snapshot = with_session(&state, |s| Ok(qiyas_plot::plot_snapshot(s, &job)))?
         .map_err(|e| e.to_string())?;
@@ -73,10 +81,13 @@ fn save_dialog_pdf(path: &str) -> Result<PathBuf, String> {
 /// print all one sheet at a time. What happened, for the status bar.
 #[tauri::command]
 pub async fn plot_and_print(
+    workspace: Option<u32>,
+
     job: PlotJob,
     printer: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let state = state.scoped(workspace)?;
     let (path, snapshot) = with_session(&state, |s| {
         Ok(qiyas_plot::spool_path(s, &job.sheet)
             .and_then(|path| Ok((path, qiyas_plot::plot_snapshot(s, &job)?))))

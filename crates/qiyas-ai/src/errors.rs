@@ -13,6 +13,8 @@ pub const CODES: &[&str] = &[
     "not_found",
     "conflict",
     "stale",
+    "stale_read",
+    "repeated_failing_call",
     "budget",
     "cancelled",
     "request_id_reused",

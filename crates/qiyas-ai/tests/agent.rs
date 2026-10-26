@@ -332,14 +332,14 @@ async fn text_stream_is_forwarded_in_order() {
         assert_eq!(b["system"][0]["type"], "text");
         assert_eq!(
             b["system"][0]["cache_control"],
-            json!({"type": "ephemeral"})
+            json!({"type": "ephemeral", "ttl": "1h"})
         );
         assert!(b["system"][0]["text"].as_str().unwrap().contains("Qiyas"));
         let tools = b["tools"].as_array().unwrap();
         assert!(tools.iter().all(|t| t["strict"] == true));
         assert_eq!(
             tools.last().unwrap()["cache_control"],
-            json!({"type": "ephemeral"})
+            json!({"type": "ephemeral", "ttl": "1h"})
         );
         assert!(tools[..tools.len() - 1]
             .iter()
@@ -539,9 +539,12 @@ async fn refusal_stop_reason_surfaces_category() {
 }
 
 #[tokio::test]
-async fn loop_stops_after_40_tool_calls() {
+async fn successful_reads_continue_beyond_40_calls() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let mock = serve(|n| {
+            if n >= 45 {
+                return text_turn(&["Done."]);
+            }
             let id = format!("toolu_{n}");
             let id: &'static str = Box::leak(id.into_boxed_str());
             tool_turn(&[(
@@ -572,24 +575,19 @@ async fn loop_stops_after_40_tool_calls() {
                 )
             })
             .count();
-        assert_eq!(run, 40);
-        assert_eq!(mock.requests().len(), 40);
-        assert_eq!(
-            events.last(),
-            Some(&AgentEvent::Stopped {
-                reason: "stopped after 40 steps".into()
-            })
-        );
-        // Every call made was answered, so the history is valid to continue from.
-        let last = agent.history().last().unwrap();
-        assert!(last.has_tool_results());
+        assert_eq!(run, 45);
+        assert_eq!(mock.requests().len(), 46);
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+        assert!(serde_json::to_string(agent.history())
+            .unwrap()
+            .contains("tool_cost"));
     })
     .await
-    .expect("test loop_stops_after_40_tool_calls timed out after 60 seconds");
+    .expect("test successful_reads_continue_beyond_40_calls timed out after 60 seconds");
 }
 
 #[tokio::test]
-async fn malformed_tool_input_still_stops_after_40_calls() {
+async fn identical_malformed_input_stops_on_sixth_attempt() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let mock = serve(|n| {
             let id: &'static str = Box::leak(format!("toolu_{n}").into_boxed_str());
@@ -608,36 +606,41 @@ async fn malformed_tool_input_still_stops_after_40_calls() {
             .iter()
             .filter(|e| matches!(e, AgentEvent::ToolResult { is_error: true, .. }))
             .count();
-        assert_eq!(answered, 40);
-        assert_eq!(mock.requests().len(), 40);
+        assert_eq!(answered, 6);
+        assert_eq!(mock.requests().len(), 6);
         assert_eq!(
             events.last(),
             Some(&AgentEvent::Stopped {
-                reason: "stopped after 40 steps".into()
+                reason: "repeated_ineffective_edit".into()
             })
         );
     })
     .await
-    .expect("test malformed_tool_input_still_stops_after_40_calls timed out after 60 seconds");
+    .expect("test identical_malformed_input_stops_on_sixth_attempt timed out after 60 seconds");
 }
 
-/// User requests and evidence stay unchanged; job-specific guidance expires at a new turn.
+/// Cache-control markers are transport metadata; every content byte, including old guidance,
+/// must stay unchanged between trims.
 fn serialised(body: &Value) -> Vec<String> {
+    fn without_markers(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.remove("cache_control");
+                for value in map.values_mut() {
+                    without_markers(value);
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(without_markers),
+            _ => {}
+        }
+    }
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
         .map(|message| {
             let mut message = message.clone();
-            if let Some(blocks) = message["content"].as_array_mut() {
-                blocks.retain(|b| {
-                    !b["text"].as_str().is_some_and(|text| {
-                        text == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::En)
-                            || text
-                                == qiyas_ai::prompt::takeoff_workflow(qiyas_ai::prompt::Lang::Ar)
-                    })
-                });
-            }
+            without_markers(&mut message);
             message.to_string()
         })
         .collect()
@@ -676,7 +679,7 @@ async fn history_is_append_only_and_system_prompt_is_stable() {
             "no live take-off in the system prompt"
         );
 
-        // Evidence and user messages only append; expired job guidance is excluded.
+        // Evidence, user messages and old job guidance only append.
         for pair in reqs.windows(2) {
             let (before, after) = (serialised(&pair[0].body), serialised(&pair[1].body));
             assert!(after.len() > before.len());
@@ -908,6 +911,7 @@ async fn api_key_absent_from_logs_and_errors() {
         .await;
         let provider = mock.anthropic().with_strict_budget();
         let req = TurnRequest {
+            cache_key: "offline-test-conversation".into(),
             system: "s".into(),
             messages: vec![qiyas_ai::Message::user(vec![
                 qiyas_ai::ContentBlock::Text { text: "hi".into() },
@@ -1116,14 +1120,20 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
             "DONE\n",
             "ERROR\n    The AI service answered 400: The request was rejected",
             "INVALID_ARGUMENT",
-            // A 4xx logs what was sent, so the next refusal can be read in the log.
-            "\n    The request: {",
-            r#""content":"","role":"assistant","tool_calls":["#,
+            // A 4xx logs what was sent (its last 4,000 characters after "…" when longer),
+            // so the next refusal can be read in the log.
+            "\n    The request: ",
+            // The tail can start inside the assistant message; openai.rs tests its empty content.
+            r#""id":"f3","type":"function"}]}"#,
             r#""role":"tool","tool_call_id":"f3""#,
             " tools: ",
-            "<system prompt, ",
         ] {
             assert!(text.contains(part), "the log lacks {part:?}:\n{text}");
+        }
+        // The system prompt's stand-in sits at the front of the request, which a long request's
+        // 4,000-character tail leaves out.
+        if text.contains("\n    The request: {") {
+            assert!(text.contains("<system prompt, "), "the log lacks the system prompt's length");
         }
         assert_eq!(text.matches("TOOL qiyas_read (").count(), 3);
         assert!(!text.contains(KEY));
@@ -1224,7 +1234,7 @@ fn many(name: &'static str, count: usize, input: impl Fn(usize) -> String) -> Re
 }
 
 #[tokio::test]
-async fn removals_and_resolutions_stop_after_10_in_one_turn() {
+async fn removals_and_resolutions_report_counts_without_blocking() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let (_dir, session) = sample();
         let ids: Vec<String> = {
@@ -1269,33 +1279,16 @@ async fn removals_and_resolutions_stop_after_10_in_one_turn() {
             .takeoff
             .items
             .len();
-        assert_eq!(left, 2, "10 removed, the 11th refused");
-        let summary = |id: &str, nth: usize| {
-            events
-                .iter()
-                .filter_map(|e| match e {
-                    AgentEvent::ToolResult { id: i, summary, .. } if i == id => Some(summary.clone()),
-                    _ => None,
-                })
-                .nth(nth)
-                .unwrap()
-        };
-        assert_eq!(
-            summary("toolu_10", 0),
-            "Too many destructive commands in one turn; ask the user to confirm"
-        );
-        assert_eq!(
-            summary("toolu_10", 1),
-            "Too many destructive commands in one turn; ask the user to confirm"
-        );
-        // Resolutions share the cap with removals, so none of them run.
-        assert_eq!(
-            summary("toolu_9", 1),
-            "Too many destructive commands in one turn; ask the user to confirm"
-        );
+        assert_eq!(left,1,"all eleven requested rows removed");
+        assert!(events.iter().filter(|e|matches!(e,AgentEvent::ToolResult{is_error:false,..})).count()>=11);
+        let history=serde_json::to_string(agent.history()).unwrap();
+        assert!(history.contains("many_removals"));
+        assert!(!history.contains("Too many destructive commands"));
+        assert!(events.iter().filter(|e|matches!(e,AgentEvent::ToolResult{is_error:true,..})).count()>=11,"missing conflicts still fail");
+
     })
     .await
-    .expect("test removals_and_resolutions_stop_after_10_in_one_turn timed out after 60 seconds");
+    .expect("test removals_and_resolutions_report_counts_without_blocking timed out after 60 seconds");
 }
 
 #[tokio::test]
@@ -1330,6 +1323,11 @@ async fn view_image_stops_when_the_image_budget_is_used() {
                     "qiyas_capture",
                     &[r#"{"source":"picture","args":{"width":64}}"#],
                 ),
+                (
+                    "toolu_3",
+                    "qiyas_capture",
+                    &[r#"{"source":"picture","args":{"width":65}}"#],
+                ),
             ]),
             _ => text_turn(&["Looked."]),
         })
@@ -1347,9 +1345,12 @@ async fn view_image_stops_when_the_image_budget_is_used() {
         let results = body["messages"][2]["content"].as_array().unwrap();
         assert!(results[0].get("is_error").is_none(), "{}", results[0]);
         assert_eq!(results[0]["content"][1]["type"], "image");
-        assert_eq!(results[1]["is_error"], true);
-        let error: Value =
+        let unchanged: Value =
             serde_json::from_str(results[1]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(unchanged["status"], "unchanged");
+        assert_eq!(results[2]["is_error"], true);
+        let error: Value =
+            serde_json::from_str(results[2]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(error["code"], "budget");
         assert_eq!(
             error["message"],
@@ -1917,10 +1918,9 @@ async fn attached_pictures_go_before_the_words() {
     .expect("test attached_pictures_go_before_the_words timed out after 60 seconds");
 }
 
-/// Old pictures give way to a line of text, so a long look round the drawing keeps working; the
-/// newest stay.
+/// Identical captures keep their first picture and append unchanged replies.
 #[tokio::test]
-async fn old_pictures_give_way_to_a_line() {
+async fn identical_pictures_keep_the_prefix_and_do_not_resend_images() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let calls: Vec<String> = (0..15).map(|k| format!("toolu_{k}")).collect();
         let mock = serve(move |n| {
@@ -1947,22 +1947,20 @@ async fn old_pictures_give_way_to_a_line() {
         let body = &requests.last().unwrap().body;
         let text = body.to_string();
         let images = text.matches("\"type\":\"image\"").count();
-        // History trimming keeps only the newest tool results whole, so at most MAX_PICTURES and
-        // at least the newest one remain; older ones give way to a line of text.
-        assert!(
-            (1..=qiyas_ai::agent::MAX_PICTURES).contains(&images),
-            "{images} pictures sent"
-        );
-        // Fifteen pictures were taken; the older ones are no longer sent whole (removed or
-        // trimmed with their tool results).
-        assert!(images < 15, "{images} pictures sent");
-        // The newest picture is still there.
+        assert_eq!(images, 1, "the same PNG is sent once");
         let messages = body["messages"].as_array().unwrap();
         let newest = &messages[messages.len() - 1]["content"][0]["content"];
-        assert_eq!(newest[1]["type"], "image");
+        let value: Value = serde_json::from_str(newest[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(value["status"], "unchanged");
+        assert_eq!(newest.as_array().unwrap().len(),1);
+        for pair in requests.windows(2) {
+            let before=serialised(&pair[0].body);
+            let after=serialised(&pair[1].body);
+            assert_eq!(&after[..before.len()],&before);
+        }
     })
     .await
-    .expect("test old_pictures_give_way_to_a_line timed out after 60 seconds");
+    .expect("test identical_pictures_keep_the_prefix_and_do_not_resend_images timed out after 60 seconds");
 }
 
 /// The effort reaches an OpenAI-compatible service; one that refuses `reasoning_effort` gets the
@@ -2206,6 +2204,7 @@ async fn invalid_output_value_keeps_the_cap_and_does_not_retry() {
     let mock = serve(|_| Reply::Status(400, vec![], json!({"error":{"message":"Invalid max_completion_tokens value, the valid range is [1, 8192]"}}).to_string())).await;
     let provider = OpenAiCompatible::new(&mock.base, None);
     let req = TurnRequest {
+        cache_key: "offline-test-conversation".into(),
         system: "s".into(),
         messages: vec![],
         tools: vec![],
@@ -2244,6 +2243,7 @@ async fn partial_usage_chunks_retain_prior_counts_through_the_http_adapter() {
         "[DONE]".into(),
     ])).await;
     let req = TurnRequest {
+        cache_key: "offline-test-conversation".into(),
         system: "s".into(),
         messages: vec![],
         tools: vec![],
@@ -2326,4 +2326,59 @@ async fn provider_failure_after_a_real_drawing_edit_preserves_work_without_a_tak
             "events":events,"error":error.public_error(),"entities_before":before,"entities_after":count(),"transcript":agent.snapshot().transcript,
         })).unwrap()).unwrap();
     }
+}
+
+#[tokio::test]
+async fn mock_openai_keeps_cache_identity_prefix_and_exact_deepseek_reasoning() {
+    use qiyas_ai::{ContentBlock, Message, ResultPart};
+    let mock = serve(|n| Reply::Data(if n == 0 { vec![
+        json!({"choices":[{"delta":{"reasoning_content":"Exact thinking\nأفكار"}}]}).to_string(),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read-1","function":{"name":"qiyas_read","arguments":"{\"op\":\"state\",\"args\":\"{}\"}"}}]},"finish_reason":"tool_calls"}]}).to_string(),
+        "[DONE]".into(),
+    ] } else { vec![json!({"choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}).to_string(),"[DONE]".into()] })).await;
+    let provider = OpenAiCompatible::new(&mock.base, None);
+    let mut request = TurnRequest {
+        cache_key: "mock-conversation".into(),
+        system: "Stable rules".into(),
+        tools: qiyas_ai::catalogue(),
+        messages: vec![Message::user(vec![ContentBlock::Text {
+            text: "Measure accurately".into(),
+        }])],
+        model: "mock-model".into(),
+        effort: "high".into(),
+        max_tokens: 1000,
+    };
+    let result = provider
+        .stream_turn(request.clone(), &mut |_| {})
+        .await
+        .unwrap();
+    request.messages.push(Message::assistant(result.content));
+    request
+        .messages
+        .push(Message::user(vec![ContentBlock::ToolResult {
+            tool_use_id: "read-1".into(),
+            content: vec![ResultPart::Text("{}".into())],
+            is_error: false,
+        }]));
+    provider.stream_turn(request, &mut |_| {}).await.unwrap();
+    let requests = mock.requests();
+    let (first, next) = (&requests[0].body, &requests[1].body);
+    assert_eq!(first["prompt_cache_key"], "mock-conversation");
+    assert_eq!(first["prompt_cache_key"], next["prompt_cache_key"]);
+    assert_eq!(first["tools"], next["tools"]);
+    for (a, b) in first["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(next["messages"].as_array().unwrap())
+    {
+        assert_eq!(a.to_string(), b.to_string());
+    }
+    let assistant = next["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .unwrap();
+    assert_eq!(assistant["reasoning_content"], "Exact thinking\nأفكار");
 }

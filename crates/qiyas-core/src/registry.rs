@@ -16,6 +16,8 @@
 //! - `x-prompts`: ordered field names or objects with `field` and `prompt`, overriding the
 //!   schema's argument order and prompt text for the typed command line.
 //!
+//! Generic edit routing fields are JSON-only and do not add typed prompts.
+//!
 //! A command whose payload is another tagged enum (`Draw(DrawSpec)`) has kinds: `draw.line`,
 //! `draw.circle`, each described and exampled on its own.
 
@@ -64,6 +66,9 @@ pub struct CommandInfo {
     pub words: Vec<String>,
     /// Ordered prompt overrides from `x-prompts`; the schema supplies omitted field details.
     pub prompts: Vec<Value>,
+    /// Routing fields added by the registry, omitted from typed command prompts.
+    #[serde(skip)]
+    pub json_only_fields: Vec<String>,
     pub effect: Effect,
     /// The part of the session its undo step keeps ("takeoff", "boq", "conflicts", "drawing",
     /// "drawing+tables", "drawing+tables+takeoff"), worked out from its first example; none when
@@ -183,6 +188,9 @@ pub fn canonicalize(value: &mut Value) {
             value["value"] = Value::Object(properties);
         }
     }
+    if value["type"] == "records" && value["query"]["where"].is_object() {
+        value["query"]["where"] = json!([value["query"]["where"]]);
+    }
     normalize_handles(&info.schema, value, "");
     if value["type"] == "set_records" && value["collection"] == "entities" {
         if let Some(updates) = value["updates"].as_array_mut() {
@@ -234,6 +242,31 @@ pub(crate) fn is_handle_field(field: &str) -> bool {
 }
 
 fn normalize_handles(schema: &Value, value: &mut Value, field: &str) {
+    // Only normalize the matching tagged variant. Another variant may legitimately
+    // use a plural handles field where this one expects a single handle.
+    if schema["properties"].as_object().is_some_and(|props| {
+        props.iter().any(|(key, sub)| {
+            value.get(key).is_some_and(|actual| {
+                sub.get("const").is_some_and(|expected| actual != expected)
+                    || sub["enum"]
+                        .as_array()
+                        .is_some_and(|values| !values.contains(actual))
+            })
+        })
+    }) {
+        return;
+    }
+    if schema["properties"].get("handle").is_some()
+        && schema["properties"].get("handles").is_none()
+        && value.get("handle").is_none()
+        && value["handles"].as_array().is_some_and(|a| a.len() == 1)
+    {
+        value["handle"] = value["handles"][0].clone();
+        value
+            .as_object_mut()
+            .expect("handles object")
+            .remove("handles");
+    }
     let handle_field = is_handle_field(field);
     if schema["type"] == "integer" && handle_field {
         if let Some(n) = handle_number(value) {
@@ -293,6 +326,7 @@ impl Registry {
                 doc,
                 words: words_of(&variant),
                 prompts: prompts_of(&variant),
+                json_only_fields: Vec::new(),
                 takeoff_step: variant["x-takeoff-step"].as_str().map(str::to_owned),
                 takeoff_kit: variant.get("x-takeoff-kit").cloned(),
                 effect: effect(&meta, &examples),
@@ -343,6 +377,7 @@ impl Registry {
                     doc,
                     words: words_of(&kind),
                     prompts: prompts_of(&kind),
+                    json_only_fields: Vec::new(),
                     takeoff_step: kind["x-takeoff-step"].as_str().map(str::to_owned),
                     takeoff_kit: kind.get("x-takeoff-kit").cloned(),
                     effect: effect(&meta, &examples),
@@ -360,6 +395,18 @@ impl Registry {
             }
         }
         for c in &mut commands {
+            if c.effect == Effect::Edit || c.name == "batch" {
+                let props = c.schema["properties"]
+                    .as_object_mut()
+                    .expect("command properties");
+                if !props.contains_key("sheet") {
+                    props.insert("sheet".into(), json!({
+                        "type":["string","null"],
+                        "description":"Target sheet name or block, such as Model or Sheet A. The user's visible sheet stays unchanged. Omit to use the working sheet."
+                    }));
+                    c.json_only_fields.push("sheet".into());
+                }
+            }
             if c.name == "set_layer" {
                 let props = c.schema["properties"]
                     .as_object_mut()
@@ -433,7 +480,12 @@ impl Registry {
     /// A command by its wire name (`draw`, `draw.line`), in any case, `-` or `_` alike.
     pub fn get(&self, name: &str) -> Option<&CommandInfo> {
         let key = name.trim().to_ascii_lowercase().replace('-', "_");
-        self.by_name.get(&key).map(|&i| &self.commands[i])
+        let key = if key == "check" {
+            "discrepancy_check"
+        } else {
+            &key
+        };
+        self.by_name.get(key).map(|&i| &self.commands[i])
     }
 
     /// A command by one of its command-line words or aliases, in any case.
@@ -506,7 +558,7 @@ impl Registry {
             let entry = if c.kinds.is_empty() {
                 c.name.clone()
             } else {
-                format!("{} ({})", c.name, c.kinds.join(", "))
+                format!("{} ({})", c.name, c.kinds.join(" "))
             };
             by_category.entry(&c.category).or_default().push(entry);
         }
@@ -882,4 +934,41 @@ pub fn effect_of(command: &Command) -> Effect {
         Some(info) if info.effect != Effect::Edit => info.effect,
         _ => Effect::Read,
     }
+}
+
+/// Explain accepted aliases without losing their original field paths.
+pub fn normalization_warnings(raw: &Value) -> Vec<crate::validation::InputIssue> {
+    fn compare(a: &Value, b: &Value, path: &str, out: &mut Vec<crate::validation::InputIssue>) {
+        if a["handles"].is_array() && b.get("handles").is_none() && b.get("handle").is_some() {
+            out.push(crate::validation::InputIssue {
+                code: "normalised_input".into(),
+                pointer: format!("{path}/handle"),
+                message: "Normalised the single handles entry to handle.".into(),
+            });
+        }
+        if a["where"].is_object() && b["where"].is_array() {
+            out.push(crate::validation::InputIssue {
+                code: "normalised_input".into(),
+                pointer: format!("{path}/where"),
+                message: "Normalised one where condition to an array.".into(),
+            });
+        }
+        if let Some(map) = a.as_object() {
+            for (key, v) in map {
+                if let Some(next) = b.get(key) {
+                    compare(v, next, &format!("{path}/{key}"), out);
+                }
+            }
+        }
+        if let (Some(a), Some(b)) = (a.as_array(), b.as_array()) {
+            for (i, (a, b)) in a.iter().zip(b).enumerate() {
+                compare(a, b, &format!("{path}/{i}"), out);
+            }
+        }
+    }
+    let mut canonical = raw.clone();
+    canonicalize(&mut canonical);
+    let mut out = Vec::new();
+    compare(raw, &canonical, "", &mut out);
+    out
 }

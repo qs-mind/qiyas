@@ -236,11 +236,23 @@ pub async fn account(store: Arc<dyn TokenStore>) -> Result<Account, AiError> {
     Ok(vault.public())
 }
 
+/// Visible account models and only the effort levels explicitly advertised by discovery.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanModel {
+    pub id: String,
+    pub label: String,
+    pub reasoning_efforts: Vec<String>,
+    #[serde(default)]
+    pub image_input: Option<bool>,
+}
+
 pub type Reauthorize = Arc<dyn Fn() -> BoxFuture<'static, Result<(), AiError>> + Send + Sync>;
 pub struct ChatgptPlan {
     store: Arc<dyn TokenStore>,
     protocol: oauth::Protocol,
     reauthorize: Option<Reauthorize>,
+    models: std::sync::Mutex<Option<(String, Vec<PlanModel>)>>,
+    refused_effort: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 impl ChatgptPlan {
     pub fn new(store: Arc<dyn TokenStore>, protocol: oauth::Protocol) -> Self {
@@ -248,6 +260,8 @@ impl ChatgptPlan {
             store,
             protocol,
             reauthorize: None,
+            models: std::sync::Mutex::new(None),
+            refused_effort: std::sync::Mutex::default(),
         }
     }
     pub fn with_reauthorization(mut self, callback: Reauthorize) -> Self {
@@ -338,14 +352,61 @@ impl ChatgptPlan {
         }
         Err(AiError::Subscription("chatgpt_auth"))
     }
-    pub async fn models(&self) -> Result<Vec<crate::models::ModelInfo>, AiError> {
+    pub async fn models(&self) -> Result<Vec<PlanModel>, AiError> {
         let (id, tokens, cancel) = self.tokens().await?;
         let result = tokio::select! {
             result = responses::models(&self.protocol.models, &tokens) => result,
             () = cancel.cancelled() => Err(AiError::Subscription("chatgpt_cancelled")),
         };
         self.record_limit(&id, &result).await?;
+        if let Ok(models) = &result {
+            *self
+                .models
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((id, models.clone()));
+        }
         result
+    }
+    async fn configure(
+        &self,
+        id: &str,
+        tokens: &Tokens,
+        req: &mut TurnRequest,
+    ) -> Result<(), AiError> {
+        if req.model.trim().is_empty() || (!req.effort.is_empty() && req.effort != "none") {
+            let cached = self
+                .models
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .filter(|(account, _)| account == id)
+                .map(|(_, models)| models.clone());
+            let models = if let Some(models) = cached {
+                models
+            } else {
+                let models = responses::models(&self.protocol.models, tokens).await?;
+                *self
+                    .models
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((id.to_owned(), models.clone()));
+                models
+            };
+            if req.model.trim().is_empty() {
+                req.model = models
+                    .first()
+                    .ok_or(AiError::Subscription("chatgpt_model"))?
+                    .id
+                    .clone();
+            }
+            if !models
+                .iter()
+                .any(|m| m.id == req.model && m.reasoning_efforts.contains(&req.effort))
+            {
+                req.effort = "none".into();
+            }
+        }
+        Ok(())
     }
     async fn record_limit<T>(&self, id: &str, result: &Result<T, AiError>) -> Result<(), AiError> {
         if result.as_ref().is_err_and(|e| e.code() == "chatgpt_limit") {
@@ -359,15 +420,65 @@ impl ChatgptPlan {
     }
 }
 impl Provider for ChatgptPlan {
+    fn image_input(&self, model: &str) -> Option<bool> {
+        self.models
+            .lock()
+            .ok()
+            .and_then(|models| {
+                models
+                    .as_ref()
+                    .and_then(|(_, models)| {
+                        if model.trim().is_empty() {
+                            models.first()
+                        } else {
+                            models.iter().find(|m| m.id == model)
+                        }
+                    })
+                    .and_then(|m| m.image_input)
+            })
+            .or_else(|| crate::models::known_image_input(&self.protocol.models, model))
+    }
+    fn save_state(&self) -> serde_json::Value {
+        let refused = self
+            .refused_effort
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if refused.is_empty() {
+            serde_json::Value::Null
+        } else {
+            let mut models: Vec<_> = refused.iter().cloned().collect();
+            models.sort();
+            serde_json::json!({"refused_effort": models})
+        }
+    }
+    fn restore_state(&self, state: serde_json::Value) {
+        *self
+            .refused_effort
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = state["refused_effort"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+    }
+
     fn stream_turn<'a>(
         &'a self,
-        req: TurnRequest,
+        mut req: TurnRequest,
         sink: Sink<'a>,
     ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
         Box::pin(async move {
             let (id, tokens, cancel) = self.tokens().await?;
             let result = tokio::select! {
-                result = responses::stream(&self.protocol.responses, &tokens, req, sink) => result,
+                result = async {
+                    let previous = (req.model.clone(), req.effort.clone());
+                    self.configure(&id, &tokens, &mut req).await?;
+                    if previous != (req.model.clone(), req.effort.clone()) {
+                        sink(crate::StreamEvent::Diagnostic { kind:"CACHE REBUILD".into(), text:"Expected rebuild: model discovery selected the model or supported effort.".into() });
+                    }
+                    responses::stream(&self.protocol.responses, &tokens, req, &self.refused_effort, sink).await
+                } => result,
                 () = cancel.cancelled() => Err(AiError::Subscription("chatgpt_cancelled")),
             };
             self.record_limit(&id, &result).await?;

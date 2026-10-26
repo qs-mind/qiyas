@@ -371,3 +371,48 @@ fn measuring_one_hatch_follows_its_material_when_another_piece_splits_or_merges(
     near(&json!(session.takeoff.items[0].shown), 1.875);
     assert_eq!(text(&session, field), "1.875");
 }
+
+/// Undoing joined runs and openings, then opening the remaining runs again, must work and
+/// leave the group usable in every unit (written while fixing a live rebuild panic, 24 Oct).
+#[test]
+fn openings_added_after_undoing_joined_runs_and_openings_rebuild_without_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    for (units, factor) in [(4, 0.001), (5, 0.01), (6, 1.0), (1, 0.0254)] {
+        let mut s = Session::new_blank(&dir.path().join(format!("undo-{units}.dxf")), units);
+        let k = 1.0 / factor;
+        run(
+            &mut s,
+            json!({"type":"walls","runs":[{"points":[[0,0],[12.0*k,0],[12.0*k,9.0*k],[0,9.0*k]],"closed":true}],"thickness":0.25*k}),
+        );
+        // A second phase joins partitions, then a batch adds openings; both are undone.
+        run(
+            &mut s,
+            json!({"type":"walls","runs":[{"points":[[6.0*k,0],[6.0*k,9.0*k]]},{"points":[[0,4.5*k],[6.0*k,4.5*k]]}],"thickness":0.15*k}),
+        );
+        let runs = groups(&mut s, 0.9 * k)[0]["runs"].clone();
+        let centreline = |i: usize| runs[i]["centreline"].as_u64().unwrap();
+        s.run_input(
+            &json!({"type":"batch","commands":[
+                {"type":"add_wall_openings","centreline":centreline(0),"openings":[{"at":2.0*k,"width":0.9*k,"kind":"door"}]},
+                {"type":"add_wall_openings","centreline":centreline(1),"openings":[{"at":1.5*k,"width":1.2*k,"kind":"window"}]}
+            ]}),
+            Source::Ai,
+        )
+        .unwrap();
+        assert!(s.undo_if(Source::Ai));
+        assert!(s.undo_if(Source::User));
+        // The runs now are the first phase's; open them again, as Mizan did.
+        let runs = groups(&mut s, 0.9 * k)[0]["runs"].clone();
+        for run_ in runs.as_array().unwrap() {
+            let c = run_["centreline"].as_u64().unwrap();
+            let result = s.run_input(
+                &json!({"type":"add_wall_openings","centreline":c,"openings":[{"at":3.0*k,"width":0.9*k,"kind":"door"}]}),
+                Source::Ai,
+            );
+            assert!(result.is_ok(), "{units}: {result:?}");
+        }
+        assert!(!groups(&mut s, 0.9 * k).as_array().unwrap().is_empty());
+        // Redo after the new edit is gone; undo still walks back cleanly.
+        while s.undo_if(Source::Ai) {}
+    }
+}

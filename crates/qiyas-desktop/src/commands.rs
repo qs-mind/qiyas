@@ -1,6 +1,6 @@
 //! IPC commands for the frontend. Each one locks the session, does its work and maps errors to text.
-//! All are `async` so Tauri runs them off the main thread and a slow open or batch never freezes
-//! the window. None awaits, so no lock is held across an `.await`.
+//! Drawing IPC resolves its workspace before awaiting. Long work uses blocking workers;
+//! session try-locks keep another drawing responsive. No lock is held across an `.await`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -11,11 +11,11 @@ use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent, AgentLog};
 use qiyas_core::{
     Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, NamedView,
-    Outcome, Picked, Reported, Session, Snap, Source, Total,
+    Outcome, Picked, Reported, Session, Snap, Source,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::mpsc;
 
 use crate::ai::{self, AiRun, Turn};
@@ -31,35 +31,71 @@ pub(crate) fn with_session<R>(
     state: &AppState,
     f: impl FnOnce(&mut Session) -> Result<R, CoreError>,
 ) -> Result<R, String> {
-    // A panic in an earlier command leaves the session as it was; keep using it.
-    let mut guard = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+    let state = state.scoped(None)?;
+    // A busy drawing keeps its last committed canvas. The window queues the original request.
+    let mut guard = match state.session.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Err("workspace_busy".into()),
+    };
     let session = guard.as_mut().ok_or("No drawing is open")?;
     session
         .automation_sheet
         .get_or_insert_with(|| session.sheet.clone());
-    f(session).map_err(|e| e.to_string())
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(session)))
+        .map_err(|_| "The command stopped unexpectedly. You can keep working.".to_string())?
+        .map_err(|e| e.to_string());
+    state.publish(session);
+    result
 }
 
-/// Opens a drawing in a new tab, or shows its tab when the file is open already; the assistant
-/// starts a new conversation about it. The file goes first in the recent list.
+pub(crate) fn cached_read<T: serde::Serialize + serde::de::DeserializeOwned>(
+    state: &AppState,
+    key: &'static str,
+    read: impl FnOnce(&mut Session) -> Result<T, CoreError>,
+) -> Result<T, String> {
+    match with_session(state, read) {
+        Ok(value) => {
+            crate::state::lock(&state.reads).insert(
+                key,
+                serde_json::to_value(&value).map_err(|e| e.to_string())?,
+            );
+            Ok(value)
+        }
+        Err(error) if error == "workspace_busy" => crate::state::lock(&state.reads)
+            .get(key)
+            .cloned()
+            .ok_or(error)
+            .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string())),
+        Err(error) => Err(error),
+    }
+}
+
+/// Opens a workspace or shows its existing tab. Its Mizan keeps the same conversation.
 #[tauri::command]
 pub async fn open_drawing<R: Runtime>(
     path: String,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
-    if let Some(id) = tabs::find_path(&state, Path::new(&path)) {
-        tabs::activate(&app, &state, id, false)?;
+    let state = state.scoped(None)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(id) = tabs::find_path(&state, Path::new(&path)) {
+            tabs::activate(&app, &state, id, false)?;
+            remember_recent(&state, &path);
+            return crate::state::lock(&state.scoped(Some(id))?.published)
+                .clone()
+                .ok_or("No drawing is open".into());
+        }
+        // Read the file before taking the lock, so a slow open doesn't block other commands.
+        let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
+        let id = tabs::add(&state, session)?;
+        let state = state.scoped(Some(id))?;
         remember_recent(&state, &path);
-        return with_session(&state, |s| Ok(s.info()));
-    }
-    // Read the file before taking the lock, so a slow open doesn't block other commands.
-    let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    // Stop a running turn first, so it can't run another tool on the new drawing.
-    new_conversation(&app, &state);
-    tabs::add(&state, session)?;
-    remember_recent(&state, &path);
-    with_session(&state, |s| Ok(s.info()))
+        with_session(&state, |s| Ok(s.info()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The header's INSUNITS for a new drawing's units: "m", "cm" or "mm".
@@ -81,9 +117,17 @@ pub async fn new_drawing<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
-    let session = Session::new_blank(&tabs::untitled_path(&state)?, insunits_of(&units)?);
-    new_conversation(&app, &state);
-    tabs::add(&state, session)?;
+    let units = insunits_of(&units)?;
+    if let Some(id) = tabs::reusable_blank(&state, units) {
+        tabs::activate(&app, &state, id, false)?;
+        let state = state.scoped(Some(id))?;
+        return with_session(&state, |s| Ok(s.info()));
+    }
+    let state = state.scoped(None)?;
+    let mut session = Session::new_blank(&tabs::untitled_path(&state)?, units);
+    tabs::set_untitled_export_folder(&app, &mut session)?;
+    let id = tabs::add(&state, session)?;
+    let state = state.scoped(Some(id))?;
     with_session(&state, |s| Ok(s.info()))
 }
 
@@ -155,34 +199,62 @@ pub async fn clear_recents(state: State<'_, AppState>) -> Result<(), String> {
 
 /// The drawing's named views of model space.
 #[tauri::command]
-pub async fn views(state: State<'_, AppState>) -> Result<Vec<NamedView>, String> {
+pub async fn views(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<NamedView>, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.views()))
 }
 
 #[tauri::command]
-pub async fn drawing_info(state: State<'_, AppState>) -> Result<DrawingInfo, String> {
-    with_session(&state, |s| Ok(s.info()))
+pub async fn drawing_info(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<DrawingInfo, String> {
+    let state = state.scoped(workspace)?;
+    if let Ok(session) = state.session.try_lock() {
+        if let Some(s) = session.as_ref() {
+            state.publish(s);
+        }
+    }
+    let info = crate::state::lock(&state.published)
+        .clone()
+        .ok_or("No drawing is open".to_string());
+    info
 }
 
 #[tauri::command]
-pub async fn set_sheet(block: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn set_sheet(
+    workspace: Option<u32>,
+    block: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| s.set_sheet(&block))
 }
 
-pub(crate) fn window_sheet_guard(state: &AppState) -> Result<MutexGuard<'_, AiRun>, String> {
+pub(crate) fn window_sheet_guard(state: &AppState) -> Result<MutexGuard<'_, ()>, String> {
+    let authority = state
+        .sheet_authority
+        .try_lock()
+        .map_err(|_| "workspace_busy".to_string())?;
     let turn = ai_run(state);
     if turn.busy() {
         return Err("Mizan owns the sheet during its turn; wait until the turn finishes".into());
     }
-    Ok(turn)
+    Ok(authority)
 }
 
 #[tauri::command]
 pub async fn set_layer_hidden(
+    workspace: Option<u32>,
+
     name: String,
     hidden: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         s.set_layer_hidden(&name, hidden);
         Ok(())
@@ -191,7 +263,11 @@ pub async fn set_layer_hidden(
 
 /// Looks for every xref again and reopens it; returns the drawing's info with the new list.
 #[tauri::command]
-pub async fn reload_xrefs(state: State<'_, AppState>) -> Result<DrawingInfo, String> {
+pub async fn reload_xrefs(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<DrawingInfo, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         s.reload_xrefs();
         Ok(s.info())
@@ -202,10 +278,13 @@ pub async fn reload_xrefs(state: State<'_, AppState>) -> Result<DrawingInfo, Str
 /// xrefs and returns the drawing's info. The window saves the project after, which remembers it.
 #[tauri::command]
 pub async fn set_xref_path(
+    workspace: Option<u32>,
+
     name: String,
     path: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         s.set_xref_path(&name, path.as_deref().map(Path::new))?;
         Ok(s.info())
@@ -214,8 +293,15 @@ pub async fn set_xref_path(
 
 /// Names the current sheet's line batch; it changes only when the batch would.
 #[tauri::command]
-pub async fn batch_version(state: State<'_, AppState>) -> Result<u64, String> {
-    with_session(&state, |s| Ok(s.batch_version()))
+pub async fn batch_version(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let state = state.scoped(workspace)?;
+    match with_session(&state, |s| Ok(s.batch_version())) {
+        Err(error) if error == "workspace_busy" => Ok(crate::state::lock(&state.render).version),
+        result => result,
+    }
 }
 
 /// The current sheet's batch (lines and text glyph quads), in the binary layout of
@@ -224,18 +310,45 @@ pub async fn batch_version(state: State<'_, AppState>) -> Result<u64, String> {
 /// (screen pixels per drawing unit); left out, the batch in hand keeps its zoom.
 #[tauri::command]
 pub async fn render_batch(
+    workspace: Option<u32>,
+
     if_version: Option<u64>,
     px_per_unit: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    with_session(&state, |s| {
-        Ok(Response::new(batch_response(s, if_version, px_per_unit)))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = with_session(&state, |s| {
+            let bytes = batch_response(s, if_version, px_per_unit);
+            if bytes != NOT_MODIFIED {
+                let mut cache = crate::state::lock(&state.render);
+                cache.batch = Some(bytes.clone());
+                cache.atlas = Some(s.atlas_bytes(None));
+                cache.version = s.batch_version();
+            }
+            Ok(Response::new(bytes))
+        });
+        match result {
+            Err(error) if error == "workspace_busy" => crate::state::lock(&state.render)
+                .batch
+                .clone()
+                .map(Response::new)
+                .ok_or(error),
+            result => result,
+        }
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Names the batch of the sheet `sheet` as `render_batch` names the current sheet's.
 #[tauri::command]
-pub async fn sheet_batch_version(sheet: String, state: State<'_, AppState>) -> Result<u64, String> {
+pub async fn sheet_batch_version(
+    workspace: Option<u32>,
+    sheet: String,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.sheet_batch_version(&sheet)))
 }
 
@@ -243,17 +356,24 @@ pub async fn sheet_batch_version(sheet: String, state: State<'_, AppState>) -> R
 /// of a layout, or a split window's second view (`Session::sheet_batch_bytes_if`).
 #[tauri::command]
 pub async fn sheet_batch(
+    workspace: Option<u32>,
+
     sheet: String,
     if_version: Option<u64>,
     px_per_unit: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    with_session(&state, |s| {
-        Ok(Response::new(
-            s.sheet_batch_bytes_if(&sheet, if_version, px_per_unit)
-                .unwrap_or_else(|| NOT_MODIFIED.to_vec()),
-        ))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        with_session(&state, |s| {
+            Ok(Response::new(
+                s.sheet_batch_bytes_if(&sheet, if_version, px_per_unit)
+                    .unwrap_or_else(|| NOT_MODIFIED.to_vec()),
+            ))
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The glyph atlas pages changed after `since_version` (all when left out), in the binary layout
@@ -261,10 +381,24 @@ pub async fn sheet_batch(
 /// height and byte length and the R8 bytes.
 #[tauri::command]
 pub async fn atlas_pages(
+    workspace: Option<u32>,
+
     since_version: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    with_session(&state, |s| Ok(Response::new(s.atlas_bytes(since_version))))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        match with_session(&state, |s| Ok(Response::new(s.atlas_bytes(since_version)))) {
+            Err(error) if error == "workspace_busy" => crate::state::lock(&state.render)
+                .atlas
+                .clone()
+                .map(Response::new)
+                .ok_or(error),
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// "QINM" and four zero bytes, in place of a batch that is unchanged. A batch starts with "BYIQ".
@@ -278,30 +412,44 @@ fn batch_response(session: &Session, if_version: Option<u64>, px_per_unit: Optio
 
 #[tauri::command]
 pub async fn pick(
+    workspace: Option<u32>,
+
     x: f64,
     y: f64,
     tol: f64,
     state: State<'_, AppState>,
 ) -> Result<Option<Picked>, String> {
-    with_session(&state, |s| Ok(s.pick([x, y], tol)))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || with_session(&state, |s| Ok(s.pick([x, y], tol))))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// The closed area around (x, y) the drawn lines make, for a hatch: looked for `start` around
 /// it first, then further (see `Session::boundary_at`).
 #[tauri::command]
 pub async fn boundary_at(
+    workspace: Option<u32>,
+
     x: f64,
     y: f64,
     start: f64,
     state: State<'_, AppState>,
 ) -> Result<qiyas_core::Boundary, String> {
-    with_session(&state, |s| Ok(s.boundary_at([x, y], start)))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        with_session(&state, |s| Ok(s.boundary_at([x, y], start)))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The entities a selection box from (`min_x`, `min_y`) to (`max_x`, `max_y`) picks: wholly
 /// inside it, or with `crossing` touching it (see `Session::pick_window`).
 #[tauri::command]
 pub async fn pick_window(
+    workspace: Option<u32>,
+
     min_x: f64,
     min_y: f64,
     max_x: f64,
@@ -309,26 +457,40 @@ pub async fn pick_window(
     crossing: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<Picked>, String> {
-    with_session(&state, |s| {
-        Ok(s.pick_window([[min_x, min_y], [max_x, max_y]], crossing))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        with_session(&state, |s| {
+            Ok(s.pick_window([[min_x, min_y], [max_x, max_y]], crossing))
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The entities a selection polygon `points` (drawing coordinates) picks: wholly inside it, or
 /// with `crossing` touching it (see `Session::pick_polygon`).
 #[tauri::command]
 pub async fn pick_polygon(
+    workspace: Option<u32>,
+
     points: Vec<[f64; 2]>,
     crossing: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<Picked>, String> {
-    with_session(&state, |s| Ok(s.pick_polygon(&points, crossing)))
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        with_session(&state, |s| Ok(s.pick_polygon(&points, crossing)))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The object snap within `tol` (drawing units) of `(x, y)`, with the session's snap modes;
 /// `from_x`, `from_y` is the previous point, for perpendicular snaps. None while snaps are off.
 #[tauri::command]
 pub async fn snap(
+    workspace: Option<u32>,
+
     x: f64,
     y: f64,
     tol: f64,
@@ -336,24 +498,38 @@ pub async fn snap(
     from_y: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<Option<Snap>, String> {
-    let from = from_x.zip(from_y).map(|(fx, fy)| [fx, fy]);
-    with_session(&state, |s| {
-        Ok(s.drafting
-            .osnap
-            .then(|| s.snap([x, y], tol, &s.drafting.snap_modes, from))
-            .flatten())
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let from = from_x.zip(from_y).map(|(fx, fy)| [fx, fy]);
+        with_session(&state, |s| {
+            Ok(s.drafting
+                .osnap
+                .then(|| s.snap([x, y], tol, &s.drafting.snap_modes, from))
+                .flatten())
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// The drawing's drafting settings: snaps, ortho, polar, grid and display precision.
 #[tauri::command]
-pub async fn get_drafting(state: State<'_, AppState>) -> Result<Drafting, String> {
-    with_session(&state, |s| Ok(s.drafting.clone()))
+pub async fn get_drafting(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Drafting, String> {
+    let state = state.scoped(workspace)?;
+    cached_read(&state, "drafting", |s| Ok(s.drafting.clone()))
 }
 
 /// Replaces the drafting settings (not an undo step); the window saves the project after.
 #[tauri::command]
-pub async fn set_drafting(drafting: Drafting, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn set_drafting(
+    workspace: Option<u32>,
+    drafting: Drafting,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         s.run(Command::SetDrafting { drafting }).map(|_| ())
     })
@@ -362,10 +538,13 @@ pub async fn set_drafting(drafting: Drafting, state: State<'_, AppState>) -> Res
 /// One entity; `chain` (outermost block reference first) for an entity inside blocks.
 #[tauri::command]
 pub async fn entity_info(
+    workspace: Option<u32>,
+
     handle: u64,
     chain: Option<Vec<u64>>,
     state: State<'_, AppState>,
 ) -> Result<EntityInfo, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         s.entity_info(handle, chain.as_deref().unwrap_or_default())
     })
@@ -375,11 +554,14 @@ pub async fn entity_info(
 /// cell by its first cell. `None` outside it.
 #[tauri::command]
 pub async fn table_cell_at(
+    workspace: Option<u32>,
+
     handle: u64,
     x: f64,
     y: f64,
     state: State<'_, AppState>,
 ) -> Result<Option<[usize; 2]>, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.table_cell_at(handle, [x, y])))
 }
 
@@ -387,72 +569,130 @@ pub async fn table_cell_at(
 /// the system clipboard's; a copy's text goes onto the system clipboard (and comes back empty).
 #[tauri::command]
 pub async fn run_command(
+    workspace: Option<u32>,
+
     mut cmd: serde_json::Value,
     state: State<'_, AppState>,
 ) -> Result<Reported, String> {
-    let parsed = qiyas_core::registry::parse_command(cmd.clone())?;
-    if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
-        cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
-    }
-    let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
-    qiyas_boq::deliverables::complete(&outcome.outcome)?;
-    if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
-        files::set_clipboard_text(&state, text)?;
-        text.clear();
-    }
-    Ok(outcome)
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut command = cmd.clone();
+        if let Some(fields) = command.as_object_mut() {
+            fields.remove("expected_revision");
+        }
+        let parsed = qiyas_core::registry::parse_command(command)?;
+        if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
+            cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
+        }
+        let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
+        qiyas_boq::deliverables::complete(&outcome.outcome)?;
+        if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
+            files::set_clipboard_text(&state, text)?;
+            text.clear();
+        }
+        Ok(outcome)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Undoes the last take-off change; false when there was none.
 #[tauri::command]
-pub async fn undo(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn undo(workspace: Option<u32>, state: State<'_, AppState>) -> Result<bool, String> {
+    let state = state.scoped(workspace)?;
     let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.undo()))
 }
 
 /// Redoes the last undone take-off change; false when there was none.
 #[tauri::command]
-pub async fn redo(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn redo(workspace: Option<u32>, state: State<'_, AppState>) -> Result<bool, String> {
+    let state = state.scoped(workspace)?;
     let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.redo()))
 }
 
 #[tauri::command]
-pub async fn takeoff(state: State<'_, AppState>) -> Result<Vec<Measurement>, String> {
-    with_session(&state, |s| Ok(s.takeoff.items.clone()))
+pub async fn takeoff(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<Measurement>, String> {
+    let state = state.scoped(workspace)?;
+    cached_read(&state, "takeoff", |s| Ok(s.takeoff.items.clone()))
 }
 
 #[tauri::command]
-pub async fn totals(state: State<'_, AppState>) -> Result<Vec<Total>, String> {
-    with_session(&state, |s| Ok(s.takeoff.totals()))
+pub async fn totals(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let state = state.scoped(workspace)?;
+    cached_read(&state, "totals", |s| {
+        Ok(serde_json::json!(s.takeoff.totals()))
+    })
 }
 
 /// Saves the take-off to the drawing's `.qiyas` project file; returns the path written.
 #[tauri::command]
-pub async fn save_project(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn save_project(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| Ok(s.save_project()?.display().to_string()))
         .map_err(|e| format!("The take-off could not be saved: {e}"))
 }
 
 /// Saves the drawing over its own file, measurements embedded, and its project file.
 #[tauri::command]
-pub async fn save_drawing(state: State<'_, AppState>) -> Result<(), String> {
-    with_session(&state, |s| s.save())
+pub async fn save_drawing(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || with_session(&state, |s| s.save()))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// Saves the drawing to `path` (.dwg or .dxf), measurements embedded, with its project file next
 /// to it; the session then works on the new file, which goes first in the recent list.
 #[tauri::command]
-pub async fn save_drawing_as(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    with_session(&state, |s| s.save_as(Path::new(&path)))?;
-    ai_run(&state).drawing_saved_as(Path::new(&path).to_path_buf());
-    remember_recent(&state, &path);
+pub async fn save_drawing_as(
+    workspace: Option<u32>,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        save_as_with_history(&state, Path::new(&path))?;
+        remember_recent(&state, &path);
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+pub(crate) fn save_as_with_history(state: &AppState, path: &Path) -> Result<(), String> {
+    let mut run = ai_run(state);
+    let from = with_session(state, |s| {
+        let from = s.drawing.path.clone();
+        s.save_as(path)?;
+        Ok(from)
+    })?;
+    crate::conversations::Store::new(&state.config_dir).follow_drawing(&from, path)?;
+    run.drawing_saved_as(path.to_path_buf());
     Ok(())
 }
 
 /// Writes the take-off and its totals to an Excel workbook at `path`.
 #[tauri::command]
-pub async fn export_takeoff(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn export_takeoff(
+    workspace: Option<u32>,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     // Copy the take-off out, so writing the file doesn't hold the lock.
     let (items, totals, title, report, queries) = with_session(&state, |s| {
         let title = match s.drawing.path.file_name() {
@@ -492,7 +732,12 @@ pub async fn export_table(
 /// Reads the BOQ in the Excel workbook at `path` and makes it the drawing's BOQ (an undo step);
 /// returns it.
 #[tauri::command]
-pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq, String> {
+pub async fn import_boq(
+    workspace: Option<u32>,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Boq, String> {
+    let state = state.scoped(workspace)?;
     // Read the workbook before taking the lock, so a slow read doesn't block other commands.
     let boq = qiyas_boq::import_boq(Path::new(&path)).map_err(|e| e.to_string())?;
     with_session(&state, |s| {
@@ -503,16 +748,23 @@ pub async fn import_boq(path: String, state: State<'_, AppState>) -> Result<Boq,
 
 /// The drawing's BOQ; null when none is imported.
 #[tauri::command]
-pub async fn boq(state: State<'_, AppState>) -> Result<Option<Boq>, String> {
-    with_session(&state, |s| Ok(s.boq.clone()))
+pub async fn boq(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Option<Boq>, String> {
+    let state = state.scoped(workspace)?;
+    cached_read(&state, "boq", |s| Ok(s.boq.clone()))
 }
 
 #[tauri::command]
 pub async fn explain_item(
+    workspace: Option<u32>,
+
     item: String,
     project: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    let state = state.scoped(workspace)?;
     if let Some(path) = project {
         return qiyas_core::trust::explain_project(&path, &item).map_err(|e| e.to_string());
     }
@@ -522,8 +774,11 @@ pub async fn explain_item(
 /// The live generated BOQ and traceable dimension sheets, separate from the imported BOQ.
 #[tauri::command]
 pub async fn measurement_report(
+    workspace: Option<u32>,
+
     state: State<'_, AppState>,
 ) -> Result<qiyas_core::measurement::MeasurementReport, String> {
+    let state = state.scoped(workspace)?;
     with_session(&state, |s| s.measurement_report())
 }
 
@@ -532,9 +787,12 @@ pub async fn measurement_report(
 /// percent for BOQ items with none of their own (5 when null).
 #[tauri::command]
 pub async fn compare(
+    workspace: Option<u32>,
+
     tolerance_default: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Conflict>, String> {
+    let state = state.scoped(workspace)?;
     let tolerance = tolerance_default.unwrap_or(qiyas_takeoff::DEFAULT_TOLERANCE);
     with_session(&state, |s| {
         qiyas_takeoff::compare_session(s, tolerance, Source::User)
@@ -543,13 +801,22 @@ pub async fn compare(
 
 /// The conflicts of the last comparison, with their statuses and notes.
 #[tauri::command]
-pub async fn conflicts(state: State<'_, AppState>) -> Result<Vec<Conflict>, String> {
-    with_session(&state, |s| Ok(s.conflicts.clone()))
+pub async fn conflicts(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<Conflict>, String> {
+    let state = state.scoped(workspace)?;
+    cached_read(&state, "conflicts", |s| Ok(s.conflicts.clone()))
 }
 
 /// Writes the conflicts to an Excel workbook at `path`.
 #[tauri::command]
-pub async fn export_conflicts(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn export_conflicts(
+    workspace: Option<u32>,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     // Copy the conflicts out, so writing the file doesn't hold the lock.
     let conflicts = with_session(&state, |s| Ok(s.conflicts.clone()))?;
     qiyas_boq::report::export_conflicts(Path::new(&path), &conflicts).map_err(|e| e.to_string())
@@ -575,8 +842,8 @@ pub async fn aliases(state: State<'_, AppState>) -> Result<BTreeMap<String, Stri
         .clone())
 }
 
-/// Checks and keeps new settings: written to disk first, then cached. Another provider, address
-/// or model starts a new assistant conversation; MCP turned on or off, or another port or token,
+/// Checks and keeps defaults for new workspaces: written to disk first, then cached.
+/// MCP turned on or off, or another port or token,
 /// restarts the MCP server. The recent list, the tool palette and the time of the last update
 /// check stay as the app has them: the dialog's copy may be older.
 #[tauri::command]
@@ -594,7 +861,7 @@ pub async fn set_settings<R: Runtime>(
     if old.providers.openai_compatible.base_url != settings.providers.openai_compatible.base_url {
         keychain(move || secrets::migrate(&old)).await?;
     }
-    let (changed, mcp_changed) = {
+    let mcp_changed = {
         let mut cached = state
             .settings
             .lock()
@@ -607,12 +874,11 @@ pub async fn set_settings<R: Runtime>(
                 &crate::methods::qiyas_dir()?,
                 settings.measurement_method.as_deref(),
             )?;
-            let mut active = state.session.lock().unwrap_or_else(PoisonError::into_inner);
-            let mut parked = state.parked.lock().unwrap_or_else(PoisonError::into_inner);
-            let mut sessions: Vec<_> = active
-                .iter_mut()
-                .chain(parked.iter_mut().map(|p| &mut p.session))
-                .collect();
+            let workspaces = state.workspaces();
+            let mut guards = workspaces.iter().map(|workspace| workspace.session.try_lock()
+                .map_err(|_| "Mizan is working. Try changing the measurement method after it finishes.".to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut sessions: Vec<_> = guards.iter_mut().filter_map(|s| s.as_mut()).collect();
             crate::methods::apply_all(&mut sessions, method.as_ref(), || {
                 settings::save(&state.config_dir, &settings).map_err(qiyas_core::CoreError::from)
             })
@@ -621,13 +887,20 @@ pub async fn set_settings<R: Runtime>(
             settings::save(&state.config_dir, &settings)
                 .map_err(|e| format!("The settings could not be saved: {e}"))?;
         }
-        let changed = ai::answerer_changed(&cached, &settings);
         let mcp_changed = mcp::needs_restart(&cached, &settings);
         *cached = settings;
-        (changed, mcp_changed)
+        mcp_changed
     };
-    if changed {
-        new_conversation(&app, &state);
+    {
+        let lobby = { crate::state::lock(&state.tabs).lobby.clone() };
+        let lobby = lobby.unwrap_or_else(|| state.workspace.clone());
+        let run = crate::state::lock(&lobby.ai);
+        if !run.busy()
+            && run.conversation_id().is_none()
+            && crate::state::lock(&lobby.published).is_none()
+        {
+            *crate::state::lock(&lobby.provider) = crate::state::lock(&state.settings).clone();
+        }
     }
     if mcp_changed {
         mcp::restart(&app);
@@ -745,13 +1018,15 @@ pub async fn set_api_key<R: Runtime>(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
+    let affected = provider.clone();
     let base = secrets::address(&saved, &provider)?;
     keychain(move || {
         secrets::migrate(&saved)?;
         secrets::set_at(&provider, &base, &key)
     })
     .await?;
-    new_conversation(&app, &state);
+    refresh_credentials(&state, &affected);
+    let _ = app.emit("workspace:changed", ());
     Ok(())
 }
 
@@ -776,14 +1051,26 @@ pub async fn delete_api_key<R: Runtime>(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
+    let affected = provider.clone();
     let base = secrets::address(&saved, &provider)?;
     keychain(move || {
         secrets::migrate(&saved)?;
         secrets::delete_at(&provider, &base)
     })
     .await?;
-    new_conversation(&app, &state);
+    refresh_credentials(&state, &affected);
+    let _ = app.emit("workspace:changed", ());
     Ok(())
+}
+
+fn refresh_credentials(state: &AppState, provider: &str) {
+    let workspaces = state.conversations();
+    for workspace in workspaces {
+        let mut run = crate::state::lock(&workspace.ai);
+        if crate::state::lock(&workspace.provider).provider.name() == provider {
+            run.rebuild_provider();
+        }
+    }
 }
 
 /// The folder of the running app, where the `qiyas-mcp` bridge sits next to it. In a dev build
@@ -816,13 +1103,23 @@ pub(crate) fn ai_run(state: &AppState) -> MutexGuard<'_, AiRun> {
 /// clears its transcript on `ai:cleared`.
 pub(crate) fn new_conversation<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     ai_run(state).new_conversation();
-    let _ = app.emit("ai:cleared", ());
+    let event = {
+        let mut view = crate::state::lock(&state.view);
+        view.transcript.clear();
+        view.status = "idle";
+        view.error = None;
+        view.away = None;
+        view.record(state.id, serde_json::json!({"type":"clear"}))
+    };
+    let _ = app.emit("workspace:event", event);
+    let _ = app.emit("ai:cleared", serde_json::json!({"workspace":state.id}));
 }
 
 /// Sent as `ai:done` when a turn has ended; `error` when it failed.
 #[derive(Serialize, Clone)]
 struct AiDone {
     error: Option<String>,
+    workspace: u32,
 }
 
 /// Sends `text` to the assistant, with what the user points at (`context`: the selection, a
@@ -832,6 +1129,8 @@ struct AiDone {
 /// reach a provider.
 #[tauri::command]
 pub async fn ai_send<R: Runtime>(
+    workspace: Option<u32>,
+
     text: String,
     pointed: Option<Vec<String>>,
     context: Option<qiyas_ai::TurnContext>,
@@ -839,6 +1138,7 @@ pub async fn ai_send<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     let images = images.unwrap_or_default();
     if text.trim().is_empty() && images.is_empty() {
         return Err("The message is empty".into());
@@ -858,40 +1158,73 @@ pub async fn ai_send<R: Runtime>(
         context: context.unwrap_or_default(),
         images,
     };
-    let (kept, generation) = ai_run(&state).reserve()?;
+    let (kept, generation) = {
+        let _authority = state
+            .sheet_authority
+            .try_lock()
+            .map_err(|_| "workspace_busy".to_string())?;
+        let mut run = ai_run(&state);
+        if state.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("The drawing is closed".into());
+        }
+        run.reserve()?
+    };
     // Gives the claim back on every way out before the turn starts, a panic included.
     let mut claim = Claim {
         state: &state,
         generation,
         armed: true,
-        kept: None,
+        kept,
     };
     // Start this job on the sheet the user was viewing; later browsing is independent.
     {
-        let mut session = state.session.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut session = state
+            .session
+            .try_lock()
+            .map_err(|_| "workspace_busy".to_string())?;
         if let Some(session) = session.as_mut() {
             session.automation_sheet = Some(session.sheet.clone());
         }
     }
     let language = ai_run(&state).language();
-    let settings = state
-        .settings
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    let mut agent = match kept {
+    let mut settings = state.turn_settings();
+    if ai::mock_provider(&state.session).is_none() {
+        crate::subscriptions::ensure_plan_model(&state, &mut settings).await?;
+    }
+    let previous = ai_run(&state).checkpoint_conversation();
+    let mut agent = match claim.kept.take() {
         Some(agent) => agent,
         // Its file tools run on the app's tabs.
-        None => new_agent(&state, &settings, language, None)
+        None => new_agent(&state, &settings, language, previous)
             .await?
-            .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() })),
+            .with_host(Arc::new(crate::drawing_host::AppHost {
+                app: app.clone(),
+                expected_revision: None,
+                binding: Some(state.clone()),
+            })),
     };
     // Effort may have changed since the last message.
     agent.set_settings(ai::agent_settings(&settings, language));
     let turn = ai_run(&state).start(agent, generation);
     // `start` settles the claim either way.
     claim.armed = false;
-    tauri::async_runtime::spawn(supervise(app, turn?, message));
+    let turn = turn?;
+    let configured = crate::state::lock(&state.settings).max_concurrent_turns;
+    let memory_limited = state.turn_limit() < configured;
+    let event = {
+        let mut view = crate::state::lock(&state.view);
+        view.error = None;
+        view.status = "queued";
+        view.away = None;
+        view.transcript.push(TranscriptEntry::User {
+            text: message.text.clone(),
+            pointed: message.pointed.clone(),
+            images: vec![qiyas_ai::conversation::PICTURE_REMOVED.to_string(); message.images.len()],
+        });
+        view.record(state.id, serde_json::json!({"type":"queued","text":message.text,"pointed":message.pointed,"memory_limited":memory_limited}))
+    };
+    let _ = app.emit("workspace:event", event);
+    tauri::async_runtime::spawn(supervise(app, state.clone(), turn, message));
     Ok(())
 }
 
@@ -977,32 +1310,191 @@ async fn new_agent(
 /// Runs one turn, forwarding its events to the window while its conversation is current.
 /// Runs the turn on its own task and always ends it with `ai:done`: if the task panics, the
 /// conversation is dropped and the error is `CRASHED`.
-async fn supervise<R: Runtime>(app: AppHandle<R>, turn: Turn, message: qiyas_ai::UserMessage) {
+async fn supervise<R: Runtime>(
+    app: AppHandle<R>,
+    state: AppState,
+    turn: Turn,
+    message: qiyas_ai::UserMessage,
+) {
     let generation = turn.generation;
-    let task = tauri::async_runtime::spawn(run_turn(app.clone(), turn, message));
+    let claude = crate::state::lock(&state.provider).provider == settings::Provider::ClaudeCode;
+    let permit = state
+        .turn_queue
+        .acquire(claude, &turn.cancel, || state.turn_limit())
+        .await;
+    if permit.is_none() {
+        ai_run(&state).finish(turn.agent, generation);
+        if ai_run(&state).generation() == generation {
+            let event = crate::state::lock(&state.view).agent_event(
+                state.id,
+                AgentEvent::Stopped {
+                    reason: "cancelled".into(),
+                },
+            );
+            let _ = app.emit("workspace:event", event);
+            workspace_finished(&app, &state, None);
+        }
+        return;
+    }
+    let event = {
+        let mut view = crate::state::lock(&state.view);
+        view.status = "working";
+        view.record(state.id, serde_json::json!({"type":"working"}))
+    };
+    let _ = app.emit("workspace:event", event);
+    let task = tauri::async_runtime::spawn(run_turn(app.clone(), state.clone(), turn, message));
+    let mut completion_generation = generation;
     let error = match task.await {
         Ok((agent, result)) => {
-            ai_run(&app.state::<AppState>()).finish(agent, generation);
+            ai_run(&state).finish(agent, generation);
             result.err().map(|e| e.for_window())
         }
         Err(_) => {
-            let state = app.state::<AppState>();
             let mut run = ai_run(&state);
             if run.generation() == generation {
                 run.crashed();
+                completion_generation = run.generation();
             } else {
                 run.release(None, generation);
             }
             Some(ai::CRASHED.to_string())
         }
     };
-    let _ = app.emit("ai:done", AiDone { error });
+    if ai_run(&state).generation() == completion_generation {
+        workspace_finished(&app, &state, error);
+    }
+    drop(permit);
+}
+
+fn workspace_finished<R: Runtime>(app: &AppHandle<R>, state: &AppState, error: Option<String>) {
+    if let Ok(session) = state.session.try_lock() {
+        if let Some(session) = session.as_ref() {
+            state.publish(session);
+        }
+    }
+    let hidden = crate::state::lock(&state.tabs).active != Some(state.id);
+    let event = {
+        let mut view = crate::state::lock(&state.view);
+        if error.is_some() {
+            view.status = "failed";
+        } else if view.status != "waiting" {
+            view.status = "done";
+        }
+        view.error = error.clone();
+        if hidden {
+            view.away = Some(
+                view.transcript
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match entry {
+                        TranscriptEntry::Event {
+                            event: AgentEvent::Text { text },
+                        } => Some(text.chars().take(240).collect()),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+            );
+        }
+        let status = view.status;
+        view.record(
+            state.id,
+            serde_json::json!({"type":"end","status":status,"error":error}),
+        )
+    };
+    let _ = app.emit("workspace:event", event);
+    let _ = app.emit(
+        "ai:done",
+        AiDone {
+            error,
+            workspace: state.id,
+        },
+    );
+}
+
+#[tauri::command]
+pub async fn workspace_attach(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let state = state.scoped(workspace)?;
+    let mut snapshot = crate::state::lock(&state.view).snapshot(state.id);
+    let settings = crate::state::lock(&state.provider).clone();
+    snapshot["context"] = serde_json::json!(*crate::state::lock(&state.context));
+    snapshot["choice"] = serde_json::json!({"provider":settings.provider,"model":settings.profile().model,"effort":settings.profile().effort,"base_url":settings.profile().base_url});
+    let configured = crate::state::lock(&state.settings).max_concurrent_turns;
+    snapshot["memory_limited"] = serde_json::json!(state.turn_limit() < configured);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn workspace_view_state(
+    workspace: Option<u32>,
+    context: qiyas_ai::TurnContext,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
+    if context.selection.len() > 100_000
+        || context
+            .region
+            .as_ref()
+            .is_some_and(|r| r.points.len() > 10_000)
+    {
+        return Err("The selection is too large".into());
+    }
+    *crate::state::lock(&state.context) = context;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn workspace_events(
+    workspace: Option<u32>,
+    after: u64,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let state = state.scoped(workspace)?;
+    let events = crate::state::lock(&state.view).since(after);
+    Ok(events)
+}
+
+#[tauri::command]
+pub async fn workspace_provider<R: Runtime>(
+    workspace: Option<u32>,
+    provider: settings::Provider,
+    model: String,
+    effort: Option<String>,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
+    let mut run = ai_run(&state);
+    if run.busy() {
+        return Err("busy".into());
+    }
+    let old = crate::state::lock(&state.provider).clone();
+    let mut next = if old.provider == provider {
+        old.clone()
+    } else {
+        crate::state::lock(&state.settings).clone()
+    };
+    next.provider = provider;
+    next.profile_mut().model = model;
+    next.profile_mut().effort = effort;
+    settings::validate(&next)?;
+    // Preserve the conversation through Agent::resume, which removes incompatible provider memory.
+    if ai::answerer_changed(&old, &next) {
+        run.rebuild_provider();
+    }
+    *crate::state::lock(&state.provider) = next;
+    drop(run);
+    let _ = app.emit("workspace:changed", state.id);
+    Ok(())
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current, and
 /// gives the agent back.
 async fn run_turn<R: Runtime>(
     app: AppHandle<R>,
+    state: AppState,
     turn: Turn,
     message: qiyas_ai::UserMessage,
 ) -> (Agent, Result<(), qiyas_ai::AiError>) {
@@ -1023,7 +1515,6 @@ async fn run_turn<R: Runtime>(
                     event
                 }
                 _ = opening.tick(), if !opening_saved => {
-                    let state = app.state::<AppState>();
                     let run = ai_run(&state);
                     if run.generation() != generation {
                         opening_saved = true;
@@ -1036,7 +1527,6 @@ async fn run_turn<R: Runtime>(
                     continue;
                 }
             };
-            let state = app.state::<AppState>();
             let run = ai_run(&state);
             if run.generation() == generation {
                 // Persist the opening message and each completed step, including during a long
@@ -1055,7 +1545,12 @@ async fn run_turn<R: Runtime>(
                     opening_saved = true;
                 }
                 first = false;
-                let _ = app.emit("ai:event", &event);
+                let window_event =
+                    crate::state::lock(&state.view).agent_event(state.id, event.clone());
+                let _ = app.emit("workspace:event", window_event);
+                let mut payload = serde_json::to_value(&event).expect("agent event serializes");
+                payload["workspace"] = serde_json::json!(state.id);
+                let _ = app.emit("ai:event", payload);
             }
         }
     };
@@ -1067,14 +1562,16 @@ async fn run_turn<R: Runtime>(
 /// Undoes the assistant's last change, only if it is still the newest change to the take-off.
 /// False when the user (or nothing) changed it since.
 #[tauri::command]
-pub async fn ai_undo(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn ai_undo(workspace: Option<u32>, state: State<'_, AppState>) -> Result<bool, String> {
+    let state = state.scoped(workspace)?;
     let _turn = window_sheet_guard(&state)?;
     with_session(&state, |s| Ok(s.undo_if(qiyas_core::Source::Ai)))
 }
 
 /// Stops the running turn; it ends with a "cancelled" stop.
 #[tauri::command]
-pub async fn ai_cancel(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn ai_cancel(workspace: Option<u32>, state: State<'_, AppState>) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     ai_run(&state).cancel();
     Ok(())
 }
@@ -1082,9 +1579,12 @@ pub async fn ai_cancel(state: State<'_, AppState>) -> Result<(), String> {
 /// Starts a new conversation.
 #[tauri::command]
 pub async fn ai_clear<R: Runtime>(
+    workspace: Option<u32>,
+
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let state = state.scoped(workspace)?;
     new_conversation(&app, &state);
     Ok(())
 }
@@ -1102,8 +1602,9 @@ pub async fn ai_conversations(
     drawing: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ConversationSummary>, String> {
-    // Serialize store access with finish/reset/delete so the index cannot lose a concurrent save.
-    let _run = ai_run(&state);
+    for workspace in state.conversations() {
+        crate::state::lock(&workspace.ai).save()?;
+    }
     crate::conversations::Store::new(&state.config_dir)
         .list(drawing.as_deref().map(Path::new))
         .map(|entries| {
@@ -1126,10 +1627,13 @@ pub struct ResumedConversation {
 /// The window first activates or opens the drawing through the usual autosave-aware path.
 #[tauri::command]
 pub async fn ai_resume<R: Runtime>(
+    workspace: Option<u32>,
+
     id: String,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<ResumedConversation, String> {
+    let state = state.scoped(workspace)?;
     let (kept, generation, language, conversation) = {
         let mut run = ai_run(&state);
         if run.busy() {
@@ -1150,20 +1654,30 @@ pub async fn ai_resume<R: Runtime>(
         transcript: conversation.transcript.clone(),
         drawing: conversation.drawing.clone(),
     };
-    let settings = state
-        .settings
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    let mut settings = state.turn_settings();
+    if ai::mock_provider(&state.session).is_none() {
+        crate::subscriptions::ensure_plan_model(&state, &mut settings).await?;
+    }
     let agent = new_agent(&state, &settings, language, Some(conversation))
         .await?
-        .with_host(Arc::new(crate::drawing_host::AppHost { app: app.clone() }));
+        .with_host(Arc::new(crate::drawing_host::AppHost {
+            app: app.clone(),
+            expected_revision: None,
+            binding: Some(state.clone()),
+        }));
     let mut run = ai_run(&state);
     if run.generation() != generation {
         return Err(ai::RESTARTED.into());
     }
     run.new_conversation();
     run.resume(agent);
+    {
+        let mut view = crate::state::lock(&state.view);
+        view.transcript = response.transcript.clone();
+        view.status = "done";
+        view.error = None;
+        view.away = None;
+    }
     claim.armed = false;
     Ok(response)
 }
@@ -1174,13 +1688,27 @@ pub async fn ai_delete_conversation<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut run = ai_run(&state);
-    if run.conversation_id().as_deref() == Some(&id) {
-        if run.busy() {
-            return Err("busy".into());
+    let workspaces = state.conversations();
+    let mut runs = workspaces
+        .iter()
+        .map(|workspace| crate::state::lock(&workspace.ai))
+        .collect::<Vec<_>>();
+    if runs
+        .iter()
+        .any(|run| run.conversation_id().as_deref() == Some(&id) && run.busy())
+    {
+        return Err("busy".into());
+    }
+    let mut cleared = Vec::new();
+    for (workspace, run) in workspaces.iter().zip(runs.iter_mut()) {
+        if run.conversation_id().as_deref() == Some(&id) {
+            run.new_conversation();
+            cleared.push(workspace.id);
         }
-        run.new_conversation();
-        let _ = app.emit("ai:cleared", ());
+    }
+    drop(runs);
+    for id in cleared {
+        new_conversation(&app, &state.scoped(Some(id))?);
     }
     crate::conversations::Store::new(&state.config_dir).delete(&id)
 }
@@ -1190,13 +1718,22 @@ pub async fn ai_delete_conversations<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut run = ai_run(&state);
-    if run.busy() {
+    let workspaces = state.conversations();
+    let mut runs = workspaces
+        .iter()
+        .map(|workspace| crate::state::lock(&workspace.ai))
+        .collect::<Vec<_>>();
+    if runs.iter().any(|run| run.busy()) {
         return Err("busy".into());
     }
-    run.new_conversation();
+    for run in &mut runs {
+        run.new_conversation();
+    }
     crate::conversations::Store::new(&state.config_dir).delete_all()?;
-    let _ = app.emit("ai:cleared", ());
+    drop(runs);
+    for workspace in workspaces {
+        new_conversation(&app, &state.scoped(Some(workspace.id))?);
+    }
     Ok(())
 }
 
@@ -1204,12 +1741,23 @@ pub async fn ai_delete_conversations<R: Runtime>(
 /// conversation.
 #[tauri::command]
 pub async fn ai_set_language<R: Runtime>(
+    workspace: Option<u32>,
+
     lang: String,
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if ai_run(&state).set_language(Lang::from_code(&lang)) {
-        let _ = app.emit("ai:cleared", ());
+    let state = state.scoped(workspace)?;
+    let changed = {
+        let mut run = ai_run(&state);
+        // Reloading or switching a translated window must not interrupt a running Mizan.
+        if run.busy() {
+            return Ok(());
+        }
+        run.set_language(Lang::from_code(&lang))
+    };
+    if changed {
+        new_conversation(&app, &state);
     }
     Ok(())
 }
@@ -1243,9 +1791,13 @@ pub struct AiStatus {
 }
 
 #[tauri::command]
-pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
+pub async fn ai_status(
+    workspace: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<AiStatus, String> {
+    let state = state.scoped(workspace)?;
     let settings = state
-        .settings
+        .provider
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
@@ -1289,7 +1841,7 @@ mod tests {
     use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
     use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime};
     use tauri::webview::InvokeRequest;
-    use tauri::{App, Listener, WebviewWindow, WebviewWindowBuilder};
+    use tauri::{App, Listener, Manager, WebviewWindow, WebviewWindowBuilder};
 
     use super::*;
 
@@ -1423,6 +1975,9 @@ mod tests {
                     export_conflicts,
                     ai_undo,
                     ai_send,
+                    workspace_attach,
+                    workspace_provider,
+                    workspace_events,
                     ai_cancel,
                     ai_clear,
                     ai_conversations,
@@ -1434,6 +1989,7 @@ mod tests {
                     get_settings,
                     set_settings,
                     mcp_status,
+                    pick,
                     snap,
                     get_drafting,
                     set_drafting,
@@ -1479,7 +2035,14 @@ mod tests {
             for name in ["ai:event", "ai:done", "ai:cleared", crate::pdf::PROGRESS] {
                 let tx = tx.clone();
                 app.listen_any(name, move |e| {
-                    let payload = serde_json::from_str(e.payload()).unwrap_or(Value::Null);
+                    let mut payload: Value =
+                        serde_json::from_str(e.payload()).unwrap_or(Value::Null);
+                    if let Some(object) = payload.as_object_mut() {
+                        object.remove("workspace");
+                    }
+                    if name == crate::pdf::PROGRESS {
+                        payload = payload.get("progress").cloned().unwrap_or(payload);
+                    }
                     let _ = tx.send((name.to_string(), payload));
                 });
             }
@@ -1490,10 +2053,9 @@ mod tests {
                 events,
             };
             ipc.call("open_drawing", json!({ "path": path })).unwrap();
-            assert_eq!(
-                ipc.next().0,
-                "ai:cleared",
-                "a new drawing, a new conversation"
+            assert!(
+                ipc.events.try_recv().is_err(),
+                "opening must not clear another conversation"
             );
             ipc
         }
@@ -1813,7 +2375,10 @@ mod tests {
 
                 let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
                 let first_call = kinds.iter().position(|k| *k == "tool_call").unwrap();
-                assert!(kinds[..first_call].iter().all(|k| *k == "text"));
+                assert!(kinds[..first_call]
+                    .iter()
+                    .all(|k| matches!(*k, "text" | "cache_usage")));
+                assert!(kinds[..first_call].contains(&"cache_usage"));
                 assert_eq!(kinds[first_call + 1], "tool_result");
                 assert_eq!(kinds.last(), Some(&"done"));
                 let call = &events[first_call];
@@ -1943,7 +2508,7 @@ mod tests {
             || {
                 let ipc = Ipc::open();
                 let untitled = ipc.call("new_drawing", json!({ "units": "m" })).unwrap();
-                assert_eq!(ipc.next().0, "ai:cleared");
+                assert!(ipc.events.try_recv().is_err());
                 ipc.call("ai_send", json!({ "text": "Hello" })).unwrap();
                 ipc.turn();
                 let list = ipc.call("ai_conversations", json!({})).unwrap();
@@ -1974,6 +2539,120 @@ mod tests {
                 ipc.call("ai_delete_conversations", json!({})).unwrap();
                 assert_eq!(ipc.next().0, "ai:cleared");
                 assert_eq!(ipc.call("ai_conversations", json!({})).unwrap(), json!([]));
+            },
+        );
+    }
+
+    #[test]
+    fn save_as_keeps_its_chats_out_of_the_next_untitled_drawing() {
+        ai_test(
+            "save_as_keeps_its_chats_out_of_the_next_untitled_drawing",
+            || {
+                let ipc = Ipc::open();
+                let first = ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+                assert!(ipc.events.try_recv().is_err());
+                ipc.call("ai_send", json!({"text":"Hello"})).unwrap();
+                ipc.turn();
+                let saved = ipc._dir.path().join("saved.dwg");
+                ipc.call("save_drawing_as", json!({"path":saved})).unwrap();
+                let second = ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+                assert_ne!(first["path"], second["path"]);
+                assert_eq!(
+                    ipc.call("ai_conversations", json!({"drawing":second["path"]}))
+                        .unwrap(),
+                    json!([])
+                );
+                assert_eq!(
+                    ipc.call("ai_conversations", json!({"drawing":saved}))
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn recovered_untitled_history_and_inactive_chats_follow_save_as() {
+        ai_test(
+            "recovered_untitled_history_and_inactive_chats_follow_save_as",
+            || {
+                let ipc = Ipc::open();
+                let untitled = ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+                assert!(ipc.events.try_recv().is_err());
+                let state = ipc._app.state::<AppState>();
+                // A copy of the founder's chat can exercise the same flow without reading his
+                // live store. Normal tests use the canned provider and synthetic conversations.
+                if let Some(path) = std::env::var_os("QIYAS_GOAL_L_CHAT_COPY") {
+                    let mut chat: qiyas_ai::conversation::Conversation =
+                        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    chat.drawing = Some(untitled["path"].as_str().unwrap().into());
+                    crate::conversations::Store::new(&state.config_dir)
+                        .save(&chat)
+                        .unwrap();
+                }
+                for _ in 0..2 {
+                    ipc.call("ai_send", json!({"text":"Hello"})).unwrap();
+                    ipc.turn();
+                    ipc.call("ai_clear", json!({})).unwrap();
+                    assert_eq!(ipc.next().0, "ai:cleared");
+                }
+                let before = ipc
+                    .call("ai_conversations", json!({"drawing":untitled["path"]}))
+                    .unwrap();
+                assert!(before.as_array().unwrap().len() >= 2);
+                ipc.call(
+                    "run_command",
+                    json!({"cmd":{"type":"draw","kind":"line","a":[0,0],"b":[5,0]}}),
+                )
+                .unwrap();
+                let autosave = ipc.call("autosave_drawings", json!({})).unwrap();
+                assert!(!autosave["written"].as_array().unwrap().is_empty());
+                let source = Path::new(untitled["path"].as_str().unwrap());
+                let auto = qiyas_core::autosave_path(source);
+                let crash =
+                    std::path::PathBuf::from(format!("{}.crash-20261024-120000", auto.display()));
+                std::fs::copy(&auto, &crash).unwrap();
+                let project = std::path::PathBuf::from(format!("{}.qiyas", auto.display()));
+                if project.exists() {
+                    std::fs::copy(&project, format!("{}.qiyas", crash.display())).unwrap();
+                }
+                let store = crate::conversations::Store::new(&state.config_dir);
+                for path in [&auto, &crash] {
+                    let mut chat = store.load(before[0]["id"].as_str().unwrap()).unwrap();
+                    chat.id = uuid::Uuid::new_v4().to_string();
+                    chat.drawing = Some(path.clone());
+                    store.save(&chat).unwrap();
+                }
+                let recovered = ipc.call("recover_autosave", json!({"path":crash})).unwrap();
+                let history = ipc
+                    .call("ai_conversations", json!({"drawing":recovered["path"]}))
+                    .unwrap();
+                assert_eq!(
+                    history.as_array().unwrap().len(),
+                    before.as_array().unwrap().len() + 2
+                );
+                let saved = ipc._dir.path().join("villa.dwg");
+                ipc.call("save_drawing_as", json!({"path":saved})).unwrap();
+                let after = ipc
+                    .call("ai_conversations", json!({"drawing":saved}))
+                    .unwrap();
+                assert_eq!(
+                    after.as_array().unwrap().len(),
+                    before.as_array().unwrap().len() + 2
+                );
+                let restarted = crate::conversations::Store::new(&state.config_dir);
+                restarted.recover().unwrap();
+                for entry in after.as_array().unwrap() {
+                    let chat = restarted.load(entry["id"].as_str().unwrap()).unwrap();
+                    assert_eq!(chat.drawing.as_deref(), Some(saved.as_path()));
+                    assert!(!chat.transcript.is_empty());
+                }
+                if let Some(path) = std::env::var_os("QIYAS_GOAL_L_HISTORY_EVIDENCE") {
+                    std::fs::write(path, serde_json::to_vec_pretty(&json!({"untitled":untitled,"before":before,"autosave":autosave,"recovered":recovered,"history":history,"save_as":after})).unwrap()).unwrap();
+                }
             },
         );
     }
@@ -2324,10 +3003,11 @@ mod tests {
         let cmd = json!({
             "type": "set_image_display", "handle": handle, "brightness": 60, "contrast": 45, "fade": 20
         });
-        assert_eq!(
-            ipc.call("run_command", json!({ "cmd": cmd })),
-            Ok(json!({ "type": "changed" }))
-        );
+        let changed = ipc.call("run_command", json!({ "cmd": cmd })).unwrap();
+        assert_eq!(changed["type"], "changed");
+        assert!(changed["revision"].is_object());
+        assert!(changed["handle_map"].is_object());
+        assert_eq!(changed["advice"], json!([]));
         assert_eq!(
             ipc.call("image_display", json!({ "handle": handle })),
             Ok(json!({ "brightness": 60, "contrast": 45, "fade": 20 }))
@@ -2355,7 +3035,7 @@ mod tests {
         let second = qiyas_core::fixtures::write_sample(ipc._dir.path(), "dwg");
         let info = ipc.call("open_drawing", json!({ "path": second })).unwrap();
         assert_eq!(info["path"], json!(second));
-        assert_eq!(ipc.next().0, "ai:cleared");
+        assert!(ipc.events.try_recv().is_err());
         let tabs = ipc.call("tabs", json!({})).unwrap();
         let list = tabs["tabs"].as_array().unwrap();
         assert_eq!(list.len(), 2);
@@ -2364,10 +3044,10 @@ mod tests {
         assert_eq!(tabs["active"], list[1]["id"]);
         let (id1, id2) = (list[0]["id"].clone(), list[1]["id"].clone());
         {
-            // The parked tab keeps no batch or pick index.
             let state = ipc.webview.state::<AppState>();
-            let parked = state.parked.lock().unwrap();
-            assert!(parked.iter().all(|p| !p.session.is_drawn()));
+            let workspaces = state.workspaces();
+            assert_eq!(workspaces.len(), 2);
+            assert!(!Arc::ptr_eq(&workspaces[0].session, &workspaces[1].session));
         }
 
         // Measure on the second drawing only.
@@ -2384,10 +3064,9 @@ mod tests {
 
         let info = ipc.call("activate_tab", json!({ "id": id1 })).unwrap();
         assert_eq!(info["path"], first);
-        assert_eq!(
-            ipc.next().0,
-            "ai:cleared",
-            "another drawing, a new conversation"
+        assert!(
+            ipc.events.try_recv().is_err(),
+            "switching must not clear a conversation"
         );
         assert_eq!(ipc.call("drawing_info", json!({})).unwrap()["path"], first);
         assert_eq!(count(&ipc), 0, "the first drawing has its own take-off");
@@ -2402,8 +3081,7 @@ mod tests {
             let session = session.as_ref().unwrap();
             assert!(session.pick([4.0, 1.5], 0.05).is_some());
             assert!(session.is_drawn());
-            let parked = state.parked.lock().unwrap();
-            assert!(parked.iter().all(|p| !p.session.is_drawn()));
+            assert_eq!(state.workspaces().len(), 2);
         }
 
         ipc.call("activate_tab", json!({ "id": id2 })).unwrap();
@@ -2530,6 +3208,323 @@ mod tests {
         assert_eq!(ipc.call("recents", json!({})), Ok(json!([])));
     }
 
+    struct GatedDrawingProvider {
+        entered: Arc<AtomicUsize>,
+        release: Arc<tokio::sync::Notify>,
+        step: AtomicUsize,
+        x: f64,
+    }
+    impl qiyas_ai::Provider for GatedDrawingProvider {
+        fn stream_turn<'a>(
+            &'a self,
+            _: qiyas_ai::TurnRequest,
+            sink: qiyas_ai::provider::Sink<'a>,
+        ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, qiyas_ai::AiError>>
+        {
+            let step = self.step.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if step == 0 {
+                    self.entered.fetch_add(1, Ordering::SeqCst);
+                    self.release.notified().await;
+                    Ok(qiyas_ai::TurnResult {
+                        content: vec![qiyas_ai::ContentBlock::ToolUse {
+                            id: "draw".into(),
+                            name: "qiyas_execute".into(),
+                            input: json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[self.x,0],"b":[self.x+2.0,0]}}}),
+                        }],
+                        stop_reason: qiyas_ai::StopReason::ToolUse,
+                        usage: Default::default(),
+                    })
+                } else {
+                    let text = format!("Finished drawing at {}", self.x);
+                    sink(qiyas_ai::provider::StreamEvent::TextDelta(text.clone()));
+                    Ok(qiyas_ai::TurnResult {
+                        content: vec![qiyas_ai::ContentBlock::Text { text }],
+                        stop_reason: qiyas_ai::StopReason::EndTurn,
+                        usage: Default::default(),
+                    })
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn workspace_turns_survive_switch_and_reload_with_independent_providers() {
+        ai_test("workspace_turns", || {
+            let ipc = Ipc::open();
+            let first = ipc.call("tabs", json!({})).unwrap()["active"]
+                .as_u64()
+                .unwrap() as u32;
+            ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+            let second = ipc.call("tabs", json!({})).unwrap()["active"]
+                .as_u64()
+                .unwrap() as u32;
+            let entered = Arc::new(AtomicUsize::new(0));
+            let release = Arc::new(tokio::sync::Notify::new());
+            for (id, x, provider, model) in [
+                (first, 101.0, "anthropic", "first-model"),
+                (second, 202.0, "openai_compatible", "second-model"),
+            ] {
+                ipc.call(
+                    "workspace_provider",
+                    json!({"workspace":id,"provider":provider,"model":model,"effort":"low"}),
+                )
+                .unwrap();
+                let state = ipc._app.state::<AppState>().scoped(Some(id)).unwrap();
+                let entered = entered.clone();
+                let release = release.clone();
+                ai_run(&state).test_provider = Some(Arc::new(move || {
+                    Box::new(GatedDrawingProvider {
+                        entered: entered.clone(),
+                        release: release.clone(),
+                        step: AtomicUsize::new(0),
+                        x,
+                    })
+                }));
+                ipc.call("ai_send", json!({"workspace":id,"text":"Draw one line"}))
+                    .unwrap();
+            }
+            let started = std::time::Instant::now();
+            while entered.load(Ordering::SeqCst) < 2 {
+                assert!(started.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            ipc.call("activate_tab", json!({"id":first})).unwrap();
+            for (id, model) in [(first, "first-model"), (second, "second-model")] {
+                let attached = ipc
+                    .call("workspace_attach", json!({"workspace":id}))
+                    .unwrap();
+                assert_eq!(attached["status"], "working");
+                assert_eq!(attached["transcript"][0]["text"], "Draw one line");
+                assert_eq!(attached["choice"]["model"], model);
+                assert_eq!(
+                    ipc.call("close_tab", json!({"id":id,"force":true})),
+                    Err(json!(tabs::WORKING))
+                );
+            }
+            // Same commands used by a new webview: they neither restart nor cancel the jobs.
+            let reattached = ipc
+                .call("workspace_attach", json!({"workspace":first}))
+                .unwrap();
+            assert_eq!(reattached["status"], "working");
+            release.notify_waiters();
+            let started = std::time::Instant::now();
+            loop {
+                let open = ipc.call("tabs", json!({})).unwrap();
+                if open["tabs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|tab| tab["busy"] == false && tab["status"] == "done")
+                {
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(20));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            for (id, x) in [(first, 101.0), (second, 202.0)] {
+                let state = ipc._app.state::<AppState>().scoped(Some(id)).unwrap();
+                with_session(&state, |session| {
+                    assert!(session.pick([x + 1.0, 0.0], 0.05).is_some());
+                    assert!(session
+                        .pick([if x == 101.0 { 203.0 } else { 102.0 }, 0.0], 0.05)
+                        .is_none());
+                    assert!(session.undo_if(Source::Ai));
+                    assert!(session.pick([x + 1.0, 0.0], 0.05).is_none());
+                    Ok(())
+                })
+                .unwrap();
+            }
+            let hidden = ipc
+                .call("workspace_attach", json!({"workspace":second}))
+                .unwrap();
+            assert!(hidden["away"].as_str().unwrap().contains("202"));
+        });
+    }
+
+    #[test]
+    fn claude_workspaces_queue_and_keep_their_provider_choices() {
+        ai_test("workspace_claude_queue", || {
+            let ipc = Ipc::open();
+            let first = ipc.call("tabs", json!({})).unwrap()["active"]
+                .as_u64()
+                .unwrap() as u32;
+            ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+            let second = ipc.call("tabs", json!({})).unwrap()["active"]
+                .as_u64()
+                .unwrap() as u32;
+            let entered = Arc::new(AtomicUsize::new(0));
+            let release = Arc::new(tokio::sync::Notify::new());
+            for id in [first, second] {
+                ipc.call("workspace_provider", json!({"workspace":id,"provider":"claude_code","model":"sonnet","effort":"low"})).unwrap();
+                let state = ipc._app.state::<AppState>().scoped(Some(id)).unwrap();
+                let provider_entered = entered.clone();
+                let provider_release = release.clone();
+                ai_run(&state).test_provider = Some(Arc::new(move || {
+                    Box::new(GatedDrawingProvider {
+                        entered: provider_entered.clone(),
+                        release: provider_release.clone(),
+                        step: AtomicUsize::new(0),
+                        x: 400.0 + f64::from(id),
+                    })
+                }));
+                ipc.call("ai_send", json!({"workspace":id,"text":"Draw one line"}))
+                    .unwrap();
+                if id == first {
+                    let until = std::time::Instant::now();
+                    while entered.load(Ordering::SeqCst) == 0 {
+                        assert!(until.elapsed() < Duration::from_secs(5));
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+            let until = std::time::Instant::now();
+            while entered.load(Ordering::SeqCst) == 0 {
+                assert!(until.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(entered.load(Ordering::SeqCst), 1);
+            let second_view = ipc
+                .call("workspace_attach", json!({"workspace":second}))
+                .unwrap();
+            assert_eq!(second_view["status"], "queued");
+            release.notify_one();
+            let until = std::time::Instant::now();
+            while entered.load(Ordering::SeqCst) < 2 {
+                assert!(until.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                ipc.call("workspace_attach", json!({"workspace":second}))
+                    .unwrap()["status"],
+                "working"
+            );
+            release.notify_one();
+            let until = std::time::Instant::now();
+            while ipc.call("tabs", json!({})).unwrap()["tabs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tab| tab["busy"] == true)
+            {
+                assert!(until.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+    }
+
+    #[test]
+    fn workspace_busy_tool_keeps_other_drawing_ipc_interactive() {
+        // Fast by default; the combined acceptance run can request a real 60-second hold.
+        let duration = Duration::from_millis(
+            std::env::var("QIYAS_W_HOLD_MS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(100),
+        );
+        let ipc = Ipc::open();
+        let first = ipc.call("tabs", json!({})).unwrap()["active"]
+            .as_u64()
+            .unwrap() as u32;
+        ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+        let second = ipc.call("tabs", json!({})).unwrap()["active"]
+            .as_u64()
+            .unwrap() as u32;
+        let committed = ipc.bytes("render_batch", json!({"workspace":first}));
+        let busy = ipc._app.state::<AppState>().scoped(Some(first)).unwrap();
+        let (ready, entered) = channel();
+        let (release, released) = channel();
+        let worker = std::thread::spawn(move || {
+            let _session = busy.session.lock().unwrap();
+            ready.send(()).unwrap();
+            // Keep the lock until the final timing sample, including a slow last iteration.
+            released
+                .recv_timeout(duration + Duration::from_secs(30))
+                .unwrap();
+        });
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        let start = std::time::Instant::now();
+        let mut worst = Duration::ZERO;
+        let mut checks = 0;
+        while start.elapsed() < duration {
+            let now = std::time::Instant::now();
+            ipc.call("activate_tab", json!({"id":first})).unwrap();
+            ipc.call("drawing_info", json!({"workspace":first}))
+                .unwrap();
+            assert_eq!(
+                ipc.bytes("render_batch", json!({"workspace":first})),
+                committed
+            );
+            assert_eq!(
+                ipc.call("pick", json!({"workspace":first,"x":0,"y":0,"tol":1})),
+                Err(json!("workspace_busy"))
+            );
+            ipc.call("activate_tab", json!({"id":second})).unwrap();
+            ipc.call("drawing_info", json!({"workspace":second}))
+                .unwrap();
+            ipc.call("snap", json!({"workspace":second,"x":0,"y":0,"tol":1}))
+                .unwrap();
+            let session = ipc._app.state::<AppState>().scoped(Some(second)).unwrap();
+            with_session(&session, |s| {
+                s.run_input(
+                    &json!({"type":"draw","kind":"line","a":[0,0],"b":[2,0]}),
+                    Source::User,
+                )?;
+                assert!(s.pick([1.0, 0.0], 0.05).is_some());
+                assert!(s.undo());
+                Ok(())
+            })
+            .unwrap();
+            worst = worst.max(now.elapsed());
+            checks += 1;
+            assert!(now.elapsed() < Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        let measured = json!({"duration_seconds":start.elapsed().as_secs_f64(),"checks":checks,"worst_ipc_group_ms":worst.as_secs_f64()*1000.0});
+        if let Some(path) = std::env::var_os("QIYAS_W_TIMING") {
+            std::fs::write(path, serde_json::to_vec_pretty(&measured).unwrap()).unwrap();
+        }
+        eprintln!("{measured}");
+    }
+
+    #[test]
+    fn closed_workspace_ids_never_rebind_to_a_new_drawing() {
+        let ipc = Ipc::open();
+        let first = ipc.call("tabs", json!({})).unwrap()["active"]
+            .as_u64()
+            .unwrap() as u32;
+        let original = ipc._app.state::<AppState>().scoped(Some(first)).unwrap();
+        ipc.call("close_tab", json!({"id":first,"force":true}))
+            .unwrap();
+        assert!(original.closed.load(Ordering::Acquire));
+        assert!(original.session.lock().unwrap().is_none());
+        assert!(ipc
+            .call("drawing_info", json!({"workspace":first}))
+            .is_err());
+        ipc.call("new_drawing", json!({"units":"m"})).unwrap();
+        let second = ipc.call("tabs", json!({})).unwrap()["active"]
+            .as_u64()
+            .unwrap() as u32;
+        assert_ne!(first, second);
+        let replacement = ipc._app.state::<AppState>().scoped(Some(second)).unwrap();
+        assert!(!Arc::ptr_eq(&original.session, &replacement.session));
+        assert!(tabs::add(
+            &original,
+            Session::new_blank(&ipc._dir.path().join("late.dxf"), 6)
+        )
+        .is_err());
+        assert_eq!(
+            ipc.call("tabs", json!({})).unwrap()["tabs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     /// The image table of a batch (`Batch::to_bytes`, kind 11): (id, version below 2^53).
     fn qiyas_render_batch(bytes: &[u8]) -> Vec<(u32, bool)> {
         let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
@@ -2553,5 +3548,60 @@ mod tests {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod panic_recovery_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_panicking_desktop_edit_releases_the_session_and_keeps_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::new(dir.path().join("config")));
+        *state.session.lock().unwrap() = Some(Session::new_blank(&dir.path().join("panic.dxf"), 6));
+        let worker = state.clone();
+        let error = std::thread::spawn(move || {
+            with_session(&worker, |s| {
+                qiyas_core::fixtures::panic_on_document_edit(2);
+                s.run_input(
+                    &json!({"type":"batch","commands":[
+                        {"type":"draw","kind":"line","a":[0,0],"b":[1,0]},
+                        {"type":"draw","kind":"line","a":[0,1],"b":[1,1]}
+                    ]}),
+                    Source::User,
+                )
+            })
+            .unwrap_err()
+        })
+        .join()
+        .expect("desktop command returned normally");
+        assert!(error.contains("rolled back"), "{error}");
+        {
+            let guard = state.session.try_lock().expect("released and not poisoned");
+            let s = guard.as_ref().unwrap();
+            assert_eq!(s.drawing.doc.entities().count(), 0);
+            assert!(s.history_steps().0.is_empty());
+        }
+        with_session(&state, |s| {
+            s.run_input(
+                &json!({"type":"draw","kind":"line","a":[0,0],"b":[1,0]}),
+                Source::User,
+            )?;
+            assert_eq!(s.drawing.doc.entities().count(), 1);
+            assert!(s.undo());
+            assert_eq!(s.drawing.doc.entities().count(), 0);
+            assert!(s.redo());
+            s.save_project()?;
+            Ok(())
+        })
+        .unwrap();
+        let error = with_session::<()>(&state, |_| panic!("injected host panic")).unwrap_err();
+        assert!(error.contains("keep working"));
+        assert!(
+            state.session.try_lock().is_ok(),
+            "host panic must not poison the session"
+        );
     }
 }

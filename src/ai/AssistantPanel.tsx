@@ -1,9 +1,11 @@
 import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
 import { uiError, userError } from "../i18n/errors";
+import { listen } from "@tauri-apps/api/event";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { aiAttachPdf, type PdfAttachment } from "../api";
 import type { Pointing } from "../app/useAssistantWiring";
 import { translate, useLanguage, useT } from "../i18n";
+import { WorkspacePicker } from "./WorkspacePicker";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
@@ -15,10 +17,11 @@ import type { Assistant } from "./useAssistant";
 import { useStickToBottom } from "./useStickToBottom";
 
 type Props = {
+  showTechnicalDetails?: boolean;
   assistant: Pick<
     Assistant,
     "transcript" | "busy" | "error" | "send" | "cancel" | "clear"
-  >;
+  > & Partial<Pick<Assistant, "workspace" | "choice" | "choose" | "phase" | "away" | "memoryLimited">>;
   onShow(card: ToolCardItem): void;
   onUndo(card: ToolCardItem): void;
   onSettings(): void;
@@ -32,10 +35,20 @@ type Props = {
 
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
 
+function connectionLost(error: string): boolean {
+  try {
+    return ["ai.error.network", "ai.error.timeout", "ai.error.stream", "ai.error.service_error", "ai.error.chatgpt_temporary"]
+      .includes(JSON.parse(error).code);
+  } catch {
+    return false;
+  }
+}
+
 /** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
  *  Memoised: the app re-renders on every pointer move. */
 export const AssistantPanel = memo(function AssistantPanel({
   assistant,
+  showTechnicalDetails = false,
   onShow,
   onUndo,
   onSettings,
@@ -49,12 +62,32 @@ export const AssistantPanel = memo(function AssistantPanel({
   const { transcript, busy, error } = assistant;
   const [attaching, setAttaching] = useState(false);
   const unavailable = busy || !!history?.pending || attaching;
-  const [draft, setDraft] = useState("");
+  type Draft = { text: string; pictures: Picture[]; documents: PdfAttachment[] };
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const key = String(assistant.workspace ?? "lobby");
+  const current = drafts[key] ?? { text: "", pictures: [], documents: [] };
+  const draft = current.text;
+  const pictures = current.pictures;
+  const documents = current.documents;
+  function editDraft(change: (before: Draft) => Draft) {
+    setDrafts(all => ({ ...all, [key]: change(all[key] ?? { text: "", pictures: [], documents: [] }) }));
+  }
+  const setDraft = (text: string) => editDraft(before => ({ ...before, text }));
+  const setPictures = (next: Picture[] | ((old: Picture[]) => Picture[])) =>
+    editDraft(before => ({ ...before, pictures: typeof next === "function" ? next(before.pictures) : next }));
+  const setDocuments = (next: PdfAttachment[] | ((old: PdfAttachment[]) => PdfAttachment[])) =>
+    editDraft(before => ({ ...before, documents: typeof next === "function" ? next(before.documents) : next }));
+  useEffect(() => {
+    let gone = false;
+    let off: (() => void) | undefined;
+    void listen<number>("workspace:closed", ({ payload }) => {
+      setDrafts(all => { const kept = { ...all }; delete kept[String(payload)]; return kept; });
+    }).then(unlisten => { if (gone) unlisten(); else off = unlisten; }).catch(() => {});
+    return () => { gone = true; off?.(); };
+  }, []);
   const box = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   /** The pictures to send with the next message. */
-  const [pictures, setPictures] = useState<Picture[]>([]);
-  const [documents, setDocuments] = useState<PdfAttachment[]>([]);
   const [pictureError, setPictureError] = useState<string | null>(null);
 
   // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
@@ -140,6 +173,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   }
 
   function errorText(e: string) {
+    if (connectionLost(e)) return t("ai.connectionLost");
     if (e === "busy") return t("ai.busy");
     if (e === "no_api_key") return t("ai.noKey");
     if (e === "no_base_url") return t("ai.noBaseUrl");
@@ -151,14 +185,34 @@ export const AssistantPanel = memo(function AssistantPanel({
     return uiError(e, lang);
   }
 
+  // Group recoverable failures within their own user turn. Stored cards and the support log
+  // stay intact, and a failure with no recovery still renders as an ordinary stopped card.
+  const recovery = new Map<number, { indices: number[]; pending: boolean }>();
+  let turn = 0;
+  transcript.items.forEach((item, i) => {
+    if (item.kind === "user") turn = i;
+    if (item.kind !== "tool" || item.status !== "error" || !recoveringCard(transcript.items, i, busy)) return;
+    const group = recovery.get(turn) ?? { indices: [], pending: false };
+    group.indices.push(i);
+    group.pending ||= !recoveringCard(transcript.items, i, false);
+    recovery.set(turn, group);
+  });
+  const recoveredIndices = new Set([...recovery.values()].flatMap((group) => group.indices));
+  const recoveryHeads = new Map([...recovery.values()].map((group) => [group.indices[0], group]));
+
   function show(item: Item, i: number): ReactNode {
     if (item.kind === "provider_status") return <p key={i} className="msg notice" role="status">{t(item.code)}</p>;
     if (item.kind === "retrying") return <p key={i} className="msg notice" role="status">
       {item.code === "ai.error.context_retry" ? t(item.code) : t("ai.error.retrying", { seconds: item.seconds })}
     </p>;
     switch (item.kind) {
+      case "cache_usage":
+        return showTechnicalDetails ? <details key={i} className="technical-details">
+          <summary>{t("technical.details")}</summary>
+          <p>{t("ai.cacheUsage", { percent: (100 * item.cached / item.total).toFixed(1), cached: item.cached, total: item.total })}</p>
+        </details> : null;
       case "plan":
-        return <PlanChecklist key={i} phases={item.phases} language={chatLang}
+        return <PlanChecklist key={i} phases={item.phases} stale={item.stale} language={chatLang} showTechnicalDetails={showTechnicalDetails}
           onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
             ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;
@@ -189,9 +243,31 @@ export const AssistantPanel = memo(function AssistantPanel({
             <Markdown text={item.text} />
           </div>
         );
+      case "open_findings":
+        return <div key={i} className="msg notice" role="note">
+          <strong className="heading">{t("ai.openFindings")}</strong>
+          <ul>{[...new Set(item.findings.map(finding => finding.rule))].map(rule =>
+            <li key={rule}>{t(`ai.finding.${rule}`)} ({item.findings.filter(finding => finding.rule === rule).length})</li>,
+          )}</ul>
+          {showTechnicalDetails && <details className="technical-details"><summary>{t("technical.details")}</summary><pre dir="ltr">{JSON.stringify(item.findings, null, 2)}</pre></details>}
+        </div>;
       case "thinking":
         return null;
       case "tool": {
+        if (recoveredIndices.has(i)) {
+          const group = recoveryHeads.get(i);
+          if (!group) return null;
+          return <div key={i} className="msg notice recovery-summary" role="note">
+            {t(group.pending ? "activity.fixing" : "activity.recovered")}
+            {showTechnicalDetails && <details className="technical-details">
+              <summary>{t("technical.details")}</summary>
+              <pre dir="ltr">{group.indices.map((index) => {
+                const failed = transcript.items[index] as ToolCardItem;
+                return `${failed.label ?? failed.name}\n${JSON.stringify(failed.input, null, 2)}\n${failed.summary}`;
+              }).join("\n\n")}</pre>
+            </details>}
+          </div>;
+        }
         if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
         const canUndo = !unavailable && item === undoable;
@@ -199,6 +275,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           <ToolCard
             key={i}
             card={item}
+            showTechnicalDetails={showTechnicalDetails}
             recovering={recoveringCard(transcript.items, i, busy)}
             onShow={canShow ? () => onShow(item) : undefined}
             onUndo={canUndo ? () => onUndo(item) : undefined}
@@ -210,7 +287,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           <div key={i} className="msg notice refused" role="note">
             <strong className="heading">{t("ai.refused")}</strong>
             {item.text && <Markdown text={item.text} />}
-            {item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
+            {showTechnicalDetails && item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
           </div>
         );
       case "stopped":
@@ -254,6 +331,10 @@ export const AssistantPanel = memo(function AssistantPanel({
           </svg>
         </button>
       </div>
+      {assistant.choice && assistant.choose && <WorkspacePicker choice={assistant.choice} busy={busy} onChange={assistant.choose} />}
+      {assistant.phase === "queued" && <p className="msg notice" role="status">{t("workspace.queued")}</p>}
+      {assistant.memoryLimited && busy && <p className="msg notice" role="status">{t("workspace.memory")}</p>}
+      {assistant.away != null && <p className="msg notice">{t("workspace.away")} {assistant.away || t(`workspace.${assistant.phase || "done"}`)}</p>}
       <p className="sr-only" role="status" aria-live="polite">
         {announce}
       </p>
@@ -310,7 +391,9 @@ export const AssistantPanel = memo(function AssistantPanel({
       {error && (
         <div className="error" role="alert">
           {errorText(error)}
-          <button type="button" className="link" onClick={onSettings}>{t("support.details")}</button>
+          {connectionLost(error) && <button type="button" disabled={busy}
+            onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>}
+          <button type="button" className="link" onClick={onSettings}>{t(showTechnicalDetails ? "support.details" : "settings")}</button>
         </div>
       )}
       <form

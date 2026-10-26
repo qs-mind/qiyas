@@ -24,6 +24,72 @@ pub fn string_chunks(text: &str) -> Vec<&str> {
     chunks
 }
 
+/// JSON with every non-ASCII character as a `\uXXXX` escape. DWG 2000 and 2004 store text
+/// in a code page and write other characters as `\U+XXXX`, which a JSON reader refuses;
+/// ASCII JSON reads back the same in every DWG version and in DXF.
+pub fn ascii_json(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut units = [0u16; 2];
+    for c in text.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            for unit in c.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        }
+    }
+    out
+}
+
+/// Turn the `\U+XXXX` escapes that DWG 2000 and 2004 leave in stored text back into
+/// characters (surrogate pairs joined). An escape after an odd run of backslashes is a
+/// literal backslash followed by text, and stays as it is.
+pub fn decode_legacy_unicode(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("\\U+") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let unit_at = |i: usize| -> Option<u16> {
+        if i + 7 > chars.len() || chars[i] != '\\' || chars[i + 1] != 'U' || chars[i + 2] != '+' {
+            return None;
+        }
+        let hex: String = chars[i + 3..i + 7].iter().collect();
+        u16::from_str_radix(&hex, 16).ok()
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut slashes = 0usize;
+    let mut i = 0;
+    while i < chars.len() {
+        if slashes.is_multiple_of(2) {
+            if let Some(unit) = unit_at(i) {
+                let mut next = i + 7;
+                let decoded = if (0xD800..0xDC00).contains(&unit) {
+                    match unit_at(next).filter(|low| (0xDC00..0xE000).contains(low)) {
+                        Some(low) => {
+                            next += 7;
+                            char::decode_utf16([unit, low]).next().and_then(Result::ok)
+                        }
+                        None => None,
+                    }
+                } else {
+                    char::from_u32(u32::from(unit))
+                };
+                if let Some(c) = decoded {
+                    out.push(c);
+                    i = next;
+                    slashes = 0;
+                    continue;
+                }
+            }
+        }
+        slashes = if chars[i] == '\\' { slashes + 1 } else { 0 };
+        out.push(chars[i]);
+        i += 1;
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 pub fn chunks(text: &str) -> Vec<XDataValue> {
     string_chunks(text)
         .into_iter()
@@ -32,18 +98,17 @@ pub fn chunks(text: &str) -> Vec<XDataValue> {
 }
 
 pub fn read_text(common: &EntityCommon, app: &str) -> Option<String> {
-    Some(
-        common
-            .extended_data
-            .get_record(app)?
-            .values
-            .iter()
-            .filter_map(|v| match v {
-                XDataValue::String(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .collect(),
-    )
+    let text: String = common
+        .extended_data
+        .get_record(app)?
+        .values
+        .iter()
+        .filter_map(|v| match v {
+            XDataValue::String(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    Some(decode_legacy_unicode(&text).into_owned())
 }
 
 pub fn read_json<T: DeserializeOwned>(common: &EntityCommon, app: &str) -> Option<T> {
@@ -103,7 +168,7 @@ pub fn write_json(
 ) -> Result<(), CoreError> {
     let text = serde_json::to_string(value)
         .map_err(|e| CoreError::InvalidCommand(format!("Invalid {app} metadata: {e}")))?;
-    write_text(common, app, app_handle, Some(&text));
+    write_text(common, app, app_handle, Some(&ascii_json(&text)));
     Ok(())
 }
 

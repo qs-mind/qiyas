@@ -218,3 +218,65 @@ test("without rows it shows what it is given", () => {
   expect(screen.getByText("Nothing here")).toBeTruthy();
   expect(screen.getAllByRole("row")).toHaveLength(1);
 });
+
+test("content sizing measures only rendered rows, caches text and honours manual widths", () => {
+  const measured: string[] = [];
+  const context = { font: "", measureText: vi.fn((text: string) => { measured.push(text); return {width: text.length * 8}; }) };
+  vi.stubGlobal("CanvasRenderingContext2D", class {});
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  const computed = vi.spyOn(window, "getComputedStyle").mockImplementation(() => ({fontSize: "12px", fontStyle: "normal", fontWeight: "400", fontFamily: '"Thmanyah Sans", "Instrument Sans"', fontVariantNumeric: "normal", letterSpacing: "0px", paddingLeft: "6px", paddingRight: "6px", getPropertyValue: () => ""}) as unknown as CSSStyleDeclaration);
+  const many = Array.from({length: 10000}, (_, i) => ({...items[0], id: String(i), code: `C.${i}`, text: `Long English description and وصف عربي طويل ${i}`, qty: 1234567890.123}));
+  const controlsColumns: GridColumn<Item>[] = [...columns,
+    {id: "status", header: "Status", size: 40, cell: () => <select defaultValue="open"><option value="open">Open</option><option value="hidden">Hidden option with very long text</option></select>},
+    {id: "input", header: "Input", size: 40, cell: () => <input readOnly value="123456789012345" />},
+  ];
+  try {
+    const {rerender} = render(<DataGrid label="Many" rows={many} columns={controlsColumns} rowKey={key} storageKey="measured" />);
+    expect(screen.getAllByRole("row").length).toBeLessThan(80);
+    expect(measured.some(text => text.includes("9999"))).toBe(false);
+    expect(context.measureText.mock.calls.length).toBeLessThan(150);
+    expect(measured).toContain("Open");
+    expect(measured).toContain("123456789012345");
+    expect(measured.some(text => text.includes("Hidden option"))).toBe(false);
+    expect(context.font).toContain('12px "Thmanyah Sans", "Instrument Sans"');
+    const edge = screen.getByRole("separator", {name: "Resize column Qty"});
+    const auto = Number(edge.getAttribute("aria-valuenow"));
+    expect(auto).toBeGreaterThan(14 * 8);
+    expect(Number(screen.getByRole("separator", {name: "Resize column Description"}).getAttribute("aria-valuenow"))).toBeLessThanOrEqual(360);
+    const calls = context.measureText.mock.calls.length;
+    fireEvent.keyDown(edge, {key: "ArrowRight"});
+    expect(Number(edge.getAttribute("aria-valuenow"))).toBe(auto + 16);
+    expect(JSON.parse(localStorage.getItem("qiyas.grid.measured")!).qty).toBe(auto + 16);
+    rerender(<DataGrid label="Many" rows={many} columns={controlsColumns} rowKey={key} storageKey="measured" />);
+    expect(context.measureText.mock.calls.length).toBe(calls);
+    fireEvent.doubleClick(edge);
+    expect(Number(edge.getAttribute("aria-valuenow"))).toBe(auto);
+    expect(JSON.parse(localStorage.getItem("qiyas.grid.measured")!)).not.toHaveProperty("qty");
+  } finally { canvas.mockRestore(); computed.mockRestore(); vi.unstubAllGlobals(); }
+});
+
+test("wrapped row heights are measured and move the following row", () => {
+  const heights = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function(this: HTMLElement) {
+    return this.dataset.rowKey === "1" ? 105 : this.hasAttribute("data-row-key") ? 45 : 0;
+  });
+  try {
+    grid();
+    const first = document.querySelector<HTMLElement>('[data-row-key="1"]')!;
+    const second = document.querySelector<HTMLElement>('[data-row-key="2"]')!;
+    expect(first.style.height).toBe("");
+    expect(second.style.transform).toBe("translateY(105px)");
+    expect(document.querySelector<HTMLElement>(".grid-body")!.style.height).toBe("240px");
+    fireEvent.click(sortButton("Qty"));
+    expect(document.querySelector<HTMLElement>('[data-row-key="4"]')!.style.transform).toBe("translateY(105px)");
+  } finally { heights.mockRestore(); }
+});
+
+test("a remembered description width overrides growth until reset", () => {
+  localStorage.setItem("qiyas.grid.growing", JSON.stringify({text: 210}));
+  grid({storageKey: "growing"});
+  const layout = () => document.querySelector<HTMLElement>(".grid-inner")!.style.getPropertyValue("--cols");
+  expect(layout()).toContain("60px 210px 70px");
+  fireEvent.doubleClick(screen.getByRole("separator", {name: "Resize column Description"}));
+  expect(layout()).toContain("minmax(140px, 1fr)");
+  expect(JSON.parse(localStorage.getItem("qiyas.grid.growing")!)).not.toHaveProperty("text");
+});
