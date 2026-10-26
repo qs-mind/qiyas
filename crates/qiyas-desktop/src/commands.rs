@@ -1385,18 +1385,23 @@ fn workspace_finished<R: Runtime>(app: &AppHandle<R>, state: &AppState, error: O
         }
         view.error = error.clone();
         if hidden {
-            view.away = Some(
-                view.transcript
-                    .iter()
-                    .rev()
-                    .find_map(|entry| match entry {
-                        TranscriptEntry::Event {
-                            event: AgentEvent::Text { text },
-                        } => Some(text.chars().take(240).collect()),
-                        _ => None,
-                    })
-                    .unwrap_or_default(),
-            );
+            // The last answer is its run of text pieces (streamed parts, then any note
+            // such as the Save As one): show its start, not only its last piece.
+            let mut pieces: Vec<&str> = Vec::new();
+            for entry in view.transcript.iter().rev() {
+                match entry {
+                    TranscriptEntry::Event {
+                        event: AgentEvent::Text { text },
+                    } => pieces.push(text),
+                    TranscriptEntry::User { .. }
+                    | TranscriptEntry::Event {
+                        event: AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. },
+                    } => break,
+                    _ => {}
+                }
+            }
+            let answer: String = pieces.into_iter().rev().collect();
+            view.away = Some(answer.trim().chars().take(240).collect());
         }
         let status = view.status;
         view.record(
