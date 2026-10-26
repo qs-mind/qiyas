@@ -1529,6 +1529,11 @@ impl Agent {
                         Ok(Route::Host { tool, input }) => {
                             let before = *epoch;
                             let ran = self.run_host_tool(id, tool, &input, cancel, *epoch).await;
+                            // Mizan saved (or opened Save As) itself: the end of the turn
+                            // does not ask the user a second time.
+                            if tool == "save_drawing" && !is_error(&ran.0) {
+                                counts.asked_save = true;
+                            }
                             if changes_drawing(tool) && !is_error(&ran.0) {
                                 *epoch = self.phase_epoch;
                                 edited = before != *epoch;
