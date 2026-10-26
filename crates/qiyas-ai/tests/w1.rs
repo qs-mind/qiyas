@@ -508,11 +508,13 @@ async fn an_answer_in_the_wrong_language_is_asked_for_again_once() {
     ]);
     let mut a = agent(provider, session);
     let events = turn(&mut a, "Build a detailed full design package").await;
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert!(user_texts(&requests[1])
-        .join("\n")
-        .contains("[reply language]"));
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(user_texts(&requests[1])
+            .join("\n")
+            .contains("[reply language]"));
+    }
     assert!(events.iter().any(
         |e| matches!(e, AgentEvent::Retrying { code, .. } if code == "ai.error.language_retry")
     ));
