@@ -431,7 +431,13 @@ mod tests {
             );
             assert!(b.len() > a.len());
             assert_eq!(&b[..a.len()], &a[..], "an earlier item changed");
-            for field in ["instructions", "tools", "prompt_cache_key", "model", "reasoning"] {
+            for field in [
+                "instructions",
+                "tools",
+                "prompt_cache_key",
+                "model",
+                "reasoning",
+            ] {
                 assert_eq!(before[field], after[field], "{field} changed");
             }
         };
@@ -457,8 +463,15 @@ mod tests {
             after["input"].as_array().unwrap(),
         );
         let first = a.iter().zip(b).position(|(x, y)| x != y).unwrap();
-        assert!(first <= 4, "the oldest result is the first to be retired: item {first}");
-        assert_eq!(a.len(), b.len(), "retiring evidence keeps every call and its result");
+        assert!(
+            first <= 4,
+            "the oldest result is the first to be retired: item {first}"
+        );
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "retiring evidence keeps every call and its result"
+        );
 
         // After the trim the turn appends again.
         let mut previous = after;

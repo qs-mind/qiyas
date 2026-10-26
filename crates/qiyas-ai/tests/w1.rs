@@ -192,10 +192,7 @@ fn results_text(request: &TurnRequest) -> String {
 // 1. Questions
 
 fn ask(questions: Value) -> (&'static str, Value) {
-    (
-        EXECUTE,
-        json!({"op":"ask","args":{"questions":questions}}),
-    )
+    (EXECUTE, json!({"op":"ask","args":{"questions":questions}}))
 }
 
 #[tokio::test]
@@ -219,15 +216,25 @@ async fn several_questions_go_out_in_one_event_with_options_and_end_the_turn() {
             _ => None,
         })
         .collect();
-    assert_eq!(asked.len(), 1, "one event for all the questions: {events:?}");
+    assert_eq!(
+        asked.len(),
+        1,
+        "one event for all the questions: {events:?}"
+    );
     let q = asked[0];
     assert_eq!(q.len(), 3);
     assert_eq!(q[0].id, "q1");
     assert_eq!(q[1].id, "finish");
-    assert!(q.iter().all(|q| q.allow_other), "free text is always allowed");
+    assert!(
+        q.iter().all(|q| q.allow_other),
+        "free text is always allowed"
+    );
     assert_eq!(q[0].options.len(), 3);
     assert!(q[0].options[0].recommended && !q[0].options[1].recommended);
-    assert_eq!(q[1].options[0].description.as_deref(), Some("Ceramic floors"));
+    assert_eq!(
+        q[1].options[0].description.as_deref(),
+        Some("Ceramic floors")
+    );
     // The turn ended on the question: one request, no Done, nothing run after it.
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert!(!events.iter().any(|e| matches!(e, AgentEvent::Done { .. })));
@@ -275,7 +282,9 @@ async fn a_bad_question_is_an_error_the_model_can_fix_in_the_next_request() {
     ]);
     let mut agent = agent(provider, session);
     let events = turn(&mut agent, "Draw").await;
-    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Question { .. })));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Question { .. })));
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     let text = results_text(&requests[1]);
@@ -286,12 +295,12 @@ async fn a_bad_question_is_an_error_the_model_can_fix_in_the_next_request() {
 #[test]
 fn ask_is_an_operation_with_a_contract_and_never_a_drawing_edit() {
     assert!(surface::EXECUTE_OPS.contains(&"ask"));
-    assert!(!surface::mutating(
+    assert!(!surface::mutating(EXECUTE, &json!({"op":"ask","args":{}})));
+    let info = surface::route(
         EXECUTE,
-        &json!({"op":"ask","args":{}})
-    ));
-    let info = surface::route(EXECUTE, &json!({"op":"ask","args":{"questions":[
-        {"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}}));
+        &json!({"op":"ask","args":{"questions":[
+        {"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}}),
+    );
     assert!(info.is_ok(), "{info:?}");
     // A question with five options is refused by the contract before anything runs.
     let five = json!({"op":"ask","args":{"questions":[{"question":"Which?","options":[
@@ -308,10 +317,21 @@ async fn ending_with_plan_phases_open_is_sent_back_naming_them() {
     let (provider, requests) = Queue::new(vec![
         Reply::Calls(
             "",
-            vec![plan(&[("Floor plans", "done"), ("Sections", "pending"), ("Roof plan", "active")])],
+            vec![plan(&[
+                ("Floor plans", "done"),
+                ("Sections", "pending"),
+                ("Roof plan", "active"),
+            ])],
         ),
         Reply::Text("I stopped here to avoid more cost."),
-        Reply::Calls("", vec![plan(&[("Floor plans", "done"), ("Sections", "done"), ("Roof plan", "done")])]),
+        Reply::Calls(
+            "",
+            vec![plan(&[
+                ("Floor plans", "done"),
+                ("Sections", "done"),
+                ("Roof plan", "done"),
+            ])],
+        ),
         Reply::Text("All three are done."),
     ]);
     let mut agent = agent(provider, session);
@@ -320,7 +340,10 @@ async fn ending_with_plan_phases_open_is_sent_back_naming_them() {
     assert_eq!(requests.len(), 4, "the early ending was refused once");
     let refusal = user_texts(&requests[2]).join("\n");
     assert!(refusal.contains("[finish refused]"), "{refusal}");
-    assert!(refusal.contains("Sections (pending)") && refusal.contains("Roof plan (active)"), "{refusal}");
+    assert!(
+        refusal.contains("Sections (pending)") && refusal.contains("Roof plan (active)"),
+        "{refusal}"
+    );
     assert!(
         events.iter().any(|e| matches!(e, AgentEvent::Retrying { code, discard_partial: true, .. } if code == "ai.error.finish_gate")),
         "the window drops the early answer: {events:?}"
@@ -359,7 +382,10 @@ async fn the_finish_gate_lets_go_when_the_user_said_stop_and_after_two_refusals(
 async fn a_closing_question_in_plain_text_or_a_skipped_phase_is_not_held_back() {
     let (_dir, session) = sample();
     let (provider, requests) = Queue::new(vec![
-        Reply::Calls("", vec![plan(&[("Sections", "skipped"), ("Plans", "done")])]),
+        Reply::Calls(
+            "",
+            vec![plan(&[("Sections", "skipped"), ("Plans", "done")])],
+        ),
         Reply::Text("Sections skipped: no soil data. Anything else?"),
     ]);
     let mut a = agent(provider, session);
@@ -373,15 +399,25 @@ async fn a_closing_question_in_plain_text_or_a_skipped_phase_is_not_held_back() 
     ]);
     let mut a = agent(provider, session);
     turn(&mut a, "Draw the sections").await;
-    assert_eq!(requests.lock().unwrap().len(), 2, "a question for the user ends the turn");
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        2,
+        "a question for the user ends the turn"
+    );
 }
 
 #[tokio::test]
 async fn the_finish_operation_is_refused_while_phases_are_open() {
     let (_dir, session) = sample();
     let (provider, requests) = Queue::new(vec![
-        Reply::Calls("", vec![plan(&[("Plans", "done"), ("Sections", "pending")])]),
-        Reply::Calls("", vec![(EXECUTE, json!({"op":"finish","args":{"answer":"All done"}}))]),
+        Reply::Calls(
+            "",
+            vec![plan(&[("Plans", "done"), ("Sections", "pending")])],
+        ),
+        Reply::Calls(
+            "",
+            vec![(EXECUTE, json!({"op":"finish","args":{"answer":"All done"}}))],
+        ),
         Reply::Text("Understood, continuing."),
     ]);
     let mut a = Agent::new(Box::new(provider), session, AgentSettings::default())
@@ -389,7 +425,10 @@ async fn the_finish_operation_is_refused_while_phases_are_open() {
     turn(&mut a, "Draw").await;
     let requests = requests.lock().unwrap();
     let text = results_text(&requests[2]);
-    assert!(text.contains("open_phases") && text.contains("Sections (pending)"), "{text}");
+    assert!(
+        text.contains("open_phases") && text.contains("Sections (pending)"),
+        "{text}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -424,9 +463,23 @@ async fn the_cost_note_is_given_once_and_never_says_to_stop() {
 async fn continue_resumes_the_open_phases_instead_of_starting_over() {
     let (_dir, session) = sample();
     let (provider, requests) = Queue::new(vec![
-        Reply::Calls("", vec![plan(&[("Plans", "done"), ("Structural sheets", "pending"), ("MEP sheets", "pending")])]),
+        Reply::Calls(
+            "",
+            vec![plan(&[
+                ("Plans", "done"),
+                ("Structural sheets", "pending"),
+                ("MEP sheets", "pending"),
+            ])],
+        ),
         Reply::Text("Stopped here. Anything else?"),
-        Reply::Calls("", vec![plan(&[("Plans", "done"), ("Structural sheets", "done"), ("MEP sheets", "done")])]),
+        Reply::Calls(
+            "",
+            vec![plan(&[
+                ("Plans", "done"),
+                ("Structural sheets", "done"),
+                ("MEP sheets", "done"),
+            ])],
+        ),
         Reply::Text("Everything is drawn."),
     ]);
     let mut a = agent(provider, session);
@@ -436,7 +489,10 @@ async fn continue_resumes_the_open_phases_instead_of_starting_over() {
     let requests = requests.lock().unwrap();
     let continuing = user_texts(&requests[2]).join("\n");
     assert!(continuing.contains("[continue]"), "{continuing}");
-    assert!(continuing.contains("Structural sheets; MEP sheets"), "{continuing}");
+    assert!(
+        continuing.contains("Structural sheets; MEP sheets"),
+        "{continuing}"
+    );
     assert!(continuing.contains("Do not stop for cost"), "{continuing}");
 }
 
@@ -454,10 +510,12 @@ async fn an_answer_in_the_wrong_language_is_asked_for_again_once() {
     let events = turn(&mut a, "Build a detailed full design package").await;
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
-    assert!(user_texts(&requests[1]).join("\n").contains("[reply language]"));
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, AgentEvent::Retrying { code, .. } if code == "ai.error.language_retry")));
+    assert!(user_texts(&requests[1])
+        .join("\n")
+        .contains("[reply language]"));
+    assert!(events.iter().any(
+        |e| matches!(e, AgentEvent::Retrying { code, .. } if code == "ai.error.language_retry")
+    ));
     // An Arabic message gets an Arabic answer, and an English one is sent back.
     let (_dir, session) = sample();
     let (provider, requests) = Queue::new(vec![
@@ -500,8 +558,8 @@ async fn a_finished_phase_that_changed_a_titled_drawing_is_saved() {
         Reply::Calls("", vec![plan(&[("Plans", "done")])]),
         Reply::Text("Plans drawn."),
     ]);
-    let mut a = Agent::new(Box::new(provider), session, AgentSettings::default())
-        .with_host(host.clone());
+    let mut a =
+        Agent::new(Box::new(provider), session, AgentSettings::default()).with_host(host.clone());
     let events = turn(&mut a, "Draw the plans").await;
     // Once when the phase finished, once when the turn ended with the drawing still changed.
     assert_eq!(*host.saves.lock().unwrap(), 2, "{events:?}");
@@ -515,8 +573,8 @@ async fn nothing_is_saved_when_nothing_changed() {
         Reply::Calls("", vec![plan(&[("Look", "done")])]),
         Reply::Text("Looked."),
     ]);
-    let mut a = Agent::new(Box::new(provider), session, AgentSettings::default())
-        .with_host(host.clone());
+    let mut a =
+        Agent::new(Box::new(provider), session, AgentSettings::default()).with_host(host.clone());
     turn(&mut a, "Look at the drawing").await;
     assert_eq!(*host.saves.lock().unwrap(), 0);
 }
@@ -537,8 +595,8 @@ async fn an_untitled_drawing_is_not_asked_about_mid_work_but_once_at_the_end() {
         Reply::Calls("", vec![plan(&[("Plans", "done")])]),
         Reply::Text("Plans drawn."),
     ]);
-    let mut a = Agent::new(Box::new(provider), session, AgentSettings::default())
-        .with_host(host.clone());
+    let mut a =
+        Agent::new(Box::new(provider), session, AgentSettings::default()).with_host(host.clone());
     let events = turn(&mut a, "Draw the plans").await;
     assert_eq!(*host.saves.lock().unwrap(), 1, "asked once, at the end");
     let said: String = events
@@ -555,14 +613,23 @@ async fn an_untitled_drawing_is_not_asked_about_mid_work_but_once_at_the_end() {
 // 10. Exports after a failed quantity check
 
 fn failing_check(session: &mut Session) {
-    let mut kit = surface::run_session(session, READ, "takeoff_kit", &json!({}), qiyas_core::Source::Ai)
-        .map(|o| match o {
-            qiyas_ai::ToolOutput::Json(v) => v,
-            _ => panic!("json"),
-        })
-        .unwrap();
+    let mut kit = surface::run_session(
+        session,
+        READ,
+        "takeoff_kit",
+        &json!({}),
+        qiyas_core::Source::Ai,
+    )
+    .map(|o| match o {
+        qiyas_ai::ToolOutput::Json(v) => v,
+        _ => panic!("json"),
+    })
+    .unwrap();
     let commands = kit["batch"]["commands"].as_array_mut().unwrap();
-    let method = commands.iter_mut().find(|c| c["kind"] == "set_method").unwrap();
+    let method = commands
+        .iter_mut()
+        .find(|c| c["kind"] == "set_method")
+        .unwrap();
     let rules = method["method"]["rules"].as_array_mut().unwrap();
     let mut rule = rules[0].clone();
     rule["kind"] = json!("count");
@@ -570,7 +637,14 @@ fn failing_check(session: &mut Session) {
     rule["terms"] = json!([{"label":"Count","operation":"add","factors":["geometry.count","1.1"],
         "citation":{"source":"drawing","clause":"provisional allowance 10%"}}]);
     rules[0] = rule;
-    surface::run_session(session, EXECUTE, "batch", &kit["batch"], qiyas_core::Source::Ai).unwrap();
+    surface::run_session(
+        session,
+        EXECUTE,
+        "batch",
+        &kit["batch"],
+        qiyas_core::Source::Ai,
+    )
+    .unwrap();
 }
 
 fn export(session: &mut Session, op: &str, args: Value) -> Result<Value, qiyas_ai::ToolError> {
@@ -594,18 +668,29 @@ fn quantities_are_not_exported_after_a_failed_check_unless_named_a_draft() {
     let refused = refused.json();
     assert_eq!(refused["code"], "quantity_check_failed", "{refused}");
     assert!(refused["message"].as_str().unwrap().contains("DRAFT"));
-    assert!(refused["measurement_errors"].as_u64().unwrap_or(0) >= 1 || refused.to_string().contains("measurement_errors"));
+    assert!(
+        refused["measurement_errors"].as_u64().unwrap_or(0) >= 1
+            || refused.to_string().contains("measurement_errors")
+    );
     assert!(!dir.path().join("villa.xlsx").exists());
 
-    let draft = export(&mut session, "export_takeoff", json!({"path":"villa_DRAFT.xlsx"})).unwrap();
+    let draft = export(
+        &mut session,
+        "export_takeoff",
+        json!({"path":"villa_DRAFT.xlsx"}),
+    )
+    .unwrap();
     assert_eq!(draft["draft"], true);
-    assert!(draft["advice"][0]["message"].as_str().unwrap().contains("DRAFT"));
+    assert!(draft["advice"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("DRAFT"));
     assert!(dir.path().join("villa_DRAFT.xlsx").exists());
 
     // The deliverable command is held to the same rule.
-    let command = |file: &str| {
-        json!({"command":{"type":"deliverable","kind":"export","report":"boq","format":"excel","path":file}})
-    };
-    let refused = export(&mut session, "run", command("boq.xlsx")).unwrap_err().json();
+    let command = |file: &str| json!({"command":{"type":"deliverable","kind":"export","report":"boq","format":"excel","path":file}});
+    let refused = export(&mut session, "run", command("boq.xlsx"))
+        .unwrap_err()
+        .json();
     assert_eq!(refused["code"], "quantity_check_failed", "{refused}");
 }

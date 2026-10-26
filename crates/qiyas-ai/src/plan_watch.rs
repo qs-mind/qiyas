@@ -66,14 +66,26 @@ impl PlanWatch {
         }
         let list = open
             .iter()
-            .map(|p| format!("{} ({})", p.title, if p.status == PlanStatus::Active { "active" } else { "pending" }))
+            .map(|p| {
+                format!(
+                    "{} ({})",
+                    p.title,
+                    if p.status == PlanStatus::Active {
+                        "active"
+                    } else {
+                        "pending"
+                    }
+                )
+            })
             .collect::<Vec<_>>();
         self.refusals += 1;
         let message = match lang {
             Lang::En => "Not finished: plan phases are still open. The user asked for the whole job, so continue with them now on your stated assumptions. Missing verified data is not a reason to stop: draw on written assumptions and mark the sheet For review. If a phase truly cannot be done, mark it skipped and say why in its title. Your final answer must list what is done and what is not, honestly.",
             Lang::Ar => "لم ينتهِ العمل: ما زالت مراحل من الخطة مفتوحة. طلب المستخدم العمل كله، فتابعها الآن بافتراضاتك المعلنة. نقص البيانات الموثقة ليس سببًا للتوقف: ارسم على افتراضات مكتوبة وضع على اللوحة «للمراجعة». وإن استحال إنجاز مرحلة فعلًا فاجعلها skipped واذكر السبب في عنوانها. يجب أن تذكر إجابتك الأخيرة بصدق ما أُنجز وما لم يُنجز.",
         };
-        Some(json!({"code":"open_phases","open_phases":list,"refusal":self.refusals,"message":message}))
+        Some(
+            json!({"code":"open_phases","open_phases":list,"refusal":self.refusals,"message":message}),
+        )
     }
 
     pub(crate) fn stale(&self) -> bool {
@@ -115,17 +127,29 @@ mod tests {
             crate::surface::read_plan(&json!({"phases":[{"id":"a","title":"Plans","status":a},{"id":"b","title":"Sections","status":b}]})).unwrap()
         };
         let mut watch = PlanWatch::default();
-        assert!(watch.finish_gate(false, Lang::En).is_none(), "no plan, no gate");
+        assert!(
+            watch.finish_gate(false, Lang::En).is_none(),
+            "no plan, no gate"
+        );
         watch.update(plan("done", "pending"));
         let refusal = watch.finish_gate(false, Lang::En).unwrap();
         assert_eq!(refusal["open_phases"], json!(["Sections (pending)"]));
-        assert!(watch.finish_gate(true, Lang::En).is_none(), "the user said stop");
+        assert!(
+            watch.finish_gate(true, Lang::En).is_none(),
+            "the user said stop"
+        );
         assert!(watch.finish_gate(false, Lang::Ar).is_some());
-        assert!(watch.finish_gate(false, Lang::En).is_none(), "two refusals are enough");
+        assert!(
+            watch.finish_gate(false, Lang::En).is_none(),
+            "two refusals are enough"
+        );
         watch.new_turn();
         assert!(watch.finish_gate(false, Lang::En).is_some());
         watch.update(plan("done", "skipped"));
-        assert!(watch.finish_gate(false, Lang::En).is_none(), "skipped is a decision");
+        assert!(
+            watch.finish_gate(false, Lang::En).is_none(),
+            "skipped is a decision"
+        );
         watch.update(plan("done", "done"));
         assert!(watch.finish_gate(false, Lang::En).is_none());
     }

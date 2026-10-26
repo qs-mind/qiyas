@@ -50,20 +50,22 @@ fn main() {
                 let out = surface::run_session(&mut session, &tool, &route_op, &args, Source::Ai)
                     .map_err(|e| e.json().to_string());
                 match out {
-                    Ok(output) => {
-                        match surface::format_result(&tool, &route_op, &args, output) {
-                            Ok(ToolOutput::Json(v)) => {
-                                let text = v.to_string();
-                                shown = text.chars().take(show).collect();
-                                (text.len(), text.contains("Full evidence is in the artifact"), false)
-                            }
-                            Ok(_) => (0, false, false),
-                            Err(e) => {
-                                shown = e.json().to_string().chars().take(show).collect();
-                                (e.json().to_string().len(), false, true)
-                            }
+                    Ok(output) => match surface::format_result(&tool, &route_op, &args, output) {
+                        Ok(ToolOutput::Json(v)) => {
+                            let text = v.to_string();
+                            shown = text.chars().take(show).collect();
+                            (
+                                text.len(),
+                                text.contains("Full evidence is in the artifact"),
+                                false,
+                            )
                         }
-                    }
+                        Ok(_) => (0, false, false),
+                        Err(e) => {
+                            shown = e.json().to_string().chars().take(show).collect();
+                            (e.json().to_string().len(), false, true)
+                        }
+                    },
                     Err(e) => {
                         shown = e.chars().take(show).collect();
                         (e.len(), false, true)
@@ -91,7 +93,11 @@ fn main() {
                 if cut { "  SHORTENED" } else { "" },
                 if err { "  ERROR" } else { "" },
                 op,
-                input["args"].to_string().chars().take(100).collect::<String>()
+                input["args"]
+                    .to_string()
+                    .chars()
+                    .take(100)
+                    .collect::<String>()
             );
             if show > 0 {
                 println!("      {shown}");

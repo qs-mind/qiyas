@@ -253,8 +253,7 @@ fn attach_contract_artifact(value: &mut Value, id: &str) {
 
 /// Most rows of a long list the model sees in place; the rest stays in the artifact.
 const ROWS: usize = 40;
-const HINT: &str =
-    "Full evidence is in the artifact; read one part with artifact {id, pointer}.";
+const HINT: &str = "Full evidence is in the artifact; read one part with artifact {id, pointer}.";
 
 /// One element of a long list reduced to its plain fields (text, numbers, flags), long text
 /// cut, nested values named in `+` and left in the artifact. This is what a table of the
@@ -546,16 +545,24 @@ mod tests {
         assert_eq!(listed["rows"][3]["code"], "A-3");
         assert_eq!(listed["rows"][3]["quantity"], 4.5);
         assert_eq!(listed["rows"][3]["unit"], "m3");
-        assert_eq!(listed["rows"][3]["+"], json!(["lines"]), "nested parts are named, not shown");
+        assert_eq!(
+            listed["rows"][3]["+"],
+            json!(["lines"]),
+            "nested parts are named, not shown"
+        );
         assert!(out.to_string().len() < 12_000, "{}", out.to_string().len());
         // Any part of the evidence is one pointer away.
-        let part = artifact::read(&json!({"id":out["artifact"],"pointer":"/outcome/result/items/3/lines/0"})).unwrap();
+        let part = artifact::read(
+            &json!({"id":out["artifact"],"pointer":"/outcome/result/items/3/lines/0"}),
+        )
+        .unwrap();
         assert!(part["data"].as_str().unwrap().contains("Gross"));
     }
 
     #[test]
     fn a_command_with_kinds_lists_each_kinds_required_fields_and_an_example() {
-        let draw = serde_json::to_value(qiyas_core::registry::registry().get("draw").unwrap()).unwrap();
+        let draw =
+            serde_json::to_value(qiyas_core::registry::registry().get("draw").unwrap()).unwrap();
         let out = reply(surface::READ, "commands", json!({"name":"draw"}), draw);
         let line = &out["kinds_contract"]["line"];
         assert_eq!(line["required"], json!(["a", "b"]));
@@ -570,7 +577,9 @@ mod tests {
 
     #[test]
     fn one_huge_record_is_shortened_to_fit_and_points_at_the_compact_table_read() {
-        let rows: Vec<_> = (0..500).map(|i| json!(["D-1000x2100","Door","1000 x 2100",format!("{i}")])).collect();
+        let rows: Vec<_> = (0..500)
+            .map(|i| json!(["D-1000x2100", "Door", "1000 x 2100", format!("{i}")]))
+            .collect();
         let value = json!({"collection":"entities","total":2,"offset":0,"next_offset":null,"truncated":false,"revision":null,
             "records":[
                 {"key":718,"type":"Table","layer":"A-SCHEDULES","data":{"rows":rows,"columns":4}},

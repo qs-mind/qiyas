@@ -830,7 +830,9 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
                         json!({"id": envelope["artifact"], "offset": 0})
                     }
                     "record_schema" => json!({"name":"line"}),
-                    "ask" => json!({"questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}),
+                    "ask" => {
+                        json!({"questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]})
+                    }
                     "validate" => {
                         json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}})
                     }
@@ -1017,7 +1019,7 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
             } else {
                 assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
                 // The finish gate sends the early ending back twice (phase two is still active).
-            assert_eq!(requests.lock().unwrap().len(), 5);
+                assert_eq!(requests.lock().unwrap().len(), 5);
             }
         }
     }

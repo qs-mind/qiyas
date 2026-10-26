@@ -1117,7 +1117,9 @@ impl Agent {
                     return match reason {
                         StopReason::EndTurn | StopReason::ToolUse => {
                             self.log("DONE", || tokens(&usage));
-                            if let Some(text) = self.keep_work(&mut counts, true, &cancel, epoch).await {
+                            if let Some(text) =
+                                self.keep_work(&mut counts, true, &cancel, epoch).await
+                            {
                                 if let Some(last) = self
                                     .history
                                     .last_mut()
@@ -2347,7 +2349,10 @@ impl Agent {
         let asks = answer.trim_end().ends_with('?') || answer.trim_end().ends_with('؟');
         if !asks {
             if let Some(refusal) = self.finish_refusal() {
-                return Some((format!("[finish refused] {refusal}"), "ai.error.finish_gate"));
+                return Some((
+                    format!("[finish refused] {refusal}"),
+                    "ai.error.finish_gate",
+                ));
             }
         }
         if !counts.language_retried && judgement::language_mismatch(&answer, self.chat_language) {
@@ -2437,7 +2442,10 @@ impl Agent {
             Ok(Err(why)) => {
                 self.log("SAVE", || format!("not saved: {why}"));
                 end.then(|| match lang {
-                    Lang::En => "\n\nThe drawing could not be saved; the changes are not on disk yet.".to_string(),
+                    Lang::En => {
+                        "\n\nThe drawing could not be saved; the changes are not on disk yet."
+                            .to_string()
+                    }
                     Lang::Ar => "\n\nتعذّر حفظ الرسم؛ التعديلات لم تُحفظ بعد.".to_string(),
                 })
             }

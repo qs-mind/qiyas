@@ -441,10 +441,9 @@ pub fn read_questions(args: &Value) -> Result<Vec<Question>, ToolError> {
     let mut ids = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for (index, q) in input.questions.into_iter().enumerate() {
-        let id = q
-            .id
-            .filter(|id| !id.trim().is_empty())
-            .unwrap_or_else(|| format!("q{}", index + 1));
+        let id =
+            q.id.filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| format!("q{}", index + 1));
         if !ids.insert(id.clone()) {
             return Err(bad("question ids must be unique"));
         }

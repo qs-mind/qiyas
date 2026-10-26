@@ -151,7 +151,16 @@ pub fn wants_to_continue(text: &str) -> bool {
     let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
     // "Continue", "resume", "أكمل": a short message that is only that.
     let carry_on = has(&[
-        "continue", "resume", "proceed", "أكمل", "اكمل", "كمل", "تابع", "استمر", "واصل", "أتمم",
+        "continue",
+        "resume",
+        "proceed",
+        "أكمل",
+        "اكمل",
+        "كمل",
+        "تابع",
+        "استمر",
+        "واصل",
+        "أتمم",
         "اتمم",
     ]) && words.len() <= 6;
     // "Complete everything", "finish the rest".
@@ -172,12 +181,36 @@ pub fn wants_to_stop(text: &str) -> bool {
         return false;
     }
     let lower = text.to_lowercase();
-    ["that's enough", "that is enough", "never mind", "do not continue", "don't continue", "no need to continue", "لا تكمل", "لا تتابع", "بلا داعي", "مش محتاج"]
-        .iter()
-        .any(|p| lower.contains(p))
-        || words
-            .iter()
-            .any(|w| matches!(w.as_str(), "stop" | "cancel" | "enough" | "كفاية" | "كفايه" | "توقف" | "قف" | "وقف" | "أوقف" | "اوقف" | "كفى"))
+    [
+        "that's enough",
+        "that is enough",
+        "never mind",
+        "do not continue",
+        "don't continue",
+        "no need to continue",
+        "لا تكمل",
+        "لا تتابع",
+        "بلا داعي",
+        "مش محتاج",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
+        || words.iter().any(|w| {
+            matches!(
+                w.as_str(),
+                "stop"
+                    | "cancel"
+                    | "enough"
+                    | "كفاية"
+                    | "كفايه"
+                    | "توقف"
+                    | "قف"
+                    | "وقف"
+                    | "أوقف"
+                    | "اوقف"
+                    | "كفى"
+            )
+        })
 }
 
 /// Arabic and Latin letters in the prose of `text` (code spans and identifiers like A-WALL left out).
@@ -312,14 +345,23 @@ mod tests {
         ] {
             assert!(!wants_to_continue(text), "{text}");
         }
-        for text in ["stop", "That's enough, thanks", "كفاية كده", "Please stop here", "وقف"] {
+        for text in [
+            "stop",
+            "That's enough, thanks",
+            "كفاية كده",
+            "Please stop here",
+            "وقف",
+        ] {
             assert!(wants_to_stop(text), "{text}");
         }
         for text in ["Continue and complete everything !", "Egypt", "Build a bus stop shelter drawing with the full detailed dimension set for every wall and window"] {
             assert!(!wants_to_stop(text), "{text}");
         }
         // Continue keeps the job the conversation was doing.
-        assert_eq!(Job::request("Continue and complete everything !", Job::Takeoff), Job::Takeoff);
+        assert_eq!(
+            Job::request("Continue and complete everything !", Job::Takeoff),
+            Job::Takeoff
+        );
     }
 
     #[test]
@@ -330,7 +372,10 @@ mod tests {
         assert!(language_mismatch(english, Lang::Ar));
         assert!(!language_mismatch(arabic, Lang::Ar));
         assert!(!language_mismatch(english, Lang::En));
-        assert!(!language_mismatch("Cairo_Villa_P02_A501_Review.pdf", Lang::Ar));
+        assert!(!language_mismatch(
+            "Cairo_Villa_P02_A501_Review.pdf",
+            Lang::Ar
+        ));
         let mixed = "الملفات: Cairo_Villa_Plans.pdf و A-WALL و Villa_Quantities.xlsx جاهزة للمراجعة وليست معتمدة بعد من المهندس المسؤول";
         assert!(!language_mismatch(mixed, Lang::Ar));
     }
