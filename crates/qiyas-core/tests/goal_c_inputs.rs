@@ -39,13 +39,20 @@ fn projections_membership_and_missing_properties_are_explicit() {
     );
     for q in [
         json!({"fields":["common/layer"]}),
-        json!({"fields":["typo"]}),
         json!({"where":[{"path":"layer","op":"in","value":"0"}]}),
         json!({"where":[{"path":"length","op":"gt","value":"5"}]}),
         json!({"where":[{"path":"wrong","value":3}]}),
     ] {
         assert!(read(&s, q.clone()).is_err(), "{q}");
     }
+    // W1: a projected field no record has is a warning naming what exists, not a refusal.
+    let r = read(&s, json!({"fields":["typo"]})).unwrap();
+    assert!(
+        r["warnings"]
+            .as_array()
+            .is_some_and(|w| w.iter().any(|w| w.as_str().unwrap_or("").contains("typo"))),
+        "{r}"
+    );
     let r = read(&s, json!({"fields":["/radius"]})).unwrap();
     assert!(r["warnings"]
         .as_array()
