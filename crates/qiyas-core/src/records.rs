@@ -244,7 +244,15 @@ impl Session {
             Collection::Viewports => self.viewport_records(q, detail)?,
             other => self.other_records(other, detail, object_ids.as_deref())?,
         };
-        let mut warnings = validate_paths(&all, q)?;
+        // A field no record has is left out with a warning naming what exists: the page still
+        // comes, so one call answers instead of a refusal and a second call.
+        let (mut warnings, absent) = validate_paths(&all, q)?;
+        let fields: Vec<String> = q
+            .fields
+            .iter()
+            .filter(|f| !absent.contains(f))
+            .cloned()
+            .collect();
         let names: Vec<String> = q.names.iter().map(|n| normalize_name(n)).collect();
         let mut matching = Vec::new();
         for record in all {
@@ -268,7 +276,7 @@ impl Session {
         let mut truncated = false;
         for record in matching.into_iter().skip(q.offset).take(limit) {
             let mut record_warnings = Vec::new();
-            let record = shape(record, &q.fields, q.detail, &mut record_warnings);
+            let record = shape(record, &fields, q.detail, &mut record_warnings);
             let size = record.to_string().len() + json!(record_warnings).to_string().len();
             if bytes + size > MAX_BYTES && !records.is_empty() {
                 truncated = true;
@@ -654,7 +662,12 @@ fn field_value<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
     }
 }
 
-fn validate_paths(records: &[Value], q: &RecordQuery) -> Result<Vec<String>, CoreError> {
+fn validate_paths(
+    records: &[Value],
+    q: &RecordQuery,
+) -> Result<(Vec<String>, Vec<String>), CoreError> {
+    let mut warnings = Vec::new();
+    let mut absent = Vec::new();
     let mut available = BTreeSet::new();
     for record in records {
         if let Some(map) = record.as_object() {
@@ -684,10 +697,19 @@ fn validate_paths(records: &[Value], q: &RecordQuery) -> Result<Vec<String>, Cor
             && !existence
             && !records.iter().any(|r| field_value(r, path).is_some())
         {
-            return Err(invalid(format!(
-                "No record has {path:?}. Available summary names and data paths: {}",
-                available.iter().cloned().collect::<Vec<_>>().join(", ")
-            )));
+            let names = available.iter().cloned().collect::<Vec<_>>().join(", ");
+            // A projected field that does not exist is omitted; a filter on one is an error.
+            if q.conditions.iter().any(|w| &w.path == path) {
+                return Err(invalid(format!(
+                    "No record has {path:?}. Available summary names and data paths: {names}"
+                )));
+            }
+            if !absent.contains(path) {
+                absent.push(path.clone());
+                warnings.push(format!(
+                    "No record has {path:?}; the field was omitted. Available summary names and data paths: {names}"
+                ));
+            }
         }
     }
     for w in &q.conditions {
@@ -701,13 +723,10 @@ fn validate_paths(records: &[Value], q: &RecordQuery) -> Result<Vec<String>, Cor
             return Err(invalid(format!("{}: exists needs true or false", w.path)));
         }
     }
-    Ok(
-        if records.is_empty() && (!q.fields.is_empty() || !q.conditions.is_empty()) {
-            vec!["No records in this scope; property paths could not be checked".into()]
-        } else {
-            Vec::new()
-        },
-    )
+    if records.is_empty() && (!q.fields.is_empty() || !q.conditions.is_empty()) {
+        warnings.push("No records in this scope; property paths could not be checked".into());
+    }
+    Ok((warnings, absent))
 }
 
 fn holds(record: &Value, w: &Where) -> Result<bool, CoreError> {
