@@ -534,7 +534,7 @@ mod tests {
     fn a_long_list_comes_as_rows_to_read_not_as_a_pointer_to_page_through() {
         let items: Vec<_> = (0..115)
             .map(|i| json!({"code":format!("A-{i}"),"description":"Net exterior masonry","quantity":i as f64 * 1.5,"unit":"m3",
-                "lines":[{"label":"Gross","value":1.0,"sources":[{"handle":i}]}; 4],"confidence":0.5}))
+                "lines":vec![json!({"label":"Gross","value":1.0,"sources":[{"handle":i}]}); 4],"confidence":0.5}))
             .collect();
         let evidence = json!({"revision":null,"outcome":{"result":{"items":items,"warnings":[]}}});
         let out = reply(surface::READ, "run", json!({}), evidence);
