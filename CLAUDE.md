@@ -2028,7 +2028,7 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
   and examples; `search`: matching commands), validate, records, record_schema, query, measure (numbers
   only), run (read-only commands), check, history, drawings, selection and rooms. Execute
-  operations: plan (conversation progress), run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
+  operations: plan (conversation progress), ask (Mizan's questions, see W1), run (any core command), type (a typed command line), batch, set_records, create_entities, undo_own, select,
   view, new_drawing, open_drawing, switch_drawing, save_drawing, close_drawing, import_boq,
   compare, export_takeoff, export_conflicts and plot. Capture's source is screen or picture.
   `qiyas_execute {op: "plot", args: {sheet?, paper?, orientation?, scale?, path?}}` plots one
@@ -2076,8 +2076,9 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   reports whether it supplies a window through `DrawingHost::has_window`. Commands,
   capabilities, record_schema and validate work without an open drawing;
   unavailable environments answer `no_drawing`, `needs_window` or `needs_host`.
-- Call counts produce `tool_cost` advice at 80% of the old 40/120 guidance thresholds.
-  More than ten destructive commands produces `many_removals` advice with the count.
+- Call counts produce `tool_cost` efficiency advice at 80% of the old 40/120 thresholds, once
+  per turn (W1; it is never a reason to end a requested job). More than ten destructive
+  commands produces `many_removals` advice with the count.
   Neither counter refuses work; Mizan decides. Actual memory/provider limits still apply. A tool
   card carries registry category/effect metadata (`qiyas-ai/src/activity.rs`) and an optional
   structured result count. The window builds a short translated sentence from these fields;
@@ -2120,12 +2121,11 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.
-- Mizan asks before guessing (`prompt.rs`): when the request is ambiguous or misses what it needs
-  (entities or layer, BOQ item, units, scale, tolerance, placement, overwrite or add) it asks the
-  engineer one short question with the options it sees, in the engineer's language, and waits;
-  when the request is clear it acts. The question is a plain text answer: the turn ends
-  (`StopReason::EndTurn`, `AgentEvent::Done`), the question stays in the history and the next
-  message is the answer (`agent.rs` test `a_question_ends_the_turn_cleanly...`). The fixed prompt
+- Mizan assumes before asking (`prompt.rs`, W1): it states assumptions and proceeds. When only the
+  user can decide it calls `qiyas_execute ask` once, with every question together (see "W1:
+  Mizan's behaviour and cost" below); the turn ends and the answer is the next message. A plain
+  text question still ends the turn cleanly (`agent.rs` test `a_question_ends_the_turn_cleanly...`).
+  The fixed prompt
   stays under 900 words (a test, excluding the index), in `prompt_en.txt` and `prompt_ar.txt`.
   Both languages append the registry's deterministic `index_text()` under "Commands by category",
   then the drawing facts. The stable index keeps prompt caching working.
@@ -3310,3 +3310,47 @@ New untitled drawings skip placeholder names already present in chat history or 
   Absolute clinic gates pass with exact results; the stricter relative clinic guard still
   fails. Local-port AI tests are blocked by sandbox permissions. No new dependencies, model
   calls or licence changes.
+
+## W1: Mizan's behaviour and cost (26 October 2026)
+
+Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas-W1.md`.
+
+- `qiyas_execute ask {questions: [{id?, question, options: [{label, description?, recommended?}]}]}`
+  (surface.rs `read_questions`): 1 to 6 questions in ONE call, 2 to 4 options each, at most one
+  recommended, free text always allowed (`allow_other`). The agent emits `AgentEvent::Question
+  {questions}` and ends the turn (no `Done`; the desktop shows status "waiting"); the answer is the
+  next user message. The panel shows a numbered list with lettered options (`kind: "question"` in
+  `ai/messages.ts`); the new shell renders the real design. MCP clients get the echoed questions.
+- Assume, do not ask: the prompts say so; `[state]` carries `Country/practice` (Settings `country`,
+  else inferred from the selected method's name: Egypt, KSA, UAE; else "ask once").
+- Finish gate (`plan_watch.rs` `finish_gate`, `agent.rs` `end_gate`, `mcp.rs`): the `finish` op, or a
+  plain end of turn, is refused while plan phases are pending or active, unless the user said stop
+  (`judgement::wants_to_stop`), the answer ends with a question, a metered run says `[finish now]`,
+  or it was refused twice for the same plan. The refusal names the phases; the window drops the
+  early answer (`Retrying` with `ai.error.finish_gate`). `skipped` phases count as decided.
+- "Continue", "complete everything", "apply your assumptions" (`judgement::wants_to_continue`) add a
+  `[continue]` note listing the open phases and keep the job. The cost note (`[efficiency note]`)
+  and `tool_cost` advice are efficiency advice, each given once per turn.
+- Reply language: the latest message decides; an answer clearly in the other language
+  (`judgement::language_mismatch`) is sent back once (`ai.error.language_retry`).
+- Saving (`agent.rs` `keep_work`): after a finished phase that changed a titled drawing the agent
+  saves through the host; an untitled one is not touched mid-work, and at the turn's end the host
+  opens the window's Save As once and the answer says so. Nothing is saved when Mizan changed nothing.
+- Drawing on assumptions: Mizan draws on written assumptions, puts them on the sheet as general
+  notes (title block status "For review") and lists them in the answer. Qiyas draws; loads, design
+  calculations and approval are the engineer's and the company's (company policy).
+- Exports (`surface.rs` `quantity_gate`): `export_takeoff` and `deliverable.export` of boq,
+  dimensions or variation by Mizan or MCP are refused (`quantity_check_failed`) while `takeoff_check`
+  reports measurement errors or unmatched schedule rows, unless the file name contains DRAFT; then
+  the answer carries `draft_export` advice and the file name marks it.
+- Fewer wasted calls (`result.rs`): a long list in a shortened result comes as `rows` (plain fields,
+  nested names in `+`, 40 rows, `more`), not a bare count; `artifact {id, pointer}` reads one part of
+  the saved evidence; `commands` of a command with kinds lists each kind's required fields and an
+  example (`kinds_contract`); a page of records shortens one oversized record (`shortened`) and
+  points tables at `query tables`; `records` with a field no record has returns the page with a
+  warning (a `where` on one is still an error); `fields` on other reads names `missing_fields`;
+  `commands` takes up to 40 names.
+- Cache: the Responses body of a long turn only appends between trims (`chatgpt_plan/responses.rs`
+  test `a_long_turn_only_appends_between_trims...`); the live miss rate is provider side (see the
+  report). Both fixed prompts stay under 900 words.
+
