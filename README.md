@@ -31,12 +31,13 @@ Coming with the next release.
 
 ## Install
 
-Download the newest release from [Releases](https://github.com/qs-mind/qiyas/releases):
-AppImage, deb or rpm on Linux, `setup.exe` or MSI on Windows, the `.dmg` on macOS (Apple silicon
-or Intel), all built by the release workflow. Installed copies check that
-page for updates (About, Check for updates). The installers are not code-signed yet, so Windows
-SmartScreen and macOS Gatekeeper warn on first open; on a Mac, if Qiyas is reported as
-"damaged", open it once from System Settings, Privacy & Security, Open Anyway (or run
+Qiyas is still in development and has no published release yet. The first one will appear on
+[Releases](https://github.com/qs-mind/qiyas/releases) as AppImage, deb or rpm on Linux, `setup.exe`
+or MSI on Windows and a `.dmg` on macOS (Apple silicon or Intel), built by the release workflow;
+installed copies will check that page for updates (About, Check for updates). Until then, build it
+yourself (below). The installers will not be code-signed at first, so Windows SmartScreen and macOS
+Gatekeeper warn on first open; on a Mac, if Qiyas is reported as "damaged", open it once from
+System Settings, Privacy & Security, Open Anyway (or run
 `xattr -dr com.apple.quarantine /Applications/Qiyas.app`).
 
 ## Build
