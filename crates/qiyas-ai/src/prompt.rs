@@ -444,7 +444,7 @@ mod tests {
             "Room areas from rooms and label_spaces are unapproved candidates",
             "Use text, tables and inserted blocks for annotations, schedules and legends",
             "One batch per phase, not everything: one undo step, all or nothing",
-            "overwrite or add",
+            "New design in a populated drawing: clarify destination if needed",
         ] {
             assert!(en.contains(rule), "{rule}");
         }
