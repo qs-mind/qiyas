@@ -76,10 +76,10 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         (READ, "brief_check") => crate::brief_check::contract(),
         (READ, "artifact") => (
             object(
-                json!({"id":string,"offset":{"type":"integer","minimum":0}}),
+                json!({"id":string,"offset":{"type":"integer","minimum":0},"pointer":{"type":"string","description":"JSON pointer to one part of the evidence, e.g. /outcome/result/items/3; paged like the whole"}}),
                 &["id"],
             ),
-            json!({"id":"artifact id from a result","offset":0}),
+            json!({"id":"artifact id from a result","pointer":"/items/0"}),
         ),
         (READ, "explain") => (
             object(json!({"item":string,"project":string}), &["item"]),
@@ -129,7 +129,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (READ, "commands") => (
             object(
-                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":16,"items":string},"search":nullable(&string),"category":nullable(&string),"offset":{"type":"integer","minimum":0}}),
+                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":40,"items":string},"search":nullable(&string),"category":nullable(&string),"offset":{"type":"integer","minimum":0}}),
                 &[],
             ),
             json!({"name":"draw.line"}),
@@ -175,6 +175,10 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (EXECUTE, "plan") => {
             let info = surface::plan_info();
+            (info["schema"].clone(), info["examples"][0].clone())
+        }
+        (EXECUTE, "ask") => {
+            let info = surface::ask_info();
             (info["schema"].clone(), info["examples"][0].clone())
         }
         (EXECUTE, "type") => (

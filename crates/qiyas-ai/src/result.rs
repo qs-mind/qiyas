@@ -87,20 +87,51 @@ pub(crate) fn format(
     }
     if tool == surface::READ && op != "records" {
         if let Some(fields) = args["fields"].as_array() {
+            // A name, a JSON pointer, or a path written without its first slash. A field the
+            // result does not have is named in `missing_fields` beside the ones it has, so one
+            // call answers instead of a refusal and a second call.
             let mut selected = json!({});
+            let mut missing = Vec::new();
             for field in fields.iter().filter_map(Value::as_str) {
-                if let Some(value) = value.get(field).or_else(|| value.pointer(field)) {
+                let found = value
+                    .get(field)
+                    .or_else(|| value.pointer(field))
+                    .or_else(|| {
+                        (!field.starts_with('/'))
+                            .then(|| value.pointer(&format!("/{field}")))
+                            .flatten()
+                    });
+                if let Some(found) = found {
                     selected[field] = if full {
-                        value.clone()
+                        found.clone()
                     } else {
-                        summary(value, 0)
+                        summary(found, 0)
                     };
                 } else {
-                    return Err(ToolError::BadInput(format!("No result field {field}.")));
+                    missing.push(json!(field));
                 }
             }
-            out = selected;
+            if !missing.is_empty() {
+                let top: Vec<_> = value
+                    .as_object()
+                    .map(|map| map.keys().take(30).cloned().collect())
+                    .unwrap_or_default();
+                if selected.as_object().is_some_and(|map| map.is_empty()) {
+                    // Nothing asked for exists: keep the summary and say what does.
+                    out["missing_fields"] = json!(missing);
+                    out["available_fields"] = json!(top);
+                } else {
+                    selected["missing_fields"] = json!(missing);
+                    selected["available_fields"] = json!(top);
+                    out = selected;
+                }
+            } else {
+                out = selected;
+            }
         }
+    }
+    if tool == surface::READ && op == "records" && !full {
+        bound_records(&mut out);
     }
     if let Some(revision) = value.get("revision") {
         out["revision"] = revision.clone();
@@ -146,6 +177,53 @@ pub(crate) fn format(
     Ok(ToolOutput::Json(artifact::canonical(&out)))
 }
 
+/// A page of records is already budgeted by the core, which lets one oversized record through
+/// whole (a table or a long polyline). Past this size such a record keeps its plain fields and
+/// shortens its nested data; the artifact keeps all of it.
+const PAGE_LIMIT: usize = 16_000;
+const RECORD_LIMIT: usize = 4_000;
+
+fn bound_records(out: &mut Value) {
+    if out.to_string().len() <= PAGE_LIMIT {
+        return;
+    }
+    let mut cut = 0;
+    let mut tables = false;
+    if let Some(records) = out.get_mut("records").and_then(Value::as_array_mut) {
+        for record in records {
+            tables |= record["type"] == "Table";
+            if record.to_string().len() <= RECORD_LIMIT {
+                continue;
+            }
+            cut += 1;
+            for field in ["data", "fields"] {
+                if let Some(inner) = record.get_mut(field) {
+                    *inner = shorten(inner);
+                }
+            }
+        }
+    }
+    if cut > 0 {
+        out["shortened"] = json!({"records":cut,"detail":"Some records are shortened to fit. Read one part with fields: [\"/pointer\"], or artifact {id, pointer} for the full record."});
+    }
+    if tables {
+        out["hint"] = json!("Table text, row by row: qiyas_read query {kind: \"tables\"}.");
+    }
+}
+
+/// The value with every long list or object inside it reduced to its size and first rows.
+fn shorten(value: &Value) -> Value {
+    match value {
+        Value::Array(items) if value.to_string().len() > 600 => list(items),
+        Value::Object(map) if value.to_string().len() > 600 => Value::Object(
+            map.iter()
+                .map(|(key, inner)| (key.clone(), shorten(inner)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
 /// Keep repair facts in context and the complete validator evidence in the artifact.
 pub(crate) fn error(value: Value) -> Value {
     let Ok(id) = artifact::save(&value) else {
@@ -173,15 +251,71 @@ fn attach_contract_artifact(value: &mut Value, id: &str) {
     }
 }
 
+/// Most rows of a long list the model sees in place; the rest stays in the artifact.
+const ROWS: usize = 40;
+const HINT: &str =
+    "Full evidence is in the artifact; read one part with artifact {id, pointer}.";
+
+/// One element of a long list reduced to its plain fields (text, numbers, flags), long text
+/// cut, nested values named in `+` and left in the artifact. This is what a table of the
+/// list would show: enough to choose, quote or total from, without paging the artifact.
+fn row(value: &Value) -> Value {
+    let Value::Object(map) = value else {
+        return summary(value, 3);
+    };
+    let mut out = serde_json::Map::new();
+    let mut nested = Vec::new();
+    for (key, field) in map {
+        match field {
+            Value::Null => {}
+            Value::String(text) => {
+                let mut text = text.clone();
+                if text.chars().count() > 100 {
+                    text = text.chars().take(100).collect::<String>() + "…";
+                }
+                out.insert(key.clone(), json!(text));
+            }
+            Value::Number(_) | Value::Bool(_) => {
+                out.insert(key.clone(), field.clone());
+            }
+            Value::Array(items)
+                if items.len() <= 6
+                    && items
+                        .iter()
+                        .all(|v| v.is_number() || v.as_str().is_some_and(|t| t.len() <= 40)) =>
+            {
+                out.insert(key.clone(), field.clone());
+            }
+            Value::Array(items) if items.is_empty() => {}
+            _ => nested.push(json!(key)),
+        }
+    }
+    if !nested.is_empty() {
+        out.insert("+".into(), Value::Array(nested));
+    }
+    Value::Object(out)
+}
+
+/// A long list as `count`, its first `ROWS` rows and what was left out.
+fn list(items: &[Value]) -> Value {
+    if items.iter().all(Value::is_object) && !items.is_empty() {
+        let mut out = json!({"count":items.len(), "rows":items.iter().take(ROWS).map(row).collect::<Vec<_>>(), "detail":HINT});
+        if items.len() > ROWS {
+            out["more"] = json!(items.len() - ROWS);
+        }
+        out
+    } else {
+        json!({"count":items.len(), "sample":items.iter().take(SAMPLE * 4).map(|v| summary(v, 3)).collect::<Vec<_>>(), "detail":HINT})
+    }
+}
+
 /// Keep small answers compatible, including exact single measurements and action handles.
 fn summary(value: &Value, depth: usize) -> Value {
     if value.to_string().len() <= SMALL {
         return value.clone();
     }
     match value {
-        Value::Array(items) => {
-            json!({"count":items.len(), "sample":items.iter().take(SAMPLE).map(|v| summary(v, depth + 1)).collect::<Vec<_>>(), "detail":"Full evidence is in the artifact."})
-        }
+        Value::Array(items) => list(items),
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
             for (key, value) in map {
@@ -200,14 +334,20 @@ fn summary(value: &Value, depth: usize) -> Value {
                         | "outcomes"
                 );
                 if (heavy || depth >= 3) && value.to_string().len() > SMALL {
-                    let count = value
-                        .as_array()
-                        .map(Vec::len)
-                        .or_else(|| value.as_object().map(|v| v.len()));
-                    out.insert(
-                        key.clone(),
-                        json!({"count":count,"detail":"Full evidence is in the artifact."}),
-                    );
+                    match value {
+                        Value::Array(items) => {
+                            out.insert(key.clone(), list(items));
+                        }
+                        Value::Object(inner) => {
+                            out.insert(
+                                key.clone(),
+                                json!({"count":inner.len(),"keys":inner.keys().take(30).collect::<Vec<_>>(),"detail":HINT}),
+                            );
+                        }
+                        _ => {
+                            out.insert(key.clone(), summary(value, depth + 1));
+                        }
+                    }
                 } else {
                     out.insert(key.clone(), summary(value, depth + 1));
                 }
@@ -215,7 +355,7 @@ fn summary(value: &Value, depth: usize) -> Value {
             Value::Object(out)
         }
         Value::String(text) => {
-            json!({"characters":text.chars().count(),"preview":text.chars().take(320).collect::<String>(),"detail":"Full evidence is in the artifact."})
+            json!({"characters":text.chars().count(),"preview":text.chars().take(320).collect::<String>(),"detail":HINT})
         }
         _ => value.clone(),
     }
@@ -316,13 +456,36 @@ fn compact_contracts(value: &Value) -> Value {
         schema(&mut out["schema"]);
         if let Some(kinds) = value["kinds"].as_array().filter(|k| !k.is_empty()) {
             out.as_object_mut().unwrap().remove("schema");
-            out["contracts"] = json!(kinds
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|kind| format!("{name}.{kind}"))
-                .collect::<Vec<_>>());
+            // Each kind with its required fields and one example: the first lookup answers.
+            let reg = qiyas_core::registry::registry();
+            let mut contracts = serde_json::Map::new();
+            for kind in kinds.iter().filter_map(Value::as_str) {
+                let Some(info) = reg.get(&format!("{name}.{kind}")) else {
+                    contracts.insert(kind.into(), json!({}));
+                    continue;
+                };
+                let required: Vec<_> = info.schema["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|field| *field != "type" && *field != "kind")
+                    .collect();
+                let mut entry = json!({"required":required});
+                if let Some(mut example) = info.examples.first().cloned() {
+                    if let Some(map) = example.as_object_mut() {
+                        map.remove("type");
+                        map.remove("kind");
+                    }
+                    if example.to_string().len() <= 400 {
+                        entry["example"] = example;
+                    }
+                }
+                contracts.insert(kind.into(), entry);
+            }
+            out["kinds_contract"] = Value::Object(contracts);
+            out.as_object_mut().unwrap().remove("kinds");
             out["next"] = json!(
-                "Choose a contract by its qualified name, or use detail: full for all kinds."
+                "Each kind lists its required fields and an example (type and kind are added: {\"type\": name, \"kind\": kind}). Optional fields: commands {name: \"<name>.<kind>\"}; detail: full only for everything."
             );
         }
         if let Some(doc) = out["doc"].as_str().filter(|doc| doc.len() > 240) {
@@ -366,6 +529,59 @@ mod tests {
             panic!("JSON result")
         };
         value
+    }
+
+    #[test]
+    fn a_long_list_comes_as_rows_to_read_not_as_a_pointer_to_page_through() {
+        let items: Vec<_> = (0..115)
+            .map(|i| json!({"code":format!("A-{i}"),"description":"Net exterior masonry","quantity":i as f64 * 1.5,"unit":"m3",
+                "lines":[{"label":"Gross","value":1.0,"sources":[{"handle":i}]}; 4],"confidence":0.5}))
+            .collect();
+        let evidence = json!({"revision":null,"outcome":{"result":{"items":items,"warnings":[]}}});
+        let out = reply(surface::READ, "run", json!({}), evidence);
+        let listed = &out["outcome"]["result"]["items"];
+        assert_eq!(listed["count"], 115);
+        assert_eq!(listed["rows"].as_array().unwrap().len(), ROWS);
+        assert_eq!(listed["more"], 115 - ROWS);
+        assert_eq!(listed["rows"][3]["code"], "A-3");
+        assert_eq!(listed["rows"][3]["quantity"], 4.5);
+        assert_eq!(listed["rows"][3]["unit"], "m3");
+        assert_eq!(listed["rows"][3]["+"], json!(["lines"]), "nested parts are named, not shown");
+        assert!(out.to_string().len() < 12_000, "{}", out.to_string().len());
+        // Any part of the evidence is one pointer away.
+        let part = artifact::read(&json!({"id":out["artifact"],"pointer":"/outcome/result/items/3/lines/0"})).unwrap();
+        assert!(part["data"].as_str().unwrap().contains("Gross"));
+    }
+
+    #[test]
+    fn a_command_with_kinds_lists_each_kinds_required_fields_and_an_example() {
+        let draw = serde_json::to_value(qiyas_core::registry::registry().get("draw").unwrap()).unwrap();
+        let out = reply(surface::READ, "commands", json!({"name":"draw"}), draw);
+        let line = &out["kinds_contract"]["line"];
+        assert_eq!(line["required"], json!(["a", "b"]));
+        assert!(line["example"]["a"].is_array());
+        assert!(out["kinds_contract"]["polyline"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("points")));
+        assert!(out.get("kinds").is_none() && out.get("schema").is_none());
+        assert!(out.to_string().len() < 9_000, "{}", out.to_string().len());
+    }
+
+    #[test]
+    fn one_huge_record_is_shortened_to_fit_and_points_at_the_compact_table_read() {
+        let rows: Vec<_> = (0..500).map(|i| json!(["D-1000x2100","Door","1000 x 2100",format!("{i}")])).collect();
+        let value = json!({"collection":"entities","total":2,"offset":0,"next_offset":null,"truncated":false,"revision":null,
+            "records":[
+                {"key":718,"type":"Table","layer":"A-SCHEDULES","data":{"rows":rows,"columns":4}},
+                {"key":719,"type":"Line","layer":"A-WALL","length":3.0}]});
+        let out = reply(surface::READ, "records", json!({}), value);
+        assert!(out.to_string().len() < 16_000, "{}", out.to_string().len());
+        assert_eq!(out["shortened"]["records"], 1);
+        assert!(out["hint"].as_str().unwrap().contains("tables"));
+        assert_eq!(out["records"][0]["data"]["columns"], 4);
+        assert_eq!(out["records"][0]["data"]["rows"]["count"], 500);
+        assert_eq!(out["records"][1]["length"], 3.0, "small records stay whole");
     }
 
     #[test]

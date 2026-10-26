@@ -694,9 +694,14 @@ async fn successful_reads_continue_with_cost_advice() {
     let results = observed_results(&agent, &requests);
     assert_eq!(results.len(), 50);
     assert!(results.iter().all(|(error, _)| !error));
-    assert!(results.last().unwrap().1["advice"]
-        .to_string()
-        .contains("tool_cost"));
+    // The efficiency advice is given once, not on every call after the threshold.
+    assert_eq!(
+        results
+            .iter()
+            .filter(|(_, r)| r["advice"].to_string().contains("tool_cost"))
+            .count(),
+        1
+    );
     assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
 }
 
@@ -713,9 +718,14 @@ async fn drawing_work_continues_beyond_the_cost_advice_threshold() {
     let results = observed_results(&agent, &requests.lock().unwrap());
     assert_eq!(results.len(), 131);
     assert!(results.iter().all(|(error, _)| !error));
-    assert!(results.last().unwrap().1["advice"]
-        .to_string()
-        .contains("tool_cost"));
+    // The efficiency advice is given once, not on every call after the threshold.
+    assert_eq!(
+        results
+            .iter()
+            .filter(|(_, r)| r["advice"].to_string().contains("tool_cost"))
+            .count(),
+        1
+    );
     assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
 }
 
@@ -820,6 +830,7 @@ fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
                         json!({"id": envelope["artifact"], "offset": 0})
                     }
                     "record_schema" => json!({"name":"line"}),
+                    "ask" => json!({"questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}),
                     "validate" => {
                         json!({"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}})
                     }
@@ -984,7 +995,8 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
             assert!(!events
                 .iter()
                 .any(|event| matches!(event, AgentEvent::AwaitingApproval { .. })));
-            assert_eq!(requests.lock().unwrap().len(), 3);
+            // The finish gate sends the early ending back twice (phase two is still active).
+            assert_eq!(requests.lock().unwrap().len(), 5);
         } else {
             assert!(
                 matches!(events.last(), Some(AgentEvent::AwaitingApproval { plan }) if plan.phases.len() == 2)
@@ -1004,7 +1016,8 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
                 assert_eq!(requests.lock().unwrap().len(), 2);
             } else {
                 assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
-                assert_eq!(requests.lock().unwrap().len(), 3);
+                // The finish gate sends the early ending back twice (phase two is still active).
+            assert_eq!(requests.lock().unwrap().len(), 5);
             }
         }
     }
@@ -2643,24 +2656,28 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
                 texts.contains("Take-off workflow:") || texts.contains("سير عمل الحصر:"),
                 takeoff
             );
-            let notice = last
+            // The note is given once in the turn, as a message of its own, and says to go on.
+            let notices: Vec<_> = last
                 .messages
-                .last()
-                .unwrap()
-                .content
                 .iter()
-                .find_map(|b| match b {
-                    qiyas_ai::ContentBlock::Text { text } if text.starts_with("[cost advice]") => {
+                .flat_map(|m| &m.content)
+                .filter_map(|b| match b {
+                    qiyas_ai::ContentBlock::Text { text }
+                        if text.starts_with("[efficiency note]") =>
+                    {
                         Some(text)
                     }
                     _ => None,
                 })
-                .unwrap();
+                .collect();
+            assert_eq!(notices.len(), 1);
+            let notice = notices[0];
             assert_eq!(
-                notice.contains("BOQ") || notice.contains("ربط الكميات"),
+                notice.contains("quantity work") || notice.contains("عمل الكميات"),
                 takeoff
             );
-            assert_eq!(notice.contains("نُفّذت"), arabic);
+            assert_eq!(notice.contains("استُخدمت"), arabic);
+            assert!(notice.contains("not a reason to stop") || notice.contains("ليس سببًا للتوقف"));
             // The original schema remains, after far more than three results.
             let contract = last.messages.iter().flat_map(|m| &m.content).find(|b| matches!(b,qiyas_ai::ContentBlock::ToolResult{tool_use_id,..} if tool_use_id == "call_0")).unwrap();
             assert!(serde_json::to_string(contract).unwrap().contains("schema"));

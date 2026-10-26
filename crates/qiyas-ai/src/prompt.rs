@@ -400,17 +400,34 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_tells_mizan_to_ask_when_unclear_and_act_when_clear() {
+    fn the_prompt_says_assume_and_proceed_and_ask_once_with_options() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
-            "Ask one short question",
-            "with the options you see",
-            "when the request is ambiguous or misses what you need",
-            "then wait",
-            "When it is clear, act",
-            "which entities, layer, BOQ item, units, scale, tolerance, placement, text height, overwrite or add",
-            "Answer in the user's language",
-            "never ask what a tool can tell you",
+            "Never ask what you can assume or a tool can tell you",
+            "state assumptions and proceed",
+            "Country/practice: use [state]'s",
+            "call qiyas_execute ask once with every question together",
+            "2 to 4 options each, one marked recommended (free text is always allowed)",
+            "Never ask one at a time or in plain text",
+            "Answer in the language of the user's latest message",
+        ] {
+            assert!(en.contains(rule), "{rule}");
+        }
+    }
+
+    #[test]
+    fn the_prompt_draws_on_assumptions_and_never_ends_a_requested_job_for_cost() {
+        let en = system_prompt(Lang::En, &DrawingFacts::none());
+        for rule in [
+            "loads, design calculations and approval belong to the engineer and the company",
+            "Missing verified data never justifies refusing to draw",
+            "title block status: For review",
+            "Never claim approval or code compliance",
+            "never a reason to end a requested job",
+            "\"Continue\" means resume the open plan phases now",
+            "Do not finish with phases pending unless the user said stop",
+            "lists honestly what is done and not",
+            "Quantity exports need a passed check",
         ] {
             assert!(en.contains(rule), "{rule}");
         }
@@ -427,7 +444,7 @@ mod tests {
             "Room areas from rooms and label_spaces are unapproved candidates",
             "Use text, tables and inserted blocks for annotations, schedules and legends",
             "One batch per phase, not everything: one undo step, all or nothing",
-            "placement, text height, overwrite or add",
+            "overwrite or add",
         ] {
             assert!(en.contains(rule), "{rule}");
         }
@@ -455,9 +472,9 @@ mod tests {
     fn the_prompt_names_the_file_tools_and_leaves_save_as_to_the_user() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
-            "Files: open, switch or make drawings only when asked",
-            "Save or close only when asked",
-            "Save As and unsaved work are the user's choice",
+            "Files: open, switch, make or close drawings only when asked",
+            "The app saves after finished phases",
+            "say when work is unsaved",
             "offer a recent drawing (qiyas_read drawings) or a new one (qiyas_execute new_drawing)",
         ] {
             assert!(en.contains(rule), "{rule}");

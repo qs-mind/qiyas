@@ -59,8 +59,9 @@ pub const READ_OPS: [&str; 24] = [
     "rooms",
 ];
 
-pub const EXECUTE_OPS: [&str; 21] = [
+pub const EXECUTE_OPS: [&str; 22] = [
     "plan",
+    "ask",
     "finish",
     "run",
     "type",
@@ -137,6 +138,7 @@ operations![
     (READ, "selection", [Window, Drawing], "get_selection"),
     (READ, "panel_state", [Window], "panel_state"),
     (EXECUTE, "plan", [Nothing]),
+    (EXECUTE, "ask", [Nothing]),
     (EXECUTE, "run", [Drawing]),
     (EXECUTE, "type", [Drawing]),
     (EXECUTE, "batch", [Drawing]),
@@ -225,7 +227,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?}, paged UTF-8 JSON with next_offset and its original revision. commands and takeoff_kit use offset for pages; repeated contracts are referenced by name/version/artifact. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
+            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. commands and takeoff_kit use offset for pages; repeated contracts are referenced by name/version/artifact. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any command that only reads); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -239,7 +241,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted); plot ({sheet?, paper?, orientation?, scale?, path?}: one sheet as a PDF in the drawing's folder, as printed; a layout plots its own paper at 1:1, Model fits ISO A1; scale is fit or 1:50). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); ask ({questions: [{question, options: [{label, description?, recommended?}]}]}: every question you need, in one call, 2 to 4 options each, at most one recommended, free text always allowed; ends your turn, the answer is the next message); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index, e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted); plot ({sheet?, paper?, orientation?, scale?, path?}: one sheet as a PDF in the drawing's folder, as printed; a layout plots its own paper at 1:1, Model fits ISO A1; scale is fit or 1:50). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -320,7 +322,11 @@ pub fn label(name: &str, input: &Value) -> Option<String> {
 
 /// Execute operations change things, except planning, selecting and viewing.
 pub fn mutating(name: &str, input: &Value) -> bool {
-    name == EXECUTE && !matches!(input["op"].as_str(), Some("plan" | "select" | "view"))
+    name == EXECUTE
+        && !matches!(
+            input["op"].as_str(),
+            Some("plan" | "ask" | "select" | "view")
+        )
 }
 
 /// A full snapshot of the phases in the current task. It belongs to the conversation,
@@ -377,6 +383,154 @@ pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
         ));
     }
     Ok(plan)
+}
+
+/// One question Mizan puts to the engineer: 2 to 4 options, at most one recommended, and always a
+/// free-text answer (`allow_other`), which the window takes from its composer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Question {
+    pub id: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    #[serde(default = "yes")]
+    pub allow_other: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recommended: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskInput {
+    questions: Vec<AskQuestion>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskQuestion {
+    #[serde(default)]
+    id: Option<String>,
+    question: String,
+    options: Vec<QuestionOption>,
+}
+
+/// The questions of an `ask` call, checked: 1 to 6 questions in one call, each with 2 to 4
+/// options and at most one recommended. Ids default to q1, q2...
+pub fn read_questions(args: &Value) -> Result<Vec<Question>, ToolError> {
+    let mut args = args.clone();
+    if let Some(map) = args.as_object_mut() {
+        map.remove("expected_revision");
+        map.remove("detail");
+    }
+    let input: AskInput = read_args(&args, "ask")?;
+    if input.questions.is_empty() || input.questions.len() > 6 {
+        return Err(bad(
+            "ask takes 1 to 6 questions in one call: put everything you need to know in it",
+        ));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (index, q) in input.questions.into_iter().enumerate() {
+        let id = q
+            .id
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| format!("q{}", index + 1));
+        if !ids.insert(id.clone()) {
+            return Err(bad("question ids must be unique"));
+        }
+        let text = q.question.trim();
+        if text.is_empty() || text.chars().count() > 300 {
+            return Err(bad("a question needs 1 to 300 characters"));
+        }
+        if q.options.len() < 2 || q.options.len() > 4 {
+            return Err(bad(format!(
+                "question {id} needs 2 to 4 options; free text is always allowed beside them"
+            )));
+        }
+        let mut labels = std::collections::BTreeSet::new();
+        for option in &q.options {
+            let label = option.label.trim();
+            if label.is_empty() || label.chars().count() > 80 {
+                return Err(bad("an option label needs 1 to 80 characters"));
+            }
+            if !labels.insert(label.to_lowercase()) {
+                return Err(bad(format!("question {id} repeats the option {label}")));
+            }
+            if option
+                .description
+                .as_ref()
+                .is_some_and(|d| d.chars().count() > 200)
+            {
+                return Err(bad("an option description has at most 200 characters"));
+            }
+        }
+        if q.options.iter().filter(|o| o.recommended).count() > 1 {
+            return Err(bad(format!(
+                "question {id} marks more than one option recommended"
+            )));
+        }
+        out.push(Question {
+            id,
+            question: text.to_string(),
+            options: q.options,
+            allow_other: true,
+        });
+    }
+    Ok(out)
+}
+
+pub(super) fn ask_info() -> Value {
+    json!({
+        "name": "ask",
+        "tool": EXECUTE,
+        "op": "ask",
+        "doc": "Ask the engineer. Use it only for what you cannot assume and no tool can tell you. Put every question you need in ONE call (1 to 6), each with 2 to 4 options and at most one marked recommended; free text is always allowed. The window shows them and your turn ends; the answer arrives as the next message. Never ask one at a time, never in plain text, and never ask what you can assume and state.",
+        "changes": false,
+        "undo": false,
+        "schema": ask_schema(),
+        "examples": [{"questions": [
+            {"question": "Which country's practice should the package follow?",
+             "options": [{"label": "Egypt", "recommended": true}, {"label": "Saudi Arabia"}, {"label": "UAE"}]},
+            {"question": "Which finishes level?",
+             "options": [{"label": "Standard", "recommended": true, "description": "Ceramic floors, plastic paint"}, {"label": "High-end"}]}
+        ]}]
+    })
+}
+
+fn ask_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["questions"],
+        "properties": {"questions": {
+            "type": "array", "minItems": 1, "maxItems": 6,
+            "items": {"type": "object", "additionalProperties": false,
+                "required": ["question", "options"],
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "question": {"type": "string", "minLength": 1, "maxLength": 300},
+                    "options": {"type": "array", "minItems": 2, "maxItems": 4,
+                        "items": {"type": "object", "additionalProperties": false,
+                            "required": ["label"],
+                            "properties": {
+                                "label": {"type": "string", "minLength": 1, "maxLength": 80},
+                                "description": {"type": "string", "maxLength": 200},
+                                "recommended": {"type": "boolean"}
+                            }
+                        }
+                    }
+                }
+            }
+        }}
+    })
 }
 
 pub(super) fn plan_info() -> Value {
@@ -651,6 +805,13 @@ pub fn run_without_drawing(
             ToolOutput::Json(out)
         }));
     }
+    if tool == EXECUTE && op == "ask" {
+        // Mizan's window shows the question itself; for anyone else this only checks and echoes it.
+        return Some(read_questions(args).map(|questions| {
+            ToolOutput::Json(json!({"status":"asked","questions":questions,"revision":null,
+                "message":"Not shown by Qiyas here: put these questions to the user in your own conversation, then wait for the answer."}))
+        }));
+    }
     if tool == CAPTURE && op == "document" {
         return Some(crate::revision::stamp(
             crate::document::capture(args),
@@ -788,6 +949,9 @@ pub fn run_session_with_method(
     source: Source,
     method: &crate::MeasurementMethod,
 ) -> Result<ToolOutput, ToolError> {
+    if tool == EXECUTE && op == "ask" {
+        return run_without_drawing(tool, op, args, None).unwrap_or_else(|| Err(bad("ask")));
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let (mut args, warnings) = crate::normalise::args(tool, op, args)?;
         let before = session.revision();
@@ -1246,6 +1410,7 @@ fn capabilities() -> Value {
         "validate": {"args": "{command} or {commands}", "commands_schema": batch_commands_schema(), "changes": false, "step_references": "Only earlier step indexes are allowed; pointed results are checked when running"},
         "execute_ops": EXECUTE_OPS,
         "plan": plan_info(),
+        "ask": ask_info(),
         "typed_commands": {
             "args": { "line": "PLINE 0,0 10,0 C" },
             "words": "qiyas_read commands returns each command's words and aliases",
@@ -1284,6 +1449,9 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     if let Some(name) = args.get("name").and_then(Value::as_str) {
         if name.eq_ignore_ascii_case("plan") {
             return Ok(plan_info());
+        }
+        if name.eq_ignore_ascii_case("ask") {
+            return Ok(ask_info());
         }
         let normalized = name.trim().to_ascii_lowercase();
         let operations: Vec<_> = OPERATIONS.iter().filter(|operation| {
@@ -1941,6 +2109,46 @@ impl ViewState {
     }
 }
 
+/// Quantities leave Qiyas only after their check passed. A failed check (measurement errors, schedule
+/// rows no element explains) refuses the export, unless the file is named as a DRAFT; then it is
+/// written and the answer says it is a draft, so the user is told. `Ok(None)` means the check passed.
+fn quantity_gate(session: &Session, file: &str) -> Result<Option<Value>, ToolError> {
+    let check = session
+        .takeoff_check(0, &[])
+        .map_err(|e| ToolError::Failed(e.to_string()))?;
+    let errors = check["measurement_errors"].as_u64().unwrap_or(0);
+    let unmatched = check["unmatched_schedule_rows"].as_u64().unwrap_or(0);
+    if errors == 0 && unmatched == 0 {
+        return Ok(None);
+    }
+    let found = json!({"measurement_errors":errors,"unmatched_schedule_rows":unmatched});
+    if file.to_lowercase().contains("draft") {
+        return Ok(Some(found));
+    }
+    Err(ToolError::Structured {
+        code: "quantity_check_failed".into(),
+        message: format!("The quantity check has not passed ({errors} measurement errors, {unmatched} schedule rows no element explains), so the quantities are not exported. Fix them (qiyas_read takeoff_check lists each one), or export a draft: put DRAFT in the file name (for example Villa_Quantities_DRAFT.xlsx) and tell the user it is a draft and why."),
+        details: found,
+    })
+}
+
+/// The answer's note on a draft export.
+fn draft_note(found: Value) -> Value {
+    json!({"code":"draft_export","check":found,"message":"This file is a DRAFT: the quantity check has not passed. Tell the user so, with the counts, and do not present it as a finished quantity set."})
+}
+
+/// Whether a deliverable command writes quantities, and the file it names.
+fn quantity_export(input: &Value) -> Option<String> {
+    if input["type"] != "deliverable" {
+        return None;
+    }
+    let report = input["report"]
+        .as_str()
+        .or_else(|| input["kind"].as_str().filter(|k| *k != "export"))?;
+    matches!(report, "boq" | "dimensions" | "variation")
+        .then(|| input["path"].as_str().unwrap_or_default().to_string())
+}
+
 /// Runs one command and answers with what it did (`changed`).
 fn run_one(
     session: &mut Session,
@@ -1950,6 +2158,10 @@ fn run_one(
 ) -> Result<Value, ToolError> {
     let label = command.label();
     let effect = effect_of(&command);
+    let draft = match quantity_export(input) {
+        Some(file) if source != Source::User => quantity_gate(session, &file)?,
+        _ => None,
+    };
     let history = session.history_revision();
     let view = ViewState::of(session);
     let outcome = session.run_input(input, source)?;
@@ -1965,6 +2177,9 @@ fn run_one(
     }
     if label == "set_sheet" {
         out["ui"] = json!({ "action": "show_sheet", "sheet": session.sheet });
+    }
+    if let Some(found) = draft {
+        crate::advice::append(&mut out, draft_note(found));
     }
     view.update_ui(session, &mut out);
     Ok(out)
@@ -2428,6 +2643,11 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
     } else {
         qiyas_core::deliverables::confined(&session.export_source(), name)?
     };
+    let draft = if op == "export_takeoff" {
+        quantity_gate(session, name)?
+    } else {
+        None
+    };
     if op == "export_takeoff" {
         let totals = session.takeoff.totals();
         qiyas_boq::export_takeoff_with_queries(
@@ -2445,7 +2665,10 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
         qiyas_boq::report::export_conflicts(&path, &session.conflicts)
             .map_err(|e| ToolError::Failed(e.to_string()))?;
     }
-    Ok(
-        json!({ "written": path.to_string_lossy(), "rows": if op == "export_takeoff" { session.takeoff.items.len() } else { session.conflicts.len() } }),
-    )
+    let mut out = json!({ "written": path.to_string_lossy(), "rows": if op == "export_takeoff" { session.takeoff.items.len() } else { session.conflicts.len() } });
+    if let Some(found) = draft {
+        out["draft"] = json!(true);
+        crate::advice::append(&mut out, draft_note(found));
+    }
+    Ok(out)
 }

@@ -478,6 +478,24 @@ impl Qiyas {
                 self.user_text.as_deref().unwrap_or(&answer),
                 crate::prompt::Lang::En,
             );
+            // The finish gate: ending with plan phases open is refused (twice at most for the
+            // same plan) unless the user said stop.
+            let stopped = self
+                .user_text
+                .as_deref()
+                .is_some_and(crate::judgement::wants_to_stop);
+            if let Some(advice) = self
+                .plan_watch
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .finish_gate(stopped, language)
+            {
+                return Err(ToolError::Structured {
+                    code: "open_phases".into(),
+                    message: advice["message"].as_str().unwrap_or_default().into(),
+                    details: advice,
+                });
+            }
             let notes = [
                 self.plan_watch
                     .lock()

@@ -11,6 +11,9 @@ pub enum Job {
 
 impl Job {
     pub fn request(text: &str, previous: Self) -> Self {
+        if wants_to_continue(text) {
+            return previous;
+        }
         let text = text.trim().to_lowercase();
         if matches!(
             text.trim_end_matches(['.', '!', '،']),
@@ -118,17 +121,67 @@ impl Job {
         }
     }
 
+    /// Efficiency advice, sent once in a turn. It is never a reason to end a job the user asked for.
     pub fn budget(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::Drawing, Lang::En) => "[cost advice] Many calls have run. Consider the remaining drawing changes and checks, and the subscription cost. This is information; Mizan decides whether to continue or finish and explain remaining findings. Do not save unless asked.",
-            (Self::Drawing, Lang::Ar) => "[cost advice] نُفّذت خطوات كثيرة. وازن بين تعديلات الرسم والفحوص المتبقية وتكلفة الاشتراك. هذه معلومات؛ ميزان يقرر المتابعة أو الإنهاء وشرح الملاحظات المتبقية. لا تحفظ إلا بطلب المستخدم.",
-            (Self::Takeoff, Lang::En) => "[cost advice] Many calls have run. Consider the remaining supported BOQ mappings, measurement.report and takeoff_check, and the subscription cost. This is information; Mizan decides whether to continue or finish and explain uncertainty. Do not save unless asked.",
-            (Self::Takeoff, Lang::Ar) => "[cost advice] نُفّذت خطوات كثيرة. وازن بين ربط الكميات المدعومة بالأدلة والفحوص المتبقية وتكلفة الاشتراك. هذه معلومات؛ ميزان يقرر المتابعة أو الإنهاء وشرح ما بقي غير مؤكد. لا تحفظ إلا بطلب المستخدم.",
+            (Self::Drawing, Lang::En) => "[efficiency note] This turn has used many calls. Spend the rest well: batch edits, do not re-read what you already have, read a long result by pointer instead of paging it. This is not a reason to stop: finish the work the user asked for, phase by phase.",
+            (Self::Drawing, Lang::Ar) => "[efficiency note] استُخدمت خطوات كثيرة في هذه الرسالة. وفّر في الباقي: اجمع التعديلات في دفعات، ولا تعد قراءة ما لديك، واقرأ النتيجة الطويلة بمؤشر لا بصفحات. هذا ليس سببًا للتوقف: أنهِ ما طلبه المستخدم مرحلة بعد مرحلة.",
+            (Self::Takeoff, Lang::En) => "[efficiency note] This turn has used many calls. Spend the rest well: batch the mappings, do not re-read what you already have, read a long report by pointer instead of paging it. This is not a reason to stop: finish the quantity work the user asked for, and explain what stays uncertain.",
+            (Self::Takeoff, Lang::Ar) => "[efficiency note] استُخدمت خطوات كثيرة في هذه الرسالة. وفّر في الباقي: اجمع الربط في دفعات، ولا تعد قراءة ما لديك، واقرأ التقرير الطويل بمؤشر لا بصفحات. هذا ليس سببًا للتوقف: أنهِ عمل الكميات الذي طلبه المستخدم واشرح ما بقي غير مؤكد.",
         }
     }
 }
 
-pub fn language(text: &str, fallback: Lang) -> Lang {
+fn words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A short message that tells Mizan to carry on ("continue", "complete everything", "أكمل"), or to
+/// decide for itself ("apply all your assumptions"). It resumes the pending plan; it is not a
+/// new request.
+pub fn wants_to_continue(text: &str) -> bool {
+    let words = words(text);
+    if words.is_empty() || words.len() > 12 {
+        return false;
+    }
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+    // "Continue", "resume", "أكمل": a short message that is only that.
+    let carry_on = has(&[
+        "continue", "resume", "proceed", "أكمل", "اكمل", "كمل", "تابع", "استمر", "واصل", "أتمم",
+        "اتمم",
+    ]) && words.len() <= 6;
+    // "Complete everything", "finish the rest".
+    let everything = has(&["complete", "finish"])
+        && has(&["everything", "all", "rest", "remaining", "كل", "الباقي"]);
+    carry_on
+        || everything
+        || (has(&["assumptions", "assumption", "افتراضاتك", "افتراضات"])
+            && has(&["apply", "use", "your", "all", "طبق", "اعتمد", "كل"]))
+        || (has(&["go"]) && has(&["ahead", "on"]))
+        || (has(&["decide"]) && has(&["you", "yourself"]))
+}
+
+/// The user told Mizan to stop: the one case where an unfinished plan may be left as it is.
+pub fn wants_to_stop(text: &str) -> bool {
+    let words = words(text);
+    if words.len() > 14 {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    ["that's enough", "that is enough", "never mind", "do not continue", "don't continue", "no need to continue", "لا تكمل", "لا تتابع", "بلا داعي", "مش محتاج"]
+        .iter()
+        .any(|p| lower.contains(p))
+        || words
+            .iter()
+            .any(|w| matches!(w.as_str(), "stop" | "cancel" | "enough" | "كفاية" | "كفايه" | "توقف" | "قف" | "وقف" | "أوقف" | "اوقف" | "كفى"))
+}
+
+/// Arabic and Latin letters in the prose of `text` (code spans and identifiers like A-WALL left out).
+fn letters(text: &str) -> (usize, usize) {
     let mut arabic = 0;
     let mut latin = 0;
     let mut code = false;
@@ -150,6 +203,22 @@ pub fn language(text: &str, fallback: Lang) -> Lang {
         }
         code = !code;
     }
+    (arabic, latin)
+}
+
+/// An answer clearly written in the other language than the user's: enough prose, and one
+/// language well ahead of the other (names, units and file names in the user's language may
+/// appear inside an answer without making it the wrong language).
+pub fn language_mismatch(answer: &str, expected: Lang) -> bool {
+    let (arabic, latin) = letters(answer);
+    match expected {
+        Lang::En => arabic >= 60 && arabic > latin,
+        Lang::Ar => latin >= 60 && latin > arabic * 4,
+    }
+}
+
+pub fn language(text: &str, fallback: Lang) -> Lang {
+    let (arabic, latin) = letters(text);
     if arabic > 0 && arabic * 2 >= latin {
         Lang::Ar
     } else if latin > 0 {
@@ -219,6 +288,53 @@ pub fn new_design(text: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn continue_and_stop_are_read_from_short_messages_in_both_languages() {
+        for text in [
+            "Continue and complete everything !",
+            "continue",
+            "Apply all assumptions from your side",
+            "أكمل كل شيء",
+            "كمل",
+            "go ahead",
+            "تابع من فضلك",
+            "Finish the rest",
+        ] {
+            assert!(wants_to_continue(text), "{text}");
+        }
+        for text in [
+            "Draw a villa",
+            "ارسم فيلا دورين وطلّع مقايستها",
+            "Cairo",
+            "Draw a villa, keep it simple",
+            "Complete the kitchen layout",
+            "What does the continue command do in this long sentence about something unrelated to resuming work at all today",
+        ] {
+            assert!(!wants_to_continue(text), "{text}");
+        }
+        for text in ["stop", "That's enough, thanks", "كفاية كده", "Please stop here", "وقف"] {
+            assert!(wants_to_stop(text), "{text}");
+        }
+        for text in ["Continue and complete everything !", "Egypt", "Build a bus stop shelter drawing with the full detailed dimension set for every wall and window"] {
+            assert!(!wants_to_stop(text), "{text}");
+        }
+        // Continue keeps the job the conversation was doing.
+        assert_eq!(Job::request("Continue and complete everything !", Job::Takeoff), Job::Takeoff);
+    }
+
+    #[test]
+    fn an_answer_in_the_wrong_language_is_found_but_names_do_not_count() {
+        let arabic = "توقفت هنا لتجنب زيادة التكلفة. الموجود حاليا حزمة تطوير معماري مبدئية وليست حزمة تنفيذ كاملة أو معتمدة.";
+        let english = "I stopped here to avoid more cost. What exists now is a preliminary architectural package, not a complete or approved construction set.";
+        assert!(language_mismatch(arabic, Lang::En));
+        assert!(language_mismatch(english, Lang::Ar));
+        assert!(!language_mismatch(arabic, Lang::Ar));
+        assert!(!language_mismatch(english, Lang::En));
+        assert!(!language_mismatch("Cairo_Villa_P02_A501_Review.pdf", Lang::Ar));
+        let mixed = "الملفات: Cairo_Villa_Plans.pdf و A-WALL و Villa_Quantities.xlsx جاهزة للمراجعة وليست معتمدة بعد من المهندس المسؤول";
+        assert!(!language_mismatch(mixed, Lang::Ar));
+    }
+
     #[test]
     fn scope_uses_requests_and_operations_not_drawing_or_layer_names() {
         for text in [

@@ -1012,6 +1012,7 @@ async fn run_agent(
                 AgentEvent::Done { .. } => status = "done".into(),
                 AgentEvent::Stopped { reason } => status = format!("stopped: {reason}"),
                 AgentEvent::AwaitingApproval { .. } => status = "awaiting_approval".into(),
+                AgentEvent::Question { .. } => status = "asked_question".into(),
                 AgentEvent::Refused { .. } => status = "refused".into(),
                 _ => {}
             }

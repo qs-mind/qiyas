@@ -469,7 +469,7 @@ impl Provider for LivePattern {
                 .flat_map(|m| &m.content)
                 // The agent passes the budget on as advice (Goal L); this scripted model decides
                 // to finish when it sees it.
-                .any(|b| matches!(b,ContentBlock::Text{text} if text.contains("[finish now]") || text.contains("[cost advice]")));
+                .any(|b| matches!(b,ContentBlock::Text{text} if text.contains("[finish now]") || text.contains("[cost advice]") || text.contains("[efficiency note]")));
             // Both estimates include identical budget notices; only old tool evidence differs.
             let input_tokens = replay_tokens(&req);
             let mut trace = self.trace.lock().unwrap();

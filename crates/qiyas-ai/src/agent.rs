@@ -169,6 +169,12 @@ pub enum AgentEvent {
     AwaitingApproval {
         plan: surface::Plan,
     },
+    /// Mizan needs answers it cannot assume: all its questions in one call, each with 2 to 4
+    /// options (one may be recommended) and a free-text answer. The turn ends after this event;
+    /// the answer is the user's next message.
+    Question {
+        questions: Vec<surface::Question>,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -249,6 +255,8 @@ pub struct Agent {
     last_request: Option<Instant>,
     rebuild: Option<String>,
     known_contracts: BTreeMap<String, Value>,
+    /// The user's country or practice, from Settings: a default, so Mizan does not ask for it.
+    country: Option<String>,
 }
 
 /// What a user turn starts from: the `[state]` block, the session's epoch (none without a
@@ -272,6 +280,16 @@ struct TurnCounts {
     approved: bool,
     awaiting: Option<surface::Plan>,
     ineffective: BTreeMap<String, usize>,
+    /// The efficiency note (a user-role message) and the efficiency advice on a result have each
+    /// been given in this turn: each is given once.
+    cost_noted: bool,
+    cost_advised: bool,
+    /// Mizan put questions to the user: the turn ends when this batch of calls is answered.
+    asking: bool,
+    /// The save-name question for an untitled drawing has been put in this turn.
+    asked_save: bool,
+    /// The answer was sent back once for being in the wrong language.
+    language_retried: bool,
 }
 
 impl TurnCounts {
@@ -327,7 +345,14 @@ impl Agent {
             last_request: None,
             rebuild: None,
             known_contracts: BTreeMap::new(),
+            country: None,
         }
+    }
+
+    /// The country or practice Settings names; written in `[state]` each turn as the default.
+    pub fn with_country(mut self, country: Option<String>) -> Self {
+        self.country = country.filter(|c| !c.trim().is_empty());
+        self
     }
 
     pub fn with_checkpoint(mut self, checkpoint: Arc<Mutex<Option<Conversation>>>) -> Self {
@@ -761,6 +786,7 @@ impl Agent {
         self.job = Job::request(&user_text, self.job);
         self.chat_language = judgement::language(&user_text, self.chat_language);
         self.turn_text = user_text.clone();
+        self.plan_watch.new_turn();
         let destination_advice =
             has_content && !pointed_destination && judgement::new_design(&user_text);
         let reply_language = match self.chat_language {
@@ -840,6 +866,17 @@ impl Agent {
         if !pictures_only && !user_text.trim().is_empty() {
             content.push(ContentBlock::Text { text: user_text });
         }
+        if judgement::wants_to_continue(&self.turn_text) {
+            let open: Vec<String> = self
+                .plan_watch
+                .open_phases()
+                .iter()
+                .map(|phase| phase.title.clone())
+                .collect();
+            content.push(ContentBlock::Text {
+                text: continue_note(self.chat_language, &open),
+            });
+        }
         if destination_advice {
             content.push(ContentBlock::Text { text: "[advice] This drawing already contains work. Consider whether a new drawing or a destination question is appropriate. Mizan decides.".into() });
         }
@@ -888,8 +925,11 @@ impl Agent {
                 || provider_notice
                     .as_ref()
                     .is_some_and(|n| n.contains("[finish now]"));
-            let notice = near_limit.then(|| self.job.budget(self.chat_language).to_string());
+            // Once per turn: it is efficiency advice, not a reason to stop.
+            let notice = (near_limit && !counts.cost_noted)
+                .then(|| self.job.budget(self.chat_language).to_string());
             if let Some(text) = notice {
+                counts.cost_noted = true;
                 self.push_user(vec![ContentBlock::Text { text }]);
             }
             if let Some(text) = provider_notice {
@@ -978,6 +1018,13 @@ impl Agent {
             usage.add(turn.usage);
             self.log("TURN CACHE", || tokens(&usage));
             self.emit(&events, AgentEvent::CacheUsage { usage }).await;
+            let gate = if matches!(turn.stop_reason, StopReason::EndTurn)
+                && !says_nothing(&turn.content)
+            {
+                self.end_gate(&turn.content, &mut counts)
+            } else {
+                None
+            };
             match turn.stop_reason {
                 StopReason::Refusal { category, text } => {
                     // A refusal can cut a tool call off; nothing of it is kept or run.
@@ -1003,11 +1050,32 @@ impl Agent {
                     {
                         return self.stop(&events, &why).await;
                     }
+                    if counts.asking {
+                        // The questions are on the user's screen; their answer is the next message.
+                        self.update_checkpoint();
+                        return Ok(());
+                    }
                     if let Some(plan) = counts.awaiting.take() {
                         self.emit(&events, AgentEvent::AwaitingApproval { plan })
                             .await;
                         return Ok(());
                     }
+                }
+                // Ending the work with plan phases open, or in the wrong language, is sent back.
+                StopReason::EndTurn if gate.is_some() => {
+                    let (note, code) = gate.unwrap_or_default();
+                    self.log("FINISH GATE", || note.clone());
+                    self.history.push(Message::assistant(turn.content));
+                    self.push_user(vec![ContentBlock::Text { text: note }]);
+                    self.emit(
+                        &events,
+                        AgentEvent::Retrying {
+                            seconds: 0,
+                            code: code.into(),
+                            discard_partial: true,
+                        },
+                    )
+                    .await;
                 }
                 // Cut off before it said or called anything: its room went on thinking (Gemini
                 // through Runware once thought for 94 s and wrote nothing). Nothing ran, so the
@@ -1049,6 +1117,16 @@ impl Agent {
                     return match reason {
                         StopReason::EndTurn | StopReason::ToolUse => {
                             self.log("DONE", || tokens(&usage));
+                            if let Some(text) = self.keep_work(&mut counts, true, &cancel, epoch).await {
+                                if let Some(last) = self
+                                    .history
+                                    .last_mut()
+                                    .filter(|m| m.role == Role::Assistant)
+                                {
+                                    last.content.push(ContentBlock::Text { text: text.clone() });
+                                }
+                                self.emit(&events, AgentEvent::Text { text }).await;
+                            }
                             let (findings, revision) =
                                 match self.unfixed_errors(&cancel, epoch).await {
                                     Ok(findings) => findings,
@@ -1367,8 +1445,12 @@ impl Agent {
                     error_result(id, &crate::advice::stopped().json().to_string()),
                     error_event(id, why),
                 )
-            } else if counts.awaiting.is_some() {
-                let why = "Not run: waiting for the user's approval.";
+            } else if counts.awaiting.is_some() || counts.asking {
+                let why = if counts.asking {
+                    "Not run: waiting for the user's answer."
+                } else {
+                    "Not run: waiting for the user's approval."
+                };
                 (error_result(id, why), error_event(id, why))
             } else if cancel.is_cancelled() {
                 (error_result(id, CANCELLED), error_event(id, CANCELLED))
@@ -1403,8 +1485,42 @@ impl Agent {
                         .map_err(|error| error.json().to_string())?;
                         Ok(route)
                     });
+                    // The finish gate: ending the work with plan phases open is refused.
+                    let finish_refusal = (name == surface::EXECUTE && op == "finish")
+                        .then(|| self.finish_refusal())
+                        .flatten();
                     match routed {
                         Err(why) => (error_result(id, &why), error_event(id, &why)),
+                        Ok(Route::Session { tool, op, args })
+                            if tool == surface::EXECUTE && op == "ask" =>
+                        {
+                            match surface::read_questions(&args) {
+                                Ok(questions) => {
+                                    counts.asking = true;
+                                    let count = questions.len();
+                                    self.log("QUESTION", || {
+                                        serde_json::to_string(&questions).unwrap_or_default()
+                                    });
+                                    self.emit(events, AgentEvent::Question { questions }).await;
+                                    json_result(
+                                        id,
+                                        &serde_json::json!({"status":"asked","questions":count,
+                                            "message":"The questions are on the user's screen. End your turn now without more text; their answer is the next message."}),
+                                    )
+                                }
+                                Err(error) => (
+                                    error_result(id, &error.json().to_string()),
+                                    error_event(id, &error.to_string()),
+                                ),
+                            }
+                        }
+                        Ok(Route::Host { tool: "finish", .. }) if finish_refusal.is_some() => {
+                            let refusal = finish_refusal.clone().unwrap_or_default();
+                            (
+                                error_result(id, &refusal.to_string()),
+                                error_event(id, "Not finished: plan phases are still open."),
+                            )
+                        }
                         Ok(Route::Window { tool, input }) => {
                             self.run_window_tool(id, tool, &input, cancel, *epoch).await
                         }
@@ -1486,10 +1602,11 @@ impl Agent {
             if !is_error(&block) && Job::observes(name, input) {
                 self.job = Job::Takeoff;
             }
-            if counts.calls * 5 >= counts.limit() * 4 {
+            if counts.calls * 5 >= counts.limit() * 4 && !counts.cost_advised {
+                counts.cost_advised = true;
                 append_advice(
                     &mut block,
-                    serde_json::json!({"code":"tool_cost","calls":counts.calls,"message":"This turn has used many calls. Consider the remaining work and subscription cost. Mizan decides when to finish."}),
+                    serde_json::json!({"code":"tool_cost","calls":counts.calls,"message":"Efficiency note, given once: this turn has used many calls. Batch edits, do not re-read what you have, read long results by pointer. It is not a reason to stop: finish the job the user asked for."}),
                 );
             }
             self.log(
@@ -1522,6 +1639,14 @@ impl Agent {
                     } else {
                         (Vec::new(), Value::Null)
                     };
+                    if completed && stopped.is_none() {
+                        if let Some(note) = self.keep_work(counts, false, cancel, *epoch).await {
+                            append_advice(
+                                &mut block,
+                                serde_json::json!({"code":"saved","message":note}),
+                            );
+                        }
+                    }
                     if !errors.is_empty() {
                         append_advice(
                             &mut block,
@@ -1937,6 +2062,7 @@ impl Agent {
         let session = self.session.clone();
         let settings = self.settings.clone();
         let build_system = self.system.is_none();
+        let country = self.country.clone();
         let image_input = self.vision();
         let vision = image_input == Some(true);
         let cancel = cancel.clone();
@@ -1972,6 +2098,7 @@ impl Agent {
             ));
             text.push_str(method.instruction());
             text.push('\n');
+            text.push_str(&country_line(country.as_deref(), method.name.as_deref()));
             let mut picture = None;
             if let Some(session) = guard.as_ref() {
                 if let Some(working) = &session.automation_sheet {
@@ -2198,9 +2325,176 @@ impl Agent {
         });
     }
 
+    /// The gate on a plain end of turn: send the answer back when plan phases are still open
+    /// (unless it ends with a question for the user) or when it is clearly in the wrong language.
+    /// Returns the note for the model and the code the window shows.
+    fn end_gate(
+        &mut self,
+        content: &[ContentBlock],
+        counts: &mut TurnCounts,
+    ) -> Option<(String, &'static str)> {
+        if self.provider.owns_turn() {
+            return None;
+        }
+        let answer: String = content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let asks = answer.trim_end().ends_with('?') || answer.trim_end().ends_with('؟');
+        if !asks {
+            if let Some(refusal) = self.finish_refusal() {
+                return Some((format!("[finish refused] {refusal}"), "ai.error.finish_gate"));
+            }
+        }
+        if !counts.language_retried && judgement::language_mismatch(&answer, self.chat_language) {
+            counts.language_retried = true;
+            let note = match self.chat_language {
+                Lang::En => "[reply language] Your last answer was in the wrong language. The user writes English: send the same final answer again in English, nothing else.",
+                Lang::Ar => "[reply language] كانت إجابتك الأخيرة بلغة غير لغة المستخدم. يكتب المستخدم بالعربية: أعد الإجابة النهائية نفسها بالعربية، ولا شيء غيرها.",
+            };
+            return Some((note.into(), "ai.error.language_retry"));
+        }
+        None
+    }
+
+    /// Keeps the work: after a finished phase that changed the drawing, a titled drawing is saved
+    /// through the app. An untitled one is left alone until the turn ends (`end`), when the user
+    /// is asked once, through the window's Save As, for a name: nothing stays unsaved unsaid.
+    /// Returns what to tell the model (phase) or the user (end).
+    async fn keep_work(
+        &mut self,
+        counts: &mut TurnCounts,
+        end: bool,
+        cancel: &CancellationToken,
+        epoch: Option<u64>,
+    ) -> Option<String> {
+        if !counts.changed_drawing {
+            return None;
+        }
+        let host = self.host.clone()?;
+        let session = self.session.clone();
+        let state = tokio::task::spawn_blocking(move || {
+            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.as_ref().map(|s| {
+                (
+                    s.is_dirty(),
+                    s.is_untitled(),
+                    qiyas_core::script::read_problems(s) > 0,
+                    s.drawing
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )
+            })
+        })
+        .await
+        .ok()??;
+        let (dirty, untitled, repaired, file) = state;
+        if !dirty {
+            return None;
+        }
+        if untitled || repaired {
+            if !end || counts.asked_save {
+                return None;
+            }
+            counts.asked_save = true;
+        }
+        let session = self.session.clone();
+        let (cancel, text) = (cancel.clone(), self.turn_text.clone());
+        let ran = tokio::task::spawn_blocking(move || {
+            {
+                let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+                check_turn(guard.as_ref(), &cancel, epoch)?;
+            }
+            run_host(&*host, "save_drawing", &serde_json::json!({}), Some(&text))
+        })
+        .await;
+        let lang = self.chat_language;
+        match ran {
+            Ok(Ok(value)) if value["asked_user"] == true => {
+                self.log("SAVE", || "asked the user for a name (Save As)".into());
+                Some(match lang {
+                    Lang::En => "\n\nI opened Save As so this work is kept: please choose a name for the drawing.".into(),
+                    Lang::Ar => "\n\nفتحت نافذة «حفظ باسم» حتى يُحفظ هذا العمل: اختر اسمًا للرسم.".into(),
+                })
+            }
+            Ok(Ok(_)) => {
+                self.log("SAVE", || format!("saved {file}"));
+                Some(if end {
+                    match lang {
+                        Lang::En => format!("\n\nSaved {file}."),
+                        Lang::Ar => format!("\n\nحُفظ {file}."),
+                    }
+                } else {
+                    format!("Saved {file} after the finished phase.")
+                })
+            }
+            Ok(Err(why)) => {
+                self.log("SAVE", || format!("not saved: {why}"));
+                end.then(|| match lang {
+                    Lang::En => "\n\nThe drawing could not be saved; the changes are not on disk yet.".to_string(),
+                    Lang::Ar => "\n\nتعذّر حفظ الرسم؛ التعديلات لم تُحفظ بعد.".to_string(),
+                })
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// The finish gate (`PlanWatch::finish_gate`): advice naming the open plan phases, or none
+    /// when the work may end. A provider that runs its own loop is not gated.
+    fn finish_refusal(&mut self) -> Option<Value> {
+        // A provider that runs its own loop, or a metered run told to finish now, is a real limit.
+        if self.provider.owns_turn()
+            || self
+                .provider
+                .budget_notice()
+                .is_some_and(|notice| notice.contains("[finish now]"))
+        {
+            return None;
+        }
+        let stopped = judgement::wants_to_stop(&self.turn_text);
+        self.plan_watch.finish_gate(stopped, self.chat_language)
+    }
+
     /// Append even after a cancellation; old messages must remain byte-for-byte stable.
     fn push_user(&mut self, content: Vec<ContentBlock>) {
         self.history.push(Message::user(content));
+    }
+}
+
+/// The `[state]` line about the country or practice: Settings first, then what the selected
+/// method's name says; otherwise Mizan asks once, with everything else it needs.
+fn country_line(country: Option<&str>, method: Option<&str>) -> String {
+    let inferred = method.and_then(|name| {
+        let lower = name.to_lowercase();
+        if lower.contains("egypt") {
+            Some("Egypt")
+        } else if lower.contains("ksa") || lower.contains("saudi") {
+            Some("Saudi Arabia")
+        } else if lower.contains("uae") || lower.contains("emirates") {
+            Some("UAE")
+        } else {
+            None
+        }
+    });
+    match country.or(inferred) {
+        Some(country) => format!("Country/practice: {country} (a default from Settings; use it, do not ask).\n"),
+        None => "Country/practice: not set. Assume and state it when the work allows; if it truly decides the work, ask once, with every other needed question in the same ask.\n".into(),
+    }
+}
+
+/// What a "continue" message adds: the open plan phases, or the unfinished list of the last answer.
+fn continue_note(lang: Lang, open: &[String]) -> String {
+    match (lang, open.is_empty()) {
+        (Lang::En, false) => format!("[continue] The user asked you to continue and complete the work. Open plan phases: {}. Do them now, one at a time, on your stated assumptions. Do not stop for cost, do not ask what you can assume, and do not finish until every phase is done or skipped with a reason.", open.join("; ")),
+        (Lang::En, true) => "[continue] The user asked you to continue and complete the work. Resume what your last answer listed as not done: make a plan for it and do it on your stated assumptions. Do not stop for cost, and do not ask what you can assume.".into(),
+        (Lang::Ar, false) => format!("[continue] طلب المستخدم أن تتابع وتكمل العمل. المراحل المفتوحة: {}. نفّذها الآن واحدة بعد أخرى بافتراضاتك المعلنة. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه، ولا تنهِ قبل أن تكتمل كل مرحلة أو تُتجاوز بسبب مذكور.", open.join("؛ ")),
+        (Lang::Ar, true) => "[continue] طلب المستخدم أن تتابع وتكمل العمل. تابع ما ذكرت في إجابتك الأخيرة أنه لم يُنجز: ضع له خطة ونفّذه بافتراضاتك المعلنة. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه.".into(),
     }
 }
 

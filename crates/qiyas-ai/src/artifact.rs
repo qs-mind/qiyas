@@ -131,6 +131,36 @@ fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
         .len()
         .saturating_sub(header.len() as u64);
     let offset = args["offset"].as_u64().unwrap_or(0);
+    let pointer = args["pointer"].as_str().filter(|p| !p.is_empty());
+    if let Some(pointer) = pointer {
+        // One part of the evidence: parse it, take the part, and page that.
+        if total > MAX_POINTER_BYTES {
+            return Err(ToolError::BadInput(
+                "This evidence is too large to read by pointer; page it with offset.".into(),
+            ));
+        }
+        let mut text = String::new();
+        file.seek(SeekFrom::Start(header.len() as u64))
+            .map_err(failed)?;
+        file.read_to_string(&mut text).map_err(failed)?;
+        let whole: Value = serde_json::from_str(&text)
+            .map_err(|_| ToolError::BadInput("The evidence could not be read.".into()))?;
+        let Some(part) = whole.pointer(pointer) else {
+            let keys: Vec<_> = match &whole {
+                Value::Object(map) => map.keys().take(40).cloned().collect(),
+                Value::Array(items) => vec![format!("0..{}", items.len())],
+                _ => Vec::new(),
+            };
+            return Err(ToolError::BadInput(format!(
+                "The evidence has nothing at {pointer}. Top level: {}",
+                keys.join(", ")
+            )));
+        };
+        let part = part.to_string();
+        let mut out = page(&part, offset, id, metadata["revision"].clone())?;
+        out["pointer"] = json!(pointer);
+        return Ok(out);
+    }
     if offset > total {
         return Err(ToolError::BadInput(format!(
             "Offset must be at most {total}."
@@ -160,6 +190,34 @@ fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
     )
 }
 
+/// The largest evidence file read whole to take one part of it.
+const MAX_POINTER_BYTES: u64 = 64 * 1024 * 1024;
+
+/// One page of `text` from byte `offset`, on a character boundary.
+fn page(text: &str, offset: u64, id: &str, revision: Value) -> Result<Value, ToolError> {
+    let total = text.len() as u64;
+    if offset > total {
+        return Err(ToolError::BadInput(format!(
+            "Offset must be at most {total}."
+        )));
+    }
+    let start = offset as usize;
+    if !text.is_char_boundary(start) {
+        return Err(ToolError::BadInput(
+            "Offset must be a UTF-8 character boundary; use next_offset.".into(),
+        ));
+    }
+    let mut end = (start + PAGE_BYTES).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok(
+        json!({"id":id,"format":"json","offset":offset,"total_bytes":total,
+        "next_offset":(end < text.len()).then_some(end),"data":&text[start..end],"artifact_revision":revision,
+        "evidence":"Immutable result at artifact_revision. Later edits do not change it. Read current objects before editing."}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +241,15 @@ mod tests {
             }
         }
         assert_eq!(serde_json::from_str::<Value>(&whole).unwrap(), evidence);
+        let part = read_in(dir.path(), &json!({"id":id,"pointer":"/items/3"})).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(part["data"].as_str().unwrap()).unwrap(),
+            evidence["items"][3]
+        );
+        assert!(read_in(dir.path(), &json!({"id":id,"pointer":"/nothing"}))
+            .unwrap_err()
+            .to_string()
+            .contains("Top level"));
         assert!(read_in(dir.path(), &json!({"id":"../../settings"})).is_err());
         assert!(read_in(dir.path(), &json!({"id":id,"offset":whole.len()+1})).is_err());
     }

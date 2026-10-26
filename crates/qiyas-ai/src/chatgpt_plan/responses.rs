@@ -391,6 +391,85 @@ mod tests {
     use super::*;
     use crate::Message;
 
+    /// One model step of a long turn: its reasoning item, a call, and the call's big result.
+    fn step(i: usize, size: usize) -> Vec<Message> {
+        vec![
+            Message::assistant(vec![
+                ContentBlock::Raw(
+                    json!({"type":"reasoning","encrypted_content":format!("opaque{i}")}),
+                ),
+                ContentBlock::ToolUse {
+                    id: format!("call_{i}"),
+                    name: "qiyas_read".into(),
+                    input: json!({"op":"records","args":"{}"}),
+                },
+            ]),
+            Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: format!("call_{i}"),
+                content: vec![ResultPart::Text("x".repeat(size))],
+                is_error: false,
+            }]),
+        ]
+    }
+
+    /// Evidence for the cache work (W1): the body a long turn sends only ever grows at its end,
+    /// request after request, with the same instructions, tools and cache key; the one thing that
+    /// moves an early part of it is a trim at the watermark, which happens once and then the
+    /// requests append again. So whatever the provider fails to reuse between two trims is not
+    /// caused by how the request is built.
+    #[test]
+    fn a_long_turn_only_appends_between_trims_and_a_trim_rewrites_the_prefix_once() {
+        let body = |history: &[Message]| {
+            let mut r = req();
+            r.messages = history.to_vec();
+            request(&r).unwrap()
+        };
+        let appended = |before: &Value, after: &Value| {
+            let (a, b) = (
+                before["input"].as_array().unwrap(),
+                after["input"].as_array().unwrap(),
+            );
+            assert!(b.len() > a.len());
+            assert_eq!(&b[..a.len()], &a[..], "an earlier item changed");
+            for field in ["instructions", "tools", "prompt_cache_key", "model", "reasoning"] {
+                assert_eq!(before[field], after[field], "{field} changed");
+            }
+        };
+        let mut history = vec![Message::user(vec![ContentBlock::Text {
+            text: "Build the package".into(),
+        }])];
+        let mut bodies = Vec::new();
+        for i in 0..40 {
+            history.extend(step(i, 9_000));
+            bodies.push(body(&history));
+        }
+        for pair in bodies.windows(2) {
+            appended(&pair[0], &pair[1]);
+        }
+
+        let before = bodies.last().unwrap().clone();
+        let trim = crate::history::trim_at(&mut history, 50_000, 20_000, 10_000)
+            .expect("the watermark was crossed");
+        assert!(trim.after < trim.before);
+        let after = body(&history);
+        let (a, b) = (
+            before["input"].as_array().unwrap(),
+            after["input"].as_array().unwrap(),
+        );
+        let first = a.iter().zip(b).position(|(x, y)| x != y).unwrap();
+        assert!(first <= 4, "the oldest result is the first to be retired: item {first}");
+        assert_eq!(a.len(), b.len(), "retiring evidence keeps every call and its result");
+
+        // After the trim the turn appends again.
+        let mut previous = after;
+        for i in 40..50 {
+            history.extend(step(i, 9_000));
+            let next = body(&history);
+            appended(&previous, &next);
+            previous = next;
+        }
+    }
+
     fn req() -> TurnRequest {
         TurnRequest {
             cache_key: "offline-test-conversation".into(),

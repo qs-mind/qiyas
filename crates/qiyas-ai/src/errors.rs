@@ -18,6 +18,8 @@ pub const CODES: &[&str] = &[
     "budget",
     "cancelled",
     "request_id_reused",
+    "quantity_check_failed",
+    "open_phases",
     "failed",
 ];
 
