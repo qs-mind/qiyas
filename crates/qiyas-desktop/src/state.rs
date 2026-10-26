@@ -175,6 +175,7 @@ impl AppState {
         let mut choice = lock(&self.provider).clone();
         choice.autonomy = shared.autonomy;
         choice.measurement_method = shared.measurement_method;
+        choice.country = shared.country;
         choice
     }
 

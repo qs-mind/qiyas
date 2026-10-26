@@ -265,3 +265,35 @@ test("retry discards unfinished thinking across cache telemetry and keeps its us
   expect(transcript.items.map((item) => item.kind)).toEqual(["user", "cache_usage", "retrying"]);
   expect(transcript.items[1]).toEqual({ kind: "cache_usage", cached: 900, total: 1000 });
 });
+
+test("a question event keeps every question with its options, and the answer is the next message", () => {
+  const questions = [
+    { id: "q1", question: "Which country?", allow_other: true, options: [{ label: "Egypt", recommended: true }, { label: "UAE" }] },
+    { id: "q2", question: "Finishes?", allow_other: true, options: [{ label: "Standard", description: "Ceramic floors" }, { label: "High-end" }] },
+  ];
+  const transcript = run([
+    { type: "user", text: "Design a villa package" },
+    { type: "text", text: "I need two answers." },
+    { type: "question", questions },
+  ]);
+  expect(transcript.items).toEqual([
+    { kind: "user", text: "Design a villa package" },
+    { kind: "assistant", text: "I need two answers.", finished: true },
+    { kind: "question", questions },
+  ]);
+  const answered = reduce(transcript, { type: "user", text: "1a, 2b" });
+  expect(answered.items.at(-1)).toEqual({ kind: "user", text: "1a, 2b" });
+  // A saved conversation shows the same list.
+  const entries: TranscriptEntry[] = [{ type: "event", event: { type: "question", questions } }];
+  expect(run([{ type: "restore", entries }]).items).toEqual([{ kind: "question", questions }]);
+});
+
+test("a finish or language retry hides the early answer, as any discarded stream", () => {
+  let state = reduce(EMPTY, { type: "user", text: "Build the package" });
+  state = reduce(state, { type: "text", text: "I stopped here to save cost." });
+  state = reduce(state, { type: "retrying", seconds: 0, code: "ai.error.finish_gate", discard_partial: true });
+  expect(state.items).toEqual([
+    { kind: "user", text: "Build the package" },
+    { kind: "retrying", seconds: 0, code: "ai.error.finish_gate" },
+  ]);
+});

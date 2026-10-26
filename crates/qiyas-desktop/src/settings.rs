@@ -161,6 +161,9 @@ pub struct Settings {
     pub autonomy: qiyas_ai::Autonomy,
     /// The selected measurement method name; local rules are optional. None means geometric quantities.
     pub measurement_method: Option<String>,
+    /// The country or practice the user works in ("Egypt"): the default Mizan assumes instead of
+    /// asking. None lets Mizan infer it from the measurement method, else ask once.
+    pub country: Option<String>,
     /// Shows diagnostic disclosures in Mizan; ordinary surveying work keeps them hidden.
     pub show_technical_details: bool,
     pub mcp_enabled: bool,
@@ -264,6 +267,7 @@ impl Default for Settings {
             effort: "medium".into(),
             autonomy: qiyas_ai::Autonomy::default(),
             measurement_method: None,
+            country: None,
             show_technical_details: false,
             mcp_enabled: false,
             mcp_port: 48123,
@@ -328,6 +332,9 @@ pub fn validate(s: &Settings) -> Result<(), String> {
         .is_some_and(|name| name.trim().is_empty())
     {
         return Err("The measurement method name is empty; choose None instead".into());
+    }
+    if s.country.as_ref().is_some_and(|c| c.chars().count() > 60) {
+        return Err("The country name is longer than 60 characters".into());
     }
     if s.mcp_port < 1024 {
         return Err(format!(

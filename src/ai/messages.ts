@@ -1,5 +1,5 @@
 /** The assistant's transcript, built from the agent's events by a pure reducer. */
-import type { Activity, AgentEvent, AiUi, PlanPhase, TranscriptEntry } from "../api";
+import type { Activity, AgentEvent, AiUi, PlanPhase, Question, TranscriptEntry } from "../api";
 
 export type ToolStatus = "running" | "done" | "error";
 
@@ -42,6 +42,8 @@ export type Item =
   | { kind: "thinking"; text: string }
   | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean; stale?: boolean }
   | { kind: "retrying"; seconds: number; code: string }
+  /** Mizan's questions, all in one list; the answer is typed as the next message. */
+  | { kind: "question"; questions: Question[] }
   | ToolCardItem
   | { kind: "refused"; category: string | null; text: string }
   | { kind: "stopped"; reason: string };
@@ -112,6 +114,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
         i === plan && item.kind === "plan" ? { ...item, awaitingApproval: true } : item,
       ) };
     }
+    case "question":
+      return { items: [...finishText(items), { kind: "question", questions: action.questions }] };
     case "provider_status":
       return { items: [...finishText(items), { kind: "provider_status", code: action.code }] };
     case "retrying": {

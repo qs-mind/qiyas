@@ -121,7 +121,7 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
         const tool = mutating.current.get(event.id);
         if (tool) callbacks.current.onMutated(tool);
       }
-      if (event.type === "awaiting_approval") setPhase("waiting");
+      if (event.type === "awaiting_approval" || event.type === "question") setPhase("waiting");
     };
     void listen<WorkspaceEvent>("workspace:event", ({ payload }) => {
       if (gone || (workspace != null && payload.workspace !== workspace)) return;

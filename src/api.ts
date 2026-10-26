@@ -1384,6 +1384,8 @@ export type Settings = {
   autonomy?: "per_job" | "per_phase" | "autonomous";
   /** A local rule set name; null means geometric quantities. */
   measurement_method?: string | null;
+  /** The country or practice Mizan assumes instead of asking ("Egypt"); no screen sets it yet. */
+  country?: string | null;
   mcp_enabled: boolean;
   mcp_port: number;
   /** 32 hex characters, made once. */
@@ -1756,6 +1758,12 @@ export type PlanPhase = {
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
 export type Activity = { category: string; effect: string };
 
+/** One question Mizan asks (`qiyas_ai::surface::Question`): 2 to 4 options, at most one
+ *  recommended, and a free-text answer always allowed. All of a turn's questions come in one
+ *  `question` event; the turn ends and the answer is the next message. */
+export type QuestionOption = { label: string; description?: string; recommended?: boolean };
+export type Question = { id: string; question: string; options: QuestionOption[]; allow_other: boolean };
+
 export type AgentEvent =
   | { type: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { type: "provider_status"; code: string }
@@ -1765,6 +1773,7 @@ export type AgentEvent =
   | { type: "plan"; phases: PlanPhase[] }
   | { type: "plan_progress"; mutations_since_update: number; stale: boolean }
   | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
+  | { type: "question"; questions: Question[] }
   | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null }
   | {
       type: "tool_result";

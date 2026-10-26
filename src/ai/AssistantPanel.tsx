@@ -203,7 +203,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   function show(item: Item, i: number): ReactNode {
     if (item.kind === "provider_status") return <p key={i} className="msg notice" role="status">{t(item.code)}</p>;
     if (item.kind === "retrying") return <p key={i} className="msg notice" role="status">
-      {item.code === "ai.error.context_retry" ? t(item.code) : t("ai.error.retrying", { seconds: item.seconds })}
+      {["ai.error.context_retry", "ai.error.finish_gate", "ai.error.language_retry"].includes(item.code) ? t(item.code) : t("ai.error.retrying", { seconds: item.seconds })}
     </p>;
     switch (item.kind) {
       case "cache_usage":
@@ -216,6 +216,30 @@ export const AssistantPanel = memo(function AssistantPanel({
           onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
             ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;
+      case "question":
+        // The questions as a plain numbered list; the answer is typed in the composer ("2b", or
+        // free text). A fuller design comes with the new shell.
+        return (
+          <div key={i} className="msg assistant question-list">
+            <ol>
+              {item.questions.map((q) => (
+                <li key={q.id}>
+                  <bdi>{q.question}</bdi>
+                  <ol type="a">
+                    {q.options.map((o) => (
+                      <li key={o.label}>
+                        <bdi>{o.label}</bdi>
+                        {o.recommended ? ` (${t("ai.recommended")})` : ""}
+                        {o.description ? <> — <bdi>{o.description}</bdi></> : null}
+                      </li>
+                    ))}
+                  </ol>
+                </li>
+              ))}
+            </ol>
+            <p className="muted">{t("ai.questionOther")}</p>
+          </div>
+        );
       case "user":
         return (
           <div key={i} className="msg user" lang={contentLanguage(item.text, lang)} dir={contentLanguage(item.text, lang) === "ar" ? "rtl" : "ltr"}>

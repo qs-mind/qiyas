@@ -280,6 +280,14 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                 onChange={(e) => change({ measurement_method: e.target.value })} />
             </label>}
             <label>
+              <span>{t("settings.country")}</span>
+              <input dir="auto" list="settings-countries" value={draft.country ?? ""} placeholder={t("settings.countryHint")}
+                onChange={(e) => change({ country: e.target.value || null })} />
+              <datalist id="settings-countries">
+                <option value="Egypt" /><option value="Saudi Arabia" /><option value="UAE" /><option value="Kuwait" />
+              </datalist>
+            </label>
+            <label>
               <span>{t("settings.autosave")}</span>
               <input
                 dir="ltr"

@@ -37,7 +37,10 @@ impl WorkspaceView {
         event
     }
     pub fn agent_event(&mut self, workspace: u32, event: AgentEvent) -> WindowEvent {
-        if matches!(event, AgentEvent::AwaitingApproval { .. }) {
+        if matches!(
+            event,
+            AgentEvent::AwaitingApproval { .. } | AgentEvent::Question { .. }
+        ) {
             self.status = "waiting";
         }
         if matches!(

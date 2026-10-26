@@ -1255,13 +1255,15 @@ async fn new_agent(
     let test_provider = ai_run(state).test_provider.clone();
     #[cfg(test)]
     if let Some(make) = test_provider {
+        let country = settings.country.clone();
         let settings = ai::agent_settings(settings, language);
         return Ok(match conversation {
             Some(conversation) => {
                 Agent::resume(conversation, make(), state.session.clone(), settings)
             }
             None => Agent::new(make(), state.session.clone(), settings),
-        });
+        }
+        .with_country(country));
     }
     let (provider, name) = match ai::mock_provider(&state.session) {
         Some(mock) => (mock, "mock"),
@@ -1297,6 +1299,7 @@ async fn new_agent(
         "NEW CONVERSATION",
         &ai::conversation_entry(name, settings, language),
     );
+    let country = settings.country.clone();
     let settings = ai::agent_settings(settings, language);
     let agent = match conversation {
         Some(conversation) => {
@@ -1304,7 +1307,7 @@ async fn new_agent(
         }
         None => Agent::new(provider, state.session.clone(), settings),
     };
-    Ok(agent.with_log(log))
+    Ok(agent.with_country(country).with_log(log))
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current.
@@ -1538,6 +1541,7 @@ async fn run_turn<R: Runtime>(
                             | AgentEvent::Done { .. }
                             | AgentEvent::Stopped { .. }
                             | AgentEvent::AwaitingApproval { .. }
+                            | AgentEvent::Question { .. }
                             | AgentEvent::Refused { .. }
                     )
                 {
