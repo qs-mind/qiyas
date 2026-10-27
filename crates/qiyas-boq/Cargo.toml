@@ -1,4 +1,6 @@
 [package]
+# Tests are listed below: one binary for all, see tests/all.rs.
+autotests = false
 name = "qiyas-boq"
 version.workspace = true
 edition.workspace = true
@@ -20,3 +22,7 @@ quick-xml = "0.41.0"
 [dev-dependencies]
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

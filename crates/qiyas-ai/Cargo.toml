@@ -1,4 +1,6 @@
 [package]
+# Tests are listed below: one binary for all, see tests/all.rs.
+autotests = false
 name = "qiyas-ai"
 version.workspace = true
 edition.workspace = true
@@ -46,3 +48,15 @@ rust_xlsxwriter.workspace = true
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
 rmcp = { version = "3.5", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[[test]]
+name = "clinic_performance"
+path = "tests/clinic_performance.rs"
+
+[[test]]
+name = "villa_openings"
+path = "tests/villa_openings.rs"

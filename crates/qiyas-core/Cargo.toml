@@ -1,4 +1,6 @@
 [package]
+# Tests are listed below: one binary for all, see tests/all.rs.
+autotests = false
 name = "qiyas-core"
 version.workspace = true
 edition.workspace = true
@@ -39,3 +41,7 @@ qiyas-render = { path = "../qiyas-render" }
 
 [features]
 fixtures = []
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

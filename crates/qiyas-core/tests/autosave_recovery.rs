@@ -64,11 +64,20 @@ fn crash_copies(dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The test's name as the test binary knows it: its module path without the binary's name
+/// (all the tests run in one binary, see tests/all.rs).
+fn test_path(name: &str) -> String {
+    match module_path!().split_once("::") {
+        Some((_, module)) => format!("{module}::{name}"),
+        None => name.to_owned(),
+    }
+}
+
 /// This test binary run again as a child process; `drawing` set makes it `recovery_child`'s.
 fn child(drawing: Option<&Path>) -> Process {
     let mut p = Process::new(std::env::current_exe().unwrap());
     p.args([
-        "recovery_child",
+        test_path("recovery_child").as_str(),
         "--exact",
         "--nocapture",
         "--test-threads=1",

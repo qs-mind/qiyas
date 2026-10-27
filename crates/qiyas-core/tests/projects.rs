@@ -13,13 +13,25 @@ fn isolated(name: &str) -> Option<PathBuf> {
     }
     let home = tempfile::tempdir().unwrap();
     let result = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", name, "--nocapture"])
+        .args(["--exact", &test_path(name), "--nocapture"])
         .env("QIYAS_PROJECT_CHILD", name)
         .env("QIYAS_HOME", home.path())
-        .status()
+        .output()
         .unwrap();
-    assert!(result.success());
+    let out = String::from_utf8_lossy(&result.stdout);
+    assert!(result.status.success(), "{out}");
+    // A wrong name runs no test and still succeeds; the child must have run this one.
+    assert!(out.contains("1 passed"), "the child ran no test:\n{out}");
     None
+}
+
+/// The test's name as the test binary knows it: its module path without the binary's name
+/// (all the tests run in one binary, see tests/all.rs).
+fn test_path(name: &str) -> String {
+    match module_path!().split_once("::") {
+        Some((_, module)) => format!("{module}::{name}"),
+        None => name.to_owned(),
+    }
 }
 fn command(session: &mut Session, value: Value) -> Value {
     let Outcome::Project { result } = session.run_input(&value, Source::Ai).unwrap().outcome else {

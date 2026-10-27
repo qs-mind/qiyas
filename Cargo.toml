@@ -37,11 +37,17 @@ rustybuzz = "0.20"
 ab_glyph = "0.2"
 unicode-bidi = "0.3"
 
+# Debug info: line tables only for our crates (panics and backtraces keep file and line), none for
+# dependencies. Full debug info made each test binary about 1 GB and most of the link time.
+[profile.dev]
+debug = "line-tables-only"
+
 # Dependencies (the DWG reader above all) and the two hot crates that flatten and batch the
 # drawing are optimised in dev builds too, so `pnpm tauri dev` draws big drawings in about a second
 # instead of 20 s. Quantity evaluation and expressions use the same optimisation level.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 [profile.dev.package.qiyas-geom]
 opt-level = 3
