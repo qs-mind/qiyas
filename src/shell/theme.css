@@ -728,7 +728,7 @@ body {
 
 /* Left column: the layers, then the properties of the picked entity. */
 .left {
-  width: var(--left-w, 220px);
+  width: var(--left-w, 260px);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -791,6 +791,16 @@ body {
 }
 .layer-row.dim .name {
   color: var(--muted);
+}
+/* A layer's whole name is readable (note 18, "A-GF-…" before): it wraps at any character rather
+   than being cut, and the full name is also its tooltip. */
+.layer-row .name {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-block: 4px;
+  line-height: 1.25;
 }
 .layer-group {
   font-weight: 600;

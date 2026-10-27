@@ -419,3 +419,16 @@ test("folders are an explicit choice and Arabic reverses the expand and collapse
   document.documentElement.lang = "en";
   document.documentElement.dir = "ltr";
 });
+
+test("a long layer name is shown whole (it wraps) and is its own tooltip, not cut to 'A-GF-…' (note 18)", async () => {
+  const css = (await import("./theme.css?raw")).default;
+  const long = "A-GF-WALL-EXTR-FINISH-PLASTER-PAINT";
+  render(<LayersPanel layers={[layer(long)]} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
+  const name = document.querySelector<HTMLElement>(".layer-row .name")!;
+  expect(name.textContent).toBe(long);
+  expect(name.getAttribute("title")).toBe(long);
+  const rule = /\.layer-row \.name \{([^}]*)\}/.exec(css)![1];
+  expect(rule).toContain("white-space: normal");
+  expect(rule).toContain("overflow-wrap: anywhere");
+  expect(rule).not.toContain("ellipsis");
+});

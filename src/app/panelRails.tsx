@@ -14,7 +14,7 @@ const WIDTH_KEY = "qiyas.panels.width";
 
 /** Each panel's width in CSS pixels: the default, the narrowest and the widest it can be. */
 export const PANEL_WIDTH: Record<WidthSlot, { initial: number; min: number; max: number }> = {
-  left: { initial: 220, min: 180, max: 480 },
+  left: { initial: 260, min: 200, max: 480 },
   right: { initial: 440, min: 300, max: 760 },
   rightWide: { initial: 672, min: 360, max: 1000 },
 };

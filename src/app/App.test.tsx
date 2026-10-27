@@ -937,9 +937,9 @@ test("the side panels fold away behind their handles, resize, and the choice com
   expect(again.classList.contains("left-off")).toBe(false);
   expect(again.classList.contains("right-off")).toBe(true);
   // The handle resizes the panel it stands beside.
-  expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("220px");
+  expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("260px");
   fireEvent.keyDown(screen.getByRole("separator", { name: en["panels.resize.left"] }), { key: "ArrowRight" });
-  expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("236px");
+  expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("276px");
   // An output in the column (the BOQ) keeps its own, wider width.
   expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("440px");
   await openOutput(en["outputs.boq"]);
