@@ -15,10 +15,14 @@ pub(crate) struct PlanWatch {
     plan: Option<Plan>,
     pub(crate) mutations: usize,
     refusals: usize,
+    /// The plan is this turn's work: it was posted or updated this turn, or the user said to
+    /// continue it. An old plan left open does not hold a later question ("what is the area?").
+    armed: bool,
 }
 
 impl PlanWatch {
     pub(crate) fn update(&mut self, plan: Plan) {
+        self.armed = true;
         if self.plan.as_ref() != Some(&plan) {
             self.mutations = 0;
             self.refusals = 0;
@@ -54,6 +58,12 @@ impl PlanWatch {
     /// A new user message starts again: the refusals were about the last one.
     pub(crate) fn new_turn(&mut self) {
         self.refusals = 0;
+        self.armed = false;
+    }
+
+    /// The user asked to continue the open plan: it is this turn's work again.
+    pub(crate) fn arm(&mut self) {
+        self.armed = true;
     }
 
     /// The finish gate. `Some(advice)` refuses ending the work while plan phases are open,
@@ -61,7 +71,7 @@ impl PlanWatch {
     /// times (then it must end honestly). Real limits (budget, provider, cancel) never come here.
     pub(crate) fn finish_gate(&mut self, user_stopped: bool, lang: Lang) -> Option<Value> {
         let open = self.open_phases();
-        if open.is_empty() || user_stopped || self.refusals >= MAX_REFUSALS {
+        if !self.armed || open.is_empty() || user_stopped || self.refusals >= MAX_REFUSALS {
             return None;
         }
         let list = open
@@ -144,7 +154,21 @@ mod tests {
             "two refusals are enough"
         );
         watch.new_turn();
-        assert!(watch.finish_gate(false, Lang::En).is_some());
+        assert!(
+            watch.finish_gate(false, Lang::En).is_none(),
+            "an old open plan does not hold a later question"
+        );
+        watch.arm();
+        assert!(
+            watch.finish_gate(false, Lang::En).is_some(),
+            "continue makes it this turn's work"
+        );
+        watch.new_turn();
+        watch.update(plan("done", "pending"));
+        assert!(
+            watch.finish_gate(false, Lang::En).is_some(),
+            "a plan posted this turn"
+        );
         watch.update(plan("done", "skipped"));
         assert!(
             watch.finish_gate(false, Lang::En).is_none(),

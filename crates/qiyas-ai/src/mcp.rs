@@ -534,6 +534,9 @@ impl Qiyas {
                 watch.update(surface::read_plan(
                     &surface::args_of(input).map_err(ToolError::BadInput)?,
                 )?);
+            } else if name == surface::EXECUTE && input["op"] == "finish" {
+                // A finished job: the next request starts afresh, as a new user turn does.
+                watch.new_turn();
             } else if surface::mutating(name, input) && before != after {
                 watch.changed();
                 self.brief_watch

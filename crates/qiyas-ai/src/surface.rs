@@ -2121,7 +2121,12 @@ fn quantity_gate(session: &Session, file: &str) -> Result<Option<Value>, ToolErr
         return Ok(None);
     }
     let found = json!({"measurement_errors":errors,"unmatched_schedule_rows":unmatched});
-    if file.to_lowercase().contains("draft") {
+    // The file's own name says DRAFT, not a folder such as Drafts/.
+    let name = std::path::Path::new(file)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if name.contains("draft") {
         return Ok(Some(found));
     }
     Err(ToolError::Structured {

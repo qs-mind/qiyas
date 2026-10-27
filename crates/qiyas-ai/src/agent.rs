@@ -867,6 +867,7 @@ impl Agent {
             content.push(ContentBlock::Text { text: user_text });
         }
         if judgement::wants_to_continue(&self.turn_text) {
+            self.plan_watch.arm();
             let open: Vec<String> = self
                 .plan_watch
                 .open_phases()

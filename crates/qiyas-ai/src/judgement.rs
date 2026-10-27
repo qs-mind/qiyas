@@ -169,15 +169,22 @@ pub fn wants_to_continue(text: &str) -> bool {
     carry_on
         || everything
         || (has(&["assumptions", "assumption", "افتراضاتك", "افتراضات"])
-            && has(&["apply", "use", "your", "all", "طبق", "اعتمد", "كل"]))
+            && has(&["apply", "use", "طبق", "اعتمد", "استخدم"])
+            && !is_question(text))
         || (has(&["go"]) && has(&["ahead", "on"]))
         || (has(&["decide"]) && has(&["you", "yourself"]))
 }
 
+/// A message that asks something ("is the wall thick enough?", "what are your assumptions?").
+fn is_question(text: &str) -> bool {
+    text.trim_end().ends_with(['?', '؟'])
+}
+
 /// The user told Mizan to stop: the one case where an unfinished plan may be left as it is.
+/// "Don't stop", "ولا توقف", a question ("thick enough?") or a noun ("bus stop") is not a stop.
 pub fn wants_to_stop(text: &str) -> bool {
     let words = words(text);
-    if words.len() > 14 {
+    if words.len() > 14 || is_question(text) || wants_to_continue(text) {
         return false;
     }
     let lower = text.to_lowercase();
@@ -195,8 +202,8 @@ pub fn wants_to_stop(text: &str) -> bool {
     ]
     .iter()
     .any(|p| lower.contains(p))
-        || words.iter().any(|w| {
-            matches!(
+        || words.iter().enumerate().any(|(i, w)| {
+            let stop_word = matches!(
                 w.as_str(),
                 "stop"
                     | "cancel"
@@ -209,7 +216,50 @@ pub fn wants_to_stop(text: &str) -> bool {
                     | "أوقف"
                     | "اوقف"
                     | "كفى"
-            )
+            );
+            let before = |k: usize| i.checked_sub(k).map(|j| words[j].as_str());
+            let negated = [before(1), before(2)].into_iter().flatten().any(|b| {
+                matches!(
+                    b,
+                    "don't"
+                        | "dont"
+                        | "not"
+                        | "never"
+                        | "no"
+                        | "without"
+                        | "لا"
+                        | "ولا"
+                        | "ما"
+                        | "متوقفش"
+                        | "مش"
+                )
+            });
+            // A command: the message's first or last word, or next to a word that makes it one
+            // ("please stop", "stop here"); "bus stop shelter" is a noun.
+            let after = words.get(i + 1).map(String::as_str);
+            let command = i == 0
+                || i + 1 == words.len()
+                || before(1).is_some_and(|b| {
+                    matches!(b, "please" | "ok" | "okay" | "now" | "خلاص" | "طيب" | "تمام")
+                })
+                || after.is_some_and(|a| {
+                    matches!(
+                        a,
+                        "here"
+                            | "now"
+                            | "there"
+                            | "working"
+                            | "it"
+                            | "that"
+                            | "this"
+                            | "هنا"
+                            | "كده"
+                            | "كدا"
+                            | "الشغل"
+                            | "دلوقتي"
+                    )
+                });
+            stop_word && command && !negated
         })
 }
 
@@ -252,6 +302,11 @@ pub fn language_mismatch(answer: &str, expected: Lang) -> bool {
 
 pub fn language(text: &str, fallback: Lang) -> Lang {
     let (arabic, latin) = letters(text);
+    // "1a, 2b", "ok", "Egypt", "continue": an option code or a word or two in Latin letters
+    // answers inside the chat's language; it does not switch the conversation to English.
+    if arabic == 0 && text.split_whitespace().count() <= 2 {
+        return fallback;
+    }
     if arabic > 0 && arabic * 2 >= latin {
         Lang::Ar
     } else if latin > 0 {
@@ -354,8 +409,24 @@ mod tests {
         ] {
             assert!(wants_to_stop(text), "{text}");
         }
-        for text in ["Continue and complete everything !", "Egypt", "Build a bus stop shelter drawing with the full detailed dimension set for every wall and window"] {
+        for text in ["Continue and complete everything !", "Egypt", "Build a bus stop shelter drawing with the full detailed dimension set for every wall and window",
+            "Continue and don't stop until everything is done", "ولا توقف", "add a bus stop shelter", "is the wall thick enough?", "Do not stop"] {
             assert!(!wants_to_stop(text), "{text}");
+        }
+        // Asking about the assumptions is not an order to apply them.
+        for text in [
+            "What are your assumptions?",
+            "list all your assumptions",
+            "ايه افتراضاتك؟",
+        ] {
+            assert!(!wants_to_continue(text), "{text}");
+        }
+        for text in [
+            "apply all your assumptions",
+            "Use your assumptions",
+            "طبق افتراضاتك",
+        ] {
+            assert!(wants_to_continue(text), "{text}");
         }
         // Continue keeps the job the conversation was doing.
         assert_eq!(
@@ -436,5 +507,14 @@ mod tests {
                 &json!({"op":"run","args":{"command":command}})
             ));
         }
+    }
+
+    #[test]
+    fn a_short_latin_answer_keeps_the_chats_language() {
+        for text in ["1a, 2b", "ok", "Egypt", "continue", "1a"] {
+            assert_eq!(language(text, Lang::Ar), Lang::Ar, "{text}");
+        }
+        assert_eq!(language("Draw a wall", Lang::Ar), Lang::En);
+        assert_eq!(language("ارسم حائط", Lang::En), Lang::Ar);
     }
 }
