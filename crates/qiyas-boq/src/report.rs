@@ -64,6 +64,7 @@ pub fn export_conflicts(path: &Path, conflicts: &[Conflict]) -> Result<(), BoqEr
         sheet.write_string(row, 11, &c.id)?;
     }
 
+    sheet.write_string_with_format(conflicts.len() as u32 + 2, 0, "Status: For review", &bold)?;
     sheet.set_column_hidden(11)?;
     for column in [3, 4, 10] {
         sheet.set_column_format(column, &Format::new().set_text_wrap())?;

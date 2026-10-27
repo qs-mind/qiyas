@@ -88,19 +88,50 @@ fn export_is_readable_by_calamine() {
     // A blank row, then the totals block.
     assert!(sheet.get((4, 0)).is_none_or(|d| *d == Data::Empty));
     assert_eq!(sheet.get((5, 0)), Some(&Data::String("Kind".into())));
-    assert_eq!(sheet.get((6, 3)), Some(&Data::Float(12.0)));
-    assert_eq!(sheet.get((8, 3)), Some(&Data::Float(3.0)));
+    assert_eq!(sheet.get((6, 4)), Some(&Data::Float(12.0)));
+    assert_eq!(sheet.get((8, 4)), Some(&Data::Float(3.0)));
+    // Every output says it is not approved.
+    assert!((0..sheet.height()).any(|r| {
+        sheet
+            .get((r, 0))
+            .is_some_and(|d| d.to_string() == "Status: For review")
+    }));
 
     let totals = book.worksheet_range("Totals").unwrap();
-    let header: Vec<_> = (0..4)
+    let header: Vec<_> = (0..5)
         .map(|c| totals.get((0, c)).unwrap().to_string())
         .collect();
-    assert_eq!(header, ["Kind", "Unit", "Count", "Sum"]);
+    assert_eq!(header, ["Kind", "Unit", "Item", "Count", "Sum"]);
     assert_eq!(totals.get((1, 0)), Some(&Data::String("area".into())));
-    assert_eq!(totals.get((1, 2)), Some(&Data::Float(1.0)));
-    assert_eq!(totals.get((2, 3)), Some(&Data::Float(7.0)));
+    assert_eq!(totals.get((1, 2)), Some(&Data::String("Slab".into())));
+    assert_eq!(totals.get((1, 3)), Some(&Data::Float(1.0)));
+    assert_eq!(totals.get((2, 4)), Some(&Data::Float(7.0)));
     assert_eq!(totals.get((3, 0)), Some(&Data::String("count".into())));
-    assert_eq!(totals.get((3, 3)), Some(&Data::Float(3.0)));
+    assert_eq!(totals.get((3, 4)), Some(&Data::Float(3.0)));
+}
+
+#[test]
+fn the_totals_sheet_adds_like_with_like_and_never_floor_tiles_to_a_ceiling() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("like.xlsx");
+    let mut takeoff = Takeoff::default();
+    // Floor tiles measured in two pieces, and a ceiling: all m².
+    takeoff.add(item(Kind::Area, 40.0, "Floor tiles"));
+    takeoff.add(item(Kind::Area, 60.0, "Floor tiles"));
+    takeoff.add(item(Kind::Area, 100.0, "Ceiling"));
+    qiyas_boq::export_takeoff(&path, &takeoff.items, &takeoff.totals(), "like").unwrap();
+    let mut book: Xlsx<_> = open_workbook(&path).unwrap();
+    let totals = book.worksheet_range("Totals").unwrap();
+    // One row per item: the two floor pieces add to 100 (count 2); the ceiling is its own row.
+    assert_eq!(totals.get((1, 2)), Some(&Data::String("Floor tiles".into())));
+    assert_eq!(totals.get((1, 3)), Some(&Data::Float(2.0)));
+    assert_eq!(totals.get((1, 4)), Some(&Data::Float(100.0)));
+    assert_eq!(totals.get((2, 2)), Some(&Data::String("Ceiling".into())));
+    assert_eq!(totals.get((2, 4)), Some(&Data::Float(100.0)));
+    // No row adds the two items together (200 m²).
+    for r in 0..totals.height() {
+        assert_ne!(totals.get((r, 4)), Some(&Data::Float(200.0)), "row {r}");
+    }
 }
 
 #[test]

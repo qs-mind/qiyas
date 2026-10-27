@@ -41,6 +41,7 @@ pub fn complete(outcome: &Outcome) -> Result<(), String> {
 fn excel(path: &Path, report: &Report) -> Result<(), String> {
     let save = || -> Result<(), crate::BoqError> {
         let mut book = Workbook::new();
+        book.set_properties(&rust_xlsxwriter::DocProperties::new().set_status("For review"));
         let sheet = book.add_worksheet().set_name("Report")?;
         if report.language == Language::Ar {
             sheet.set_right_to_left(true);
@@ -70,9 +71,10 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
             0.,
         );
         sheet.set_print_scale(100).set_print_fit_to_pages(1, 0);
-        let rows = report
+        let mut rows = report
             .table()
             .map_err(|e| crate::BoqError::Xlsx(e.to_string()))?;
+        rows.push(report.status_row());
         let band = bold
             .clone()
             .set_font_size(report.layout.page.font_size + 1.)

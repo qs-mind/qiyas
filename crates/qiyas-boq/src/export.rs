@@ -46,11 +46,14 @@ const ITEM_HEADER: [&str; 11] = [
     "Measurement basis",
     "Count scope",
 ];
-const TOTAL_HEADER: [&str; 4] = ["Kind", "Unit", "Count", "Sum"];
+const TOTAL_HEADER: [&str; 5] = ["Kind", "Unit", "Item", "Count", "Sum"];
+/// Every output Qiyas makes says it is not approved.
+const STATUS: &str = "Status: For review";
 
-/// Writes `items` and `totals` to the workbook at `path`. Sheet "Take-off" has one row per item,
-/// a blank row, then the totals; sheet "Totals" has the totals alone. `title` becomes the
-/// workbook's document title.
+/// Writes `items` to the workbook at `path`. Sheet "Take-off" has one row per item, a blank row,
+/// then the totals; sheet "Totals" has the totals alone. A total adds like with like (one item of
+/// one kind and unit), so the `totals` of the whole take-off, which add different items, are not
+/// written. `title` becomes the workbook's document title.
 pub fn export_takeoff(
     path: &Path,
     items: &[Measurement],
@@ -75,13 +78,14 @@ pub fn export_takeoff_with_report(
 pub fn export_takeoff_with_queries(
     path: &Path,
     items: &[Measurement],
-    totals: &[Total],
+    _totals: &[Total],
     title: &str,
     report: &qiyas_core::measurement::MeasurementReport,
     queries: &[qiyas_core::Conflict],
 ) -> Result<(), BoqError> {
+    let totals = item_totals(items);
     let mut book = Workbook::new();
-    book.set_properties(&DocProperties::new().set_title(title));
+    book.set_properties(&DocProperties::new().set_title(title).set_status("For review"));
     let bold = Format::new().set_bold();
 
     let sheet = book.add_worksheet().set_name("Take-off")?;
@@ -117,19 +121,22 @@ pub fn export_takeoff_with_queries(
         sheet.write_string(row, 10, m.count_scope.as_deref().unwrap_or("unspecified"))?;
         row += 1;
     }
-    write_totals(sheet, row + 1, totals, &bold)?;
+    write_totals(sheet, row + 1, &totals, &bold)?;
+    let status_row = row + totals.len() as u32 + 3;
+    sheet.write_string_with_format(status_row, 0, STATUS, &bold)?;
     for column in 7..ITEM_HEADER.len() as u16 {
         sheet.set_column_hidden(column)?;
     }
     sheet.set_column_format(0, &Format::new().set_text_wrap())?;
     sheet.set_column_format(6, &Format::new().set_text_wrap())?;
-    sheet.set_print_area(0, 0, row + totals.len() as u32 + 2, 6)?;
+    sheet.set_print_area(0, 0, status_row, 6)?;
 
     let sheet = book.add_worksheet().set_name("Totals")?;
     for col in 0..TOTAL_HEADER.len() as u16 {
         sheet.set_column_width(col, 12)?;
     }
-    write_totals(sheet, 0, totals, &bold)?;
+    write_totals(sheet, 0, &totals, &bold)?;
+    sheet.write_string_with_format(totals.len() as u32 + 2, 0, STATUS, &bold)?;
 
     crate::dimensions::write(&mut book, report)?;
     crate::queries::write(&mut book, queries)?;
@@ -189,19 +196,54 @@ fn plain_decimal(s: &str) -> Option<f64> {
     s.parse().ok()
 }
 
+/// One item's total: its rows of one kind and unit, added. Different items are never added
+/// together, even in the same unit (floor tiles and ceiling are both m²).
+struct ItemTotal {
+    kind: Kind,
+    unit: String,
+    item: String,
+    count: usize,
+    sum: f64,
+}
+
+/// Totals by kind, unit and description, in order of first appearance; only available rows.
+fn item_totals(items: &[Measurement]) -> Vec<ItemTotal> {
+    let mut totals: Vec<ItemTotal> = Vec::new();
+    for m in items.iter().filter(|m| m.available()) {
+        match totals
+            .iter_mut()
+            .find(|t| t.kind == m.kind && t.unit == m.unit && t.item == m.description)
+        {
+            Some(t) => {
+                t.count += 1;
+                t.sum += m.shown;
+            }
+            None => totals.push(ItemTotal {
+                kind: m.kind,
+                unit: m.unit.clone(),
+                item: m.description.clone(),
+                count: 1,
+                sum: m.shown,
+            }),
+        }
+    }
+    totals
+}
+
 /// Writes the totals header at `row` and one row per total below it.
 fn write_totals(
     sheet: &mut Worksheet,
     row: RowNum,
-    totals: &[Total],
+    totals: &[ItemTotal],
     bold: &Format,
 ) -> Result<(), XlsxError> {
     sheet.write_row_with_format(row, 0, TOTAL_HEADER, bold)?;
     for (t, row) in totals.iter().zip(row + 1..) {
         sheet.write_string(row, 0, kind_name(t.kind))?;
         sheet.write_string(row, 1, display_unit(&t.unit))?;
-        sheet.write_number(row, 2, t.count as f64)?;
-        sheet.write_number_with_format(row, 3, t.sum, &qty(t.kind))?;
+        sheet.write_string(row, 2, &t.item)?;
+        sheet.write_number(row, 3, t.count as f64)?;
+        sheet.write_number_with_format(row, 4, t.sum, &qty(t.kind))?;
     }
     Ok(())
 }

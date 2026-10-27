@@ -183,3 +183,71 @@ fn the_boq_is_itemised_by_size_in_sections_with_no_cross_item_total() {
         "{words}"
     );
 }
+
+#[test]
+fn every_output_says_it_is_for_review() {
+    let (dir, s) = villa();
+    // The BOQ and the dimension sheets, in Excel, in both languages.
+    for (language, status) in [
+        (Language::En, "Status: For review"),
+        (Language::Ar, "الحالة: للمراجعة"),
+    ] {
+        for kind in [Kind::Boq, Kind::Dimensions] {
+            let report = deliverables::drawing(&s, kind, language, None).unwrap();
+            let path = dir.path().join(format!("status-{kind:?}-{language:?}.xlsx"));
+            qiyas_boq::deliverables::write(&Export {
+                path: path.clone(),
+                format: Format::Excel,
+                report,
+            })
+            .unwrap();
+            let visible = visible_text(&path);
+            assert!(
+                visible[0].1.lines().any(|cell| cell == status),
+                "{kind:?} {language:?}: {}",
+                visible[0].1
+            );
+        }
+    }
+    // The PDFs.
+    for kind in [Kind::Boq, Kind::Dimensions] {
+        let report = deliverables::drawing(&s, kind, Language::En, None).unwrap();
+        let pdf = dir.path().join(format!("status-{kind:?}.pdf"));
+        qiyas_boq::deliverables::write(&Export {
+            path: pdf.clone(),
+            format: Format::Pdf,
+            report,
+        })
+        .unwrap();
+        let out = std::process::Command::new("pdftotext")
+            .arg(&pdf)
+            .arg("-")
+            .output()
+            .unwrap();
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("For review"), "{kind:?}: {text}");
+    }
+    // The take-off workbook and the conflicts workbook.
+    let takeoff = dir.path().join("status-takeoff.xlsx");
+    qiyas_boq::export_takeoff_with_queries(
+        &takeoff,
+        &s.takeoff.items,
+        &s.takeoff.totals(),
+        "villa",
+        &s.measurement_report().unwrap(),
+        &s.conflicts,
+    )
+    .unwrap();
+    let visible = visible_text(&takeoff);
+    assert!(
+        visible
+            .iter()
+            .any(|(name, text)| name == "Take-off" && text.contains("Status: For review")),
+        "{visible:?}"
+    );
+    let conflicts = dir.path().join("status-conflicts.xlsx");
+    qiyas_boq::report::export_conflicts(&conflicts, &[]).unwrap();
+    assert!(visible_text(&conflicts)
+        .iter()
+        .any(|(_, text)| text.contains("Status: For review")));
+}

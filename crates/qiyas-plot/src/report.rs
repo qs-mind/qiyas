@@ -51,8 +51,22 @@ fn wrap(engine: &mut TextEngine, chain: &[u16], text: &str, width: f64, size: f6
     }
     lines
 }
+/// A cell that is a number reads in Arabic digits in an Arabic report.
+fn arabic_number(text: &str, language: Language) -> String {
+    if language != Language::Ar || text.parse::<f64>().is_err() {
+        return text.to_string();
+    }
+    text.chars()
+        .map(|c| match c {
+            '0'..='9' => char::from_u32('٠' as u32 + c as u32 - '0' as u32).unwrap_or(c),
+            '.' => '٫',
+            other => other,
+        })
+        .collect()
+}
 pub fn write(path: &Path, report: &Report) -> Result<(), String> {
-    let rows = report.table().map_err(|e| e.to_string())?;
+    let mut rows = report.table().map_err(|e| e.to_string())?;
+    rows.push(report.status_row());
     let page = &report.layout.page;
     let (width, height, margin) = (
         page.width_mm * crate::PT_PER_MM,
@@ -88,7 +102,7 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
                 wrap(
                     &mut engine,
                     &chain,
-                    &display(v),
+                    &arabic_number(&display(v), report.language),
                     if wide { available - 6. } else { widths[i] - 6. },
                     size,
                 )
