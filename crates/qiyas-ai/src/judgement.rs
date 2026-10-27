@@ -302,9 +302,26 @@ pub fn language_mismatch(answer: &str, expected: Lang) -> bool {
 
 pub fn language(text: &str, fallback: Lang) -> Lang {
     let (arabic, latin) = letters(text);
-    // "1a, 2b", "ok", "Egypt", "continue": an option code or a word or two in Latin letters
-    // answers inside the chat's language; it does not switch the conversation to English.
-    if arabic == 0 && text.split_whitespace().count() <= 2 {
+    // "1a, 2b" (an answer to Mizan's question list), "ok", "continue": these answer inside the
+    // chat's language and do not switch the conversation to English. Prose ("HELLO") does.
+    let tokens: Vec<String> = text
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '،' | ';' | '.' | '!'))
+        .filter(|t| !t.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let option_code = |t: &str| {
+        let digits = t.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+        !digits.is_empty()
+            && digits.chars().all(|c| c.is_ascii_digit())
+            && t.len() - digits.len() <= 1
+    };
+    let neutral = |t: &str| {
+        matches!(
+            t,
+            "ok" | "okay" | "yes" | "no" | "continue" | "go" | "done" | "sure" | "thanks"
+        )
+    };
+    if arabic == 0 && !tokens.is_empty() && tokens.iter().all(|t| option_code(t) || neutral(t)) {
         return fallback;
     }
     if arabic > 0 && arabic * 2 >= latin {
@@ -511,7 +528,7 @@ mod tests {
 
     #[test]
     fn a_short_latin_answer_keeps_the_chats_language() {
-        for text in ["1a, 2b", "ok", "Egypt", "continue", "1a"] {
+        for text in ["1a, 2b", "ok", "continue", "1a", "2"] {
             assert_eq!(language(text, Lang::Ar), Lang::Ar, "{text}");
         }
         assert_eq!(language("Draw a wall", Lang::Ar), Lang::En);
