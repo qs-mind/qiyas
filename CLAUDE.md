@@ -156,6 +156,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 ## Working here
 
 - Use pnpm, not npm.
+- Agent skills live in `.claude/skills/`; every Qiyas job loads the ones its work needs (the map is
+  in `.claude/skills/README.md`: speed, Rust, units, tests, UI, Mizan, security, review).
 - Run `scripts/check.sh` before every commit.
 - `qiyas-render` builds with one codegen unit (`Cargo.toml`): split, the pick index builds about
   4 times slower. `cargo test -p qiyas-render --release pick_index_one_million` guards it.
