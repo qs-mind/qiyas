@@ -1,6 +1,7 @@
 import { hotkeysCoreFeature, selectionFeature, syncDataLoaderFeature } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
-import { memo, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { measureElement, observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { LayerInfo, LayerProp, ViewportInfo } from "../api";
 import { useLanguage, useT } from "../i18n";
 import type { Theme } from "../viewport/gl";
@@ -126,6 +127,16 @@ function LayerProps({ layer, linetypes, onSet, onRename, onDelete }: LayerPropsP
 
 const STORE = "qiyas.layers.collapsed";
 
+/** A row's height before it is measured (a single line); a row with its properties open is taller
+ *  and is measured. */
+const ROW_PX = 28;
+
+/** A box with no layout (jsdom, a hidden panel) measures 0 by 0: keep the size it started with. */
+const observeRect: typeof observeElementRect = (instance, cb) =>
+  observeElementRect(instance, (rect) => {
+    if (rect.width > 0 || rect.height > 0) cb(rect);
+  });
+
 /** The tree's movement keys, which the tree must leave alone while the keyboard is in a layer's
  *  properties: an arrow there moves a drop-down or a caret, not the focus along the rows. Only
  *  `hotkey` and `isEnabled` are ours; what each key does stays the library's. */
@@ -202,8 +213,14 @@ export const LayersPanel = memo(function LayersPanel({
   const tree = useMemo(() => buildLayerTree(layers, folders), [layers, folders]);
   // Kept the same array while nothing changed: the tree takes a new one for a change of state.
   const expanded = useMemo(() => tree.groups.filter((g) => !collapsed.includes(g)), [tree, collapsed]);
+  // Only the rows in view (and a few past them) are in the page: a drawing can have thousands of
+  // layers, and every row is some 25 elements. The tree asks for a row to be scrolled to before it
+  // focuses it (a key moved there), which mounts it.
+  const scroller = useRef<HTMLElement | null>(null);
+  const scrollToRow = useRef<(index: number) => void>(() => {});
   const instance = useTree<LayerNode>({
     rootItemId: ROOT,
+    scrollToItem: (item) => scrollToRow.current(item.getItemMeta().index),
     getItemName: (item) => item.getItemData().name,
     isItemFolder: (item) => item.getItemData().kind === "group",
     dataLoader: {
@@ -236,9 +253,23 @@ export const LayersPanel = memo(function LayersPanel({
   useEffect(() => {
     instance.rebuildTree();
   }, [instance, tree, collapsed]);
+  const items = instance.getItems();
+  const rowIds = items.map((item) => item.getId()).join("\n");
+  const virtual = useVirtualizer({
+    count: items.length,
+    getItemKey: (i) => items[i]?.getId() ?? i,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => ROW_PX,
+    overscan: 12,
+    // The size before the box is measured, and where it never is (no layout in the tests).
+    initialRect: { width: 260, height: 600 },
+    observeElementRect: observeRect,
+    measureElement: (element, entry, instance) => measureElement(element, entry, instance) || ROW_PX,
+  });
+  scrollToRow.current = (index) => virtual.scrollToIndex(index);
 
   /** What one layer's row says and does. */
-  function layerRow(item: ReturnType<typeof instance.getItems>[number], l: LayerInfo) {
+  function layerRow(item: ReturnType<typeof instance.getItems>[number], l: LayerInfo, index: number) {
     // Off and frozen layers stay hidden whatever the user does (the drawing says so).
     const locked = l.off || l.frozen;
     const visible = !locked && !hidden.has(l.name);
@@ -270,7 +301,13 @@ export const LayersPanel = memo(function LayersPanel({
       </button>
     );
     return (
-      <div className={expandedProps ? "layer-node open" : "layer-node"} role="none" key={item.getId()}>
+      <div
+        className={expandedProps ? "layer-node open" : "layer-node"}
+        role="none"
+        key={item.getId()}
+        data-index={index}
+        ref={virtual.measureElement}
+      >
         <div
           {...item.getProps()}
           onFocus={() => item.setFocused()}
@@ -367,38 +404,65 @@ export const LayersPanel = memo(function LayersPanel({
   }
 
   /** A group's row: its name, how many layers it holds, a chevron that turns when it opens. */
-  function groupRow(item: ReturnType<typeof instance.getItems>[number], node: Extract<LayerNode, { kind: "group" }>) {
+  function groupRow(
+    item: ReturnType<typeof instance.getItems>[number],
+    node: Extract<LayerNode, { kind: "group" }>,
+    index: number,
+  ) {
     const isOpen = item.isExpanded();
     return (
-      <div
-        {...item.getProps()}
-        key={item.getId()}
-        onFocus={() => item.setFocused()}
-        className="layer-row layer-group"
-        style={{ "--level": item.getItemMeta().level } as CSSProperties}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true" className={isOpen ? "chevron open" : "chevron"}>
-          <path d="M6 4l4 4-4 4" />
-        </svg>
-        <svg className="folder" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h5l1.5 2h6.5v7h-13Z" /></svg>
-        <span className="name" title={t("layer.folder", { name: node.name })}>
-          <bdi>{node.name}</bdi>
-        </span>
-        <span className="layer-count">{t("layer.count", { n: node.children.length })}</span>
+      <div role="none" className="layer-vrow" key={item.getId()} data-index={index} ref={virtual.measureElement}>
+        <div
+          {...item.getProps()}
+          onFocus={() => item.setFocused()}
+          className="layer-row layer-group"
+          style={{ "--level": item.getItemMeta().level } as CSSProperties}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" className={isOpen ? "chevron open" : "chevron"}>
+            <path d="M6 4l4 4-4 4" />
+          </svg>
+          <svg className="folder" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h5l1.5 2h6.5v7h-13Z" /></svg>
+          <span className="name" title={t("layer.folder", { name: node.name })}>
+            <bdi>{node.name}</bdi>
+          </span>
+          <span className="layer-count">{t("layer.count", { n: node.children.length })}</span>
+        </div>
       </div>
     );
   }
 
-  return (
-    <aside className="layers" aria-busy={busy || undefined} data-layer-state={JSON.stringify({
-      view: folders ? "folders" : "flat", current: current ?? null,
-      selected: selectedItems.map(id => tree.nodes[id]?.name).filter(Boolean),
-      open_properties: open,
-      rows: instance.getItems().map(item => {
-        const node = item.getItemData();
-        return { name: node.name, kind: node.kind, ...(node.kind === "group" ? { expanded: expanded.includes(item.getId()), count: node.children.length } : { hidden: hidden.has(node.layer.name) }) };
+  // What the window reports to Mizan about the panel (`windowState.ts`): every row, not only those
+  // in view. Made when something it says changes, not on every render.
+  const layerState = useMemo(
+    () =>
+      JSON.stringify({
+        view: folders ? "folders" : "flat",
+        current: current ?? null,
+        selected: selectedItems.map((id) => tree.nodes[id]?.name).filter(Boolean),
+        open_properties: open,
+        rows: items.map((item) => {
+          const node = item.getItemData();
+          return {
+            name: node.name,
+            kind: node.kind,
+            ...(node.kind === "group"
+              ? { expanded: expanded.includes(item.getId()), count: node.children.length }
+              : { hidden: hidden.has(node.layer.name) }),
+          };
+        }),
       }),
-    })}>
+    // `items` is a new array each render, and the tree lists the new layers one render after `tree`
+    // changes (`rebuildTree`): what it lists, by id, is a dependency too.
+    [folders, current, selectedItems, open, tree, expanded, hidden, rowIds],
+  );
+  const rows = virtual.getVirtualItems();
+  const containerProps = instance.getContainerProps(t("layers")) as Record<string, unknown> & {
+    ref?: (el: HTMLElement | null) => void;
+  };
+  const { ref: treeRef, ...treeProps } = containerProps;
+
+  return (
+    <aside className="layers" aria-busy={busy || undefined} data-layer-state={layerState}>
       <div className="layers-head">
         <h2 className="heading">{t("layers")}</h2>
         <button type="button" className="link" onClick={onShowAll} disabled={hidden.size === 0 || busy}>
@@ -435,11 +499,26 @@ export const LayersPanel = memo(function LayersPanel({
           </select>
         </label>
       )}
-      <div {...instance.getContainerProps(t("layers"))} className="layer-tree" aria-multiselectable="false">
-        {instance.getItems().map((item) => {
+      <div
+        {...treeProps}
+        ref={(el) => {
+          treeRef?.(el);
+          scroller.current = el;
+        }}
+        className="layer-tree"
+        aria-multiselectable="false"
+      >
+        <div role="none" aria-hidden="true" style={{ height: rows[0]?.start ?? 0 }} />
+        {rows.map((row) => {
+          const item = items[row.index];
           const node = item.getItemData();
-          return node.kind === "group" ? groupRow(item, node) : layerRow(item, node.layer);
+          return node.kind === "group" ? groupRow(item, node, row.index) : layerRow(item, node.layer, row.index);
         })}
+        <div
+          role="none"
+          aria-hidden="true"
+          style={{ height: Math.max(0, virtual.getTotalSize() - (rows[rows.length - 1]?.end ?? 0)) }}
+        />
       </div>
       {(onNewLayer || onLayerStates || onTranslate) && (
         <div className="layers-foot">

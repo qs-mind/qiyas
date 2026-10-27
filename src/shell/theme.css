@@ -4111,3 +4111,6 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .shortcut-row .gesture {
   color: var(--fg);
 }
+
+/* A layers-panel row that holds its own margins, so the virtual list measures its whole height. */
+.layer-vrow { display: flow-root; }

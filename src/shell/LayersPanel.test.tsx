@@ -432,3 +432,21 @@ test("a long layer name is shown whole (it wraps) and is its own tooltip, not cu
   expect(rule).toContain("overflow-wrap: anywhere");
   expect(rule).not.toContain("ellipsis");
 });
+
+test("a drawing with 1,500 layers puts only the rows in view in the page, and Mizan still reads them all", () => {
+  const names = Array.from({ length: 1500 }, (_, i) => `L-${String(i).padStart(4, "0")}`);
+  const { container } = render(
+    <LayersPanel layers={names.map((n) => layer(n))} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />,
+  );
+  // Rows in view and a few past them: not 1,500 rows of some 25 elements each.
+  const rows = screen.getAllByRole("treeitem");
+  expect(rows.length).toBeGreaterThan(10);
+  expect(rows.length).toBeLessThan(60);
+  expect(container.querySelectorAll("*").length).toBeLessThan(2500);
+  expect(rows[0].getAttribute("aria-label")).toBe("L-0000");
+  expect(rows[0].getAttribute("aria-setsize")).toBe("1500");
+  // The window's report of the panel (`windowState.ts`) lists every layer.
+  const state = JSON.parse(container.querySelector("[data-layer-state]")!.getAttribute("data-layer-state")!);
+  expect(state.rows).toHaveLength(1500);
+  expect(state.rows[1499]).toEqual({ name: "L-1499", kind: "layer", hidden: false });
+});
