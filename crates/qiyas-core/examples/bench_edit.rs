@@ -58,7 +58,7 @@ fn main() {
     let centre = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
     let tol = (x1 - x0) / 2000.0;
     session.drafting.osnap = true;
-    let modes = session.drafting.snap_modes.clone();
+    let modes = session.drafting.snap_modes;
     let t = Instant::now();
     let mut found = 0;
     for i in 0..50 {
