@@ -3406,3 +3406,37 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
 - Numbers: no confidence percentage or band anywhere in the window, and no professional body in
   method names or Mizan's words (`shell/methodName.ts`: `plainMethod`, `withoutBody`).
 
+## W2: speed (27 October 2026)
+
+Measurements, the ledger of every attempt and what is still slow: `docs/2026-10-27-qiyas-W2.md`.
+Tools: `bench_gen`, `bench_open`, `bench_edit` (`crates/qiyas-core/examples/`, a 0.5 M and a 2.5 M segment
+drawing: `bench_gen out.dwg 400|2000`), and `scripts/perf/` (the real React app in headless Chromium with the
+W4 stub: `perf.mjs`, `inter.mjs`, `move.mjs`, `renders.mjs`, `split.mjs`, `batch.mjs`; `launch.py` and
+`proxy.mjs` run the real `qiyas-desktop` on a Broadway display, no window on any screen). No `perf` or
+`heaptrack` on the founder's laptop: timers, `/proc` and Chromium's CPU profiler. Check the heat guard's state file
+before a heavy step and never take a timing during a pause.
+
+- `pnpm tauri:fast` runs the debug Rust app on the production bundle (`tauri.fast.conf.json`, `vite preview`
+  on port 1420): the window is 1.5 times faster to start and 2.4 to 3.7 times faster to use than under
+  `pnpm tauri dev`, whose React is the development build with `StrictMode`. No hot reload; the normal
+  command is unchanged.
+- The click index (`PickIndex`, 85% of a batch's cost) is built by the first `pick`, `snap` or window pick of a
+  batch (`Cached::index`), not by `batch()`. Do not call `index()` from the draw path;
+  `tests/pick_index_lazy.rs` fails if a batch builds it.
+- The pointer is not React state (`src/tools/pointer.ts`): `useTool.onMove` writes a `PointerStore`; the
+  status bar follows it (`usePointer`); the app renders on a move only while a tool needs the cursor
+  (`needsPointer` in `useTool`: a snap, points in progress or a tool state). A bare move used to render the
+  whole window. Do not put the cursor, a hover or any per-move value in a hook the app's root calls. The
+  ribbon takes its handlers through `useStableCallbacks` and is `memo`; `Markdown` is `memo`.
+  `tools/pointerMove.test.tsx` counts renders.
+- The layers panel renders only the rows in view (`@tanstack/react-virtual`; headless-tree's `scrollToItem`
+  mounts the row a key moves to). `data-layer-state` (Mizan's `panel_state`) still lists every row and is
+  rebuilt when the rows, the selection, the open groups or `hidden` change. `LayersPanel.test.tsx` has a
+  1,500 layer test.
+- An animation that loops forever may move only `transform`, `opacity` or a stroke offset
+  (`shell/animations.test.ts`): a `box-shadow` ring on one 7 px dot cost 6% of a core. Mizan's mark in the
+  panel heading rests (`MizanMark still`) unless Mizan is working.
+- `public/theme-init.js` (a blocking script in `index.html`) puts `data-theme` on `<html>` before the first
+  paint, so the window's first frame is the theme's own background (`html` in `index.html`). It must choose
+  what `initialTheme` (`app/shared.ts`) chooses: `app/themeInit.test.ts`.
+
