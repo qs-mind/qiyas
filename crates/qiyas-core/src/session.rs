@@ -190,10 +190,20 @@ struct Cached {
     /// The curve tolerance it was flattened within (`screen_tol`).
     tol: f64,
     batch: Batch,
-    index: PickIndex,
+    /// Built on the first pick, snap or window pick, not with the batch: an edit, an undo or a layer
+    /// toggle that is drawn and then not clicked on never pays for it (`Cached::index`).
+    index: std::cell::OnceCell<PickIndex>,
     /// The point entities on the sheet (top level, on shown layers), for node snaps: where, and
     /// their handle. They are not drawn, so the pick index can't find them.
     points: Vec<PointAt>,
+}
+
+impl Cached {
+    /// The click index of `batch`, built the first time it is asked for. It is about 85% of the
+    /// cost of building the batch (0.69 s of 0.82 s on 2.5 million segments).
+    fn index(&self) -> &PickIndex {
+        self.index.get_or_init(|| PickIndex::new(&self.batch))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1168,6 +1178,15 @@ impl Session {
         self.with_cache(None, |cached| cached.batch.clone())
     }
 
+    /// Whether the click index of the batch in hand is built (it is built by the first pick, snap or
+    /// window pick, not by the batch). For the speed guard in `tests/pick_index_lazy.rs`.
+    pub fn pick_index_built(&self) -> bool {
+        self.cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|cached| cached.index.get().is_some())
+    }
+
     /// What the sheet on screen draws, `[[min_x, min_y], [max_x, max_y]]`; zeros when nothing.
     pub(crate) fn sheet_bounds(&self) -> [[f64; 2]; 2] {
         self.with_cache(None, |cached| cached.batch.bounds)
@@ -1332,10 +1351,10 @@ impl Session {
     fn pick_drawn(&self, p: [f64; 2], tol: f64) -> Option<Picked> {
         self.with_cache(None, |cached| {
             let i = match self.locked() {
-                None => cached.index.pick(p, tol)?,
+                None => cached.index().pick(p, tol)?,
                 // While a block is edited in place, the nearest of its entities only.
                 Some(locked) => cached
-                    .index
+                    .index()
                     .near(p, tol, PICK_PAST_LOCKED)
                     .into_iter()
                     .find(|&i| {
@@ -1375,7 +1394,7 @@ impl Session {
                 [s[0], s[1], s[2], s[3]].map(f64::from)
             };
             let near = cached
-                .index
+                .index()
                 .within(bounds[0], bounds[1], usize::MAX, |_| true);
             let mut tops = std::collections::BTreeSet::new();
             if crossing {
@@ -1434,7 +1453,7 @@ impl Session {
                 let s = &batch.segments[4 * i..4 * i + 4];
                 [s[0], s[1], s[2], s[3]].map(f64::from)
             };
-            let near = cached.index.within(lo, hi, usize::MAX, |_| true);
+            let near = cached.index().within(lo, hi, usize::MAX, |_| true);
             let mut tops = std::collections::BTreeSet::new();
             if crossing {
                 for i in near {
@@ -1499,7 +1518,7 @@ impl Session {
     ) -> (Vec<EntityAt>, Vec<PointAt>) {
         self.with_cache(None, |cached| {
             let mut entities: Vec<EntityAt> = Vec::new();
-            for i in cached.index.near(p, tol, max_segments) {
+            for i in cached.index().near(p, tol, max_segments) {
                 let Some(range) = cached.batch.range_of(i) else {
                     continue;
                 };
@@ -1575,7 +1594,7 @@ impl Session {
             })
         };
         if self.sheet.eq_ignore_ascii_case(sheet) {
-            self.with_cache(None, |cached| near(&cached.batch, &cached.index))
+            self.with_cache(None, |cached| near(&cached.batch, cached.index()))
         } else {
             self.with_sheet(sheet, None, |batch| near(batch, &PickIndex::new(batch)))
         }
@@ -2561,7 +2580,7 @@ impl Session {
                 hidden_layers: self.visibility.hidden_layers.clone(),
                 arabic_reversed: self.arabic_reversed,
                 tol: self.screen_tol(),
-                index: PickIndex::new(&batch),
+                index: std::cell::OnceCell::new(),
                 batch,
                 points,
             });
