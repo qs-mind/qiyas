@@ -288,6 +288,28 @@ body {
   width: calc(var(--rb-std-icon) * 0.7);
   height: calc(var(--rb-std-icon) * 0.7);
 }
+/* Collapsing the ribbon (double-click a tab, this arrow, Ctrl+F1): only the tabs' row stays; a tab
+   clicked shows its panel over the drawing for a moment. */
+.ribbon-collapse {
+  align-self: center;
+  margin-inline-start: 4px;
+  color: var(--muted);
+}
+.ribbon-collapse[aria-expanded="true"] .gl {
+  transform: rotate(180deg);
+}
+.ribbon.collapsed .ribbon-panel {
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  z-index: 25;
+  border-bottom: 1px solid var(--rule);
+  box-shadow: 0 10px 24px rgb(14 15 18 / 0.14);
+}
+.ribbon.collapsed .tab-indicator {
+  box-shadow: none;
+}
+
 /* An icon button: standard size, or primary for the headline tools. Its name is its aria-label;
    the tooltip says the rest. */
 .rb {
@@ -925,31 +947,71 @@ button.link {
 }
 
 /* File tabs: one per open drawing, above the drawing. */
+/* The drawings' tabs (design B): flat on the paper, the chosen one underlined, a dot before the
+   name while Mizan works on that drawing, one after it while the drawing is unsaved. */
 .file-tabs {
   display: flex;
-  gap: 2px;
-  padding: 4px 8px 0;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 14px;
   overflow-x: auto;
-  background: var(--panel);
+  scrollbar-width: none;
+  background: var(--bg);
   border-bottom: 1px solid var(--rule);
+}
+.file-tabs::-webkit-scrollbar {
+  display: none;
 }
 .file-tab {
   display: flex;
   align-items: center;
-  border-radius: 6px 6px 0 0;
+  flex: none;
+  height: 32px;
+  margin-inline-end: 14px;
   color: var(--muted);
 }
 .file-tab[data-active] {
-  background: var(--bg);
   color: var(--fg);
-  font-weight: 500;
+  box-shadow: inset 0 -2px 0 var(--fg);
 }
 .file-tab button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   white-space: nowrap;
-  border-radius: 6px 6px 0 0;
+  border-radius: 6px;
+  padding-inline: 6px 4px;
 }
 .file-tab .dirty {
-  color: var(--accent);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg);
+  flex: none;
+}
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.tab-dot.working,
+.tab-dot.queued {
+  background: var(--accent);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+.tab-dot.waiting {
+  background: var(--accent);
+}
+.tab-dot.failed {
+  background: var(--warn);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-dot.working,
+  .tab-dot.queued {
+    animation: none;
+  }
 }
 button.close {
   padding: 0 6px;
@@ -1032,23 +1094,66 @@ button.close {
 }
 
 /* Sheet tabs */
+/* The layout tabs under the drawing. No scrollbar (it lay over the names, note 47): too many tabs
+   fade at the edge that has more, with an arrow there. */
+.sheet-strip {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg);
+  border-top: 1px solid var(--rule);
+}
 .sheet-tabs {
+  flex: 1;
+  min-width: 0;
   display: flex;
   gap: 2px;
   padding: 0 8px;
   overflow-x: auto;
-  background: var(--panel);
-  border-top: 1px solid var(--rule);
+  scrollbar-width: none;
+}
+.sheet-tabs::-webkit-scrollbar {
+  display: none;
+}
+.sheet-strip.more-start .sheet-tabs {
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.sheet-strip.more-end .sheet-tabs {
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+.sheet-strip.more-start.more-end .sheet-tabs {
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+:root[dir="rtl"] .sheet-strip.more-start .sheet-tabs {
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+:root[dir="rtl"] .sheet-strip.more-end .sheet-tabs {
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.sheet-arrow {
+  flex: none;
+  width: 24px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  background: var(--bg);
+}
+.sheet-arrow.start .gl {
+  transform: scaleX(-1);
 }
 .sheet-tabs button {
+  flex: none;
   border-radius: 0 0 6px 6px;
   color: var(--muted);
   white-space: nowrap;
 }
 .sheet-tabs button[aria-selected="true"] {
-  background: var(--bg);
   color: var(--fg);
   font-weight: 500;
+  box-shadow: inset 0 2px 0 var(--fg);
 }
 
 /* Status bar */
@@ -2805,7 +2910,7 @@ span.grid-sort {
   gap: 6px;
   padding: 10px 14px 14px;
   border-top: 1px solid var(--rule);
-  background: var(--panel);
+  background: var(--bg);
 }
 .composer .box {
   display: flex;
@@ -3791,9 +3896,6 @@ code, kbd, .chip { unicode-bidi: isolate; }
 }
 .md h4 { font-feature-settings: "swsh"; }
 
-.workspace-status { margin-inline-start: 0.4rem; color: var(--muted); font-size: 0.65rem; }
-.workspace-status.working, .workspace-status.queued { color: var(--accent); }
-.workspace-status.failed { color: var(--danger); }
 /* The model popover (the small icon in Mizan's box). */
 .model-positioner { z-index: 40; }
 .workspace-picker {
@@ -3809,7 +3911,6 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .workspace-picker fieldset { border: 0; padding: 0.4rem 0 0; margin: 0; display: grid; gap: 0.4rem; }
 .workspace-picker label { display: flex; justify-content: space-between; gap: 0.5rem; }
 
-.workspace-caption { color: var(--muted); font-size: 0.8em; margin-inline-start: 0.5em; }
 
 /* Slash commands: the list above the box, one row each (design B). */
 .slash {

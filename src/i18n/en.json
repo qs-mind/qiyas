@@ -1845,5 +1845,9 @@
   "ai.slash.check.desc": "Check the drawing and fix what is found",
   "ai.slash.check.prompt": "Check the drawing and fix what you find.",
   "ai.slash.new.desc": "Start a new chat",
-  "workspace.model": "Model"
+  "workspace.model": "Model",
+  "ribbon.collapse": "Collapse the ribbon",
+  "ribbon.expand": "Expand the ribbon",
+  "sheets.earlier": "Earlier layouts",
+  "sheets.later": "More layouts"
 }

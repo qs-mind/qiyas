@@ -19,8 +19,8 @@ test("a tab per drawing: the active one selected, a dot while unsaved", () => {
   const tower = screen.getByRole("tab", { name: /tower\.dxf/ });
   expect(villa.getAttribute("aria-selected")).toBe("false");
   expect(tower.getAttribute("aria-selected")).toBe("true");
-  expect(tower.textContent).toContain("•");
-  expect(villa.textContent).not.toContain("•");
+  expect(tower.querySelector(".dirty")).not.toBeNull();
+  expect(villa.querySelector(".dirty")).toBeNull();
   fireEvent.click(villa);
   expect(onSelect).toHaveBeenCalledWith(1);
 });
@@ -73,4 +73,17 @@ test("each drawing exposes its own Mizan status", () => {
   expect(screen.getByLabelText("Mizan is working…")).toBeTruthy();
   expect(screen.getByLabelText("Waiting for a free Mizan slot…")).toBeTruthy();
   expect(screen.getByLabelText("Mizan finished")).toBeTruthy();
+});
+
+test("a drawing Mizan works on has a dot before its name and no words (note 9)", () => {
+  const working: TabInfo[] = [{ ...tabs[0], busy: true, status: "working" }, { ...tabs[1], status: "done" }];
+  render(<FileTabs tabs={working} active={1} onSelect={() => {}} onClose={() => {}} />);
+  const villa = screen.getAllByRole("tab")[0];
+  const children = [...villa.children].map((el) => el.className || el.tagName);
+  expect(children[0]).toBe("tab-dot working");
+  expect(children[1]).toBe("BDI");
+  expect(villa.textContent).toBe("villa.dwg");
+  expect(screen.queryByText(/working/i)).toBeNull();
+  // Done is a still dot; an idle drawing has none.
+  expect(screen.getAllByRole("tab")[1].querySelector(".tab-dot.done")).not.toBeNull();
 });

@@ -681,3 +681,61 @@ test("the quick-access arrows skip a disabled button and mirror in Arabic", () =
     document.documentElement.dir = "ltr";
   }
 });
+
+// Collapsing the ribbon (W4, note 40 interview): double-click a tab; the keyboard keeps working.
+const panel = () => document.querySelector(".ribbon-panel");
+
+test("double-clicking a tab collapses the ribbon to its tabs, and again expands it; the choice is kept", () => {
+  localStorage.removeItem("qiyas.ribbon.collapsed");
+  render(<Ribbon {...props} />);
+  expect(panel()).not.toBeNull();
+  const measure = screen.getByRole("tab", { name: "Measure" });
+  fireEvent.doubleClick(measure);
+  expect(panel()).toBeNull();
+  expect(localStorage.getItem("qiyas.ribbon.collapsed")).toBe("1");
+  expect(document.querySelector(".ribbon")?.classList.contains("collapsed")).toBe(true);
+  fireEvent.doubleClick(measure);
+  expect(panel()).not.toBeNull();
+  expect(localStorage.getItem("qiyas.ribbon.collapsed")).toBe("0");
+});
+
+test("a collapsed ribbon shows a tab's panel when the tab is clicked, and Escape or a click elsewhere puts it away", () => {
+  localStorage.setItem("qiyas.ribbon.collapsed", "1");
+  render(<Ribbon {...props} />);
+  expect(panel()).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Draw" }));
+  expect(panel()).not.toBeNull();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(panel()).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Annotate" }));
+  expect(panel()).not.toBeNull();
+  fireEvent.pointerDown(document.body);
+  expect(panel()).toBeNull();
+  localStorage.removeItem("qiyas.ribbon.collapsed");
+});
+
+test("a tool chosen from the shown panel puts the panel away again", () => {
+  localStorage.setItem("qiyas.ribbon.collapsed", "1");
+  const onTool = vi.fn();
+  render(<Ribbon {...props} onTool={onTool} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Measure" }));
+  fireEvent.click(screen.getByRole("button", { name: "Distance" }));
+  expect(onTool).toHaveBeenCalledWith("distance");
+  expect(panel()).toBeNull();
+  localStorage.removeItem("qiyas.ribbon.collapsed");
+});
+
+test("without a mouse: Ctrl+F1 and the arrow at the row's end collapse and expand", () => {
+  localStorage.removeItem("qiyas.ribbon.collapsed");
+  render(<Ribbon {...props} />);
+  const arrow = screen.getByRole("button", { name: "Collapse the ribbon" });
+  expect(arrow.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(arrow);
+  expect(panel()).toBeNull();
+  expect(screen.getByRole("button", { name: "Expand the ribbon" }).getAttribute("aria-expanded")).toBe("false");
+  fireEvent.keyDown(window, { key: "F1", ctrlKey: true });
+  expect(panel()).not.toBeNull();
+  fireEvent.keyDown(window, { key: "F1", ctrlKey: true });
+  expect(panel()).toBeNull();
+  localStorage.removeItem("qiyas.ribbon.collapsed");
+});

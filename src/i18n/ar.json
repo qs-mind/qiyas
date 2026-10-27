@@ -1845,5 +1845,9 @@
   "ai.slash.check.desc": "فحص الرسم وإصلاح ما يظهر",
   "ai.slash.check.prompt": "افحص الرسم وأصلح ما تجده.",
   "ai.slash.new.desc": "بدء محادثة جديدة",
-  "workspace.model": "النموذج"
+  "workspace.model": "النموذج",
+  "ribbon.collapse": "طيّ الشريط",
+  "ribbon.expand": "فرد الشريط",
+  "sheets.earlier": "التخطيطات السابقة",
+  "sheets.later": "مزيد من التخطيطات"
 }

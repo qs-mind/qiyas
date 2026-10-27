@@ -17,7 +17,8 @@ export function cycleTab(tabs: TabInfo[], active: number | null, step: 1 | -1): 
   return tabs[(at + step + tabs.length) % tabs.length].id;
 }
 
-/** One tab per open drawing, above the drawing: its file name, a dot while it has unsaved changes,
+/** One tab per open drawing, above the drawing, compact: a dot before the name while Mizan works on
+ *  that drawing (animated; no words), the file name, a dot after it while it has unsaved changes,
  *  and × to close it (a middle click closes too). */
 export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
   const t = useT();
@@ -50,14 +51,11 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
             tabIndex={roving.tabIndex(i)}
             onClick={() => onSelect(tab.id)}
           >
-            <bdi>{tab.title}</bdi>
-            {tab.status && tab.status !== "idle" && <span className={`workspace-status ${tab.status}`} title={t(`workspace.${tab.status}`)} aria-label={t(`workspace.${tab.status}`)}>●</span>}
-            {tab.busy && tab.id === active && <small className="workspace-caption" aria-hidden="true">{t(tab.status === "queued" ? "workspace.queued" : "workspace.working")}</small>}
-            {tab.dirty && (
-              <span className="dirty" aria-label={t("tab.unsaved")}>
-                {" •"}
-              </span>
+            {tab.status && tab.status !== "idle" && (
+              <span className={`tab-dot ${tab.status}`} role="img" title={t(`workspace.${tab.status}`)} aria-label={t(`workspace.${tab.status}`)} />
             )}
+            <bdi>{tab.title}</bdi>
+            {tab.dirty && <span className="dirty" role="img" title={t("tab.unsaved")} aria-label={t("tab.unsaved")} />}
           </button>
           <button
             type="button"

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 import type { NamedView, Recent, RibbonButton, RibbonGroup, RibbonLayout } from "../api";
 import { useT } from "../i18n";
 import type { Tool } from "../viewport/Viewport";
+import { Glyph } from "./glyphs";
 import { RecentsMenu } from "./RecentsMenu";
 import { RibbonFlyout } from "./RibbonFlyout";
 import { RibbonIcon } from "./ribbonIcons";
@@ -168,6 +169,19 @@ function actions(props: Props): Record<string, (() => void) | undefined> {
 /** Tabs the tabs' row shows; the others are under "More" (all of them when "More" would hold one). */
 const SHOWN_TABS = 3;
 
+/** The ribbon's collapsed state is kept on this computer. Collapsed, only the tabs' row shows; a tab
+ *  clicked shows its panel over the drawing until something else is done (Esc, a click elsewhere, a
+ *  tool). Double-click a tab, the arrow at the row's end or Ctrl+F1 collapse and expand it. */
+const COLLAPSED_KEY = "qiyas.ribbon.collapsed";
+
+function storedCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** The tab that is the "More" button: it is never the chosen tab itself, but stands for the one
  *  chosen from its menu. */
 const MORE = "\u0000more";
@@ -194,6 +208,20 @@ function RibbonBody(props: Props) {
   const handlers = actions(props);
   /** The flyout open: the key of a group's "⋯" list, or `MORE` for the tabs' menu. */
   const [open, setOpen] = useState<string | null>(null);
+  const [collapsed, setCollapsedNow] = useState(storedCollapsed);
+  /** A collapsed ribbon's panel shown over the drawing for a moment. */
+  const [peek, setPeek] = useState(false);
+  const showPanel = !collapsed || peek;
+  const setCollapsed = (next: boolean) => {
+    setCollapsedNow(next);
+    setPeek(false);
+    setOpen(null);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
+    } catch {
+      // Not kept; it still collapses for this session.
+    }
+  };
 
   // How many buttons each group of the tab on screen shows in this width (`main`, or fewer when
   // the panel would need to scroll), by tab and group.
@@ -211,7 +239,10 @@ function RibbonBody(props: Props) {
       return {
         label: b.label,
         pressed: props.active === name,
-        run: () => props.onTool(props.active === name && name !== "select" ? "select" : name),
+        run: () => {
+          props.onTool(props.active === name && name !== "select" ? "select" : name);
+          if (collapsed) setPeek(false);
+        },
       };
     }
     if (b.kind === "toggle") {
@@ -346,7 +377,28 @@ function RibbonBody(props: Props) {
     const watch = new ResizeObserver(() => setWidth(el.clientWidth));
     watch.observe(el);
     return () => watch.disconnect();
-  }, []);
+  }, [showPanel]);
+
+  // Ctrl+F1 collapses and expands, as in Office; Escape and a click elsewhere put a peeking panel away.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "F1") {
+        e.preventDefault();
+        if (!e.repeat) setCollapsed(!collapsed);
+      } else if (e.key === "Escape" && peek) {
+        setPeek(false);
+      }
+    };
+    const onPointer = (e: PointerEvent) => {
+      if (peek && !(e.target as Element | null)?.closest?.(".ribbon, .rb-flyout-pos, .rb-tooltip")) setPeek(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer);
+    };
+  });
   // Another tab: its flyouts are closed.
   useEffect(() => setOpen(null), [tab?.id]);
 
@@ -426,11 +478,14 @@ function RibbonBody(props: Props) {
   const chosenValue = inMore ? MORE : (tab?.id ?? null);
   return (
     <Tabs.Root
-      className="ribbon"
+      className={collapsed ? "ribbon collapsed" : "ribbon"}
       value={chosenValue}
       onValueChange={(value) => {
         // "More" opens its menu; the tab it stands for is chosen there.
-        if (value !== MORE) setTab(String(value));
+        if (value !== MORE) {
+          setTab(String(value));
+          if (collapsed) setPeek(true);
+        }
       }}
     >
       <div className="ribbon-tabs">
@@ -440,7 +495,15 @@ function RibbonBody(props: Props) {
         </div>
         <Tabs.List className="ribbon-tablist">
           {lead.map((x) => (
-            <Tabs.Tab key={x.id} value={x.id} className="ribbon-tab">
+            <Tabs.Tab
+              key={x.id}
+              value={x.id}
+              className="ribbon-tab"
+              // A tab clicked again while the ribbon is collapsed shows its panel too; two quick
+              // clicks collapse or expand it (Ctrl+F1 and the arrow do the same from the keyboard).
+              onClick={() => collapsed && setPeek(true)}
+              onDoubleClick={() => setCollapsed(!collapsed)}
+            >
               {t(x.label)}
             </Tabs.Tab>
           ))}
@@ -475,8 +538,20 @@ function RibbonBody(props: Props) {
           )}
           <Tabs.Indicator className="tab-indicator" />
         </Tabs.List>
+        <button
+          type="button"
+          className="rb ribbon-collapse"
+          aria-expanded={!collapsed}
+          aria-label={t(collapsed ? "ribbon.expand" : "ribbon.collapse")}
+          title={`${t(collapsed ? "ribbon.expand" : "ribbon.collapse")} (Ctrl+F1)`}
+          onClick={() => setCollapsed(!collapsed)}
+          onKeyDown={ignoreSpace}
+          onKeyUp={ignoreSpace}
+        >
+          <Glyph name="down" size={14} />
+        </button>
       </div>
-      {tab && (
+      {tab && showPanel && (
         <Tabs.Panel value={chosenValue} className="ribbon-panel" ref={panel} tabIndex={-1}>
           {tab.groups.map(groupBox)}
         </Tabs.Panel>
