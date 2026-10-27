@@ -371,7 +371,7 @@ export const AssistantPanel = memo(function AssistantPanel({
       <div className="art-slot" hidden={!shownOutput}>{artifact?.node}</div>
       <div className="chat-slot" hidden={!!shownOutput}>
       <div className="assistant-head">
-        <MizanMark />
+        <MizanMark still={!busy} />
         <span className="chat-title heading">{t("assistant")}</span>
         {history && <ConversationHistory history={history} disabled={busy} />}
         <button

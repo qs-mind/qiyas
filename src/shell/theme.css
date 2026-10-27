@@ -1006,6 +1006,7 @@ button.link {
   flex: none;
 }
 .tab-dot {
+  position: relative;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -1015,7 +1016,7 @@ button.link {
 .tab-dot.working,
 .tab-dot.queued {
   background: var(--accent);
-  animation: dot-pulse 1.5s ease-in-out infinite;
+  animation: dot-beat 1.5s ease-in-out infinite;
 }
 .tab-dot.waiting {
   background: var(--accent);
@@ -1027,6 +1028,10 @@ button.link {
   .tab-dot.working,
   .tab-dot.queued {
     animation: none;
+  }
+  .tab-dot.working::after,
+  .tab-dot.queued::after {
+    display: none;
   }
 }
 button.close {
@@ -2467,7 +2472,8 @@ span.grid-sort {
   flex: none;
 }
 .back-strip i.live {
-  animation: dot-pulse 1.5s ease-in-out infinite;
+  position: relative;
+  animation: dot-beat 1.5s ease-in-out infinite;
 }
 .back-title {
   max-width: 55%;
@@ -2475,20 +2481,45 @@ span.grid-sort {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-@keyframes dot-pulse {
+/* A working dot: it beats and a ring spreads from it. Only transform and opacity move, so the page is
+   not painted again every frame (the ring was a box-shadow: 6% of a core for one 7 px dot). */
+.tab-dot.working::after,
+.tab-dot.queued::after,
+.back-strip i.live::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  box-sizing: border-box;
+  border: 2px solid var(--accent-soft);
+  border-radius: 50%;
+  animation: dot-ring 1.5s ease-in-out infinite;
+}
+@keyframes dot-beat {
   0%,
   100% {
-    box-shadow: 0 0 0 2px var(--accent-soft);
     transform: scale(0.88);
   }
   50% {
-    box-shadow: 0 0 0 5px transparent;
     transform: scale(1);
+  }
+}
+@keyframes dot-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.55);
+    opacity: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .back-strip i.live {
     animation: none;
+  }
+  .back-strip i.live::after {
+    display: none;
   }
 }
 .side .takeoff {
@@ -3815,6 +3846,15 @@ span.grid-sort {
     animation: none;
     opacity: 1;
   }
+}
+/* The mark at rest (the panel's heading while Mizan is not working): drawn, not moving. */
+.mizan-mark.still .mm-pen line {
+  animation: none;
+  stroke-dashoffset: 0;
+}
+.mizan-mark.still .mm-face {
+  animation: none;
+  opacity: 1;
 }
 
 /* The AI model list in the settings: a filter for long lists, the list with its refresh button,

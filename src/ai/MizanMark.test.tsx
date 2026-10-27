@@ -48,3 +48,13 @@ test("the pen draws and wipes; nothing blinks; with reduced motion the mark stan
   expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.mizan-mark \.mm-pen line \{\s*animation: none;\s*stroke-dashoffset: 0;/);
   expect(css).toMatch(/\.mizan-mark \.mm-face \{\s*animation: none;\s*opacity: 1;/);
 });
+
+test("a still mark is the finished drawing with no animation: an idle panel must not restyle sixty lines sixty times a second", () => {
+  const moving = render(<MizanMark />).container.querySelector("svg")!;
+  expect(moving.classList.contains("still")).toBe(false);
+  cleanup();
+  const resting = render(<MizanMark still />).container.querySelector("svg")!;
+  expect(resting.classList.contains("still")).toBe(true);
+  expect(css).toMatch(/\.mizan-mark\.still \.mm-pen line \{[^}]*animation: none;[^}]*stroke-dashoffset: 0;/);
+  expect(css).toMatch(/\.mizan-mark\.still \.mm-face \{[^}]*animation: none;[^}]*opacity: 1;/);
+});

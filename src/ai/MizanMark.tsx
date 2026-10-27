@@ -77,11 +77,22 @@ const SEGMENTS: [number, number, number, number][] = [
 const SPHERE = SEGMENTS.map(([x1, y1, x2, y2]) => `M${x1} ${y1}L${x2} ${y2}`).join("");
 const FACE = "182.68,51.49 206.9,101.48 158.61,79.35";
 
-export function MizanMark({ size = "sm", className }: { size?: "sm" | "md"; className?: string }) {
+/** `still`: the finished mark, no animation. An animated mark is some sixty SVG lines restyled sixty
+ *  times a second for as long as it is on screen (9% of a core idle in Chromium), so it moves only
+ *  while something is being waited for. */
+export function MizanMark({
+  size = "sm",
+  className,
+  still = false,
+}: {
+  size?: "sm" | "md";
+  className?: string;
+  still?: boolean;
+}) {
   const id = useId().replace(/:/g, "");
   return (
     <svg
-      className={["mizan-mark", `mizan-mark-${size}`, className].filter(Boolean).join(" ")}
+      className={["mizan-mark", `mizan-mark-${size}`, still ? "still" : null, className].filter(Boolean).join(" ")}
       viewBox="0 0 240 240"
       aria-hidden="true"
       focusable="false"
