@@ -196,21 +196,21 @@ fn the_opening_schedule_totals_each_kind_and_speaks_arabic_when_asked() {
                 .collect()
         })
         .collect();
+    // An Arabic table reads from the right: the mark column is the rightmost.
     assert_eq!(
         rows[0],
-        ["العلامة", "النوع", "العرض × الارتفاع (مم)", "العدد"]
+        ["العدد", "العرض × الارتفاع (مم)", "النوع", "العلامة"]
     );
-    assert_eq!(rows[1][1], "باب");
-    assert_eq!(rows[1][2], "٩٠٠ × ٢١٠٠");
-    assert_eq!(rows[1][3], "٢");
-    // One total per kind, never one for doors and windows together.
-    let totals: Vec<_> = rows
-        .iter()
-        .filter(|r| r[0].starts_with("المجموع"))
-        .collect();
+    assert_eq!(rows[1][2], "باب");
+    assert_eq!(rows[1][1], "٩٠٠ × ٢١٠٠");
+    assert_eq!(rows[1][0], "٢");
+    // One total per kind, never one for doors and windows together, each a phrase of its own.
+    let totals: Vec<_> = rows.iter().filter(|r| r[3].starts_with("إجمالي")).collect();
     assert_eq!(totals.len(), 2, "{rows:?}");
-    assert_eq!(totals[0][3], "٢");
-    assert_eq!(totals[1][3], "١");
+    assert_eq!(totals[0][3], "إجمالي الأبواب");
+    assert_eq!(totals[0][0], "٢");
+    assert_eq!(totals[1][3], "إجمالي الشبابيك");
+    assert_eq!(totals[1][0], "١");
 }
 
 #[test]
@@ -412,6 +412,22 @@ fn deductions_beyond_a_short_walls_gross_limit_it_to_nothing_and_say_why() {
         assert!(
             warning.contains("gross_volume") && warning.contains("exceed"),
             "{warning}"
+        );
+        // An export of it must be a draft: the check counts it as a measurement error, and the
+        // BOQ row itself says the quantity was limited.
+        let check = s.takeoff_check(0, &[]).unwrap();
+        assert!(
+            check["measurement_errors"].as_u64().unwrap() >= 1,
+            "units {units}: {check}"
+        );
+        assert!(report.items.iter().any(|i| i.limited));
+        let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
+        assert!(
+            boq.rows.iter().any(|r| r["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("quantity limited"))),
+            "{:?}",
+            boq.rows
         );
     }
 }
@@ -660,9 +676,11 @@ fn an_arabic_room_schedule_has_arabic_digits_and_its_unit_only_in_the_heading() 
         let EntityType::Table(t) = s.drawing.doc.get_entity(Handle::new(table)).unwrap() else {
             panic!("table")
         };
-        assert_eq!(t.cell_text(0, 1), Some("المساحة (م²)"), "units {units}");
-        assert_eq!(t.cell_text(1, 1), Some("١٢٫٠٠"), "units {units}");
-        assert_eq!(t.cell_text(2, 1), Some("١٢٫٠٠"));
+        // Right to left: the room name is the rightmost column, the area the one beside it.
+        assert_eq!(t.cell_text(0, 0), Some("المساحة (م²)"), "units {units}");
+        assert_eq!(t.cell_text(0, 1), Some("الغرفة"), "units {units}");
+        assert_eq!(t.cell_text(1, 0), Some("١٢٫٠٠"), "units {units}");
+        assert_eq!(t.cell_text(2, 0), Some("١٢٫٠٠"));
     }
 }
 
@@ -732,4 +750,118 @@ fn schedules_placed_by_themselves_on_a_sheet_stay_on_the_paper_and_clear_of_the_
             seen.push(t);
         }
     }
+}
+
+#[test]
+fn a_total_area_line_is_a_billable_item_and_only_the_flag_or_a_gross_floor_area_is_information() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("tiling.dwg"), 6);
+    fixture::fixture(&mut s);
+    fixture::apply(&mut s, fixture::method("client method", false));
+    let cite = json!({"source":"Test","clause":"1"});
+    for (en, ar) in [
+        ("Total area of tiling", "المساحة الإجمالية للتبليط"),
+        ("Items for information to the client", "بند معلوماتي للعميل"),
+    ] {
+        run(
+            &mut s,
+            json!({"type":"measurement","kind":"set_mappings","mappings":[
+                {"rule":"surface","code":"T-1","description_en":en,"description_ar":ar,"section":"Informational","trade":"","unit":"{unit}","citation":cite}]}),
+        );
+        let measured = s.measurement_report().unwrap();
+        assert!(measured.items.iter().all(|i| !i.informational), "{en}");
+        let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
+        assert!(!boq.rows.is_empty(), "{en} stays in the BOQ");
+    }
+    // The flag still works for any wording.
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_mappings","mappings":[
+            {"rule":"surface","code":"T-1","description_en":"Circulation share","description_ar":"نسبة الممرات","section":"X","trade":"","unit":"{unit}","citation":cite,"informational":true}]}),
+    );
+    assert!(s
+        .measurement_report()
+        .unwrap()
+        .items
+        .iter()
+        .all(|i| i.informational));
+}
+
+#[test]
+fn door_lines_come_from_the_size_whatever_was_made_first_and_roll_up_for_a_client_boq() {
+    let (_dir, mut s) = doors_and_floor(6);
+    let lines = |s: &Session| -> Vec<(String, String, String)> {
+        let mut v: Vec<_> = s
+            .measurement_report()
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| {
+                (
+                    i.code.clone(),
+                    i.description_en.clone(),
+                    i.description_ar.clone(),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let before = lines(&s);
+    assert!(
+        before.iter().any(|l| l.0 == "A-D01-900x2100"
+            && l.1 == "Doors, various sizes — 900 × 2100 mm"
+            && l.2 == "أبواب بمقاسات متنوعة — ٩٠٠ × ٢١٠٠ مم"),
+        "{before:?}"
+    );
+    // A schedule and the tags give every opening a mark: the lines do not change.
+    run(&mut s, json!({"type":"set_sheet","block":"*Paper_Space"}));
+    run(&mut s, json!({"type":"opening_schedule","at":[10,100]}));
+    run(&mut s, json!({"type":"set_sheet","block":"*Model_Space"}));
+    run(
+        &mut s,
+        json!({"type":"object_tags","category":"opening","property":"mark"}),
+    );
+    assert_eq!(lines(&s), before);
+    // A client's single "Doors" row is compared with all the doors (2 + 1), not with each size.
+    let doors = |quantity: f64| {
+        json!({"type":"set_boq","boq":{"source":"client.xlsx","imported":"","items":[
+            {"code":"A-D01","description":"Doors","unit":"pcs","quantity":quantity,"row":1}]}})
+    };
+    run(&mut s, doors(3.0));
+    run(&mut s, json!({"type":"check"}));
+    assert!(
+        s.conflicts
+            .iter()
+            .all(|c| c.boq_code.as_deref() != Some("A-D01")),
+        "{:?}",
+        s.conflicts
+    );
+    run(&mut s, doors(5.0));
+    run(&mut s, json!({"type":"check"}));
+    assert!(s.conflicts.iter().any(|c| {
+        c.boq_code.as_deref() == Some("A-D01")
+            && c.kind == qiyas_core::ConflictKind::QuantityMismatch
+    }));
+}
+
+#[test]
+fn the_arabic_boq_reads_in_arabic_words_digits_and_units() {
+    let (_dir, s) = doors_and_floor(6);
+    let report = deliverables::drawing(&s, Kind::Boq, Language::Ar, None).unwrap();
+    let table = report.table().unwrap();
+    let text: String = table
+        .iter()
+        .flat_map(|r| &r.cells)
+        .map(deliverables::display)
+        .collect::<Vec<_>>()
+        .join("|");
+    assert!(
+        text.contains("أبواب بمقاسات متنوعة — ٩٠٠ × ٢١٠٠ مم"),
+        "{text}"
+    );
+    assert!(text.contains("عدد"), "the unit is in Arabic: {text}");
+    assert!(!text.contains(" mm") && !text.contains("pcs"), "{text}");
+    // The status line is Arabic too.
+    assert_eq!(report.status_row().cells[0], "الحالة: للمراجعة");
 }

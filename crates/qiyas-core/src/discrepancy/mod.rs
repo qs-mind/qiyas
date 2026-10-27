@@ -101,7 +101,7 @@ impl Session {
                 if report
                     .items
                     .iter()
-                    .any(|g| g.code == item.code && !g.tolerances.is_empty())
+                    .any(|g| g.base_code() == item.code && !g.tolerances.is_empty())
                 {
                     item.tolerance = Some(0.);
                 }
@@ -138,7 +138,7 @@ impl Session {
             let Some(item) = report
                 .items
                 .iter()
-                .find(|g| c.boq_code.as_ref() == Some(&g.code))
+                .find(|g| c.boq_code.as_deref() == Some(g.base_code()))
             else {
                 return true;
             };
@@ -168,8 +168,8 @@ impl Session {
                     }
                 }
                 for g in report.items.iter().filter(|g| {
-                    c.boq_code.as_ref() == Some(&g.code)
-                        || c.measurements.contains(&format!("generated:{}", g.code))
+                    c.boq_code.as_deref() == Some(g.base_code())
+                        || c.measurements.contains(&format!("generated:{}", g.base_code()))
                 }) {
                     citations.extend(g.mapping_citations.clone());
                     for l in &g.lines {

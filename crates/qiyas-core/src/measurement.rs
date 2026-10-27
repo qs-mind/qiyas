@@ -264,8 +264,32 @@ pub struct GeneratedItem {
     /// Left out of the BOQ: see `Mapping::informational`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub informational: bool,
+    /// A deduction beyond the gross quantity limited it to nothing: the BOQ row says so and an
+    /// export of it needs a draft name until the openings or the rule are corrected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub limited: bool,
+    /// A door or window line split by size: the mapping's own code and descriptions, which a
+    /// client BOQ is compared by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_code: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_description_en: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_description_ar: String,
 }
+/// The dimension line that says a deduction was limited to the gross quantity.
+pub(crate) const LIMITED_LINE: &str = "Deductions limited to the gross quantity";
+
 impl GeneratedItem {
+    /// The mapping's own code: the one a client BOQ row is matched by.
+    pub fn base_code(&self) -> &str {
+        if self.base_code.is_empty() {
+            &self.code
+        } else {
+            &self.base_code
+        }
+    }
+
     pub fn methods(&self) -> String {
         self.lines
             .iter()
@@ -597,11 +621,42 @@ fn put(s: &mut Session, name: &str, value: &impl Serialize) -> Result<(), CoreEr
 }
 
 impl MeasurementReport {
+    /// The lines split by size, added back up under the mapping's own code, so a client's single
+    /// "Doors" row is compared with all the doors and not with each size.
+    fn rolled_up(&self) -> Vec<GeneratedItem> {
+        let mut out: Vec<GeneratedItem> = Vec::new();
+        for item in self.items.iter().filter(|item| !item.informational) {
+            if item.base_code.is_empty() {
+                out.push(item.clone());
+            } else if let Some(sum) = out
+                .iter_mut()
+                .find(|o| o.code == item.base_code && o.unit == item.unit)
+            {
+                sum.quantity += item.quantity;
+                sum.confidence = sum.confidence.min(item.confidence);
+                sum.limited |= item.limited;
+                sum.lines.extend(item.lines.clone());
+                for t in &item.tolerances {
+                    if !sum.tolerances.contains(t) {
+                        sum.tolerances.push(t.clone());
+                    }
+                }
+            } else {
+                let mut first = item.clone();
+                first.code = item.base_code.clone();
+                first.description_en = item.base_description_en.clone();
+                first.description_ar = item.base_description_ar.clone();
+                first.base_code.clear();
+                out.push(first);
+            }
+        }
+        out
+    }
+
     /// Adapter for the existing comparison engine. It does not edit the manual take-off.
     pub fn comparison_measurements(&self, units: crate::Units) -> Vec<crate::Measurement> {
-        self.items
+        self.rolled_up()
             .iter()
-            .filter(|item| !item.informational)
             .map(|item| {
                 let mut m = crate::Measurement::new(
                     crate::Kind::Item,

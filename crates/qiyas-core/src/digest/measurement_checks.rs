@@ -91,6 +91,15 @@ pub(super) fn findings(report: &MeasurementReport, notes: &[(u64, String)]) -> V
                 "message":"Count quantities must be whole numbers; correct the rule before finishing."}));
         }
     }
+    // A deduction beyond the gross quantity limited an object to nothing: the BOQ would carry a
+    // zero for work that exists, so it is an error until the openings or the rule are corrected.
+    for q in &report.quantities {
+        if q.lines.iter().any(|l| l.label == crate::measurement::LIMITED_LINE) {
+            errors.push(json!({"section":"measurement_errors","severity":"error",
+                "code":"deductions_exceed_gross","handle":q.object,"rule":q.rule,
+                "message":"Deductions exceed the object's gross quantity, so its quantity was limited to 0; correct the rule or the openings before finishing."}));
+        }
+    }
     let Some(method) = method.filter(|m| m.rules.len() > 1) else {
         return errors;
     };

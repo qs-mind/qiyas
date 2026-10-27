@@ -259,6 +259,18 @@ pub fn confined(source: &Path, name: &str) -> Result<PathBuf, CoreError> {
     Ok(real)
 }
 impl Report {
+    /// The line every printed report ends with: Qiyas draws and measures, the engineer approves.
+    pub fn status_row(&self) -> TableRow {
+        TableRow {
+            cells: vec![json!(match self.language {
+                Language::En => "Status: For review",
+                Language::Ar => "الحالة: للمراجعة",
+            })],
+            heading: true,
+            section: false,
+        }
+    }
+
     pub fn table(&self) -> Result<Vec<TableRow>, CoreError> {
         self.layout.validate()?;
         let mut result = vec![];
@@ -383,6 +395,19 @@ pub fn display_unit(unit: &str) -> &str {
         other => other,
     }
 }
+/// The unit as an Arabic report writes it; a unit it does not know stays as it is.
+pub fn arabic_unit(unit: &str) -> &str {
+    match unit {
+        "m2" | "m²" => "م²",
+        "m3" | "m³" => "م³",
+        "m" => "م",
+        "mm" => "مم",
+        "pcs" | "nr" | "count" => "عدد",
+        "kg" => "كجم",
+        "ton" | "t" => "طن",
+        other => other,
+    }
+}
 pub fn display_sheet(sheet: &str, language: Language) -> &str {
     if sheet.eq_ignore_ascii_case("*Model_Space") {
         if language == Language::Ar {
@@ -473,7 +498,12 @@ fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
         return rounded(n, decimals);
     }
     if field == "unit" {
-        return json!(display_unit(v.as_str().unwrap_or_default()));
+        let unit = v.as_str().unwrap_or_default();
+        return json!(if language == Language::Ar {
+            arabic_unit(unit)
+        } else {
+            display_unit(unit)
+        });
     }
     if field == "sheet" {
         return json!(display_sheet(v.as_str().unwrap_or_default(), language));
@@ -613,6 +643,13 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
                 v["drawing"] = json!(drawing);
                 v["method"] = json!(i.methods());
                 v["citations"] = json!(i.rule_citations());
+                if i.limited {
+                    // Visible on the row itself: the quantity is not a measured one.
+                    v["description_en"] =
+                        json!(format!("{} [quantity limited: deductions exceed the gross quantity]", i.description_en));
+                    v["description_ar"] =
+                        json!(format!("{} [الكمية مقيّدة: الخصومات تتجاوز الإجمالي]", i.description_ar));
+                }
                 v
             })
             .collect();

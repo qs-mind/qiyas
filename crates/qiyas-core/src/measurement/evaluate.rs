@@ -218,59 +218,27 @@ const SIZE_PLACEHOLDERS: [&str; 7] = [
     "{mark}", "{size}", "{width}", "{height}", "{head}", "{sill}", "{depth}",
 ];
 
-/// A line for a gross floor area, a circulation share or another figure that is information,
-/// not an item to buy or build, by what its own description says.
-fn reads_as_information(description_en: &str, description_ar: &str, section: &str) -> bool {
-    let text = format!("{description_en} {description_ar} {section}").to_lowercase();
-    [
-        "gross floor area",
-        "gfa",
-        "informational",
-        "for information",
-        "المسطح الإجمالي",
-        "إجمالي المسطح",
-        "المساحة الإجمالية",
-        "معلوماتي",
-    ]
-    .iter()
-    .any(|marker| {
-        text.match_indices(marker).any(|(at, _)| {
-            // "gfa" inside another word is not the abbreviation.
-            *marker != "gfa"
-                || (!text[..at].ends_with(|c: char| c.is_alphanumeric())
-                    && !text[at + 3..].starts_with(|c: char| c.is_alphanumeric()))
-        })
-    })
+/// A gross floor area is information, not an item to buy or build. Only these words say so by
+/// themselves (a flag on the mapping, `informational`, covers any other line): a longer list
+/// would silently drop billable lines such as "Total area of tiling".
+fn reads_as_information(description_en: &str, description_ar: &str) -> bool {
+    let en = description_en.to_lowercase();
+    let abbreviation = en.match_indices("gfa").any(|(at, _)| {
+        !en[..at].ends_with(|c: char| c.is_alphanumeric())
+            && !en[at + 3..].starts_with(|c: char| c.is_alphanumeric())
+    });
+    abbreviation || en.contains("gross floor area") || description_ar.contains("إجمالي المسطح")
 }
 
-/// What tells this object's size apart from another's in the same BOQ line: its mark (as the
-/// schedule shows it), else for an opening its width and height. `(code part, description part)`.
-fn size_label(s: &Session, object: &ObjectRecord, unit: &str) -> Option<(String, String)> {
-    let text = |name: &str| {
-        object
-            .instance
-            .props
-            .get(name)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_owned)
-    };
+/// What tells a door or window's size apart from another's in the same BOQ line, always from
+/// its width and height (never from a mark, which depends on whether a schedule or a tag was made
+/// first): `(code part, English description part, Arabic description part)`.
+fn size_label(object: &ObjectRecord, unit: &str) -> Option<(String, String, String)> {
     // Doors and windows only: any other counted object keeps the mapping's own code, which a
     // client BOQ is matched by.
-    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count") {
-        return None;
-    }
-    if let Some(mark) = text("mark") {
-        return Some((mark.clone(), mark));
-    }
-    if let Some(mark) = s
-        .drawing
-        .doc
-        .get_entity(Handle::new(object.instance.id))
-        .and_then(crate::opening_schedule::mark)
+    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count")
     {
-        return Some((mark.clone(), mark));
+        return None;
     }
     let number = |name: &str| object.instance.props.get(name).and_then(Value::as_f64);
     let mm = |metres: f64| (metres * 1000.0).round() as i64;
@@ -282,8 +250,13 @@ fn size_label(s: &Session, object: &ObjectRecord, unit: &str) -> Option<(String,
         Some(h) => (
             format!("{}x{}", mm(width), mm(h)),
             format!("{} × {} mm", mm(width), mm(h)),
+            crate::numbers::arabic_numerals(&format!("{} × {} مم", mm(width), mm(h))),
         ),
-        None => (format!("{}", mm(width)), format!("{} mm", mm(width))),
+        None => (
+            format!("{}", mm(width)),
+            format!("{} mm", mm(width)),
+            crate::numbers::arabic_numerals(&format!("{} مم", mm(width))),
+        ),
     })
 }
 
@@ -461,7 +434,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     gross - raw,
                 ));
                 lines.push(DimensionLine {
-                    label: "Deductions limited to the gross quantity".into(),
+                    label: LIMITED_LINE.into(),
                     operation: Operation::Add,
                     timesing: 1.0,
                     factors: vec![-raw],
@@ -565,11 +538,11 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 coverage: rule.coverage.clone(),
                 lines,
                 informational: mapping.informational
-                    || reads_as_information(
-                        &mapping.description_en,
-                        &mapping.description_ar,
-                        &mapping.section,
-                    ),
+                    || reads_as_information(&mapping.description_en, &mapping.description_ar),
+                limited,
+                base_code: String::new(),
+                base_description_en: String::new(),
+                base_description_ar: String::new(),
             };
             if item.unit != *unit {
                 return Err(invalid(format!(
@@ -587,10 +560,13 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             .iter()
             .any(|t| SIZE_PLACEHOLDERS.iter().any(|p| t.contains(p)));
             if !sized && !item.informational {
-                if let Some((code, label)) = size_label(s, object, unit) {
+                if let Some((code, en, ar)) = size_label(object, unit) {
+                    item.base_code = item.code.clone();
+                    item.base_description_en = item.description_en.clone();
+                    item.base_description_ar = item.description_ar.clone();
                     item.code = format!("{}-{code}", item.code);
-                    item.description_en = format!("{} — {label}", item.description_en);
-                    item.description_ar = format!("{} — {label}", item.description_ar);
+                    item.description_en = format!("{} — {en}", item.description_en);
+                    item.description_ar = format!("{} — {ar}", item.description_ar);
                 }
             }
             let key = (
@@ -608,6 +584,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     }
                 }
                 existing.confidence = existing.confidence.min(item.confidence);
+                existing.limited |= item.limited;
                 existing.lines.extend(item.lines);
                 existing.quantity = total(&context, &existing.lines)?.max(0.0);
                 for c in item.mapping_citations {
