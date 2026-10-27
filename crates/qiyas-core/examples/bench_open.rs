@@ -49,7 +49,7 @@ fn main() {
 
     if let Some(dir) = std::env::args().nth(2).map(PathBuf::from) {
         std::fs::create_dir_all(&dir).expect("create the folder");
-        std::fs::write(dir.join("batch.bin"), &batch.to_bytes()).expect("write batch.bin");
+        std::fs::write(dir.join("batch.bin"), batch.to_bytes()).expect("write batch.bin");
         std::fs::write(dir.join("atlas.bin"), session.atlas_bytes(None)).expect("write atlas.bin");
     }
 
