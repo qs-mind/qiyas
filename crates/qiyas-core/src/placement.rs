@@ -53,6 +53,9 @@ pub struct Placement {
 fn invalid(s: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(s.into())
 }
+fn overlaps(a: Bounds, b: Bounds) -> bool {
+    a[0][0] < b[1][0] && b[0][0] < a[1][0] && a[0][1] < b[1][1] && b[0][1] < a[1][1]
+}
 impl Session {
     pub(crate) fn paper_distance(&self, mm: f64) -> f64 {
         let (to_m, scale) = self.check_space(&self.sheet);
@@ -144,6 +147,13 @@ impl Session {
                 ]);
             }
         }
+        // What a viewport shows is model space, which this sheet's own ink does not hold: its
+        // frame is occupied.
+        let viewports: Vec<Bounds> = self
+            .paper_views_of(&sheet)
+            .into_iter()
+            .map(|v| v.rect)
+            .collect();
         let score = |p: [f64; 2]| (p[0] - near[0]).hypot(p[1] - near[1]);
         candidates.sort_by(|a, b| {
             score(*a)
@@ -165,6 +175,7 @@ impl Session {
                 if q.within.as_ref().is_some_and(|r| {
                     !crate::check_layout::polygon_inside(&ink::corners(padded), r, &[])
                 }) || !ink.collisions(padded, &exclude).is_empty()
+                    || viewports.iter().any(|v| overlaps(padded, *v))
                 {
                     return None;
                 }
@@ -348,17 +359,51 @@ impl Session {
         handle: u64,
         automatic: bool,
     ) -> Result<(), CoreError> {
-        if automatic {
-            self.auto_place(
-                &[Target {
-                    handle,
-                    chain: vec![],
-                }],
-                None,
-                Side::Right,
-                Some(10.0),
-            )?;
+        if !automatic {
+            return Ok(());
         }
+        if let Some(paper) = self.paper() {
+            // On a sheet the table goes inside the frame, clear of what is drawn on it, of
+            // the title block and of every viewport; never beyond the paper.
+            let (left, bottom) = (23.0, 13.0);
+            let (right, top) = (paper.w_mm - 13.0, paper.h_mm - 13.0);
+            let space = self.free_space(&SpaceQuery {
+                entity: Some(handle),
+                near: Some([left, top]),
+                side: Side::Any,
+                clearance_mm: Some(2.5),
+                within: Some(vec![
+                    [left, bottom],
+                    [right, bottom],
+                    [right, top],
+                    [left, top],
+                ]),
+                ..Default::default()
+            })?;
+            let best = space.positions.first().ok_or_else(|| {
+                invalid("There is no free room for the table on this sheet: give its position (at), or put it on another sheet")
+            })?;
+            let delta = best.delta.unwrap_or([0.0, 0.0]);
+            if delta != [0.0, 0.0] {
+                self.modify(crate::modify::ModifySpec::Move {
+                    targets: vec![Target {
+                        handle,
+                        chain: vec![],
+                    }],
+                    delta,
+                })?;
+            }
+            return Ok(());
+        }
+        self.auto_place(
+            &[Target {
+                handle,
+                chain: vec![],
+            }],
+            None,
+            Side::Right,
+            Some(10.0),
+        )?;
         Ok(())
     }
 }

@@ -382,7 +382,7 @@ impl Session {
             };
             let arabic = arabic_text || flagged;
             if let (Some(dim), true) = (dim, value.parse::<f64>().is_ok()) {
-                if units || flagged {
+                if units {
                     out.push_str(&crate::numbers::with_unit(
                         &value,
                         dim,

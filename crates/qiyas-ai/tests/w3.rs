@@ -348,4 +348,33 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
     assert!(names.contains(&"Villa_BOQ.xlsx".to_string()), "{names:?}");
     let hidden_files = std::fs::read_dir(&hidden).unwrap().count();
     assert_eq!(hidden_files, 0, "nothing in the hidden folder");
+
+    // For the report: the files and what a client reads in them (QIYAS_W3_EVIDENCE=<folder>).
+    if let Ok(folder) = std::env::var("QIYAS_W3_EVIDENCE") {
+        std::fs::create_dir_all(&folder).unwrap();
+        for name in &names {
+            std::fs::copy(
+                documents.join(name),
+                std::path::Path::new(&folder).join(name),
+            )
+            .unwrap();
+        }
+        let mut text = String::new();
+        text.push_str("ROOM LABELS (Model)\n");
+        for t in model.iter().filter(|t| t.contains("المساحة")) {
+            text.push_str(&format!("  {t}\n"));
+        }
+        text.push_str("\nSHEET A-101 (title block, notes, schedules)\n");
+        for t in &sheet {
+            text.push_str(&format!("  {}\n", t.replace('\n', " | ")));
+        }
+        text.push_str("\nBOQ items\n");
+        for i in &measured.items {
+            text.push_str(&format!(
+                "  {} | {} | {} {}\n",
+                i.code, i.description_en, i.quantity, i.unit
+            ));
+        }
+        std::fs::write(std::path::Path::new(&folder).join("evidence.txt"), text).unwrap();
+    }
 }

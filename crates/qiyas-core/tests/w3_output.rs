@@ -649,3 +649,69 @@ fn tags_and_room_labels_live_together_on_a_walled_plan_in_every_unit() {
         assert_eq!(findings(&s, "label_outside_room"), 0);
     }
 }
+
+#[test]
+fn an_arabic_room_schedule_has_arabic_digits_and_its_unit_only_in_the_heading() {
+    for units in UNITS {
+        let (_dir, mut s, _boundary, _u) = room(units);
+        s.set_sheet_language(Some(qiyas_core::rooms::LabelLanguage::Ar));
+        run(&mut s, json!({"type":"set_sheet","block":"*Paper_Space"}));
+        let table = added(&mut s, json!({"type":"room_schedule"}))[0];
+        let EntityType::Table(t) = s.drawing.doc.get_entity(Handle::new(table)).unwrap() else {
+            panic!("table")
+        };
+        assert_eq!(t.cell_text(0, 1), Some("المساحة (م²)"), "units {units}");
+        assert_eq!(t.cell_text(1, 1), Some("١٢٫٠٠"), "units {units}");
+        assert_eq!(t.cell_text(2, 1), Some("١٢٫٠٠"));
+    }
+}
+
+#[test]
+fn schedules_placed_by_themselves_on_a_sheet_stay_on_the_paper_and_clear_of_the_view() {
+    for units in UNITS {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("sched.dwg"), units);
+        let k = 1.0 / s.drawing.units.to_metres();
+        run(
+            &mut s,
+            json!({"type":"walls","thickness":0.2*k,"height":3.0,
+                "runs":[{"points":[[0,0],[12.0*k,0],[12.0*k,15.0*k],[0,15.0*k]],"closed":true}],
+                "openings":[{"run":0,"at":2.0*k,"width":0.9*k,"kind":"door"},
+                            {"run":0,"at":6.0*k,"width":1.2*k,"kind":"window"}]}),
+        );
+        run(
+            &mut s,
+            json!({"type":"label_spaces","query":{"seeds":[{"name":"Hall","point":[3.0*k,3.0*k]}]}}),
+        );
+        run(&mut s, json!({"type":"make_sheet","name":"A-101","title":"Plan"}));
+        let block = s.drawing.sheets().into_iter().find(|x| x.name == "A-101").unwrap().block;
+        run(&mut s, json!({"type":"set_sheet","block":block.clone()}));
+        let a = added(&mut s, json!({"type":"opening_schedule"}))[0];
+        let b = added(&mut s, json!({"type":"room_schedule"}))[0];
+        let view = s.paper_views_of(&block)[0].rect;
+        let rows = s
+            .find_entities(&qiyas_core::EntityFilter {
+                kind: Some("Table".into()),
+                sheet: Some(block.clone()),
+                ..Default::default()
+            })
+            .rows;
+        assert_eq!(rows.len(), 2);
+        let paper = s.paper().unwrap();
+        let mut seen = Vec::new();
+        for row in rows {
+            assert!([a, b].contains(&row.handle));
+            let t = row.bounds;
+            assert!(t[0][0] >= 20.0 && t[1][0] <= paper.w_mm - 10.0, "units {units}: {t:?}");
+            assert!(t[0][1] >= 10.0 && t[1][1] <= paper.h_mm - 10.0, "units {units}: {t:?}");
+            let apart = |o: [[f64; 2]; 2]| {
+                t[1][0] <= o[0][0] || o[1][0] <= t[0][0] || t[1][1] <= o[0][1] || o[1][1] <= t[0][1]
+            };
+            assert!(apart(view), "units {units}: table {t:?} over the view {view:?}");
+            for other in &seen {
+                assert!(apart(*other), "tables overlap: {t:?} {other:?}");
+            }
+            seen.push(t);
+        }
+    }
+}

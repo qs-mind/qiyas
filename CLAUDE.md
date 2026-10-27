@@ -3491,6 +3491,8 @@ villa request in Arabic through the scripted provider).
   review, sheet) in the sheet's language, general notes at 3 mm and a scale bar. Titles are 4 mm; nothing
   is under 2.5 mm. Fields nobody gave stay empty and are listed. `plot` with no sheet prints the
   layout. The layout's own viewport (number 1) no longer makes a sheet "incomplete" for `free_space`.
+  A schedule added to a layout without `at` goes inside the frame, clear of the viewports and the title block
+  (`place_new_table`); `free_space` treats a viewport's frame as occupied.
 - Language: the agent sets `Session::set_sheet_language` from the user's latest message each turn;
   `label_spaces`, schedules, `make_sheet` and `deliverable` take it when `language` is omitted.
 - One retained room per enclosure (`room_with_ring`); `A-ROOM-BOUNDARY` is made non-plotting even when
