@@ -65,3 +65,38 @@ Each workstream ends with evidence and one independent check.
 | W3 | Output quality: sheet composition, title block, text sizes, decimals and units, no internal IDs, door and window tags, itemised BOQ, export folder, block exports with failed checks | 21–39, 54–62, 68 |
 | W4 | Window: shell B and every UI note, shortcuts, save feedback | 1, 6, 9, 18–19, 47, 67, 69, interview |
 | W5 | Built-in drafting and design knowledge as data: sheet sets, view standards, space-planning checks, Egypt/KSA/UAE code register | 13–17, 43, 45, 57, 60–63 |
+| W6 | Take-off checks: a blind second measurement before a quantity reaches the BOQ, a drawing-pack check card before take-off, an evidence PDF of marked quantities | take-off method review, 27 Oct |
+
+W6 runs straight after W3, before W5. Take-off numbers are what QS Mind sells, and the
+evidence PDF reuses the sheet work W3 has just finished.
+
+## W6: take-off checks (added 27 October)
+
+Added after a review of a published AI take-off method (plan first, measure in small chunks,
+mark the evidence on the drawing, have a fresh reader check the count). Qiyas already plans
+and works in phases, explains each number and shows it on the drawing, runs `verify`,
+`brief_check` and `takeoff_check`, and keeps unverified numbers out of exports through
+`quantity_gate`. Three pieces are missing:
+
+1. **Blind second measurement.** Before a generated quantity enters the BOQ, a fresh Mizan run
+   with no conversation history and read-only tools measures the same item again. It sees
+   the item's description, unit and rule but not the first quantity. Code, not the model,
+   compares the two within a stated tolerance per unit. If they disagree, the item becomes a
+   drawing query with both readings and is not written as a BOQ row. Large drawings check the
+   largest items by value first. The BOQ line and Mizan panel say "Second reading agrees",
+   "differs" or "not checked"; no confidence words. Tests use the scripted provider.
+2. **Drawing-pack check card.** One short card shown before take-off, not a settings page:
+   drawing units known (INSUNITS not 0), annotation scale set, each PDF page vector or
+   scanned and, if scanned, calibrated, page orientation, and sheet number and revision read
+   by the register rules. Each line passes or names the fix. It builds on the existing unit,
+   scan-detection and calibration code.
+3. **Evidence PDF.** One PDF per take-off: each BOQ item's elements highlighted on its sheet,
+   with the item number beside them and the "For review" notice, so the engineer can check
+   by eye and send it to the client. It goes in the same export folder as the BOQ.
+
+Later, not in W6: IFC import, and a simple 3D extrusion for concrete and formwork volumes on
+varying levels.
+
+Done means: a seeded disagreement never reaches the BOQ and appears as a query; a drawing with
+INSUNITS 0 or an uncalibrated scan is flagged on the card before take-off; the evidence PDF of
+the sample villa marks every BOQ item; `scripts/check.sh` passes; one independent check.
