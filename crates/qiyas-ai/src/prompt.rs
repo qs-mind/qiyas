@@ -336,12 +336,13 @@ mod tests {
     }
 
     /// The registry index and drawing facts do not count against the fixed rules' budget.
+    /// 960 since 27 October 2026: the drafting knowledge (W5) and take-off checks (W6) lines.
     #[test]
-    fn fixed_text_is_under_900_words() {
-        assert!(words(EN) < 900, "{}", words(EN));
-        assert!(words(AR) < 900, "{}", words(AR));
+    fn fixed_text_is_under_960_words() {
+        assert!(words(EN) < 960, "{}", words(EN));
+        assert!(words(AR) < 960, "{}", words(AR));
         for lang in [Lang::En, Lang::Ar] {
-            assert!(words(takeoff_workflow(lang)) < 900);
+            assert!(words(takeoff_workflow(lang)) < 960);
         }
     }
 

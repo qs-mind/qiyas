@@ -3499,3 +3499,58 @@ villa request in Arabic through the scripted provider).
   the layer existed; retained boundaries are not line work for the duplicate and overlap checks.
 - The quantity check no longer reads a sheet number (`A-101`) as a reference to element 101, nor a
   schedule Qiyas drew as a table nothing explains.
+
+
+## W6: take-off checks (27 October 2026)
+
+The scope is `docs/2026-10-26-qiyas-test-notes-plan.md`, W6. These checks support the engineer's
+review of a take-off; every evidence page carries For review / للمراجعة.
+
+- Blind second reading: `crates/qiyas-core/src/second_reading.rs` stores the readings, compares
+  them within the tolerance for the unit, and raises a drawing query when they differ. An
+  unresolved disagreement stays out of the generated BOQ. `crates/qiyas-ai/src/blind_reader.rs`
+  runs a fresh reader with no conversation history and only drawing reads; it gets the item's
+  description, unit and rule, never the first quantity. The BOQ says agrees, differs or not
+  checked. Scripted-provider coverage is in `crates/qiyas-ai/tests/w3.rs`; core coverage is in
+  `crates/qiyas-core/tests/w3_output.rs`.
+- Drawing-pack card: `crates/qiyas-core/src/pack_check.rs`, read by `measurement.pack_check`,
+  checks known units, annotation scale, vector/scanned PDF pages, scan calibration, page
+  orientation, and sheet number/revision from the register rules. Each line passes or names
+  the fix; calibration is recorded by the existing calibration command.
+- Evidence PDF: `crates/qiyas-plot/src/evidence.rs` uses the existing plot snapshots, page maps
+  and embedded text fonts. Each source sheet has heavy coloured outlines and BOQ item codes
+  beside its elements, plus a legend of code, description, quantity and unit in the BOQ's
+  language. Long legends continue on pages that repeat the drawing and review notice. Missing
+  source geometry refuses the export instead of silently omitting an item. The drawing is
+  unchanged. `qiyas_execute` op `export_evidence {path?, language?: "en"|"ar"}` in
+  `crates/qiyas-ai/src/surface.rs` uses the quantity gate; desktop IPC `export_evidence` lives in
+  `crates/qiyas-desktop/src/plot.rs` and writes off the session lock. It defaults to
+  `<drawing> evidence.pdf` in `Session::export_folder`, beside the BOQ; pass the BOQ's language
+  if it had an explicit override. Tests added to `crates/qiyas-plot/tests/plot.rs` cover the W3
+  sample villa's items, both languages, continuation-page notices and the export folder;
+  `crates/qiyas-ai/tests/surface.rs` covers the agent export.
+
+## W5: drafting and design knowledge (27 October 2026)
+
+W5 adds built-in drafting knowledge and villa planning checks from
+`data/drafting-standards.json` and `data/code-register.json`. `drafting_knowledge`
+and `space_check` are read-only inquiry commands returning measurements; source
+citations and `practice_default` labels travel with limits, and missing evidence
+is reported separately. `symbol` draws single/double doors with leaves and swings,
+straight stairs with floor-specific UP/cut or DN/void/handrails, elevation levels,
+ground/foundation lines and labelled material hatches through the existing drawing,
+block, text and leader APIs in one undo step. Coordinates use drawing units and
+`_m` fields stay in metres. Mizan accesses them through the ordinary registry tools;
+read knowledge before a package and check the proposed villa plan before walls.
+Outputs remain for review, with design and approval assigned to the engineer.
+`tests/w5_drafting.rs` is included in `tests/all.rs`; the registry-index ceiling is
+5,000 bytes. This handoff has not yet been compiled or tested.
+
+## Builds and tests (27 October 2026)
+
+- qiyas-core, qiyas-ai and qiyas-boq each build their integration tests as ONE binary, `tests/all.rs`
+  (`autotests = false`). A new test file needs its `#[path = "x.rs"] mod x;` line there; the test
+  `every_test_file_is_listed` fails otherwise. `villa_openings` and `clinic_performance` stay their
+  own binaries because `scripts/check.sh` names them.
+- Debug info is line tables for our crates and none for dependencies (`[profile.dev]`).
+- Child-process tests run the same binary again: name the test by its module path (`test_path`).

@@ -18,3 +18,5 @@ For scans, supply recognition.vision texts with verbatim room labels and page po
 For room recognition, set boundary_layers/exclude_layers from enclosure evidence. Room sources exclude annotations, grids and opening symbols. Plan labels use Area / المساحة with Arabic digits in Arabic; approval status stays in the report.
 
 Before comparing, link each measurement to its BOQ item with link_boq, or name it the way the BOQ does. Notes and analysis go in your answer or into the drawing as text (values, never ids), never as rows. Describe BOQ items by type and size ({mark}, {width}); a figure nobody buys (gross floor area) is informational: true. Tag doors and windows: object_tags {category: opening, property: mark}. Fix new warnings before finishing. Save only when asked; finish never saves.
+
+Before take-off, run qiyas_read run measurement pack_check and show its card; fix or state each failed line. Compare and export run a blind second reading: an item that differs becomes a drawing query, never a BOQ row. After the BOQ export, export_evidence in the same language; report both paths.
