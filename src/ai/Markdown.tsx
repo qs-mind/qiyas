@@ -1,5 +1,5 @@
 import { chatText, contentLanguage, isolateRuns } from "./content";
-import { Children, isValidElement, cloneElement, type ReactNode } from "react";
+import { Children, isValidElement, cloneElement, memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./markdown.css";
@@ -61,8 +61,9 @@ const components: Components = {
 
 /** Mizan's answers as GitHub-flavoured Markdown: headings, lists (nested), tables, rules, quotes,
  *  code. Raw HTML in the text stays text, never markup, and links never navigate. TeX formulas
- *  read as plain text (`plainMath`). */
-export function Markdown({ text }: { text: string }) {
+ *  read as plain text (`plainMath`). Memoised: parsing an answer is about a millisecond, and the
+ *  thread has one per message; the app renders on every pointer move while a tool is in use. */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const lang = contentLanguage(text);
   return (
     <div className="md" lang={lang} dir={lang === "ar" ? "rtl" : "ltr"}>
@@ -71,4 +72,4 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

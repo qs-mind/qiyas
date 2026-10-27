@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import { Tabs } from "@base-ui/react/tabs";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { NamedView, Recent, RibbonButton, RibbonGroup, RibbonLayout } from "../api";
 import { useT } from "../i18n";
 import type { Tool } from "../viewport/Viewport";
@@ -8,6 +8,7 @@ import { Glyph } from "./glyphs";
 import { RecentsMenu } from "./RecentsMenu";
 import { RibbonFlyout } from "./RibbonFlyout";
 import { RibbonIcon } from "./ribbonIcons";
+import { useStableCallbacks } from "./stableCallbacks";
 import { aliasesFor, isPrimaryGroup } from "./ribbonInfo";
 import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
 import { Tip, TooltipLayer, type TipInfo } from "./Tooltip";
@@ -187,9 +188,11 @@ function storedCollapsed(): boolean {
 const MORE = "\u0000more";
 
 export function Ribbon(props: Props) {
+  // The handlers are the app's, new on every render of it: the body re-renders for a changed value.
+  const stable = useStableCallbacks(props);
   return (
     <TooltipLayer>
-      <RibbonBody {...props} />
+      <RibbonBodyMemo {...stable} />
     </TooltipLayer>
   );
 }
@@ -559,3 +562,5 @@ function RibbonBody(props: Props) {
     </Tabs.Root>
   );
 }
+
+const RibbonBodyMemo = memo(RibbonBody);

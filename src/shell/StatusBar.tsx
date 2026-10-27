@@ -3,6 +3,7 @@ import { useRef } from "react";
 import type { Drafting, Ucs } from "../api";
 import { useT } from "../i18n";
 import type { DraftingToggle } from "../tools/shortcuts";
+import { usePointer, type PointerStore } from "../tools/pointer";
 import { isWorld, toUcs } from "../tools/ucs";
 import { Progress } from "../ui/Progress";
 import { SegmentedToggles } from "../ui/Segmented";
@@ -10,6 +11,9 @@ import { DotLoader, type DotPattern } from "./DotLoader";
 
 type Props = {
   cursor: [number, number] | null;
+  /** The pointer, followed live: only this bar renders on a move. When given, it says the cursor
+   *  and the snap, and `cursor` and `snapLabel` are not used. */
+  pointer?: PointerStore;
   units: string;
   unitsWarning: boolean;
   /** The drawing's reading problems, one line each; a button with their count opens the list. */
@@ -43,10 +47,29 @@ const TOGGLES: { toggle: DraftingToggle; key: string; on: (d: Drafting) => boole
   { toggle: "grid", key: "F7", on: (d) => d.grid },
 ];
 
+/** The name of the object snap under the cursor. Alone in following the pointer, so a move renders
+ *  this and not the whole bar. */
+function SnapKind({ pointer }: { pointer: PointerStore }) {
+  const t = useT();
+  const live = usePointer(pointer);
+  return live?.snap ? <span className="snap-kind">{t(`snap.${live.snap.kind}`)}</span> : null;
+}
+
+/** The cursor position; see `SnapKind`. */
+function CursorReadout({ pointer, shown }: { pointer: PointerStore; shown(p: [number, number]): string }) {
+  const live = usePointer(pointer);
+  return (
+    <span className="cursor" dir="ltr">
+      {live?.cursor ? shown(live.cursor) : ""}
+    </span>
+  );
+}
+
 /** Bottom line: what is happening, the snap under the cursor, the drafting switches, cursor
  *  position in metres, units and file warnings. */
 export function StatusBar({
   cursor,
+  pointer,
   units,
   unitsWarning,
   problems,
@@ -81,7 +104,7 @@ export function StatusBar({
           </>
         )}
       </span>
-      {snapLabel && <span className="snap-kind">{snapLabel}</span>}
+      {pointer ? <SnapKind pointer={pointer} /> : snapLabel && <span className="snap-kind">{snapLabel}</span>}
       {problems.length > 0 && (
         // A popover: it takes the focus (so the keyboard can scroll the list), Escape closes it and
         // gives the focus back to the button, and so does a click outside.
@@ -132,9 +155,13 @@ export function StatusBar({
         </button>
       </span>
       {/* Coordinates read left to right in both languages. */}
-      <span className="cursor" dir="ltr">
-        {cursor ? shown(cursor) : ""}
-      </span>
+      {pointer ? (
+        <CursorReadout pointer={pointer} shown={shown} />
+      ) : (
+        <span className="cursor" dir="ltr">
+          {cursor ? shown(cursor) : ""}
+        </span>
+      )}
     </footer>
   );
 }

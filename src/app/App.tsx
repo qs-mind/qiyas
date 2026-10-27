@@ -483,6 +483,7 @@ export default function App() {
       )}
       <StatusBar
         cursor={measure.cursor}
+        pointer={measure.pointer}
         // With no drawing open, the Options dialog's decimals.
         precision={drafting?.precision ?? options.displayPrecision}
         metresPerUnit={info ? metresPerUnit(info.units) : 1}

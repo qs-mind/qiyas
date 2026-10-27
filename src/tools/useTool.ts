@@ -3,13 +3,14 @@
  *  async picking around it and hands each finished command to the app. It also keeps the selection
  *  set: the entities a Shift click or a selection box picked with the select tool, which a modify
  *  tool then works on. */
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import type { AiRegion, Boundary, Command, Drafting, EntityInfo, Picked, Snap, SnapKind, Ucs } from "../api";
 import type { Target } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import { markerSegments } from "../viewport/snapMarker";
 import type { Tool } from "../viewport/Viewport";
 import { coalesce } from "./coalesce";
+import { PointerStore } from "./pointer";
 import {
   drawOptions,
   drawPreview,
@@ -733,18 +734,17 @@ export function useTool(
   px: { snap: number; pick: number } = { snap: SNAP_PX, pick: PICK_PX },
 ) {
   const [state, dispatch] = useReducer(toolReducer, tool, initialToolState);
-  /** The cursor in drawing coordinates as it is, and drawing units per CSS pixel there. */
-  const [raw, setRaw] = useState<{ p: Point; wpp: number } | null>(null);
-  /** The object snap under the cursor, and the zoom it was found at. */
-  const [hover, setHover] = useState<{ snap: Snap; wpp: number } | null>(null);
+  /** The cursor in drawing coordinates as it is, and the object snap under it. Not React state: see
+   *  `pointer.ts`. */
+  const [pointer] = useState(() => new PointerStore());
   const apiRef = useRef(api);
   apiRef.current = api;
   const snapper = useRef(
     coalesce(
       (ask: SnapAsk) => apiRef.current.snap(ask.p[0], ask.p[1], ask.tol, ask.from),
-      (snap, ask) => setHover(snap ? { snap, wpp: ask.wpp } : null),
+      (snap, ask) => pointer.setHover(snap ? { snap, wpp: ask.wpp } : null),
       // A failed snap is no snap; the click asks again and reports its own error.
-      () => setHover(null),
+      () => pointer.setHover(null),
     ),
   );
   const modifyPhase = state.modify?.phase ?? null;
@@ -784,7 +784,7 @@ export function useTool(
   useEffect(() => {
     if (snapping) return;
     snapper.current.cancel();
-    setHover(null);
+    pointer.setHover(null);
   }, [snapping]);
 
   useEffect(() => {
@@ -868,7 +868,7 @@ export function useTool(
     drafting?.grid_snap ? gridRound(p, drafting.grid_spacing, ucs) : p;
 
   function onMove(world: Point, worldPerPixel: number) {
-    setRaw({ p: world, wpp: worldPerPixel });
+    pointer.setRaw({ p: world, wpp: worldPerPixel });
     if (snapping) snapper.current.request({ p: world, tol: px.snap * worldPerPixel, from: prev, wpp: worldPerPixel });
   }
 
@@ -943,13 +943,28 @@ export function useTool(
     }
   }
 
+  /** Where a click would place the next point now, and the snap it uses, from the pointer as it is
+   *  now: the status bar asks this on every move, on its own (`usePointer`). */
+  function deriveCursor(): { cursor: Point | null; snap: Snap | null } {
+    const now = pointer.raw;
+    const found = snapping ? (pointer.hover?.snap ?? null) : null;
+    if (!now) return { cursor: null, snap: found };
+    if (found) return { cursor: found.point, snap: found };
+    return { cursor: placesNow ? constrain(prev, onGrid(now.p), track) : now.p, snap: null };
+  }
+  pointer.derive = deriveCursor;
+  /** A tool in progress draws at the cursor (a rubber band, a preview, the snap marker): then the
+   *  app renders on every move, as it always did. With none, a move renders the status bar only. */
+  const needsPointer =
+    snapping ||
+    state.points.length > 0 ||
+    !!(state.draw || state.modify || state.edit || state.text || state.dim || state.param);
+  useSyncExternalStore(pointer.subscribe, () => (needsPointer ? pointer.getVersion() : 0));
+  const raw = pointer.raw;
+  const hover = pointer.hover;
   const snap = snapping ? (hover?.snap ?? null) : null;
   /** Where a click would place the next point now. */
-  const cursor = useMemo((): Point | null => {
-    if (!raw) return null;
-    if (snap) return snap.point;
-    return placesNow ? constrain(prev, onGrid(raw.p), track) : raw.p;
-  }, [raw, snap, tool, prev, drafting, placesNow, ucs]);
+  const cursor = useMemo((): Point | null => deriveCursor().cursor, [raw, snap, tool, prev, drafting, placesNow, ucs]);
   const marker = useMemo(
     () => (snap && hover ? markerSegments(snap.point, snap.kind, hover.wpp) : null),
     [snap, hover],
@@ -1053,6 +1068,8 @@ export function useTool(
     drawInput: (input: DrawInput) => dispatch({ type: "draw", input }),
     /** See `cursor` above: snapped, on the grid or tracked. */
     cursor,
+    /** The pointer, for the status bar to follow on its own (`usePointer`). */
+    pointer,
     /** The object snap under the cursor, for the status bar. */
     snap,
     /** Its marker, segments in drawing coordinates for the overlay. */
