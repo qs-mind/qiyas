@@ -229,8 +229,8 @@ fn takeoff_and_fields_follow_a_split_hatch_and_replaced_centreline_in_the_same_u
         );
         fields.push(result["handles"][0].as_u64().unwrap());
     }
-    assert_eq!(text(&session, fields[0]), "2.500");
-    assert_eq!(text(&session, fields[1]), "10.000");
+    assert_eq!(text(&session, fields[0]), "2.50 m²");
+    assert_eq!(text(&session, fields[1]), "10.00 m");
     let before = session.history_steps().0.len();
     let opened = run(
         &mut session,
@@ -238,8 +238,8 @@ fn takeoff_and_fields_follow_a_split_hatch_and_replaced_centreline_in_the_same_u
     );
     assert_eq!(opened["hatches"].as_array().unwrap().len(), 2);
     assert_eq!(session.history_steps().0.len(), before + 1);
-    assert_eq!(text(&session, fields[0]), "2.200");
-    assert_eq!(text(&session, fields[1]), "10.000");
+    assert_eq!(text(&session, fields[0]), "2.20 m²");
+    assert_eq!(text(&session, fields[1]), "10.00 m");
     near(&json!(session.takeoff.items[0].shown), 2.2);
     near(&json!(session.takeoff.items[1].shown), 10.0);
     assert_eq!(json!(session.takeoff.items[0].handles), opened["hatches"]);
@@ -248,11 +248,11 @@ fn takeoff_and_fields_follow_a_split_hatch_and_replaced_centreline_in_the_same_u
         opened["centrelines"]
     );
     assert!(session.undo());
-    assert_eq!(text(&session, fields[0]), "2.500");
+    assert_eq!(text(&session, fields[0]), "2.50 m²");
     assert_eq!(json!(session.takeoff.items[0].handles), wall["hatches"]);
     assert_eq!(json!(session.takeoff.items[1].handles), wall["centrelines"]);
     assert!(session.redo());
-    assert_eq!(text(&session, fields[0]), "2.200");
+    assert_eq!(text(&session, fields[0]), "2.20 m²");
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn measuring_one_hatch_follows_its_material_when_another_piece_splits_or_merges(
         .as_u64()
         .unwrap();
     near(&json!(session.takeoff.items[0].shown), 0.85);
-    assert_eq!(text(&session, field), "0.850");
+    assert_eq!(text(&session, field), "0.85 m²");
 
     let second = run(
         &mut session,
@@ -342,7 +342,7 @@ fn measuring_one_hatch_follows_its_material_when_another_piece_splits_or_merges(
     assert_eq!(second["hatches"].as_array().unwrap().len(), 3);
     near(&json!(session.takeoff.items[0].shown), 0.85);
     assert_eq!(session.takeoff.items[0].handles.len(), 1);
-    assert_eq!(text(&session, field), "0.850");
+    assert_eq!(text(&session, field), "0.85 m²");
     assert_eq!(
         second["handle_map"][left.to_string()]
             .as_array()
@@ -362,14 +362,14 @@ fn measuring_one_hatch_follows_its_material_when_another_piece_splits_or_merges(
     // Closing the first opening merges the left piece into the 7.5 m piece.
     near(&json!(session.takeoff.items[0].shown), 1.875);
     assert_eq!(session.takeoff.items[0].handles.len(), 1);
-    assert_eq!(text(&session, field), "1.875");
+    assert_eq!(text(&session, field), "1.88 m²");
     assert!(session.undo());
     near(&json!(session.takeoff.items[0].shown), 0.85);
     assert_eq!(session.takeoff.items[0].handles, after_split);
-    assert_eq!(text(&session, field), "0.850");
+    assert_eq!(text(&session, field), "0.85 m²");
     assert!(session.redo());
     near(&json!(session.takeoff.items[0].shown), 1.875);
-    assert_eq!(text(&session, field), "1.875");
+    assert_eq!(text(&session, field), "1.88 m²");
 }
 
 /// Undoing joined runs and openings, then opening the remaining runs again, must work and
