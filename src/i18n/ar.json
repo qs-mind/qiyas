@@ -1932,5 +1932,6 @@
   "shortcut.askMizan": "اسأل ميزان",
   "shortcut.cheatsheet": "إظهار الاختصارات",
   "save.choose": "اختر مكان حفظ الرسم…",
-  "save.defaultName": "رسم قياس {date}"
+  "save.defaultName": "رسم قياس {date}",
+  "outputs.oneItem": "بند واحد"
 }

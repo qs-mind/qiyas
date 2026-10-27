@@ -298,6 +298,12 @@ body {
 .ribbon-collapse[aria-expanded="true"] .gl {
   transform: rotate(180deg);
 }
+/* Not the pressed look of an open menu: it is a plain arrow. */
+.rb.ribbon-collapse[aria-expanded="true"] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
 .ribbon.collapsed .ribbon-panel {
   position: absolute;
   inset-inline: 0;

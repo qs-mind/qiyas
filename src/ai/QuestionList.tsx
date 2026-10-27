@@ -5,6 +5,7 @@
  *  1, 2, 3. Several: the questions are numbered and each one's options lettered. */
 import type { Question } from "../api";
 import { useT } from "../i18n";
+import { withoutBody } from "../shell/methodName";
 
 type Props = {
   questions: Question[];
@@ -21,7 +22,7 @@ export function QuestionList({ questions, onPick }: Props) {
     <div className="msg assistant question-list" role="group" aria-label={t(many ? "ai.nQuestions" : "ai.oneQuestion", { n: questions.length })}>
       {questions.map((q, qi) => (
         <div key={q.id} className="q">
-          <p className="qt"><bdi>{many ? `${qi + 1}. ` : ""}{q.question}</bdi></p>
+          <p className="qt"><bdi>{many ? `${qi + 1}. ` : ""}{withoutBody(q.question)}</bdi></p>
           <ol className="qo">
             {q.options.map((o, oi) => {
               const marker = many ? letter(oi) : String(oi + 1);
@@ -37,10 +38,10 @@ export function QuestionList({ questions, onPick }: Props) {
                     <span className="k" aria-hidden="true">{marker}</span>
                     <span className="tx">
                       <span className="l">
-                        <bdi>{o.label}</bdi>
+                        <bdi>{withoutBody(o.label)}</bdi>
                         {o.recommended && <em>· {t("ai.recommended")}</em>}
                       </span>
-                      {o.description && <span className="s"><bdi>{o.description}</bdi></span>}
+                      {o.description && <span className="s"><bdi>{withoutBody(o.description)}</bdi></span>}
                     </span>
                   </button>
                 </li>

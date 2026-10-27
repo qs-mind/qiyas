@@ -1932,5 +1932,6 @@
   "shortcut.askMizan": "Ask Mizan",
   "shortcut.cheatsheet": "Show the shortcuts",
   "save.choose": "Choose where to save the drawing…",
-  "save.defaultName": "Qiyas drawing {date}"
+  "save.defaultName": "Qiyas drawing {date}",
+  "outputs.oneItem": "1 item"
 }

@@ -1,3 +1,4 @@
+import { withoutBody } from "../shell/methodName";
 import type { PlanPhase } from "../api";
 import { translate, useT, type Lang } from "../i18n";
 import "./plan.css";
@@ -18,7 +19,7 @@ export function PlanChecklist({ phases, stale = false, onApprove, onChange, lang
   function title(phase: PlanPhase) {
     if (phase.id === "drawing-check") return t("ai.reviewDrawingErrors");
     if (phase.id === "drawing-check-review") return t("ai.reviewDrawingErrors");
-    return phase.title;
+    return withoutBody(phase.title);
   }
   return (
     <section className="mizan-plan" aria-label={t("ai.plan")}>

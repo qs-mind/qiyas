@@ -368,7 +368,7 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
   const outputs = outputList(takeoffState);
   const meta = (id: OutputId) => {
     const count = outputs.find((o) => o.id === id)?.count;
-    return [drawing, count ? t("outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
+    return [drawing, count ? t(count === 1 ? "outputs.oneItem" : "outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
   };
   const body = (id: OutputId) => {
     switch (id) {
