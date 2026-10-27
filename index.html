@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Qiyas</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- The first frame is the theme's own background (--bg: Paper, Ink in dark), not the web view's
+         white, until theme.css arrives. theme-init.js sets data-theme before the first paint. -->
+    <style>
+      html { background: #f9f8f4; }
+      html[data-theme="dark"] { background: #0e0f12; }
+    </style>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>
