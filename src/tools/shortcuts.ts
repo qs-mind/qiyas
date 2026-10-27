@@ -10,6 +10,14 @@ export type Shortcut =
   | "undo"
   | "redo"
   | "save"
+  | "saveAs"
+  | "open"
+  | "plot"
+  | "find"
+  | "selectAll"
+  | "cut"
+  | "askMizan"
+  | "cheatsheet"
   | "new"
   | "escape"
   | "finish"
@@ -56,8 +64,20 @@ function builtInShortcut(e: Keys): Shortcut | null {
   if (e.ctrlKey) {
     if (e.code === "KeyZ") return e.shiftKey ? "redo" : "undo";
     if (e.code === "KeyY") return "redo";
-    if (e.code === "KeyS" && !e.shiftKey) return "save";
+    // As in AutoCAD: Ctrl+S saves, Ctrl+Shift+S saves as, Ctrl+N and Ctrl+O make and open a drawing,
+    // Ctrl+P plots, Ctrl+A selects all.
+    if (e.code === "KeyS") return e.shiftKey ? "saveAs" : "save";
     if (e.code === "KeyN" && !e.shiftKey) return "new";
+    if (e.code === "KeyO" && !e.shiftKey) return "open";
+    if (e.code === "KeyP" && !e.shiftKey) return "plot";
+    if (e.code === "KeyA" && !e.shiftKey) return "selectAll";
+    // Ctrl+F is Find and replace here (AutoCAD's Ctrl+F is the running object snap, F3 here).
+    if (e.code === "KeyF" && !e.shiftKey) return "find";
+    // Ctrl+X cuts (CUTCLIP): copy, then erase.
+    if (e.code === "KeyX" && !e.shiftKey) return "cut";
+    // Mizan: Ctrl+K goes to his box; Ctrl+/ shows the shortcuts.
+    if (e.code === "KeyK" && !e.shiftKey) return "askMizan";
+    if (e.code === "Slash" && !e.shiftKey) return "cheatsheet";
     // Shows and hides the command line, as in AutoCAD.
     if (e.code === "Digit9" && !e.shiftKey) return "commandLine";
     // The file tabs, as in a browser.
@@ -70,6 +90,8 @@ function builtInShortcut(e: Keys): Shortcut | null {
     return null;
   }
   if (e.code === "Escape") return "escape";
+  // "/" goes to Mizan's box with a slash typed, which lists his commands.
+  if (e.code === "Slash" && !e.shiftKey) return "askMizan";
   // Delete erases what is selected (ERASE takes the selection as it is), as in AutoCAD.
   if (e.code === "Delete" && !e.shiftKey) return "erase";
   if (!e.shiftKey && e.code in TOGGLE_CODES) return TOGGLE_CODES[e.code];
@@ -84,7 +106,16 @@ export const BUILT_IN_SHORTCUTS: [string, string][] = [
   ["redo", "Ctrl+Shift+Z"],
   ["redo", "Ctrl+Y"],
   ["save", "Ctrl+S"],
+  ["saveAs", "Ctrl+Shift+S"],
   ["new", "Ctrl+N"],
+  ["open", "Ctrl+O"],
+  ["plot", "Ctrl+P"],
+  ["find", "Ctrl+F"],
+  ["selectAll", "Ctrl+A"],
+  ["cut", "Ctrl+X"],
+  ["askMizan", "Slash"],
+  ["askMizan", "Ctrl+K"],
+  ["cheatsheet", "Ctrl+Slash"],
   ["commandLine", "Ctrl+9"],
   ["nextTab", "Ctrl+Tab"],
   ["prevTab", "Ctrl+Shift+Tab"],
@@ -108,6 +139,7 @@ export const BUILT_IN_SHORTCUTS: [string, string][] = [
 
 /** The keys a shortcut may end in besides letters, digits and F1 to F24 (as the core's). */
 const NAMED_KEYS = [
+  "Slash",
   "Escape",
   "Enter",
   "Tab",
@@ -154,6 +186,9 @@ export function keyOf(e: Keys): string | null {
   const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta"].filter(Boolean);
   return normalizeKey([...mods, key].join("+"));
 }
+
+/** A key as people read it: "Slash" is "/". */
+export const keyLabel = (key: string) => key.replace(/\bSlash$/, "/");
 
 /** The first key two commands share once the user's shortcuts (command to key) are laid over the
  *  built-in ones (a command the user gave a key keeps only that one); null when none. */

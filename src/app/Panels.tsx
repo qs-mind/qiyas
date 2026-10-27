@@ -145,6 +145,8 @@ type WorkProps = {
   chooseTool(tool: Tool): void;
   onProperties(): void;
   askMizan?: Pick<Pointing, "selection" | "ask">;
+  /** A tap of Space in the drawing: repeat the last tool. */
+  onSpaceTap?(): void;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -171,6 +173,7 @@ export function WorkArea({
   chooseTool,
   onProperties,
   askMizan,
+  onSpaceTap,
 }: WorkProps) {
   const { theme, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -245,6 +248,7 @@ export function WorkArea({
             inset={inset}
             onMove={measure.onMove}
             onWindowZoomed={measure.cancel}
+            onSpaceTap={onSpaceTap}
           />
           {info && !parametric.barHidden && (
             <ConstraintBar
@@ -332,13 +336,15 @@ type SideProps = {
   onSlashCompare?(): void;
   /** Opens "Connect an AI app". */
   onConnect?(): void;
+  /** A key asked for Mizan's box. */
+  ask?: { n: number; text: string };
 };
 
 /** The right column (design B): Mizan's conversation, and, when Mizan's work is opened, the take-off,
  *  BOQ, conflicts or take-off report in the same column in place of the conversation, with a way
  *  back. The conversation and every output stay mounted, one shown, so a draft, a search or a
  *  running answer survives the switch. */
-export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect }: SideProps) {
+export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect, ask }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -439,6 +445,7 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
         artifact={{ shown, node: frames, onBack: () => setSideTab("assistant") }}
         onCompare={onSlashCompare}
         onConnect={onConnect}
+        ask={ask}
       />
     </aside>
   );

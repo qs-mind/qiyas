@@ -198,7 +198,7 @@ test("Mizan's requests: a drawing it put on screen is shown; closing unsaved wor
   expect(result.current.newOpen).toBe(false);
 });
 
-test("New makes an untitled drawing in the units chosen; its Save starts in Documents with its name offered, never saves over the placeholder", async () => {
+test("New makes an untitled drawing in the units chosen; its Save starts in Documents offering a real name (the date when there is nothing to name it by), never saves over the placeholder", async () => {
   const { result } = await launch();
   await act(() => result.current.newDrawing("cm"));
   expect(core.calls).toContain(`new_drawing {"units":"cm"}`);
@@ -206,7 +206,7 @@ test("New makes an untitled drawing in the units chosen; its Save starts in Docu
 
   await act(() => result.current.saveFile());
   expect(dialogs.save).toHaveBeenCalledTimes(1);
-  expect(dialogs.save.mock.calls[0][0].defaultPath).toBe("/home/qs/Documents/Untitled-1.dwg");
+  expect(dialogs.save.mock.calls[0][0].defaultPath).toMatch(/^\/home\/qs\/Documents\/Qiyas drawing \d{4}-\d{2}-\d{2}\.dwg$/);
   expect(core.calls.some((c) => c.startsWith("save_drawing "))).toBe(false);
 
   dialogs.save.mockResolvedValueOnce("/jobs/new.dwg");

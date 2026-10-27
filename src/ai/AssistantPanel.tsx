@@ -40,6 +40,8 @@ type Props = {
   onCompare?(): void;
   /** The /connect command and the empty chat's link: the "Connect an AI app" dialog. */
   onConnect?(): void;
+  /** A key asked for the box (`/`, Ctrl+K): it takes the focus, and `text` goes in it when empty. */
+  ask?: { n: number; text: string };
   /** Reads a picture pasted, dropped or picked (tests give their own). */
   read?(file: File): Promise<Picture>;
 };
@@ -68,6 +70,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   artifact,
   onCompare,
   onConnect,
+  ask,
   read = readPicture,
 }: Props) {
   const t = useT();
@@ -106,6 +109,13 @@ export const AssistantPanel = memo(function AssistantPanel({
   /** Slash commands: the row chosen in the list, and whether Escape closed it for this text. */
   const [slashAt, setSlashAt] = useState(0);
   const [slashOff, setSlashOff] = useState(false);
+
+  // `/` or Ctrl+K: the box takes the focus (a slash typed in it lists the commands).
+  useEffect(() => {
+    if (!ask || ask.n === 0) return;
+    box.current?.focus();
+    if (ask.text && !draft) setDraft(ask.text);
+  }, [ask?.n]);
 
   // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
   const focusKey = pointing?.focusKey ?? 0;

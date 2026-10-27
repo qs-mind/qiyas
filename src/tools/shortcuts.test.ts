@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { keyOf, normalizeKey, shortcutClash, shortcutFor, type Keys } from "./shortcuts";
+import { keyLabel, keyOf, normalizeKey, shortcutClash, shortcutFor, type Keys } from "./shortcuts";
 
 const keys = (code: string, more: Partial<Keys> = {}): Keys => ({
   code,
@@ -42,7 +42,7 @@ test("undo, redo and save with Ctrl", () => {
   expect(shortcutFor(keys("KeyN", { ctrlKey: true, shiftKey: true }))).toBeNull();
   expect(shortcutFor(keys("Digit9", { ctrlKey: true }))).toBe("commandLine");
   expect(shortcutFor(keys("Digit9"))).toBeNull();
-  expect(shortcutFor(keys("KeyS", { ctrlKey: true, shiftKey: true }))).toBeNull();
+  expect(shortcutFor(keys("KeyS", { ctrlKey: true, shiftKey: true }))).toBe("saveAs");
   expect(shortcutFor(keys("KeyD", { ctrlKey: true }))).toBeNull();
 });
 
@@ -122,4 +122,31 @@ test("the user's shortcuts start their command, and a command moved leaves its b
   expect(shortcutFor(keys("F3"), mine)).toBeNull();
   // The rest as built in.
   expect(shortcutFor(keys("KeyY", { ctrlKey: true }), mine)).toBe("redo");
+});
+
+test("W4: the file, edit and Mizan keys the audit added", () => {
+  const ctrl = (code: string, more: Partial<Keys> = {}) => shortcutFor(keys(code, { ctrlKey: true, ...more }));
+  expect(ctrl("KeyO")).toBe("open");
+  expect(ctrl("KeyP")).toBe("plot");
+  expect(ctrl("KeyF")).toBe("find");
+  expect(ctrl("KeyA")).toBe("selectAll");
+  expect(ctrl("KeyX")).toBe("cut");
+  expect(ctrl("KeyK")).toBe("askMizan");
+  expect(ctrl("Slash")).toBe("cheatsheet");
+  // A bare slash asks Mizan; with Shift (the "?" key on most layouts) it does not.
+  expect(shortcutFor(keys("Slash"))).toBe("askMizan");
+  expect(shortcutFor(keys("Slash", { shiftKey: true }))).toBeNull();
+  // Shift variants that are not shortcuts stay free.
+  expect(ctrl("KeyO", { shiftKey: true })).toBeNull();
+  expect(ctrl("KeyP", { shiftKey: true })).toBeNull();
+  expect(ctrl("KeyX", { shiftKey: true })).toBeNull();
+  // The same on an Arabic layout (the physical key).
+  expect(ctrl("KeyS", { key: "س", shiftKey: true })).toBe("saveAs");
+  expect(keyLabel("Ctrl+Slash")).toBe("Ctrl+/");
+});
+
+test("no two built-in commands share a key, with the new ones in", () => {
+  expect(shortcutClash({})).toBeNull();
+  // Slash is Mizan's, so a user who gives another command the slash is told.
+  expect(shortcutClash({ distance: "Slash" })).toMatchObject({ key: "Slash" });
 });

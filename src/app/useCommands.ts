@@ -2,7 +2,7 @@
  *  last point), `apply` for the commands tools, panels and the command line make, and undo and
  *  redo (`history`). */
 import { useRef, useState } from "react";
-import { blocks as readBlocks, drawingInfo, runCommand, type Command, type DrawingInfo } from "../api";
+import { blocks as readBlocks, drawingInfo, redo, runCommand, type Command, type DrawingInfo } from "../api";
 import type { Tool } from "../shell/Ribbon";
 import type { Point } from "../viewport/camera";
 import type { T } from "./shared";
@@ -18,14 +18,18 @@ export function useToolChoice(focusDrawing: () => void) {
   const lastPoint = useRef<Point | null>(null);
   /** DIVIDE n or MEASURE step typed on the command line: the answer once the entity is clicked. */
   const preset = useRef<{ tool: Tool; value: number } | null>(null);
+  /** The last tool chosen other than Select: Enter, with nothing under way, does it again (AutoCAD's
+   *  repeat of the last command). */
+  const lastTool = useRef<Tool | null>(null);
 
   function chooseTool(next: Tool) {
     preset.current = null;
+    if (next !== "select") lastTool.current = next;
     setTool(next);
     focusDrawing();
   }
 
-  return { tool, setTool, lastPoint, preset, chooseTool };
+  return { tool, setTool, lastPoint, preset, chooseTool, lastTool };
 }
 
 export type ToolChoice = ReturnType<typeof useToolChoice>;
@@ -177,8 +181,11 @@ export function useCommands({
       if (outcome.type === "constrained" && cmd.type === "delete_constraints_on") {
         setNotice(t("param.removed", { n: outcome.ids.length }));
       }
+      // Delete says how many it erased, with what the take-off did about them.
+      const erased = cmd.type === "delete_entities" ? t("modify.erased", { n: cmd.targets.length }) : null;
+      if (erased && outcome.type !== "takeoff_followed") setNotice(erased);
       if (outcome.type === "exploded" || outcome.type === "takeoff_followed") {
-        const notes: string[] = [];
+        const notes: string[] = erased ? [erased] : [];
         if (outcome.type === "exploded" && outcome.left_alone > 0) {
           notes.push(t("modify.leftAlone", { n: outcome.left_alone }));
         }
@@ -204,8 +211,16 @@ export function useCommands({
 
   async function history(step: () => Promise<boolean>) {
     let changed = false;
+    // Every undo and redo says what it did (a key press otherwise shows nothing when it changes
+    // nothing): done, or that there was nothing.
+    const redoing = step === redo;
     await run(async () => {
-      if (!info || !(await step())) return;
+      if (!info) return;
+      if (!(await step())) {
+        setNotice(t(redoing ? "history.nothingRedo" : "history.nothingUndo"));
+        return;
+      }
+      setNotice(t(redoing ? "history.redone" : "history.undone"));
       changed = true;
       await refreshTakeoffAndBoq();
       // The step may have been a PDF import, an underlay or a calibration.

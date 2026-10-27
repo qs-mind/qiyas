@@ -4077,3 +4077,56 @@ code, kbd, .chip { unicode-bidi: isolate; }
   overflow-wrap: anywhere;
   user-select: text;
 }
+
+/* The keyboard shortcuts cheat sheet. */
+.shortcuts {
+  width: min(900px, 94vw);
+}
+.shortcuts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shortcuts-body p {
+  margin: 0;
+}
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px 28px;
+  max-height: min(64vh, 640px);
+  overflow-y: auto;
+}
+.shortcuts-grid h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.shortcuts-grid dl {
+  margin: 0;
+}
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 38%) 1fr;
+  gap: 12px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.shortcut-row dt,
+.shortcut-row dd {
+  margin: 0;
+}
+.shortcut-row kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--panel);
+}
+.shortcut-row .gesture {
+  color: var(--fg);
+}

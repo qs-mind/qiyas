@@ -6,8 +6,10 @@ import { cmdlineStep, EMPTY_MODEL, pick, redo, undo, type CmdlineStep, type Draw
 import type { Assistant } from "../ai/useAssistant";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
 import type { DotPattern } from "../shell/DotLoader";
+import type { Tool } from "../shell/Ribbon";
 import type { Action, Expect, ParseState } from "../tools/commandParser";
 import { shortcutFor, userShortcut } from "../tools/shortcuts";
+import { toolLabel } from "../shell/toolLabel";
 import type { Point } from "../viewport/camera";
 import { type Measure, type T, typing } from "./shared";
 import type { Annotate } from "./useAnnotate";
@@ -30,7 +32,7 @@ type Deps = {
   info: DrawingInfo | null;
   measure: Measure;
   assistant: Pick<Assistant, "send">;
-  shell: Pick<Shell, "run" | "setError" | "setNotice" | "setSideTab" | "viewport" | "commandAliases">;
+  shell: Pick<Shell, "run" | "setError" | "setNotice" | "setSideTab" | "viewport" | "commandAliases" | "askMizan" | "setShortcutsOpen">;
   drafting: Pick<DraftingState, "toggleDrafting">;
   toolChoice: ToolChoice;
   commands: Commands;
@@ -101,9 +103,9 @@ export function useCommandLine({
   options,
   parametric,
 }: Deps) {
-  const { run, setError, setNotice, setSideTab, viewport, commandAliases } = shell;
+  const { run, setError, setNotice, setSideTab, viewport, commandAliases, askMizan, setShortcutsOpen } = shell;
   const { toggleDrafting } = drafting;
-  const { tool, setTool, lastPoint, preset, chooseTool } = toolChoice;
+  const { tool, setTool, lastPoint, preset, chooseTool, lastTool } = toolChoice;
   const { apply, history } = commands;
   const { batch, renderProgress, split, setSplit, hidden, chooseSheet, ucsIcon, chooseUcsIcon } = sheets;
   const { applyHidden, isolateLayer, unisolateLayers, showAll, setLayerStatesOpen, setTranslatorOpen } = layers;
@@ -221,7 +223,19 @@ export function useCommandLine({
 
   /** Escape: drops what is waiting (an insert point, a measure, a prompt) and every highlight.
    *  `escKey` for the Esc key itself (or ESC typed), which keeps a polyline drawn so far. */
+  /** The tool and time of the last Esc: a second one soon after, in the same tool, ends the tool
+   *  (AutoCAD: Esc cancels the input, Esc again leaves the command). */
+  const lastEsc = useRef<{ tool: Tool; at: number } | null>(null);
   function cancelAll(escKey = false) {
+    if (escKey) {
+      const now = Date.now();
+      const again = lastEsc.current;
+      lastEsc.current = tool !== "select" ? { tool, at: now } : null;
+      if (again && again.tool === tool && tool !== "select" && now - again.at < 1500) {
+        lastEsc.current = null;
+        chooseTool("select");
+      }
+    }
     cancelTyped();
     preset.current = null;
     setPending(null);
@@ -401,6 +415,7 @@ export function useCommandLine({
       return;
     }
     // The window's own settings need no drawing.
+    if (what === "shortcuts") return setShortcutsOpen(true);
     if (what === "options") return options.setOptionsOpen(true);
     if (what === "customize") return options.setCustomizeOpen(true);
     if (what === "aliasEdit") return options.setAliasesOpen(true);
@@ -493,6 +508,63 @@ export function useCommandLine({
     }
   }
 
+  /** Enter (or a tap of Space) with nothing under way does the last tool again, as AutoCAD repeats
+   *  its last command; it says which, or that there is none. False when something is under way. */
+  function repeatLast(): boolean {
+    if (tool !== "select" || measure.highlighted !== null || measure.picks.length > 0) return false;
+    if (!info) return false;
+    const again = lastTool.current;
+    if (!again) {
+      setNotice(t("repeat.none"));
+      return true;
+    }
+    setNotice(t("repeat.last", { name: toolLabel(again, t) }));
+    chooseTool(again);
+    return true;
+  }
+
+  /** Select all (Ctrl+A): the Select tool's selection set takes every entity of the sheet on screen. */
+  const selectAllNext = useRef(false);
+  const announceSelection = useRef(false);
+  function selectAll() {
+    if (!info || !batch) {
+      setNotice(t("select.none"));
+      return;
+    }
+    if (tool !== "select") {
+      // The Select tool first; the selection is made once it is on (the effect below).
+      selectAllNext.current = true;
+      chooseTool("select");
+      return;
+    }
+    announceSelection.current = true;
+    void measure.onBox(batch.bounds, true, false);
+  }
+  useEffect(() => {
+    if (tool === "select" && selectAllNext.current) {
+      selectAllNext.current = false;
+      selectAll();
+    }
+  }, [tool]);
+  useEffect(() => {
+    if (!announceSelection.current) return;
+    announceSelection.current = false;
+    setNotice(measure.picks.length > 0 ? t("select.all", { n: measure.picks.length }) : t("select.none"));
+  }, [measure.picks]);
+
+  /** Cut (Ctrl+X): what is selected goes onto the clipboard and is erased, as CUTCLIP. */
+  async function cutSelection() {
+    const handles = tool === "select" ? measure.picks : measure.selection;
+    if (!info || handles.length === 0) {
+      setNotice(t("clip.nothingSelected"));
+      return;
+    }
+    const targets = handles.map((handle) => ({ handle, chain: [] as number[] }));
+    await apply({ type: "copy_to_clipboard", targets, base: null });
+    await apply({ type: "delete_entities", targets });
+    setNotice(t("clip.cut", { n: targets.length }));
+  }
+
   // Keyboard: tool letters, Escape, Enter, undo, redo and save. Re-bound each render, so it sees fresh state.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -509,6 +581,20 @@ export function useCommandLine({
       if (action === "new") {
         e.preventDefault();
         if (!e.repeat) setNewOpen(true);
+        return;
+      }
+      // Files and Mizan, from anywhere (a prompt being typed too: Ctrl+S saves the drawing): the
+      // window answers with a dialog, a toast or the box, never silence.
+      if (action === "save" || action === "saveAs" || action === "open" || action === "plot" || action === "find") {
+        e.preventDefault();
+        if (!e.repeat && switching.current === 0) runCommandLine(action);
+        return;
+      }
+      if (action === "cheatsheet" || (action === "askMizan" && e.ctrlKey)) {
+        e.preventDefault();
+        if (e.repeat) return;
+        if (action === "cheatsheet") setShortcutsOpen(true);
+        else askMizan();
         return;
       }
       // The file tabs, from anywhere: Ctrl+Tab and Ctrl+W type nothing.
@@ -529,11 +615,22 @@ export function useCommandLine({
         // F7 and F10 also mean something to the web view; not here.
         e.preventDefault();
         if (!e.repeat) toggleDrafting(action);
-      } else if (action === "undo" || action === "redo" || action === "save") {
+      } else if (action === "undo" || action === "redo") {
         if (action === "undo") history(undo);
-        else if (action === "redo") history(redo);
-        else saveFile();
+        else history(redo);
         e.preventDefault();
+      } else if (action === "askMizan") {
+        // "/" opens Mizan's box with a slash typed, which lists his commands.
+        e.preventDefault();
+        if (!e.repeat) askMizan("/");
+      } else if (action === "selectAll") {
+        e.preventDefault();
+        if (!e.repeat) selectAll();
+      } else if (action === "cut") {
+        // Text selected in a panel: Ctrl+X is the text's, as Ctrl+C.
+        if ((window.getSelection()?.toString() ?? "") !== "") return;
+        e.preventDefault();
+        if (!e.repeat) void cutSelection();
       } else if (action === "escape") {
         cancelAll(true);
       } else if (action === "finish") {
@@ -541,6 +638,8 @@ export function useCommandLine({
         if (e.target instanceof HTMLButtonElement) return;
         // Nor on a menu item, a grid or tree row or a list option: they are divs, and Enter is theirs.
         if ((e.target as Element | null)?.closest?.("[role^='menuitem'],[role=row],[role=treeitem],[role=option]")) return;
+        // Nothing under way: Enter does the last tool again.
+        if (!e.repeat && repeatLast()) return;
         measure.finish();
       } else if (action === "erase" && (e.target as Element | null)?.closest?.("dialog[open], [role=dialog], [role=menu]")) {
         // Delete in a dialog or a menu is not for the drawing behind it.
@@ -669,5 +768,5 @@ export function useCommandLine({
   const progress =
     !opening && !comparing && !windowPick && !pending && renderProgress !== null && !attachOpen ? renderProgress : null;
 
-  return { commandLineOn, commandInput, onCommand, typeCommand, startCommand, coreActive: typedPrompt !== null, clickDrawing, commandState, prompt, message, waiting, progress };
+  return { commandLineOn, commandInput, onCommand, typeCommand, startCommand, repeatLast, coreActive: typedPrompt !== null, clickDrawing, commandState, prompt, message, waiting, progress };
 }

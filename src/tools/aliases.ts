@@ -124,6 +124,7 @@ export const COMMANDS = [
   "SCRIPT",
   "SHEET",
   "SHEETSET",
+  "SHORTCUTS",
   "SKETCH",
   "SOLID",
   "SPLINE",

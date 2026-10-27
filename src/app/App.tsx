@@ -50,6 +50,10 @@ export default function App() {
   // An output in the right column wants a wider panel than the conversation: its width is kept apart.
   const rightSlot = shell.sideTab === "assistant" ? "right" : "rightWide";
   const options = useOptions({ t, info, setError: shell.setError });
+  // A key that asks for Mizan's box opens the column if it is folded away.
+  useEffect(() => {
+    if (shell.mizanAsk.n > 0) panels.setFolded("right", false);
+  }, [shell.mizanAsk.n]);
   const { theme, settingsOpen, setSettingsOpen, setConnectOpen, commandAliases, setError, setNotice, setSideTab, viewport, focusDrawing } =
     shell;
   /** User commands end Mizan's animation before running. Background refreshes use shell.run. */
@@ -64,7 +68,7 @@ export default function App() {
   /** Bumped whenever another drawing comes on screen (open, tab switch, close): work started
    *  before is stale (`isStale`) and drops its results. */
   const switchGen = useRef(0);
-  const draftingState = useDrafting({ run, autosave });
+  const draftingState = useDrafting({ run, autosave, setNotice, t });
   const { drafting, setDraftingState, setDraftingOpen, toggleDrafting } = draftingState;
   const takeoffState = useTakeoffState(switchGen);
   const { items, setSelectedId, setCompared, aiHighlight, setAiHighlight, setInfoCard, refreshTakeoffAndBoq } = takeoffState;
@@ -302,7 +306,7 @@ export default function App() {
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
   const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
-  const { commandLineOn, commandInput, onCommand, typeCommand, startCommand, coreActive, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
+  const { commandLineOn, commandInput, onCommand, typeCommand, startCommand, repeatLast, coreActive, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
     t,
     switchGen,
     info,
@@ -442,6 +446,7 @@ export default function App() {
           parametric={parametric}
           chooseTool={chooseTool}
           askMizan={ai.pointing}
+          onSpaceTap={() => void repeatLast()}
           onProperties={() => {
             panels.setFolded("left", false);
             setRevealProperties((n) => n + 1);
@@ -468,6 +473,7 @@ export default function App() {
           onExportTakeoff={info ? drawings.exportFile : undefined}
           onSlashCompare={info ? takeoff.importAndCompare : undefined}
           onConnect={() => setConnectOpen(true)}
+          ask={shell.mizanAsk}
           recognition={{ revision: batch, run: runDrawingCommand }}
         />
       </div>

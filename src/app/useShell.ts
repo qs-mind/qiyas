@@ -21,6 +21,12 @@ export function useShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The "Connect an AI app" dialog. */
   const [connectOpen, setConnectOpen] = useState(false);
+  /** The shortcuts cheat sheet (Ctrl+/). */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** Counts up when a key asks for Mizan's box (`/`, Ctrl+K): the box takes the focus, and `text`
+   *  goes in it when it is empty (a slash opens his commands). */
+  const [mizanAsk, setMizanAsk] = useState<{ n: number; text: string }>({ n: 0, text: "" });
+  const askMizan = useCallback((text = "") => setMizanAsk((was) => ({ n: was.n + 1, text })), []);
   /** The user's command line aliases from the settings. */
   const [userAliases, setUserAliases] = useState<Record<string, string>>({});
   const [words, setWords] = useState<CommandWord[]>([]);
@@ -96,6 +102,10 @@ export function useShell() {
     setSettingsOpen,
     connectOpen,
     setConnectOpen,
+    shortcutsOpen,
+    setShortcutsOpen,
+    mizanAsk,
+    askMizan,
     commandAliases,
     words,
     loadAliases,

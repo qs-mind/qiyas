@@ -71,6 +71,8 @@ export type Run =
   /** UCS W: back to the world coordinate system. */
   | "ucsWorld"
   | "sheetSet"
+  /** SHORTCUTS: the keyboard shortcuts cheat sheet (Ctrl+/). */
+  | "shortcuts"
   | "recover"
   /** SCRIPT: runs a `.scr` command script. */
   | "script"
@@ -149,6 +151,7 @@ const RUNS: Partial<Record<CommandName, Run>> = {
   VPLAYER: "vpLayer",
   PROPERTIES: "properties",
   SHEETSET: "sheetSet",
+  SHORTCUTS: "shortcuts",
   RECOVER: "recover",
   SCRIPT: "script",
   OPTIONS: "options",

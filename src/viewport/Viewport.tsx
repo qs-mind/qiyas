@@ -122,6 +122,9 @@ type Props = {
   onMove(world: Point, worldPerPixel: number): void;
   /** A zoom window was dragged and shown: a corner typed before it is dropped. */
   onWindowZoomed?(): void;
+  /** Space was tapped (pressed and let go with no pan between, the pointer over nothing else): AutoCAD
+   *  repeats its last command on Space. Held with a drag it is the pan key, as ever. */
+  onSpaceTap?(): void;
   /** The zoom has more than doubled or halved since the batch's glyphs were drawn: draw them
    *  again for `pxPerUnit` screen pixels per drawing unit. Called once the zoom settles. */
   onZoomHint?(pxPerUnit: number): void;
@@ -164,6 +167,7 @@ export function Viewport({
   onBox,
   onMove,
   onWindowZoomed,
+  onSpaceTap,
   onZoomHint,
   pictures = NO_PICTURES,
   onPictureHint,
@@ -186,6 +190,10 @@ export function Viewport({
   /** Where a left press began; it is a click only if the release is within a few pixels. */
   const press = useRef<Point | null>(null);
   const space = useRef(false);
+  /** Space went down not on a field or a button, and was not used to pan: a tap on release. */
+  const spaceTap = useRef(false);
+  const onSpaceTapRef = useRef(onSpaceTap);
+  onSpaceTapRef.current = onSpaceTap;
   const lastMiddle = useRef(0);
   const [zoomBox, setZoomBox] = useState<[Point, Point] | null>(null);
   const [selectBox, setSelectBox] = useState<[Point, Point] | null>(null);
@@ -345,10 +353,20 @@ export function Viewport({
       e.target instanceof HTMLElement &&
       (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !typing(e)) space.current = true;
+      if (e.code === "Space" && !typing(e)) {
+        space.current = true;
+        // Only over the drawing itself (the canvas, or nothing focused): on a button Space presses it.
+        const target = e.target;
+        if (!e.repeat) spaceTap.current = !(target instanceof Element) || target === document.body || target === canvas || !!target.closest(".viewport");
+      } else if (e.code !== "Space") {
+        spaceTap.current = false;
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") space.current = false;
+      if (e.code !== "Space") return;
+      space.current = false;
+      if (spaceTap.current) onSpaceTapRef.current?.();
+      spaceTap.current = false;
     };
     const onBlur = () => (space.current = false);
     window.addEventListener("keydown", onKeyDown);
@@ -443,6 +461,7 @@ export function Viewport({
       lastMiddle.current = now;
       startDrag(e, "pan", p);
     } else if (e.button === 0 && space.current) {
+      spaceTap.current = false;
       startDrag(e, "pan", p);
     } else if (e.button === 0 && tool === "zoomWindow") {
       startDrag(e, "zoomWindow", p);

@@ -57,6 +57,7 @@ import {
 } from "../api";
 import { useLanguage } from "../i18n";
 import { cycleTab } from "../shell/FileTabs";
+import { readNameTexts, suggestDrawingName } from "./saveName";
 import { useOpenRequests } from "../shell/openRequests";
 import { atLaunch, drop, enqueue, forgetThen, laterOpens, localTime, offered, type RecoveryAsk } from "../shell/recoveryQueue";
 import type { SheetSetApi } from "../shell/SheetSetManager";
@@ -722,7 +723,7 @@ export function useDrawings({
       // The save wrote the project file too: autosave can try again.
       autosaveOff.current = false;
       if (workspace === displayedWorkspace()) await redraw();
-      setNotice(t("save.done", { path: next?.path ?? "" }));
+      setNotice(t("save.done", { name: (next?.path ?? "").split(/[\\/]/).pop() ?? "" }));
       saved = true;
     });
     return saved;
@@ -774,14 +775,29 @@ export function useDrawings({
   /** Save As for `of`, the drawing on screen (given, as one just recovered is not in `info` yet). */
   async function saveAs(of: DrawingInfo, workspace = displayedWorkspace()): Promise<string | null> {
     const path = await askSavePath(of);
-    if (!path) return null;
+    if (!path) {
+      // Cancelled: the "Choose where to save" toast goes with it.
+      setNotice(null);
+      return null;
+    }
     return (await saveWith(() => saveDrawingAs(path, workspace), workspace)) ? path : null;
   }
 
-  /** Keeps the offered name; the shared picker chooses a folder for untitled drawings. */
+  /** Asks where to save. The native dialog can open where the user is not looking (a compositor may
+   *  put it on another workspace), so a toast says it is coming; an untitled drawing is offered a
+   *  real name (its title block's project or title, else its first text, else "Qiyas drawing <date>")
+   *  and the shared picker's real folder (the last one used, else Documents), never the placeholder's. */
   async function askSavePath(of: DrawingInfo): Promise<string | null> {
+    setNotice(t("save.choose"));
+    let offered = of.path;
+    if (of.untitled) {
+      const now = new Date();
+      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      const name = suggestDrawingName(await readNameTexts(of.sheets.map((s) => s.block)), t("save.defaultName", { date }));
+      offered = `${name}.dwg`;
+    }
     return save({
-      defaultPath: of.untitled ? (of.path.split(/[\\/]/).pop() ?? of.path) : of.path,
+      defaultPath: offered,
       filters: [
         { name: "DWG", extensions: ["dwg"] },
         { name: "DXF", extensions: ["dxf"] },

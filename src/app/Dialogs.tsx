@@ -49,6 +49,7 @@ import { PurgeDialog } from "../shell/PurgeDialog";
 import { RecoverReportDialog, RecoveryDialog } from "../shell/RecoveryDialog";
 import { ScriptResultDialog } from "../shell/ScriptResultDialog";
 import { ConnectAiDialog } from "../shell/ConnectAiDialog";
+import { ShortcutsDialog } from "../shell/ShortcutsDialog";
 import { SettingsDialog } from "../shell/SettingsDialog";
 import { SheetSetManager } from "../shell/SheetSetManager";
 import { NewTableDialog, TableEditor } from "../shell/TableEditor";
@@ -105,7 +106,7 @@ export function Dialogs({
   onUndo,
 }: Props) {
   const t = useT();
-  const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, connectOpen, setConnectOpen, loadAliases, run, setNotice, focusDrawing } =
+  const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, connectOpen, setConnectOpen, shortcutsOpen, setShortcutsOpen, loadAliases, run, setNotice, focusDrawing } =
     shell;
   const { drafting, draftingOpen, setDraftingOpen, saveDrafting } = draftingState;
   const { batch, renderProgress, redraw } = sheets;
@@ -626,6 +627,7 @@ export function Dialogs({
           }}
         />
       )}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {connectOpen && <ConnectAiDialog onSettings={() => setSettingsOpen(true)} onClose={() => setConnectOpen(false)} />}
       {options.optionsOpen && (
         <OptionsDialog

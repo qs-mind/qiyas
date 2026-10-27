@@ -72,6 +72,12 @@ const core = vi.hoisted(() => ({
   undoBatch: null as ArrayBuffer | null,
   otherBatch: null as ArrayBuffer | null,
   untitled: false,
+  /** What the drawing's texts are: `extract_data` rows of layer, text, y (the name Save As offers). */
+  nameRows: [] as (string | number)[][],
+  /** Where the last Save As wrote: the drawing's path from then on. */
+  savedAs: null as string | null,
+  /** What `redo` answers (undo's answer is `undoBatch`). */
+  canRedo: false,
   savedConversations: [] as ConversationSummary[],
 }));
 
@@ -127,8 +133,12 @@ vi.mock("@tauri-apps/api/core", () => ({
         return { items: [], warnings: [] };
       case "boq":
         return core.hasBoq ? { source: "/d/bill.xlsx", imported: "", items: [], skipped_rows: 0 } : null;
+      case "save_drawing_as":
+        core.untitled = false;
+        core.savedAs = args!.path as string;
+        return null;
       case "drawing_info":
-        return info(core.active === 2 && core.otherBatch ? "/d/other.dwg" : PLAN);
+        return info(core.savedAs ?? (core.active === 2 && core.otherBatch ? "/d/other.dwg" : PLAN));
       case "get_drafting":
         return {
           osnap: true,
@@ -157,6 +167,21 @@ vi.mock("@tauri-apps/api/core", () => ({
         core.batch = core.otherBatch;
         core.batchVersion += 1;
         return info("/d/other.dwg");
+      case "redo":
+        return core.canRedo;
+      case "pick_window":
+        return [
+          { top: 42, entity: 42, chain: [], xref: null, kind: "Line" },
+          { top: 43, entity: 43, chain: [], xref: null, kind: "Circle" },
+        ];
+      case "entity_info":
+        return {
+          handle: args!.handle ?? 42, kind: "Line", layer: "0", layer_short: "0", length: 5, area: null, block_name: null, text: null,
+          inside_block: null, chain: [], block_path: [], xref: null, color: "ByLayer", color_rgb: [255, 255, 255], linetype: "ByLayer",
+          lineweight: -1, radius: null, attributes: [], height: null, style: null,
+        };
+      case "close_tab":
+        return { tabs: [], active: null };
       case "undo":
         if (!core.undoBatch) return false;
         core.batch = core.undoBatch;
@@ -224,6 +249,11 @@ vi.mock("@tauri-apps/api/core", () => ({
             ],
           };
         if (cmd.type === "set_parameter") return { type: "changed" };
+        if (cmd.type === "copy_to_clipboard") return { type: "clipboard", count: (cmd as unknown as { targets: unknown[] }).targets.length };
+        if (cmd.type === "extract_data") {
+          const filter = (cmd as unknown as { filter: { kind: string } }).filter;
+          return { type: "table", columns: ["layer", "text", "y"], rows: filter.kind === "Text" ? core.nameRows : [] };
+        }
         return { type: "added", handles: [7, 8, 9, 10] };
       }
       default:
@@ -244,6 +274,7 @@ vi.mock("@tauri-apps/api/event", () => ({
     return () => { handlers.delete(handler); };
   }),
 }));
+vi.mock("@tauri-apps/api/path", () => ({ documentDir: async () => "/home/u/Documents" }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {} }),
 }));
@@ -305,6 +336,9 @@ beforeAll(() => {
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver;
+  HTMLDialogElement.prototype.show ??= function (this: HTMLDialogElement) {
+    this.open = true;
+  };
   HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
     this.open = true;
   };
@@ -315,6 +349,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // The folder the last dialog used is kept on this computer: each test starts without one.
+  try { localStorage.removeItem("qiyas.files.lastFolder"); } catch { /* none */ }
   events.clear();
   core.cursor = 0; core.workspaceCalls = [];
   openDialog.mockImplementation(async () => core.chosen);
@@ -336,6 +372,9 @@ beforeEach(() => {
   core.undoBatch = null;
   core.otherBatch = null;
   core.untitled = false;
+  core.nameRows = [];
+  core.savedAs = null;
+  core.canRedo = false;
   core.savedConversations = [];
 });
 
@@ -1328,4 +1367,221 @@ test("Connect an AI app opens from the top bar and from the /connect command (no
   fireEvent.change(box, { target: { value: "/connect" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await until(() => expect(screen.getByRole("heading", { name: en["connect.title"] })).toBeTruthy());
+});
+
+/** A key pressed in the window, as the keyboard handler hears it (the physical key, as it matches on any layout). */
+const press = (code: string, more: Partial<KeyboardEventInit> = {}) =>
+  act(async () => void fireEvent.keyDown(window, { code, key: code, ...more }));
+
+test("Ctrl+S on an untitled drawing says it will ask, offers a real name and folder, then says Saved (notes 67, 68)", async () => {
+  core.untitled = true;
+  core.opened = true;
+  core.nameRows = [["A-ANNO-TTLB", "Ground floor plan", 290], ["A-ANNO-TTLB", "Cairo Villa", 282], ["A-ANNO-TTLB", "A-101", 274]];
+  await mount();
+  await emit("drawing:shown", null);
+  await until(() => expect(core.calls).toContain("render_batch {\"workspace\":1}"));
+  let choose!: (path: string | null) => void;
+  vi.mocked(saveDialog).mockImplementationOnce(() => new Promise((resolve) => { choose = resolve; }));
+  core.calls.length = 0;
+  await press("KeyS", { ctrlKey: true });
+  // Said before the native dialog (which may open where the user is not looking).
+  await expectToasts([en["save.choose"]]);
+  await until(() => expect(vi.mocked(saveDialog)).toHaveBeenCalled());
+  const offered = vi.mocked(saveDialog).mock.calls.at(-1)![0] as { defaultPath: string };
+  expect(offered.defaultPath).toBe("/home/u/Documents/Cairo Villa.dwg");
+  expect(offered.defaultPath).not.toMatch(/untitled/i);
+  await act(async () => choose("/home/u/Documents/Cairo Villa.dwg"));
+  await expectToasts(["Saved Cairo Villa.dwg"]);
+  expect(core.calls.some((c) => c.startsWith("save_drawing_as"))).toBe(true);
+});
+
+test("cancelling the Save dialog takes the 'Choose where to save' toast away", async () => {
+  core.untitled = true;
+  core.opened = true;
+  await mount();
+  await emit("drawing:shown", null);
+  await until(() => expect(core.calls).toContain("render_batch {\"workspace\":1}"));
+  await press("KeyS", { ctrlKey: true });
+  await until(() => expect(vi.mocked(saveDialog)).toHaveBeenCalled());
+  // No texts in the drawing: the name is the date, never "Untitled".
+  const offered = (vi.mocked(saveDialog).mock.calls.at(-1)![0] as { defaultPath: string }).defaultPath;
+  expect(offered).toMatch(/^\/home\/u\/Documents\/Qiyas drawing \d{4}-\d{2}-\d{2}\.dwg$/);
+  await expectToasts([]);
+});
+
+// ---- The shortcut audit (note 69): each key, end to end through the window, with the feedback it gives.
+
+test("audit: Ctrl+S saves a titled drawing and says Saved; Ctrl+Shift+S asks where first", async () => {
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  await press("KeyS", { ctrlKey: true });
+  await until(() => expect(core.calls.some((c) => c.startsWith("save_drawing "))).toBe(true));
+  await expectToasts(["Saved plan.dwg"]);
+  // Save as: the toast says a dialog is coming; cancelling it takes the toast away and saves nothing.
+  core.calls.length = 0;
+  let cancel!: (path: null) => void;
+  vi.mocked(saveDialog).mockImplementationOnce(() => new Promise((resolve) => { cancel = resolve as (path: null) => void; }));
+  await press("KeyS", { ctrlKey: true, shiftKey: true });
+  await expectToasts([en["save.choose"]]);
+  expect((vi.mocked(saveDialog).mock.calls.at(-1)![0] as { defaultPath: string }).defaultPath).toBe("/d/plan.dwg");
+  await act(async () => cancel(null));
+  await expectToasts([]);
+  expect(core.calls.some((c) => c.startsWith("save_drawing"))).toBe(false);
+});
+
+test("audit: Ctrl+S works from Mizan's box too, where the founder types", async () => {
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  const box = screen.getByLabelText(en["ai.placeholder"]);
+  box.focus();
+  fireEvent.keyDown(box, { code: "KeyS", key: "s", ctrlKey: true });
+  await until(() => expect(core.calls.some((c) => c.startsWith("save_drawing "))).toBe(true));
+});
+
+test("audit: with no drawing open Ctrl+S, Ctrl+Shift+S, Ctrl+P and Ctrl+F answer 'open a drawing first', never silence", async () => {
+  await mount();
+  for (const more of [{ ctrlKey: true, code: "KeyS" }, { ctrlKey: true, shiftKey: true, code: "KeyS" }, { ctrlKey: true, code: "KeyP" }, { ctrlKey: true, code: "KeyF" }]) {
+    await press(more.code, more);
+    await expectToasts([en["cmd.noDrawing"]]);
+  }
+});
+
+test("audit: Ctrl+N, Ctrl+O, Ctrl+P, Ctrl+F and Ctrl+/ each open what they name", async () => {
+  await mount();
+  await press("KeyN", { ctrlKey: true });
+  await until(() => expect(screen.getByRole("heading", { name: en["newDrawing.title"] })).toBeTruthy());
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await clickOpen();
+  // Ctrl+O: the open dialog.
+  openDialog.mockClear();
+  await press("KeyO", { ctrlKey: true });
+  await until(() => expect(openDialog).toHaveBeenCalled());
+  await press("KeyP", { ctrlKey: true });
+  await until(() => expect(screen.getByRole("heading", { name: en["plot.title"] })).toBeTruthy());
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await press("KeyF", { ctrlKey: true });
+  await until(() => expect(screen.getByRole("heading", { name: en["find.title"] })).toBeTruthy());
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await press("Slash", { ctrlKey: true });
+  await until(() => expect(screen.getByRole("heading", { name: en["shortcuts.title"] })).toBeTruthy());
+});
+
+test("audit: Ctrl+W closes the drawing's tab, Ctrl+Tab goes to the next one", async () => {
+  core.otherBatch = new ArrayBuffer(0);
+  await mount();
+  await clickOpen();
+  core.calls.length = 0;
+  await press("Tab", { ctrlKey: true });
+  await until(() => expect(core.calls.some((c) => c.startsWith("activate_tab"))).toBe(true));
+  core.calls.length = 0;
+  await press("KeyW", { ctrlKey: true });
+  await until(() => expect(core.calls.some((c) => c.startsWith("close_tab"))).toBe(true));
+});
+
+test("audit: Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z say what they did, or that there was nothing", async () => {
+  await mount();
+  await clickOpen();
+  await press("KeyZ", { ctrlKey: true });
+  await expectToasts([en["history.nothingUndo"]]);
+  core.undoBatch = drawingBatch([1, 7]);
+  await press("KeyZ", { ctrlKey: true });
+  await expectToasts([en["history.undone"]]);
+  await press("KeyY", { ctrlKey: true });
+  await expectToasts([en["history.nothingRedo"]]);
+  core.canRedo = true;
+  await press("KeyZ", { ctrlKey: true, shiftKey: true });
+  await expectToasts([en["history.redone"]]);
+});
+
+test("audit: Ctrl+A selects everything and says how many; Ctrl+C copies; Ctrl+X cuts; Delete erases, each saying so", async () => {
+  core.batch = drawingBatch([42, 43]);
+  await mount();
+  await clickOpen();
+  await press("KeyA", { ctrlKey: true });
+  await until(() => expect(screen.getByText("Selection · 2")).toBeTruthy());
+  await expectToasts(["2 selected"]);
+  core.calls.length = 0;
+  await press("KeyC", { ctrlKey: true });
+  await until(() => expect(core.calls.some((c) => c.includes('"copy_to_clipboard"'))).toBe(true));
+  await expectToasts(["2 copied to the clipboard"]);
+  // Copying puts the tool back to Select, which drops the selection: select again, then cut.
+  await press("KeyA", { ctrlKey: true });
+  await until(() => expect(screen.getByText("Selection · 2")).toBeTruthy());
+  core.calls.length = 0;
+  await press("KeyX", { ctrlKey: true });
+  await until(() => expect(core.calls.filter((c) => c.startsWith("run_command")).map((c) => /"type":"(\w+)"/.exec(c)![1])).toEqual(["copy_to_clipboard", "delete_entities"]));
+  await expectToasts(["2 cut to the clipboard"]);
+  // Delete on a fresh selection.
+  canvas.props!.onClick([10, 10], [100, 100], 1, false);
+  await until(() => expect(screen.getByText("Selection · 1")).toBeTruthy());
+  core.calls.length = 0;
+  await press("Delete");
+  await until(() => expect(core.calls.some((c) => c.includes('"delete_entities"'))).toBe(true));
+  await expectToasts(["1 erased"]);
+});
+
+test("audit: Ctrl+X with nothing selected says so", async () => {
+  await mount();
+  await clickOpen();
+  await press("KeyX", { ctrlKey: true });
+  await expectToasts([en["clip.nothingSelected"]]);
+});
+
+test("audit: Esc cancels the tool under way; Enter then does the last tool again and says which", async () => {
+  await mount();
+  await clickOpen();
+  const prompt = () => document.querySelector(".command-line label:not([cmdk-label])")?.textContent;
+  await press("KeyD");
+  await until(() => expect(prompt()).toBe(en["cmd.prompt.firstPoint"]));
+  // Esc once cancels what is typed in; a second one leaves the tool (AutoCAD's two Escs).
+  await press("Escape");
+  await press("Escape");
+  await until(() => expect(prompt()).toBe(en["cmd.prompt.command"]));
+  await press("Enter");
+  await expectToasts([`Again: ${en.distance}`]);
+  await until(() => expect(prompt()).toBe(en["cmd.prompt.firstPoint"]));
+});
+
+test("audit: F3, F7, F8 and F10 flip their switch and say it in words", async () => {
+  await mount();
+  await clickOpen();
+  await press("F3");
+  await expectToasts([`${en["status.osnap"]} off`]);
+  await press("F7");
+  await expectToasts([`${en["status.grid"]} on`]);
+  await press("F8");
+  await expectToasts([`${en["status.ortho"]} on`]);
+  await press("F10");
+  await expectToasts([`${en["status.polar"]} on`]);
+});
+
+test("audit: '/' and Ctrl+K go to Mizan's box ('/' with his commands listed), and unfold a folded column", async () => {
+  localStorage.setItem("qiyas.panels.hidden", JSON.stringify({ left: false, right: true }));
+  await mount();
+  await clickOpen();
+  expect(document.querySelector(".middle")!.classList.contains("right-off")).toBe(true);
+  await press("Slash");
+  await until(() => expect(document.querySelector(".middle")!.classList.contains("right-off")).toBe(false));
+  const box = document.querySelector<HTMLTextAreaElement>("textarea[role=combobox]")!;
+  expect(document.activeElement).toBe(box);
+  expect(box.value).toBe("/");
+  expect(screen.getAllByRole("option").length).toBeGreaterThan(3);
+  // Ctrl+K from the drawing: the box again, nothing typed in it.
+  fireEvent.change(box, { target: { value: "" } });
+  (document.querySelector(".viewport") as HTMLElement | null)?.focus();
+  await press("KeyK", { ctrlKey: true });
+  await until(() => expect(document.activeElement).toBe(screen.getByLabelText(en["ai.placeholder"])));
+  expect((screen.getByLabelText(en["ai.placeholder"]) as HTMLTextAreaElement).value).toBe("");
+  localStorage.removeItem("qiyas.panels.hidden");
+});
+
+test("audit: '/' typed in a text field is just a slash", async () => {
+  await mount();
+  await clickOpen();
+  const input = document.querySelector<HTMLInputElement>("input[aria-autocomplete]")!;
+  input.focus();
+  fireEvent.keyDown(input, { code: "Slash", key: "/" });
+  expect(document.activeElement).toBe(input);
 });

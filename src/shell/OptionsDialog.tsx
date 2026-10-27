@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { getSettings, setSettings, type Settings } from "../api";
 import { useT } from "../i18n";
 import { normalizeDigits } from "../tools/commandParser";
-import { BUILT_IN_SHORTCUTS, keyOf, normalizeKey, shortcutClash } from "../tools/shortcuts";
+import { BUILT_IN_SHORTCUTS, keyLabel, keyOf, normalizeKey, shortcutClash } from "../tools/shortcuts";
 import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
 
 /** The core's ranges (`settings::validate_options`). */
@@ -254,7 +254,7 @@ export function OptionsDialog({
                             dir="ltr"
                             readOnly
                             aria-label={t("options.keyFor", { command: label(command) })}
-                            value={mine !== undefined ? (normalizeKey(mine) ?? mine) : builtIn.join(" / ")}
+                            value={mine !== undefined ? keyLabel(normalizeKey(mine) ?? mine) : builtIn.map(keyLabel).join(" / ")}
                             onKeyDown={(e) => pressed(e, (key) => bind(command, key))}
                           />
                         </td>
