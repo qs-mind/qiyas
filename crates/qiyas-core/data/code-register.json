@@ -1,0 +1,645 @@
+{
+  "version": 1,
+  "policy": {
+    "en": "Qiyas draws. The engineer and the company check and approve. Every output says For review. A value below is either a code requirement with its source (code, clause and URL) or a practice default that is labelled as one and that the engineer edits. No clause number or value here was made up: where a source could not be read, the value is a practice default.",
+    "ar": "قياس يرسم. المهندس والشركة يراجعان ويعتمدان. كل مخرَج مكتوب عليه: للمراجعة. كل قيمة هنا إما اشتراط كود له مصدره (الكود والبند والرابط) وإما قيمة ممارسة معتادة مكتوب أنها كذلك ويعدّلها المهندس. لم يُختلق أي رقم بند أو قيمة: حيث لم يمكن قراءة المصدر تكون القيمة ممارسة معتادة."
+  },
+  "markets": {
+    "egypt": {
+      "name_en": "Egypt",
+      "name_ar": "مصر",
+      "codes": [
+        {
+          "id": "egypt_building_law_119",
+          "title_en": "Unified Building Law No. 119 of 2008 and its executive regulations (Ministerial Decree No. 144 of 2009)",
+          "title_ar": "قانون البناء الموحد رقم 119 لسنة 2008 ولائحته التنفيذية (قرار وزير الإسكان رقم 144 لسنة 2009)",
+          "publisher": "Ministry of Housing, Utilities and Urban Communities",
+          "official_url": "https://www.mhuc.gov.eg",
+          "official_url_read": false,
+          "evidence_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+          "evidence_read": true,
+          "evidence_note": "English translation by a law firm, read in full for the articles used below. Article numbers follow that translation; check them against the Arabic official text.",
+          "status": "read",
+          "use": "Room sizes, ceiling height, openings, doors, stairs, railings (limits below)."
+        },
+        {
+          "id": "ecp_201",
+          "title_en": "Egyptian Code of Practice 201: loads and forces on structures and buildings",
+          "title_ar": "الكود المصري 201: الأحمال والقوى على المنشآت والمباني",
+          "publisher": "Housing and Building National Research Center (HBRC)",
+          "official_url": "https://www.hbrc.edu.eg",
+          "official_url_read": false,
+          "evidence_url": "https://www.eng-tips.com/viewthread.cfm?qid=405210",
+          "evidence_read": false,
+          "evidence_note": "The pairing of the number and the subject was found in search results (an engineers' forum and an HBRC codes page). The edition and the exact title are not verified.",
+          "status": "named_in_source",
+          "use": "Loads. The structural engineer applies it; Qiyas does not calculate loads."
+        },
+        {
+          "id": "ecp_202",
+          "title_en": "Egyptian Code of Practice 202: soil mechanics and foundations",
+          "title_ar": "الكود المصري 202: ميكانيكا التربة والأساسات",
+          "publisher": "Housing and Building National Research Center (HBRC)",
+          "official_url": "https://www.hbrc.edu.eg",
+          "official_url_read": false,
+          "evidence_url": "https://leap.unep.org/en/countries/eg/national-legislation/resolution-no-139-2001-concerning-egyptian-code-soil-mechanic-and",
+          "evidence_read": false,
+          "evidence_note": "Title seen in a search result for Ministerial Resolution 139 of 2001 (Egyptian code for soil mechanics and foundations). The number 202 and the edition are not verified.",
+          "status": "named_in_source",
+          "use": "Foundations. The geotechnical and structural engineer apply it; foundation levels on a sheet are indicative."
+        },
+        {
+          "id": "ecp_203",
+          "title_en": "Egyptian Code of Practice 203: design and construction of reinforced concrete structures",
+          "title_ar": "الكود المصري 203: تصميم وتنفيذ المنشآت الخرسانية",
+          "publisher": "Housing and Building National Research Center (HBRC)",
+          "official_url": "https://www.hbrc.edu.eg",
+          "official_url_read": false,
+          "evidence_url": "https://www.eng-tips.com/viewthread.cfm?qid=405210",
+          "evidence_read": false,
+          "evidence_note": "Pairing of number and subject seen in a forum thread in search results; the edition is not verified.",
+          "status": "named_in_source",
+          "use": "Reinforced concrete design. The structural engineer applies it."
+        },
+        {
+          "id": "ecp_205",
+          "title_en": "Egyptian Code of Practice 205: steel structures and bridges",
+          "title_ar": "الكود المصري 205: المنشآت المعدنية والكباري",
+          "publisher": "Housing and Building National Research Center (HBRC)",
+          "official_url": "https://www.hbrc.edu.eg",
+          "official_url_read": false,
+          "evidence_url": "https://demosites.mans.edu.eg/hbrc/en/activities/codes",
+          "evidence_read": false,
+          "evidence_note": "An HBRC codes page seen in search results cites Code No. 205 of 2001 for metal structures and bridges. The edition in force is not verified.",
+          "status": "named_in_source",
+          "use": "Steel structures. The structural engineer applies it."
+        }
+      ]
+    },
+    "ksa": {
+      "name_en": "Saudi Arabia",
+      "name_ar": "المملكة العربية السعودية",
+      "codes": [
+        {
+          "id": "sbc_201",
+          "title_en": "Saudi Building Code SBC 201: General",
+          "title_ar": "كود البناء السعودي SBC 201: العام",
+          "publisher": "Saudi Building Code National Committee",
+          "official_url": "https://www.sbc.gov.sa",
+          "official_url_read": false,
+          "evidence_url": "https://www.saso.gov.sa/en/sectors/product-safety/Documents/SBC-INSP-EN.pdf",
+          "evidence_read": true,
+          "evidence_note": "The SASO list of accepted inspection bodies (updated 6 September 2026) names the code and its number. The text of the code was not read.",
+          "status": "named_in_source",
+          "use": "Architectural requirements (means of egress, stairs, doors, room heights). Values were not read: see the limits."
+        },
+        {
+          "id": "sbc_1101_1102",
+          "title_en": "The Saudi Residential Building Code SBC 1101 and SBC 1102",
+          "title_ar": "كود البناء السكني السعودي SBC 1101 و SBC 1102",
+          "publisher": "Saudi Building Code National Committee",
+          "official_url": "https://www.sbc.gov.sa",
+          "official_url_read": false,
+          "evidence_url": "https://www.saso.gov.sa/en/sectors/product-safety/Documents/SBC-INSP-EN.pdf",
+          "evidence_read": true,
+          "evidence_note": "Named in the SASO list. The text was not read. Villas and houses fall under the residential code: the engineer checks room sizes and stairs against it.",
+          "status": "named_in_source",
+          "use": "Houses and villas."
+        },
+        {
+          "id": "sbc_301",
+          "title_en": "Saudi Loading Code SBC 301",
+          "title_ar": "كود الأحمال السعودي SBC 301",
+          "publisher": "Saudi Building Code National Committee",
+          "official_url": "https://www.sbc.gov.sa",
+          "official_url_read": false,
+          "evidence_url": "https://www.saso.gov.sa/en/sectors/product-safety/Documents/SBC-INSP-EN.pdf",
+          "evidence_read": true,
+          "evidence_note": "Named in the SASO list. Loads are the structural engineer's.",
+          "status": "named_in_source",
+          "use": "Loads."
+        },
+        {
+          "id": "sbc_302_303_304",
+          "title_en": "Saudi Construction Code SBC 302, Soils and Foundation Code SBC 303, Concrete Structures Code SBC 304",
+          "title_ar": "كود الإنشاءات SBC 302 وكود التربة والأساسات SBC 303 وكود المنشآت الخرسانية SBC 304",
+          "publisher": "Saudi Building Code National Committee",
+          "official_url": "https://www.sbc.gov.sa",
+          "official_url_read": false,
+          "evidence_url": "https://www.saso.gov.sa/en/sectors/product-safety/Documents/SBC-INSP-EN.pdf",
+          "evidence_read": true,
+          "evidence_note": "Named in the SASO list.",
+          "status": "named_in_source",
+          "use": "Structure, foundations and concrete. The structural engineer applies them."
+        },
+        {
+          "id": "sbc_401_501_701",
+          "title_en": "Saudi Electrical Code SBC 401, Mechanical Code SBC 501, Sanitary Code SBC 701 (and Private Sewage Disposal SBC 702)",
+          "title_ar": "الكود الكهربائي SBC 401 والميكانيكي SBC 501 والصحي SBC 701 (وصرف الصرف الخاص SBC 702)",
+          "publisher": "Saudi Building Code National Committee",
+          "official_url": "https://www.sbc.gov.sa",
+          "official_url_read": false,
+          "evidence_url": "https://www.saso.gov.sa/en/sectors/product-safety/Documents/SBC-INSP-EN.pdf",
+          "evidence_read": true,
+          "evidence_note": "Named in the SASO list.",
+          "status": "named_in_source",
+          "use": "MEP layouts on the sheets are indicative; the discipline engineer sizes and approves."
+        },
+        {
+          "id": "sbc_801",
+          "title_en": "Saudi Fire Code SBC 801",
+          "title_ar": "كود الحريق السعودي SBC 801",
+          "publisher": "Saudi Building Code National Committee",
+          "official_url": "https://www.sbc.gov.sa",
+          "official_url_read": false,
+          "evidence_url": "https://www.saso.gov.sa/en/sectors/product-safety/Documents/SBC-INSP-EN.pdf",
+          "evidence_read": true,
+          "evidence_note": "Named in the SASO list.",
+          "status": "named_in_source",
+          "use": "Fire and life safety."
+        }
+      ]
+    },
+    "uae": {
+      "name_en": "United Arab Emirates",
+      "name_ar": "الإمارات العربية المتحدة",
+      "codes": [
+        {
+          "id": "dubai_building_code_2021",
+          "title_en": "Dubai Building Code (Decree No. 45 of 2021)",
+          "title_ar": "كود دبي للبناء (المرسوم رقم 45 لسنة 2021)",
+          "publisher": "Dubai Municipality",
+          "official_url": "https://www.dm.gov.ae/",
+          "official_url_read": true,
+          "evidence_url": "https://dlp.dubai.gov.ae/Legislation%20Reference/2021/Decree%20No.%20%2845%29%20of%202021%20Concerning%20the%20Dubai%20Building%20Code.html",
+          "evidence_read": true,
+          "evidence_note": "The decree defines the code and says it is published on the Dubai Municipality website. The text of the code (Part B, villas) was not read: no value from it is used below.",
+          "status": "read",
+          "use": "Buildings in Dubai."
+        },
+        {
+          "id": "abu_dhabi_building_codes",
+          "title_en": "Abu Dhabi building codes (based on the 2009 International Codes)",
+          "title_ar": "أكواد البناء في أبوظبي (مبنية على الأكواد الدولية 2009)",
+          "publisher": "Abu Dhabi Department of Municipalities and Transport",
+          "official_url": "https://dmat.abudhabi.ae/en/About/Pages/buildingcode.aspx",
+          "official_url_read": false,
+          "evidence_url": "https://www.iccsafe.org/international-code-adoptions/united-arab-emirates/",
+          "evidence_read": true,
+          "evidence_note": "The ICC page says Abu Dhabi's building codes are based on the 2009 I-Codes and links the department. The current edition is not verified.",
+          "status": "named_in_source",
+          "use": "Buildings in Abu Dhabi."
+        },
+        {
+          "id": "uae_fire_and_life_safety_code",
+          "title_en": "UAE Fire and Life Safety Code of Practice",
+          "title_ar": "كود الإمارات للحماية من الحريق وسلامة الأرواح",
+          "publisher": "UAE Civil Defence",
+          "official_url": "https://www.dcd.gov.ae/portal/eng/UAEFIRECODE_ENG.pdf",
+          "official_url_read": false,
+          "evidence_url": "https://www.iccsafe.org/international-code-adoptions/united-arab-emirates/",
+          "evidence_read": true,
+          "evidence_note": "The ICC page links the national fire code PDF. The PDF could not be opened from here: no value from it is used below.",
+          "status": "named_in_source",
+          "use": "Fire and life safety, national."
+        }
+      ]
+    }
+  },
+  "limits": [
+    {
+      "id": "ceiling_height_min_m",
+      "market": "egypt",
+      "value": 2.7,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 93",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Clear height from finished floor to the underside of the exposed ceiling, every floor."
+    },
+    {
+      "id": "ceiling_height_service_min_m",
+      "market": "egypt",
+      "value": 2.3,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 93",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Entrances, internal corridors, bathrooms, laundry rooms, guards' rooms and similar spaces."
+    },
+    {
+      "id": "room_area_min_m2",
+      "market": "egypt",
+      "value": 7.5,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Residential rooms."
+    },
+    {
+      "id": "room_width_min_m",
+      "market": "egypt",
+      "value": 2.5,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Residential rooms, smallest dimension."
+    },
+    {
+      "id": "kitchen_area_min_m2",
+      "market": "egypt",
+      "value": 3.0,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Kitchens."
+    },
+    {
+      "id": "kitchen_width_min_m",
+      "market": "egypt",
+      "value": 1.5,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Kitchens, smallest dimension."
+    },
+    {
+      "id": "bathroom_area_min_m2",
+      "market": "egypt",
+      "value": 1.5,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Bathrooms."
+    },
+    {
+      "id": "bathroom_width_min_m",
+      "market": "egypt",
+      "value": 1.2,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Bathrooms, smallest dimension."
+    },
+    {
+      "id": "wc_area_min_m2",
+      "market": "egypt",
+      "value": 0.8,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Toilets."
+    },
+    {
+      "id": "wc_width_min_m",
+      "market": "egypt",
+      "value": 0.8,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 94",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Toilets, smallest dimension."
+    },
+    {
+      "id": "window_area_ratio_habitable_min",
+      "market": "egypt",
+      "value": 0.08,
+      "unit": "ratio of floor area",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 96",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Openings for light and ventilation: 8% of the floor area of residential rooms. Living, dining and reception count as residential rooms."
+    },
+    {
+      "id": "window_area_ratio_service_min",
+      "market": "egypt",
+      "value": 0.1,
+      "unit": "ratio of floor area",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 96",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "10% of the floor area of a bathroom, kitchen, toilet or stairwell. Distribution halls, corridors and entrances are exempt."
+    },
+    {
+      "id": "door_to_stair_min_m",
+      "market": "egypt",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 96",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "A door that opens directly onto a stair flight must be at least one metre from it."
+    },
+    {
+      "id": "window_sill_height_min_m",
+      "market": "egypt",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 96",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Window sill, unless a balcony, terrace or a railing of at least 0.9 m is in front of it."
+    },
+    {
+      "id": "door_width_min_room_m",
+      "market": "egypt",
+      "value": 0.8,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 97",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Residential rooms and offices."
+    },
+    {
+      "id": "door_width_min_service_m",
+      "market": "egypt",
+      "value": 0.7,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 97",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Kitchens, bathrooms and toilets."
+    },
+    {
+      "id": "stair_width_min_m",
+      "market": "egypt",
+      "value": 1.1,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 100",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Clear length of the step, floors with up to four units (a villa has one). 1.30 m for the main stair when a floor has more than four units."
+    },
+    {
+      "id": "stair_going_min_m",
+      "market": "egypt",
+      "value": 0.27,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 100",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Tread not less than 27 cm."
+    },
+    {
+      "id": "stair_riser_max_m",
+      "market": "egypt",
+      "value": 0.17,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 100",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Riser not more than 17 cm."
+    },
+    {
+      "id": "stair_steps_per_flight_max",
+      "market": "egypt",
+      "value": 14,
+      "unit": "steps",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 100",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "At most 14 consecutive steps, then a landing at least four treads wide."
+    },
+    {
+      "id": "stair_headroom_min_m",
+      "market": "egypt",
+      "value": 2.1,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 100",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Clear height above any step."
+    },
+    {
+      "id": "guard_height_min_m",
+      "market": "egypt",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations",
+      "clause": "Article 100 and Article 103",
+      "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
+      "note": "Stair railing 0.90 m. Terrace and balcony railings 0.90 m for the first five floors, plus 5 cm for each floor after, up to 1.20 m; it must stop objects of 10 cm or more falling."
+    },
+    {
+      "id": "ceiling_height_min_m",
+      "market": "any",
+      "value": 2.7,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Common clear height for habitable rooms in Egyptian and Gulf housing. Not read from the KSA or UAE code text. The engineer confirms it against the code that applies."
+    },
+    {
+      "id": "ceiling_height_service_min_m",
+      "market": "any",
+      "value": 2.3,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Common lower height for corridors, bathrooms and service rooms. Not read from the code text."
+    },
+    {
+      "id": "room_area_min_m2",
+      "market": "any",
+      "value": 9.0,
+      "unit": "m2",
+      "basis": "practice_default",
+      "rationale": "A bedroom or living room under about 9 square metres is hard to furnish. Practice, not a code value."
+    },
+    {
+      "id": "room_width_min_m",
+      "market": "any",
+      "value": 2.7,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "A bed and a passage beside it need about this width. Practice, not a code value."
+    },
+    {
+      "id": "kitchen_area_min_m2",
+      "market": "any",
+      "value": 6.0,
+      "unit": "m2",
+      "basis": "practice_default",
+      "rationale": "A kitchen with units on two walls and a passage. Practice, not a code value."
+    },
+    {
+      "id": "kitchen_width_min_m",
+      "market": "any",
+      "value": 2.0,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Units on one side plus a working passage. Practice, not a code value."
+    },
+    {
+      "id": "bathroom_area_min_m2",
+      "market": "any",
+      "value": 3.0,
+      "unit": "m2",
+      "basis": "practice_default",
+      "rationale": "WC, basin and shower or bath with clearances. Practice, not a code value."
+    },
+    {
+      "id": "bathroom_width_min_m",
+      "market": "any",
+      "value": 1.5,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Practice, not a code value."
+    },
+    {
+      "id": "wc_area_min_m2",
+      "market": "any",
+      "value": 1.5,
+      "unit": "m2",
+      "basis": "practice_default",
+      "rationale": "A guest WC with a basin. Practice, not a code value."
+    },
+    {
+      "id": "wc_width_min_m",
+      "market": "any",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Practice, not a code value."
+    },
+    {
+      "id": "corridor_width_min_m",
+      "market": "any",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "A clear passage inside a house. No corridor width was read in the Egyptian regulations or the other codes. Practice, not a code value."
+    },
+    {
+      "id": "door_width_min_room_m",
+      "market": "any",
+      "value": 0.8,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Common clear leaf for a room door. The Egyptian regulations give the same figure (Article 97); KSA and UAE text was not read."
+    },
+    {
+      "id": "door_width_min_service_m",
+      "market": "any",
+      "value": 0.7,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Kitchens, bathrooms and toilets. Practice, not read from the KSA or UAE text."
+    },
+    {
+      "id": "door_width_entrance_min_m",
+      "market": "any",
+      "value": 1.2,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "A villa main entrance is a wide single leaf (1.20 m) or a double leaf (1.50 m and more). No code value was read; it is the way villas are designed in the region."
+    },
+    {
+      "id": "door_to_stair_min_m",
+      "market": "any",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Space to stop before a stair. The Egyptian regulations give one metre (Article 96); KSA and UAE text was not read."
+    },
+    {
+      "id": "window_area_ratio_habitable_min",
+      "market": "any",
+      "value": 0.1,
+      "unit": "ratio of floor area",
+      "basis": "practice_default",
+      "rationale": "Common rule of thumb for daylight. Not read from the KSA or UAE text."
+    },
+    {
+      "id": "window_area_ratio_service_min",
+      "market": "any",
+      "value": 0.1,
+      "unit": "ratio of floor area",
+      "basis": "practice_default",
+      "rationale": "Practice, not a code value."
+    },
+    {
+      "id": "window_sill_height_min_m",
+      "market": "any",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Above 0.9 m, or protected by a railing. Practice, not read from the code text."
+    },
+    {
+      "id": "stair_width_min_m",
+      "market": "any",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Clear width of a private stair in a house. The Egyptian regulations ask 1.10 m (Article 100). KSA and UAE text was not read."
+    },
+    {
+      "id": "stair_going_min_m",
+      "market": "any",
+      "value": 0.25,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Comfortable tread for a private stair. Practice, not read from the KSA or UAE text."
+    },
+    {
+      "id": "stair_riser_max_m",
+      "market": "any",
+      "value": 0.18,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Comfortable riser for a private stair. Practice, not read from the KSA or UAE text."
+    },
+    {
+      "id": "stair_steps_per_flight_max",
+      "market": "any",
+      "value": 16,
+      "unit": "steps",
+      "basis": "practice_default",
+      "rationale": "A landing after this many steps keeps a fall short. Practice, not a code value."
+    },
+    {
+      "id": "stair_headroom_min_m",
+      "market": "any",
+      "value": 2.1,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Clear height above every step. The Egyptian regulations give 2.10 m (Article 100)."
+    },
+    {
+      "id": "guard_height_min_m",
+      "market": "any",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "practice_default",
+      "rationale": "Stair, balcony and terrace railings. The Egyptian regulations give 0.90 m (Articles 100 and 103); KSA and UAE text was not read, so the safer figure is used."
+    }
+  ]
+}

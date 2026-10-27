@@ -1,0 +1,445 @@
+{
+  "version": 1,
+  "notice": {
+    "en": "Built-in drafting knowledge of Qiyas. Mizan draws a full package without being told how seniors draw. Qiyas draws; loads, design calculations and approval belong to the engineer and the company. Every sheet says For review. All thresholds are editable practice defaults unless a code is named.",
+    "ar": "معرفة الرسم المدمجة في قياس. ميزان يرسم حزمة كاملة دون أن يُطلب منه كيف يرسم كبار المهندسين. قياس يرسم؛ الأحمال والحسابات التصميمية والاعتماد من مسؤولية المهندس والشركة. كل لوحة مكتوب عليها: للمراجعة. كل الحدود قيم ممارسة معتادة قابلة للتعديل ما لم يُذكر كود."
+  },
+  "project_types": {
+    "villa": {
+      "title_en": "Villa or detached house (residential)",
+      "title_ar": "فيلا أو منزل مستقل (سكني)",
+      "aliases": ["villa", "house", "residential", "detached", "duplex", "فيلا", "منزل", "بيت", "سكني"],
+      "order": ["general", "architectural", "structural", "mechanical", "electrical", "plumbing"],
+      "sheets": [
+        {
+          "number": "G-001", "discipline": "general", "view": "cover", "scale": null, "paper": "ISO A3",
+          "title_en": "Cover sheet, drawing index and project data",
+          "title_ar": "الغلاف وفهرس اللوحات وبيانات المشروع",
+          "content": ["Project name, client, location, plot number", "Drawing index with sheet numbers, titles and revision", "Issue status: For review", "Design team and who approves"],
+          "required": true
+        },
+        {
+          "number": "G-002", "discipline": "general", "view": "notes", "scale": null, "paper": "ISO A1",
+          "title_en": "General notes, legend, abbreviations, codes and assumptions",
+          "title_ar": "الملاحظات العامة والرموز والاختصارات والأكواد والافتراضات",
+          "content": ["General notes", "Legend of symbols and hatches", "Abbreviations", "Codes and limits applied, with their source (code register)", "Assumptions Mizan made, each one numbered", "Responsibility notice"],
+          "required": true
+        },
+        {
+          "number": "A-001", "discipline": "architectural", "view": "site", "scale": "1:200", "paper": "ISO A1",
+          "title_en": "Site plan",
+          "title_ar": "الموقع العام",
+          "content": ["Plot boundary and dimensions", "Building outline and setbacks to each boundary", "Entrances: pedestrian and car", "Parking and external works", "Road names, north arrow, scale bar", "Ground level and plot level"],
+          "required": true
+        },
+        {
+          "number": "A-101", "discipline": "architectural", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Ground floor plan",
+          "title_ar": "مسقط الدور الأرضي",
+          "content": ["See plan standards"],
+          "required": true
+        },
+        {
+          "number": "A-102", "discipline": "architectural", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "First floor plan",
+          "title_ar": "مسقط الدور الأول",
+          "content": ["See plan standards"],
+          "required": true,
+          "when": "storeys >= 2"
+        },
+        {
+          "number": "A-103", "discipline": "architectural", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Roof plan",
+          "title_ar": "مسقط السطح",
+          "content": ["Roof slopes and falls with arrows", "Drains and outlets", "Parapet height and roof access", "Water tanks and equipment positions", "Levels: top of slab, top of parapet"],
+          "required": true
+        },
+        {
+          "number": "A-201", "discipline": "architectural", "view": "elevation", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Elevations: front and rear",
+          "title_ar": "الواجهات: الأمامية والخلفية",
+          "content": ["See elevation standards"],
+          "required": true
+        },
+        {
+          "number": "A-202", "discipline": "architectural", "view": "elevation", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Elevations: sides",
+          "title_ar": "الواجهات: الجانبية",
+          "content": ["See elevation standards"],
+          "required": true
+        },
+        {
+          "number": "A-301", "discipline": "architectural", "view": "section", "scale": "1:50", "paper": "ISO A1",
+          "title_en": "Building sections A-A and B-B",
+          "title_ar": "القطاعات A-A و B-B",
+          "content": ["See section standards", "One section through the stair, one across the main rooms"],
+          "required": true
+        },
+        {
+          "number": "A-302", "discipline": "architectural", "view": "section", "scale": "1:25", "paper": "ISO A1",
+          "title_en": "Staircase plans and section",
+          "title_ar": "مساقط وقطاع السلم",
+          "content": ["Stair plan on each floor (UP with cut line below, void, handrail and DN above)", "Stair section with risers, goings, headroom and handrail", "Number of risers, riser height and going, written once"],
+          "required": true
+        },
+        {
+          "number": "A-401", "discipline": "architectural", "view": "plan", "scale": "1:25", "paper": "ISO A1",
+          "title_en": "Enlarged plans: kitchen and bathrooms",
+          "title_ar": "مساقط مكبرة: المطبخ والحمامات",
+          "content": ["Fixtures with dimensions: WC, basin, shower, sink, units", "Floor falls and drains", "Wall tiling extent", "Interior elevations of wet walls"],
+          "required": true
+        },
+        {
+          "number": "A-501", "discipline": "architectural", "view": "detail", "scale": "1:10", "paper": "ISO A1",
+          "title_en": "Construction details",
+          "title_ar": "تفاصيل التنفيذ",
+          "content": ["See detail standards", "Wall section through foundation, floor, slab, parapet", "Door and window head, jamb and sill", "Wet-area floor build-up"],
+          "required": true
+        },
+        {
+          "number": "A-601", "discipline": "architectural", "view": "schedule", "scale": null, "paper": "ISO A1",
+          "title_en": "Door and window schedule",
+          "title_ar": "جدول الأبواب والشبابيك",
+          "content": ["See schedule standards", "One row per mark: width, height, sill, material, quantity"],
+          "required": true
+        },
+        {
+          "number": "A-602", "discipline": "architectural", "view": "schedule", "scale": null, "paper": "ISO A1",
+          "title_en": "Room finish schedule",
+          "title_ar": "جدول تشطيبات الغرف",
+          "content": ["See schedule standards", "Room, floor, skirting, walls, ceiling, height"],
+          "required": true
+        },
+        {
+          "number": "S-001", "discipline": "structural", "view": "notes", "scale": null, "paper": "ISO A1",
+          "title_en": "Structural notes (indicative, by the structural engineer)",
+          "title_ar": "ملاحظات إنشائية (استرشادية، من المهندس الإنشائي)",
+          "content": ["Codes named by the structural engineer (see code register)", "Loads and materials: the engineer's values, not Qiyas", "Responsibility notice"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "S-101", "discipline": "structural", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Foundation plan (indicative layout)",
+          "title_ar": "مسقط الأساسات (توزيع استرشادي)",
+          "content": ["Column grid from the architectural grid", "Foundation level marked indicative", "Sizes and reinforcement: by the structural engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "S-102", "discipline": "structural", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Floor slab layout (indicative)",
+          "title_ar": "مسقط البلاطات (استرشادي)",
+          "content": ["Columns, beams and slab panels on the grid", "Openings: stair void, shafts", "Sizes and reinforcement: by the structural engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "S-103", "discipline": "structural", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Roof slab layout (indicative)",
+          "title_ar": "مسقط بلاطة السطح (استرشادي)",
+          "content": ["Roof slab, parapet and slopes", "Sizes and reinforcement: by the structural engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "S-201", "discipline": "structural", "view": "detail", "scale": "1:20", "paper": "ISO A1",
+          "title_en": "Typical structural details (indicative)",
+          "title_ar": "تفاصيل إنشائية نموذجية (استرشادية)",
+          "content": ["Typical sections: footing, column, beam, slab", "Dimensions and bars: by the structural engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "M-101", "discipline": "mechanical", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Air conditioning layout (indicative)",
+          "title_ar": "توزيع التكييف (استرشادي)",
+          "content": ["Indoor units, outdoor units and the shafts", "Duct and pipe routes marked indicative", "Sizing and equipment selection: by the mechanical engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "E-101", "discipline": "electrical", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Lighting and power layout, ground floor (indicative)",
+          "title_ar": "توزيع الإنارة والقوى، الدور الأرضي (استرشادي)",
+          "content": ["Lights, sockets, switches, distribution board position", "Legend of symbols", "Circuits and loads: by the electrical engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "E-102", "discipline": "electrical", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Lighting and power layout, first floor (indicative)",
+          "title_ar": "توزيع الإنارة والقوى، الدور الأول (استرشادي)",
+          "content": ["Lights, sockets, switches, distribution board position", "Legend of symbols", "Circuits and loads: by the electrical engineer"],
+          "required": true,
+          "by_engineer": true,
+          "when": "storeys >= 2"
+        },
+        {
+          "number": "E-201", "discipline": "electrical", "view": "schedule", "scale": null, "paper": "ISO A1",
+          "title_en": "Distribution board schedule and single-line diagram (indicative)",
+          "title_ar": "جدول لوحة التوزيع والمخطط أحادي الخط (استرشادي)",
+          "content": ["Board layout and circuit list as a table", "Ratings: by the electrical engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "P-101", "discipline": "plumbing", "view": "plan", "scale": "1:100", "paper": "ISO A1",
+          "title_en": "Water supply and drainage layout (indicative)",
+          "title_ar": "توزيع التغذية والصرف (استرشادي)",
+          "content": ["Fixtures, risers, drains, manholes, septic tank or connection", "Pipe sizes and falls: by the plumbing engineer"],
+          "required": true,
+          "by_engineer": true
+        }
+      ]
+    },
+    "residential_unit": {
+      "title_en": "Apartment or residential unit (fit-out)",
+      "title_ar": "شقة أو وحدة سكنية (تشطيب)",
+      "aliases": ["apartment", "flat", "unit", "residential unit", "شقة", "وحدة"],
+      "order": ["general", "architectural", "electrical", "plumbing"],
+      "sheets": [
+        {
+          "number": "G-001", "discipline": "general", "view": "cover", "scale": null, "paper": "ISO A3",
+          "title_en": "Cover sheet, drawing index and project data",
+          "title_ar": "الغلاف وفهرس اللوحات وبيانات المشروع",
+          "content": ["Project name, client, unit number", "Drawing index", "Issue status: For review"],
+          "required": true
+        },
+        {
+          "number": "G-002", "discipline": "general", "view": "notes", "scale": null, "paper": "ISO A3",
+          "title_en": "General notes, codes and assumptions",
+          "title_ar": "الملاحظات العامة والأكواد والافتراضات",
+          "content": ["General notes", "Codes and limits applied, with their source", "Assumptions Mizan made, numbered", "Responsibility notice"],
+          "required": true
+        },
+        {
+          "number": "A-101", "discipline": "architectural", "view": "plan", "scale": "1:50", "paper": "ISO A2",
+          "title_en": "Unit plan",
+          "title_ar": "مسقط الوحدة",
+          "content": ["See plan standards"],
+          "required": true
+        },
+        {
+          "number": "A-201", "discipline": "architectural", "view": "elevation", "scale": "1:50", "paper": "ISO A2",
+          "title_en": "Interior elevations of wet areas and kitchen",
+          "title_ar": "واجهات داخلية للحمامات والمطبخ",
+          "content": ["Tiling extent, fixtures, heights, finishes with leaders"],
+          "required": true
+        },
+        {
+          "number": "A-601", "discipline": "architectural", "view": "schedule", "scale": null, "paper": "ISO A3",
+          "title_en": "Door, window and finish schedules",
+          "title_ar": "جداول الأبواب والشبابيك والتشطيبات",
+          "content": ["See schedule standards"],
+          "required": true
+        },
+        {
+          "number": "E-101", "discipline": "electrical", "view": "plan", "scale": "1:50", "paper": "ISO A2",
+          "title_en": "Lighting and power layout (indicative)",
+          "title_ar": "توزيع الإنارة والقوى (استرشادي)",
+          "content": ["Lights, sockets, switches, board", "Circuits and loads: by the electrical engineer"],
+          "required": true,
+          "by_engineer": true
+        },
+        {
+          "number": "P-101", "discipline": "plumbing", "view": "plan", "scale": "1:50", "paper": "ISO A2",
+          "title_en": "Water supply and drainage layout (indicative)",
+          "title_ar": "توزيع التغذية والصرف (استرشادي)",
+          "content": ["Fixtures, points, drains", "Pipe sizes: by the plumbing engineer"],
+          "required": true,
+          "by_engineer": true
+        }
+      ]
+    }
+  },
+  "views": {
+    "plan": {
+      "title_en": "Plan",
+      "title_ar": "مسقط",
+      "include": [
+        {"id": "grid", "en": "Grid axes with bubbles at both ends, letters one way and numbers the other, on the structural grid", "ar": "محاور الشبكة بفقاعات من الطرفين، حروف في اتجاه وأرقام في الآخر، على الشبكة الإنشائية", "how": "grid"},
+        {"id": "dimension_strings", "en": "Three dimension strings outside the plan on each side: overall, between grid axes or wall faces, and openings. Never a dimension through a room label or a stair", "ar": "ثلاثة خطوط أبعاد خارج المسقط على كل جانب: الكلي، بين المحاور أو أوجه الحوائط، والفتحات. لا بعد يمر على اسم غرفة أو سلم", "how": "dimension.linear, dimension.continue, dimension.baseline, auto_place"},
+        {"id": "room_names_areas", "en": "Every room named and its area to two decimals with the unit (17.81 m²), in the sheet's language", "ar": "كل غرفة باسمها ومساحتها برقمين عشريين مع الوحدة (17.81 م²) بلغة اللوحة", "how": "label_spaces"},
+        {"id": "wall_poche", "en": "Cut walls in solid poche or one hatch, the same on every sheet; columns filled", "ar": "الحوائط المقطوعة بتظليل مصمت أو هاتش واحد ثابت في كل اللوحات؛ الأعمدة مملوءة", "how": "walls"},
+        {"id": "doors", "en": "Doors with leaf line and swing arc; double leaf for openings of 1.20 m and more; swing never over a stair landing or another door", "ar": "الأبواب بخط الضلفة وقوس الفتح؛ ضلفتان للفتحات 1.20 م فأكثر؛ الفتح لا يقع على بسطة سلم أو باب آخر", "how": "symbol.door, add_wall_openings"},
+        {"id": "opening_tags", "en": "Every door and window tagged with the mark of the schedule", "ar": "كل باب وشباك عليه رمز الجدول", "how": "object_tags, opening_schedule"},
+        {"id": "stairs", "en": "Stair on every floor it serves: lower floor shows UP, the treads to the cut line and a cut line, treads above it dashed; upper floor shows the void, the handrail, the treads hidden under the slab dashed and DN. Enclosed by walls and never in the middle of a corridor", "ar": "السلم في كل دور يخدمه: الدور السفلي يظهر صعود والدرجات حتى خط القطع وخط القطع والدرجات بعده منقطة؛ الدور العلوي يظهر الفتحة والدرابزين والدرجات تحت البلاطة منقطة ونزول. السلم محاط بحوائط ولا يقع وسط ممر", "how": "symbol.stair"},
+        {"id": "levels", "en": "Floor level (FFL) with the sign and two decimals at every change of level; steps at the entrance", "ar": "منسوب الأرضية بالإشارة ورقمين عشريين عند كل تغيير منسوب؛ درجات المدخل", "how": "symbol.levels"},
+        {"id": "fixtures", "en": "Fixtures and fixed furniture drawn: WC, basin, shower or bath, sink, wardrobes, kitchen units", "ar": "التجهيزات والأثاث الثابت مرسومة: كرسي ومغسلة ودش أو بانيو وحوض مطبخ وخزائن ووحدات المطبخ", "how": "insert_block, draw"},
+        {"id": "section_marks", "en": "Section and elevation marks with the sheet that shows them", "ar": "علامات القطاعات والواجهات مع رقم اللوحة التي تعرضها", "how": "mleader, text"},
+        {"id": "north_scale", "en": "North arrow, scale and scale bar in the title block", "ar": "سهم الشمال والمقياس ومقياس الرسم في بطاقة اللوحة", "how": "make_sheet"},
+        {"id": "notes", "en": "General notes and the plan basis in words, never internal ids", "ar": "الملاحظات العامة وأساس المسقط بالكلمات، دون رموز داخلية", "how": "make_sheet notes"}
+      ]
+    },
+    "elevation": {
+      "title_en": "Elevation",
+      "title_ar": "واجهة",
+      "include": [
+        {"id": "ground_line", "en": "Ground line in a heavy line across the width with ground ticks below it", "ar": "خط الأرض بخط سميك على عرض الواجهة مع علامات التربة تحته", "how": "symbol.ground_line"},
+        {"id": "level_markers", "en": "Level markers on one side: ground, FFL of each floor, top of slab, top of parapet, top of roof structures; sign and two decimals", "ar": "علامات المناسيب على جانب واحد: الأرض ومنسوب كل دور وسقف البلاطة وأعلى الدرابزين وأعلى منشآت السطح؛ بالإشارة ورقمين عشريين", "how": "symbol.levels"},
+        {"id": "materials", "en": "Materials shown by hatch or by a leader note: render, stone, tile, glass, metal", "ar": "الخامات بالهاتش أو بتعليق بسهم: بياض وحجر وبلاط وزجاج ومعادن", "how": "symbol.material_hatch, mleader"},
+        {"id": "openings", "en": "Doors and windows with frames, glass lines, sill and head heights; same tags as the plan", "ar": "الأبواب والشبابيك بالإطارات وخطوط الزجاج ومناسيب الجلسة والعتب؛ نفس رموز المسقط", "how": "draw, object_tags"},
+        {"id": "entrance", "en": "Entrance steps, landing and canopy or porch drawn; the entrance door as wide as on the plan", "ar": "درجات المدخل والبسطة والمظلة أو الرواق مرسومة؛ باب المدخل بنفس عرضه في المسقط", "how": "draw"},
+        {"id": "roof", "en": "Parapet, roof slab edge, water tank and roof access shown with their levels", "ar": "الدرابزين وحافة بلاطة السطح وخزان المياه ومدخل السطح مع مناسيبها", "how": "draw, symbol.levels"},
+        {"id": "grid_ends", "en": "Grid axes with bubbles at the ends of the elevation", "ar": "محاور الشبكة بفقاعاتها على طرفي الواجهة", "how": "grid"},
+        {"id": "dimensions", "en": "Overall height and floor-to-floor heights as vertical dimension strings", "ar": "الارتفاع الكلي والارتفاعات بين الأدوار كخطوط أبعاد رأسية", "how": "dimension.linear"},
+        {"id": "title_scale", "en": "Title under each elevation with its name and scale", "ar": "عنوان تحت كل واجهة باسمها ومقياسها", "how": "text"}
+      ]
+    },
+    "section": {
+      "title_en": "Section",
+      "title_ar": "قطاع",
+      "include": [
+        {"id": "cut_hatch", "en": "Everything cut is hatched: walls, slabs, beams, parapet, in the poche of the cut material, with a heavy cut outline", "ar": "كل ما هو مقطوع مظلل: الحوائط والبلاطات والكمرات والدرابزين، بتظليل خامة القطع ومحيط قطع سميك", "how": "symbol.material_hatch"},
+        {"id": "openings", "en": "Doors and windows cut in the walls with heads and sills", "ar": "الأبواب والشبابيك المقطوعة في الحوائط بعتباتها وجلساتها", "how": "draw"},
+        {"id": "stair", "en": "The stair in section: steps, landing, handrail, headroom line", "ar": "السلم في القطاع: الدرجات والبسطة والدرابزين وخط ارتفاع الرأس", "how": "draw"},
+        {"id": "ground_foundation", "en": "Ground line and the foundation level as a dashed line marked indicative: sizes are the structural engineer's", "ar": "خط الأرض ومنسوب الأساس بخط منقط مكتوب عليه استرشادي: الأبعاد من المهندس الإنشائي", "how": "symbol.ground_line, symbol.foundation_level"},
+        {"id": "level_markers", "en": "Level markers: ground, FFL, top of slab, top of parapet", "ar": "علامات المناسيب: الأرض وأرضية كل دور وسقف البلاطة وأعلى الدرابزين", "how": "symbol.levels"},
+        {"id": "heights", "en": "Vertical dimensions: floor to floor, clear height, parapet, overall", "ar": "أبعاد رأسية: بين الأدوار والارتفاع الصافي والدرابزين والكلي", "how": "dimension.linear"},
+        {"id": "room_names", "en": "Room names inside the cut rooms", "ar": "أسماء الغرف داخل الغرف المقطوعة", "how": "text"},
+        {"id": "build_up", "en": "Roof and floor build-ups named by layers with leaders", "ar": "طبقات السطح والأرضيات مسماة بتعليقات بأسهم", "how": "mleader"},
+        {"id": "section_title", "en": "Section name and scale under it; the cut marks on the plan use the same letters", "ar": "اسم القطاع ومقياسه تحته؛ علامات القطع في المسقط بنفس الحروف", "how": "text"}
+      ]
+    },
+    "detail": {
+      "title_en": "Detail",
+      "title_ar": "تفصيلة",
+      "include": [
+        {"id": "material_hatch", "en": "Each material in its hatch: concrete, masonry, earth, insulation; cut outline heavy", "ar": "كل خامة بهاتش الخاص بها: خرسانة ومباني وتربة وعزل؛ ومحيط القطع سميك", "how": "symbol.material_hatch"},
+        {"id": "leaders", "en": "Every layer named with a leader: material, thickness, finish", "ar": "كل طبقة مسماة بسهم: الخامة والسمك والتشطيب", "how": "symbol.material_hatch with label, mleader"},
+        {"id": "dimensions", "en": "Thicknesses, heights and falls dimensioned", "ar": "السماكات والارتفاعات والميول بأبعاد", "how": "dimension.linear"},
+        {"id": "reference", "en": "Reference mark back to the plan or section it comes from", "ar": "علامة مرجعية إلى المسقط أو القطاع الذي أُخذت منه", "how": "text"},
+        {"id": "title_scale", "en": "Title and scale under each detail (1:5, 1:10 or 1:20)", "ar": "عنوان ومقياس تحت كل تفصيلة (1:5 أو 1:10 أو 1:20)", "how": "text"}
+      ]
+    },
+    "schedule": {
+      "title_en": "Schedule",
+      "title_ar": "جدول",
+      "include": [
+        {"id": "source", "en": "Built from the drawing objects; quantities never typed", "ar": "مبني من عناصر الرسم؛ الكميات لا تُكتب باليد", "how": "opening_schedule, room_schedule"},
+        {"id": "marks", "en": "Same marks as the plan tags", "ar": "نفس رموز المسقط", "how": "object_tags"},
+        {"id": "sizes", "en": "One row per type and size; no total across different items", "ar": "صف لكل نوع ومقاس؛ لا إجمالي يجمع أصنافاً مختلفة", "how": "opening_schedule total_by"},
+        {"id": "units_decimals", "en": "Unit in the heading and two decimals", "ar": "الوحدة في العنوان ورقمان عشريان", "how": "language"},
+        {"id": "language", "en": "In the language of the sheet", "ar": "بلغة اللوحة", "how": "language"}
+      ]
+    },
+    "site": {
+      "title_en": "Site plan",
+      "title_ar": "الموقع العام",
+      "include": [
+        {"id": "boundary", "en": "Plot boundary with dimensions and area", "ar": "حدود القطعة بأبعادها ومساحتها", "how": "draw, dimension.linear"},
+        {"id": "setbacks", "en": "Setbacks to each boundary, dimensioned", "ar": "الارتدادات على كل حد، بالأبعاد", "how": "dimension.linear"},
+        {"id": "access", "en": "Pedestrian and car entrances, parking, roads", "ar": "مداخل المشاة والسيارات والمواقف والطرق", "how": "draw"},
+        {"id": "north", "en": "North arrow and scale bar", "ar": "سهم الشمال ومقياس الرسم", "how": "make_sheet"}
+      ]
+    }
+  },
+  "symbols": {
+    "door": {
+      "open_angle_deg": 90,
+      "layer": "A-DOOR",
+      "color_aci": 3,
+      "note": "A leaf line at its open position plus the swing arc. Two leaves for openings from double_leaf_from_m wide."
+    },
+    "double_leaf_from_m": {"value": 1.2, "basis": "practice_default", "rationale": "A leaf wider than about 1.0 m is hard to swing; wide villa entrances are double leaf. Practice, not a code value."},
+    "stair": {
+      "cut_height_m": {"value": 1.2, "basis": "practice_default", "rationale": "The plan cuts the stair about 1.2 m above the floor; the treads above the cut are drawn dashed. Practice."},
+      "going_m": {"value": 0.28, "basis": "practice_default", "rationale": "Comfortable tread used when a code minimum is smaller. Practice."},
+      "handrail_offset_m": {"value": 0.06, "basis": "practice_default", "rationale": "Drawn inside the flight edge. Practice."},
+      "gap_between_flights_m": {"value": 0.1, "basis": "practice_default", "rationale": "Eye between the two flights of a U stair. Practice."},
+      "layers": {
+        "stair": "A-FLOR-STRS",
+        "hidden": "A-FLOR-STRS-HIDD",
+        "rail": "A-FLOR-HRAL",
+        "text": "A-ANNO-STRS"
+      }
+    },
+    "levels": {
+      "layer": "A-ANNO-LEVL",
+      "marker_size_paper_mm": 3.0,
+      "color_aci": 1
+    },
+    "ground_line": {
+      "elevation_layer": "A-ELEV-GRND",
+      "section_layer": "A-SECT-GRND",
+      "lineweight_hundredths_mm": 70,
+      "tick_spacing_paper_mm": 4.0,
+      "tick_length_paper_mm": 3.0,
+      "color_aci": 7
+    },
+    "foundation_level": {
+      "layer": "A-SECT-FNDN",
+      "color_aci": 5,
+      "label_en": "Foundation level (indicative, by the structural engineer)",
+      "label_ar": "منسوب الأساس (استرشادي، من المهندس الإنشائي)"
+    },
+    "hatch": {
+      "cut_layer": "A-SECT-CUT",
+      "pattern_layer": "A-SECT-PATT",
+      "detail_layer": "A-DETL-PATT",
+      "label_layer": "A-ANNO-NOTE",
+      "cut_lineweight_hundredths_mm": 50,
+      "spacing_paper_mm": {"section": 2.5, "detail": 2.0, "elevation": 3.0}
+    }
+  },
+  "materials": {
+    "concrete": {"title_en": "Reinforced concrete", "title_ar": "خرسانة مسلحة", "section_pattern": "ANSI37", "elevation_pattern": null, "color_aci": 8},
+    "masonry": {"title_en": "Masonry (brick or block)", "title_ar": "مباني (طوب أو بلوك)", "section_pattern": "ANSI31", "elevation_pattern": "BRICK", "color_aci": 30},
+    "earth": {"title_en": "Earth or fill", "title_ar": "تربة أو ردم", "section_pattern": "NET", "elevation_pattern": null, "color_aci": 8},
+    "insulation": {"title_en": "Insulation", "title_ar": "عزل", "section_pattern": "DASH", "elevation_pattern": null, "color_aci": 2},
+    "screed": {"title_en": "Screed or plaster", "title_ar": "مونة أو بياض", "section_pattern": "LINE", "elevation_pattern": null, "color_aci": 9},
+    "solid": {"title_en": "Solid poche", "title_ar": "تظليل مصمت", "section_pattern": "SOLID", "elevation_pattern": "SOLID", "color_aci": 7}
+  },
+  "space_planning": {
+    "project_types": ["villa"],
+    "thresholds": {
+      "circulation_share_warn": {"value": 0.15, "basis": "practice_default", "rationale": "Corridors and halls take about 10 to 15 percent of a house floor. Above 15 percent the plan is carrying too much passage."},
+      "circulation_share_error": {"value": 0.22, "basis": "practice_default", "rationale": "A fifth of the floor is passage: the plan needs to be reorganised, not adjusted."},
+      "corridor_length_max_m": {"value": 8.0, "basis": "practice_default", "rationale": "A passage longer than this is a corridor plan with rooms on both sides. Practice."},
+      "kitchen_to_living_max_ratio": {"value": 1.0, "basis": "practice_default", "rationale": "The kitchen is not larger than the biggest living space of its floor. Practice."},
+      "master_rule_min_bedrooms": {"value": 3, "basis": "practice_default", "rationale": "From three bedrooms a villa has a master bedroom with its own bathroom. Practice."},
+      "baths_per_bedroom_min": {"value": 0.75, "basis": "practice_default", "rationale": "A villa with four bedrooms and two shared bathrooms is under-served; three or more is the usual minimum. Practice."},
+      "guest_wc_distance_max_m": {"value": 10.0, "basis": "practice_default", "rationale": "Guests reach the WC without crossing the family area. Practice."},
+      "bedroom_oversize_m2": {"value": 24.0, "basis": "practice_default", "rationale": "A bedroom other than the master above this size is wasting floor. Practice."},
+      "master_oversize_m2": {"value": 36.0, "basis": "practice_default", "rationale": "A master bedroom without dressing and bath above this size is wasting floor. Practice."},
+      "service_oversize_m2": {"value": 12.0, "basis": "practice_default", "rationale": "Utility, laundry and store above this size are wasting floor. Practice."}
+    },
+    "circulation_kinds": ["corridor", "lobby"],
+    "living_kinds": ["living", "majlis", "reception"],
+    "wet_kinds": ["bathroom", "wc", "guest_wc"],
+    "kind_rules": [
+      {"kind": "stair", "any": ["stair", "سلم"]},
+      {"kind": "guest_wc", "any": ["guest wc", "guest toilet", "guest w.c", "powder", "حمام ضيوف", "حمام الضيوف", "دورة مياه ضيوف", "دورة مياه الضيوف"]},
+      {"kind": "bathroom", "any": ["bath", "shower", "ensuite", "en-suite", "حمام"]},
+      {"kind": "wc", "any": ["wc", "w.c", "toilet", "lavatory", "دورة مياه", "مرحاض", "تواليت"]},
+      {"kind": "kitchen", "any": ["kitchen", "مطبخ"]},
+      {"kind": "dining", "any": ["dining", "سفرة", "طعام"]},
+      {"kind": "majlis", "any": ["majlis", "مجلس"]},
+      {"kind": "reception", "any": ["reception", "salon", "صالون", "استقبال"]},
+      {"kind": "living", "any": ["living", "family", "lounge", "sitting", "معيشة", "جلوس", "ليفينج"]},
+      {"kind": "dressing", "any": ["dressing", "walk-in", "walk in", "wardrobe room", "غرفة ملابس", "ملابس"]},
+      {"kind": "bedroom", "any": ["bed", "غرفة نوم", "نوم"]},
+      {"kind": "corridor", "any": ["corridor", "passage", "hallway", "ممر", "طرقة"]},
+      {"kind": "lobby", "any": ["lobby", "hall", "foyer", "entrance", "vestibule", "entry", "مدخل", "ردهة", "هول", "بهو", "صالة"]},
+      {"kind": "utility", "any": ["utility", "laundry", "store", "storage", "maid", "driver", "service", "مخزن", "غسيل", "خدمات", "خادمة"]},
+      {"kind": "garage", "any": ["garage", "parking", "جراج", "كراج", "موقف"]},
+      {"kind": "balcony", "any": ["balcony", "terrace", "veranda", "شرفة", "بلكونة", "تراس"]}
+    ],
+    "master_words": ["master", "رئيسية", "ماستر", "رئيسي"],
+    "wardrobe_words": ["wardrobe", "closet", "cupboard", "خزانة", "دولاب", "ملابس"]
+  },
+  "general_notes": {
+    "status": {"en": "ISSUE STATUS: FOR REVIEW", "ar": "حالة الإصدار: للمراجعة"},
+    "responsibility": {
+      "en": "Drawn by Qiyas. Loads, design calculations and approval are the responsibility of the engineer and the company. This sheet is not approved or stamped.",
+      "ar": "رسم قياس. الأحمال والحسابات التصميمية والاعتماد من مسؤولية المهندس والشركة. هذه اللوحة غير معتمدة ولا مختومة."
+    },
+    "codes_prefix": {"en": "Codes and limits applied:", "ar": "الأكواد والحدود المطبقة:"},
+    "assumptions_prefix": {"en": "Assumptions (to be confirmed by the engineer):", "ar": "افتراضات (يؤكدها المهندس):"},
+    "practice_line": {
+      "en": "Limits marked practice default are common practice, not code values: the engineer confirms them.",
+      "ar": "الحدود المكتوب عليها ممارسة معتادة ليست قيم كود: المهندس يؤكدها."
+    }
+  }
+}
