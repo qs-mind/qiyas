@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
+    "tauri:fast": "tauri dev --config crates/qiyas-desktop/tauri.conf.json --config crates/qiyas-desktop/tauri.fast.conf.json",
     "bundle": "scripts/build-sidecar.sh && tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json",
     "bundle:signed": "scripts/build-sidecar.sh && tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json --config crates/qiyas-desktop/tauri.updater.conf.json"
   },
