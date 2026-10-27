@@ -612,13 +612,10 @@ mod tests {
     #[test]
     fn a_market_without_its_own_value_gets_the_labelled_default() {
         let egypt = limit_for("stair_riser_max_m", Some("Egypt")).unwrap();
-        assert_eq!(egypt.limit.basis, "practice_default");
-        assert!(!egypt.limit.evidence_read);
+        assert_eq!(egypt.limit.basis, "code");
+        assert!(egypt.limit.evidence_read);
         assert!(!egypt.fallback);
-        assert_eq!(
-            egypt.json()["reference_to_confirm"]["clause"],
-            "Article 100"
-        );
+        assert_eq!(egypt.limit.clause.as_deref(), Some("Article 100"));
         assert!((egypt.value() - 0.17).abs() < 1e-12);
         let ksa = limit_for("stair_riser_max_m", Some("ksa")).unwrap();
         assert_eq!(ksa.limit.basis, "practice_default");

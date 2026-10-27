@@ -16,10 +16,10 @@
           "publisher": "Ministry of Housing, Utilities and Urban Communities",
           "official_url": "https://www.mhuc.gov.eg",
           "official_url_read": false,
-          "evidence_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-          "evidence_read": false,
-          "evidence_note": "The landing page does not show the figures. translation; confirm against the Arabic text of the executive regulations",
-          "status": "named_in_source",
+          "evidence_url": "https://lawyeregypt.net/?p=3758",
+          "evidence_read": true,
+          "evidence_note": "Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it. Articles 93, 94, 96, 97, 100 and 103 were read in Arabic and each limit below quotes its article.",
+          "status": "read",
           "use": "Room sizes, ceiling height, openings, doors, stairs, railings (limits below)."
         },
         {
@@ -212,352 +212,286 @@
       "market": "egypt",
       "value": 2.7,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 93",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Clear height from finished floor to the underside of the exposed ceiling, every floor."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 93",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "مقاسً من مستوى السطح النهائى للأرضية حتى بطنيه سقفه الظاهر فى جميع الدوار 2.7 متر",
+      "evidence_read": true,
+      "note": "Clear height from finished floor to the underside of the exposed ceiling, every floor. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "ceiling_height_service_min_m",
       "market": "egypt",
       "value": 2.3,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 93",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Entrances, internal corridors, bathrooms, laundry rooms, guards' rooms and similar spaces."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 93",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "ويجوز أن يقل الارتفاع إلى 2.30 متر بالنسبة للمداخل و الطرقات الداخلية والحمامات وغرف الغسيل",
+      "evidence_read": true,
+      "note": "Entrances, internal corridors, bathrooms, laundry rooms, guards' rooms and similar spaces. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "room_area_min_m2",
       "market": "egypt",
       "value": 7.5,
       "unit": "m2",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Residential rooms."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "غرف سكنية 7.5 2.5",
+      "evidence_read": true,
+      "note": "Residential rooms. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "room_width_min_m",
       "market": "egypt",
       "value": 2.5,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Residential rooms, smallest dimension."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "غرف سكنية 7.5 2.5",
+      "evidence_read": true,
+      "note": "Residential rooms, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "kitchen_area_min_m2",
       "market": "egypt",
       "value": 3.0,
       "unit": "m2",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Kitchens."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "مطابخ 3.00 1.50",
+      "evidence_read": true,
+      "note": "Kitchens. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "kitchen_width_min_m",
       "market": "egypt",
       "value": 1.5,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Kitchens, smallest dimension."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "مطابخ 3.00 1.50",
+      "evidence_read": true,
+      "note": "Kitchens, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "bathroom_area_min_m2",
       "market": "egypt",
       "value": 1.5,
       "unit": "m2",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Bathrooms."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "حمامات 1.50 1.20",
+      "evidence_read": true,
+      "note": "Bathrooms. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "bathroom_width_min_m",
       "market": "egypt",
       "value": 1.2,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Bathrooms, smallest dimension."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "حمامات 1.50 1.20",
+      "evidence_read": true,
+      "note": "Bathrooms, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "wc_area_min_m2",
       "market": "egypt",
       "value": 0.8,
       "unit": "m2",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Toilets."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "دورة مياة 0.80 0.80",
+      "evidence_read": true,
+      "note": "Toilets. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "wc_width_min_m",
       "market": "egypt",
       "value": 0.8,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 94",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Toilets, smallest dimension."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 94",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "دورة مياة 0.80 0.80",
+      "evidence_read": true,
+      "note": "Toilets, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "window_area_ratio_habitable_min",
       "market": "egypt",
       "value": 0.08,
       "unit": "ratio of floor area",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 96",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Openings for light and ventilation: 8% of the floor area of residential rooms. Living, dining and reception count as residential rooms."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 96",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "( 8 % ) من مسطح أرضية الغرف السكنية .",
+      "evidence_read": true,
+      "note": "Openings for light and ventilation: 8% of the floor area of residential rooms. Living, dining and reception count as residential rooms. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "window_area_ratio_service_min",
       "market": "egypt",
       "value": 0.1,
       "unit": "ratio of floor area",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 96",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "10% of the floor area of a bathroom, kitchen, toilet or stairwell. Distribution halls, corridors and entrances are exempt."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 96",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "( 10 % ) من مسطح أى مرفق من مرافق البناء ( حمام – مطبخ – دورة مياه – بئر سلم بالدور – وما إليه )",
+      "evidence_read": true,
+      "note": "10% of the floor area of a bathroom, kitchen, toilet or stairwell. Distribution halls, corridors and entrances are exempt. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "door_to_stair_min_m",
       "market": "egypt",
       "value": 1.0,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 96",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "A door that opens directly onto a stair flight must be at least one metre from it."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 96",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "فى حالة وجود باب يفتح مباشرة على درج سلم فإنه يجب أن تفصل بينهما مسافة لا تقل عن متر واحد",
+      "evidence_read": true,
+      "note": "A door that opens directly onto a stair flight must be at least one metre from it. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "window_sill_height_min_m",
       "market": "egypt",
       "value": 0.9,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 96",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Window sill, unless a balcony, terrace or a railing of at least 0.9 m is in front of it."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 96",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "الا يقل ارتفاع جلسات الشبابيك عن 0.9 من المتر",
+      "evidence_read": true,
+      "note": "Window sill, unless a balcony, terrace or a railing of at least 0.9 m is in front of it. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "door_width_min_room_m",
       "market": "egypt",
       "value": 0.8,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 97",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Residential rooms and offices."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 97",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "الغرف السكنية والمكاتب 80 سم",
+      "evidence_read": true,
+      "note": "Residential rooms and offices. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "door_width_min_service_m",
       "market": "egypt",
       "value": 0.7,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 97",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Kitchens, bathrooms and toilets."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 97",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "المطابخ والحمامات ودورات المياة 70 سم",
+      "evidence_read": true,
+      "note": "Kitchens, bathrooms and toilets. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "stair_width_min_m",
       "market": "egypt",
       "value": 1.1,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 100",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Clear length of the step, floors with up to four units (a villa has one). 1.30 m for the main stair when a floor has more than four units."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 100",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "110 سم إذا كان عدد الوحدات بالدور لا يزيد على اربع وحدات",
+      "evidence_read": true,
+      "note": "Clear length of the step where a floor has up to four units (a villa has one). Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "stair_going_min_m",
       "market": "egypt",
       "value": 0.27,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 100",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Tread not less than 27 cm."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 100",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "النائمة لا تقل عن 27 سم",
+      "evidence_read": true,
+      "note": "Tread not less than 27 cm. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "stair_riser_max_m",
       "market": "egypt",
       "value": 0.17,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 100",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Riser not more than 17 cm."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 100",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "القائمة لا تزيد عن 17 سم",
+      "evidence_read": true,
+      "note": "Riser not more than 17 cm. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "stair_steps_per_flight_max",
       "market": "egypt",
       "value": 14,
       "unit": "steps",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 100",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "At most 14 consecutive steps, then a landing at least four treads wide."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 100",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "14 درجة تليها صدفة لا يقل عرضها عن أربع نوائم",
+      "evidence_read": true,
+      "note": "At most 14 consecutive steps, then a landing at least four treads wide. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "stair_headroom_min_m",
       "market": "egypt",
       "value": 2.1,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 100",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Clear height above any step."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 100",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "يجب أن يكون الحد الأدنى لصافى الارتفاع فوق درجة 2.1 متر",
+      "evidence_read": true,
+      "note": "Clear height above any step. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "guard_height_min_m",
       "market": "egypt",
       "value": 0.9,
       "unit": "m",
-      "basis": "practice_default",
-      "rationale": "Provisional planning default; the cited translation has not been confirmed against the Arabic executive regulations.",
-      "evidence_read": false,
-      "reference_to_confirm": {
-        "code": "Egypt Building Law 119/2008, executive regulations",
-        "clause": "Article 100 and Article 103",
-        "source_url": "https://eg.andersen.com/translation-of-law-no-119-of-2008/",
-        "note": "translation; confirm against the Arabic text of the executive regulations"
-      },
-      "note": "Stair railing 0.90 m. Terrace and balcony railings 0.90 m for the first five floors, plus 5 cm for each floor after, up to 1.20 m; it must stop objects of 10 cm or more falling."
+      "basis": "code",
+      "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
+      "clause": "Article 100 and Article 103",
+      "source_url": "https://lawyeregypt.net/?p=3758",
+      "quote_ar": "ألا يقل ارتفاع درابزين الشرفات والبلكونات والسلالم المكشوفة عن 0.9 من المتر بالنسبة للأدوار الخمسة الأولى",
+      "evidence_read": true,
+      "note": "Stair railing 0.90 m. Terrace and balcony railings 0.90 m for the first five floors, plus 5 cm for each floor after, up to 1.20 m; it must stop objects of 10 cm or more falling. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
     },
     {
       "id": "ceiling_height_min_m",

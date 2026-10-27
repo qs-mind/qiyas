@@ -425,44 +425,47 @@ fn code_register_never_presents_an_unsourced_value_as_code() {
 }
 
 #[test]
-fn egypt_translation_limits_are_unverified_defaults_with_references_to_confirm() {
-    let egypt: Vec<_> = limits().iter().filter(|l| l.market == "egypt").collect();
-    assert_eq!(egypt.len(), 22);
-    for limit in egypt {
-        assert_eq!(limit.basis, "practice_default", "{}", limit.id);
-        assert!(!limit.evidence_read);
-        assert!(limit.code.is_none() && limit.clause.is_none() && limit.source_url.is_none());
-        let reference = limit.reference_to_confirm.as_ref().unwrap();
-        assert_eq!(
-            reference.code,
-            "Egypt Building Law 119/2008, executive regulations"
-        );
-        assert!(reference.clause.starts_with("Article "));
-        assert_eq!(
-            reference.source_url,
-            "https://eg.andersen.com/translation-of-law-no-119-of-2008/"
-        );
-        assert_eq!(
-            reference.note,
-            "translation; confirm against the Arabic text of the executive regulations"
-        );
-        let resolved = qiyas_core::drafting_standards::limit_for(&limit.id, Some("egypt"))
-            .unwrap()
-            .json();
-        assert_eq!(resolved["reference_to_confirm"]["clause"], reference.clause);
-        assert_eq!(resolved["evidence_read"], false);
-    }
+fn egypt_limits_are_code_values_quoting_the_arabic_article() {
     let register = qiyas_core::drafting_standards::register();
+    let raw: Vec<_> = register["limits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["market"] == "egypt")
+        .collect();
+    assert_eq!(raw.len(), 22);
+    for limit in raw {
+        let id = limit["id"].as_str().unwrap();
+        assert_eq!(limit["basis"], "code", "{id}");
+        assert_eq!(limit["evidence_read"], true, "{id}");
+        assert!(
+            limit["clause"].as_str().unwrap().starts_with("Article "),
+            "{id}"
+        );
+        assert!(
+            limit["source_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://"),
+            "{id}"
+        );
+        // Each value quotes the Arabic article it comes from, figure included.
+        let quote = limit["quote_ar"].as_str().unwrap();
+        assert!(quote.chars().count() > 10, "{id}");
+        // The caveat about the edition travels with the finding.
+        assert!(limit["note"].as_str().unwrap().contains("774/2014"), "{id}");
+        assert!(limit.get("reference_to_confirm").is_none(), "{id}");
+    }
     let law = &register["markets"]["egypt"]["codes"][0];
     assert_eq!(law["id"], "egypt_building_law_119");
-    assert_eq!(law["evidence_read"], false);
-    assert_eq!(law["status"], "named_in_source");
+    assert_eq!(law["evidence_read"], true);
     assert!(check_register().is_empty(), "{:?}", check_register());
 }
 
 #[test]
 fn practice_defaults_are_labelled_and_never_report_code_errors() {
-    for market in [None, Some("egypt"), Some("ksa"), Some("uae")] {
+    // Egypt's limits are code values since 27 October 2026 (see the test below).
+    for market in [None, Some("ksa"), Some("uae")] {
         let report = run_checks(&bad_plan(), market).unwrap();
         assert!(!report.findings.is_empty());
         assert_eq!(report.errors, 0);
@@ -479,5 +482,30 @@ fn practice_defaults_are_labelled_and_never_report_code_errors() {
             .find(|f| f.rule == "circulation_share")
             .unwrap();
         assert_eq!(circulation.severity, "warning");
+    }
+}
+
+#[test]
+fn egypt_code_findings_cite_the_article_its_source_and_the_edition_caveat() {
+    let report = run_checks(&bad_plan(), Some("egypt")).unwrap();
+    let code: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.basis == "code")
+        .collect();
+    assert!(!code.is_empty(), "{report:#?}");
+    for finding in &code {
+        assert!(finding
+            .source_url
+            .as_deref()
+            .is_some_and(|u| u.starts_with("https://")));
+        assert!(finding
+            .caveat
+            .as_deref()
+            .is_some_and(|c| c.contains("774/2014")));
+    }
+    for finding in report.findings.iter().filter(|f| f.basis != "code") {
+        assert_eq!(finding.basis, "practice_default");
+        assert_ne!(finding.severity, "error");
     }
 }
