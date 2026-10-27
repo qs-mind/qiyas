@@ -52,8 +52,28 @@ pub(crate) fn internal_id(text: &str) -> Option<&'static str> {
     None
 }
 
-/// The numbers `text` states with a metre unit, in the order written (Arabic digits read).
-fn stated_numbers(text: &str) -> Vec<f64> {
+/// What a stated value measures: a note's "17.81 m²" is an area, its "5 m" a length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stated {
+    Length,
+    Area,
+    Volume,
+}
+
+impl Stated {
+    fn of(kind: crate::Kind) -> Option<Self> {
+        match kind {
+            crate::Kind::Length => Some(Self::Length),
+            crate::Kind::Area => Some(Self::Area),
+            crate::Kind::Volume => Some(Self::Volume),
+            _ => None,
+        }
+    }
+}
+
+/// The values `text` states with a metre unit, in the order written (Arabic digits read), each
+/// with what it measures.
+fn stated_values(text: &str) -> Vec<(f64, Stated)> {
     let text = crate::numbers::western(&text.to_lowercase()).into_owned();
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
@@ -73,16 +93,25 @@ fn stated_numbers(text: &str) -> Vec<f64> {
             k += 1;
         }
         let tail: String = chars[k..].iter().collect();
-        if ["m", "metre", "meter", "square m", "cubic m", "م", "متر"]
-            .iter()
-            .any(|u| {
+        let starts = |units: &[&str]| units.iter().any(|u| tail.starts_with(u));
+        // A word unit ends the word: "m" is a metre, "mm" and "minutes" are not.
+        let word = |units: &[&str]| {
+            units.iter().any(|u| {
                 tail.strip_prefix(u)
                     .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphabetic()))
             })
-        {
-            if let Ok(n) = number.parse::<f64>() {
-                out.push(n);
-            }
+        };
+        let measures = if starts(&["m²", "m2", "m^2", "square m", "sq m", "م²", "م2", "متر مربع"]) {
+            Some(Stated::Area)
+        } else if starts(&["m³", "m3", "m^3", "cubic m", "م³", "م3", "متر مكعب"]) {
+            Some(Stated::Volume)
+        } else if word(&["m", "metre", "metres", "meter", "meters", "م", "متر", "أمتار", "امتار"]) {
+            Some(Stated::Length)
+        } else {
+            None
+        };
+        if let (Some(measures), Ok(n)) = (measures, number.parse::<f64>()) {
+            out.push((n, measures));
         }
         i = j.max(i + 1);
     }
@@ -175,11 +204,15 @@ impl Session {
                         || row.block_name.is_some())
             })
             .collect();
-        let numbers = stated_numbers(text);
-        let by_value = !numbers.is_empty()
-            && numbers
-                .iter()
-                .all(|n| rows.iter().any(|row| (row.shown - n).abs() <= 0.0051));
+        // Each stated value must be a row's value as that row shows it, in the unit the note
+        // gives it: 20 m² is not cited by a 20 m length.
+        let values = stated_values(text);
+        let by_value = !values.is_empty()
+            && values.iter().all(|(n, measures)| {
+                rows.iter().any(|row| {
+                    Stated::of(row.kind) == Some(*measures) && (row.shown - n).abs() <= 0.0051
+                })
+            });
         let by_id = rows.iter().any(|row| {
             text.match_indices(&format!("takeoff:{}", row.id))
                 .any(|(at, citation)| {
@@ -226,13 +259,15 @@ mod tests {
         }
     }
     #[test]
-    fn stated_numbers_are_the_values_with_a_metre_unit() {
+    fn stated_values_are_the_values_with_a_metre_unit_and_what_they_measure() {
+        use super::Stated::{Area, Length, Volume};
         assert_eq!(
-            super::stated_numbers("Area 17.81 m² and 3,200.5 m"),
-            [17.81, 3200.5]
+            super::stated_values("Area 17.81 m² and 3,200.5 m"),
+            [(17.81, Area), (3200.5, Length)]
         );
-        assert_eq!(super::stated_numbers("المساحة ١٧٫٨١ م²"), [17.81]);
-        assert!(super::stated_numbers("Room 2, 1200 mm").is_empty());
+        assert_eq!(super::stated_values("المساحة ١٧٫٨١ م²"), [(17.81, Area)]);
+        assert_eq!(super::stated_values("Volume 60 m³"), [(60.0, Volume)]);
+        assert!(super::stated_values("Room 2, 1200 mm").is_empty());
     }
     #[test]
     fn detects_english_and_arabic_values_without_confusing_other_units_or_names() {

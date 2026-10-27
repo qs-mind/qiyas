@@ -160,6 +160,10 @@ pub struct Session {
     /// The language of the user's request, set by the host: what labels, schedules and title
     /// blocks that Qiyas writes use when a command does not say (an explicit `language` wins).
     sheet_language: Option<crate::rooms::LabelLanguage>,
+    /// The layout `make_sheet` made last (its block): what `plot` prints when no sheet is named.
+    made_sheet: Option<String>,
+    /// The computer's local date, set by a host that knows it; else the UTC date is used.
+    local_date: Option<String>,
     /// The curve tolerance of the sheet on screen when zoomed in past `batch_tol` (`zoom_tol`);
     /// `None` draws at `batch_tol`.
     zoom_tol: std::cell::Cell<Option<f64>>,
@@ -769,6 +773,8 @@ impl Session {
             untitled: false,
             export_directory: None,
             sheet_language: None,
+            made_sheet: None,
+            local_date: None,
             zoom_tol: std::cell::Cell::new(None),
             document_revision: 0,
             saved_revision: 0,
@@ -914,6 +920,28 @@ impl Session {
 
     pub fn sheet_language(&self) -> Option<crate::rooms::LabelLanguage> {
         self.sheet_language
+    }
+
+    /// The layout `make_sheet` made last, while it still exists.
+    pub fn made_sheet(&self) -> Option<&str> {
+        self.made_sheet
+            .as_deref()
+            .filter(|block| self.drawing.sheets().iter().any(|s| &s.block == block))
+    }
+
+    pub(crate) fn set_made_sheet(&mut self, block: &str) {
+        self.made_sheet = Some(block.to_string());
+    }
+
+    /// A host that knows the computer's local date (yyyy-MM-dd) gives it here.
+    pub fn set_local_date(&mut self, date: Option<String>) {
+        self.local_date = date;
+    }
+
+    pub(crate) fn local_date(&self) -> String {
+        self.local_date
+            .clone()
+            .unwrap_or_else(crate::field::local_today)
     }
 
     pub fn export_folder(&self) -> &Path {

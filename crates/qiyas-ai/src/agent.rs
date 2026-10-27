@@ -710,6 +710,15 @@ impl Agent {
         );
         let result = self.run_turn_inner(message, events, cancel).await;
         self.update_checkpoint();
+        // The user's language and date belong to this turn: a ribbon command afterwards is not
+        // written in Arabic because the last message was.
+        {
+            let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(s) = guard.as_mut() {
+                s.set_sheet_language(None);
+                s.set_local_date(None);
+            }
+        }
         result
     }
 
@@ -2075,6 +2084,7 @@ impl Agent {
                     Lang::Ar => qiyas_core::rooms::LabelLanguage::Ar,
                     Lang::En => qiyas_core::rooms::LabelLanguage::En,
                 }));
+                s.set_local_date(Some(chrono::Local::now().format("%Y-%m-%d").to_string()));
             }
             let epoch = guard.as_ref().map(Session::epoch);
             check_turn(guard.as_ref(), &cancel, epoch)?;

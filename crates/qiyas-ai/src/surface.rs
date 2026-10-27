@@ -2508,13 +2508,21 @@ fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
     use qiyas_plot::{Area, Orientation, PlotJob, Scale};
     let failed = |e: String| ToolError::Failed(e);
     let sheets = session.drawing.sheets();
-    // A sheet made with make_sheet is what gets printed: the layout on screen, else the first
-    // layout with something on it, else Model (which has no title block or true scale).
+    // A sheet made with make_sheet is what gets printed: the layout on screen, else the one make_sheet
+    // made last, else the first layout with something on it, else Model (which has no title block or true scale).
     let default_sheet = if session.sheet.eq_ignore_ascii_case("*Model_Space") {
-        sheets
-            .iter()
-            .find(|s| !s.is_model && session.drawing.entities_in(&s.block).next().is_some())
-            .map_or(session.sheet.clone(), |s| s.block.clone())
+        session
+            .made_sheet()
+            .map(str::to_owned)
+            .or_else(|| {
+                sheets
+                    .iter()
+                    .find(|s| {
+                        !s.is_model && session.drawing.entities_in(&s.block).next().is_some()
+                    })
+                    .map(|s| s.block.clone())
+            })
+            .unwrap_or_else(|| session.sheet.clone())
     } else {
         session.sheet.clone()
     };

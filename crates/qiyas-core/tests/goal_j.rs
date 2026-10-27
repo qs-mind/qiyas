@@ -53,16 +53,39 @@ fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
             json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("21 m² [takeoff:{id}-missing]")}),
             json!({"type":"add_measurement","kind":"item","unit":"markup","value":0,"points":[[k,k]],"description":"Check this room","note":"٢١ م²","empty_item":true}),
         ] {
+            // A printed id is advised against first, then the missing citation; nothing else.
+            let expected: &[&str] = if v.to_string().contains("takeoff:") {
+                &["internal_id_in_text", "uncited_quantity"]
+            } else {
+                &["uncited_quantity"]
+            };
             let out = run(&mut s, v);
-            assert!(
-                out["advice"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|a| a["code"] == "uncited_quantity"),
-                "{out}"
-            );
+            let mut codes: Vec<String> = out["advice"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["code"].as_str().unwrap().to_string())
+                .collect();
+            codes.dedup();
+            assert_eq!(codes, expected, "{out}");
         }
+        // W3: a value a measured row shows, in the unit the note gives it, is cited by its
+        // value; no id is printed or asked for.
+        for text in ["Area 20 m²", "المساحة ٢٠ م²", "Area 20.00 m²"] {
+            let v = json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":text});
+            assert_eq!(json!(s.run_input(&v, Source::Ai).unwrap())["advice"], json!([]), "{text}");
+        }
+        // The same number in another unit is another quantity: the 20 m² row does not cite 20 m.
+        let wrong = json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"Length 20 m"});
+        assert_eq!(
+            json!(s.run_input(&wrong, Source::Ai).unwrap())["advice"][0]["code"],
+            "uncited_quantity"
+        );
+        // An id on the sheet is advised against, even when the value is right.
+        let v = json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("Area 20 m² takeoff:{id}")});
+        let out = json!(s.run_input(&v, Source::Ai).unwrap());
+        assert_eq!(out["advice"].as_array().unwrap().len(), 1, "{out}");
+        assert_eq!(out["advice"][0]["code"], "internal_id_in_text");
         let out = json!(s
             .run_input(
                 &json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"21 m²"}),

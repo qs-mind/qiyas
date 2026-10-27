@@ -267,6 +267,7 @@ impl Session {
             .find(|s| s.name.eq_ignore_ascii_case(spec.name.trim()))
             .map(|s| s.block)
             .ok_or_else(|| invalid("The new layout could not be found"))?;
+        self.set_made_sheet(&block);
         let shown = std::mem::replace(&mut self.sheet, block);
         let made = self.sheet_contents(
             &spec,
@@ -350,7 +351,7 @@ impl Session {
         put("title", spec.title.as_deref());
         put("drawing_no", spec.drawing_no.as_deref());
         put("scale", Some(&digits(scale_text)));
-        let today = crate::field::today();
+        let today = self.local_date();
         put(
             "date",
             Some(&digits(spec.date.as_deref().unwrap_or(&today))),
@@ -545,6 +546,14 @@ mod tests {
         assert_eq!(best_denominator(12.0, 15.0, &zone), Some(50.0));
         assert_eq!(best_denominator(0.5, 0.5, &zone), Some(5.0));
         assert_eq!(best_denominator(1.0e6, 1.0e6, &zone), None);
+    }
+
+    #[test]
+    fn the_default_date_is_a_whole_local_date() {
+        let date = crate::field::local_today();
+        assert_eq!(date.len(), 10, "{date}");
+        assert_eq!(date.matches('-').count(), 2, "{date}");
+        assert!(date.chars().all(|c| c.is_ascii_digit() || c == '-'), "{date}");
     }
 
     #[test]

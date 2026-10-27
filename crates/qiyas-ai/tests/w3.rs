@@ -179,7 +179,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         })),
         Reply::Calls(vec![read("takeoff_check", json!({}))]),
         // The plot and the exports: no folder named anywhere.
-        Reply::Calls(vec![exec("plot", json!({"sheet":"A-101"}))]),
+        Reply::Calls(vec![exec("plot", json!({}))]),
         Reply::Calls(vec![exec(
             "export_takeoff",
             json!({"path":"Villa DRAFT take-off.xlsx"}),
@@ -283,7 +283,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         "مقياس الرسم",
         "ملاحظات عامة",
         "العدد",
-        "المجموع",
+        "إجمالي الأبواب",
     ] {
         assert!(all.contains(must), "{must} missing in {all}");
     }
@@ -316,7 +316,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         ..Default::default()
     });
     assert!(on_layout.findings.is_empty(), "{:?}", on_layout.findings);
-    let totals: Vec<_> = sheet.iter().filter(|t| t.starts_with("المجموع")).collect();
+    let totals: Vec<_> = sheet.iter().filter(|t| t.starts_with("إجمالي")).collect();
     assert!(totals.len() >= 2, "a total per kind: {sheet:?}");
 
     // 4. The BOQ lists doors by size, not "various sizes" in one line.
@@ -344,7 +344,13 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         .collect();
     names.sort();
     assert_eq!(names.len(), 3, "{names:?}");
-    assert!(names.iter().any(|n| n.ends_with(".pdf")), "{names:?}");
+    // No sheet was named: plot printed the layout make_sheet had just made.
+    assert!(
+        names.iter().any(|n| n.ends_with(".pdf") && n.contains("A-101")),
+        "{names:?}"
+    );
+    // The user's language belongs to the turn that asked for it.
+    assert_eq!(s.sheet_language(), None);
     assert!(names.contains(&"Villa_BOQ.xlsx".to_string()), "{names:?}");
     let hidden_files = std::fs::read_dir(&hidden).unwrap().count();
     assert_eq!(hidden_files, 0, "nothing in the hidden folder");

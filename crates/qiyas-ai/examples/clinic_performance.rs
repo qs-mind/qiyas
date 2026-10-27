@@ -56,6 +56,10 @@ fn rewrite_paths(v: &mut Value, dir: &std::path::Path) {
         _ => {}
     }
 }
+/// The one recorded call whose literal handle no longer names what the recording meant: the
+/// opening schedule totals each kind (one more table row), which moves every handle made after it.
+const HANDLE_SHIFT_CALL: u64 = 83;
+
 pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let label = std::env::var("CLINIC_LABEL").unwrap_or_else(|_| {
@@ -84,6 +88,7 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
         .as_ref()
         .map(|p| Session::open_standalone(std::path::Path::new(p)).unwrap())
         .unwrap_or_else(|| seed(&dir, 6));
+    let mut handle_shifts: Vec<u64> = Vec::new();
     let mut guard = churn::Guard::default();
     let mut last_turn = 0;
     for call in calls.iter().take(if loaded.is_some() {
@@ -253,13 +258,15 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
         // moves every handle made after it. A recorded literal handle that now names something
         // else is refused as not what the recording meant; the batch is put back whole (the
         // rollback check below still holds). Regenerate the fixture's handles to exercise it.
-        let handle_shift = !expected_error
+        let handle_shift = i == HANDLE_SHIFT_CALL
+            && !expected_error
             && error.as_ref().is_some_and(|e| {
                 e["message"].as_str().is_some_and(|m| {
                     m.contains("is not a wall opening") || m.contains("No such entity")
                 })
             });
         if handle_shift {
+            handle_shifts.push(i);
             eprintln!(
                 "NOTE call {i}: a recorded handle now names another entity (W3 per-kind totals moved the handles after the first opening schedule)"
             );
@@ -294,6 +301,14 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
             serde_json::to_vec(&snapshot).unwrap(),
         )
         .unwrap();
+    }
+    // The tolerance fires at its one call and nowhere else, whole replays only.
+    if loaded.is_none() && limit >= HANDLE_SHIFT_CALL as usize {
+        assert_eq!(
+            handle_shifts,
+            [HANDLE_SHIFT_CALL],
+            "the handle tolerance must fire exactly once, at call {HANDLE_SHIFT_CALL}"
+        );
     }
     if std::env::var("CLINIC_SAVE_FINAL").is_ok() {
         s.save_as_headless(&dir.join("final-research.dxf")).unwrap();
