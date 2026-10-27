@@ -455,6 +455,7 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
       <AssistantPanel
         showTechnicalDetails={showTechnicalDetails}
         assistant={assistant}
+        drawing={info ? { path: info.path, revision: recognition.revision } : undefined}
         history={conversationHistory}
         onShow={showCard}
         onUndo={undoCard}

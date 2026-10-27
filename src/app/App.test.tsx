@@ -46,6 +46,7 @@ const expectToasts = (texts: string[]) => until(() => expect(toasts()).toEqual(t
 
 const core = vi.hoisted(() => ({
   calls: [] as string[],
+  packCheckCalls: [] as { workspace: unknown }[],
   workspaceCalls: [] as { cmd: string; args?: Record<string, unknown> }[],
   cursor: 0,
   /** The drawings with an autosave newer than them. */
@@ -83,6 +84,12 @@ const core = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+    const command = args?.cmd as { type?: string; kind?: string } | undefined;
+    if (cmd === "run_command" && command?.type === "measurement" && command.kind === "pack_check") {
+      // Background card reads have their own ledger; `calls` checks the order of user actions.
+      core.packCheckCalls.push({ workspace: args?.workspace });
+      return { type: "measurement", result: { ready: true, lines: [] } };
+    }
     if (cmd.startsWith("workspace_") || cmd === "ai_status") {
       core.workspaceCalls.push({ cmd, args });
     } else core.calls.push(`${cmd} ${JSON.stringify(args ?? null)}`);
@@ -359,6 +366,7 @@ beforeEach(() => {
   saveDialog.mockResolvedValue(null);
   core.calls.length = 0;
   core.autosaved.clear();
+  core.packCheckCalls.length = 0;
   core.chosen = PLAN;
   core.active = 1; core.opened = false;
   core.scriptOpens = false;
@@ -529,6 +537,8 @@ test("open → an autosave is asked about first → Discard deletes it, then the
     // The status bar names the drawing on screen.
     expect(statusMessage().textContent).toBe("plan.dwg");
   });
+  await until(() => expect(core.packCheckCalls).toContainEqual({ workspace: 1 }));
+  expect(await screen.findByText(en["ai.packCheck.ready"])).toBeTruthy();
 });
 
 test("DIVIDE 5 answers the divide prompt once: one divide_along for the command, none for the next pick", async () => {

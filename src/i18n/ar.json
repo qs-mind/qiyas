@@ -1932,5 +1932,19 @@
   "shortcut.cheatsheet": "إظهار الاختصارات",
   "save.choose": "اختر مكان حفظ الرسم…",
   "save.defaultName": "رسم قياس {date}",
-  "outputs.oneItem": "بند واحد"
+  "outputs.oneItem": "بند واحد",
+  "ai.packCheck.title": "فحص حزمة الرسومات",
+  "ai.packCheck.ready": "جاهزة للحصر",
+  "ai.packCheck.fix": "صحّح هذه النقاط قبل الحصر",
+  "ai.packCheck.loading": "جارٍ فحص حزمة الرسومات…",
+  "ai.packCheck.waiting": "ستُحدَّث الفحوص بعد انتهاء ميزان.",
+  "ai.packCheck.refresh": "تحديث الفحوص",
+  "ai.packCheck.passed": "اجتاز الفحص",
+  "ai.packCheck.needsFix": "يحتاج إلى تصحيح",
+  "ai.packCheck.units": "الوحدات",
+  "ai.packCheck.annotation_scale": "مقياس الكتابة",
+  "ai.packCheck.pdf_pages": "صفحات PDF",
+  "ai.packCheck.calibration": "ضبط مقياس الصور الممسوحة",
+  "ai.packCheck.orientation": "اتجاه الصفحات",
+  "ai.packCheck.register": "رقم اللوحة والمراجعة"
 }

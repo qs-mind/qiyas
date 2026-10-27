@@ -10,6 +10,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
+import { PackCheckCard } from "./PackCheckCard";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
 import { readRuns, recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
@@ -36,6 +37,8 @@ type Props = {
   /** The right column's outputs (the take-off, the BOQ...): `node` holds them all, mounted; while
    *  one is `shown` it takes the conversation's place, and the box below stays. */
   artifact?: { shown: OutputId | null; node: ReactNode; onBack(): void };
+  /** The drawing on screen and the same revision used by the take-off report. */
+  drawing?: { path: string; revision: unknown };
   /** The /compare command: ask for a BOQ and find its conflicts with the drawings. */
   onCompare?(): void;
   /** The /connect command and the empty chat's link: the "Connect an AI app" dialog. */
@@ -68,6 +71,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   pointing,
   history,
   artifact,
+  drawing,
   onCompare,
   onConnect,
   ask,
@@ -394,6 +398,13 @@ export const AssistantPanel = memo(function AssistantPanel({
       {history?.error && <p className="msg notice" role="alert">{uiError(history.error, lang)}</p>}
         <div className="assistant-thread">
         <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
+          {drawing && !shownOutput && <PackCheckCard
+            key={`${assistant.workspace ?? "drawing"}:${drawing.path}`}
+            drawing={drawing.path}
+            workspace={assistant.workspace}
+            revision={drawing.revision}
+            busy={busy}
+          />}
           {empty ? (
             <div className="assistant-empty">
               <p>{t("ai.emptyTitle")}</p>

@@ -1932,5 +1932,19 @@
   "shortcut.cheatsheet": "Show the shortcuts",
   "save.choose": "Choose where to save the drawing…",
   "save.defaultName": "Qiyas drawing {date}",
-  "outputs.oneItem": "1 item"
+  "outputs.oneItem": "1 item",
+  "ai.packCheck.title": "Drawing-pack check",
+  "ai.packCheck.ready": "Ready for take-off",
+  "ai.packCheck.fix": "Fix these before take-off",
+  "ai.packCheck.loading": "Checking the drawing pack…",
+  "ai.packCheck.waiting": "Checks will update when Mizan finishes.",
+  "ai.packCheck.refresh": "Refresh checks",
+  "ai.packCheck.passed": "Passed",
+  "ai.packCheck.needsFix": "Needs a fix",
+  "ai.packCheck.units": "Units",
+  "ai.packCheck.annotation_scale": "Annotation scale",
+  "ai.packCheck.pdf_pages": "PDF pages",
+  "ai.packCheck.calibration": "Scan calibration",
+  "ai.packCheck.orientation": "Page orientation",
+  "ai.packCheck.register": "Sheet number and revision"
 }

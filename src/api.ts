@@ -1928,6 +1928,24 @@ export type MeasurementReport = {
 };
 export const measurementReport = () => invoke<MeasurementReport>("measurement_report");
 
+/** The pre-take-off checks from `qiyas_core::pack_check`, including the fix for each failure. */
+export type PackCheckLine = {
+  id: string;
+  passes: boolean;
+  found_en: string;
+  found_ar: string;
+  fix_en: string;
+  fix_ar: string;
+};
+export type PackCheck = { ready: boolean; lines: PackCheckLine[] };
+export async function measurementPackCheck(workspace?: number | null): Promise<PackCheck> {
+  const outcome = await invoke<{ type: "measurement"; result: PackCheck }>("run_command", {
+    cmd: { type: "measurement", kind: "pack_check" },
+    ...(workspace == null ? {} : { workspace }),
+  });
+  return outcome.result;
+}
+
 export type ProjectReply = {
   type: "project";
   result: {
