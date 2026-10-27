@@ -391,7 +391,7 @@ fn the_index_lists_every_public_command_once_and_stays_small() {
         "internal commands stay out"
     );
     // The index is part of the cached system prompt; new commands grow it slowly.
-    assert!(index.len() < 4_500, "index is {} characters", index.len());
+    assert!(index.len() < 5_000, "index is {} characters", index.len());
     assert_eq!(index, reg.index_text(), "deterministic");
 }
 

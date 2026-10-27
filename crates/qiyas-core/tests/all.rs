@@ -186,6 +186,8 @@ mod wall_rollback;
 mod wall_systems;
 #[path = "walls.rs"]
 mod walls;
+#[path = "w5_drafting.rs"]
+mod w5_drafting;
 #[path = "xref.rs"]
 mod xref;
 

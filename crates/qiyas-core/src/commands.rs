@@ -186,6 +186,46 @@ pub enum Command {
         #[serde(default)]
         bubble: Option<f64>,
     },
+    /// Built-in sheet sets, view checklists, symbols, material hatches and sourced code limits.
+    /// Unsourced values are labelled practice_default. Read this before designing a package.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"drafting_knowledge","topic":"sheet_set","project_type":"villa","storeys":2,"market":"egypt"}))]
+    DraftingKnowledge {
+        topic: crate::drafting_standards::KnowledgeTopic,
+        #[serde(default)]
+        project_type: Option<String>,
+        #[serde(default)]
+        market: Option<String>,
+        #[serde(default)]
+        storeys: Option<u32>,
+        #[serde(default)]
+        view: Option<String>,
+        #[serde(default)]
+        language: Option<crate::rooms::LabelLanguage>,
+        #[serde(default)]
+        assumptions: Vec<String>,
+    },
+    /// Checks villa circulation, room proportions, en-suite, wardrobes, stairs and doors.
+    /// Explicit plan sizes are metres/m²; floors can also read rooms from drawing-unit windows.
+    /// Missing evidence is reported in not_checked; this is design review, not approval.
+    #[schemars(extend("x-category" = "inquiry"))]
+    #[schemars(example = json!({"type":"space_check","plan":{"floors":[{"name":"Ground floor","rooms":[{"name":"Living","area_m2":24,"width_m":4}]}]}}))]
+    SpaceCheck {
+        #[serde(default)]
+        plan: Option<crate::space_planning::PlanModel>,
+        #[serde(default)]
+        floors: Vec<crate::space_planning::FloorQuery>,
+        #[serde(default)]
+        market: Option<String>,
+        #[serde(default)]
+        language: Option<crate::rooms::LabelLanguage>,
+    },
+    /// Draws conventional doors, floor-specific stairs, level markers, ground lines and
+    /// labelled material hatches. Coordinates use drawing units; _m fields remain metres.
+    /// Geometry and any layers, blocks and linetypes form one undo step.
+    #[schemars(extend("x-category" = "draw"))]
+    #[schemars(example = json!({"type":"symbol","kind":"door","a":[0,0],"b":[1.5,0],"side_point":[0,1],"leaves":2}))]
+    Symbol(crate::draft_symbols::SymbolSpec),
     /// Draws editable wall systems with measurable hatches, centrelines and door/window blocks.
     /// Touching systems on the same layers join and rebuild unless join is false. Each run may
     /// override thickness, height and justification. Use wall_groups to read current handles
@@ -1606,6 +1646,8 @@ impl Command {
             | Command::ListConstraints
             | Command::ListParameters
             | Command::WallGroups { .. }
+            | Command::DraftingKnowledge { .. }
+            | Command::SpaceCheck { .. }
             | Command::Records { .. }
             | Command::RecordSchema { .. }
             | Command::Rooms { .. }
@@ -1677,6 +1719,7 @@ impl Command {
             | Command::CenterLine { .. }
             | Command::SymmetryAxis { .. }
             | Command::Grid { .. }
+            | Command::Symbol(_)
             | Command::NewLayout { .. }
             | Command::SetLayoutPaper { .. }
             | Command::RenameLayout { .. }
@@ -2043,6 +2086,23 @@ impl Session {
                 return Ok(Outcome::Added {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
+            }
+            Command::DraftingKnowledge { topic, project_type, market, storeys, view, language, assumptions } => {
+                return Ok(Outcome::Measurement {
+                    result: crate::drafting_standards::knowledge(
+                        topic, project_type.as_deref(), market.as_deref(), storeys,
+                        view.as_deref(), language.or(self.sheet_language()).unwrap_or(crate::rooms::LabelLanguage::En),
+                        &assumptions,
+                    )?,
+                });
+            }
+            Command::SpaceCheck { plan, floors, market, language } => {
+                return Ok(Outcome::Measurement {
+                    result: self.space_check(plan, &floors, market.as_deref(), language)?,
+                });
+            }
+            Command::Symbol(spec) => {
+                return Ok(Outcome::Added { handles: self.draft_symbol(spec)? });
             }
             Command::CompareRevisions {
                 other_path,

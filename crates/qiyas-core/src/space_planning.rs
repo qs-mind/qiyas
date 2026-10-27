@@ -211,15 +211,15 @@ struct Fl<'p> {
     rooms: Vec<R<'p>>,
 }
 
-impl Fl<'_> {
-    fn of_kind<'s>(&'s self, kinds: &[&str]) -> Vec<&'s R<'s>> {
+impl<'p> Fl<'p> {
+    fn of_kind(&self, kinds: &[&str]) -> Vec<&R<'p>> {
         self.rooms
             .iter()
             .filter(|r| r.kind.is_some_and(|k| kinds.contains(&k)))
             .collect()
     }
 
-    fn find(&self, name: &str) -> Option<&R<'_>> {
+    fn find(&self, name: &str) -> Option<&R<'p>> {
         self.rooms.iter().find(|r| same(&r.room.name, name))
     }
 
@@ -333,6 +333,9 @@ fn check_model(plan: &PlanModel) -> Result<(), CoreError> {
                     return Err(invalid(format!("Room {}: sizes are non-negative metres", room.name)));
                 }
             }
+            if room.centre_m.is_some_and(|p| p.into_iter().any(|v| !v.is_finite())) {
+                return Err(invalid("Room centres must be finite metres"));
+            }
             if let Some(kind) = &room.kind {
                 if !KINDS.contains(&kind.as_str()) {
                     return Err(invalid(format!(
@@ -346,6 +349,21 @@ fn check_model(plan: &PlanModel) -> Result<(), CoreError> {
         for door in &floor.doors {
             if !door.width_m.is_finite() || door.width_m <= 0.0 {
                 return Err(invalid("A door needs a positive width in metres"));
+            }
+            if door.leaves.is_some_and(|n| !matches!(n, 1 | 2))
+                || door.position_m.is_some_and(|p| p.into_iter().any(|v| !v.is_finite()))
+            {
+                return Err(invalid("A door has one or two leaves and a finite position"));
+            }
+        }
+        for stair in &floor.stairs {
+            if [stair.width_m, stair.riser_m, stair.going_m, stair.headroom_m]
+                .into_iter().flatten().any(|v| !v.is_finite() || v <= 0.0)
+                || [stair.passage_beside_m, stair.door_distance_m]
+                    .into_iter().flatten().any(|v| !v.is_finite() || v < 0.0)
+                || stair.steps_per_flight == Some(0)
+            {
+                return Err(invalid("Stair sizes must be finite positive metres; clearances may be zero"));
             }
         }
     }
@@ -1206,8 +1224,8 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
         cx.checked.insert("master_without_ensuite");
         return;
     }
-    if !baths.is_empty() && verdicts.iter().all(Option::is_none) {
-        cx.skip("master_without_ensuite", "bathrooms have no door or adjacency data");
+    if verdicts.iter().any(Option::is_none) {
+        cx.skip("master_without_ensuite", "some bathrooms have no door or adjacency data");
         return;
     }
     cx.checked.insert("master_without_ensuite");
