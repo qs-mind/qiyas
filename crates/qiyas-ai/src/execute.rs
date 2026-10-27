@@ -1417,13 +1417,9 @@ pub(crate) fn resolve_in_drawing_folder(
     session: &Session,
     path: &str,
 ) -> Result<PathBuf, ToolError> {
-    let parent = session
-        .drawing
-        .path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let folder = parent
+    // The drawing's folder, or Documents for an untitled drawing: one place for every export.
+    let folder = session
+        .export_folder()
         .canonicalize()
         .map_err(|e| ToolError::Failed(format!("The drawing's folder can't be read: {e}")))?;
     let full = folder.join(path);

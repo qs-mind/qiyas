@@ -161,13 +161,12 @@ pub fn output_path(session: &Session, job: &PlotJob) -> Result<PathBuf, PlotErro
                 .into(),
         )
     };
-    let parent = session
-        .drawing
-        .path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let folder = parent.canonicalize().map_err(|_| outside())?;
+    // The drawing's folder, or Documents for a drawing that has no file yet: the same place as
+    // every other export (never the app's hidden placeholder folder).
+    let folder = session
+        .export_folder()
+        .canonicalize()
+        .map_err(|_| outside())?;
     let name = match &job.output {
         Some(name) => name.clone(),
         None => default_file_name(session, &job.sheet)?,

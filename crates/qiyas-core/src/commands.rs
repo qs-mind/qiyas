@@ -1113,7 +1113,7 @@ pub enum Command {
     /// model text height that reads at that scale. plot then prints it as it is.
     #[schemars(extend("x-category" = "layouts", "x-words" = ["MAKESHEET"]))]
     #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Villa", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
-    MakeSheet(crate::sheet_setup::SheetSpec),
+    MakeSheet(Box<crate::sheet_setup::SheetSpec>),
     /// Renames a paper layout, refusing a name already taken. One undo step.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "rename_layout", "from": "Layout1", "to": "Ground floor"}))]
@@ -2223,7 +2223,7 @@ impl Session {
             }
             Command::MakeSheet(spec) => {
                 return Ok(Outcome::Sheet {
-                    report: Box::new(self.make_sheet(spec)?),
+                    report: Box::new(self.make_sheet(*spec)?),
                 });
             }
             Command::TitleBlock {

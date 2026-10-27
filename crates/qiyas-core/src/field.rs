@@ -89,8 +89,14 @@ enum Code {
     FileName,
     Area(u64),
     Length(u64),
-    Sum { handles: Vec<u64>, area: bool },
-    RoomArea { handles: Vec<u64>, decimals: usize },
+    Sum {
+        handles: Vec<u64>,
+        area: bool,
+    },
+    RoomArea {
+        handles: Vec<u64>,
+        decimals: usize,
+    },
     Count(String),
     OpeningCount(u64, String),
     /// Object ids, quantity name, decimals, and whether the sheet is in Arabic (digits too).
@@ -183,14 +189,16 @@ fn parse_code(code: &str) -> Code {
                         .map_or(Code::Unknown, |ids| {
                             let decimals = parts
                                 .get(4)
-                                .and_then(|s| s.trim().split_whitespace().next()?.parse::<usize>().ok())
+                                .and_then(|s| s.split_whitespace().next()?.parse::<usize>().ok())
                                 .unwrap_or_else(|| crate::numbers::default_decimals(name))
                                 .min(6);
                             Code::ObjectValue(
                                 ids,
                                 (*name).into(),
                                 decimals,
-                                parts.get(4).is_some_and(|s| s.split_whitespace().nth(1) == Some("ar")),
+                                parts
+                                    .get(4)
+                                    .is_some_and(|s| s.split_whitespace().nth(1) == Some("ar")),
                             )
                         }),
                     _ => Code::Unknown,

@@ -34,7 +34,12 @@ fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
                 cited["text"] = json!(format!("{text} [takeoff:{id}]"));
                 let out = json!(s.run_input(&cited, source).unwrap());
                 // Still cited (old drawings), but the id on the sheet is advised against.
-                let codes: Vec<_> = out["advice"].as_array().unwrap().iter().map(|a| a["code"].clone()).collect();
+                let codes: Vec<_> = out["advice"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| a["code"].clone())
+                    .collect();
                 assert_eq!(codes, [json!("internal_id_in_text")]);
                 assert!(s.takeoff.items.last().unwrap().description.contains(&id));
             }

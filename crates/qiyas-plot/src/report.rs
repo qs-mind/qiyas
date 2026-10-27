@@ -75,6 +75,10 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
     let mut y = height - margin - pitch;
     // Warnings stay in the attached lossless record, outside the client pages.
     for row in rows {
+        // A section or trade title stands apart from the rows above it.
+        if row.section {
+            y -= pitch * 0.8;
+        }
         let wide = row.cells.len() == 1;
         let wrapped: Vec<_> = row
             .cells

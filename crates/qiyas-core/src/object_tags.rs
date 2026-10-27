@@ -124,8 +124,8 @@ impl Session {
             if let Some(block) = self.drawing.doc.block_records.get(&self.sheet) {
                 let handle = block.handle;
                 self.mark_openings(handle)?;
-                objects = self
-                    .objects_for(&handles.iter().map(|h| h.value()).collect::<Vec<_>>())?;
+                objects =
+                    self.objects_for(&handles.iter().map(|h| h.value()).collect::<Vec<_>>())?;
             }
         }
         let height = height.unwrap_or_else(|| self.default_text_height());

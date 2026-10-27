@@ -227,7 +227,10 @@ mod tests {
     }
     #[test]
     fn stated_numbers_are_the_values_with_a_metre_unit() {
-        assert_eq!(super::stated_numbers("Area 17.81 m² and 3,200.5 m"), [17.81, 3200.5]);
+        assert_eq!(
+            super::stated_numbers("Area 17.81 m² and 3,200.5 m"),
+            [17.81, 3200.5]
+        );
         assert_eq!(super::stated_numbers("المساحة ١٧٫٨١ م²"), [17.81]);
         assert!(super::stated_numbers("Room 2, 1200 mm").is_empty());
     }

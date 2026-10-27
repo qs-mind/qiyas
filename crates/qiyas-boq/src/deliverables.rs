@@ -73,9 +73,36 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
         let rows = report
             .table()
             .map_err(|e| crate::BoqError::Xlsx(e.to_string()))?;
+        let band = bold
+            .clone()
+            .set_font_size(report.layout.page.font_size + 1.)
+            .set_background_color(0xE4DFD6)
+            .set_border_bottom(rust_xlsxwriter::FormatBorder::Thin);
+        let header = bold
+            .clone()
+            .set_background_color(0xF2EEE7)
+            .set_border_bottom(rust_xlsxwriter::FormatBorder::Thin);
+        let columns = report.layout.columns.len();
         for (r, row) in rows.iter().enumerate() {
+            if row.section {
+                // A section or trade title is a band across the whole table.
+                let title = row.cells.first().map(qiyas_core::deliverables::display);
+                let title = title.unwrap_or_default();
+                if columns > 1 {
+                    sheet.merge_range(r as u32, 0, r as u32, columns as u16 - 1, &title, &band)?;
+                } else {
+                    sheet.write_string_with_format(r as u32, 0, &title, &band)?;
+                }
+                continue;
+            }
             for (c, v) in row.cells.iter().enumerate() {
-                let format = if row.heading { &bold } else { &base };
+                let format = if row.heading && row.cells.len() == columns && columns > 1 {
+                    &header
+                } else if row.heading {
+                    &bold
+                } else {
+                    &base
+                };
                 if let Some(n) = v.as_f64() {
                     sheet.write_number_with_format(
                         r as u32,

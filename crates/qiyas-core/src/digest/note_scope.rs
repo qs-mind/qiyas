@@ -17,9 +17,17 @@ fn handle(text: &str) -> Option<u64> {
     }
 }
 
+/// The number is the tail of a code such as a sheet number `A-101` or a mark `D-12`, not a
+/// reference to an element.
+fn part_of_a_code(text: &str, m: &regex::Match<'_>) -> bool {
+    let mut before = text[..m.start()].chars().rev();
+    before.next() == Some('-') && before.next().is_some_and(char::is_alphanumeric)
+}
+
 pub(super) fn named_handles(text: &str, handles: &BTreeSet<u64>) -> BTreeSet<u64> {
     NUMBERS
         .find_iter(text)
+        .filter(|m| !part_of_a_code(text, m))
         .filter_map(|m| handle(m.as_str()))
         .filter(|h| handles.contains(h))
         .collect()
@@ -29,6 +37,7 @@ fn cites(text: &str, note: u64, full_note: &str) -> bool {
     (!full_note.is_empty() && text.contains(full_note))
         || NUMBERS
             .find_iter(text)
+            .filter(|m| !part_of_a_code(text, m))
             .any(|m| handle(m.as_str()) == Some(note))
 }
 
@@ -172,6 +181,15 @@ pub(super) fn findings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sheet_number_or_mark_is_not_a_reference_to_an_element() {
+        let handles: BTreeSet<u64> = [101, 12].into();
+        assert!(named_handles("A-101", &handles).is_empty());
+        assert!(named_handles("Sheet D-12, drawing A-101", &handles).is_empty());
+        assert_eq!(named_handles("see 101 and 12", &handles), [12, 101].into());
+        assert_eq!(named_handles("element 101-", &handles), [101].into());
+    }
 
     #[test]
     fn parses_only_complete_numbers_that_are_real_handles() {

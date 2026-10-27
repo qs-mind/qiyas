@@ -2179,6 +2179,10 @@ fn run_one(
     if let Some(outputs) = outputs {
         out["outputs"] = outputs;
     }
+    // Every export names the file it wrote, with its whole path.
+    if let qiyas_core::Outcome::Deliverable { export } = &outcome.outcome {
+        out["written"] = json!(export.path.to_string_lossy());
+    }
     if label == "set_sheet" {
         out["ui"] = json!({ "action": "show_sheet", "sheet": session.sheet });
     }
@@ -2504,10 +2508,20 @@ fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
     use qiyas_plot::{Area, Orientation, PlotJob, Scale};
     let failed = |e: String| ToolError::Failed(e);
     let sheets = session.drawing.sheets();
+    // A sheet made with make_sheet is what gets printed: the layout on screen, else the first
+    // layout with something on it, else Model (which has no title block or true scale).
+    let default_sheet = if session.sheet.eq_ignore_ascii_case("*Model_Space") {
+        sheets
+            .iter()
+            .find(|s| !s.is_model && session.drawing.entities_in(&s.block).next().is_some())
+            .map_or(session.sheet.clone(), |s| s.block.clone())
+    } else {
+        session.sheet.clone()
+    };
     let wanted = args
         .get("sheet")
         .and_then(Value::as_str)
-        .unwrap_or(&session.sheet);
+        .unwrap_or(&default_sheet);
     let sheet = sheets
         .iter()
         .find(|s| s.name.eq_ignore_ascii_case(wanted) || s.block.eq_ignore_ascii_case(wanted))
@@ -2619,7 +2633,14 @@ fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
         output,
     };
     let out = qiyas_plot::plot_pdf(session, &job).map_err(|e| failed(e.to_string()))?;
-    Ok(json!({"written": out.path.to_string_lossy(), "sheet": sheet.name, "skipped": out.skipped}))
+    let mut result = json!({"written": out.path.to_string_lossy(), "folder": out.path.parent().map(|p| p.to_string_lossy().to_string()), "sheet": sheet.name, "skipped": out.skipped});
+    if sheet.is_model {
+        crate::advice::append(
+            &mut result,
+            json!({"code":"plot_without_layout","message":"This plotted Model fitted to the paper: it has no title block, border, scale bar or true scale. Make a sheet with make_sheet, then plot it."}),
+        );
+    }
+    Ok(result)
 }
 
 /// `export_takeoff`, `export_conflicts`: a workbook in the drawing's folder.
@@ -2636,17 +2657,8 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
         format!("{stem} conflicts.xlsx")
     };
     let name = args.get("path").and_then(Value::as_str).unwrap_or(&default);
-    let path = if session.export_folder()
-        == session
-            .drawing
-            .path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-    {
-        crate::execute::resolve_in_drawing_folder(session, name)?
-    } else {
-        qiyas_core::deliverables::confined(&session.export_source(), name)?
-    };
+    // One folder for every export: the drawing's, or Documents for an untitled drawing.
+    let path = crate::execute::resolve_in_drawing_folder(session, name)?;
     let draft = if op == "export_takeoff" {
         quantity_gate(session, name)?
     } else {

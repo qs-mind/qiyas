@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use opencadcodec::objects::{Layout, ObjectType};
 use opencadcodec::entities::AttachmentPoint;
+use opencadcodec::objects::{Layout, ObjectType};
 use opencadcodec::{CadDocument, EntityType, MText, Vector3};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -427,7 +427,13 @@ impl Session {
         );
         let heights: Vec<f64> = rows
             .iter()
-            .map(|k| if captions.is_some() && *k == "title" { 14.0 } else { 8.0 })
+            .map(|k| {
+                if captions.is_some() && *k == "title" {
+                    14.0
+                } else {
+                    8.0
+                }
+            })
             .collect();
         let (left, bottom) = (margin_mm.max(binding_mm), margin_mm);
         let (right, top) = (paper.w_mm - margin_mm, paper.h_mm - margin_mm);
@@ -467,11 +473,11 @@ impl Session {
                 })?);
             }
             let put = |entities: &mut Vec<EntityType>,
-                           text: &str,
-                           x: f64,
-                           width: f64,
-                           height: f64,
-                           right_aligned: bool| {
+                       text: &str,
+                       x: f64,
+                       width: f64,
+                       height: f64,
+                       right_aligned: bool| {
                 // Keep values literal: title-block dates and names never become generated fields.
                 let mut text = MText::with_value(escape_mtext(text), Vector3::new(x, y - 2.0, 0.0))
                     .with_height(height);
@@ -486,9 +492,23 @@ impl Session {
             if let Some(language) = captions {
                 let name = caption(key, language);
                 if arabic {
-                    put(&mut entities, &name, right - 2.0, caption_w - 2.0, 2.5, true);
+                    put(
+                        &mut entities,
+                        &name,
+                        right - 2.0,
+                        caption_w - 2.0,
+                        2.5,
+                        true,
+                    );
                 } else {
-                    put(&mut entities, &name, block_left + 2.0, caption_w - 2.0, 2.5, false);
+                    put(
+                        &mut entities,
+                        &name,
+                        block_left + 2.0,
+                        caption_w - 2.0,
+                        2.5,
+                        false,
+                    );
                 }
             }
             if let Some(value) = fields.get(key).filter(|v| !v.is_empty()) {
@@ -501,12 +521,33 @@ impl Session {
                 if captions.is_some() {
                     let width = block_w - caption_w - gap - 2.0;
                     if arabic {
-                        put(&mut entities, value, right - caption_w - gap, width, height, true);
+                        put(
+                            &mut entities,
+                            value,
+                            right - caption_w - gap,
+                            width,
+                            height,
+                            true,
+                        );
                     } else {
-                        put(&mut entities, value, block_left + caption_w + gap, width, height, false);
+                        put(
+                            &mut entities,
+                            value,
+                            block_left + caption_w + gap,
+                            width,
+                            height,
+                            false,
+                        );
                     }
                 } else {
-                    put(&mut entities, value, block_left + 2.0, block_w - 4.0, height, false);
+                    put(
+                        &mut entities,
+                        value,
+                        block_left + 2.0,
+                        block_w - 4.0,
+                        height,
+                        false,
+                    );
                 }
             }
         }

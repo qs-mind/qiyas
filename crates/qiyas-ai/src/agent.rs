@@ -788,7 +788,14 @@ impl Agent {
             system,
             picture,
             has_content,
-        } = match self.opening(pointed, &cancel).await {
+        } = match self
+            .opening(
+                pointed,
+                &cancel,
+                judgement::language(&user_text, self.chat_language),
+            )
+            .await
+        {
             Ok(opening) => opening,
             Err(why) => return self.stop(&events, &why).await,
         };
@@ -2050,6 +2057,7 @@ impl Agent {
         &self,
         pointed: TurnContext,
         cancel: &CancellationToken,
+        request_language: Lang,
     ) -> Result<Opening, String> {
         let session = self.session.clone();
         let settings = self.settings.clone();
@@ -2060,7 +2068,14 @@ impl Agent {
         let cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some(s) = guard.as_mut() { s.set_read_selection(&pointed.selection); }
+            if let Some(s) = guard.as_mut() {
+                s.set_read_selection(&pointed.selection);
+                // Labels, schedules and title blocks Qiyas writes follow the user's request.
+                s.set_sheet_language(Some(match request_language {
+                    Lang::Ar => qiyas_core::rooms::LabelLanguage::Ar,
+                    Lang::En => qiyas_core::rooms::LabelLanguage::En,
+                }));
+            }
             let epoch = guard.as_ref().map(Session::epoch);
             check_turn(guard.as_ref(), &cancel, epoch)?;
             let lang = settings.language;

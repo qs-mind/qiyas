@@ -248,9 +248,9 @@ pub struct ObjectRecord {
 fn invalid(message: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(message.into())
 }
-/// `placeholder` in `label` replaced by the number as a client reads it: a whole number as it
-/// is, a measured area or length to two decimals with its unit (unless the label gives one
-/// after it), any other number to two decimals.
+/// `placeholder` in `label` replaced by the number as a client reads it: a measured area or
+/// length to two decimals with its unit (unless the label gives one after it), any other number
+/// to three decimals as before.
 fn label_number(label: &str, placeholder: &str, key: &str, n: f64) -> String {
     let dim = crate::numbers::dim_of_name(key);
     let arabic = crate::numbers::has_arabic(label);
@@ -259,10 +259,11 @@ fn label_number(label: &str, placeholder: &str, key: &str, n: f64) -> String {
     while let Some(at) = rest.find(placeholder) {
         out.push_str(&rest[..at]);
         let after = &rest[at + placeholder.len()..];
-        let text = if dim.is_none() && n.fract() == 0.0 && n.abs() < 1e12 {
-            format!("{n:.0}")
-        } else {
+        // Areas and lengths read to the centimetre; any other quantity keeps its three decimals.
+        let text = if dim.is_some() {
             format!("{n:.2}")
+        } else {
+            format!("{n:.3}")
         };
         match dim {
             Some(dim) => out.push_str(&crate::numbers::with_unit(&text, dim, arabic, after)),

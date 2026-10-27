@@ -225,19 +225,22 @@ impl Session {
     /// The retained room on `sheet` whose boundary is exactly `ring` (the same corners).
     fn room_with_ring(&self, sheet: &str, ring: &[[f64; 2]]) -> Option<u64> {
         let tol = self.measure_tol() * 100.0;
-        self.drawing.doc.entities_in_block(sheet).find_map(|entity| {
-            room_object(entity)?;
-            let EntityType::LwPolyline(p) = entity else {
-                return None;
-            };
-            let same = p.vertices.len() == ring.len()
-                && ring.iter().all(|c| {
-                    p.vertices
-                        .iter()
-                        .any(|v| (v.location.x - c[0]).hypot(v.location.y - c[1]) <= tol)
-                });
-            same.then(|| entity.common().handle.value())
-        })
+        self.drawing
+            .doc
+            .entities_in_block(sheet)
+            .find_map(|entity| {
+                room_object(entity)?;
+                let EntityType::LwPolyline(p) = entity else {
+                    return None;
+                };
+                let same = p.vertices.len() == ring.len()
+                    && ring.iter().all(|c| {
+                        p.vertices
+                            .iter()
+                            .any(|v| (v.location.x - c[0]).hypot(v.location.y - c[1]) <= tol)
+                    });
+                same.then(|| entity.common().handle.value())
+            })
     }
 
     /// Keeps one actual region as a reusable object; repeated labelling reuses its handle.

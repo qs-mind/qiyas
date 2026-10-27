@@ -832,8 +832,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
 - PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
   and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
-  Visible Excel/PDF cells format counts as integers and quantities to the method precision
-  (three decimals for geometric quantities). References show sheet, element kind/mark and short
+  Visible Excel/PDF cells format counts as integers and quantities to the method's rounding, else
+  two decimals for m² and m and three for other units (W3). References show sheet, element kind/mark and short
   handles; drawing cells show filenames. Full precision, paths and structured provenance remain
   in the lossless report records. Excel/PDF include lossless report records. Client-template exports preserve the original
   workbook's package and change only mapped quantity cells, leaving rates and amounts untouched.
@@ -1227,7 +1227,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   erase in the same step (`follow_fields`). A field is a derived value: one on a locked layer, or
   outside a block edited in place, is worked out too (as AutoCAD); the lock stops only the user's
   own changes (find and replace, attribute sync, edits). Metres and square metres (`in_metres`, as the
-  take-off), 3 decimals; UTC date; `####` when the entity is gone. Not worked out on open. Find
+  take-off), shown to 2 decimals with their unit unless the text after the field gives one
+  (`17.81 m²`, Arabic `١٧٫٨١ م²`; a table cell whose heading gives the unit has none; W3);
+  UTC date; `####` when the entity is gone. Not worked out on open. Find
   and replace leaves field texts and field cells as they are and counts them in `skipped`.
 - Annotate tab, Tables group: Table (click, then rows, columns and sizes), Edit table (or a double
   click on a table: `TableEditor`, a grid in the drawing's column order; Shift+click or
@@ -1698,8 +1700,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   there yet) are embedded at 300 dpi on the page, at most 8192 px a side (a raster image never
   beyond its own pixels, decoded at most 4096); each one left out (file gone, PDF support
   missing) is in `PlotOutput::skipped` with why.
-- By command a plot goes only in the drawing's folder (`output` a name inside it or a subfolder;
-  none: `<drawing>-<sheet>.pdf` beside it), written beside the target then moved over it.
+- By command a plot goes only in the export folder (`Session::export_folder`: the drawing's folder,
+  or Documents for an untitled drawing; `output` a name inside it or a subfolder;
+  none: `<drawing>-<sheet>.pdf` there), written beside the target then moved over it.
   `plot_pdf_to` writes anywhere: the Save dialog later, and `plot_and_print`'s spool PDF in
   `spool_dir()`: `<temp>/qiyas-plot-<uid>` with mode 0700 on Unix (refused when another user
   owns it or it is a link), `<temp>/qiyas-plot` on Windows. `print_spooled` removes the PDF once
@@ -2978,8 +2981,9 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   legitimate plural handles in text and attribute schedules.
 - An empty room-name query lists candidate text layers and counts of short names inside
   closed regions, including when the requested layer does not exist.
-- AI/MCP quantity notes without a valid `takeoff:<row id>` citation return `uncited_quantity`
-  advice and remain in the drawing. This covers descriptions, notes and comment-label edits.
+- AI/MCP quantity notes that state a value no measured take-off row shows return `uncited_quantity`
+  advice and remain in the drawing (W3: a value a row shows is cited by that value; a `takeoff:<id>`
+  is still read but is never to be printed, see W3). This covers descriptions, notes and comment-label edits.
   Text does not establish a measured quantity. Engine discrepancy comments retain their query
   evidence and undo behavior. English and Arabic notes use the same advice rule.
 - Unsupported measurement-method versions name supported version 1; the registry and
@@ -3205,7 +3209,8 @@ New untitled drawings skip placeholder names already present in chat history or 
 - Room-name and area placement searches inside the room, avoids plotted ink, and tries
   wrapping then a quarter-turn without reducing text height. Drawing-check results include
   complete per-rule counts even when only a short sample of findings is returned.
-- New drawing annotations default to English. `label_spaces` may match existing Arabic room
+- New drawing annotations default to English unless the host sets the sheet language (W3: Mizan's
+  agent sets it from the user's message). `label_spaces` may match existing Arabic room
   names from a supplied drawing; explicit `language` wins. Arabic/Persian digits and the
   Arabic decimal separator are accepted by area checks and numeric field readers.
 - Block symbols are not room islands by default. Explicit geometry and object types with
@@ -3440,3 +3445,55 @@ before a heavy step and never take a timing during a pause.
   paint, so the window's first frame is the theme's own background (`html` in `index.html`). It must choose
   what `initialTheme` (`app/shared.ts`) chooses: `app/themeInit.test.ts`.
 
+
+## W3: output quality (27 October 2026)
+
+What a client gets from Qiyas and Mizan: the notes, the root cause of each and the evidence are in
+`docs/2026-10-27-qiyas-W3.md`. Tests: `crates/qiyas-core/tests/w3_output.rs` (every unit),
+`crates/qiyas-boq/tests/w3_workbook.rs`, and the offline replay `crates/qiyas-ai/tests/w3.rs` (the
+villa request in Arabic through the scripted provider).
+
+- Numbers a client reads (`numbers.rs`): an area or length in text, a label, a schedule cell or a BOQ
+  row is shown to two decimals with its unit (`17.81 m²`, `١٧٫٨١ م²`, `14.00 m`); the take-off and the
+  lossless records keep full precision. A field's unit is left out only when the text after it gives
+  one or the table heading does (`Area (m²)`). `QiyasObject` fields default to 2 decimals for area and
+  length names, 3 otherwise; an object label template does the same (`label_number`).
+- No internal identifier on a sheet. Drawing check rule `internal_id_in_text` (general, a layout rule)
+  finds `takeoff:`, `boq-row:`, handle references (`handle 12`, `0x1A`), unique ids and `QIYAS_` names in
+  plotted text and table cells. The root cause was the advice that told Mizan to cite `takeoff:<row id>`
+  in notes: a note is now cited by its value (a stated value equal to a measured row's), and a writer
+  through the AI or MCP door (text, mtext, edit_text, cells, notes) gets `internal_id_in_text` advice.
+- Opening tags: with an opening schedule, doors and windows no tag shows are `opening_untagged`
+  (construction, a layout rule). `object_tags {category:"opening", property:"mark"}` tags all of them in
+  one step (marks are given out first when no schedule has yet). Text that sits inside a room but is not a
+  room label (a tag on a wall) goes to free space when it cannot stay inside.
+- Totals add like with like. The opening schedule has `total_by` (kind): one total row per kind. The
+  report layouts total only rows of one item in one unit; the shipped BOQ and variation layouts total
+  nothing. `ObjectSchedule.language: "ar"` (`ar_headers`, `ar_templates`, `ar_totals`) gives Arabic
+  headers, kinds and digits; `opening_schedule` and `room_schedule` take `language`.
+- BOQ: lines split by size or mark for doors and windows when the mapping does not say it
+  (`{mark}`, `{width}`, `{size}`... in its text): code `A-D01-D-900x2100`, description `… — 900 × 2100 mm`.
+  Other objects keep the mapping's code (a client BOQ is matched by it). One code with several descriptions
+  is numbered (`-2`), with a warning, not refused. `Mapping.informational` (also read from "gross floor
+  area", "GFA", "إجمالي المسطح"…) keeps a line out of the BOQ and the comparison; the dimension sheets keep it.
+  Section and trade titles are `TableRow.section`: a band in Excel, spaced in the PDF. In an Arabic
+  BOQ an English-only method or source column is left out (and said in the report); the dimension sheets
+  keep it. No visible sheet of a client workbook holds JSON (`Qiyas record` is hidden).
+- Measurement: a deduction beyond an object's gross quantity limits it to nothing, adds a line saying so
+  and a report warning (what to look at; deduct from `geometry.gross_volume`, not the net figure); it no
+  longer refuses the whole method. A negative operand names the term, the expression and the object.
+- One export folder (`Session::export_folder`): the plot, the take-off workbook and every deliverable go
+  to the drawing's folder, or Documents for an untitled drawing; results name the whole path.
+- `make_sheet` (`sheet_setup.rs`, `Command::MakeSheet`, `Outcome::Sheet`): a sized layout (smallest of
+  A3 to A0, or ANSI B to E in inches and feet, that holds the model at 1:100 or larger; orientation by
+  the better scale), a viewport at the largest standard scale that fits (`STANDARD_SCALES`), a captioned
+  title block (project, title, drawing number, scale, date, drawn by Qiyas, revision P01, status For
+  review, sheet) in the sheet's language, general notes at 3 mm and a scale bar. Titles are 4 mm; nothing
+  is under 2.5 mm. Fields nobody gave stay empty and are listed. `plot` with no sheet prints the
+  layout. The layout's own viewport (number 1) no longer makes a sheet "incomplete" for `free_space`.
+- Language: the agent sets `Session::set_sheet_language` from the user's latest message each turn;
+  `label_spaces`, schedules, `make_sheet` and `deliverable` take it when `language` is omitted.
+- One retained room per enclosure (`room_with_ring`); `A-ROOM-BOUNDARY` is made non-plotting even when
+  the layer existed; retained boundaries are not line work for the duplicate and overlap checks.
+- The quantity check no longer reads a sheet number (`A-101`) as a reference to element 101, nor a
+  schedule Qiyas drew as a table nothing explains.

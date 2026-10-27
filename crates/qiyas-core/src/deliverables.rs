@@ -313,7 +313,9 @@ impl Report {
                 }
                 let one_item = rows.len() > 1
                     && rows.iter().all(|r| {
-                        !r["code"].is_null() && r["code"] == rows[0]["code"] && r["unit"] == rows[0]["unit"]
+                        !r["code"].is_null()
+                            && r["code"] == rows[0]["code"]
+                            && r["unit"] == rows[0]["unit"]
                     });
                 let mut totals = vec![0.; self.layout.columns.len()];
                 let mut total_decimals = vec![0; self.layout.columns.len()];

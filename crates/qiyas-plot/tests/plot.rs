@@ -1009,3 +1009,34 @@ fn plotted_linetypes_and_hidden_points_match_the_screen_in_every_unit() {
         );
     }
 }
+
+#[test]
+fn an_untitled_drawing_plots_into_the_export_folder_not_its_hidden_placeholder_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let hidden = dir.path().join("config").join("untitled");
+    let documents = dir.path().join("Documents");
+    std::fs::create_dir_all(&hidden).unwrap();
+    std::fs::create_dir_all(&documents).unwrap();
+    let mut s = Session::new_blank(&hidden.join("Untitled-1.dwg"), 6);
+    s.set_export_directory(documents.clone());
+    s.run(Command::Draw(DrawSpec::Line {
+        a: [0.0, 0.0],
+        b: [5.0, 0.0],
+    }))
+    .unwrap();
+    // Named and unnamed, the PDF goes where the workbooks go; the full path comes back.
+    let mut named = job(MODEL);
+    named.output = Some("Villa_Plans.pdf".into());
+    let out = plot_pdf(&s, &named).unwrap();
+    assert_eq!(
+        out.path.parent().unwrap(),
+        documents.canonicalize().unwrap()
+    );
+    assert!(out.path.is_file());
+    let out = plot_pdf(&s, &job(MODEL)).unwrap();
+    assert_eq!(
+        out.path.parent().unwrap(),
+        documents.canonicalize().unwrap()
+    );
+    assert_eq!(std::fs::read_dir(&hidden).unwrap().count(), 0);
+}

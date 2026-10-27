@@ -258,8 +258,7 @@ fn size_label(s: &Session, object: &ObjectRecord, unit: &str) -> Option<(String,
     };
     // Doors and windows only: any other counted object keeps the mapping's own code, which a
     // client BOQ is matched by.
-    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count")
-    {
+    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count") {
         return None;
     }
     if let Some(mark) = text("mark") {
@@ -388,15 +387,17 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             }
             let mut lines = Vec::new();
             for term in terms {
-                lines.push(line(
-                    &context,
-                    term,
-                    unit,
-                    method,
-                    &citations,
-                    vec![source.clone()],
-                )
-                .map_err(|e| on_object(e, object.instance.id))?);
+                lines.push(
+                    line(
+                        &context,
+                        term,
+                        unit,
+                        method,
+                        &citations,
+                        vec![source.clone()],
+                    )
+                    .map_err(|e| on_object(e, object.instance.id))?,
+                );
             }
             for deduction in deductions {
                 for void in objects.iter().filter(|v| {
@@ -578,9 +579,13 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             }
             // A BOQ line is one description. Doors and windows of different sizes or marks are
             // different lines unless the mapping's own text already says which size.
-            let sized = [&mapping.code, &mapping.description_en, &mapping.description_ar]
-                .iter()
-                .any(|t| SIZE_PLACEHOLDERS.iter().any(|p| t.contains(p)));
+            let sized = [
+                &mapping.code,
+                &mapping.description_en,
+                &mapping.description_ar,
+            ]
+            .iter()
+            .any(|t| SIZE_PLACEHOLDERS.iter().any(|p| t.contains(p)));
             if !sized && !item.informational {
                 if let Some((code, label)) = size_label(s, object, unit) {
                     item.code = format!("{}-{code}", item.code);

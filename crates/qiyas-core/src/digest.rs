@@ -316,8 +316,21 @@ impl Session {
                             .iter()
                             .any(|rule| rule.sources.iter().any(|e| e.handle == Some(row.handle)))
                     {
-                        if let Some(EntityType::Table(t)) =
-                            self.drawing.doc.get_entity(Handle::new(row.handle))
+                        // A schedule Qiyas drew from the drawing's own objects is not evidence
+                        // for a rule to explain.
+                        if let Some(EntityType::Table(t)) = self
+                            .drawing
+                            .doc
+                            .get_entity(Handle::new(row.handle))
+                            .filter(|e| {
+                                [
+                                    "QIYAS_OBJECT_SCHEDULE",
+                                    "QIYAS_OPENING_SCHEDULE",
+                                    "QIYAS_ROOM_SCHEDULE",
+                                ]
+                                .iter()
+                                .all(|app| e.common().extended_data.get_record(app).is_none())
+                            })
                         {
                             for (index, cells) in
                                 crate::table::table_info(t).cells.iter().enumerate()

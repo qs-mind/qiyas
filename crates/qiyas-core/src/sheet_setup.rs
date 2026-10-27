@@ -173,18 +173,28 @@ impl Session {
             .language
             .or(self.sheet_language())
             .unwrap_or(LabelLanguage::En);
-        let [[x0, y0], [x1, y1]] = spec.model_bounds.or_else(|| self.model_window()).ok_or_else(
-            || invalid("Model has nothing to put on a sheet: draw first, or give model_bounds"),
-        )?;
+        let [[x0, y0], [x1, y1]] = spec
+            .model_bounds
+            .or_else(|| self.model_window())
+            .ok_or_else(|| {
+                invalid("Model has nothing to put on a sheet: draw first, or give model_bounds")
+            })?;
         let to_m = self.drawing.units.to_metres();
-        let (w_m, h_m) = (((x1 - x0).abs() * to_m).max(1e-6), ((y1 - y0).abs() * to_m).max(1e-6));
+        let (w_m, h_m) = (
+            ((x1 - x0).abs() * to_m).max(1e-6),
+            ((y1 - y0).abs() * to_m).max(1e-6),
+        );
         // Paper, orientation and scale.
         let imperial = matches!(self.drawing.units, Units::Inches | Units::Feet);
         let catalog = crate::layouts::paper_catalog();
         let candidates: Vec<String> = match &spec.paper {
             Some(name) => vec![name.clone()],
-            None if imperial => ["ANSI B", "ANSI C", "ANSI D", "ANSI E"].map(String::from).to_vec(),
-            None => ["ISO A3", "ISO A2", "ISO A1", "ISO A0"].map(String::from).to_vec(),
+            None if imperial => ["ANSI B", "ANSI C", "ANSI D", "ANSI E"]
+                .map(String::from)
+                .to_vec(),
+            None => ["ISO A3", "ISO A2", "ISO A1", "ISO A0"]
+                .map(String::from)
+                .to_vec(),
         };
         let forced = spec.scale.as_deref().map(ratio).transpose()?;
         let mut chosen = None;
@@ -236,7 +246,19 @@ impl Session {
         })?;
         let scale_text = format!("1:{}", trimmed(den));
 
-        // Make the layout and draw on it without moving the user's view.
+        // Make the layout and draw on it without moving the user's view. A sheet that is
+        // already there is never drawn on twice (a second title block over the first).
+        if self
+            .drawing
+            .sheets()
+            .iter()
+            .any(|s| s.name.eq_ignore_ascii_case(spec.name.trim()))
+        {
+            return Err(invalid(format!(
+                "The drawing already has a sheet named {}: give the new sheet another name",
+                spec.name.trim()
+            )));
+        }
         self.new_layout(&spec.name, &paper.name, orientation)?;
         let block = self
             .drawing
@@ -247,7 +269,13 @@ impl Session {
             .ok_or_else(|| invalid("The new layout could not be found"))?;
         let shown = std::mem::replace(&mut self.sheet, block);
         let made = self.sheet_contents(
-            &spec, language, &paper, orientation, den, &scale_text, [[x0, y0], [x1, y1]],
+            &spec,
+            language,
+            &paper,
+            orientation,
+            den,
+            &scale_text,
+            [[x0, y0], [x1, y1]],
         );
         self.sheet = shown;
         let (viewport, handles, empty_fields, notes_fit) = made?;
@@ -296,7 +324,10 @@ impl Session {
         // zone, at the scale; the zone keeps an inner margin round it.
         let [[x0, y0], [x1, y1]] = bounds;
         let model = [[x0, y0], [x1, y1]];
-        let centre = [(zone.left + zone.right) / 2.0, (zone.bottom + zone.top) / 2.0];
+        let centre = [
+            (zone.left + zone.right) / 2.0,
+            (zone.bottom + zone.top) / 2.0,
+        ];
         let frame = self.viewport_frame(
             [0.0, 0.0],
             [0.0, 0.0],
@@ -326,16 +357,20 @@ impl Session {
         );
         put(
             "drawn_by",
-            Some(spec.drawn_by.as_deref().unwrap_or(if arabic { "قياس" } else { "Qiyas" })),
+            Some(
+                spec.drawn_by
+                    .as_deref()
+                    .unwrap_or(if arabic { "قياس" } else { "Qiyas" }),
+            ),
         );
         put("revision", Some(spec.revision.as_deref().unwrap_or("P01")));
         put(
             "status",
-            Some(
-                spec.status
-                    .as_deref()
-                    .unwrap_or(if arabic { "للمراجعة" } else { "For review" }),
-            ),
+            Some(spec.status.as_deref().unwrap_or(if arabic {
+                "للمراجعة"
+            } else {
+                "For review"
+            })),
         );
         put("sheet", Some(spec.name.trim()));
         let empty_fields: Vec<String> = crate::layouts::SHEET_FIELDS
@@ -361,7 +396,8 @@ impl Session {
         let right_aligned = arabic;
         let anchor_x = if arabic { strip_right } else { strip_left };
         let style_note = |this: &mut Session, y: f64, text: &str, size: f64, wrap: f64| {
-            let mut e = this.mtext_entity(Vector3::new(anchor_x, y, 0.0), wrap, size, text, None)?;
+            let mut e =
+                this.mtext_entity(Vector3::new(anchor_x, y, 0.0), wrap, size, text, None)?;
             if let EntityType::MText(t) = &mut e {
                 if right_aligned {
                     t.attachment_point = opencadcodec::entities::AttachmentPoint::TopRight;
@@ -376,7 +412,11 @@ impl Session {
             notes_fit = false;
         }
         if !spec.notes.is_empty() && width >= 40.0 {
-            let heading = if arabic { "ملاحظات عامة" } else { "General notes" };
+            let heading = if arabic {
+                "ملاحظات عامة"
+            } else {
+                "General notes"
+            };
             entities.push(style_note(self, strip_top - 2.0, heading, 3.5, width)?);
             let numbered: Vec<String> = spec
                 .notes
@@ -436,11 +476,13 @@ impl Session {
                 text.to_string()
             }
         };
-        let length_m = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]
-            .into_iter()
-            .rev()
-            .find(|m| m * 1000.0 / den <= max_len_mm)
-            .unwrap_or(1.0);
+        let length_m = [
+            1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0,
+        ]
+        .into_iter()
+        .rev()
+        .find(|m| m * 1000.0 / den <= max_len_mm)
+        .unwrap_or(1.0);
         let len = length_m * 1000.0 / den;
         let segment = len / 4.0;
         let bar_h = 2.0;
@@ -450,16 +492,18 @@ impl Session {
             b: [x + len, y + bar_h],
         })?);
         for i in [0.0, 2.0] {
-            out.extend(self.draw_entities(DrawSpec::Solid2D {
-                // A 2D solid takes its corners in the order 1, 2, 4, 3.
-                points: vec![
-                    [x + i * segment, y],
-                    [x + (i + 1.0) * segment, y],
-                    [x + i * segment, y + bar_h],
-                    [x + (i + 1.0) * segment, y + bar_h],
-                ]
-                .into(),
-            })?);
+            out.extend(
+                self.draw_entities(DrawSpec::Solid2D {
+                    // A 2D solid takes its corners in the order 1, 2, 4, 3.
+                    points: vec![
+                        [x + i * segment, y],
+                        [x + (i + 1.0) * segment, y],
+                        [x + i * segment, y + bar_h],
+                        [x + (i + 1.0) * segment, y + bar_h],
+                    ]
+                    .into(),
+                })?,
+            );
         }
         let unit = if arabic { "م" } else { "m" };
         for (at, label) in [
@@ -476,11 +520,7 @@ impl Session {
             )?;
             out.push(label);
         }
-        let heading = format!(
-            "{} {}",
-            caption("scale", language),
-            digits(scale_text)
-        );
+        let heading = format!("{} {}", caption("scale", language), digits(scale_text));
         out.push(self.mtext_entity(
             Vector3::new(x, y + bar_h + 5.0, 0.0),
             0.0,

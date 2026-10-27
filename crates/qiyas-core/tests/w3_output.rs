@@ -81,7 +81,10 @@ fn an_area_in_text_shows_two_decimals_and_its_unit_in_every_unit() {
         assert_eq!(text_of(&s, h), "12.000 m²");
         // A perimeter is a length.
         let perimeter = format!(r#"%<\AcVar QiyasObject "{boundary:X}" "boundary_length">%"#);
-        let h = added(&mut s, json!({"type":"text","at":[0,-5.0*u],"value":perimeter}))[0];
+        let h = added(
+            &mut s,
+            json!({"type":"text","at":[0,-5.0*u],"value":perimeter}),
+        )[0];
         assert_eq!(text_of(&s, h), "14.00 m");
     }
 }
@@ -193,12 +196,18 @@ fn the_opening_schedule_totals_each_kind_and_speaks_arabic_when_asked() {
                 .collect()
         })
         .collect();
-    assert_eq!(rows[0], ["العلامة", "النوع", "العرض × الارتفاع (مم)", "العدد"]);
+    assert_eq!(
+        rows[0],
+        ["العلامة", "النوع", "العرض × الارتفاع (مم)", "العدد"]
+    );
     assert_eq!(rows[1][1], "باب");
     assert_eq!(rows[1][2], "٩٠٠ × ٢١٠٠");
     assert_eq!(rows[1][3], "٢");
     // One total per kind, never one for doors and windows together.
-    let totals: Vec<_> = rows.iter().filter(|r| r[0].starts_with("المجموع")).collect();
+    let totals: Vec<_> = rows
+        .iter()
+        .filter(|r| r[0].starts_with("المجموع"))
+        .collect();
     assert_eq!(totals.len(), 2, "{rows:?}");
     assert_eq!(totals[0][3], "٢");
     assert_eq!(totals[1][3], "١");
@@ -285,7 +294,11 @@ fn the_boq_lists_doors_and_windows_by_size_even_when_the_mapping_says_various() 
             ],
             "units {units}"
         );
-        let windows: Vec<_> = report.items.iter().filter(|i| i.code.starts_with("A-W01")).collect();
+        let windows: Vec<_> = report
+            .items
+            .iter()
+            .filter(|i| i.code.starts_with("A-W01"))
+            .collect();
         assert_eq!(windows.len(), 1);
         assert!(windows[0].description_ar.contains("1200 × 1200 mm"));
         // The printed BOQ has a section row per section and no total across doors and windows.
@@ -307,7 +320,12 @@ fn a_mapping_that_already_says_the_size_is_left_as_it_is() {
             {"rule":"windows","code":"A-W01","description_en":"Windows","description_ar":"شبابيك","section":"Openings","trade":"Windows","unit":"pcs","citation":cite}]}),
     );
     let report = s.measurement_report().unwrap();
-    let mut doors: Vec<_> = report.items.iter().filter(|i| i.code.starts_with("A-D-")).map(|i| i.code.clone()).collect();
+    let mut doors: Vec<_> = report
+        .items
+        .iter()
+        .filter(|i| i.code.starts_with("A-D-"))
+        .map(|i| i.code.clone())
+        .collect();
     doors.sort();
     assert_eq!(doors, ["A-D-0.9", "A-D-1"]);
 }
@@ -326,7 +344,10 @@ fn a_gross_floor_area_is_information_not_a_boq_item() {
     );
     let measured = s.measurement_report().unwrap();
     assert!(measured.items.iter().all(|i| i.informational));
-    assert!(measured.warnings.iter().any(|w| w.contains("informational")));
+    assert!(measured
+        .warnings
+        .iter()
+        .any(|w| w.contains("informational")));
     let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
     assert!(boq.rows.is_empty(), "left out of the BOQ: {:?}", boq.rows);
     let dims = deliverables::drawing(&s, Kind::Dimensions, Language::En, None).unwrap();
@@ -341,8 +362,15 @@ fn an_arabic_boq_leaves_out_english_method_and_source_columns() {
     fixture::fixture(&mut s);
     fixture::apply(&mut s, fixture::method("client method", false));
     let arabic = deliverables::drawing(&s, Kind::Boq, Language::Ar, None).unwrap();
-    assert!(arabic.layout.columns.iter().all(|c| c.field != "method" && c.field != "citations"));
-    assert!(arabic.warnings.iter().any(|w| w.contains("not in the report's language")));
+    assert!(arabic
+        .layout
+        .columns
+        .iter()
+        .all(|c| c.field != "method" && c.field != "citations"));
+    assert!(arabic
+        .warnings
+        .iter()
+        .any(|w| w.contains("not in the report's language")));
     let english = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
     assert!(english.layout.columns.iter().any(|c| c.field == "method"));
     // The dimension sheets keep the full citations in both languages.
@@ -376,8 +404,15 @@ fn deductions_beyond_a_short_walls_gross_limit_it_to_nothing_and_say_why() {
             .expect("the stub is measured");
         assert_eq!(q.quantity, 0.0, "units {units}");
         assert!(q.lines.iter().any(|l| l.label.contains("limited")));
-        let warning = report.warnings.iter().find(|w| w.contains(&stub.to_string())).unwrap();
-        assert!(warning.contains("gross_volume") && warning.contains("exceed"), "{warning}");
+        let warning = report
+            .warnings
+            .iter()
+            .find(|w| w.contains(&stub.to_string()))
+            .unwrap();
+        assert!(
+            warning.contains("gross_volume") && warning.contains("exceed"),
+            "{warning}"
+        );
     }
 }
 
@@ -399,7 +434,14 @@ fn the_same_enclosure_seeded_twice_is_one_retained_room_and_never_plots() {
             .filter(|e| e.common().layer == "A-ROOM-BOUNDARY")
             .count();
         assert_eq!(polylines, 1, "units {units}");
-        assert!(!s.drawing.doc.layers.get("A-ROOM-BOUNDARY").unwrap().is_plottable);
+        assert!(
+            !s.drawing
+                .doc
+                .layers
+                .get("A-ROOM-BOUNDARY")
+                .unwrap()
+                .is_plottable
+        );
         assert_eq!(findings(&s, "duplicate"), 0);
     }
 }
@@ -447,33 +489,66 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
         assert!(report.notes_fit);
         assert!(report.empty_fields.is_empty(), "{:?}", report.empty_fields);
         // Text that reads on paper: 2.5 mm at least; 3.5 mm or more for titles.
-        let block = s.drawing.sheets().into_iter().find(|x| x.name == "A-101").unwrap().block;
+        let block = s
+            .drawing
+            .sheets()
+            .into_iter()
+            .find(|x| x.name == "A-101")
+            .unwrap()
+            .block;
         let texts = layout_texts(&s, &block);
         for (value, height) in &texts {
             assert!(*height >= 2.5, "{value} is {height} mm");
         }
-        let all: String = texts.iter().map(|t| t.0.as_str()).collect::<Vec<_>>().join("|");
-        for must in ["Ground floor plan", "Villa", "A-101", "Qiyas", "For review", "P01", &report.scale, "2026-10-27", "Scale", "General notes"] {
+        let all: String = texts
+            .iter()
+            .map(|t| t.0.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        for must in [
+            "Ground floor plan",
+            "Villa",
+            "A-101",
+            "Qiyas",
+            "For review",
+            "P01",
+            &report.scale,
+            "2026-10-27",
+            "Scale",
+            "General notes",
+        ] {
             assert!(all.contains(must), "{must} missing in {all}");
         }
-        assert!(texts.iter().any(|(v, h)| v.contains("Ground floor plan") && *h >= 3.5));
+        assert!(texts
+            .iter()
+            .any(|(v, h)| v.contains("Ground floor plan") && *h >= 3.5));
         // The viewport is at exactly the scale (paper mm per model unit).
         let view = s.paper_views_of(&block);
         assert_eq!(view.len(), 1);
         let expected = 1000.0 * s.drawing.units.to_metres() / den;
-        assert!((view[0].scale - expected).abs() < 1e-9 * expected.max(1.0), "{} vs {expected}", view[0].scale);
+        assert!(
+            (view[0].scale - expected).abs() < 1e-9 * expected.max(1.0),
+            "{} vs {expected}",
+            view[0].scale
+        );
         // It sits inside the frame and clear of the title strip.
         let [[ax, ay], [bx, by]] = view[0].rect;
         assert!(ax >= 20.0 && bx <= paper_w - 10.0 && ay >= 10.0 + 78.0 && by <= paper_h - 10.0);
         // The model's 12 x 15 m on paper at that scale.
-        assert!(((bx - ax) - 12000.0 / den).abs() < 1e-6 && ((by - ay) - 15000.0 / den).abs() < 1e-6);
+        assert!(
+            ((bx - ax) - 12000.0 / den).abs() < 1e-6 && ((by - ay) - 15000.0 / den).abs() < 1e-6
+        );
         assert!(report.min_text_height > 0.0);
         // The sheet checks completely, so schedules can be placed on it without a position.
         let checked = s.check_drawing(&CheckScope {
             sheet: Some(block.clone()),
             ..Default::default()
         });
-        assert!(checked.complete, "units {units}: not checked {:?}", checked.not_checked);
+        assert!(
+            checked.complete,
+            "units {units}: not checked {:?}",
+            checked.not_checked
+        );
         assert!(
             s.free_space(&qiyas_core::placement::SpaceQuery {
                 sheet: Some(block.clone()),
@@ -483,6 +558,15 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
             .is_ok(),
             "units {units}"
         );
+        // A name already taken is refused, not drawn on twice.
+        let again = s.run_input(
+            &json!({"type":"make_sheet","name":"a-101","title":"Again"}),
+            Source::User,
+        );
+        assert!(again
+            .unwrap_err()
+            .to_string()
+            .contains("already has a sheet"));
         // Undo takes the whole sheet away.
         assert!(s.undo());
         assert!(!s.drawing.sheets().iter().any(|x| x.name == "A-101"));
@@ -493,7 +577,10 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
 fn make_sheet_speaks_the_requested_language_and_takes_the_user_language_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::new_blank(&dir.path().join("ar-sheet.dwg"), 6);
-    added(&mut s, json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[12,15]}));
+    added(
+        &mut s,
+        json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[12,15]}),
+    );
     s.set_sheet_language(Some(qiyas_core::rooms::LabelLanguage::Ar));
     let Outcome::Sheet { report } = run(
         &mut s,
@@ -501,9 +588,28 @@ fn make_sheet_speaks_the_requested_language_and_takes_the_user_language_by_defau
     ) else {
         panic!("sheet")
     };
-    let block = s.drawing.sheets().into_iter().find(|x| x.name == "A-101").unwrap().block;
-    let all: String = layout_texts(&s, &block).into_iter().map(|t| t.0).collect::<Vec<_>>().join("|");
-    for must in ["المشروع", "رقم اللوحة", "للمراجعة", "قياس", "مقياس الرسم", "ملاحظات عامة", "١:٥٠", "٢٠٢٦-١٠-٢٧"] {
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|x| x.name == "A-101")
+        .unwrap()
+        .block;
+    let all: String = layout_texts(&s, &block)
+        .into_iter()
+        .map(|t| t.0)
+        .collect::<Vec<_>>()
+        .join("|");
+    for must in [
+        "المشروع",
+        "رقم اللوحة",
+        "للمراجعة",
+        "قياس",
+        "مقياس الرسم",
+        "ملاحظات عامة",
+        "١:٥٠",
+        "٢٠٢٦-١٠-٢٧",
+    ] {
         assert!(all.contains(must), "{must} missing in {all}");
     }
     assert!(!all.contains("For review") && !all.contains("Scale"));
