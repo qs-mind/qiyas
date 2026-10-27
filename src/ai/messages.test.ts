@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { AgentEvent, TranscriptEntry } from "../api";
-import { EMPTY, reduce, startNewOffered, undoableCard, type Action, type Transcript } from "./messages";
+import { EMPTY, readRuns, reduce, startNewOffered, undoableCard, type Action, type Item, type ToolCardItem, type Transcript } from "./messages";
 
 const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
 
@@ -296,4 +296,29 @@ test("a finish or language retry hides the early answer, as any discarded stream
     { kind: "user", text: "Build the package" },
     { kind: "retrying", seconds: 0, code: "ai.error.finish_gate" },
   ]);
+});
+
+const readCard = (id: string, over: Partial<ToolCardItem> = {}): ToolCardItem => ({
+  kind: "tool", id, name: "qiyas_read", label: "records", activity: { category: "drawing", effect: "read" },
+  input: {}, status: "done", summary: "", handles: [], ui: null, mutating: false, undone: false, stale: false, ...over,
+});
+
+test("a run of identical finished reads is one line with a count; nothing else joins it", () => {
+  const items: Item[] = [
+    { kind: "user", text: "Check it" },
+    readCard("a"), readCard("b"), { kind: "thinking", text: "hm" }, readCard("c"),
+    readCard("d", { activity: { category: "takeoff", effect: "read" } }),
+    readCard("e", { mutating: true, activity: { category: "drawing", effect: "edit" } }),
+    readCard("f"), readCard("g"),
+    readCard("h", { handles: [7] }),
+    readCard("i", { status: "error" }),
+  ];
+  const { counts, hidden } = readRuns(items);
+  expect([...counts]).toEqual([[1, 3], [7, 2]]);
+  expect([...hidden].sort()).toEqual([2, 4, 8]);
+});
+
+test("an assistant message ends a run, so reads before and after it stay two lines", () => {
+  const items: Item[] = [readCard("a"), readCard("b"), { kind: "assistant", text: "Done so far", finished: true }, readCard("c"), readCard("d")];
+  expect([...readRuns(items).counts]).toEqual([[0, 2], [3, 2]]);
 });

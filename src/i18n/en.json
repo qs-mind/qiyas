@@ -1707,7 +1707,7 @@
   "ai.error.finish_gate": "Some steps of the plan are still open, so Mizan continues with them.",
   "ai.error.language_retry": "Mizan is rewriting its answer in your language.",
   "ai.recommended": "recommended",
-  "ai.questionOther": "Answer with the question number and option letter (for example 1a), or write your own answer.",
+  "ai.questionOther": "Or type another answer below",
   "ai.error.no_models": "The service listed no suitable models. Check the service and model in Settings.",
   "effort.none": "None (service default)",
   "settings.rotateToken": "Replace token on Save",

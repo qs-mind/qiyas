@@ -3848,3 +3848,92 @@ code, kbd, .chip { unicode-bidi: isolate; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Mizan's questions: a plain numbered list in the message, no boxes (W4, design B). */
+.question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.question-list .qt {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.qo {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.qopt {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 0;
+  text-align: start;
+}
+.qopt:hover:not(:disabled) {
+  background: none;
+}
+.qopt:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.qopt .k,
+.qother .k {
+  width: 14px;
+  flex: none;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.qopt .tx {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.qopt .l {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.qopt .l em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.qopt .s {
+  font-size: 12px;
+  color: var(--muted);
+}
+.qopt.hot .k,
+.qopt.hot .l {
+  color: var(--accent);
+}
+.qopt.hot .l {
+  font-weight: 500;
+}
+.qopt:hover:not(:disabled) .l {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--rule);
+}
+.qother {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.tool-repeat {
+  color: var(--muted);
+  font-weight: 400;
+}

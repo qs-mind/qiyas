@@ -11,8 +11,9 @@ import { MizanMark } from "./MizanMark";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
-import { recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
+import { readRuns, recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
+import { QuestionList } from "./QuestionList";
 import { ToolCard } from "./ToolCard";
 import { Glyph } from "../shell/glyphs";
 import type { OutputId } from "../shell/outputs";
@@ -227,6 +228,8 @@ export const AssistantPanel = memo(function AssistantPanel({
     recovery.set(turn, group);
   });
   const recoveredIndices = new Set([...recovery.values()].flatMap((group) => group.indices));
+  // A run of identical reads is one line with a count.
+  const runs = readRuns(transcript.items);
   const recoveryHeads = new Map([...recovery.values()].map((group) => [group.indices[0], group]));
 
   function show(item: Item, i: number): ReactNode {
@@ -246,28 +249,17 @@ export const AssistantPanel = memo(function AssistantPanel({
             ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;
       case "question":
-        // The questions as a plain numbered list; the answer is typed in the composer ("2b", or
-        // free text). A fuller design comes with the new shell.
+        // Plain numbered list in Mizan's message (design B); the answer is typed, or an option
+        // is put in the box. Once the user has replied it is only a record.
         return (
-          <div key={i} className="msg assistant question-list">
-            <ol>
-              {item.questions.map((q) => (
-                <li key={q.id}>
-                  <bdi>{q.question}</bdi>
-                  <ol type="a">
-                    {q.options.map((o) => (
-                      <li key={o.label}>
-                        <bdi>{o.label}</bdi>
-                        {o.recommended ? ` (${t("ai.recommended")})` : ""}
-                        {o.description ? <> — <bdi>{o.description}</bdi></> : null}
-                      </li>
-                    ))}
-                  </ol>
-                </li>
-              ))}
-            </ol>
-            <p className="muted">{t("ai.questionOther")}</p>
-          </div>
+          <QuestionList
+            key={i}
+            questions={item.questions}
+            onPick={unavailable || transcript.items.slice(i + 1).some((next) => next.kind === "user") ? undefined : (text) => {
+              setDraft(draft.trim() ? `${draft.trim()}\n${text}` : text);
+              box.current?.focus();
+            }}
+          />
         );
       case "user":
         return (
@@ -322,12 +314,14 @@ export const AssistantPanel = memo(function AssistantPanel({
           </div>;
         }
         if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
+        if (runs.hidden.has(i)) return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
         const canUndo = !unavailable && item === undoable;
         return (
           <ToolCard
             key={i}
             card={item}
+            repeat={runs.counts.get(i)}
             showTechnicalDetails={showTechnicalDetails}
             recovering={recoveringCard(transcript.items, i, busy)}
             onShow={canShow ? () => onShow(item) : undefined}

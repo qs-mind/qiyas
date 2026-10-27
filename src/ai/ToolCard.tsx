@@ -7,13 +7,15 @@ type Props = {
   /** Highlights the card's entities and zooms to them; absent when there is nothing to show. */
   onShow?(): void;
   recovering?: boolean;
+  /** How many identical reads this line stands for (`readRuns`). */
+  repeat?: number;
   showTechnicalDetails?: boolean;
   /** Undoes the card's change; absent when it can't be undone from here. */
   onUndo?(): void;
 };
 
 /** A translated activity sentence; raw tool input and output stay in support details. */
-export function ToolCard({ card, onShow, onUndo, recovering = false, showTechnicalDetails = false }: Props) {
+export function ToolCard({ card, onShow, onUndo, recovering = false, repeat, showTechnicalDetails = false }: Props) {
   const t = useT();
   const subjectKey = `activity.subject.${card.activity?.category ?? "drawing"}`;
   const subject = t(subjectKey) === subjectKey ? t("activity.subject.drawing") : t(subjectKey);
@@ -32,7 +34,7 @@ export function ToolCard({ card, onShow, onUndo, recovering = false, showTechnic
             </svg>
           )}
         </span>
-        <span className="tool-name heading">{label}</span>
+        <span className="tool-name heading">{label}{repeat && repeat > 1 && <span className="tool-repeat"> ×{repeat}</span>}</span>
       </div>
       {card.count != null && card.status === "done" && <p className="tool-summary">{t("activity.count", { n: card.count })}</p>}
       {showTechnicalDetails && <details className="technical-details">

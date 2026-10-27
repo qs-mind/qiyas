@@ -558,3 +558,18 @@ test("composer drafts belong to their drawing", () => {
   rerender(panel(1));
   expect((screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement).value).toBe("First drawing draft");
 });
+
+test("a run of identical reads shows as one line with its count (note 18)", () => {
+  const read = (id: string): ToolCardItem => ({ ...card, id, label: "records", mutating: false, handles: [], activity: { category: "drawing", effect: "read" }, summary: "" });
+  setup({ items: [{ kind: "user", text: "Look" }, read("a"), read("b"), read("c"), read("d")] });
+  expect(document.querySelectorAll(".tool-card")).toHaveLength(1);
+  expect(document.querySelector(".tool-repeat")?.textContent).toContain("×4");
+});
+
+test("choosing an option of a question puts it in the box without sending, and the question is a record after the reply", () => {
+  const question = { kind: "question" as const, questions: [{ id: "q", question: "Which country?", allow_other: true, options: [{ label: "Egypt", recommended: true }, { label: "UAE" }] }] };
+  const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, question] });
+  fireEvent.click(screen.getByRole("button", { name: /UAE/ }));
+  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("UAE");
+  expect(assistant.send).not.toHaveBeenCalled();
+});

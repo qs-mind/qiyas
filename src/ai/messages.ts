@@ -247,3 +247,41 @@ export function recoveringCard(items: Item[], index: number, busy: boolean): boo
     .some((item) => item.kind === "tool" && item.status === "done" && !!failed.label
       && item.name === failed.name && item.label === failed.label);
 }
+
+/** Runs of identical finished reads ("Read the drawing." eight times in a row) are one line with a
+ *  count (founder's note 18, 26 October 2026). For the first card of each run, how many cards it
+ *  stands for, and the indices of the others, left out. Only quiet reads join: a card with
+ *  something to show or undo, a running or failed one, or any edit stays a line of its own. Items
+ *  that draw nothing (thinking, the plan, usage) do not break a run. */
+export function readRuns(items: Item[]): { counts: Map<number, number>; hidden: Set<number> } {
+  const counts = new Map<number, number>();
+  const hidden = new Set<number>();
+  let head = -1;
+  let key = "";
+  items.forEach((item, i) => {
+    const quiet =
+      item.kind === "thinking" ||
+      item.kind === "cache_usage" ||
+      (item.kind === "tool" && item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error");
+    if (quiet) return;
+    if (item.kind !== "tool") {
+      head = -1;
+      return;
+    }
+    const effect = item.activity?.effect ?? (item.mutating ? "edit" : "read");
+    const joins = item.status === "done" && (effect === "read" || effect === "view") && item.handles.length === 0 && !item.ui?.bounds;
+    if (!joins) {
+      head = -1;
+      return;
+    }
+    const mine = `${effect}|${item.activity?.category ?? "drawing"}`;
+    if (head >= 0 && mine === key) {
+      counts.set(head, (counts.get(head) ?? 1) + 1);
+      hidden.add(i);
+    } else {
+      head = i;
+      key = mine;
+    }
+  });
+  return { counts, hidden };
+}
