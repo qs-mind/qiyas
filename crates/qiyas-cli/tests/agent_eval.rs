@@ -686,10 +686,10 @@ fn eval_agent_passes_the_selected_name_to_mcp_and_saved_boq() {
     let run = Path::new(report["reports"][0]["report_directory"].as_str().unwrap());
     assert_artifacts(run);
     let measurement = read(&run.join("measurement.json"));
-    assert_eq!(measurement["selection"]["settings"]["name"], "POMI (RICS)");
+    assert_eq!(measurement["selection"]["settings"]["name"], "POMI");
     for item in measurement["items"].as_array().unwrap() {
         for line in item["lines"].as_array().unwrap() {
-            assert_eq!(line["method"], "POMI (RICS)");
+            assert_eq!(line["method"], "POMI");
         }
     }
     let config = read(&Path::new(report["report_directory"].as_str().unwrap()).join("mcp-0.json"));

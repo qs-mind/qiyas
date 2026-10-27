@@ -25,9 +25,6 @@ export function countByKind(conflicts: Conflict[]): Record<ConflictKind, number>
   return counts;
 }
 
-export const openCount = (conflicts: Conflict[]) =>
-  conflicts.filter((c) => c.status === "open").length;
-
 /** The conflicts with `status` (any when "all") and `kind` (any when null). */
 export const filterConflicts = (
   conflicts: Conflict[],

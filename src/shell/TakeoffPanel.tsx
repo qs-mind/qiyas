@@ -162,7 +162,6 @@ export const TakeoffPanel = memo(function TakeoffPanel({
 
   return (
     <aside className="takeoff">
-      <h2 className="heading panel-head">{t("takeoff")}</h2>
       {items.length === 0 ? (
         <p className="empty">{t("takeoffEmpty")}</p>
       ) : (

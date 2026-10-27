@@ -133,7 +133,7 @@ pub fn write_outputs(qss: &Path, set: &SheetSet, out: Option<&Path>) -> Result<V
         .iter()
         .map(|r| r.flags.len())
         .sum::<usize>();
-    let mut text=format!("# {}\n\n{} drawings; {} failed. {} BOQ items; {} project queries. {} register fields flagged.\n\nCross-drawing checks: {}.\n\nMethod: {}. Quantities only.\n",set.name,project.drawings.len(),failed,project.boq.len(),project.queries.len(),flags,if project.checked{"completed"}else{"incomplete"},project.method.as_ref().map(|m|m.title.as_str()).unwrap_or("drawing methods (see dimension sources)"));
+    let mut text=format!("# {}\n\n{} drawings; {} failed. {} BOQ items; {} project queries. {} register fields flagged.\n\nCross-drawing checks: {}.\n\nMethod: {}. Quantities only.\n",set.name,project.drawings.len(),failed,project.boq.len(),project.queries.len(),flags,if project.checked{"completed"}else{"incomplete"},project.method.as_ref().map(|m|qiyas_core::measurement::canonical_method_name(&m.title)).as_deref().unwrap_or("drawing methods (see dimension sources)"));
     let confidence = &project.confidence_summary;
     text.push_str(&format!("\nConfidence bands: low {}, medium {}, high {}. Review is optional.\n\n| Item (lowest confidence first) | Confidence | Band |\n|---|---:|---|\n", confidence.low, confidence.medium, confidence.high));
     let mut items = project.boq.iter().collect::<Vec<_>>();

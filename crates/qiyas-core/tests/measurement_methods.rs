@@ -115,3 +115,135 @@ fn name_only_reopen_reuses_authored_rules_and_project_override_in_all_units() {
         }
     }
 }
+
+#[test]
+fn the_publishing_body_is_not_part_of_a_method_name() {
+    use qiyas_core::measurement::{canonical_method_name, same_method_name};
+    for (name, bare) in [
+        ("POMI (RICS)", "POMI"),
+        ("NRM2 (rics)", "NRM2"),
+        ("NRM2 [RICS]", "NRM2"),
+        ("SMM7", "SMM7"),
+        ("Client's method / ARM4", "Client's method / ARM4"),
+        ("طريقة العميل (RICS)", "طريقة العميل"),
+        ("(RICS)", "(RICS)"),
+        ("RICS NRM2 4.1", "NRM2 4.1"),
+        ("NRM2 - rics", "NRM2 -"),
+        ("بند 3 من RICS POMI", "بند 3 من POMI"),
+        ("Metrics sheet", "Metrics sheet"),
+    ] {
+        assert_eq!(canonical_method_name(name), bare, "{name}");
+    }
+    assert!(same_method_name("POMI (RICS)", "POMI"));
+    assert!(!same_method_name("POMI", "NRM2 (RICS)"));
+    assert_eq!(RuleSet::named("POMI (RICS)").title, "POMI");
+}
+
+/// A drawing saved before this ruling holds "POMI (RICS)" with its rules and a cached result that
+/// says so. It must still match the bare "POMI" Settings now offer (the rules stay), and what is
+/// shown and exported must not carry the body.
+#[test]
+fn an_old_drawing_with_the_long_name_keeps_its_rules_and_exports_the_bare_name() {
+    use qiyas_core::knowledge::{put, Kind};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("old.dxf"), 6);
+    fixture::fixture(&mut session);
+    fixture::apply(&mut session, fixture::method("POMI", false));
+    // Written as an older version wrote it: the long name in the selection and in the cached result.
+    let selection = serde_json::to_string(&session.measurement_selection().unwrap())
+        .unwrap()
+        .replace("POMI", "POMI (RICS)");
+    put(
+        &mut session.drawing.doc,
+        Kind::Measurement,
+        "selection",
+        &serde_json::from_str(&selection).unwrap(),
+    )
+    .unwrap();
+    let result = serde_json::to_string(&session.remeasure_report().unwrap())
+        .unwrap()
+        .replace("\"POMI\"", "\"POMI (RICS)\"");
+    put(
+        &mut session.drawing.doc,
+        Kind::Measurement,
+        "result",
+        &serde_json::from_str(&result).unwrap(),
+    )
+    .unwrap();
+    assert!(result.contains("POMI (RICS)"));
+    assert_eq!(
+        session
+            .measurement_selection()
+            .unwrap()
+            .settings
+            .unwrap()
+            .name,
+        "POMI (RICS)"
+    );
+
+    // Settings now say "POMI": the same method, so the authored rules stay and nothing changes.
+    let history = session.history_steps();
+    session
+        .apply_settings_method(Some(&RuleSet::named("POMI")))
+        .unwrap();
+    assert_eq!(session.history_steps(), history);
+    assert!(!session
+        .measurement_selection()
+        .unwrap()
+        .settings
+        .unwrap()
+        .rules
+        .is_empty());
+
+    // What is shown: the report and every deliverable say "POMI".
+    let report = session.measurement_report().unwrap();
+    assert!(!report.items.is_empty());
+    assert!(!serde_json::to_string(&report).unwrap().contains("RICS"));
+    assert!(serde_json::to_string(&report).unwrap().contains("POMI"));
+    for language in [
+        qiyas_core::deliverables::Language::En,
+        qiyas_core::deliverables::Language::Ar,
+    ] {
+        for kind in [
+            qiyas_core::deliverables::Kind::Boq,
+            qiyas_core::deliverables::Kind::Dimensions,
+        ] {
+            let table = qiyas_core::deliverables::drawing(&session, kind, language, None)
+                .unwrap()
+                .table()
+                .unwrap();
+            let rendered = serde_json::to_string(&table).unwrap();
+            assert!(rendered.contains("POMI"));
+            assert!(!rendered.contains("RICS"), "{rendered}");
+        }
+    }
+}
+
+/// A drawing whose name-only selection was saved as "POMI (RICS)" opens under Settings' "POMI"
+/// without becoming a changed drawing: no undo step, nothing to save.
+#[test]
+fn an_old_name_only_selection_opens_unchanged() {
+    use qiyas_core::knowledge::{put, Kind};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("old.dxf"), 6);
+    session
+        .apply_settings_method(Some(&RuleSet::named("POMI")))
+        .unwrap();
+    let selection = serde_json::to_string(&session.measurement_selection().unwrap())
+        .unwrap()
+        .replace("POMI", "POMI (RICS)");
+    put(
+        &mut session.drawing.doc,
+        Kind::Measurement,
+        "selection",
+        &serde_json::from_str(&selection).unwrap(),
+    )
+    .unwrap();
+    let history = session.history_steps();
+    let revision = session.document_revision();
+    session
+        .apply_settings_method(Some(&RuleSet::named("POMI")))
+        .unwrap();
+    assert_eq!(session.history_steps(), history);
+    assert_eq!(session.document_revision(), revision);
+}

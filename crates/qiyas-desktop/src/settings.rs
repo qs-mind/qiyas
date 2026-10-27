@@ -628,6 +628,15 @@ fn read_settings(text: &str) -> Result<(Settings, bool), serde_json::Error> {
             migrated = true;
         }
     }
+    // The publishing body is not part of a method's name (27 October 2026): "POMI (RICS)" is
+    // "POMI". Written back, so the file and the window say the same.
+    if let Some(name) = value["measurement_method"].as_str() {
+        let bare = qiyas_core::measurement::canonical_method_name(name);
+        if bare != name {
+            value["measurement_method"] = serde_json::json!(bare);
+            migrated = true;
+        }
+    }
     serde_json::from_value(value).map(|settings| (settings, migrated))
 }
 

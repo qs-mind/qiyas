@@ -2307,7 +2307,8 @@ fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_the
             panic!("JSON")
         };
         let method = &value["measurement_method"];
-        assert_eq!(method["name"], "POMI (RICS)");
+        // A saved "POMI (RICS)" is told to the model, and shown, as "POMI".
+        assert_eq!(method["name"], "POMI");
         assert_eq!(method["rules_loaded"], false);
         if op != "digest" {
             assert!(method["instruction"]
@@ -2328,10 +2329,7 @@ fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_the
                 .iter()
                 .find(|c| c["kind"] == "set_method")
                 .unwrap();
-            assert_eq!(
-                command["method"]["name"],
-                selected.name.as_ref().unwrap().as_str()
-            );
+            assert_eq!(command["method"]["name"], "POMI");
             assert_eq!(command["method"]["rules"], json!([]));
             assert_eq!(command["scope"], "settings");
         }
@@ -2341,10 +2339,13 @@ fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_the
 #[tokio::test]
 async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_quantity() {
     let (_dir, mut session) = sample();
-    let name = "POMI (RICS)";
+    // The saved name is the old one; everything shown and exported is bare.
     session
-        .apply_settings_method(Some(&qiyas_core::measurement::RuleSet::named(name)))
+        .apply_settings_method(Some(&qiyas_core::measurement::RuleSet::named(
+            "POMI (RICS)",
+        )))
         .unwrap();
+    let name = "POMI";
     fn author_from_kit(request: &TurnRequest) -> (&'static str, Value) {
         let kit = request
             .messages
@@ -2426,7 +2427,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
     );
     let requests = requests.lock().unwrap();
     assert!(format!("{:?}", requests[0].messages)
-        .contains("Measurement method: POMI (RICS); rules loaded: false"));
+        .contains("Measurement method: POMI; rules loaded: false"));
     assert!(format!("{:?}", requests[0].messages).contains("Write rules from your knowledge"));
     let mut guard = session.lock().unwrap();
     let session = guard.as_mut().unwrap();

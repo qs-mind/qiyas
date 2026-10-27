@@ -99,7 +99,7 @@ fn approval_modes_and_measurement_method_round_trip() {
     for method in [
         None,
         Some("local-test"),
-        Some("POMI (RICS)"),
+        Some("POMI"),
         Some("Client's own / ARM4"),
         Some("طريقة العميل"),
     ] {
@@ -531,4 +531,32 @@ fn technical_details_are_opt_in_and_persist() {
         .remove("show_technical_details");
     let restored: Settings = serde_json::from_value(old).unwrap();
     assert!(!restored.show_technical_details);
+}
+
+/// 27 October 2026: the publishing body is not part of a method's name. A file written before
+/// says "POMI (RICS)": it loads as "POMI" and is written back, so the file and the window agree.
+#[test]
+fn a_saved_method_name_with_the_publishing_body_is_migrated_and_written_back() {
+    let dir = tempfile::tempdir().unwrap();
+    for (old, bare) in [
+        ("POMI (RICS)", "POMI"),
+        ("NRM2 (RICS)", "NRM2"),
+        ("SMM7", "SMM7"),
+    ] {
+        fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({ "measurement_method": old }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings::load(dir.path()).measurement_method.as_deref(),
+            Some(bare)
+        );
+        let written = fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        assert!(
+            written.contains(&format!("\"measurement_method\": \"{bare}\"")),
+            "{written}"
+        );
+        assert!(!written.contains("RICS"));
+    }
 }

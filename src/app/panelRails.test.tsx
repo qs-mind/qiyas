@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import ar from "../i18n/ar.json";
 import en from "../i18n/en.json";
 import { LanguageProvider } from "../i18n";
@@ -8,10 +8,25 @@ import { PANEL_WIDTH, PanelHandle, usePanelRails } from "./panelRails";
 
 const KEY = "qiyas.panels.hidden";
 
+const setWindowWidth = (width: number) => Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+
+beforeEach(() => setWindowWidth(1512));
 afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
+});
+
+test("below about 1300 px the column starts narrower, so the drawing keeps its room; a width the user chose is kept", () => {
+  setWindowWidth(1100);
+  const narrow = renderHook(() => usePanelRails());
+  expect(narrow.result.current.width).toEqual({ left: 260, right: 360, rightWide: 560 });
+  act(() => narrow.result.current.resize("right", 500));
+  narrow.unmount();
+  expect(renderHook(() => usePanelRails()).result.current.width.right).toBe(500);
+  localStorage.clear();
+  setWindowWidth(1300);
+  expect(renderHook(() => usePanelRails()).result.current.width).toEqual({ left: 260, right: 440, rightWide: 672 });
 });
 
 test("both panels start shown", () => {

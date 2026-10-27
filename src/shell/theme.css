@@ -1623,24 +1623,6 @@ span.grid-sort {
   display: flex;
   flex-direction: column;
 }
-.boq-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.boq-head .source {
-  flex: 1;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.boq-head .boq-import {
-  margin-inline-start: auto;
-  border-color: var(--rule);
-}
 .boq .empty {
   margin: 0;
   padding: 0 10px 8px;
@@ -1688,17 +1670,6 @@ span.grid-sort {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.conflicts-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.conflicts-head .heading {
-  flex: 1;
-}
-.conflicts-head button:not(.primary) {
-  border-color: var(--rule);
 }
 .conflicts-hint {
   margin: 0;
@@ -2417,6 +2388,10 @@ span.grid-sort {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+.exp.primary {
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 .exp {
   height: 30px;

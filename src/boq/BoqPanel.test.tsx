@@ -31,7 +31,6 @@ function renderPanel(more: Partial<Parameters<typeof BoqPanel>[0]> = {}) {
     takeoff,
     selectedCode: null,
     onSelect: vi.fn(),
-    onImport: vi.fn(),
     onTolerance: vi.fn(),
     ...more,
   };
@@ -56,7 +55,8 @@ test("lists items under their section headers, with the skipped rows notice", ()
   expect(within(rows[0]).getByRole("rowheader").textContent).toBe("Masonry");
   expect(within(rows[0]).queryAllByRole("cell")).toHaveLength(0);
   expect(screen.getByRole("status").textContent).toBe("Skipped rows: 2");
-  expect(screen.getByText("boq.xlsx")).toBeTruthy();
+  // The workbook's name is the output head's (meta), not the panel's.
+  expect(screen.queryByText("boq.xlsx")).toBeNull();
 });
 
 test("measured sum and an over-tolerance difference", () => {
@@ -144,14 +144,11 @@ test("double click the tolerance to change it; empty goes back to the default", 
   expect(props.onTolerance).toHaveBeenLastCalledWith("A.2", null);
 });
 
-test("no BOQ: the import button, disabled without a drawing", () => {
-  const props = renderPanel({ boq: null });
+test("no BOQ: it says so; Import BOQ is in the output's head, not in the panel", () => {
+  renderPanel({ boq: null });
   expect(screen.getByText("No BOQ")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Import BOQ" }));
-  expect(props.onImport).toHaveBeenCalled();
-  cleanup();
-  renderPanel({ boq: null, onImport: undefined });
-  expect((screen.getByRole("button", { name: "Import BOQ" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Import BOQ" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "BOQ" })).toBeNull();
 });
 
 test("an item without a code can't be selected", () => {

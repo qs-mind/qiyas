@@ -95,15 +95,29 @@ impl MeasurementMethod {
         )?
         .is_none()
         {
-            return Ok(fallback.clone());
+            return Ok(fallback.bare());
         }
         let selection = session.measurement_selection()?;
         Ok(Self {
-            name: selection.effective().map(|method| method.name.clone()),
+            name: selection
+                .effective()
+                .map(|method| qiyas_core::measurement::canonical_method_name(&method.name)),
             rules_loaded: selection
                 .effective()
                 .is_some_and(|method| !method.rules.is_empty()),
         })
+    }
+
+    /// The same method with its name shown without the body that publishes it (a saved
+    /// "POMI (RICS)" is told to the model, and shown, as "POMI").
+    pub fn bare(&self) -> Self {
+        Self {
+            name: self
+                .name
+                .as_deref()
+                .map(qiyas_core::measurement::canonical_method_name),
+            rules_loaded: self.rules_loaded,
+        }
     }
 
     pub fn instruction(&self) -> &'static str {
@@ -117,7 +131,7 @@ impl MeasurementMethod {
     }
 
     pub fn state(&self) -> Value {
-        serde_json::json!({"name":self.name,"rules_loaded":self.rules_loaded,"instruction":self.instruction()})
+        serde_json::json!({"name":self.bare().name,"rules_loaded":self.rules_loaded,"instruction":self.instruction()})
     }
 }
 

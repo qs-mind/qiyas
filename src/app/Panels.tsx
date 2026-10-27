@@ -1,7 +1,8 @@
-import { uiError } from "../i18n/errors";
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and Mizan's column (the conversation, and the outputs in its place) on the right. */
+import { useState } from "react";
+import { uiError } from "../i18n/errors";
 import { RecognitionPanel } from "../shell/RecognitionPanel";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
@@ -366,9 +367,13 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
   const shown: OutputId | null = sideTab === "assistant" ? null : sideTab;
   const drawing = info?.path.split(/[\\/]/).pop() ?? "";
   const outputs = outputList(takeoffState);
+  /** The take-off report reads again when its head's Refresh is pressed. */
+  const [reviewRefresh, setReviewRefresh] = useState(0);
   const meta = (id: OutputId) => {
     const count = outputs.find((o) => o.id === id)?.count;
-    return [drawing, count ? t(count === 1 ? "outputs.oneItem" : "outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
+    // The BOQ is a workbook: its name says where it came from.
+    const name = id === "boq" && bill ? (bill.source.split(/[\\/]/).pop() ?? drawing) : drawing;
+    return [name, count ? t(count === 1 ? "outputs.oneItem" : "outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
   };
   const body = (id: OutputId) => {
     switch (id) {
@@ -395,7 +400,6 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
             takeoff={items}
             selectedCode={boqCode}
             onSelect={selectBoq}
-            onImport={info ? onImportBoq : undefined}
             onTolerance={setTolerance}
           />
         );
@@ -405,15 +409,29 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
             conflicts={conflicts}
             compared={compared}
             hasBoq={bill !== null}
-            onCompare={info ? onCompare : undefined}
-            onExport={info ? onExportConflicts : undefined}
             onShow={showConflict}
             onResolve={resolveConflict}
             onOpenBoq={openBoqTab}
           />
         );
       case "review":
-        return <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null} revision={recognition.revision} run={recognition.run} />;
+        return <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null} revision={recognition.revision} run={recognition.run} refresh={reviewRefresh} />;
+    }
+  };
+  /** The buttons of an output's head: what its panel used to carry, now in one place. */
+  const actionsOf = (id: OutputId) => {
+    switch (id) {
+      case "takeoff":
+        return [{ id: "export", label: t("exportTakeoff"), onClick: () => onExportTakeoff?.(), disabled: !onExportTakeoff || items.length === 0 }];
+      case "boq":
+        return [{ id: "import", label: t("importBoq"), onClick: onImportBoq, disabled: !info }];
+      case "conflicts":
+        return [
+          { id: "compare", label: t("compare"), onClick: onCompare, disabled: !info, primary: true },
+          { id: "export", label: t("exportConflicts"), onClick: onExportConflicts, disabled: !info || conflicts.length === 0 },
+        ];
+      case "review":
+        return [{ id: "refresh", label: t("recognition.refresh"), onClick: () => setReviewRefresh((n) => n + 1), disabled: !info }];
     }
   };
   const frames = OUTPUT_IDS.map((id) => (
@@ -422,7 +440,7 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
         id={id}
         outputs={outputs}
         meta={meta(id)}
-        action={id === "takeoff" ? { label: t("exportTakeoff"), onClick: () => onExportTakeoff?.(), disabled: !onExportTakeoff || items.length === 0 } : undefined}
+        actions={actionsOf(id)}
         onSelect={setSideTab}
         onBack={() => setSideTab("assistant")}
       >

@@ -32,7 +32,7 @@ const PLAN = "/d/plan.dwg";
 /** Opens an output (take-off, BOQ, conflicts, report) in Mizan's column, from the top bar's Outputs menu. */
 async function openOutput(name: string) {
   fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}\\s*(\\d+|${en["outputs.empty"]})$`) }));
 }
 
 /** The status bar's message (Mizan's box has its own, screen-reader-only, live region). */
@@ -349,6 +349,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // A wide window: the column starts at its full 440 px (narrow windows start at 360).
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1512 });
   // The folder the last dialog used is kept on this computer: each test starts without one.
   try { localStorage.removeItem("qiyas.files.lastFolder"); } catch { /* none */ }
   events.clear();
@@ -1584,4 +1586,29 @@ test("audit: '/' typed in a text field is just a slash", async () => {
   input.focus();
   fireEvent.keyDown(input, { code: "Slash", key: "/" });
   expect(document.activeElement).toBe(input);
+});
+
+test("an output's buttons are in its head (one heading), and every action is still reachable", async () => {
+  await mount();
+  await clickOpen();
+  // Conflicts: Compare and Export conflicts in the head; Export waits for conflicts.
+  await openOutput(en["outputs.conflicts"]);
+  const conflicts = within(screen.getByRole("region", { name: en["outputs.conflicts"] }));
+  expect(conflicts.queryAllByRole("heading")).toHaveLength(0);
+  expect((conflicts.getByRole("button", { name: en.exportConflicts }) as HTMLButtonElement).disabled).toBe(true);
+  core.calls.length = 0;
+  fireEvent.click(conflicts.getByRole("button", { name: en.compare }));
+  await until(() => expect(core.calls.some((c) => c.startsWith("compare"))).toBe(true));
+  // BOQ: Import BOQ in the head asks for the workbook.
+  await openOutput(en["outputs.boq"]);
+  const boq = within(screen.getByRole("region", { name: en["outputs.boq"] }));
+  expect(boq.queryAllByRole("heading")).toHaveLength(0);
+  openDialog.mockClear();
+  fireEvent.click(boq.getByRole("button", { name: en.importBoq }));
+  await until(() => expect(openDialog).toHaveBeenCalled());
+  // Take-off: Export take-off waits for rows; the report: Refresh.
+  await openOutput(en["outputs.takeoff"]);
+  expect(within(screen.getByRole("region", { name: en["outputs.takeoff"] })).getByRole("button", { name: en.exportTakeoff })).toBeTruthy();
+  await openOutput(en["outputs.review"]);
+  expect(within(screen.getByRole("region", { name: en["outputs.review"] })).getByRole("button", { name: en["recognition.refresh"] })).toBeTruthy();
 });

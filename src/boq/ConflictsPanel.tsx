@@ -23,9 +23,6 @@ type Props = {
   /** A comparison ran for this drawing, so an empty list means none were found. */
   compared: boolean;
   hasBoq: boolean;
-  /** Missing while no drawing is open: the button is disabled. */
-  onCompare?(): void;
-  onExport?(): void;
   /** Points the drawing (or the BOQ tab) at what the conflict is about. */
   onShow(conflict: Conflict): void;
   /** Sets a conflict's status and note. */
@@ -35,13 +32,11 @@ type Props = {
 };
 
 /** The last comparison's conflicts, grouped by kind: filter them, show one on the drawing, set its
- *  status, write a note, export them. Memoised: the app re-renders on every pointer move. */
+ *  status, write a note. Compare and Export are in the output's head (`ArtifactFrame`). Memoised: the app re-renders on every pointer move. */
 export const ConflictsPanel = memo(function ConflictsPanel({
   conflicts,
   compared,
   hasBoq,
-  onCompare,
-  onExport,
   onShow,
   onResolve,
   onOpenBoq,
@@ -248,19 +243,6 @@ export const ConflictsPanel = memo(function ConflictsPanel({
 
   return (
     <aside className="conflicts">
-      <div className="panel-head conflicts-head">
-        <h2 className="heading">{t("conflicts")}</h2>
-        <button type="button" className="primary" disabled={!onCompare} onClick={onCompare}>
-          {t("compare")}
-        </button>
-        <button
-          type="button"
-          disabled={!onExport || conflicts.length === 0}
-          onClick={onExport}
-        >
-          {t("exportConflicts")}
-        </button>
-      </div>
       <p className="conflicts-hint">{t("conflicts.hint")}</p>
       {conflicts.length > 0 && (
         <div className="conflicts-filters">

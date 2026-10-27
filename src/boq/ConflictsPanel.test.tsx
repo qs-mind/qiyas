@@ -37,8 +37,6 @@ function renderPanel(more: Partial<Parameters<typeof ConflictsPanel>[0]> = {}) {
     conflicts,
     compared: true,
     hasBoq: true,
-    onCompare: vi.fn(),
-    onExport: vi.fn(),
     onShow: vi.fn(),
     onResolve: vi.fn(),
     onOpenBoq: vi.fn(),
@@ -76,10 +74,10 @@ test("rows are grouped by kind, in kind order, with their counts and details", (
 
   fireEvent.click(within(walls).getByRole("button", { name: "Show" }));
   expect(props.onShow).toHaveBeenCalledWith(conflicts[1]);
-  fireEvent.click(screen.getByRole("button", { name: "Compare" }));
-  expect(props.onCompare).toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Export conflicts" }));
-  expect(props.onExport).toHaveBeenCalled();
+  // Compare and Export conflicts are in the output's head, one heading and one set of actions.
+  expect(screen.queryByRole("button", { name: "Compare" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Export conflicts" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Conflicts" })).toBeNull();
 });
 
 test("the status filter hides resolved ones; kind chips filter and count", () => {
@@ -148,18 +146,12 @@ test("empty states: no BOQ, not compared, none found", () => {
   expect(screen.getByText(/No BOQ loaded, import one first/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Go to the BOQ" }));
   expect(props.onOpenBoq).toHaveBeenCalled();
-  expect((screen.getByRole("button", { name: "Export conflicts" }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
   cleanup();
   renderPanel({ conflicts: [], compared: false });
   expect(screen.getByText("Not compared yet, press Compare.")).toBeTruthy();
   cleanup();
   renderPanel({ conflicts: [] });
   expect(screen.getByText("No conflicts")).toBeTruthy();
-  cleanup();
-  renderPanel({ conflicts: [], onCompare: undefined });
-  expect((screen.getByRole("button", { name: "Compare" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("a hint under the toolbar says to link or name measurements", () => {

@@ -1300,12 +1300,6 @@ export async function listConstraints(): Promise<ConstraintInfo[]> {
   return o.type === "constraints" ? o.constraints : [];
 }
 
-/** The comment clouds of every sheet. */
-export async function listComments(): Promise<CommentInfo[]> {
-  const o = await runCommand({ type: "list_comments" });
-  return o.type === "comments" ? o.comments : [];
-}
-
 /** Every parameter of the drawing, by name. */
 export async function listParameters(): Promise<ParameterInfo[]> {
   const o = await runCommand({ type: "list_parameters" });

@@ -12,14 +12,16 @@ type Props = {
   outputs: OutputInfo[];
   /** What it holds: the drawing and the count, as the panel says it. */
   meta?: string;
-  /** One button at the end of the head (Export); disabled when there is nothing to do. */
-  action?: { label: string; onClick(): void; disabled?: boolean };
+  /** The output's buttons at the end of the head (Export, Import BOQ, Compare...), in order; each
+   *  disabled when there is nothing to do. The panel under the head has no buttons of its own for
+   *  these. */
+  actions?: { id: string; label: string; onClick(): void; disabled?: boolean; primary?: boolean }[];
   onSelect(id: OutputId): void;
   onBack(): void;
   children: ReactNode;
 };
 
-export function ArtifactFrame({ id, outputs, meta, action, onSelect, onBack, children }: Props) {
+export function ArtifactFrame({ id, outputs, meta, actions = [], onSelect, onBack, children }: Props) {
   const t = useT();
   return (
     <section className="art" aria-label={t(`outputs.${id}`)}>
@@ -49,9 +51,9 @@ export function ArtifactFrame({ id, outputs, meta, action, onSelect, onBack, chi
         </Menu.Root>
         {meta && <span className="art-meta"><bdi>{meta}</bdi></span>}
         <span className="grow" />
-        {action && (
-          <button type="button" className="exp" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>
-        )}
+        {actions.map((a) => (
+          <button key={a.id} type="button" className={a.primary ? "exp primary" : "exp"} disabled={a.disabled} onClick={a.onClick}>{a.label}</button>
+        ))}
         <button type="button" className="ib" aria-label={t("outputs.close")} title={t("outputs.close")} onClick={onBack}>
           <Glyph name="close" />
         </button>

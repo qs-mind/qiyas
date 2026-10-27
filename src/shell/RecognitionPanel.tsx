@@ -5,8 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import { runCommand, type Command, type RecognitionCandidate } from "../api";
 import { useT } from "../i18n";
 
-export function RecognitionPanel({ active, drawing, revision, run }: {
-  active: boolean; drawing: string | null; revision: unknown; run(command: Command): Promise<unknown>;
+/** The take-off report. `refresh` counts up when the output's head asks to read it again. */
+export function RecognitionPanel({ active, drawing, revision, run, refresh = 0 }: {
+  active: boolean; drawing: string | null; revision: unknown; run(command: Command): Promise<unknown>; refresh?: number;
 }) {
   const t = useT();
   const [rows, setRows] = useState<RecognitionCandidate[]>([]);
@@ -24,7 +25,7 @@ export function RecognitionPanel({ active, drawing, revision, run }: {
       setError(null);
     }).catch((error) => { if (current === generation.current) setError(uiError(error)); });
     return () => { generation.current++; };
-  }, [active, drawing, revision, reload]);
+  }, [active, drawing, revision, reload, refresh]);
 
   async function decide(row: RecognitionCandidate, decision: "accepted" | "rejected",
     props?: Record<string, string | number | boolean>, object_type?: string, saveRule = false) {
@@ -38,9 +39,8 @@ export function RecognitionPanel({ active, drawing, revision, run }: {
     } catch (error) { if (current === generation.current) setError(uiError(error)); }
     finally { setBusy(false); }
   }
-  return <section className="recognition-panel" aria-label={t("recognition.review")}>
+  return <section className="recognition-panel">
     <p>{t("recognition.optional")}</p>
-    <button disabled={!drawing || busy} onClick={() => setReload((n) => n + 1)}>{t("recognition.refresh")}</button>
     {error && <p role="alert">{error}</p>}
     {rows.length === 0 && <p>{t("recognition.empty")}</p>}
     {rows.map((row) => <ReviewRow key={`${drawing}:${row.handle}`} row={row} busy={busy} decide={decide} />)}

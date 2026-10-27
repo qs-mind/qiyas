@@ -2,7 +2,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::{MeasurementCommand, MethodScope, RuleSet};
+use super::{same_method_name, MeasurementCommand, MethodScope, RuleSet};
 use crate::{Command, CoreError, Session};
 
 pub fn load_method_at(home: &Path, name: Option<&str>) -> Result<Option<RuleSet>, String> {
@@ -25,10 +25,14 @@ pub fn load_method_at(home: &Path, name: Option<&str>) -> Result<Option<RuleSet>
             Ok(value) => value,
             Err(_) => continue,
         };
-        if value["name"] != name {
+        if !value["name"]
+            .as_str()
+            .is_some_and(|declared| same_method_name(declared, name))
+        {
             continue;
         }
         let method: RuleSet = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        let method = method.bare();
         method.validate().map_err(|e| e.to_string())?;
         if found.replace(method).is_some() {
             return Err(format!("More than one measurement method is named {name}"));
@@ -45,7 +49,10 @@ impl Session {
             || method
                 .zip(selection.settings.as_ref())
                 .is_some_and(|(next, saved)| {
-                    next.name == saved.name && next.rules.is_empty() && !saved.rules.is_empty()
+                    // A name-only choice of the same method keeps what the drawing has: its
+                    // rules, or an older spelling of the name ("POMI (RICS)"), which every
+                    // report shows bare. Rewriting it would mark an untouched drawing changed.
+                    same_method_name(&next.name, &saved.name) && next.rules.is_empty()
                 })
         {
             return Ok(());

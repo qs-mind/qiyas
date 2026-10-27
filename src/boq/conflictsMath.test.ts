@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { countByKind, filterConflicts, groupByKind, openCount, reasonIn } from "./conflictsMath";
+import { countByKind, filterConflicts, groupByKind, reasonIn } from "./conflictsMath";
 import { conflict } from "./testItems";
 
 const list = [
@@ -31,7 +31,6 @@ test("counts per kind list every kind; open counts only open ones", () => {
     relation_mismatch: 0,
     document_mismatch: 0,
   });
-  expect(openCount(list)).toBe(2);
 });
 
 test("filters by status and kind", () => {

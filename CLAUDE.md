@@ -120,8 +120,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   bottom; scrolled up it leaves them and offers "Jump to latest". There is no propose-and-approve flow
   for BOQ changes (the tools apply and each card can be undone), so there are no suggestion cards.
 - The side panels' widths and folds are our own handle (`app/panelRails.tsx`: drag, double click, arrows;
-  kept on this computer), not `react-resizable-panels`. Mizan's column is 440 px (672 px while an
-  output is open, its own remembered width), the layers panel 260 px.
+  kept on this computer), not `react-resizable-panels`. Mizan's column starts at 440 px (672 px while an
+  output is open, its own remembered width), 360 and 560 px in a window under 1300 px; the layers
+  panel 260 px.
 - Dependencies (all MIT; `tslib`, 0BSD, comes with them, text in `LICENSES/tslib-0BSD.txt`):
   `@base-ui/react`, `@tanstack/react-table`, `@tanstack/react-virtual` (3.14.13: the newest that passes
   pnpm's release-age gate), `@headless-tree/core` and `/react`, `cmdk`, `sonner`, and
@@ -492,7 +493,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
   withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
 - Settings selects method names: POMI, NRM2, SMM7, CESMM4 (never with the publishing body's name:
-  W4; a saved "POMI (RICS)" is shown and saved as "POMI"), local practice in
+  `measurement::canonical_method_name` takes the body out, bracketed or as a bare word, as the window's `plainMethod`; settings load migrates a saved
+  "POMI (RICS)" to "POMI" and writes it back; the two names are one method when matched
+  (`same_method_name`: an old drawing keeps its rules), and the report, exports and the name told
+  to the model show the bare one), local practice in
   Egypt/KSA/UAE, Other (free text), or None (geometric quantities). Labels are English/Arabic;
   saved `measurement_method` is the name string (null for None). Optional `methods/*.json`
   files remain extra name choices. Files are matched by their declared name, not filename.
@@ -3365,7 +3369,9 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   `"assistant"` (the conversation) or an output: `takeoff`, `boq`, `conflicts`, `review`
   (`shell/outputs.ts`). An output shows in the same column in place of the chat (`ArtifactFrame`: back
   arrow, a switch menu, its meta, one action, close) with a strip under it back to the chat
-  (`.back-strip`) and the box still below ("Ask Mizan about this BOQ"). The top bar's Outputs menu
+  (`.back-strip`) and the box still below ("Ask Mizan about this BOQ"). Its head carries the
+  output's buttons (Export take-off; Import BOQ; Compare and Export conflicts; Refresh), so the
+  panels under it have no heading or buttons of their own. The top bar's Outputs menu
   (`OutputsMenu`) opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
   Projects, Comments tabs and `SideTabs` are removed; the conversation and all outputs stay mounted.
 - The box (`.composer`): attach, mark an area and the model icon (`WorkspacePicker`, now a popover:

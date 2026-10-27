@@ -25,7 +25,18 @@ const STEP = 16;
 
 const clampWidth = (slot: WidthSlot, w: number) => Math.round(Math.min(PANEL_WIDTH[slot].max, Math.max(PANEL_WIDTH[slot].min, w)));
 const SLOTS: WidthSlot[] = ["left", "right", "rightWide"];
-const initialWidths = () => Object.fromEntries(SLOTS.map((k) => [k, PANEL_WIDTH[k].initial])) as Record<WidthSlot, number>;
+/** Below this window width Mizan's column starts narrower, so the drawing keeps its room (a choice
+ *  the user made is kept as it was). */
+const NARROW_WINDOW = 1300;
+const NARROW_START: Partial<Record<WidthSlot, number>> = { right: 360, rightWide: 560 };
+
+/** A panel's width before the user chose one: its `initial`, or the narrow start in a narrow window. */
+export function defaultWidth(slot: WidthSlot): number {
+  const narrow = typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth < NARROW_WINDOW;
+  return (narrow && NARROW_START[slot]) || PANEL_WIDTH[slot].initial;
+}
+
+const initialWidths = () => Object.fromEntries(SLOTS.map((k) => [k, defaultWidth(k)])) as Record<WidthSlot, number>;
 
 function storedHidden(): Record<PanelSide, boolean> {
   try {
@@ -39,7 +50,7 @@ function storedHidden(): Record<PanelSide, boolean> {
 
 function storedWidth(): Record<WidthSlot, number> {
   const width = (slot: WidthSlot, v: unknown) =>
-    typeof v === "number" && Number.isFinite(v) ? clampWidth(slot, v) : PANEL_WIDTH[slot].initial;
+    typeof v === "number" && Number.isFinite(v) ? clampWidth(slot, v) : defaultWidth(slot);
   try {
     const raw = JSON.parse(localStorage.getItem(WIDTH_KEY) ?? "{}") ?? {};
     return Object.fromEntries(SLOTS.map((k) => [k, width(k, raw[k])])) as Record<WidthSlot, number>;

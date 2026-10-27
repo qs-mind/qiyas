@@ -340,17 +340,52 @@ fn deductions(values: &[Deduction]) -> Result<(), CoreError> {
     }
     Ok(())
 }
+/// A method name as people see it: without the body that publishes the method ("POMI (RICS)" is
+/// "POMI"; founder's ruling, 27 October 2026). Older settings and drawings keep the longer name in
+/// their data, so the two are treated as the same method wherever names are compared.
+pub fn canonical_method_name(name: &str) -> String {
+    // The same rule as the window's `plainMethod` (src/shell/methodName.ts): the body in
+    // brackets, or the bare word, in any case.
+    static BODY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\s*[(\[]\s*RICS\s*[)\]]|\bRICS\b\s*").expect("valid pattern")
+    });
+    if !name.to_ascii_lowercase().contains("rics") {
+        return name.to_string();
+    }
+    let text = BODY.replace_all(name, "");
+    let text = text.trim();
+    if text.is_empty() {
+        name.to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// Two method names are the same method when they differ only by the body's name.
+pub fn same_method_name(a: &str, b: &str) -> bool {
+    canonical_method_name(a) == canonical_method_name(b)
+}
+
 impl RuleSet {
     /// A name selected by the QS. Mizan supplies the rules later; no standard is bundled.
     pub fn named(name: &str) -> Self {
+        let name = canonical_method_name(name);
         Self {
             version: 1,
-            name: name.into(),
-            title: name.into(),
-            based_on: name.into(),
+            title: name.clone(),
+            based_on: name.clone(),
+            name,
             source_note: String::new(),
             rules: Vec::new(),
         }
+    }
+
+    /// The same rules with the name, title and basis shown without the publishing body.
+    pub fn bare(mut self) -> Self {
+        self.name = canonical_method_name(&self.name);
+        self.title = canonical_method_name(&self.title);
+        self.based_on = canonical_method_name(&self.based_on);
+        self
     }
 
     pub fn validate(&self) -> Result<(), CoreError> {
@@ -428,6 +463,28 @@ impl Session {
     }
     pub fn measurement_report(&self) -> Result<MeasurementReport, CoreError> {
         let mut report: MeasurementReport = read(self, "result")?;
+        // A drawing saved with "POMI (RICS)" shows and exports "POMI".
+        report.selection.settings = report.selection.settings.take().map(RuleSet::bare);
+        report.selection.project = report.selection.project.take().map(RuleSet::bare);
+        let bare = |c: &mut Citation| {
+            c.source = canonical_method_name(&c.source);
+            c.clause = canonical_method_name(&c.clause);
+        };
+        for quantity in &mut report.quantities {
+            quantity.method = canonical_method_name(&quantity.method);
+            bare(&mut quantity.citation);
+            for line in &mut quantity.lines {
+                line.method = canonical_method_name(&line.method);
+                line.citations.iter_mut().for_each(bare);
+            }
+        }
+        for item in &mut report.items {
+            item.mapping_citations.iter_mut().for_each(bare);
+            for line in &mut item.lines {
+                line.method = canonical_method_name(&line.method);
+                line.citations.iter_mut().for_each(bare);
+            }
+        }
         report.variation = self.variation()?;
         let unavailable: Vec<_> = self
             .takeoff
@@ -475,6 +532,7 @@ impl Session {
                     .map_err(|e| invalid(e.to_string()))
             }
             MeasurementCommand::SetMethod { scope, method } => {
+                let method = method.map(|m| Box::new(m.bare()));
                 if let Some(method) = &method {
                     method.validate()?;
                 }

@@ -24,8 +24,6 @@ type Props = {
   selectedCode: string | null;
   /** Shows the item's linked measurements on the drawing. */
   onSelect(code: string): void;
-  /** Missing while no drawing is open: the button is disabled. */
-  onImport?(): void;
   /** A tolerance in percent, or null for the default. */
   onTolerance(code: string, percent: number | null): void;
 };
@@ -60,7 +58,6 @@ export const BoqPanel = memo(function BoqPanel({
   takeoff,
   selectedCode,
   onSelect,
-  onImport,
   onTolerance,
 }: Props) {
   const t = useT();
@@ -220,19 +217,9 @@ export const BoqPanel = memo(function BoqPanel({
     [t, editing, draft],
   );
 
-  const importButton = (
-    <button type="button" className="boq-import" disabled={!onImport} onClick={onImport}>
-      {t("importBoq")}
-    </button>
-  );
-
   if (!boq) {
     return (
       <aside className="boq">
-        <div className="panel-head boq-head">
-          <h2 className="heading">{t("boq")}</h2>
-          {importButton}
-        </div>
         <GeneratedBoq report={generated} onShow={onShowGenerated} />
         <p className="empty">{t("boq.empty")}</p>
       </aside>
@@ -241,13 +228,6 @@ export const BoqPanel = memo(function BoqPanel({
 
   return (
     <aside className="boq">
-      <div className="panel-head boq-head">
-        <h2 className="heading">{t("boq")}</h2>
-        <span className="source" title={boq.source}>
-          {boq.source.split(/[\\/]/).pop()}
-        </span>
-        {importButton}
-      </div>
       <GeneratedBoq report={generated} onShow={onShowGenerated} />
       {boq.skipped_rows > 0 && (
         <p className="boq-notice" role="status">

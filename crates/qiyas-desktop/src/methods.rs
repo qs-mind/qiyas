@@ -35,6 +35,7 @@ fn read(path: &Path) -> Result<MeasurementMethodInfo, String> {
     if rules.name.trim().is_empty() || rules.title.trim().is_empty() {
         return Err("A measurement rule set needs a name and title".into());
     }
+    let rules = rules.bare();
     Ok(MeasurementMethodInfo {
         name: rules.name,
         title: rules.title,
@@ -87,11 +88,14 @@ pub fn measurement_methods() -> Result<Vec<MeasurementMethodInfo>, String> {
 
 pub fn selected(name: Option<&str>) -> MeasurementMethod {
     let loaded = name.is_some_and(|name| {
-        measurement_methods()
-            .is_ok_and(|methods| methods.iter().any(|m| m.name == name && m.rules_loaded))
+        measurement_methods().is_ok_and(|methods| {
+            methods
+                .iter()
+                .any(|m| qiyas_core::measurement::same_method_name(&m.name, name) && m.rules_loaded)
+        })
     });
     MeasurementMethod {
-        name: name.map(str::to_owned),
+        name: name.map(qiyas_core::measurement::canonical_method_name),
         rules_loaded: loaded,
     }
 }

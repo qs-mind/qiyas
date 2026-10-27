@@ -28,7 +28,7 @@ test("an output has a way back, a menu to the others, its meta and one action", 
   const onClick = vi.fn();
   render(
     <LanguageProvider>
-      <ArtifactFrame id="boq" outputs={outputs} meta="plan.dwg · 12 items" action={{ label: "Export", onClick }} onSelect={onSelect} onBack={onBack}>
+      <ArtifactFrame id="boq" outputs={outputs} meta="plan.dwg · 12 items" actions={[{ id: "export", label: "Export", onClick }, { id: "more", label: "Second", onClick: vi.fn(), disabled: true }]} onSelect={onSelect} onBack={onBack}>
         <p>the table</p>
       </ArtifactFrame>
     </LanguageProvider>,
@@ -38,6 +38,7 @@ test("an output has a way back, a menu to the others, its meta and one action", 
   expect(screen.getByText("plan.dwg · 12 items")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Export" }));
   expect(onClick).toHaveBeenCalledOnce();
+  expect((screen.getByRole("button", { name: "Second" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: en["outputs.back"] }));
   fireEvent.click(screen.getByRole("button", { name: en["outputs.close"] }));
   expect(onBack).toHaveBeenCalledTimes(2);
