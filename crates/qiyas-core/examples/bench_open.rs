@@ -1,7 +1,9 @@
 //! Times opening a real drawing, building its first batch, picking and copying the document.
 //!
 //! `cargo run --release -p qiyas-core --example bench_open -- <drawing.dwg>`
-//! Read only: it never writes to the drawing.
+//! Read only: it never writes to the drawing. With a second argument, a folder, it also writes the
+//! first batch and the glyph atlas there (`batch.bin`, `atlas.bin`, as the window's IPC sends them),
+//! to feed a stand-in for the window.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -44,6 +46,12 @@ fn main() {
     let copy = session.drawing.doc.clone();
     let clone_ms = ms(t);
     drop(copy);
+
+    if let Some(dir) = std::env::args().nth(2).map(PathBuf::from) {
+        std::fs::create_dir_all(&dir).expect("create the folder");
+        std::fs::write(dir.join("batch.bin"), &batch.to_bytes()).expect("write batch.bin");
+        std::fs::write(dir.join("atlas.bin"), session.atlas_bytes(None)).expect("write atlas.bin");
+    }
 
     let info = session.info();
     println!("file      {}", path.display());
