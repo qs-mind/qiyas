@@ -201,10 +201,15 @@ pub enum MeasurementCommand {
     #[schemars(extend("x-takeoff-step" = "6 check generated BOQ"))]
     #[schemars(extend("x-takeoff-kit" = {"order":90,"example":0,"batch":60}))]
     Report,
+    /// The drawing-pack check card, before take-off: units known, annotation scale set, each PDF
+    /// page vector or scanned (a scan calibrated), page orientation, and the sheet number and
+    /// revision the register rules read. Each line passes or names the fix.
+    #[schemars(example = json!({"kind":"pack_check"}))]
+    PackCheck,
 }
 impl MeasurementCommand {
     pub fn is_read(&self) -> bool {
-        matches!(self, Self::Report)
+        matches!(self, Self::Report | Self::PackCheck)
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -574,6 +579,9 @@ impl Session {
             MeasurementCommand::Report => {
                 return serde_json::to_value(self.measurement_report()?)
                     .map_err(|e| invalid(e.to_string()))
+            }
+            MeasurementCommand::PackCheck => {
+                return Ok(crate::pack_check::as_json(&self.pack_check()?));
             }
             MeasurementCommand::SetMethod { scope, method } => {
                 let method = method.map(|m| Box::new(m.bare()));

@@ -98,6 +98,7 @@ pub use blocks::{drawing_blocks, AttDefInfo, BlockInfo};
 pub use boq::{Boq, BoqItem};
 pub use clipboard::CLIPBOARD_MARK;
 mod quantity_notes;
+pub mod pack_check;
 pub mod second_reading;
 pub use commands::{Command, MarkupKind, Outcome, Target};
 pub use comment::{CommentInfo, COMMENT_APP, COMMENT_LAYER};

@@ -411,3 +411,41 @@ fn page_1999_of_a_2000_page_pdf_attaches_as_an_underlay() {
     let rss = resident_bytes();
     assert!(rss < 300 << 20, "{} MB resident", rss >> 20);
 }
+
+#[test]
+fn the_pack_card_calls_a_vector_page_vector_and_reads_its_orientation() {
+    if !pdfium() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
+    let pdf = write_wall(dir.path());
+    session
+        .attach_pdf(&pdf, 1, [0.0, 0.0], 0.01, AttachMode::Underlay)
+        .unwrap();
+    let card = session.pack_check().unwrap();
+    let pages = card.line("pdf_pages").expect("a PDF page is on the drawing");
+    assert!(pages.passes && pages.found_en.contains("vector"), "{pages:?}");
+    // A vector page needs no calibration line; it is stored upright.
+    assert!(card.line("calibration").is_none());
+    assert!(card.line("orientation").unwrap().passes);
+    assert_eq!(qiyas_pdf::page_rotation(&pdf, 1).unwrap(), 0);
+}
+
+#[test]
+fn the_pack_card_says_when_a_pdf_page_cannot_be_read() {
+    if !pdfium() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(&write_sample(dir.path(), "dxf")).unwrap();
+    let pdf = write_wall(dir.path());
+    session
+        .attach_pdf(&pdf, 1, [0.0, 0.0], 0.01, AttachMode::Underlay)
+        .unwrap();
+    std::fs::remove_file(&pdf).unwrap();
+    let card = session.pack_check().unwrap();
+    let pages = card.line("pdf_pages").unwrap();
+    assert!(!pages.passes && pages.found_en.contains("Could not read"), "{pages:?}");
+    assert!(!pages.fix_en.is_empty());
+}

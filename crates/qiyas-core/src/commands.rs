@@ -1583,6 +1583,8 @@ impl Command {
             Command::Measurement(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::Recognition(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::SecondReading(_) => Some(Part::Document {tables:true,takeoff:false}),
+            // The note that a picture was calibrated is drawing knowledge, so it is kept in the step.
+            Command::Calibrate { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::SetLayerHidden { .. }
             | Command::IsolateLayer { .. }
             | Command::UnisolateLayers
@@ -1619,8 +1621,7 @@ impl Command {
             Command::SetBoq { .. } | Command::SetBoqTolerance { .. } => Some(Part::Boq),
             Command::SetConflicts { .. } | Command::ResolveConflict { .. } => Some(Part::Conflicts),
             // Entities only.
-            Command::Calibrate { .. }
-            | Command::SetImageDisplay { .. }
+            Command::SetImageDisplay { .. }
             | Command::DeleteEntities { .. }
             | Command::Modify(_)
             | Command::Edit(_) => Some(Part::Document {

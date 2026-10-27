@@ -31,6 +31,23 @@ pub fn page_size(path: &Path, page: u32) -> Result<(f64, f64)> {
     })
 }
 
+/// How far page `page` (from 1) is stored turned (`/Rotate`): 0, 90, 180 or 270 degrees
+/// clockwise. The page is shown upright whatever it says; this is for telling the engineer.
+pub fn page_rotation(path: &Path, page: u32) -> Result<u16> {
+    let path = path.to_path_buf();
+    run(move |pdfium| {
+        let doc = open(pdfium, &path)?;
+        let index = page_index(&doc, page)?;
+        let page = doc.pages().get(index).map_err(page_error)?;
+        Ok(match page.rotation().map_err(page_error)? {
+            PdfPageRenderRotation::None => 0,
+            PdfPageRenderRotation::Degrees90 => 90,
+            PdfPageRenderRotation::Degrees180 => 180,
+            PdfPageRenderRotation::Degrees270 => 270,
+        })
+    })
+}
+
 /// The pages `pages` (from 1) drawn to fit in `px` x `px` pixels, keeping their shape, in the
 /// order asked. Only those pages are read. A page number past the end is `NoSuchPage`.
 pub fn thumbnails(path: &Path, pages: &[u32], px: u32) -> Result<Vec<RgbaImage>> {

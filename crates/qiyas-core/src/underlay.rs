@@ -788,6 +788,8 @@ impl Session {
             }
             None => return Err(CoreError::NoSuchEntity(handle)),
         }
+        // The pack check card tells a scan that was set to scale from one that was not.
+        self.mark_calibrated(handle)?;
         Ok(())
     }
 }

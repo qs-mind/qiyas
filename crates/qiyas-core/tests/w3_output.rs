@@ -1014,3 +1014,34 @@ fn the_tolerance_is_set_per_unit_by_code() {
     assert!(agrees(10.0, 10.0, "pcs") && !agrees(10.0, 11.0, "pcs"));
     assert!(agrees(100.0, 100.5, "m") && !agrees(100.0, 103.0, "m"));
 }
+
+// ---- W6: the drawing-pack check card ----
+
+#[test]
+fn the_pack_card_flags_a_drawing_without_units_and_names_the_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new_blank(&dir.path().join("nounits.dwg"), 0);
+    let card = s.pack_check().unwrap();
+    let units = card.line("units").unwrap();
+    assert!(!units.passes && !card.ready);
+    assert!(units.found_en.contains("INSUNITS 0"), "{units:?}");
+    assert!(!units.fix_en.is_empty() && !units.fix_ar.is_empty());
+
+    for known in UNITS {
+        let s = Session::new_blank(&dir.path().join(format!("u{known}.dwg")), known);
+        let card = s.pack_check().unwrap();
+        assert!(card.line("units").unwrap().passes, "units {known}");
+        assert!(card.line("annotation_scale").unwrap().passes, "units {known}");
+        // No PDF or picture: no PDF lines on a short card.
+        assert!(card.line("pdf_pages").is_none() && card.line("calibration").is_none());
+    }
+}
+
+#[test]
+fn the_pack_card_asks_where_the_sheet_number_and_revision_are_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new_blank(&dir.path().join("reg.dwg"), 6);
+    let card = s.pack_check().unwrap();
+    let line = card.line("register").unwrap();
+    assert!(!line.passes && line.fix_en.contains("sheet number"), "{line:?}");
+}
