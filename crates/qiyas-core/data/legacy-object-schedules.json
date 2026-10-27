@@ -1,84 +1,35 @@
 {
   "opening": {
-    "at": [
-      0,
-      0
-    ],
-    "filter": {
-      "category": "opening"
-    },
-    "columns": [
-      "mark",
-      "kind",
-      "size",
-      "count"
-    ],
-    "headers": [
-      "Mark",
-      "Kind",
-      "Width x height (mm)",
-      "Count"
-    ],
-    "group_by": [
-      "mark"
-    ],
+    "at": [0, 0],
+    "filter": {"category": "opening"},
+    "columns": ["mark", "kind", "size", "count"],
+    "headers": ["Mark", "Kind", "Width x height (mm)", "Count"],
+    "group_by": ["mark"],
     "templates": {
       "mark": "{if(type == 'Legacy door', 'D', 'W')}-{width * 1000:6t}x{(head-sill) * 1000:6t}",
       "kind": "{if(type == 'Legacy door', 'Door', 'Window')}",
       "size": "{width * 1000:6t} x {(head-sill) * 1000:6t}"
     },
-    "decimals": {
-      "count": 0
-    },
-    "totals": {
-      "mark": "Total",
-      "count": ""
-    },
-    "default_layer": "A-ANNO-TABL",
-    "total_by": [
-      "kind"
-    ],
-    "ar_headers": [
-      "العلامة",
-      "النوع",
-      "العرض × الارتفاع (مم)",
-      "العدد"
-    ],
+    "decimals": {"count": 0},
+    "totals": {"mark": "Total", "count": ""},
+    "total_by": ["kind"],
+    "ar_headers": ["العلامة", "النوع", "العرض × الارتفاع (مم)", "العدد"],
     "ar_templates": {
       "kind": "{if(type == 'Legacy door', 'باب', 'شباك')}",
       "size": "{width * 1000:6t} × {(head-sill) * 1000:6t}"
     },
-    "ar_totals": {
-      "mark": "المجموع",
-      "count": ""
-    }
+    "ar_totals": {"mark": "الإجمالي", "count": ""},
+    "ar_total_labels": {"باب": "إجمالي الأبواب", "شباك": "إجمالي الشبابيك"},
+    "default_layer": "A-ANNO-TABL"
   },
   "room": {
-    "at": [
-      0,
-      0
-    ],
-    "filter": {
-      "category": "room"
-    },
-    "columns": [
-      "name",
-      "net_floor_area"
-    ],
-    "headers": [
-      "Room",
-      "Area (m²)"
-    ],
-    "templates": {
-      "name": "{if(name == '', 'Room ', '')}{if(name == '', id, name)}"
-    },
-    "decimals": {
-      "net_floor_area": 2
-    },
-    "totals": {
-      "name": "Total area",
-      "net_floor_area": ""
-    },
+    "at": [0, 0],
+    "filter": {"category": "room"},
+    "columns": ["name", "net_floor_area"],
+    "headers": ["Room", "Area (m²)"],
+    "templates": {"name": "{if(name == '', 'Room ', '')}{if(name == '', id, name)}"},
+    "decimals": {"net_floor_area": 2},
+    "totals": {"name": "Total area", "net_floor_area": ""},
     "default_layer": "A-ANNO-TABL",
     "preserve_overrides": true
   }

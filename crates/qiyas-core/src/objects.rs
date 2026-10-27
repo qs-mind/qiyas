@@ -228,6 +228,9 @@ pub struct ObjectSchedule {
     pub ar_templates: BTreeMap<String, String>,
     #[serde(default)]
     pub ar_totals: BTreeMap<String, String>,
+    /// Arabic total rows read as a phrase of their own ("إجمالي الأبواب"), by the group's label.
+    #[serde(default)]
+    pub ar_total_labels: BTreeMap<String, String>,
     #[serde(default)]
     pub default_layer: Option<String>,
     #[serde(default)]

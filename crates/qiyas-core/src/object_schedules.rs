@@ -334,7 +334,11 @@ impl Session {
                             arabic,
                         ),
                         Some(text) if label.is_empty() => text.clone(),
-                        Some(text) => format!("{text} {label}"),
+                        Some(text) => arabic
+                            .then(|| spec.ar_total_labels.get(&label))
+                            .flatten()
+                            .cloned()
+                            .unwrap_or_else(|| format!("{text} {label}")),
                         None => String::new(),
                     });
                 }
@@ -343,6 +347,12 @@ impl Session {
         }
         if rows.len() == 1 {
             rows.push(vec![String::new(); spec.columns.len()]);
+        }
+        // An Arabic table reads from the right: its first column is the rightmost.
+        if arabic {
+            for row in &mut rows {
+                row.reverse();
+            }
         }
         if rows.len() * spec.columns.len() > 10000 {
             return Err(invalid(
