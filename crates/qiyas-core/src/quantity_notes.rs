@@ -101,11 +101,30 @@ fn stated_values(text: &str) -> Vec<(f64, Stated)> {
                     .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphabetic()))
             })
         };
-        let measures = if starts(&["m²", "m2", "m^2", "square m", "sq m", "م²", "م2", "متر مربع"]) {
+        let measures = if starts(&[
+            "m²",
+            "m2",
+            "m^2",
+            "square m",
+            "sq m",
+            "م²",
+            "م2",
+            "متر مربع",
+        ]) {
             Some(Stated::Area)
         } else if starts(&["m³", "m3", "m^3", "cubic m", "م³", "م3", "متر مكعب"]) {
             Some(Stated::Volume)
-        } else if word(&["m", "metre", "metres", "meter", "meters", "م", "متر", "أمتار", "امتار"]) {
+        } else if word(&[
+            "m",
+            "metre",
+            "metres",
+            "meter",
+            "meters",
+            "م",
+            "متر",
+            "أمتار",
+            "امتار",
+        ]) {
             Some(Stated::Length)
         } else {
             None

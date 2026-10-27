@@ -269,7 +269,11 @@ impl Ctx<'_> {
     ) {
         let (basis, source, value) = match limit {
             Some(l) => (
-                if l.limit.basis == "code" { "code" } else { "practice_default" },
+                if l.limit.basis == "code" {
+                    "code"
+                } else {
+                    "practice_default"
+                },
                 (l.limit.basis == "code").then(|| {
                     format!(
                         "{}, {}",
@@ -330,10 +334,16 @@ fn check_model(plan: &PlanModel) -> Result<(), CoreError> {
             }
             for v in [room.width_m, room.length_m].into_iter().flatten() {
                 if !v.is_finite() || v < 0.0 {
-                    return Err(invalid(format!("Room {}: sizes are non-negative metres", room.name)));
+                    return Err(invalid(format!(
+                        "Room {}: sizes are non-negative metres",
+                        room.name
+                    )));
                 }
             }
-            if room.centre_m.is_some_and(|p| p.into_iter().any(|v| !v.is_finite())) {
+            if room
+                .centre_m
+                .is_some_and(|p| p.into_iter().any(|v| !v.is_finite()))
+            {
                 return Err(invalid("Room centres must be finite metres"));
             }
             if let Some(kind) = &room.kind {
@@ -351,19 +361,34 @@ fn check_model(plan: &PlanModel) -> Result<(), CoreError> {
                 return Err(invalid("A door needs a positive width in metres"));
             }
             if door.leaves.is_some_and(|n| !matches!(n, 1 | 2))
-                || door.position_m.is_some_and(|p| p.into_iter().any(|v| !v.is_finite()))
+                || door
+                    .position_m
+                    .is_some_and(|p| p.into_iter().any(|v| !v.is_finite()))
             {
-                return Err(invalid("A door has one or two leaves and a finite position"));
+                return Err(invalid(
+                    "A door has one or two leaves and a finite position",
+                ));
             }
         }
         for stair in &floor.stairs {
-            if [stair.width_m, stair.riser_m, stair.going_m, stair.headroom_m]
-                .into_iter().flatten().any(|v| !v.is_finite() || v <= 0.0)
+            if [
+                stair.width_m,
+                stair.riser_m,
+                stair.going_m,
+                stair.headroom_m,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|v| !v.is_finite() || v <= 0.0)
                 || [stair.passage_beside_m, stair.door_distance_m]
-                    .into_iter().flatten().any(|v| !v.is_finite() || v < 0.0)
+                    .into_iter()
+                    .flatten()
+                    .any(|v| !v.is_finite() || v < 0.0)
                 || stair.steps_per_flight == Some(0)
             {
-                return Err(invalid("Stair sizes must be finite positive metres; clearances may be zero"));
+                return Err(invalid(
+                    "Stair sizes must be finite positive metres; clearances may be zero",
+                ));
             }
         }
     }
@@ -419,11 +444,14 @@ pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport,
     master_ensuite(&mut cx, &floors);
     bathroom_ratio(&mut cx, &floors);
     wardrobes(&mut cx, &floors);
-    let (errors, warnings, notes) = cx.findings.iter().fold((0, 0, 0), |(e, w, n), f| match f.severity {
-        "error" => (e + 1, w, n),
-        "warning" => (e, w + 1, n),
-        _ => (e, w, n + 1),
-    });
+    let (errors, warnings, notes) =
+        cx.findings
+            .iter()
+            .fold((0, 0, 0), |(e, w, n), f| match f.severity {
+                "error" => (e + 1, w, n),
+                "warning" => (e, w + 1, n),
+                _ => (e, w, n + 1),
+            });
     let summary = if cx.findings.is_empty() {
         format!("{} checks ran; no finding.", cx.checked.len())
     } else {
@@ -452,7 +480,8 @@ pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport,
         limits_used: cx.used.into_values().collect(),
         findings: cx.findings,
         status: "For review",
-        responsibility: "Qiyas draws and checks against stated limits. The engineer and the company approve.",
+        responsibility:
+            "Qiyas draws and checks against stated limits. The engineer and the company approve.",
     })
 }
 
@@ -473,7 +502,10 @@ impl SpaceReport {
 fn circulation_share(cx: &mut Ctx, fl: &Fl) {
     let total: f64 = fl.rooms.iter().map(|r| r.room.area_m2).sum();
     if fl.rooms.len() < 3 || total <= 0.0 {
-        cx.skip("circulation_share", format!("{}: fewer than three rooms", fl.floor.name));
+        cx.skip(
+            "circulation_share",
+            format!("{}: fewer than three rooms", fl.floor.name),
+        );
         return;
     }
     cx.checked.insert("circulation_share");
@@ -537,11 +569,10 @@ fn corridors(cx: &mut Ctx, fl: &Fl) {
     let min_width = cx.limit("corridor_width_min_m");
     for r in corridors {
         let width = r.room.width_m;
-        let length = r.room.length_m.or_else(|| {
-            width
-                .filter(|w| *w > 0.0)
-                .map(|w| r.room.area_m2 / w)
-        });
+        let length = r
+            .room
+            .length_m
+            .or_else(|| width.filter(|w| *w > 0.0).map(|w| r.room.area_m2 / w));
         match length {
             Some(length) => {
                 cx.checked.insert("corridor_length");
@@ -565,7 +596,10 @@ fn corridors(cx: &mut Ctx, fl: &Fl) {
                     );
                 }
             }
-            None => cx.skip("corridor_length", format!("{}: no length or width given", r.room.name)),
+            None => cx.skip(
+                "corridor_length",
+                format!("{}: no length or width given", r.room.name),
+            ),
         }
         match (width, &min_width) {
             (Some(w), Some(limit)) => {
@@ -577,8 +611,18 @@ fn corridors(cx: &mut Ctx, fl: &Fl) {
                         &fl.floor.name,
                         vec![r.room.name.clone()],
                         (
-                            format!("{} is {} m wide; the least is {} m.", r.room.name, e(w, 2), e(limit.value(), 2)),
-                            format!("{} عرضه {} م؛ والحد الأدنى {} م.", r.room.name, a(w, 2), a(limit.value(), 2)),
+                            format!(
+                                "{} is {} m wide; the least is {} m.",
+                                r.room.name,
+                                e(w, 2),
+                                e(limit.value(), 2)
+                            ),
+                            format!(
+                                "{} عرضه {} م؛ والحد الأدنى {} م.",
+                                r.room.name,
+                                a(w, 2),
+                                a(limit.value(), 2)
+                            ),
                         ),
                         (
                             format!("Widen it to {} m or more.", e(limit.value(), 2)),
@@ -624,12 +668,28 @@ fn room_sizes(cx: &mut Ctx, fl: &Fl) {
                 &fl.floor.name,
                 vec![r.room.name.clone()],
                 (
-                    format!("{} is {} m²; the least for this room is {} m².", r.room.name, e(r.room.area_m2, 2), e(area_limit.value(), 2)),
-                    format!("{} مساحته {} م²؛ والحد الأدنى لهذه الغرفة {} م².", r.room.name, a(r.room.area_m2, 2), a(area_limit.value(), 2)),
+                    format!(
+                        "{} is {} m²; the least for this room is {} m².",
+                        r.room.name,
+                        e(r.room.area_m2, 2),
+                        e(area_limit.value(), 2)
+                    ),
+                    format!(
+                        "{} مساحته {} م²؛ والحد الأدنى لهذه الغرفة {} م².",
+                        r.room.name,
+                        a(r.room.area_m2, 2),
+                        a(area_limit.value(), 2)
+                    ),
                 ),
                 (
-                    format!("Enlarge it to at least {} m², or merge it with a neighbour.", e(area_limit.value(), 1)),
-                    format!("كبّرها إلى {} م² على الأقل، أو ادمجها مع المجاور.", a(area_limit.value(), 1)),
+                    format!(
+                        "Enlarge it to at least {} m², or merge it with a neighbour.",
+                        e(area_limit.value(), 1)
+                    ),
+                    format!(
+                        "كبّرها إلى {} م² على الأقل، أو ادمجها مع المجاور.",
+                        a(area_limit.value(), 1)
+                    ),
                 ),
                 Some(r.room.area_m2),
                 Some(&area_limit),
@@ -644,11 +704,24 @@ fn room_sizes(cx: &mut Ctx, fl: &Fl) {
                     &fl.floor.name,
                     vec![r.room.name.clone()],
                     (
-                        format!("{} is {} m across at its narrowest; the least is {} m.", r.room.name, e(w, 2), e(width_limit.value(), 2)),
-                        format!("{} أضيق عرض فيها {} م؛ والحد الأدنى {} م.", r.room.name, a(w, 2), a(width_limit.value(), 2)),
+                        format!(
+                            "{} is {} m across at its narrowest; the least is {} m.",
+                            r.room.name,
+                            e(w, 2),
+                            e(width_limit.value(), 2)
+                        ),
+                        format!(
+                            "{} أضيق عرض فيها {} م؛ والحد الأدنى {} م.",
+                            r.room.name,
+                            a(w, 2),
+                            a(width_limit.value(), 2)
+                        ),
                     ),
                     (
-                        format!("Make the room at least {} m wide.", e(width_limit.value(), 1)),
+                        format!(
+                            "Make the room at least {} m wide.",
+                            e(width_limit.value(), 1)
+                        ),
                         format!("اجعل عرض الغرفة {} م على الأقل.", a(width_limit.value(), 1)),
                     ),
                     Some(w),
@@ -708,12 +781,19 @@ fn kitchen_and_living(cx: &mut Ctx, fl: &Fl) {
         };
         let has_data = |r: &R| !r.room.adjacent.is_empty() || !r.room.opens_to.is_empty();
         if !has_data(x) && !has_data(y) {
-            cx.skip(rule, format!("{}: no adjacency or door data", fl.floor.name));
+            cx.skip(
+                rule,
+                format!("{}: no adjacency or door data", fl.floor.name),
+            );
             continue;
         }
         cx.checked.insert(rule);
         let linked = |p: &R, q: &R| {
-            p.room.adjacent.iter().chain(&p.room.opens_to).any(|n| same(n, &q.room.name))
+            p.room
+                .adjacent
+                .iter()
+                .chain(&p.room.opens_to)
+                .any(|n| same(n, &q.room.name))
         };
         if !linked(x, y) && !linked(y, x) {
             let (en_first, en_second, ar_first, ar_second) = if rule == "kitchen_far_from_dining" {
@@ -818,7 +898,10 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                         );
                     }
                 }
-                _ => cx.skip("stair_blocks_corridor", format!("{label}: passage beside the stair not given")),
+                _ => cx.skip(
+                    "stair_blocks_corridor",
+                    format!("{label}: passage beside the stair not given"),
+                ),
             }
         }
         if let Some(enclosed) = s.enclosed {
@@ -854,8 +937,16 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     &fl.floor.name,
                     rooms.clone(),
                     (
-                        format!("{label} is {} m wide; the least is {} m.", e(w, 2), e(limit.value(), 2)),
-                        format!("{label} عرضه {} م؛ والحد الأدنى {} م.", a(w, 2), a(limit.value(), 2)),
+                        format!(
+                            "{label} is {} m wide; the least is {} m.",
+                            e(w, 2),
+                            e(limit.value(), 2)
+                        ),
+                        format!(
+                            "{label} عرضه {} م؛ والحد الأدنى {} م.",
+                            a(w, 2),
+                            a(limit.value(), 2)
+                        ),
                     ),
                     (
                         format!("Widen the flight to {} m or more.", e(limit.value(), 2)),
@@ -876,8 +967,16 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     &fl.floor.name,
                     rooms.clone(),
                     (
-                        format!("{label} riser is {} m; the most is {} m.", e(r, 3), e(limit.value(), 3)),
-                        format!("ارتفاع القائمة في {label} {} م؛ والحد الأقصى {} م.", a(r, 3), a(limit.value(), 3)),
+                        format!(
+                            "{label} riser is {} m; the most is {} m.",
+                            e(r, 3),
+                            e(limit.value(), 3)
+                        ),
+                        format!(
+                            "ارتفاع القائمة في {label} {} م؛ والحد الأقصى {} م.",
+                            a(r, 3),
+                            a(limit.value(), 3)
+                        ),
                     ),
                     (
                         "Add a riser to the flight so each one is lower.".into(),
@@ -898,8 +997,16 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     &fl.floor.name,
                     rooms.clone(),
                     (
-                        format!("{label} tread is {} m; the least is {} m.", e(g, 3), e(limit.value(), 3)),
-                        format!("عمق النائمة في {label} {} م؛ والحد الأدنى {} م.", a(g, 3), a(limit.value(), 3)),
+                        format!(
+                            "{label} tread is {} m; the least is {} m.",
+                            e(g, 3),
+                            e(limit.value(), 3)
+                        ),
+                        format!(
+                            "عمق النائمة في {label} {} م؛ والحد الأدنى {} م.",
+                            a(g, 3),
+                            a(limit.value(), 3)
+                        ),
                     ),
                     (
                         "Lengthen the flight or turn part of it into a landing.".into(),
@@ -920,8 +1027,15 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     &fl.floor.name,
                     rooms.clone(),
                     (
-                        format!("{label} has {n} steps in one flight; the most is {}.", e(limit.value(), 0)),
-                        format!("{label} فيه {} درجة في مرقاة واحدة؛ والحد الأقصى {}.", a(f64::from(n), 0), a(limit.value(), 0)),
+                        format!(
+                            "{label} has {n} steps in one flight; the most is {}.",
+                            e(limit.value(), 0)
+                        ),
+                        format!(
+                            "{label} فيه {} درجة في مرقاة واحدة؛ والحد الأقصى {}.",
+                            a(f64::from(n), 0),
+                            a(limit.value(), 0)
+                        ),
                     ),
                     (
                         "Break the flight with a landing (an L or U stair).".into(),
@@ -964,8 +1078,16 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     &fl.floor.name,
                     rooms.clone(),
                     (
-                        format!("A door opens {} m from {label}; at least {} m is needed.", e(d, 2), e(limit.value(), 2)),
-                        format!("باب يفتح على بعد {} م من {label}؛ والمطلوب {} م على الأقل.", a(d, 2), a(limit.value(), 2)),
+                        format!(
+                            "A door opens {} m from {label}; at least {} m is needed.",
+                            e(d, 2),
+                            e(limit.value(), 2)
+                        ),
+                        format!(
+                            "باب يفتح على بعد {} م من {label}؛ والمطلوب {} م على الأقل.",
+                            a(d, 2),
+                            a(limit.value(), 2)
+                        ),
                     ),
                     (
                         "Move the door, or put a landing between it and the first step.".into(),
@@ -1025,7 +1147,10 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                 }
             }
         } else if let Some(to) = d.to.as_deref() {
-            let service = matches!(fl.kind_of(to), Some("bathroom" | "wc" | "guest_wc" | "kitchen"));
+            let service = matches!(
+                fl.kind_of(to),
+                Some("bathroom" | "wc" | "guest_wc" | "kitchen")
+            );
             let limit = if service { &service_min } else { &room_min };
             if let Some(limit) = limit {
                 cx.checked.insert("door_width");
@@ -1036,8 +1161,16 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                         &fl.floor.name,
                         rooms.clone(),
                         (
-                            format!("{label} to {to} is {} m wide; the least is {} m.", e(d.width_m, 2), e(limit.value(), 2)),
-                            format!("{label} إلى {to} عرضه {} م؛ والحد الأدنى {} م.", a(d.width_m, 2), a(limit.value(), 2)),
+                            format!(
+                                "{label} to {to} is {} m wide; the least is {} m.",
+                                e(d.width_m, 2),
+                                e(limit.value(), 2)
+                            ),
+                            format!(
+                                "{label} إلى {to} عرضه {} م؛ والحد الأدنى {} م.",
+                                a(d.width_m, 2),
+                                a(limit.value(), 2)
+                            ),
                         ),
                         (
                             format!("Widen the door to {} m or more.", e(limit.value(), 2)),
@@ -1062,7 +1195,8 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                     format!("{label} يفتح على {what}."),
                 ),
                 (
-                    "Hang the door the other way, make it sliding, or move it clear of the swing.".into(),
+                    "Hang the door the other way, make it sliding, or move it clear of the swing."
+                        .into(),
                     "اعكس اتجاه فتح الباب، أو اجعله منزلقاً، أو انقله بعيداً عن مجال الفتح.".into(),
                 ),
                 None,
@@ -1074,7 +1208,10 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
     if !saw_entrance {
         let ground = fl.floor.name.to_lowercase();
         if ground.contains("ground") || ground.contains("أرضي") || ground.starts_with("gf") {
-            cx.skip("entrance_door_narrow", format!("{}: no door is marked main_entrance", fl.floor.name));
+            cx.skip(
+                "entrance_door_narrow",
+                format!("{}: no door is marked main_entrance", fl.floor.name),
+            );
         }
     }
 }
@@ -1121,11 +1258,7 @@ fn guest_wc(cx: &mut Ctx, fl: &Fl) {
         .filter(|d| d.main_entrance)
         .filter_map(|d| d.position_m)
         .collect();
-    points.extend(
-        guest_facing
-            .iter()
-            .filter_map(|r| r.room.centre_m),
-    );
+    points.extend(guest_facing.iter().filter_map(|r| r.room.centre_m));
     // The nearest guest WC decides.
     let mut nearest: Option<(f64, &R)> = None;
     let mut unknown = false;
@@ -1160,8 +1293,18 @@ fn guest_wc(cx: &mut Ctx, fl: &Fl) {
             &fl.floor.name,
             vec![wc.room.name.clone()],
             (
-                format!("{} is {} m from the entrance and the majlis (practice limit {} m).", wc.room.name, e(d, 1), e(max, 0)),
-                format!("{} يبعد {} م عن المدخل والمجلس (الحد المعتاد {} م).", wc.room.name, a(d, 1), a(max, 0)),
+                format!(
+                    "{} is {} m from the entrance and the majlis (practice limit {} m).",
+                    wc.room.name,
+                    e(d, 1),
+                    e(max, 0)
+                ),
+                format!(
+                    "{} يبعد {} م عن المدخل والمجلس (الحد المعتاد {} م).",
+                    wc.room.name,
+                    a(d, 1),
+                    a(max, 0)
+                ),
             ),
             (
                 "Move the guest WC next to the entrance hall or the majlis.".into(),
@@ -1172,7 +1315,13 @@ fn guest_wc(cx: &mut Ctx, fl: &Fl) {
             Some(max),
         ),
         Some(_) => {}
-        None if unknown => cx.skip("guest_wc_far", format!("{}: the guest WC has no centre, or the entrance no position", fl.floor.name)),
+        None if unknown => cx.skip(
+            "guest_wc_far",
+            format!(
+                "{}: the guest WC has no centre, or the entrance no position",
+                fl.floor.name
+            ),
+        ),
         None => {}
     }
 }
@@ -1189,29 +1338,34 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
         return;
     }
     // The master is the one named so, else the largest bedroom.
-    let master = bedrooms
-        .iter()
-        .find(|(_, r)| r.master)
-        .or_else(|| {
-            bedrooms
-                .iter()
-                .max_by(|x, y| x.1.room.area_m2.total_cmp(&y.1.room.area_m2))
-        });
+    let master = bedrooms.iter().find(|(_, r)| r.master).or_else(|| {
+        bedrooms
+            .iter()
+            .max_by(|x, y| x.1.room.area_m2.total_cmp(&y.1.room.area_m2))
+    });
     let Some((fl, master)) = master.copied() else {
         return;
     };
     let circulation = kind_list("circulation_kinds");
     let is_ensuite = |bath: &R| -> Option<bool> {
         if !bath.room.opens_to.is_empty() {
-            return Some(bath.room.opens_to.len() == 1 && same(&bath.room.opens_to[0], &master.room.name));
+            return Some(
+                bath.room.opens_to.len() == 1 && same(&bath.room.opens_to[0], &master.room.name),
+            );
         }
         if bath.room.adjacent.is_empty() {
             return None;
         }
-        let touches_master = bath.room.adjacent.iter().any(|n| same(n, &master.room.name));
+        let touches_master = bath
+            .room
+            .adjacent
+            .iter()
+            .any(|n| same(n, &master.room.name));
         let public = bath.room.adjacent.iter().any(|n| {
-            fl.kind_of(n)
-                .is_some_and(|k| circulation.iter().any(|c| c == k) || matches!(k, "kitchen" | "living" | "majlis" | "reception" | "dining"))
+            fl.kind_of(n).is_some_and(|k| {
+                circulation.iter().any(|c| c == k)
+                    || matches!(k, "kitchen" | "living" | "majlis" | "reception" | "dining")
+            })
         });
         Some(touches_master && !public)
     };
@@ -1220,12 +1374,15 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
     for bath in baths.iter().copied() {
         verdicts.push(is_ensuite(bath));
     }
-    if verdicts.iter().any(|v| *v == Some(true)) {
+    if verdicts.contains(&Some(true)) {
         cx.checked.insert("master_without_ensuite");
         return;
     }
     if verdicts.iter().any(Option::is_none) {
-        cx.skip("master_without_ensuite", "some bathrooms have no door or adjacency data");
+        cx.skip(
+            "master_without_ensuite",
+            "some bathrooms have no door or adjacency data",
+        );
         return;
     }
     cx.checked.insert("master_without_ensuite");
@@ -1261,7 +1418,11 @@ fn bathroom_ratio(cx: &mut Ctx, floors: &[Fl]) {
     if baths < needed {
         let names: Vec<String> = floors
             .iter()
-            .flat_map(|f| f.of_kind(&["bathroom"]).into_iter().map(|r| r.room.name.clone()))
+            .flat_map(|f| {
+                f.of_kind(&["bathroom"])
+                    .into_iter()
+                    .map(|r| r.room.name.clone())
+            })
             .collect();
         cx.add(
             "bathroom_ratio",
@@ -1269,12 +1430,25 @@ fn bathroom_ratio(cx: &mut Ctx, floors: &[Fl]) {
             &floors[0].floor.name,
             names,
             (
-                format!("{bedrooms} bedrooms share {baths} bathrooms; {needed} or more are expected."),
-                format!("{} غرف نوم تتشارك {} حمامات؛ والمتوقع {} أو أكثر.", a(bedrooms as f64, 0), a(baths as f64, 0), a(needed as f64, 0)),
+                format!(
+                    "{bedrooms} bedrooms share {baths} bathrooms; {needed} or more are expected."
+                ),
+                format!(
+                    "{} غرف نوم تتشارك {} حمامات؛ والمتوقع {} أو أكثر.",
+                    a(bedrooms as f64, 0),
+                    a(baths as f64, 0),
+                    a(needed as f64, 0)
+                ),
             ),
             (
-                format!("Add {} bathroom(s), the first one for the master bedroom.", needed - baths),
-                format!("أضف {} حمام، الأول لغرفة النوم الرئيسية.", a((needed - baths) as f64, 0)),
+                format!(
+                    "Add {} bathroom(s), the first one for the master bedroom.",
+                    needed - baths
+                ),
+                format!(
+                    "أضف {} حمام، الأول لغرفة النوم الرئيسية.",
+                    a((needed - baths) as f64, 0)
+                ),
             ),
             Some(baths as f64),
             None,
@@ -1315,8 +1489,10 @@ fn wardrobes(cx: &mut Ctx, floors: &[Fl]) {
                         format!("{} بلا خزانة ملابس مرسومة.", r.room.name),
                     ),
                     (
-                        "Draw a wardrobe along a wall (about 0.60 m deep), or add a dressing room.".into(),
-                        "ارسم خزانة ملابس على أحد الحوائط (عمقها حوالي 0.60 م)، أو أضف غرفة ملابس.".into(),
+                        "Draw a wardrobe along a wall (about 0.60 m deep), or add a dressing room."
+                            .into(),
+                        "ارسم خزانة ملابس على أحد الحوائط (عمقها حوالي 0.60 م)، أو أضف غرفة ملابس."
+                            .into(),
                     ),
                     None,
                     None,
@@ -1359,7 +1535,10 @@ fn point_along(points: &[[f64; 2]], at: f64) -> Option<[f64; 2]> {
         let len = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
         if len > 0.0 && left <= len {
             let t = left / len;
-            return Some([w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])]);
+            return Some([
+                w[0][0] + t * (w[1][0] - w[0][0]),
+                w[0][1] + t * (w[1][1] - w[0][1]),
+            ]);
         }
         left -= len;
     }
@@ -1372,7 +1551,10 @@ impl Session {
     /// named inside each room, and the walls' doors. Sizes come from each room's bounding box, so
     /// a room that is not rectangular reports its box. Stairs and main entrances cannot be known
     /// from the drawing alone: pass them in the plan.
-    pub(crate) fn plan_floor_from_drawing(&self, query: &FloorQuery) -> Result<PlanFloor, CoreError> {
+    pub(crate) fn plan_floor_from_drawing(
+        &self,
+        query: &FloorQuery,
+    ) -> Result<PlanFloor, CoreError> {
         let k = self.drawing.units.to_metres();
         let report = self.rooms(&RoomsQuery {
             text_layer: query.text_layer.clone(),
@@ -1387,18 +1569,27 @@ impl Session {
                 continue;
             }
             match entity {
-                EntityType::Text(t) => items.push((t.value.clone(), [t.insertion_point.x * k, t.insertion_point.y * k])),
+                EntityType::Text(t) => items.push((
+                    t.value.clone(),
+                    [t.insertion_point.x * k, t.insertion_point.y * k],
+                )),
                 EntityType::MText(t) => items.push((
                     crate::query::plain_text(&t.value),
                     [t.insertion_point.x * k, t.insertion_point.y * k],
                 )),
-                EntityType::Insert(i) => items.push((i.block_name.clone(), [i.insert_point.x * k, i.insert_point.y * k])),
+                EntityType::Insert(i) => items.push((
+                    i.block_name.clone(),
+                    [i.insert_point.x * k, i.insert_point.y * k],
+                )),
                 _ => {}
             }
         }
         let mut rooms: Vec<(PlanRoom, BoxM)> = Vec::new();
         for (index, row) in report.rooms.iter().enumerate() {
-            let name = row.name.clone().unwrap_or_else(|| format!("Room {}", index + 1));
+            let name = row
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Room {}", index + 1));
             let ring: Vec<[f64; 2]> = row
                 .boundary_handle
                 .and_then(|h| self.drawing.doc.get_entity(opencadcodec::Handle::new(h)))
@@ -1419,8 +1610,14 @@ impl Session {
                 let xs = ring.iter().map(|p| p[0]);
                 let ys = ring.iter().map(|p| p[1]);
                 [
-                    [xs.clone().fold(f64::INFINITY, f64::min), ys.clone().fold(f64::INFINITY, f64::min)],
-                    [xs.fold(f64::NEG_INFINITY, f64::max), ys.fold(f64::NEG_INFINITY, f64::max)],
+                    [
+                        xs.clone().fold(f64::INFINITY, f64::min),
+                        ys.clone().fold(f64::INFINITY, f64::min),
+                    ],
+                    [
+                        xs.fold(f64::NEG_INFINITY, f64::max),
+                        ys.fold(f64::NEG_INFINITY, f64::max),
+                    ],
                 ]
             };
             let (w, h) = (bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1]);
@@ -1430,7 +1627,10 @@ impl Session {
                     area_m2: row.net_area_m2,
                     width_m: (!ring.is_empty()).then_some(w.min(h)),
                     length_m: (!ring.is_empty()).then_some(w.max(h)),
-                    centre_m: Some([(bounds[0][0] + bounds[1][0]) / 2.0, (bounds[0][1] + bounds[1][1]) / 2.0]),
+                    centre_m: Some([
+                        (bounds[0][0] + bounds[1][0]) / 2.0,
+                        (bounds[0][1] + bounds[1][1]) / 2.0,
+                    ]),
                     fixtures: items
                         .iter()
                         .filter(|(_, p)| !ring.is_empty() && inside_box(&bounds, *p))
@@ -1530,7 +1730,13 @@ impl Session {
         }
         let report = run_checks(&model, market)?;
         let mut value = report.json();
-        value["language"] = json!(if language.or(self.sheet_language()) == Some(LabelLanguage::Ar) { "ar" } else { "en" });
+        value["language"] = json!(
+            if language.or(self.sheet_language()) == Some(LabelLanguage::Ar) {
+                "ar"
+            } else {
+                "en"
+            }
+        );
         value["floors"] = json!(model.floors.iter().map(|f| json!({
             "name": f.name, "rooms": f.rooms.len(), "doors": f.doors.len(), "stairs": f.stairs.len()
         })).collect::<Vec<_>>());

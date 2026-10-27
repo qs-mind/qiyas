@@ -553,7 +553,10 @@ mod tests {
         let date = crate::field::local_today();
         assert_eq!(date.len(), 10, "{date}");
         assert_eq!(date.matches('-').count(), 2, "{date}");
-        assert!(date.chars().all(|c| c.is_ascii_digit() || c == '-'), "{date}");
+        assert!(
+            date.chars().all(|c| c.is_ascii_digit() || c == '-'),
+            "{date}"
+        );
     }
 
     #[test]

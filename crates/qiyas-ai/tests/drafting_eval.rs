@@ -16,8 +16,7 @@ use tokio_util::sync::CancellationToken;
 mod phases;
 #[path = "drafting_eval/replay.rs"]
 mod replay;
-#[path = "support/scripted.rs"]
-pub mod scripted;
+use crate::scripted;
 use scripted::{Script, ScriptCall};
 
 const MODEL: &str = "*Model_Space";

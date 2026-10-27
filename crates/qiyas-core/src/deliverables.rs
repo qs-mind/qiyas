@@ -645,10 +645,14 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
                 v["citations"] = json!(i.rule_citations());
                 if i.limited {
                     // Visible on the row itself: the quantity is not a measured one.
-                    v["description_en"] =
-                        json!(format!("{} [quantity limited: deductions exceed the gross quantity]", i.description_en));
-                    v["description_ar"] =
-                        json!(format!("{} [الكمية مقيّدة: الخصومات تتجاوز الإجمالي]", i.description_ar));
+                    v["description_en"] = json!(format!(
+                        "{} [quantity limited: deductions exceed the gross quantity]",
+                        i.description_en
+                    ));
+                    v["description_ar"] = json!(format!(
+                        "{} [الكمية مقيّدة: الخصومات تتجاوز الإجمالي]",
+                        i.description_ar
+                    ));
                 }
                 v
             })
@@ -788,7 +792,13 @@ pub fn drawing(
     }
     localized(&mut rows, language);
     if kind == Kind::Boq {
-        second_reading_column(&mut layout, &mut rows, &measured.items, language, &mut warnings);
+        second_reading_column(
+            &mut layout,
+            &mut rows,
+            &measured.items,
+            language,
+            &mut warnings,
+        );
         drop_foreign_columns(&mut layout, &rows, language, &mut warnings);
     }
     Ok(Report {

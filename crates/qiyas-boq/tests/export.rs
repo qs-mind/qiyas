@@ -91,11 +91,8 @@ fn export_is_readable_by_calamine() {
     assert_eq!(sheet.get((6, 4)), Some(&Data::Float(12.0)));
     assert_eq!(sheet.get((8, 4)), Some(&Data::Float(3.0)));
     // Every output says it is not approved.
-    assert!((0..sheet.height()).any(|r| {
-        sheet
-            .get((r, 0))
-            .is_some_and(|d| d.to_string() == "Status: For review")
-    }));
+    assert!((0..sheet.height())
+        .any(|r| { sheet.get((r, 0)).is_some_and(|d| d == "Status: For review") }));
 
     let totals = book.worksheet_range("Totals").unwrap();
     let header: Vec<_> = (0..5)
@@ -123,7 +120,10 @@ fn the_totals_sheet_adds_like_with_like_and_never_floor_tiles_to_a_ceiling() {
     let mut book: Xlsx<_> = open_workbook(&path).unwrap();
     let totals = book.worksheet_range("Totals").unwrap();
     // One row per item: the two floor pieces add to 100 (count 2); the ceiling is its own row.
-    assert_eq!(totals.get((1, 2)), Some(&Data::String("Floor tiles".into())));
+    assert_eq!(
+        totals.get((1, 2)),
+        Some(&Data::String("Floor tiles".into()))
+    );
     assert_eq!(totals.get((1, 3)), Some(&Data::Float(2.0)));
     assert_eq!(totals.get((1, 4)), Some(&Data::Float(100.0)));
     assert_eq!(totals.get((2, 2)), Some(&Data::String("Ceiling".into())));

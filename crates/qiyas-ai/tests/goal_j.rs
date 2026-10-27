@@ -1,14 +1,13 @@
 //! Offline live-session replays. No credentials or model calls.
+use crate::scripted;
 use qiyas_ai::surface::{CAPTURE, EXECUTE, READ};
 use qiyas_ai::{Agent, AgentEvent, AgentSettings, ContentBlock, ResultPart, TurnRequest};
 use qiyas_core::Session;
+use scripted::{Script, ScriptCall};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-#[path = "support/scripted.rs"]
-mod scripted;
-use scripted::{Script, ScriptCall};
 
 fn latest_rows(req: &TurnRequest) -> Vec<Value> {
     req.messages

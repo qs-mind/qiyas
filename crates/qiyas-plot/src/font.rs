@@ -172,7 +172,12 @@ impl FontSet {
             .iter()
             .zip(chars)
             .map(|(g, c)| {
-                let c = c?;
+                // A separately drawn dot/mark is already represented by its cluster's
+                // base glyph. Explicit empty text prevents extractors inventing a
+                // replacement character for that unmapped decorative glyph.
+                let Some(c) = c else {
+                    return Some(String::new());
+                };
                 let mapped = self
                     .fonts
                     .get(&g.font)

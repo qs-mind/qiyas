@@ -387,7 +387,9 @@ fn the_pack_card_flags_a_scan_until_it_is_calibrated_and_again_after_an_undo() {
     let dir = tempfile::tempdir().unwrap();
     let (mut session, handle) = attached(dir.path(), "dxf");
     let card = session.pack_check().unwrap();
-    let calibration = card.line("calibration").expect("an attached image is a scan");
+    let calibration = card
+        .line("calibration")
+        .expect("an attached image is a scan");
     assert!(!calibration.passes && !card.ready);
     assert!(calibration.found_en.contains("pic.png"), "{calibration:?}");
     assert!(calibration.fix_en.to_lowercase().contains("calibrate"));
@@ -396,13 +398,34 @@ fn the_pack_card_flags_a_scan_until_it_is_calibrated_and_again_after_an_undo() {
     session
         .calibrate(handle, [5.0, 5.0], [15.0, 5.0], 10.0)
         .unwrap();
-    assert!(session.pack_check().unwrap().line("calibration").unwrap().passes);
+    assert!(
+        session
+            .pack_check()
+            .unwrap()
+            .line("calibration")
+            .unwrap()
+            .passes
+    );
     // Saving and reading it again keeps the note: it is drawing knowledge.
     let path = dir.path().join("saved.dxf");
     session.save_as(&path).unwrap();
     let reopened = Session::open(&path).unwrap();
-    assert!(reopened.pack_check().unwrap().line("calibration").unwrap().passes);
+    assert!(
+        reopened
+            .pack_check()
+            .unwrap()
+            .line("calibration")
+            .unwrap()
+            .passes
+    );
 
     assert!(session.undo());
-    assert!(!session.pack_check().unwrap().line("calibration").unwrap().passes);
+    assert!(
+        !session
+            .pack_check()
+            .unwrap()
+            .line("calibration")
+            .unwrap()
+            .passes
+    );
 }

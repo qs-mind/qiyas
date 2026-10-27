@@ -123,22 +123,54 @@ pub fn guard(op: &str, args: &Value) -> Result<(), String> {
 
 /// Replaces any text that prints the first quantity with its unit ("17.81 m²").
 pub fn redact(value: &mut Value, first: f64, unit: &str) {
-    let number = format!("{first:.2}");
-    let unit = qiyas_core::deliverables::display_unit(unit).to_string();
-    fn walk(value: &mut Value, number: &str, unit: &str) {
+    let units = [
+        unit,
+        qiyas_core::deliverables::display_unit(unit),
+        qiyas_core::deliverables::arabic_unit(unit),
+    ];
+    fn contains_quantity(text: &str, first: f64, units: &[&str]) -> bool {
+        let normalized: String = text
+            .chars()
+            .filter_map(|c| match c {
+                '٠'..='٩' => char::from_u32('0' as u32 + c as u32 - '٠' as u32),
+                '۰'..='۹' => char::from_u32('0' as u32 + c as u32 - '۰' as u32),
+                '٫' => Some('.'),
+                '٬' | ',' => None,
+                _ => Some(c),
+            })
+            .collect();
+        units.iter().filter(|u| !u.is_empty()).any(|unit| {
+            normalized.match_indices(unit).any(|(start, matched)| {
+                if normalized[start + matched.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '²' | '³'))
+                {
+                    return false;
+                }
+                let before = normalized[..start].trim_end();
+                let number_start = before
+                    .rfind(|c: char| !c.is_ascii_digit() && c != '.')
+                    .map_or(0, |i| i + before[i..].chars().next().unwrap().len_utf8());
+                before[number_start..]
+                    .parse::<f64>()
+                    .is_ok_and(|n| (n - first).abs() <= 0.005)
+            })
+        })
+    }
+    fn walk(value: &mut Value, first: f64, units: &[&str]) {
         match value {
             Value::String(s) => {
-                let squeezed: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-                if squeezed.contains(&format!("{number}{unit}")) {
+                if contains_quantity(s, first, units) {
                     *s = "[a Qiyas result, hidden from this reading]".into();
                 }
             }
-            Value::Array(a) => a.iter_mut().for_each(|v| walk(v, number, unit)),
-            Value::Object(o) => o.values_mut().for_each(|v| walk(v, number, unit)),
+            Value::Array(a) => a.iter_mut().for_each(|v| walk(v, first, units)),
+            Value::Object(o) => o.values_mut().for_each(|v| walk(v, first, units)),
             _ => {}
         }
     }
-    walk(value, &number, &unit);
+    walk(value, first, &units);
 }
 
 /// The quantity in the reader's last message: `{"quantity": 12.5}`.
@@ -301,7 +333,8 @@ pub async fn run_pass(
         left: total.saturating_sub(items.len()),
         ..Default::default()
     };
-    for (brief, first) in items {
+    let mut items = items.into_iter();
+    while let Some((brief, first)) = items.next() {
         if cancel.is_cancelled() {
             pass.left += 1;
             continue;
@@ -314,31 +347,59 @@ pub async fn run_pass(
             }
             Err(_) => {
                 pass.failed.push(brief.code.clone());
-                pass.left += 1;
+                pass.left += items.len();
                 break;
             }
         };
         let shared = session.clone();
         let code = brief.code.clone();
-        let recorded = tokio::task::spawn_blocking(move || -> Result<qiyas_core::Outcome, String> {
-            let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
-            let s = guard.as_mut().ok_or("No drawing is open")?;
-            s.run_as(
-                Command::SecondReading(Box::new(SecondReadingCommand::Record {
-                    code,
-                    quantity: second,
-                })),
-                Source::Ai,
-            )
-            .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        let unit = brief.unit.clone();
+        let recorded =
+            tokio::task::spawn_blocking(move || -> Result<Option<qiyas_core::Outcome>, String> {
+                let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                let s = guard.as_mut().ok_or("No drawing is open")?;
+                let report = s.measurement_report().map_err(|e| e.to_string())?;
+                if !report.items.iter().any(|item| {
+                    item.code == code
+                        && item.unit == unit
+                        && item.quantity == first
+                        && !item.informational
+                }) {
+                    return Ok(None);
+                }
+                s.run_as(
+                    Command::SecondReading(Box::new(SecondReadingCommand::Record {
+                        code,
+                        quantity: second,
+                    })),
+                    Source::Ai,
+                )
+                .map(Some)
+                .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+        let Some(recorded) = recorded else {
+            pass.failed.push(brief.code);
+            continue;
+        };
         let agrees = match recorded {
             qiyas_core::Outcome::Measurement { result } => result["agrees"].as_bool() == Some(true),
             _ => false,
         };
         pass.read.push((brief.code, first, second, agrees));
+    }
+    if !pass.read.is_empty() {
+        let shared = session.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+            let s = guard.as_mut().ok_or("No drawing is open")?;
+            s.run_as(Command::Check { tolerance: None }, Source::Ai)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     }
     Ok(pass)
 }
@@ -373,6 +434,26 @@ mod tests {
         assert_eq!(v["rows"][1]["text"], "Door 3");
         assert!(v["rows"][0]["text"].as_str().unwrap().contains("hidden"));
         assert_eq!(v["n"], 45.2, "numbers of the drawing stay");
+    }
+
+    #[test]
+    fn arabic_quantities_and_integer_counts_are_hidden_without_changing_geometry() {
+        for (text, first, unit) in [
+            ("المساحة ١٧٫٨١ م²", 17.812, "m2"),
+            ("المساحة ۱۷٫۸۱ م²", 17.812, "m2"),
+            ("Doors 2 pcs", 2.0, "pcs"),
+            ("الأبواب ٢ عدد", 2.0, "pcs"),
+            ("Area 1,234.50 m2", 1234.5, "m2"),
+        ] {
+            let mut value = json!({"text":text,"geometry":first});
+            redact(&mut value, first, unit);
+            assert!(value["text"].as_str().unwrap().contains("hidden"), "{text}");
+            assert_eq!(value["geometry"], first);
+        }
+        let mut value = json!(["Length 45.20 mm", "Length 145.20 m", "Area 45.20 m²"]);
+        let before = value.clone();
+        redact(&mut value, 45.2, "m");
+        assert_eq!(value, before);
     }
 
     #[test]

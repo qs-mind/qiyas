@@ -1103,7 +1103,9 @@ fn evidence_text(doc: &lopdf::Document, page: lopdf::ObjectId) -> String {
                     .and_then(|v| v.as_str().ok())
                     .map(|bytes| {
                         let units: Vec<_> = bytes[2..]
-                            .chunks_exact(2)
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
                             .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
                             .collect();
                         String::from_utf16(&units).unwrap()

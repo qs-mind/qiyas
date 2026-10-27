@@ -13,8 +13,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-#[path = "support/scripted.rs"]
-pub mod scripted;
+use crate::scripted;
 use scripted::Script;
 
 fn sample() -> (tempfile::TempDir, Session) {

@@ -218,6 +218,13 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
             object(json!({"path":string}), &[]),
             json!({"path":"takeoff.xlsx"}),
         ),
+        (EXECUTE, "export_evidence") => (
+            object(
+                json!({"path":{"type":["string","null"]},"language":{"type":["string","null"],"enum":["en","ar",null]}}),
+                &[],
+            ),
+            json!({"path":"drawing evidence.pdf","language":"en"}),
+        ),
         (EXECUTE, "plot") => (
             object(
                 json!({"sheet":{"type":["string","null"],"description":"A sheet's name or block; the current sheet when omitted"},"paper":{"type":["string","null"],"description":"A catalog paper such as ISO A1; a layout's own page setup when omitted"},"orientation":{"type":["string","null"],"enum":["portrait","landscape",null]},"scale":{"type":["string","null"],"description":"fit, or num:den such as 1:50; a layout plots 1:1 and Model fits when omitted"},"path":{"type":["string","null"],"description":"The PDF's name in the drawing's folder; <drawing>-<sheet>.pdf when omitted"}}),

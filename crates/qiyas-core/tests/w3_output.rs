@@ -8,8 +8,7 @@ use qiyas_core::deliverables::{self, Kind, Language};
 use qiyas_core::{Outcome, Session, Source};
 use serde_json::{json, Value};
 
-#[path = "support/measurement_fixture.rs"]
-mod fixture;
+use crate::measurement_fixture as fixture;
 
 const UNITS: [i16; 4] = [4, 5, 6, 1];
 
@@ -300,7 +299,7 @@ fn the_boq_lists_doors_and_windows_by_size_even_when_the_mapping_says_various() 
             .filter(|i| i.code.starts_with("A-W01"))
             .collect();
         assert_eq!(windows.len(), 1);
-        assert!(windows[0].description_ar.contains("1200 × 1200 mm"));
+        assert!(windows[0].description_ar.contains("١٢٠٠ × ١٢٠٠ مم"));
         // The printed BOQ has a section row per section and no total across doors and windows.
         let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
         let table = boq.table().unwrap();
@@ -900,7 +899,10 @@ fn the_reader_is_shown_each_item_but_never_its_quantity() {
     assert_eq!(brief.len(), 3, "{brief:?}");
     let text = serde_json::to_string(&brief).unwrap();
     assert!(text.contains("900 × 2100 mm"));
-    assert!(!text.contains("quantity"), "the brief holds no quantity: {text}");
+    assert!(
+        !text.contains("quantity"),
+        "the brief holds no quantity: {text}"
+    );
     for b in &brief {
         assert!(!b.unit.is_empty() && !b.rule.is_empty(), "{b:?}");
     }
@@ -926,7 +928,11 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
         assert!(find(&window).second_reading.is_none());
 
         let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
-        let codes: Vec<_> = boq.rows.iter().map(|r| r["code"].as_str().unwrap()).collect();
+        let codes: Vec<_> = boq
+            .rows
+            .iter()
+            .map(|r| r["code"].as_str().unwrap())
+            .collect();
         assert!(codes.contains(&agreeing.as_str()), "{codes:?}");
         assert!(!codes.contains(&differing.as_str()), "{codes:?}");
         assert!(boq.warnings.iter().any(|w| w.contains(&differing)));
@@ -952,7 +958,8 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
             .any(|r| r["second_reading_text"] == "القراءة الثانية متطابقة"));
 
         // The disagreement is a query with both readings.
-        s.run(qiyas_core::Command::Check { tolerance: None }).unwrap();
+        s.run(qiyas_core::Command::Check { tolerance: None })
+            .unwrap();
         let q = s
             .conflicts
             .iter()
@@ -977,6 +984,47 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
 }
 
 #[test]
+fn resolving_one_size_disagreement_does_not_accept_another_size() {
+    let (_dir, mut s) = doors_and_floor(6);
+    let first = item_code(&s, 2.0, "A-D01");
+    let second = item_code(&s, 1.0, "A-D01");
+    record(&mut s, &first, 3.0);
+    record(&mut s, &second, 4.0);
+    s.run(qiyas_core::Command::Check { tolerance: None })
+        .unwrap();
+    let queries: Vec<_> = s
+        .conflicts
+        .iter()
+        .filter(|c| c.hash_key.contains("second_reading"))
+        .collect();
+    assert_eq!(queries.len(), 2);
+    assert_ne!(queries[0].hash_key, queries[1].hash_key);
+    let id = queries
+        .iter()
+        .find(|c| c.hash_key.ends_with(&format!("second_reading|{first}")))
+        .unwrap()
+        .id
+        .clone();
+    s.run(qiyas_core::Command::ResolveConflict {
+        id,
+        status: qiyas_core::ConflictStatus::Resolved,
+        note: "Checked this size on site".into(),
+    })
+    .unwrap();
+    let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
+    assert!(boq.rows.iter().any(|r| r["code"] == first));
+    assert!(!boq.rows.iter().any(|r| r["code"] == second));
+    record(&mut s, &first, 5.0);
+    s.run(qiyas_core::Command::Check { tolerance: None })
+        .unwrap();
+    let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
+    assert!(
+        !boq.rows.iter().any(|r| r["code"] == first),
+        "a new disagreement needs its own answer"
+    );
+}
+
+#[test]
 fn a_second_reading_is_not_checked_again_once_the_quantity_has_changed() {
     let (_dir, mut s) = doors_and_floor(6);
     let code = item_code(&s, 2.0, "A-D01");
@@ -990,7 +1038,10 @@ fn a_second_reading_is_not_checked_again_once_the_quantity_has_changed() {
     let report = s.measurement_report().unwrap();
     let item = report.items.iter().find(|i| i.code == code).unwrap();
     assert_eq!(item.quantity, 3.0);
-    assert!(item.second_reading.is_none(), "an edited quantity is read again");
+    assert!(
+        item.second_reading.is_none(),
+        "an edited quantity is read again"
+    );
     // Clearing forgets a reading.
     let code = item_code(&s, 3.0, "A-D01");
     record(&mut s, &code, 3.0);
@@ -1012,6 +1063,7 @@ fn the_tolerance_is_set_per_unit_by_code() {
     assert_eq!(tolerance_percent("pcs"), 0.0);
     assert!(tolerance_percent("m3") > tolerance_percent("m"));
     assert!(agrees(10.0, 10.0, "pcs") && !agrees(10.0, 11.0, "pcs"));
+    assert!(!agrees(10.0, 10.25, "pcs"), "counts have zero tolerance");
     assert!(agrees(100.0, 100.5, "m") && !agrees(100.0, 103.0, "m"));
 }
 
@@ -1031,7 +1083,10 @@ fn the_pack_card_flags_a_drawing_without_units_and_names_the_fix() {
         let s = Session::new_blank(&dir.path().join(format!("u{known}.dwg")), known);
         let card = s.pack_check().unwrap();
         assert!(card.line("units").unwrap().passes, "units {known}");
-        assert!(card.line("annotation_scale").unwrap().passes, "units {known}");
+        assert!(
+            card.line("annotation_scale").unwrap().passes,
+            "units {known}"
+        );
         // No PDF or picture: no PDF lines on a short card.
         assert!(card.line("pdf_pages").is_none() && card.line("calibration").is_none());
     }
@@ -1043,5 +1098,8 @@ fn the_pack_card_asks_where_the_sheet_number_and_revision_are_written() {
     let s = Session::new_blank(&dir.path().join("reg.dwg"), 6);
     let card = s.pack_check().unwrap();
     let line = card.line("register").unwrap();
-    assert!(!line.passes && line.fix_en.contains("sheet number"), "{line:?}");
+    assert!(
+        !line.passes && line.fix_en.contains("sheet number"),
+        "{line:?}"
+    );
 }

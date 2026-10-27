@@ -528,12 +528,14 @@ impl Registry {
                 if words.is_empty() || !words.iter().all(|w| text.contains(w.as_str())) {
                     return None;
                 }
-                let rank = if words.iter().all(|w| name.contains(w.as_str())) {
+                let rank = if words.iter().all(|w| name.split('.').any(|part| part == w)) {
                     0
-                } else if words.iter().any(|w| name.contains(w.as_str())) {
+                } else if words.iter().all(|w| name.contains(w.as_str())) {
                     1
-                } else {
+                } else if words.iter().any(|w| name.contains(w.as_str())) {
                     2
+                } else {
+                    3
                 };
                 Some((rank, i))
             })

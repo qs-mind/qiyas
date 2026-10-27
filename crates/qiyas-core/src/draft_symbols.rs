@@ -152,15 +152,29 @@ impl Session {
         if !self.drawing.doc.layers.contains(name) {
             self.new_layer(name)?;
         }
-        let layer = self.drawing.doc.layers.get(name).ok_or_else(|| invalid("Missing symbol layer"))?;
+        let layer = self
+            .drawing
+            .doc
+            .layers
+            .get(name)
+            .ok_or_else(|| invalid("Missing symbol layer"))?;
         if layer.flags.locked {
             return Err(invalid(format!("Layer {} is locked", layer.name)));
         }
-        self.current = Current { layer: layer.name.clone(), lineweight: weight, ..Current::default() };
+        self.current = Current {
+            layer: layer.name.clone(),
+            lineweight: weight,
+            ..Current::default()
+        };
         Ok(())
     }
 
-    fn symbol_line(&mut self, a: [f64; 2], b: [f64; 2], out: &mut Vec<u64>) -> Result<(), CoreError> {
+    fn symbol_line(
+        &mut self,
+        a: [f64; 2],
+        b: [f64; 2],
+        out: &mut Vec<u64>,
+    ) -> Result<(), CoreError> {
         out.extend(self.draw(DrawSpec::Line { a, b })?);
         Ok(())
     }
@@ -184,7 +198,12 @@ impl Session {
         let paper_mm = h / 2.5;
         let mut out = Vec::new();
         match spec {
-            SymbolSpec::Door { a, b, side_point, leaves } => {
+            SymbolSpec::Door {
+                a,
+                b,
+                side_point,
+                leaves,
+            } => {
                 let (u, width) = direction(a, b)?;
                 finite(side_point)?;
                 let cross = u[0] * (side_point[1] - a[1]) - u[1] * (side_point[0] - a[0]);
@@ -198,35 +217,72 @@ impl Session {
                 }
                 let sign = cross.signum();
                 let leaf = width / f64::from(leaves);
-                let mut specs = vec![DrawSpec::Line { a: [0.0, 0.0], b: [0.0, sign * leaf] }];
-                specs.push(DrawSpec::Arc { centre: [0.0, 0.0], radius: leaf,
+                let mut specs = vec![DrawSpec::Line {
+                    a: [0.0, 0.0],
+                    b: [0.0, sign * leaf],
+                }];
+                specs.push(DrawSpec::Arc {
+                    centre: [0.0, 0.0],
+                    radius: leaf,
                     start: if sign > 0.0 { 0.0 } else { 270.0 },
-                    end: if sign > 0.0 { 90.0 } else { 360.0 } });
+                    end: if sign > 0.0 { 90.0 } else { 360.0 },
+                });
                 if leaves == 2 {
-                    specs.push(DrawSpec::Line { a: [width, 0.0], b: [width, sign * leaf] });
-                    specs.push(DrawSpec::Arc { centre: [width, 0.0], radius: leaf,
+                    specs.push(DrawSpec::Line {
+                        a: [width, 0.0],
+                        b: [width, sign * leaf],
+                    });
+                    specs.push(DrawSpec::Arc {
+                        centre: [width, 0.0],
+                        radius: leaf,
                         start: if sign > 0.0 { 90.0 } else { 180.0 },
-                        end: if sign > 0.0 { 180.0 } else { 270.0 } });
+                        end: if sign > 0.0 { 180.0 } else { 270.0 },
+                    });
                 }
                 self.symbol_layer(data["door"]["layer"].as_str().unwrap_or("A-DOOR"), -1)?;
                 let base = "QIYAS_DRAFT_DOOR";
                 let block = self.legacy_symbol_block(base, specs.clone())?;
-                let handle = self.insert_block(&block, a, 1.0, u[1].atan2(u[0]).to_degrees(), &BTreeMap::new(), None)?;
+                let handle = self.insert_block(
+                    &block,
+                    a,
+                    1.0,
+                    u[1].atan2(u[0]).to_degrees(),
+                    &BTreeMap::new(),
+                    None,
+                )?;
                 self.stamp_legacy_symbol_recipe(handle, base, &specs)?;
                 out.push(handle);
             }
-            SymbolSpec::Stair { origin, width, length_m, rise_m, steps, floor, rotation, language } => {
+            SymbolSpec::Stair {
+                origin,
+                width,
+                length_m,
+                rise_m,
+                steps,
+                floor,
+                rotation,
+                language,
+            } => {
                 finite(origin)?;
-                if [width, length_m, rise_m].into_iter().any(|v| !v.is_finite() || v <= 0.0)
-                    || !rotation.is_finite() || !(2..=200).contains(&steps) {
-                    return Err(invalid("Stair width, length and rise must be positive; steps must be 2 to 200"));
+                if [width, length_m, rise_m]
+                    .into_iter()
+                    .any(|v| !v.is_finite() || v <= 0.0)
+                    || !rotation.is_finite()
+                    || !(2..=200).contains(&steps)
+                {
+                    return Err(invalid(
+                        "Stair width, length and rise must be positive; steps must be 2 to 200",
+                    ));
                 }
                 let arabic = self.symbol_arabic(language);
                 let length = length_m / k;
                 let (sin, cos) = rotation.to_radians().sin_cos();
-                let p = |x: f64, y: f64| [origin[0] + x * cos - y * sin, origin[1] + x * sin + y * cos];
+                let p =
+                    |x: f64, y: f64| [origin[0] + x * cos - y * sin, origin[1] + x * sin + y * cos];
                 let stair = &data["stair"];
-                let cut = (stair["cut_height_m"]["value"].as_f64().unwrap_or(1.2) / rise_m).clamp(0.1, 0.9) * length;
+                let cut = (stair["cut_height_m"]["value"].as_f64().unwrap_or(1.2) / rise_m)
+                    .clamp(0.1, 0.9)
+                    * length;
                 self.symbol_layer("A-FLOR-STRS", -1)?;
                 self.symbol_line(p(0.0, 0.0), p(0.0, length), &mut out)?;
                 self.symbol_line(p(width, 0.0), p(width, length), &mut out)?;
@@ -243,56 +299,128 @@ impl Session {
                 }
                 if floor == StairFloor::Lower {
                     self.symbol_layer("A-FLOR-STRS", 50)?;
-                    let zig = [p(-0.1 * width, cut), p(0.4 * width, cut),
-                        p(0.6 * width, cut + 0.15 * width), p(1.1 * width, cut + 0.15 * width)];
-                    out.extend(self.draw(DrawSpec::Polyline { points: zig.to_vec().into(), bulges: vec![], closed: false })?);
+                    let zig = [
+                        p(0.0, cut),
+                        p(0.4 * width, cut),
+                        p(0.6 * width, cut + 0.15 * width),
+                        p(width, cut + 0.15 * width),
+                    ];
+                    out.extend(self.draw(DrawSpec::Polyline {
+                        points: zig.to_vec().into(),
+                        bulges: vec![],
+                        closed: false,
+                    })?);
                 } else {
                     // The upper-floor slab has an open well beside the descending flight.
                     self.symbol_layer("A-FLOR-STRS", -1)?;
-                    for (a, b) in [(p(-width, 0.0), p(-width, length)),
-                        (p(-width, 0.0), p(0.0, 0.0)), (p(-width, length), p(0.0, length))] {
+                    for (a, b) in [
+                        (p(-width, 0.0), p(-width, length)),
+                        (p(-width, 0.0), p(0.0, 0.0)),
+                        (p(-width, length), p(0.0, length)),
+                    ] {
                         self.symbol_line(a, b, &mut out)?;
                     }
                     self.symbol_layer("A-FLOR-HRAL", -1)?;
-                    let rail = (stair["handrail_offset_m"]["value"].as_f64().unwrap_or(0.06) / k).min(width / 4.0);
+                    let rail = (stair["handrail_offset_m"]["value"].as_f64().unwrap_or(0.06) / k)
+                        .min(width / 4.0);
                     for x in [rail, width - rail] {
-                        self.symbol_line(p(x, rail), p(x, length - rail), &mut out)?;
+                        self.symbol_line(p(x, 0.0), p(x, length), &mut out)?;
                     }
                     // Guard the other three sides of the void as well.
-                    out.extend(self.draw(DrawSpec::Polyline { points: vec![p(-rail, rail), p(-width + rail, rail),
-                        p(-width + rail, length - rail), p(-rail, length - rail)].into(), bulges: vec![], closed: false })?);
+                    out.extend(
+                        self.draw(DrawSpec::Polyline {
+                            points: vec![
+                                p(0.0, rail),
+                                p(-width + rail, rail),
+                                p(-width + rail, length - rail),
+                                p(0.0, length - rail),
+                            ]
+                            .into(),
+                            bulges: vec![],
+                            closed: false,
+                        })?,
+                    );
                     self.symbol_layer("A-ANNO-STRS", -1)?;
-                    out.push(self.add_text(p(-width + h * 0.3, length / 2.0), 0.0, rotation,
-                        if arabic { "فراغ" } else { "VOID" }.into(), None)?);
+                    out.push(self.add_text(
+                        p(-width + h * 0.3, length / 2.0),
+                        0.0,
+                        rotation,
+                        if arabic { "فراغ" } else { "VOID" }.into(),
+                        None,
+                    )?);
                 }
                 self.symbol_layer("A-ANNO-STRS", -1)?;
                 let (tip, tail, label) = if floor == StairFloor::Lower {
-                    (p(width / 2.0, cut * 0.8), p(width / 2.0, length * 0.1), if arabic { "صعود" } else { "UP" })
+                    (
+                        p(width / 2.0, cut * 0.8),
+                        p(width / 2.0, length * 0.1),
+                        if arabic { "صعود" } else { "UP" },
+                    )
                 } else {
-                    (p(width / 2.0, length * 0.1), p(width / 2.0, length * 0.85), if arabic { "نزول" } else { "DN" })
+                    (
+                        p(width / 2.0, length * 0.1),
+                        p(width / 2.0, length * 0.85),
+                        if arabic { "نزول" } else { "DN" },
+                    )
                 };
                 out.extend(self.add_leader(&[tip, tail], "", false)?);
-                out.push(self.add_text(p(width + h, length / 2.0), 0.0, rotation, label.into(), None)?);
+                out.push(self.add_text(
+                    p(width + h, length / 2.0),
+                    0.0,
+                    rotation,
+                    label.into(),
+                    None,
+                )?);
             }
-            SymbolSpec::Levels { origin, levels, language } => {
+            SymbolSpec::Levels {
+                origin,
+                levels,
+                language,
+            } => {
                 finite(origin)?;
                 if levels.is_empty() || levels.len() > 100 {
                     return Err(invalid("Give 1 to 100 named levels"));
                 }
                 let arabic = self.symbol_arabic(language);
                 self.symbol_layer("A-ANNO-LEVL", -1)?;
-                let size = data["levels"]["marker_size_paper_mm"].as_f64().unwrap_or(3.0) * paper_mm;
+                let size = data["levels"]["marker_size_paper_mm"]
+                    .as_f64()
+                    .unwrap_or(3.0)
+                    * paper_mm;
                 for level in levels {
                     if !level.elevation_m.is_finite() || level.label.trim().is_empty() {
                         return Err(invalid("Each level needs a label and finite elevation_m"));
                     }
                     let at = [origin[0], origin[1] + level.elevation_m / k];
-                    let ring = vec![at, [at[0] + size, at[1] + size], [at[0] - size, at[1] + size]];
-                    out.extend(self.draw(DrawSpec::Polyline { points: ring.into(), bulges: vec![], closed: true })?);
+                    let ring = vec![
+                        at,
+                        [at[0] + size, at[1] + size],
+                        [at[0] - size, at[1] + size],
+                    ];
+                    out.extend(self.draw(DrawSpec::Polyline {
+                        points: ring.into(),
+                        bulges: vec![],
+                        closed: true,
+                    })?);
                     self.symbol_line(at, [at[0] + 5.0 * size, at[1]], &mut out)?;
-                    let text = format!("{} {:+.2} {}", level.label, level.elevation_m, if arabic { "م" } else { "m" });
-                    let text = if arabic { crate::numbers::arabic_digits(&text) } else { text };
-                    out.push(self.add_text([at[0] + 1.5 * size, at[1] + h * 0.4], 0.0, 0.0, text, None)?);
+                    let text = format!(
+                        "{} {:+.2} {}",
+                        level.label,
+                        level.elevation_m,
+                        if arabic { "م" } else { "m" }
+                    );
+                    let text = if arabic {
+                        crate::numbers::arabic_digits(&text)
+                    } else {
+                        text
+                    };
+                    out.push(self.add_text(
+                        [at[0] + 1.5 * size, at[1] + h * 0.4],
+                        0.0,
+                        0.0,
+                        text,
+                        None,
+                    )?);
                 }
             }
             SymbolSpec::GroundLine { a, b } => {
@@ -301,19 +429,30 @@ impl Session {
                 let spacing = ground["tick_spacing_paper_mm"].as_f64().unwrap_or(4.0) * paper_mm;
                 let tick = ground["tick_length_paper_mm"].as_f64().unwrap_or(3.0) * paper_mm;
                 let count = (length / spacing).ceil();
-                if count > 10_000.0 { return Err(invalid("Ground line has too many ticks at this annotation scale")); }
+                if count > 10_000.0 {
+                    return Err(invalid(
+                        "Ground line has too many ticks at this annotation scale",
+                    ));
+                }
                 self.symbol_layer("A-ELEV-GRND", 70)?;
                 self.symbol_line(a, b, &mut out)?;
                 self.current.lineweight = -1;
-                for i in 0..count as usize {
-                    let p = offset(a, u, (i as f64 + 0.5) * length / count);
+                for i in 0..=count as usize {
+                    let p = offset(a, u, i as f64 * length / count);
                     let q = offset(offset(p, [u[1], -u[0]], tick), u, -tick * 0.5);
                     self.symbol_line(p, q, &mut out)?;
                 }
             }
-            SymbolSpec::FoundationLevel { a, b, elevation_m, language } => {
+            SymbolSpec::FoundationLevel {
+                a,
+                b,
+                elevation_m,
+                language,
+            } => {
                 direction(a, b)?;
-                if !elevation_m.is_finite() { return Err(invalid("Foundation elevation_m must be finite")); }
+                if !elevation_m.is_finite() {
+                    return Err(invalid("Foundation elevation_m must be finite"));
+                }
                 let arabic = self.symbol_arabic(language);
                 self.symbol_layer("A-SECT-FNDN", -1)?;
                 self.ensure_convention_linetype("HIDDEN")?;
@@ -321,38 +460,96 @@ impl Session {
                 self.symbol_line(a, b, &mut out)?;
                 self.current.linetype = "ByLayer".into();
                 let key = if arabic { "label_ar" } else { "label_en" };
-                let text = format!("{} {:+.2} {}", data["foundation_level"][key].as_str().unwrap_or("Foundation (indicative)"),
-                    elevation_m, if arabic { "م" } else { "m" });
-                let text = if arabic { crate::numbers::arabic_digits(&text) } else { text };
+                let text = format!(
+                    "{} {:+.2} {}",
+                    data["foundation_level"][key]
+                        .as_str()
+                        .unwrap_or("Foundation (indicative)"),
+                    elevation_m,
+                    if arabic { "م" } else { "m" }
+                );
+                let text = if arabic {
+                    crate::numbers::arabic_digits(&text)
+                } else {
+                    text
+                };
                 out.push(self.add_text([a[0], a[1] + h], 0.0, 0.0, text, None)?);
             }
-            SymbolSpec::MaterialHatch { points, holes, material, view, point, at, label, language } => {
+            SymbolSpec::MaterialHatch {
+                points,
+                holes,
+                material,
+                view,
+                point,
+                at,
+                label,
+                language,
+            } => {
                 direction(point, at)?;
                 let material = material.trim().to_lowercase();
-                let entry = standards()["materials"].get(&material).ok_or_else(|| invalid("Unknown material: read drafting_knowledge topic materials"))?;
+                let entry = standards()["materials"].get(&material).ok_or_else(|| {
+                    invalid("Unknown material: read drafting_knowledge topic materials")
+                })?;
                 let arabic = self.symbol_arabic(language);
-                let pattern_key = if view == MaterialView::Elevation { "elevation_pattern" } else { "section_pattern" };
-                let layer = if view == MaterialView::Detail { "A-DETL-PATT" } else { "A-SECT-PATT" };
+                let pattern_key = if view == MaterialView::Elevation {
+                    "elevation_pattern"
+                } else {
+                    "section_pattern"
+                };
+                let layer = if view == MaterialView::Detail {
+                    "A-DETL-PATT"
+                } else {
+                    "A-SECT-PATT"
+                };
                 self.symbol_layer(layer, -1)?;
                 if let Some(name) = entry[pattern_key].as_str() {
-                    let view_key = match view { MaterialView::Section => "section", MaterialView::Detail => "detail", MaterialView::Elevation => "elevation" };
-                    let spacing = data["hatch"]["spacing_paper_mm"][view_key].as_f64().unwrap_or(2.5) * paper_mm;
+                    let view_key = match view {
+                        MaterialView::Section => "section",
+                        MaterialView::Detail => "detail",
+                        MaterialView::Elevation => "elevation",
+                    };
+                    let spacing = data["hatch"]["spacing_paper_mm"][view_key]
+                        .as_f64()
+                        .unwrap_or(2.5)
+                        * paper_mm;
                     // Built-in base spacing is 3.175 drawing units for ANSI patterns; other
                     // material patterns retain their own proportions through the same API.
-                    let pattern = if name == "SOLID" { HatchPattern::Solid } else {
-                        HatchPattern::Custom { name: name.into(), angle: 0.0, scale: spacing / 3.175 }
+                    let pattern = if name == "SOLID" {
+                        HatchPattern::Solid
+                    } else {
+                        HatchPattern::Custom {
+                            name: name.into(),
+                            angle: 0.0,
+                            scale: spacing / 3.175,
+                        }
                     };
-                    out.extend(self.draw(DrawSpec::Hatch { boundary_handles: vec![], points: points.clone(),
-                        holes: holes.clone(), bulges: vec![], pattern })?);
+                    out.extend(self.draw(DrawSpec::Hatch {
+                        boundary_handles: vec![],
+                        points: points.clone(),
+                        holes: holes.clone(),
+                        bulges: vec![],
+                        pattern,
+                    })?);
                 }
                 if view != MaterialView::Elevation {
                     self.symbol_layer("A-SECT-CUT", 50)?;
                     for ring in std::iter::once(points).chain(holes) {
-                        out.extend(self.draw(DrawSpec::Polyline { points: Vec::<[f64; 2]>::from(ring).into(), bulges: vec![], closed: true })?);
+                        out.extend(self.draw(DrawSpec::Polyline {
+                            points: Vec::<[f64; 2]>::from(ring).into(),
+                            bulges: vec![],
+                            closed: true,
+                        })?);
                     }
                 }
-                let text = label.unwrap_or_else(|| entry[if arabic { "title_ar" } else { "title_en" }].as_str().unwrap_or(&material).into());
-                if text.trim().is_empty() { return Err(invalid("A material leader needs a label")); }
+                let text = label.unwrap_or_else(|| {
+                    entry[if arabic { "title_ar" } else { "title_en" }]
+                        .as_str()
+                        .unwrap_or(&material)
+                        .into()
+                });
+                if text.trim().is_empty() {
+                    return Err(invalid("A material leader needs a label"));
+                }
                 self.symbol_layer("A-ANNO-NOTE", -1)?;
                 out.extend(self.add_leader(&[point, at], &text, true)?);
             }

@@ -246,6 +246,16 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
     let mut handles = Vec::new();
     if let Some(prepared) = record_fixtures::prepare(session, name, example) {
         handles = prepared;
+    } else if matches!(name, "second_reading" | "second_reading.record") {
+        use crate::measurement_fixture as fixture;
+        fixture::fixture(session);
+        fixture::apply(session, fixture::method("Example measurement", false));
+        let mut mappings = fixture::mappings();
+        mappings[0]["code"] = example["code"].clone();
+        fixture::run(
+            session,
+            json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+        );
     } else if name == "set_measurement_scope" {
         handles = added_by(
             session,

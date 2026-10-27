@@ -808,5 +808,4 @@ fn a_one_metre_rectangle_far_from_the_origin_solves_as_one_at_the_origin() {
     );
 }
 
-#[path = "../../../tests/support/performance.rs"]
-mod performance;
+use crate::performance;

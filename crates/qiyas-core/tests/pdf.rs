@@ -388,6 +388,32 @@ fn resident_bytes() -> u64 {
 #[test]
 #[cfg(target_os = "linux")]
 fn page_1999_of_a_2000_page_pdf_attaches_as_an_underlay() {
+    const CHILD: &str = "QIYAS_PDF_MEMORY_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // The RSS limit belongs to this operation, not to all the other tests now
+        // sharing this binary and their retained allocator/PDF caches.
+        let module = module_path!()
+            .split_once("::")
+            .map(|(_, m)| m)
+            .unwrap_or("");
+        let name = format!("{module}::page_1999_of_a_2000_page_pdf_attaches_as_an_underlay");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "child did not run the test: {stdout}"
+        );
+        return;
+    }
     if !pdfium() {
         return;
     }
@@ -424,8 +450,13 @@ fn the_pack_card_calls_a_vector_page_vector_and_reads_its_orientation() {
         .attach_pdf(&pdf, 1, [0.0, 0.0], 0.01, AttachMode::Underlay)
         .unwrap();
     let card = session.pack_check().unwrap();
-    let pages = card.line("pdf_pages").expect("a PDF page is on the drawing");
-    assert!(pages.passes && pages.found_en.contains("vector"), "{pages:?}");
+    let pages = card
+        .line("pdf_pages")
+        .expect("a PDF page is on the drawing");
+    assert!(
+        pages.passes && pages.found_en.contains("vector"),
+        "{pages:?}"
+    );
     // A vector page needs no calibration line; it is stored upright.
     assert!(card.line("calibration").is_none());
     assert!(card.line("orientation").unwrap().passes);
@@ -446,6 +477,9 @@ fn the_pack_card_says_when_a_pdf_page_cannot_be_read() {
     std::fs::remove_file(&pdf).unwrap();
     let card = session.pack_check().unwrap();
     let pages = card.line("pdf_pages").unwrap();
-    assert!(!pages.passes && pages.found_en.contains("Could not read"), "{pages:?}");
+    assert!(
+        !pages.passes && pages.found_en.contains("Could not read"),
+        "{pages:?}"
+    );
     assert!(!pages.fix_en.is_empty());
 }

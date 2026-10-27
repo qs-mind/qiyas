@@ -1,5 +1,4 @@
-#[path = "../../qiyas-core/tests/support/measurement_fixture.rs"]
-mod fixture;
+use crate::fixture;
 use qiyas_core::{
     deliverables::{self, Export, Format, Kind, Language},
     projects::{aggregate, ProjectData},

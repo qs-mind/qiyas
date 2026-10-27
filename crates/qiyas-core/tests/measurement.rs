@@ -1,6 +1,5 @@
 //! Invented test methods exercise the engine; no measurement standard is shipped.
-#[path = "support/measurement_fixture.rs"]
-mod fixture;
+use crate::measurement_fixture as fixture;
 use fixture::*;
 use qiyas_core::{Session, Source};
 use serde_json::json;

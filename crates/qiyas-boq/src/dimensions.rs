@@ -41,7 +41,11 @@ pub(crate) fn write_contents(
     }
     // An item whose second reading differs is a query, not a BOQ row; its working stays in the
     // dimension sheets below.
-    let boq_items: Vec<_> = report.items.iter().filter(|i| !i.second_differs()).collect();
+    let boq_items: Vec<_> = report
+        .items
+        .iter()
+        .filter(|i| !i.second_differs())
+        .collect();
     sheet.set_print_area(0, 0, boq_items.len() as u32, 11)?;
     sheet.set_column_width(11, 28)?;
     for (index, item) in boq_items.into_iter().enumerate() {

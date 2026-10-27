@@ -194,7 +194,9 @@ fn every_output_says_it_is_for_review() {
     ] {
         for kind in [Kind::Boq, Kind::Dimensions] {
             let report = deliverables::drawing(&s, kind, language, None).unwrap();
-            let path = dir.path().join(format!("status-{kind:?}-{language:?}.xlsx"));
+            let path = dir
+                .path()
+                .join(format!("status-{kind:?}-{language:?}.xlsx"));
             qiyas_boq::deliverables::write(&Export {
                 path: path.clone(),
                 format: Format::Excel,

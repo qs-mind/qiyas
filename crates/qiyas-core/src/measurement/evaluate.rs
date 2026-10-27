@@ -236,8 +236,7 @@ fn reads_as_information(description_en: &str, description_ar: &str) -> bool {
 fn size_label(object: &ObjectRecord, unit: &str) -> Option<(String, String, String)> {
     // Doors and windows only: any other counted object keeps the mapping's own code, which a
     // client BOQ is matched by.
-    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count")
-    {
+    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count") {
         return None;
     }
     let number = |name: &str| object.instance.props.get(name).and_then(Value::as_f64);

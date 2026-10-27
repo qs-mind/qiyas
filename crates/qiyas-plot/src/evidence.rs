@@ -370,7 +370,10 @@ fn outline(
             continue;
         }
         for i in r.first..r.first + r.count {
-            for p in batch.fills[i as usize * 6..i as usize * 6 + 6].chunks_exact(2) {
+            for p in batch.fills[i as usize * 6..i as usize * 6 + 6]
+                .as_chunks::<2>()
+                .0
+            {
                 points.push(xf.apply(absolute(batch, p[0], p[1])));
             }
         }

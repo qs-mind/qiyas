@@ -83,7 +83,11 @@ fn export_conflicts_is_readable_by_calamine() {
         ]
     );
     assert_eq!(sheet.get((1, 5)), Some(&Data::Float(120.0)));
-    assert_eq!(sheet.height(), 4);
+    assert_eq!(sheet.height(), 6);
+    assert_eq!(
+        sheet.get((5, 0)),
+        Some(&Data::String("Status: For review".into()))
+    );
 
     let summary = book.worksheet_range("Summary").unwrap();
     let count = |label: &str| -> f64 {

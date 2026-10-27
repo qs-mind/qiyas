@@ -85,7 +85,11 @@ pub fn export_takeoff_with_queries(
 ) -> Result<(), BoqError> {
     let totals = item_totals(items);
     let mut book = Workbook::new();
-    book.set_properties(&DocProperties::new().set_title(title).set_status("For review"));
+    book.set_properties(
+        &DocProperties::new()
+            .set_title(title)
+            .set_status("For review"),
+    );
     let bold = Format::new().set_bold();
 
     let sheet = book.add_worksheet().set_name("Take-off")?;

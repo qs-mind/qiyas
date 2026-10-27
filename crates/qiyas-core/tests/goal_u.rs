@@ -1,8 +1,7 @@
 //! Clinic regressions: use the public wire boundary and verify the drawing after each edit.
+use crate::measurement_fixture;
 use qiyas_core::{Outcome, Session, Source};
 use serde_json::{json, Value};
-#[path = "support/measurement_fixture.rs"]
-mod measurement_fixture;
 
 fn near(actual: f64, expected: f64) {
     assert!((actual - expected).abs() < 1e-7, "{actual} != {expected}");

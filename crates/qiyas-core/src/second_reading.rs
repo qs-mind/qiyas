@@ -97,7 +97,7 @@ pub fn agrees(first: f64, second: f64, unit: &str) -> bool {
     }
     let percent = tolerance_percent(unit);
     if percent == 0.0 {
-        return (first - second).abs() < 0.5;
+        return first == second;
     }
     (first - second).abs() <= first.abs().max(second.abs()) * percent / 100.0 + 0.005
 }
@@ -172,9 +172,7 @@ impl Session {
         match command {
             SecondReadingCommand::Record { code, quantity } => {
                 if !quantity.is_finite() || quantity < 0.0 {
-                    return Err(invalid(
-                        "A second reading is a finite number of 0 or more",
-                    ));
+                    return Err(invalid("A second reading is a finite number of 0 or more"));
                 }
                 let report = self.measurement_report()?;
                 let item = report
@@ -239,12 +237,15 @@ impl Session {
                 let key = format!(
                     "{}|{}",
                     crate::ConflictKind::QuantityMismatch.name(),
-                    conflict_key(item.base_code())
+                    conflict_key(&item.code)
                 );
-                let answered = self
-                    .conflicts
-                    .iter()
-                    .any(|c| c.hash_key == key && c.status != crate::ConflictStatus::Open);
+                let answered = self.conflicts.iter().any(|c| {
+                    c.hash_key == key
+                        && c.status != crate::ConflictStatus::Open
+                        && c.expected == Some(s.first)
+                        && c.found == Some(s.second)
+                        && c.unit == s.unit
+                });
                 if answered {
                     SecondStatus::Accepted
                 } else {
@@ -272,12 +273,8 @@ impl Session {
                 .and_then(|boq| boq.items.iter().find(|b| b.code == item.base_code()))
                 .and_then(|b| b.rate)
         };
-        let elements = |item: &GeneratedItem| {
-            item.lines
-                .iter()
-                .map(|l| l.sources.len())
-                .sum::<usize>()
-        };
+        let elements =
+            |item: &GeneratedItem| item.lines.iter().map(|l| l.sources.len()).sum::<usize>();
         let mut open: Vec<(f64, usize, &GeneratedItem)> = report
             .items
             .iter()

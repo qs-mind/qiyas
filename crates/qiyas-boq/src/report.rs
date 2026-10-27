@@ -69,7 +69,7 @@ pub fn export_conflicts(path: &Path, conflicts: &[Conflict]) -> Result<(), BoqEr
     for column in [3, 4, 10] {
         sheet.set_column_format(column, &Format::new().set_text_wrap())?;
     }
-    sheet.set_print_area(0, 0, conflicts.len() as u32, 10)?;
+    sheet.set_print_area(0, 0, conflicts.len() as u32 + 2, 10)?;
     let sheet = book.add_worksheet().set_name("Summary")?;
     sheet.set_column_width(0, 20)?;
     sheet.write_row_with_format(0, 0, ["Kind", "Count"], &bold)?;

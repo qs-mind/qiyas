@@ -2520,9 +2520,7 @@ fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
             .or_else(|| {
                 sheets
                     .iter()
-                    .find(|s| {
-                        !s.is_model && session.drawing.entities_in(&s.block).next().is_some()
-                    })
+                    .find(|s| !s.is_model && session.drawing.entities_in(&s.block).next().is_some())
                     .map(|s| s.block.clone())
             })
             .unwrap_or_else(|| session.sheet.clone())
@@ -2709,7 +2707,8 @@ fn export_evidence(session: &Session, args: &Value) -> Result<Value, ToolError> 
     let path = qiyas_plot::evidence::output_path(session, args.get("path").and_then(Value::as_str))
         .map_err(|e| bad(e.to_string()))?;
     let draft = quantity_gate(session, &path.to_string_lossy())?;
-    let snapshot = qiyas_plot::evidence::snapshot(session, language).map_err(|e| bad(e.to_string()))?;
+    let snapshot =
+        qiyas_plot::evidence::snapshot(session, language).map_err(|e| bad(e.to_string()))?;
     let output = qiyas_plot::evidence::write(&snapshot, &path).map_err(|e| bad(e.to_string()))?;
     let mut out = json!({"written": output.path.to_string_lossy(), "skipped": output.skipped});
     if let Some(found) = draft {

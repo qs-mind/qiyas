@@ -73,10 +73,15 @@ fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
         // value; no id is printed or asked for.
         for text in ["Area 20 m²", "المساحة ٢٠ م²", "Area 20.00 m²"] {
             let v = json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":text});
-            assert_eq!(json!(s.run_input(&v, Source::Ai).unwrap())["advice"], json!([]), "{text}");
+            assert_eq!(
+                json!(s.run_input(&v, Source::Ai).unwrap())["advice"],
+                json!([]),
+                "{text}"
+            );
         }
         // The same number in another unit is another quantity: the 20 m² row does not cite 20 m.
-        let wrong = json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"Length 20 m"});
+        let wrong =
+            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"Length 20 m"});
         assert_eq!(
             json!(s.run_input(&wrong, Source::Ai).unwrap())["advice"][0]["code"],
             "uncited_quantity"

@@ -1,4 +1,5 @@
 //! Scripted provider replays and revision readbacks; no model or network access.
+use crate::scripted;
 use qiyas_ai::surface::{CAPTURE, EXECUTE, READ};
 use qiyas_ai::{Agent, AgentEvent, AgentSettings, ContentBlock, ResultPart};
 use qiyas_core::Session;
@@ -6,8 +7,6 @@ use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-#[path = "support/scripted.rs"]
-pub mod scripted;
 
 #[tokio::test]
 async fn villa_replay_finishes_with_all_openings_and_visible_findings() {

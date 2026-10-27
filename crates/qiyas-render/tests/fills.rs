@@ -401,6 +401,10 @@ fn fill_in_a_block_inserted_500_times_is_triangulated_once() {
     let t = std::time::Instant::now();
     let b = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
     let build = t.elapsed().as_secs_f64();
+    eprintln!(
+        "500 fill inserts: build {build:.6} s, 500 triangulations {per_instance:.6} s, ratio {:.4}, limit 0.25",
+        build / per_instance
+    );
     assert_eq!(b.fill_ranges.len(), 500);
     assert!(
         build < per_instance / 4.0,

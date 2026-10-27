@@ -1088,5 +1088,4 @@ fn labelled_circles_and_grid_bubbles_are_annotations_but_plain_holes_need_marks(
     }
 }
 
-#[path = "../../../tests/support/performance.rs"]
-mod performance;
+use crate::performance;

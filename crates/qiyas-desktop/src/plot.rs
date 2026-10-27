@@ -162,10 +162,12 @@ pub async fn export_evidence(
 ) -> Result<PlotOutput, String> {
     let state = state.scoped(workspace)?;
     let (path, snapshot) = with_session(&state, |s| {
-        Ok(qiyas_plot::evidence::output_path(s, path.as_deref()).and_then(|path| {
-            let language = language.unwrap_or_else(|| qiyas_plot::evidence::language(s));
-            Ok((path, qiyas_plot::evidence::snapshot(s, language)?))
-        }))
+        Ok(
+            qiyas_plot::evidence::output_path(s, path.as_deref()).and_then(|path| {
+                let language = language.unwrap_or_else(|| qiyas_plot::evidence::language(s));
+                Ok((path, qiyas_plot::evidence::snapshot(s, language)?))
+            }),
+        )
     })?
     .map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {

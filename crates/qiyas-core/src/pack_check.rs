@@ -78,9 +78,8 @@ impl Session {
     /// The pictures calibrated with `Command::Calibrate`, by handle.
     fn calibrated_pictures(&self) -> Result<BTreeSet<u64>, CoreError> {
         match knowledge::get(&self.drawing.doc, Kind::Measurement, CALIBRATED)? {
-            Some(entry) => {
-                serde_json::from_value(entry.data).map_err(|e| CoreError::InvalidCommand(e.to_string()))
-            }
+            Some(entry) => serde_json::from_value(entry.data)
+                .map_err(|e| CoreError::InvalidCommand(e.to_string())),
             None => Ok(BTreeSet::new()),
         }
     }
@@ -135,7 +134,10 @@ impl Session {
                         });
                     }
                     EntityType::RasterImage(image) => {
-                        let name = match image.definition_handle.and_then(|h| self.drawing.doc.objects.get(&h)) {
+                        let name = match image
+                            .definition_handle
+                            .and_then(|h| self.drawing.doc.objects.get(&h))
+                        {
                             Some(ObjectType::ImageDefinition(def)) => Path::new(&def.file_name)
                                 .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
@@ -295,7 +297,10 @@ impl Session {
                 .map(|(p, _)| format!("{} on {}", p.name, p.sheet))
                 .collect();
             let found = if missing.is_empty() {
-                both("Every scan is calibrated.", "كل صورة ممسوحة مضبوطة المقياس.")
+                both(
+                    "Every scan is calibrated.",
+                    "كل صورة ممسوحة مضبوطة المقياس.",
+                )
             } else {
                 both(
                     format!("Not calibrated: {}.", missing.join(", ")),
@@ -338,8 +343,8 @@ impl Session {
     }
 
     fn register_line(&self) -> Result<PackLine, CoreError> {
-        let mut rules = crate::deliverables::default_layout(crate::deliverables::Kind::Register)
-            .register_rules;
+        let mut rules =
+            crate::deliverables::default_layout(crate::deliverables::Kind::Register).register_rules;
         if let Some(entry) = knowledge::get(&self.drawing.doc, Kind::Reports, "register")? {
             if let Ok(layout) = serde_json::from_value::<crate::deliverables::Layout>(entry.data) {
                 rules = layout.register_rules;

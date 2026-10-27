@@ -2087,22 +2087,43 @@ impl Session {
                     handles: self.reference_grid(&x, &y, extent, bubble)?,
                 });
             }
-            Command::DraftingKnowledge { topic, project_type, market, storeys, view, language, assumptions } => {
+            Command::DraftingKnowledge {
+                topic,
+                project_type,
+                market,
+                storeys,
+                view,
+                language,
+                assumptions,
+            } => {
                 return Ok(Outcome::Measurement {
                     result: crate::drafting_standards::knowledge(
-                        topic, project_type.as_deref(), market.as_deref(), storeys,
-                        view.as_deref(), language.or(self.sheet_language()).unwrap_or(crate::rooms::LabelLanguage::En),
+                        topic,
+                        project_type.as_deref(),
+                        market.as_deref(),
+                        storeys,
+                        view.as_deref(),
+                        language
+                            .or(self.sheet_language())
+                            .unwrap_or(crate::rooms::LabelLanguage::En),
                         &assumptions,
                     )?,
                 });
             }
-            Command::SpaceCheck { plan, floors, market, language } => {
+            Command::SpaceCheck {
+                plan,
+                floors,
+                market,
+                language,
+            } => {
                 return Ok(Outcome::Measurement {
                     result: self.space_check(plan, &floors, market.as_deref(), language)?,
                 });
             }
             Command::Symbol(spec) => {
-                return Ok(Outcome::Added { handles: self.draft_symbol(spec)? });
+                return Ok(Outcome::Added {
+                    handles: self.draft_symbol(spec)?,
+                });
             }
             Command::CompareRevisions {
                 other_path,

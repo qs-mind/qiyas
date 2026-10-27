@@ -1,7 +1,6 @@
+use crate::measurement_fixture as fixture;
 use qiyas_core::{Session, Source};
 use serde_json::json;
-#[path = "support/measurement_fixture.rs"]
-mod fixture;
 
 #[test]
 fn explain_preserves_cited_dimensions_confidence_and_undo_history() {

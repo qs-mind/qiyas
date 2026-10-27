@@ -1700,5 +1700,4 @@ fn picks_say_what_kind_of_entity_they_are() {
     );
 }
 
-#[path = "../../../tests/support/performance.rs"]
-mod performance;
+use crate::performance;

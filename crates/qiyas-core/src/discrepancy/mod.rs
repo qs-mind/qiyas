@@ -106,7 +106,7 @@ impl Session {
                 );
                 let mut c = finding(
                     ConflictKind::QuantityMismatch,
-                    &crate::second_reading::conflict_key(item.base_code()),
+                    &crate::second_reading::conflict_key(&item.code),
                     reason,
                     reason_ar,
                 );
@@ -215,7 +215,8 @@ impl Session {
                 }
                 for g in report.items.iter().filter(|g| {
                     c.boq_code.as_deref() == Some(g.base_code())
-                        || c.measurements.contains(&format!("generated:{}", g.base_code()))
+                        || c.measurements
+                            .contains(&format!("generated:{}", g.base_code()))
                 }) {
                     citations.extend(g.mapping_citations.clone());
                     for l in &g.lines {
@@ -266,7 +267,13 @@ impl Session {
                     ..Default::default()
                 });
             }
-            if let Some(old) = self.conflicts.iter().find(|old| old.id == c.id) {
+            if let Some(old) = self.conflicts.iter().find(|old| {
+                old.id == c.id
+                    && (!c.hash_key.contains("|second_reading|")
+                        || (old.expected == c.expected
+                            && old.found == c.found
+                            && old.unit == c.unit))
+            }) {
                 c.status = old.status;
                 c.note = old.note.clone();
                 c.created = old.created.clone();

@@ -10,6 +10,8 @@ mod deliverables;
 mod dimensions;
 #[path = "export.rs"]
 mod export;
+#[path = "../../qiyas-core/tests/support/measurement_fixture.rs"]
+mod fixture;
 #[path = "goal_u_exports.rs"]
 mod goal_u_exports;
 #[path = "import.rs"]

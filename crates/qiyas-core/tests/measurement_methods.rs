@@ -4,8 +4,7 @@ use qiyas_core::Session;
 use serde_json::json;
 use std::fs;
 
-#[path = "support/measurement_fixture.rs"]
-mod fixture;
+use crate::measurement_fixture as fixture;
 
 #[test]
 fn names_need_no_file_and_files_are_resolved_by_declared_name() {

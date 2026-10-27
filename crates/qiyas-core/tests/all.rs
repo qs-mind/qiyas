@@ -74,6 +74,8 @@ mod layouts;
 mod measure;
 #[path = "measurement.rs"]
 mod measurement;
+#[path = "support/measurement_fixture.rs"]
+mod measurement_fixture;
 #[path = "measurement_methods.rs"]
 mod measurement_methods;
 #[path = "modify.rs"]
@@ -106,6 +108,8 @@ mod own_output;
 mod param;
 #[path = "pdf.rs"]
 mod pdf;
+#[path = "../../../tests/support/performance.rs"]
+mod performance;
 #[path = "pick_index_lazy.rs"]
 mod pick_index_lazy;
 #[path = "pick_polygon.rs"]
@@ -172,6 +176,8 @@ mod viewports;
 mod views;
 #[path = "w3_output.rs"]
 mod w3_output;
+#[path = "w5_drafting.rs"]
+mod w5_drafting;
 #[path = "wall_copy_mirror.rs"]
 mod wall_copy_mirror;
 #[path = "wall_defaults.rs"]
@@ -186,8 +192,6 @@ mod wall_rollback;
 mod wall_systems;
 #[path = "walls.rs"]
 mod walls;
-#[path = "w5_drafting.rs"]
-mod w5_drafting;
 #[path = "xref.rs"]
 mod xref;
 

@@ -82,11 +82,25 @@ pub fn normalise_market(text: &str) -> Option<&'static str> {
     if has(&["egypt", "cairo", "مصر", "القاهرة", "ecp"]) {
         Some("egypt")
     } else if has(&[
-        "ksa", "saudi", "riyadh", "jeddah", "sbc", "السعود", "الرياض", "جدة",
+        "ksa",
+        "saudi",
+        "riyadh",
+        "jeddah",
+        "sbc",
+        "السعود",
+        "الرياض",
+        "جدة",
     ]) {
         Some("ksa")
     } else if has(&[
-        "uae", "emirates", "dubai", "abu dhabi", "sharjah", "الإمارات", "دبي", "أبوظبي",
+        "uae",
+        "emirates",
+        "dubai",
+        "abu dhabi",
+        "sharjah",
+        "الإمارات",
+        "دبي",
+        "أبوظبي",
     ]) {
         Some("uae")
     } else {
@@ -186,12 +200,16 @@ pub fn check_register() -> Vec<String> {
                     ));
                 }
             }
-            other => problems.push(format!("{at}: basis {other:?} is neither code nor practice_default")),
+            other => problems.push(format!(
+                "{at}: basis {other:?} is neither code nor practice_default"
+            )),
         }
     }
     for id in limit_ids() {
         if !limits().iter().any(|l| l.id == id && l.market == "any") {
-            problems.push(format!("limit {id}: no practice default for markets without a value"));
+            problems.push(format!(
+                "limit {id}: no practice default for markets without a value"
+            ));
         }
     }
     if let Some(markets) = register()["markets"].as_object() {
@@ -205,7 +223,10 @@ pub fn check_register() -> Vec<String> {
                     }
                 }
                 for field in ["official_url", "evidence_url"] {
-                    if !code[field].as_str().is_some_and(|u| u.starts_with("https://")) {
+                    if !code[field]
+                        .as_str()
+                        .is_some_and(|u| u.starts_with("https://"))
+                    {
                         problems.push(format!("{at}: {field} must be an https address"));
                     }
                 }
@@ -364,8 +385,22 @@ pub fn room_kind(name: &str) -> (Option<&'static str>, bool) {
 
 /// The kinds the rules may name (a closed set so code can match on them).
 pub const KINDS: [&str; 16] = [
-    "stair", "guest_wc", "bathroom", "wc", "kitchen", "dining", "majlis", "reception", "living",
-    "dressing", "bedroom", "corridor", "lobby", "utility", "garage", "balcony",
+    "stair",
+    "guest_wc",
+    "bathroom",
+    "wc",
+    "kitchen",
+    "dining",
+    "majlis",
+    "reception",
+    "living",
+    "dressing",
+    "bedroom",
+    "corridor",
+    "lobby",
+    "utility",
+    "garage",
+    "balcony",
 ];
 
 /// A space-planning threshold (practice default) by id.
@@ -398,10 +433,18 @@ pub fn codes_of(market: &str) -> Vec<Value> {
 /// The lines Mizan puts in a sheet's general notes: the status, the responsibility notice, the
 /// codes applied for the market, the practice-default line and the numbered assumptions.
 /// Never mentions anything but the data. Returns English or Arabic lines.
-pub fn general_notes(market: Option<&str>, language: LabelLanguage, assumptions: &[String]) -> Vec<String> {
+pub fn general_notes(
+    market: Option<&str>,
+    language: LabelLanguage,
+    assumptions: &[String],
+) -> Vec<String> {
     let notes = &standards()["general_notes"];
     let pick = |field: &str| -> String {
-        let key = if language == LabelLanguage::Ar { "ar" } else { "en" };
+        let key = if language == LabelLanguage::Ar {
+            "ar"
+        } else {
+            "en"
+        };
         notes[field][key].as_str().unwrap_or("").to_string()
     };
     let digits = |text: String| {
@@ -415,7 +458,11 @@ pub fn general_notes(market: Option<&str>, language: LabelLanguage, assumptions:
     let market = market.and_then(normalise_market);
     let codes = market.map(codes_of).unwrap_or_default();
     if !codes.is_empty() {
-        let title = if language == LabelLanguage::Ar { "title_ar" } else { "title_en" };
+        let title = if language == LabelLanguage::Ar {
+            "title_ar"
+        } else {
+            "title_en"
+        };
         let names: Vec<&str> = codes.iter().filter_map(|c| c[title].as_str()).collect();
         lines.push(format!("{} {}", pick("codes_prefix"), names.join("; ")));
     }

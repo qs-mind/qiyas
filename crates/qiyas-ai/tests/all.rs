@@ -22,6 +22,8 @@ mod goal_u_connection;
 mod key_safety;
 #[path = "mcp.rs"]
 mod mcp;
+#[path = "support/scripted.rs"]
+mod scripted;
 #[path = "surface.rs"]
 mod surface;
 #[path = "takeoff_eval.rs"]

@@ -3,8 +3,7 @@ use qiyas_ai::{surface, ToolOutput};
 use qiyas_core::{Session, Source};
 use serde_json::{json, Value};
 
-#[path = "support/scripted.rs"]
-mod scripted;
+use crate::scripted;
 
 fn input(op: &str, args: Value) -> Value {
     json!({"op":op,"args":args.to_string()})
