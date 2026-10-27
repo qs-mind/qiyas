@@ -85,6 +85,12 @@ pub enum Command {
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type":"measurement","kind":"report"}))]
     Measurement(Box<crate::measurement::MeasurementCommand>),
+    /// Records or clears the blind second reading of a generated BOQ quantity. Qiyas runs it
+    /// itself after a fresh reader measured the item without seeing the first quantity; a model
+    /// cannot write a reading.
+    #[schemars(extend("x-category" = "takeoff", "x-internal" = true))]
+    #[schemars(example = json!({"type":"second_reading","kind":"record","code":"03.01","quantity":12.5}))]
+    SecondReading(Box<crate::second_reading::SecondReadingCommand>),
     /// Read drawing evidence through data-defined rules; define, test, apply and review typed
     /// recognition. Physical extraction properties use metres, coordinates use drawing units.
     #[schemars(extend("x-category" = "objects"))]
@@ -1555,6 +1561,7 @@ impl Command {
                         | "dimension"
                         | "recognition"
                         | "measurement"
+                        | "second_reading"
                         | "project"
                         | "deliverable"
                 ) =>
@@ -1575,6 +1582,7 @@ impl Command {
             Command::Check { .. } | Command::DefineCheck { .. } => Some(Part::Document { tables: true, takeoff: false }),
             Command::Measurement(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
             Command::Recognition(command) => if command.is_read() {None} else {Some(Part::Document {tables:true,takeoff:false})},
+            Command::SecondReading(_) => Some(Part::Document {tables:true,takeoff:false}),
             Command::SetLayerHidden { .. }
             | Command::IsolateLayer { .. }
             | Command::UnisolateLayers
@@ -2070,6 +2078,11 @@ impl Session {
             Command::Measurement(command) => {
                 return Ok(Outcome::Measurement {
                     result: self.run_measurement(*command)?,
+                });
+            }
+            Command::SecondReading(command) => {
+                return Ok(Outcome::Measurement {
+                    result: self.run_second_reading(*command)?,
                 });
             }
             Command::Recognition(command) => {

@@ -30,6 +30,7 @@ pub(crate) fn write_contents(
             "Coverage",
             "Method",
             "Source / clause",
+            "Second reading",
         ],
         &bold,
     )?;
@@ -38,8 +39,12 @@ pub(crate) fn write_contents(
     for column in [1, 2, 7, 8, 9, 10] {
         sheet.set_column_format(column, &Format::new().set_text_wrap())?;
     }
-    sheet.set_print_area(0, 0, report.items.len() as u32, 10)?;
-    for (index, item) in report.items.iter().enumerate() {
+    // An item whose second reading differs is a query, not a BOQ row; its working stays in the
+    // dimension sheets below.
+    let boq_items: Vec<_> = report.items.iter().filter(|i| !i.second_differs()).collect();
+    sheet.set_print_area(0, 0, boq_items.len() as u32, 11)?;
+    sheet.set_column_width(11, 28)?;
+    for (index, item) in boq_items.into_iter().enumerate() {
         let row = (index + 1) as u32;
         sheet.write_string(row, 0, &item.code)?;
         sheet.write_string(row, 1, &item.description_en)?;
@@ -82,6 +87,7 @@ pub(crate) fn write_contents(
                 .collect::<Vec<_>>()
                 .join("; "),
         )?;
+        sheet.write_string(row, 11, qiyas_core::second_reading::item_label(item, false))?;
     }
     let sheet = book.add_worksheet().set_name("Dimension sheets")?;
     sheet.write_row_with_format(

@@ -75,6 +75,51 @@ pub(super) fn finding(
 }
 
 impl Session {
+    /// One query per generated item whose blind second reading differs from the first. The
+    /// item stays out of the BOQ until the engineer answers it (`resolve_conflict`).
+    pub(crate) fn second_reading_conflicts(
+        &self,
+        report: &crate::measurement::MeasurementReport,
+    ) -> Vec<Conflict> {
+        report
+            .items
+            .iter()
+            .filter(|i| {
+                i.second_reading.as_ref().is_some_and(|s| {
+                    matches!(
+                        s.status,
+                        crate::second_reading::SecondStatus::Differs
+                            | crate::second_reading::SecondStatus::Accepted
+                    )
+                })
+            })
+            .map(|item| {
+                let read = item.second_reading.as_ref().expect("filtered");
+                let unit = crate::deliverables::display_unit(&item.unit);
+                let reason = format!(
+                    "{}: the first reading is {:.2} {unit} and the second, made without it, is {:.2} {unit} (allowed difference {}%)",
+                    item.description_en, read.first, read.second, read.tolerance_percent
+                );
+                let reason_ar = format!(
+                    "{}: القراءة الأولى {:.2} {unit} والقراءة الثانية، دون الاطلاع عليها، {:.2} {unit} (الفرق المسموح {}%)",
+                    item.description_ar, read.first, read.second, read.tolerance_percent
+                );
+                let mut c = finding(
+                    ConflictKind::QuantityMismatch,
+                    &crate::second_reading::conflict_key(item.base_code()),
+                    reason,
+                    reason_ar,
+                );
+                c.boq_code = Some(item.base_code().to_string());
+                c.measurements = vec![format!("generated:{}", item.base_code())];
+                c.expected = Some(read.first);
+                c.found = Some(read.second);
+                c.unit = item.unit.clone();
+                c
+            })
+            .collect()
+    }
+
     pub fn evaluate_check_rules(&self) -> Result<Vec<Conflict>, CoreError> {
         rules::evaluate(self)
     }
@@ -149,6 +194,7 @@ impl Session {
                     .any(|t| t.differs(c.expected.unwrap_or(0.), c.found.unwrap_or(0.)))
         });
         conflicts.extend(self.evaluate_check_rules()?);
+        conflicts.extend(self.second_reading_conflicts(&report));
         for c in &mut conflicts {
             if c.query.is_none() {
                 let mut refs = vec![];

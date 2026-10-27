@@ -543,6 +543,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 base_code: String::new(),
                 base_description_en: String::new(),
                 base_description_ar: String::new(),
+                second_reading: None,
             };
             if item.unit != *unit {
                 return Err(invalid(format!(

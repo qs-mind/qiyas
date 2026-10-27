@@ -865,3 +865,152 @@ fn the_arabic_boq_reads_in_arabic_words_digits_and_units() {
     // The status line is Arabic too.
     assert_eq!(report.status_row().cells[0], "الحالة: للمراجعة");
 }
+
+// ---- W6: the blind second reading ----
+
+fn item_code(s: &Session, quantity: f64, starts: &str) -> String {
+    s.measurement_report()
+        .unwrap()
+        .items
+        .iter()
+        .find(|i| i.code.starts_with(starts) && i.quantity == quantity)
+        .unwrap_or_else(|| panic!("no item {starts} with quantity {quantity}"))
+        .code
+        .clone()
+}
+fn record(s: &mut Session, code: &str, quantity: f64) -> Value {
+    match s
+        .run(qiyas_core::Command::SecondReading(Box::new(
+            qiyas_core::second_reading::SecondReadingCommand::Record {
+                code: code.into(),
+                quantity,
+            },
+        )))
+        .unwrap()
+    {
+        Outcome::Measurement { result } => result,
+        other => panic!("expected a measurement outcome, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_reader_is_shown_each_item_but_never_its_quantity() {
+    let (_dir, s) = doors_and_floor(6);
+    let brief = s.second_reading_brief(None).unwrap();
+    assert_eq!(brief.len(), 3, "{brief:?}");
+    let text = serde_json::to_string(&brief).unwrap();
+    assert!(text.contains("900 × 2100 mm"));
+    assert!(!text.contains("quantity"), "the brief holds no quantity: {text}");
+    for b in &brief {
+        assert!(!b.unit.is_empty() && !b.rule.is_empty(), "{b:?}");
+    }
+    assert_eq!(s.second_reading_brief(Some(1)).unwrap().len(), 1);
+}
+
+#[test]
+fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the_boq() {
+    for units in UNITS {
+        let (_dir, mut s) = doors_and_floor(units);
+        let agreeing = item_code(&s, 2.0, "A-D01");
+        let differing = item_code(&s, 1.0, "A-D01");
+        let window = item_code(&s, 1.0, "A-W01");
+        let r = record(&mut s, &agreeing, 2.0);
+        assert_eq!(r["agrees"], json!(true), "units {units}");
+        let r = record(&mut s, &differing, 2.0);
+        assert_eq!(r["agrees"], json!(false), "units {units}");
+
+        let items = s.measurement_report().unwrap().items;
+        let find = |c: &str| items.iter().find(|i| i.code == c).unwrap();
+        assert!(!find(&agreeing).second_differs());
+        assert!(find(&differing).second_differs());
+        assert!(find(&window).second_reading.is_none());
+
+        let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
+        let codes: Vec<_> = boq.rows.iter().map(|r| r["code"].as_str().unwrap()).collect();
+        assert!(codes.contains(&agreeing.as_str()), "{codes:?}");
+        assert!(!codes.contains(&differing.as_str()), "{codes:?}");
+        assert!(boq.warnings.iter().any(|w| w.contains(&differing)));
+        let col = boq
+            .layout
+            .columns
+            .iter()
+            .find(|c| c.field == "second_reading_text")
+            .expect("the second reading column");
+        assert_eq!(col.heading.en, "Second reading");
+        let by_code = |c: &str| {
+            boq.rows
+                .iter()
+                .find(|r| r["code"] == c)
+                .map(|r| r["second_reading_text"].as_str().unwrap().to_string())
+        };
+        assert_eq!(by_code(&agreeing).unwrap(), "Second reading agrees");
+        assert_eq!(by_code(&window).unwrap(), "Second reading not checked");
+        let ar = deliverables::drawing(&s, Kind::Boq, Language::Ar, None).unwrap();
+        assert!(ar
+            .rows
+            .iter()
+            .any(|r| r["second_reading_text"] == "القراءة الثانية متطابقة"));
+
+        // The disagreement is a query with both readings.
+        s.run(qiyas_core::Command::Check { tolerance: None }).unwrap();
+        let q = s
+            .conflicts
+            .iter()
+            .find(|c| c.hash_key.contains("second_reading"))
+            .expect("a query for the differing item");
+        assert_eq!(q.expected, Some(1.0));
+        assert_eq!(q.found, Some(2.0));
+        assert!(q.reason.contains("first reading") && q.reason.contains("second"));
+        assert!(q.query.is_some());
+
+        // The engineer answers the query: the item goes in, with the words that say so.
+        let id = q.id.clone();
+        s.run(qiyas_core::Command::ResolveConflict {
+            id,
+            status: qiyas_core::ConflictStatus::Resolved,
+            note: "Checked on site".into(),
+        })
+        .unwrap();
+        let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
+        assert!(boq.rows.iter().any(|r| r["code"] == differing.as_str()));
+    }
+}
+
+#[test]
+fn a_second_reading_is_not_checked_again_once_the_quantity_has_changed() {
+    let (_dir, mut s) = doors_and_floor(6);
+    let code = item_code(&s, 2.0, "A-D01");
+    record(&mut s, &code, 2.0);
+    let k = 1.0 / s.drawing.units.to_metres();
+    run(
+        &mut s,
+        json!({"type":"walls","runs":[{"points":[[0,5.0*k],[20.0*k,5.0*k]]}],"thickness":0.2*k,
+            "openings":[{"run":0,"at":2.0*k,"width":0.9*k,"kind":"door"}]}),
+    );
+    let report = s.measurement_report().unwrap();
+    let item = report.items.iter().find(|i| i.code == code).unwrap();
+    assert_eq!(item.quantity, 3.0);
+    assert!(item.second_reading.is_none(), "an edited quantity is read again");
+    // Clearing forgets a reading.
+    let code = item_code(&s, 3.0, "A-D01");
+    record(&mut s, &code, 3.0);
+    s.run(qiyas_core::Command::SecondReading(Box::new(
+        qiyas_core::second_reading::SecondReadingCommand::Clear { code: None },
+    )))
+    .unwrap();
+    assert!(s
+        .measurement_report()
+        .unwrap()
+        .items
+        .iter()
+        .all(|i| i.second_reading.is_none()));
+}
+
+#[test]
+fn the_tolerance_is_set_per_unit_by_code() {
+    use qiyas_core::second_reading::{agrees, tolerance_percent};
+    assert_eq!(tolerance_percent("pcs"), 0.0);
+    assert!(tolerance_percent("m3") > tolerance_percent("m"));
+    assert!(agrees(10.0, 10.0, "pcs") && !agrees(10.0, 11.0, "pcs"));
+    assert!(agrees(100.0, 100.5, "m") && !agrees(100.0, 103.0, "m"));
+}

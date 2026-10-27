@@ -276,6 +276,10 @@ pub struct GeneratedItem {
     pub base_description_en: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub base_description_ar: String,
+    /// The blind second reading of this quantity, when one was made and is still current. It is
+    /// attached when the report is read (`second_reading.rs`), never stored with the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_reading: Option<crate::second_reading::SecondRead>,
 }
 /// The dimension line that says a deduction was limited to the gross quantity.
 pub(crate) const LIMITED_LINE: &str = "Deductions limited to the gross quantity";
@@ -288,6 +292,14 @@ impl GeneratedItem {
         } else {
             &self.base_code
         }
+    }
+
+    /// The second reading differs beyond its tolerance and nobody has answered the query:
+    /// the item stays out of the BOQ.
+    pub fn second_differs(&self) -> bool {
+        self.second_reading
+            .as_ref()
+            .is_some_and(|s| s.status == crate::second_reading::SecondStatus::Differs)
     }
 
     pub fn methods(&self) -> String {
@@ -517,6 +529,7 @@ impl Session {
             }
         }
         report.variation = self.variation()?;
+        self.attach_second_readings(&mut report)?;
         let unavailable: Vec<_> = self
             .takeoff
             .items
@@ -647,6 +660,7 @@ impl MeasurementReport {
                 first.description_en = item.base_description_en.clone();
                 first.description_ar = item.base_description_ar.clone();
                 first.base_code.clear();
+                first.second_reading = None;
                 out.push(first);
             }
         }

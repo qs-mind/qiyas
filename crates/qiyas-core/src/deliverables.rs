@@ -637,7 +637,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
     if kind == Kind::Boq {
         return items
             .iter()
-            .filter(|i| !i.informational)
+            .filter(|i| !i.informational && !i.second_differs())
             .map(|i| {
                 let mut v = json!(i);
                 v["drawing"] = json!(drawing);
@@ -788,6 +788,7 @@ pub fn drawing(
     }
     localized(&mut rows, language);
     if kind == Kind::Boq {
+        second_reading_column(&mut layout, &mut rows, &measured.items, language, &mut warnings);
         drop_foreign_columns(&mut layout, &rows, language, &mut warnings);
     }
     Ok(Report {
@@ -797,6 +798,47 @@ pub fn drawing(
         rows,
         warnings,
     })
+}
+/// The BOQ says, line by line, whether a fresh reader measured the same quantity again. The
+/// column is left out when nothing was checked. A line whose second reading differs is not a
+/// BOQ row at all (it is a query); the report says which.
+fn second_reading_column(
+    layout: &mut Layout,
+    rows: &mut [Value],
+    items: &[crate::measurement::GeneratedItem],
+    language: Language,
+    warnings: &mut Vec<String>,
+) {
+    let arabic = language == Language::Ar;
+    for item in items.iter().filter(|i| i.second_differs()) {
+        let (first, second) = item
+            .second_reading
+            .as_ref()
+            .map_or((0.0, 0.0), |s| (s.first, s.second));
+        warnings.push(format!(
+            "BOQ line {} is left out: the second reading ({second:.2}) differs from the first ({first:.2}). It is a query to answer",
+            item.code
+        ));
+    }
+    if layout.client.is_some() || !items.iter().any(|i| i.second_reading.is_some()) {
+        return;
+    }
+    for row in rows.iter_mut() {
+        let label = items
+            .iter()
+            .find(|i| row["code"].as_str() == Some(i.code.as_str()))
+            .map_or("", |i| crate::second_reading::item_label(i, arabic));
+        row["second_reading_text"] = json!(label);
+    }
+    layout.columns.push(Column {
+        field: "second_reading_text".into(),
+        heading: Heading {
+            en: "Second reading".into(),
+            ar: "القراءة الثانية".into(),
+        },
+        width: 2.0,
+        total: false,
+    });
 }
 pub fn project(
     set: &SheetSet,
