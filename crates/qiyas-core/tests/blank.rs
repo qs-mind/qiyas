@@ -82,6 +82,41 @@ fn a_drawn_line_survives_save_as_and_reopening() {
     assert_eq!(lines.len(), 1);
 }
 
+/// Note 68 (26 October 2026): the founder saved an untitled drawing and thought no `.qiyas` file
+/// was written. It is: `<name>.qiyas`, the drawing's stem (not `<name>.dwg.qiyas`). The take-off
+/// measured in the untitled drawing must be in it and come back on reopening.
+#[test]
+fn an_untitled_drawings_take_off_is_written_beside_its_first_save_and_comes_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let placeholder = dir.path().join("config").join("Untitled-5.dwg");
+    std::fs::create_dir_all(placeholder.parent().unwrap()).unwrap();
+    let mut s = Session::new_blank(&placeholder, 6);
+    s.run(Command::Draw(DrawSpec::Line {
+        a: [0.0, 0.0],
+        b: [3.0, 4.0],
+    }))
+    .unwrap();
+    s.run(Command::MeasureDistance {
+        points: vec![[0.0, 0.0], [3.0, 4.0]].into(),
+    })
+    .unwrap();
+    assert_eq!(s.takeoff.items.len(), 1);
+
+    let target = dir.path().join("Cairo villa.dwg");
+    s.save_as(&target).unwrap();
+    let sidecar = dir.path().join("Cairo villa.qiyas");
+    assert!(sidecar.exists(), "the project file sits beside the drawing");
+    assert!(
+        !placeholder.with_extension("qiyas").exists(),
+        "nothing is left beside the placeholder"
+    );
+    assert!(!placeholder.exists());
+
+    let again = Session::open(&target).unwrap();
+    assert_eq!(again.takeoff.items.len(), 1);
+    assert!((again.takeoff.items[0].value - 5.0).abs() < 1e-9);
+}
+
 /// The segments the screen draws for a circle of `radius_m` metres in a new drawing of INSUNITS
 /// `insunits` (`per_metre` drawing units a metre).
 fn circle_segments(insunits: i16, per_metre: f64, radius_m: f64) -> usize {
