@@ -61,6 +61,20 @@ pub struct Limit {
     pub note: Option<String>,
     #[serde(default)]
     pub rationale: Option<String>,
+    #[serde(default)]
+    pub evidence_read: bool,
+    /// An unverified reference, never evidence for a code requirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_to_confirm: Option<UnconfirmedReference>,
+}
+
+/// A translation reference retained so the engineer can confirm the Arabic text.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct UnconfirmedReference {
+    pub code: String,
+    pub clause: String,
+    pub source_url: String,
+    pub note: String,
 }
 
 /// Every limit of the register.
@@ -598,7 +612,13 @@ mod tests {
     #[test]
     fn a_market_without_its_own_value_gets_the_labelled_default() {
         let egypt = limit_for("stair_riser_max_m", Some("Egypt")).unwrap();
-        assert_eq!(egypt.limit.basis, "code");
+        assert_eq!(egypt.limit.basis, "practice_default");
+        assert!(!egypt.limit.evidence_read);
+        assert!(!egypt.fallback);
+        assert_eq!(
+            egypt.json()["reference_to_confirm"]["clause"],
+            "Article 100"
+        );
         assert!((egypt.value() - 0.17).abs() < 1e-12);
         let ksa = limit_for("stair_riser_max_m", Some("ksa")).unwrap();
         assert_eq!(ksa.limit.basis, "practice_default");

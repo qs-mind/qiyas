@@ -646,7 +646,11 @@ impl MeasurementReport {
     /// "Doors" row is compared with all the doors and not with each size.
     fn rolled_up(&self) -> Vec<GeneratedItem> {
         let mut out: Vec<GeneratedItem> = Vec::new();
-        for item in self.items.iter().filter(|item| !item.informational) {
+        for item in self
+            .items
+            .iter()
+            .filter(|item| !item.informational && !item.second_differs())
+        {
             if item.base_code.is_empty() {
                 out.push(item.clone());
             } else if let Some(sum) = out
@@ -726,6 +730,26 @@ impl MeasurementReport {
                     .into_iter()
                     .collect::<Vec<_>>()
                     .join("; ");
+                let excluded: Vec<&str> = self
+                    .items
+                    .iter()
+                    .filter(|i| {
+                        !i.informational
+                            && i.second_differs()
+                            && i.base_code() == item.code
+                            && i.unit == item.unit
+                    })
+                    .map(|i| i.code.as_str())
+                    .collect();
+                if !excluded.is_empty() {
+                    if !m.note.is_empty() {
+                        m.note.push_str("; ");
+                    }
+                    m.note.push_str(&format!(
+                        "Incomplete: second reading differs; excluded {} pending query resolution",
+                        excluded.join(", ")
+                    ));
+                }
                 m
             })
             .collect()

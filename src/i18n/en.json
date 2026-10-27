@@ -27,6 +27,7 @@
   "save": "Save",
   "saveAs": "Save as",
   "exportTakeoff": "Export take-off",
+  "exportEvidence": "Export evidence PDF",
   "undo": "Undo",
   "redo": "Redo",
   "select": "Select",

@@ -423,3 +423,61 @@ fn code_register_never_presents_an_unsourced_value_as_code() {
         }
     }
 }
+
+#[test]
+fn egypt_translation_limits_are_unverified_defaults_with_references_to_confirm() {
+    let egypt: Vec<_> = limits().iter().filter(|l| l.market == "egypt").collect();
+    assert_eq!(egypt.len(), 22);
+    for limit in egypt {
+        assert_eq!(limit.basis, "practice_default", "{}", limit.id);
+        assert!(!limit.evidence_read);
+        assert!(limit.code.is_none() && limit.clause.is_none() && limit.source_url.is_none());
+        let reference = limit.reference_to_confirm.as_ref().unwrap();
+        assert_eq!(
+            reference.code,
+            "Egypt Building Law 119/2008, executive regulations"
+        );
+        assert!(reference.clause.starts_with("Article "));
+        assert_eq!(
+            reference.source_url,
+            "https://eg.andersen.com/translation-of-law-no-119-of-2008/"
+        );
+        assert_eq!(
+            reference.note,
+            "translation; confirm against the Arabic text of the executive regulations"
+        );
+        let resolved = qiyas_core::drafting_standards::limit_for(&limit.id, Some("egypt"))
+            .unwrap()
+            .json();
+        assert_eq!(resolved["reference_to_confirm"]["clause"], reference.clause);
+        assert_eq!(resolved["evidence_read"], false);
+    }
+    let register = qiyas_core::drafting_standards::register();
+    let law = &register["markets"]["egypt"]["codes"][0];
+    assert_eq!(law["id"], "egypt_building_law_119");
+    assert_eq!(law["evidence_read"], false);
+    assert_eq!(law["status"], "named_in_source");
+    assert!(check_register().is_empty(), "{:?}", check_register());
+}
+
+#[test]
+fn practice_defaults_are_labelled_and_never_report_code_errors() {
+    for market in [None, Some("egypt"), Some("ksa"), Some("uae")] {
+        let report = run_checks(&bad_plan(), market).unwrap();
+        assert!(!report.findings.is_empty());
+        assert_eq!(report.errors, 0);
+        for finding in &report.findings {
+            assert_eq!(finding.basis, "practice_default");
+            assert_ne!(finding.severity, "error");
+            assert!(finding.message.contains("practice default"));
+            assert!(finding.message_ar.contains("قيمة ممارسة معتادة"));
+            assert!(finding.source.is_none() && finding.source_url.is_none());
+        }
+        let circulation = report
+            .findings
+            .iter()
+            .find(|f| f.rule == "circulation_share")
+            .unwrap();
+        assert_eq!(circulation.severity, "warning");
+    }
+}

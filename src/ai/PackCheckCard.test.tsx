@@ -173,11 +173,31 @@ test("Mizan shows the card before the first take-off request and removes it when
   const view = render(<AssistantPanel {...props} />);
   expect(screen.queryByRole("region", { name: en["ai.packCheck.title"] })).toBeNull();
   expect(invoke).not.toHaveBeenCalled();
-  view.rerender(<AssistantPanel {...props} drawing={{ path: "plan.dwg", revision: 1 }} />);
+  view.rerender(<AssistantPanel {...props} drawing={{ path: "plan.dwg", revision: 1, hasTakeoff: false }} />);
   await screen.findByText(en["ai.packCheck.fix"]);
   const card = screen.getByRole("region", { name: en["ai.packCheck.title"] });
   expect(card.compareDocumentPosition(screen.getByText(en["ai.emptyTitle"])) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(props.assistant.send).not.toHaveBeenCalled();
   view.rerender(<AssistantPanel {...props} />);
   expect(screen.queryByRole("region", { name: en["ai.packCheck.title"] })).toBeNull();
+});
+
+test("Mizan hides the pack check once a take-off exists and restores it when the take-off is removed", async () => {
+  invoke.mockResolvedValue(reply(ready));
+  const props = {
+    assistant: { transcript: EMPTY, busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn() },
+    onShow: vi.fn(), onUndo: vi.fn(), onSettings: vi.fn(),
+  };
+  const drawing = { path: "plan.dwg", revision: 1, hasTakeoff: true };
+  const view = render(<AssistantPanel {...props} drawing={drawing} />);
+  expect(screen.queryByRole("region", { name: en["ai.packCheck.title"] })).toBeNull();
+  expect(invoke).not.toHaveBeenCalled();
+
+  view.rerender(<AssistantPanel {...props} drawing={{ ...drawing, revision: 2, hasTakeoff: false }} />);
+  await screen.findByText(en["ai.packCheck.ready"]);
+  expect(invoke).toHaveBeenCalledTimes(1);
+
+  view.rerender(<AssistantPanel {...props} drawing={{ ...drawing, revision: 3 }} />);
+  expect(screen.queryByRole("region", { name: en["ai.packCheck.title"] })).toBeNull();
+  expect(invoke).toHaveBeenCalledTimes(1);
 });

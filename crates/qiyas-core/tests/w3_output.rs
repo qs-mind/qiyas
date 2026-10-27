@@ -980,6 +980,16 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
         .unwrap();
         let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
         assert!(boq.rows.iter().any(|r| r["code"] == differing.as_str()));
+        let comparison = s
+            .measurement_report()
+            .unwrap()
+            .comparison_measurements(s.drawing.units);
+        let doors = comparison
+            .iter()
+            .find(|m| m.boq_code.as_deref() == Some("A-D01"))
+            .unwrap();
+        assert_eq!(doors.shown, 3.0);
+        assert!(!doors.note.contains("Incomplete"));
     }
 }
 
@@ -1022,6 +1032,63 @@ fn resolving_one_size_disagreement_does_not_accept_another_size() {
         !boq.rows.iter().any(|r| r["code"] == first),
         "a new disagreement needs its own answer"
     );
+}
+
+#[test]
+fn comparison_excludes_disputed_items_and_labels_partial_opening_totals() {
+    for units in UNITS {
+        let (_dir, mut s) = doors_and_floor(units);
+        let agreeing = item_code(&s, 2.0, "A-D01");
+        let differing = item_code(&s, 1.0, "A-D01");
+        let window = item_code(&s, 1.0, "A-W01");
+        record(&mut s, &agreeing, 2.0);
+        record(&mut s, &differing, 2.0);
+        let mut report = s.measurement_report().unwrap();
+        let omitted_handles: Vec<_> = report
+            .items
+            .iter()
+            .find(|i| i.code == differing)
+            .unwrap()
+            .lines
+            .iter()
+            .flat_map(|l| l.sources.iter().map(|s| s.handle))
+            .collect();
+        // Either size can be first in the report; neither ordering may leak its quantity.
+        for _ in 0..2 {
+            let comparison = report.comparison_measurements(s.drawing.units);
+            let doors = comparison
+                .iter()
+                .find(|m| m.boq_code.as_deref() == Some("A-D01"))
+                .unwrap();
+            assert_eq!(doors.shown, 2.0);
+            assert!(doors.note.contains("Incomplete") && doors.note.contains(&differing));
+            assert!(doors.note.contains("second reading differs"));
+            assert!(omitted_handles.iter().all(|h| !doors.handles.contains(h)));
+            assert!(comparison
+                .iter()
+                .any(|m| m.boq_code.as_deref() == Some("A-W01")));
+            report.items.reverse();
+        }
+        // The same disagreement on an unsplit item excludes the entire comparison row.
+        report.items.retain(|i| i.code == differing);
+        report.items[0].base_code.clear();
+        assert!(report.comparison_measurements(s.drawing.units).is_empty());
+
+        record(&mut s, &agreeing, 3.0);
+        let comparison = s
+            .measurement_report()
+            .unwrap()
+            .comparison_measurements(s.drawing.units);
+        assert!(comparison
+            .iter()
+            .all(|m| m.boq_code.as_deref() != Some("A-D01")));
+        record(&mut s, &window, 2.0);
+        assert!(s
+            .measurement_report()
+            .unwrap()
+            .comparison_measurements(s.drawing.units)
+            .is_empty());
+    }
 }
 
 #[test]

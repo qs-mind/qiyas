@@ -9,7 +9,8 @@ import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
 import type { Batch } from "../viewport/batch";
-import type { ConversationSummary } from "../api";
+import type { ConversationSummary, Measurement, MeasurementReport } from "../api";
+import { row } from "../boq/testItems";
 
 // These integration tests mount the whole shell and drive several accessible dialogs each.
 // A loaded build machine can spend over five seconds in one test's DOM queries alone.
@@ -67,6 +68,9 @@ const core = vi.hoisted(() => ({
   /** The block edited in place, as drawing_info says. */
   blockEdit: null as string | null,
   hasBoq: false,
+  measurements: [] as Measurement[],
+  generated: { items: [], warnings: [] } as MeasurementReport,
+  evidenceError: null as string | null,
   batch: null as ArrayBuffer | null,
   batchVersion: 1,
   layers: ["0"],
@@ -100,12 +104,13 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "aliases":
         return {};
       case "recents":
-      case "takeoff":
       case "totals":
       case "conflicts":
       case "paper_views":
       case "measurement_methods":
         return [];
+      case "takeoff":
+        return core.measurements;
       case "ai_conversations":
         return core.savedConversations;
       case "pick_polygon":
@@ -137,7 +142,10 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (core.compareHold) await core.compareHold;
         return [];
       case "measurement_report":
-        return { items: [], warnings: [] };
+        return core.generated;
+      case "export_evidence":
+        if (core.evidenceError) throw core.evidenceError;
+        return { path: "/d/plan evidence.pdf", skipped: [] };
       case "boq":
         return core.hasBoq ? { source: "/d/bill.xlsx", imported: "", items: [], skipped_rows: 0 } : null;
       case "save_drawing_as":
@@ -376,6 +384,9 @@ beforeEach(() => {
   core.settings = {};
   core.blockEdit = null;
   core.hasBoq = false;
+  core.measurements = [];
+  core.generated = { items: [], warnings: [] };
+  core.evidenceError = null;
   core.batch = null;
   core.batchVersion = 1;
   core.layers = ["0"];
@@ -539,6 +550,49 @@ test("open → an autosave is asked about first → Discard deletes it, then the
   });
   await until(() => expect(core.packCheckCalls).toContainEqual({ workspace: 1 }));
   expect(await screen.findByText(en["ai.packCheck.ready"])).toBeTruthy();
+});
+
+test.each(["none", "imported BOQ", "manual", "generated"])("the pack check follows the drawing's take-off state: %s", async (state) => {
+  core.hasBoq = state === "imported BOQ";
+  if (state === "manual") core.measurements = [row("Wall", 12, "m", null)];
+  if (state === "generated") core.generated = {
+    items: [{ code: "A", description_en: "Wall", description_ar: "جدار", section: "Walls", trade: "Walls", unit: "m", quantity: 12, lines: [] }],
+    warnings: [],
+  };
+  await mount();
+  await clickOpen();
+  if (state === "none" || state === "imported BOQ") {
+    expect(await screen.findByText(en["ai.packCheck.ready"])).toBeTruthy();
+  } else {
+    await until(() => expect(screen.queryByRole("region", { name: en["ai.packCheck.title"] })).toBeNull());
+  }
+});
+
+test("Outputs exports the evidence PDF for the displayed drawing and names the written file in a toast", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
+  const disabled = await screen.findByRole("menuitem", { name: en.exportEvidence });
+  expect(disabled.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(disabled);
+  expect(core.calls.some((call) => call.startsWith("export_evidence"))).toBe(false);
+  fireEvent.keyDown(disabled, { key: "Escape" });
+  await until(() => expect(screen.queryByRole("menuitem", { name: en.exportEvidence })).toBeNull());
+
+  await clickOpen();
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: en.exportEvidence }));
+  await until(() => expect(core.calls).toContain('export_evidence {"path":null,"language":null,"workspace":1}'));
+  await expectToasts([en["export.done"].replace("{path}", "/d/plan evidence.pdf")]);
+});
+
+test("an evidence export failure uses the existing export error toast", async () => {
+  core.evidenceError = "private diagnostic";
+  await mount();
+  await clickOpen();
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: en.exportEvidence }));
+  await expectToasts([en["export.failed"].replace("{error}", en["err.unknown"])]);
+  expect(toasts().some((text) => text?.includes("plan evidence.pdf"))).toBe(false);
 });
 
 test("DIVIDE 5 answers the divide prompt once: one divide_along for the command, none for the next pick", async () => {

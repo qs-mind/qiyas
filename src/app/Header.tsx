@@ -95,7 +95,7 @@ export function Header({
     runScriptFile,
     scriptLine,
   } = drawings;
-  const { importBoqFile, compareNow, exportConflictsFile } = takeoff;
+  const { importBoqFile, compareNow, exportConflictsFile, exportEvidenceFile } = takeoff;
 
   return (
     // A running script: the ribbon waits (its Stop is beside the status bar).
@@ -194,7 +194,7 @@ export function Header({
         })}
       />
       <div className="prefs">
-        <OutputsMenu outputs={outputs} shown={shownOutput} onOpen={onOpenOutput} />
+        <OutputsMenu outputs={outputs} shown={shownOutput} onOpen={onOpenOutput} onExportEvidence={info ? exportEvidenceFile : undefined} />
         {/* One switch each: the language button names the other language in its own script; the
             theme button shows where it goes (a moon in light, a sun in dark). */}
         <button

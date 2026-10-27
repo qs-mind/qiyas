@@ -38,7 +38,7 @@ type Props = {
    *  one is `shown` it takes the conversation's place, and the box below stays. */
   artifact?: { shown: OutputId | null; node: ReactNode; onBack(): void };
   /** The drawing on screen and the same revision used by the take-off report. */
-  drawing?: { path: string; revision: unknown };
+  drawing?: { path: string; revision: unknown; hasTakeoff: boolean };
   /** The /compare command: ask for a BOQ and find its conflicts with the drawings. */
   onCompare?(): void;
   /** The /connect command and the empty chat's link: the "Connect an AI app" dialog. */
@@ -398,7 +398,7 @@ export const AssistantPanel = memo(function AssistantPanel({
       {history?.error && <p className="msg notice" role="alert">{uiError(history.error, lang)}</p>}
         <div className="assistant-thread">
         <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
-          {drawing && !shownOutput && <PackCheckCard
+          {drawing && !drawing.hasTakeoff && !shownOutput && <PackCheckCard
             key={`${assistant.workspace ?? "drawing"}:${drawing.path}`}
             drawing={drawing.path}
             workspace={assistant.workspace}

@@ -7,6 +7,7 @@ fn arabic_rules_use_the_three_tools_and_preserve_measurement_safeguards() {
         "qiyas_read",
         "qiyas_execute",
         "qiyas_capture",
+        "ونص لا يقل عن 2.5 مم على الورق",
         "source screen يريك الرسم فقط؛ اقرأ panel_state",
         "سلّم العناصر للمستخدم بـ qiyas_execute select",
         "كبّر بـ bounds حتى تُقرأ النصوص",

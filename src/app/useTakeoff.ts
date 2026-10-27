@@ -11,6 +11,7 @@ import {
   compare,
   conflicts as readConflicts,
   exportConflicts,
+  exportEvidence,
   importBoq,
   takeoff,
   totals,
@@ -230,6 +231,17 @@ export function useTakeoff({
     });
   }
 
+  /** Writes the marked source sheets to the backend's export folder, beside the BOQ. */
+  async function exportEvidenceFile() {
+    if (!info) return;
+    await run(async () => {
+      const result = await exportEvidence().catch((e) => {
+        throw userError(t("export.failed", { error: uiError(e) }));
+      });
+      setNotice(t("export.done", { path: result.path }));
+    });
+  }
+
   // Stable for the memoised conflicts panel.
   const compareRef = useRef(compareNow);
   compareRef.current = compareNow;
@@ -366,6 +378,7 @@ export function useTakeoff({
     compareNow,
     onCompare,
     exportConflictsFile,
+    exportEvidenceFile,
     onExportConflicts,
     selected,
     boqLinked,

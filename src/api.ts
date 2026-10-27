@@ -1328,6 +1328,10 @@ export const saveDrawingAs = (path: string, workspace?: number | null) => invoke
 /** Writes the take-off and its totals to an Excel workbook at `path`. */
 export const exportTakeoff = (path: string) => invoke<void>("export_takeoff", { path });
 
+/** Writes the generated BOQ's marked source sheets, beside the BOQ by default. */
+export const exportEvidence = (path?: string, language?: "en" | "ar", workspace?: number | null) =>
+  invoke<PlotOutput>("export_evidence", { path: path ?? null, language: language ?? null, ...(workspace == null ? {} : { workspace }) });
+
 /** Writes a table (from `extract_data`) to an Excel workbook at `path`: one sheet "Data". */
 export const exportTable = (path: string, columns: string[], rows: string[][]) =>
   invoke<void>("export_table", { path, columns, rows });

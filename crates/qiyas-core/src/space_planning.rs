@@ -162,6 +162,9 @@ pub struct SpaceFinding {
     pub basis: &'static str,
     /// The code and clause when the limit is a code requirement.
     pub source: Option<String>,
+    pub source_url: Option<String>,
+    /// Qualifications attached to the cited code limit.
+    pub caveat: Option<String>,
 }
 
 /// The result of the checks.
@@ -285,6 +288,22 @@ impl Ctx<'_> {
             ),
             None => ("practice_default", None, limit_value),
         };
+        let (severity, say) = if basis == "practice_default" {
+            (
+                if severity == "error" {
+                    "warning"
+                } else {
+                    severity
+                },
+                (
+                    format!("{} (practice default).", say.0),
+                    format!("{} (قيمة ممارسة معتادة).", say.1),
+                ),
+            )
+        } else {
+            (severity, say)
+        };
+        let cited = limit.filter(|l| l.limit.basis == "code");
         self.findings.push(SpaceFinding {
             rule,
             severity,
@@ -298,6 +317,8 @@ impl Ctx<'_> {
             limit: value,
             basis,
             source,
+            source_url: cited.and_then(|l| l.limit.source_url.clone()),
+            caveat: cited.and_then(|l| l.limit.note.clone()),
         });
     }
 }
@@ -1741,5 +1762,51 @@ impl Session {
             "name": f.name, "rooms": f.rooms.len(), "doors": f.doors.len(), "stairs": f.stairs.len()
         })).collect::<Vec<_>>());
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_findings_keep_the_citation_url_and_caveat() {
+        // A synthetic code limit tests the citation path without promoting unverified data.
+        let limit = ResolvedLimit {
+            limit: serde_json::from_value(json!({
+                "id":"test_width", "market":"egypt", "value":1.0, "unit":"m",
+                "basis":"code", "code":"Test code", "clause":"Test clause",
+                "source_url":"https://example.com/test-code", "evidence_read":true,
+                "note":"Test caveat: applies only to the stated room type."
+            }))
+            .unwrap(),
+            asked: Some("egypt".into()),
+            fallback: false,
+        };
+        let mut cx = Ctx {
+            market: Some("egypt"),
+            findings: Vec::new(),
+            checked: BTreeSet::new(),
+            skipped: Vec::new(),
+            used: BTreeMap::new(),
+        };
+        cx.add(
+            "test_width",
+            "error",
+            "Ground floor",
+            vec!["Test room".into()],
+            ("Too narrow.".into(), "العرض غير كافٍ.".into()),
+            ("Widen the room.".into(), "زِد عرض الغرفة.".into()),
+            Some(0.8),
+            Some(&limit),
+            None,
+        );
+        let finding = serde_json::to_value(&cx.findings[0]).unwrap();
+        assert_eq!(finding["basis"], "code");
+        assert_eq!(finding["severity"], "error");
+        assert_eq!(finding["source"], "Test code, Test clause");
+        assert_eq!(finding["source_url"], "https://example.com/test-code");
+        assert_eq!(finding["caveat"], limit.limit.note.unwrap());
+        assert_eq!(finding["message"], "Too narrow.");
     }
 }

@@ -10,9 +10,10 @@ type Props = {
   /** The output on screen, if one is. */
   shown: OutputId | null;
   onOpen(id: OutputId): void;
+  onExportEvidence?(): void;
 };
 
-export function OutputsMenu({ outputs, shown, onOpen }: Props) {
+export function OutputsMenu({ outputs, shown, onOpen, onExportEvidence }: Props) {
   const t = useT();
   const filled = filledOutputs(outputs);
   return (
@@ -31,6 +32,9 @@ export function OutputsMenu({ outputs, shown, onOpen }: Props) {
                 <span className="muted">{o.count && o.count > 0 ? o.count : t("outputs.empty")}</span>
               </Menu.Item>
             ))}
+            <Menu.Item className="rb-item" onClick={onExportEvidence} disabled={!onExportEvidence}>
+              <span className="grow">{t("exportEvidence")}</span>
+            </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

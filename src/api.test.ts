@@ -1,13 +1,35 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-import { atlasPages, batchVersion, isNotModified, renderBatch } from "./api";
+import { atlasPages, batchVersion, exportEvidence, isNotModified, renderBatch } from "./api";
+import { setWorkspace } from "./workspaceIpc";
 
 const buffer = (bytes: number[]) => new Uint8Array(bytes).buffer;
 // What qiyas-desktop sends for a batch that is still current: "QINM" and four zero bytes.
 const NOT_MODIFIED = buffer([0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0]);
+
+describe("exportEvidence", () => {
+  beforeEach(() => invoke.mockReset());
+  afterEach(() => setWorkspace(null));
+
+  it("uses the displayed drawing and the backend's default path and language", async () => {
+    setWorkspace(7);
+    const output = { path: "/d/plan evidence.pdf", skipped: [] };
+    invoke.mockResolvedValue(output);
+    expect(await exportEvidence()).toEqual(output);
+    expect(invoke).toHaveBeenCalledWith("export_evidence", { path: null, language: null, workspace: 7 });
+  });
+
+  it("passes an explicit path, BOQ language and workspace unchanged", async () => {
+    setWorkspace(7);
+    const output = { path: "/deliverables/evidence.pdf", skipped: [] };
+    invoke.mockResolvedValue(output);
+    expect(await exportEvidence(output.path, "ar", 3)).toEqual(output);
+    expect(invoke).toHaveBeenCalledWith("export_evidence", { path: output.path, language: "ar", workspace: 3 });
+  });
+});
 
 describe("renderBatch", () => {
   beforeEach(() => invoke.mockReset());

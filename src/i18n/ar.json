@@ -27,6 +27,7 @@
   "save": "حفظ",
   "saveAs": "حفظ باسم",
   "exportTakeoff": "تصدير الحصر",
+  "exportEvidence": "تصدير ملف الإثبات PDF",
   "undo": "تراجع",
   "redo": "إعادة",
   "select": "تحديد",

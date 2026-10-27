@@ -25,7 +25,7 @@ use crate::ToolOutput;
 /// The reads a second reader may use: exact facts of the drawing and nothing Qiyas derived.
 pub const ALLOWED_OPS: [&str; 5] = ["query", "measure", "rooms", "commands", "record_schema"];
 
-/// Words that name a Qiyas result. A call carrying one is refused.
+/// Exact result selectors. Free drawing text and search strings are not selectors.
 const FORBIDDEN: [&str; 9] = [
     "measurement",
     "generated",
@@ -112,8 +112,17 @@ pub fn guard(op: &str, args: &Value) -> Result<(), String> {
             ALLOWED_OPS.join(", ")
         ));
     }
-    let text = args.to_string().to_lowercase();
-    if let Some(word) = FORBIDDEN.iter().find(|w| text.contains(*w)) {
+    let selector = match op {
+        "query" => args.get("kind"),
+        "record_schema" => args.get("name"),
+        _ => None,
+    };
+    let mut selectors = selector
+        .into_iter()
+        .chain(args.get("collection"))
+        .chain(args.get("command").and_then(|c| c.get("type")))
+        .filter_map(Value::as_str);
+    if let Some(word) = selectors.find(|s| FORBIDDEN.iter().any(|w| s.eq_ignore_ascii_case(w))) {
         return Err(format!(
             "Not allowed in a second reading: {word} is a Qiyas result. Measure the drawing itself."
         ));
@@ -423,8 +432,61 @@ mod tests {
         assert!(guard("measure", &json!({"handle": 12})).is_ok());
         assert!(guard("state", &json!({})).is_err());
         assert!(guard("records", &json!({"collection":"entities"})).is_err());
-        assert!(guard("query", &json!({"kind":"texts","text":"takeoff"})).is_err());
-        assert!(guard("query", &json!({"kind":"texts","text":"BOQ"})).is_err());
+        assert!(guard("query", &json!({"kind":"texts","text":"takeoff"})).is_ok());
+        assert!(guard("query", &json!({"kind":"texts","text":"BOQ"})).is_ok());
+        for name in FORBIDDEN {
+            assert!(guard(name, &json!({})).is_err(), "{name}");
+            assert!(guard("query", &json!({"kind":name})).is_err(), "{name}");
+            assert!(guard("records", &json!({"collection":name})).is_err());
+            assert!(guard("run", &json!({"command":{"type":name}})).is_err());
+        }
+    }
+
+    #[test]
+    fn drawing_layers_and_search_text_are_not_result_selectors() {
+        assert!(guard("query", &json!({"kind":"texts","layer":"BOQ-notes"})).is_ok());
+        assert!(guard("rooms", &json!({"text_layer":"knowledge-generated"})).is_ok());
+        assert!(guard("commands", &json!({"search":"boq generated knowledge"})).is_ok());
+        assert!(guard(
+            "query",
+            &json!({"kind":"texts","text":"generated knowledge"})
+        )
+        .is_ok());
+        assert!(guard("boq", &json!({})).is_err());
+        assert!(guard("records", &json!({"collection":"boq"})).is_err());
+        assert!(guard("query", &json!({"kind":"BOQ"})).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_reader_can_read_boq_notes_on_the_drawing_but_not_the_boq() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new_blank(&dir.path().join("notes.dxf"), 6);
+        session
+            .run_input(
+                &json!({"type":"batch","layer":"BOQ-notes","commands":[
+                    {"type":"text","at":[0,0],"height":0.25,"value":"Door width 0.90 m"}
+                ]}),
+                Source::User,
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(Some(session)));
+        let read = read_op(
+            &shared,
+            &json!({"op":"query","args":{"kind":"texts","layer":"BOQ-notes"}}),
+            5.0,
+            "m",
+        )
+        .await
+        .unwrap();
+        assert!(read.contains("Door width 0.90 m"), "{read}");
+        assert!(read_op(
+            &shared,
+            &json!({"op":"records","args":{"collection":"boq"}}),
+            5.0,
+            "m",
+        )
+        .await
+        .is_err());
     }
 
     #[test]
