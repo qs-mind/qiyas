@@ -245,10 +245,16 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
                         })
                 })
             });
+        // W1: an export of quantities whose check failed is now refused unless named DRAFT.
+        let export_gate = error
+            .as_ref()
+            .is_some_and(|e| e["code"] == "quantity_check_failed");
         if error.is_none() && expected_error && shape_refusal {
             eprintln!(
                 "NOTE call {i}: the recorded input-shape refusal is now normalised and accepted"
             );
+        } else if export_gate && !expected_error {
+            eprintln!("NOTE call {i}: the export is now refused while the quantity check fails");
         } else {
             assert_eq!(
                 error.is_some(),
