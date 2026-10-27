@@ -1139,9 +1139,6 @@ impl Agent {
                                 self.emit(&events, AgentEvent::OpenFindings { findings, revision })
                                     .await;
                             }
-                            if self.job == Job::Takeoff {
-                                self.report_confidence(&events).await;
-                            }
                             if let Some(text) = self.plan_watch.final_text(self.chat_language) {
                                 if let Some(last) = self
                                     .history
@@ -1200,39 +1197,12 @@ impl Agent {
         Ok(())
     }
 
-    async fn report_confidence(&self, events: &mpsc::Sender<AgentEvent>) {
-        let session = self.session.clone();
-        let report = tokio::task::spawn_blocking(move || {
-            let guard = session.lock().unwrap_or_else(PoisonError::into_inner);
-            guard.as_ref()?.measurement_report().ok()
-        })
-        .await
-        .ok()
-        .flatten();
-        if let Some(report) = report.filter(|r| !r.items.is_empty()) {
-            let summary = &report.confidence_summary;
-            let items = report
-                .items
-                .iter()
-                .map(|i| format!("{}: {:.0}%", i.code, i.confidence * 100.))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let text = if self.chat_language == Lang::Ar {
-                format!("\nالثقة في الكميات، من الأقل: {items}. منخفضة: {}، متوسطة: {}، عالية: {}. المراجعة اختيارية.", summary.low, summary.medium, summary.high)
-            } else {
-                format!("\nConfidence report (lowest first): {items}. Bands: low {}, medium {}, high {}. Review is optional.", summary.low, summary.medium, summary.high)
-            };
-            self.emit(events, AgentEvent::Text { text }).await;
-        }
-    }
-
     /// A hard cap may leave no paid request for a final answer. Report the persisted state
     /// locally; never fabricate measurements or discard an already generated BOQ.
     async fn report_interrupted(&self, events: &mpsc::Sender<AgentEvent>, reason: &str) {
         if self.job != Job::Takeoff {
             return;
         }
-        self.report_confidence(events).await;
         let session = self.session.clone();
         let arabic = self.chat_language == Lang::Ar;
         let report = tokio::task::spawn_blocking(move || {

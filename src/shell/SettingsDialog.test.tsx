@@ -274,12 +274,12 @@ test("method choices contain names plus local files without requiring rules", as
   const select = await screen.findByLabelText("Method of measurement") as HTMLSelectElement;
   await screen.findByRole("option", { name: "local-test" });
   expect(Array.from(select.options).map((option) => option.text)).toEqual([
-    "None (geometric quantities)", "POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4",
+    "None (geometric quantities)", "POMI", "NRM2", "SMM7", "CESMM4",
     "Local practice – Egypt", "Local practice – KSA", "Local practice – UAE", "local-test", "Other…",
   ]);
-  fireEvent.change(select, { target: { value: "POMI (RICS)" } });
+  fireEvent.change(select, { target: { value: "POMI" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ ...settings, measurement_method: "POMI (RICS)" }));
+  await vi.waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ ...settings, measurement_method: "POMI" }));
 });
 
 test("Other saves free text and restores it when Settings reopens", async () => {
@@ -308,7 +308,7 @@ test("named methods remain available without files and local choices have Arabic
     render(<LanguageProvider><SettingsDialog onClose={() => {}} /></LanguageProvider>);
     const select = await screen.findByLabelText("طريقة القياس") as HTMLSelectElement;
     expect(Array.from(select.options).map((option) => option.text)).toEqual([
-      "بلا طريقة (كميات هندسية)", "POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4",
+      "بلا طريقة (كميات هندسية)", "POMI", "NRM2", "SMM7", "CESMM4",
       "الممارسة المحلية – مصر", "الممارسة المحلية – السعودية", "الممارسة المحلية – الإمارات", "أخرى…",
     ]);
     fireEvent.change(select, { target: { value: "Local practice – Egypt" } });

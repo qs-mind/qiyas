@@ -48,8 +48,6 @@ export function Explain({ item, project }: { item: string; project?: string }) {
       {error && <p role="alert">{error}</p>}
       {result && <>
         <p><bdi>{quantity(result.quantity)} {result.unit}</bdi></p>
-        <p>{t("evidence.confidence")}: {(result.confidence * 100).toFixed(0)}% · {t(`evidence.confidence.${result.confidence_band}`)}</p>
-        <p>{t("evidence.confidenceHelp")}</p>
         {result.drawings.map(d => <p key={d}><bdi>{d.split(/[\\/]/).pop()}</bdi></p>)}
         <h3>{t("evidence.dimensions")}</h3>
         <ol>{result.dimension_lines.map((line, i) => <li key={i}>

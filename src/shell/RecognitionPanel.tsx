@@ -68,7 +68,7 @@ function ReviewRow({ row, busy, decide }: {
     return [key, value];
   }));
   return <article>
-    <strong>{entityKind(row.placement.type, t)}</strong> <span>{t("recognition.confidence")}: {Math.round(row.confidence * 100)}%</span>
+    <strong>{entityKind(row.placement.type, t)}</strong>
     <TechnicalDetails><pre>{row.rule}{"\n"}{JSON.stringify(row.placement, null, 2)}</pre></TechnicalDetails>
     {row.evidence.map((source, index) => <p key={index}><bdi>{source.path?.split(/[\\/]/).pop()}{source.page ? ` · ${source.page}` : ""}</bdi></p>)}
     <ReviewNotes notes={row.issues} />

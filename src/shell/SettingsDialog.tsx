@@ -23,11 +23,12 @@ import { normalizeDigits } from "../tools/commandParser";
 import { useT } from "../i18n";
 import { ModalDialog } from "../ui/ModalDialog";
 import { ModelPicker } from "./ModelPicker";
+import { plainMethod } from "./methodName";
 import { SubscriptionSettings } from "./SubscriptionSettings";
 
 
 // Names only. Rules are authored by Mizan and stored with each drawing.
-const STANDARD_METHODS = ["POMI (RICS)", "NRM2 (RICS)", "SMM7", "CESMM4"];
+const STANDARD_METHODS = ["POMI", "NRM2", "SMM7", "CESMM4"];
 const LOCAL_METHODS = ["Egypt", "KSA", "UAE"];
 const OTHER_METHOD = "\u0000other";
 
@@ -71,7 +72,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
 
   useEffect(() => {
     getSettings()
-      .then((s) => { setDraft(s); setSavedAddress(s.providers.openai_compatible.base_url ?? null); })
+      .then((s) => { setDraft(s.measurement_method ? { ...s, measurement_method: plainMethod(s.measurement_method) } : s); setSavedAddress(s.providers.openai_compatible.base_url ?? null); })
       .catch((e) => setError(uiError(e)));
     appDir()
       .then(setDir)

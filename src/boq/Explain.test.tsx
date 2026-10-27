@@ -16,7 +16,8 @@ test("one read exposes citations and highlights the source", async () => {
   fireEvent.click(screen.getByRole("button", { name: /How was this measured/ }));
   await screen.findByText("Test source / Q1");
   expect(explainItem).toHaveBeenCalledExactlyOnceWith("generated:A", undefined);
-  expect(screen.getByText(/75%/)).toBeTruthy();
+  // No confidence percentage is shown (W4): the number stays in the data only.
+  expect(screen.queryByText(/75%/)).toBeNull();
   expect((shown.mock.calls[0][0] as CustomEvent).detail).toEqual(evidence);
   fireEvent.click(screen.getByRole("button", { name: /Show on drawing/ }));
   expect(rowClick).not.toHaveBeenCalled();

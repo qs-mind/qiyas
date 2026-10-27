@@ -3,6 +3,7 @@ import { Children, isValidElement, cloneElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./markdown.css";
+import { withoutBody } from "../shell/methodName";
 import { plainMath } from "./plainMath";
 
 /** Links never navigate the window: Mizan's answers show where a link points, as text. */
@@ -66,7 +67,7 @@ export function Markdown({ text }: { text: string }) {
   return (
     <div className="md" lang={lang} dir={lang === "ar" ? "rtl" : "ltr"}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {plainMath(chatText(text))}
+        {withoutBody(plainMath(chatText(text)))}
       </ReactMarkdown>
     </div>
   );
