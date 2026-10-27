@@ -1649,20 +1649,9 @@ span.grid-sort {
   border-color: var(--rule);
   border-radius: 999px;
 }
-.conflicts .n,
-.tab-count {
+.conflicts .n {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
-}
-.tab-count {
-  min-width: 16px;
-  padding: 0 4px;
-  font-size: 10.5px;
-  line-height: 15px;
-  text-align: center;
-  color: var(--fg);
-  background: var(--accent-soft);
-  border-radius: 999px;
 }
 /* A conflict row: a thin mark on its start edge while it is open (the warning colour), muted once
    resolved or ignored. */
@@ -2221,74 +2210,17 @@ span.grid-sort {
 }
 
 /* Right panel: the take-off and the assistant, as tabs. */
+/* Mizan's column (W4, design B): one column on the end side of the drawing. It shows the
+   conversation, or an output in its place (`.art`), and the box stays below either. Paper ground,
+   hairlines, flat; the handle beside it draws the dividing line. */
 .side {
-  width: var(--side-w, 340px);
+  width: var(--side-w, 440px);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
-  background: var(--panel);
-}
-
-/* The tab row never wraps: the tabs are one line each at 12.5px, and a row too narrow for them
-   folds the last into a "⋯" menu (`SideTabs.tsx`). The chosen tab's face slides (`.tab-indicator`). */
-.side-tabs {
-  position: relative;
-  isolation: isolate;
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 0;
-  padding: 6px 6px 0;
   overflow: hidden;
-  border-bottom: 1px solid var(--rule);
-}
-.side-tab {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 6px 6px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  transition: color 150ms ease;
-}
-.side-tab[aria-selected="true"] {
-  color: var(--fg);
-}
-.side-tab:focus-visible {
-  outline-offset: -2px;
-}
-:root[dir="rtl"] .side-tab {
-  font-feature-settings: "swsh";
-}
-/* A tab that did not fit stays in the row, unseen, so its width is known. */
-.side-tab.folded {
-  position: absolute;
-  visibility: hidden;
-  pointer-events: none;
-}
-.side-tab-more {
-  padding: 0 7px;
-}
-.side-tab-more svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-.side-more-menu {
-  display: flex;
-  flex-direction: column;
-  min-width: 140px;
-}
-.side-more-menu .rb-item {
-  justify-content: space-between;
+  background: var(--bg);
 }
 .side-panel {
   flex: 1;
@@ -2296,8 +2228,172 @@ span.grid-sort {
   display: flex;
   flex-direction: column;
 }
-.side-panel[hidden] {
+.side-panel[hidden],
+.art-item[hidden],
+.art-slot[hidden],
+.chat-slot[hidden] {
   display: none;
+}
+/* Icon buttons of the column and the top bar. */
+.ib {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 7px;
+  color: var(--muted);
+}
+.ib:hover:not(:disabled),
+.ib[aria-expanded="true"] {
+  color: var(--fg);
+}
+.gl {
+  flex: none;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.muted {
+  color: var(--muted);
+}
+/* An output in the column: its head, then the panel. */
+.art-slot,
+.art-item,
+.art {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.art-head {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+.art-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 8px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.art-title .gl {
+  color: var(--muted);
+}
+.art-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.exp {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-weight: 500;
+  flex: none;
+}
+.art-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.outputs-menu {
+  grid-auto-flow: row;
+  min-width: 220px;
+}
+.outputs-menu .rb-item {
+  gap: 14px;
+}
+/* The top bar's Outputs button. */
+.obtn {
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  flex: none;
+}
+.obtn.on {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+.obtn-count {
+  color: var(--muted);
+  font-weight: 400;
+}
+.obtn.on .obtn-count {
+  color: inherit;
+  opacity: 0.65;
+}
+/* The strip under an output: back to the conversation (its state, its name). */
+.back-strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 36px;
+  padding-inline: 16px;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.back-strip b {
+  color: var(--fg);
+  font-weight: 500;
+}
+.back-strip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: block;
+  flex: none;
+}
+.back-strip i.live {
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+.back-title {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--accent-soft);
+    transform: scale(0.88);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .back-strip i.live {
+    animation: none;
+  }
 }
 .side .takeoff {
   flex: 1;
@@ -2423,7 +2519,6 @@ span.grid-sort {
 }
 .working .dot-loader,
 .tool-state .dot-loader,
-.side-tabs .dot-loader,
 .script-running .dot-loader,
 .status > .dot-loader {
   margin-inline-end: 0;
@@ -2440,25 +2535,31 @@ span.grid-sort {
   display: flex;
   flex-direction: column;
 }
+.chat-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .assistant-head {
+  height: 44px;
+  flex: none;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 6px 8px 2px;
-}
-.assistant-head .new-chat {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
+  padding-inline: 16px 10px;
 }
-.assistant-head .new-chat svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
+.assistant-head .mizan-mark {
+  margin-inline-end: 4px;
+}
+.chat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  font-size: 13px;
 }
 /* The thread and the button that jumps to its end, over its bottom edge. */
 .assistant-thread {
@@ -2500,8 +2601,8 @@ span.grid-sort {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 4px 10px 10px;
+  gap: 14px;
+  padding: 6px 18px 14px;
 }
 /* Mizan's log, in place of the conversation. */
 .agent-log {
@@ -2580,11 +2681,13 @@ span.grid-sort {
 }
 .msg.user {
   align-self: flex-end;
-  max-width: 88%;
-  padding: 6px 10px;
+  max-width: 90%;
+  padding: 9px 13px;
   white-space: pre-wrap;
-  background: var(--accent-soft);
-  border-radius: 10px;
+  background: var(--panel);
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.5;
 }
 .msg.thinking {
   color: var(--muted);
@@ -2633,15 +2736,11 @@ span.grid-sort {
   border-color: var(--accent);
 }
 
+/* An activity line: what Mizan did, quiet and flat (a run of identical reads is one line). */
 .tool-card {
-  padding: 6px 8px;
-  background: var(--bg);
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-  font-size: 12px;
-}
-.tool-card.error {
-  border-color: var(--warn);
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 .tool-head {
   display: flex;
@@ -2696,40 +2795,75 @@ span.grid-sort {
 .assistant-panel .error {
   border-top: 1px solid var(--rule);
 }
+/* The prompt box (design B): one rounded box, the text above and its tools below (attach, mark an
+   area, the model) with the send button at the end. It never moves; the slash commands open above. */
 .composer {
+  position: relative;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px;
+  padding: 10px 14px 14px;
   border-top: 1px solid var(--rule);
+  background: var(--panel);
+}
+.composer .box {
+  display: flex;
+  flex-direction: column;
+  min-height: 88px;
+  padding: 10px 8px 8px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 11px;
+  background: var(--bg);
+}
+:root[dir="rtl"] .composer .box {
+  padding: 10px 12px 8px 8px;
+}
+.composer .box:focus-within {
+  border-color: var(--fg);
 }
 .composer textarea {
+  flex: 1;
   resize: none;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
   font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
   color: inherit;
-  background: var(--bg);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  padding: 6px 8px;
 }
 .composer-buttons {
   display: flex;
-  justify-content: flex-end;
-  gap: 6px;
+  align-items: center;
+  gap: 1px;
+  margin-top: 6px;
 }
-.composer-buttons button {
-  border-color: var(--rule);
+.composer-buttons .ib {
+  width: 30px;
+  height: 30px;
 }
-.composer-buttons button.icon svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.composer-buttons .grow {
+  flex: 1;
 }
-
+.composer-buttons .send {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  background: var(--fg);
+  color: var(--bg);
+  border: 0;
+}
+.composer-buttons .send:disabled {
+  background: var(--rule);
+  color: var(--muted);
+  opacity: 1;
+}
 /* What goes with the next message to Mizan: the selection, a marked area, pictures. */
 .composer-chips,
 .msg-attached {
@@ -3621,15 +3755,6 @@ span.grid-sort {
 .generated-boq li { margin-block: 8px; overflow-wrap: anywhere; }
 .generated-boq button { margin: 3px; }
 
-.projects-panel { padding: var(--space-3, 12px); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
-.projects-panel form, .projects-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; }
-.projects-panel label { display: flex; flex-direction: column; gap: 4px; }
-.projects-list { list-style: none; margin: 0; padding: 0; }
-.projects-list li { padding-block: 8px; border-block-end: 1px solid var(--rule); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.projects-list li > bdi { flex: 1; overflow-wrap: anywhere; }
-.projects-list li p { width: 100%; margin: 0; }
-.projects-list button[aria-pressed="true"] { color: var(--accent); }
-.projects-panel p { overflow-wrap: anywhere; }
 
 /* Arabic glyphs keep their own font in controls, code and mixed-language content. */
 input, select, textarea { font: inherit; }
@@ -3648,7 +3773,6 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .layer-count { white-space: nowrap; }
 .technical-details { font-size: 12px; color: var(--muted); min-width: 0; }
 .technical-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
-.tool-card.error { border-color: var(--rule); background: transparent; color: var(--muted); }
 .tool-card.error .tool-state { color: var(--muted); }
 .support-log { margin-block: 12px; }
 
@@ -3670,9 +3794,57 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .workspace-status { margin-inline-start: 0.4rem; color: var(--muted); font-size: 0.65rem; }
 .workspace-status.working, .workspace-status.queued { color: var(--accent); }
 .workspace-status.failed { color: var(--danger); }
-.workspace-picker { padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--border); }
-.workspace-picker summary { cursor: pointer; }
-.workspace-picker fieldset { border: 0; padding: 0.5rem 0; display: grid; gap: 0.4rem; }
+/* The model popover (the small icon in Mizan's box). */
+.model-positioner { z-index: 40; }
+.workspace-picker {
+  width: min(320px, calc(100vw - 24px));
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgb(14 15 18 / 0.14);
+}
+.workspace-picker .workspace-now { margin: 0 0 4px; font-weight: 500; }
+.workspace-picker fieldset { border: 0; padding: 0.4rem 0 0; margin: 0; display: grid; gap: 0.4rem; }
 .workspace-picker label { display: flex; justify-content: space-between; gap: 0.5rem; }
 
 .workspace-caption { color: var(--muted); font-size: 0.8em; margin-inline-start: 0.5em; }
+
+/* Slash commands: the list above the box, one row each (design B). */
+.slash {
+  position: absolute;
+  inset-inline: 14px;
+  bottom: calc(100% - 4px);
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgb(14 15 18 / 0.14);
+  z-index: 5;
+}
+.sl {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  text-align: start;
+}
+.sl.on {
+  background: var(--hover);
+}
+.sl .cmd {
+  min-width: 78px;
+  font-weight: 500;
+}
+.sl .d {
+  flex: 1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

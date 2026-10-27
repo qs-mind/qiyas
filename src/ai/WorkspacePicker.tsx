@@ -1,10 +1,13 @@
+import { Popover } from "@base-ui/react/popover";
 import { useEffect, useRef, useState } from "react";
 import { getSettings, claudeCodeStatus, chatgptModels, type ClaudeCodeStatus, type PlanModel, type Settings, type WorkspaceChoice } from "../api";
 import { useT } from "../i18n";
 import { uiError } from "../i18n/errors";
+import { Glyph } from "../shell/glyphs";
 import { ModelPicker } from "../shell/ModelPicker";
 
-/** Credentials and provider addresses stay in Settings; these choices belong to this drawing. */
+/** The small model icon in Mizan's box (W4): a popover with this drawing's provider, model and
+ *  effort. Credentials and provider addresses stay in Settings; these choices belong to this drawing. */
 export function WorkspacePicker({ choice, busy, onChange }: {
   choice: WorkspaceChoice; busy: boolean; onChange(choice: WorkspaceChoice): Promise<void>;
 }) {
@@ -17,8 +20,15 @@ export function WorkspacePicker({ choice, busy, onChange }: {
     setError(null); setChanging(true);
     void onChange(next).catch(error => setError(uiError(error))).finally(() => setChanging(false));
   };
-  return <details className="workspace-picker">
-    <summary>{t("workspace.provider")} · <bdi>{choice.model || choice.provider}</bdi></summary>
+  const name = choice.model || choice.provider;
+  return <Popover.Root modal={false}>
+    <Popover.Trigger className="ib model-button" aria-label={`${t("workspace.model")}: ${name}`} title={`${t("workspace.provider")} · ${name}`}>
+      <Glyph name="model" />
+    </Popover.Trigger>
+    <Popover.Portal>
+      <Popover.Positioner className="model-positioner" side="top" align="start" sideOffset={8} collisionPadding={8}>
+        <Popover.Popup className="workspace-picker" aria-label={t("workspace.provider")}>
+    <p className="workspace-now"><bdi>{name}</bdi></p>
     <fieldset disabled={busy || changing || !defaults}>
       <label>{t("settings.provider")}
         <select value={choice.provider} onChange={event => {
@@ -46,7 +56,10 @@ export function WorkspacePicker({ choice, busy, onChange }: {
       </>}
     </fieldset>
     {error && <p role="alert">{error}</p>}
-  </details>;
+        </Popover.Popup>
+      </Popover.Positioner>
+    </Popover.Portal>
+  </Popover.Root>;
 }
 
 

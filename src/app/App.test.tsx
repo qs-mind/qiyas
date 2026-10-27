@@ -29,6 +29,15 @@ function goTab(name: string) {
 
 const PLAN = "/d/plan.dwg";
 
+/** Opens an output (take-off, BOQ, conflicts, report) in Mizan's column, from the top bar's Outputs menu. */
+async function openOutput(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) }));
+}
+
+/** The status bar's message (Mizan's box has its own, screen-reader-only, live region). */
+const statusMessage = () => within(document.querySelector<HTMLElement>("footer.status")!).getByRole("status");
+
 /** What the notices say now (the toasts), the newest first: what was done and any error are
  *  toasts, the status bar says what is happening. */
 const toasts = () => [...document.querySelectorAll('[data-sonner-toast]:not([data-removed="true"]) [data-title]')].map((el) => el.textContent);
@@ -477,7 +486,7 @@ test("open → an autosave is asked about first → Discard deletes it, then the
     ]);
     expect(screen.queryByRole("heading", { name: en["recovery.title"] })).toBeNull();
     // The status bar names the drawing on screen.
-    expect(screen.getByRole("status").textContent).toBe("plan.dwg");
+    expect(statusMessage().textContent).toBe("plan.dwg");
   });
 });
 
@@ -571,7 +580,7 @@ const A4 = { name: "ISO A4", w_mm: 210, h_mm: 297 };
 test("PLOT: a window clicked in the drawing (usePlot through the command line) is plotted to the PDF chosen", async () => {
   await mount();
   await clickOpen();
-  const status = () => screen.getByRole("status").textContent;
+  const status = () => statusMessage().textContent;
 
   await typeLine("PLOT");
   expect(screen.getByRole("heading", { name: en["plot.title"] })).toBeTruthy();
@@ -931,10 +940,10 @@ test("the side panels fold away behind their handles, resize, and the choice com
   expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("220px");
   fireEvent.keyDown(screen.getByRole("separator", { name: en["panels.resize.left"] }), { key: "ArrowRight" });
   expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("236px");
-  // The BOQ tab keeps its own, wider width.
-  expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("340px");
-  fireEvent.click(screen.getByRole("tab", { name: en.boq }));
-  expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("620px");
+  // An output in the column (the BOQ) keeps its own, wider width.
+  expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("440px");
+  await openOutput(en["outputs.boq"]);
+  await until(() => expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("672px"));
   localStorage.removeItem("qiyas.panels.hidden");
   localStorage.removeItem("qiyas.panels.width");
 });
@@ -965,7 +974,7 @@ test("Delete erases what is selected, and types in a text field as ever", async 
 test("the tool's prompt is said once: on the command line, or in the status bar when that is hidden", async () => {
   await mount();
   await clickOpen();
-  const status = () => screen.getByRole("status").textContent;
+  const status = () => statusMessage().textContent;
   const prompt = en["modify.prompt.select"].replace("{n}", "0");
 
   await typeLine("MOVE");
@@ -1007,7 +1016,7 @@ test("with the command line on, a hint it does not show stays in the status bar 
   await typeLine("COUNT");
   canvas.props!.onClick([10, 10], [100, 100], 1, false);
   await until(() => {
-    expect(screen.getByRole("status").textContent).toBe(en["measure.notABlock"]);
+    expect(statusMessage().textContent).toBe(en["measure.notABlock"]);
   });
 });
 
@@ -1061,9 +1070,9 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
   core.hasBoq = true;
   await mount();
   await clickOpen();
-  fireEvent.click(screen.getByRole("tab", { name: en.conflicts }));
-  await until(() => expect(screen.getByRole("tabpanel", { name: en.conflicts })).toBeTruthy());
-  const panel = within(screen.getByRole("tabpanel", { name: en.conflicts }));
+  await openOutput(en["outputs.conflicts"]);
+  await until(() => expect(screen.getByRole("region", { name: en["outputs.conflicts"] })).toBeTruthy());
+  const panel = within(screen.getByRole("region", { name: en["outputs.conflicts"] }));
   expect(panel.getByText(en["conflicts.notCompared"])).toBeTruthy();
 
   await agentEvent({
@@ -1254,7 +1263,6 @@ test("an area marked with the area tool reaches Mizan's composer, made after the
   await mount();
   await clickOpen();
   core.calls.length = 0;
-  fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
   await until(() => expect(screen.getByRole("button", { name: en["ai.markArea"] })).toBeTruthy());
   await act(async () => fireEvent.click(screen.getByRole("button", { name: en["ai.markArea"] })));
   // The tool hands the box to the wiring through the root's markRegionRef.
@@ -1305,7 +1313,6 @@ test("an untitled drawing keeps its own Continue offer through its placeholder p
   // An existing untitled tab is shown directly; its placeholder is not a file to open.
   await emit("drawing:shown", null);
   await until(() => expect(core.calls).toContain("render_batch {\"workspace\":1}"));
-  fireEvent.click(screen.getByRole("tab", { name: en.assistant }));
   await until(() => {
     expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();
   });

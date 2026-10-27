@@ -1,21 +1,18 @@
 import { uiError } from "../i18n/errors";
-import { ProjectsPanel } from "../shell/ProjectsPanel";
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
- *  tabs), and the side panel (take-off, BOQ, conflicts, Mizan) on the right. */
+ *  tabs), and Mizan's column (the conversation, and the outputs in its place) on the right. */
 import { RecognitionPanel } from "../shell/RecognitionPanel";
-import { MizanMark } from "../ai/MizanMark";
-import { Tabs } from "@base-ui/react/tabs";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
 import { AssistantPanel } from "../ai/AssistantPanel";
 import type { ConversationHistoryState } from "../ai/ConversationHistory";
 import { BoqPanel } from "../boq/BoqPanel";
 import { ConflictsPanel } from "../boq/ConflictsPanel";
-import { openCount } from "../boq/conflictsMath";
+import { ArtifactFrame } from "../shell/ArtifactFrame";
+import { OUTPUT_IDS, outputList, type OutputId } from "../shell/outputs";
 import { useT } from "../i18n";
 import { ImageDisplayPanel } from "../shell/AttachImageDialog";
 import { BlockEditBar } from "../shell/BlockDialogs";
-import { CommentsPanel } from "../shell/CommentsPanel";
 import { ConstraintBar } from "../shell/ConstraintBar";
 import { FileTabs } from "../shell/FileTabs";
 import { AlongPrompt, InfoCard } from "../shell/InfoCard";
@@ -37,13 +34,11 @@ import type { Annotate } from "./useAnnotate";
 import type { AssistantWiring, Pointing } from "./useAssistantWiring";
 import type { Attach } from "./useAttach";
 import type { Blocks } from "./useBlocks";
-import type { Comments } from "./useComments";
 import type { Drawings } from "./useDrawings";
 import type { Layers } from "./useLayers";
-import { SideTabs, type SideTabItem } from "./SideTabs";
 import type { Parametric } from "./useParametric";
 import type { Selection } from "./useSelection";
-import type { Shell, SideTab } from "./useShell";
+import type { Shell } from "./useShell";
 import type { Sheets } from "./useSheets";
 import type { Takeoff, TakeoffState } from "./useTakeoff";
 
@@ -330,13 +325,18 @@ type SideProps = {
   takeoff: Takeoff;
   ai: AssistantWiring;
   conversationHistory: ConversationHistoryState;
-  comments: Comments;
   recognition: { revision: unknown; run: Layers["runDrawingCommand"] };
+  /** Writes the take-off to Excel (the take-off output's action). */
+  onExportTakeoff?(): void;
+  /** The /compare command: ask for a BOQ and find its conflicts. */
+  onSlashCompare?(): void;
 };
 
-/** The side panel: its tabs, the inquiry card, and the take-off, BOQ, conflicts, comments and
- *  Mizan panels (all mounted, one shown). */
-export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, comments, recognition }: SideProps) {
+/** The right column (design B): Mizan's conversation, and, when Mizan's work is opened, the take-off,
+ *  BOQ, conflicts or take-off report in the same column in place of the conversation, with a way
+ *  back. The conversation and every output stay mounted, one shown, so a draft, a search or a
+ *  running answer survives the switch. */
+export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -355,98 +355,88 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
     openBoqTab,
   } = takeoff;
   const { assistant, showCard, undoCard, openSettings, pointing } = ai;
-  const openConflicts = openCount(conflicts);
+  const shown: OutputId | null = sideTab === "assistant" ? null : sideTab;
+  const drawing = info?.path.split(/[\\/]/).pop() ?? "";
+  const outputs = outputList(takeoffState);
+  const meta = (id: OutputId) => {
+    const count = outputs.find((o) => o.id === id)?.count;
+    return [drawing, count ? t("outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
+  };
+  const body = (id: OutputId) => {
+    switch (id) {
+      case "takeoff":
+        return (
+          <TakeoffPanel
+            items={items}
+            totals={itemTotals}
+            selectedId={selectedId}
+            onSelect={selectRow}
+            onRemove={removeRow}
+            onRename={renameRow}
+            boq={bill}
+            onLink={linkRow}
+            precision={drafting?.precision ?? 3}
+          />
+        );
+      case "boq":
+        return (
+          <BoqPanel
+            boq={bill}
+            generated={generated}
+            onShowGenerated={takeoff.showGenerated}
+            takeoff={items}
+            selectedCode={boqCode}
+            onSelect={selectBoq}
+            onImport={info ? onImportBoq : undefined}
+            onTolerance={setTolerance}
+          />
+        );
+      case "conflicts":
+        return (
+          <ConflictsPanel
+            conflicts={conflicts}
+            compared={compared}
+            hasBoq={bill !== null}
+            onCompare={info ? onCompare : undefined}
+            onExport={info ? onExportConflicts : undefined}
+            onShow={showConflict}
+            onResolve={resolveConflict}
+            onOpenBoq={openBoqTab}
+          />
+        );
+      case "review":
+        return <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null} revision={recognition.revision} run={recognition.run} />;
+    }
+  };
+  const frames = OUTPUT_IDS.map((id) => (
+    <div key={id} className="art-item" hidden={sideTab !== id}>
+      <ArtifactFrame
+        id={id}
+        outputs={outputs}
+        meta={meta(id)}
+        action={id === "takeoff" ? { label: t("exportTakeoff"), onClick: () => onExportTakeoff?.(), disabled: !onExportTakeoff || items.length === 0 } : undefined}
+        onSelect={setSideTab}
+        onBack={() => setSideTab("assistant")}
+      >
+        <div className="side-panel">{body(id)}</div>
+      </ArtifactFrame>
+    </div>
+  ));
 
-  const tabs: SideTabItem<SideTab>[] = [
-    { id: "takeoff", label: t("takeoff") },
-    { id: "boq", label: t("boq") },
-    {
-      id: "conflicts",
-      label: t("conflicts"),
-      extra:
-        openConflicts > 0 ? (
-          <span className="tab-count" title={t("conflicts.openCount", { n: openConflicts })}>
-            {openConflicts}
-          </span>
-        ) : undefined,
-    },
-    { id: "comments", label: t("comments") },
-    { id: "review", label: t("recognition.review") },
-    { id: "projects", label: t("projects.title") },
-    { id: "assistant", pinned: true, label: t("assistant"), extra: assistant.busy ? <MizanMark /> : undefined },
-  ];
-
-  // The BOQ table and the conflicts need more room than the take-off. All the panels stay mounted,
-  // so a draft, a search or a running answer survives a tab switch.
   return (
-    <SideTabs<SideTab>
-      className={sideTab === "boq" || sideTab === "conflicts" ? "side wide" : "side"}
-      tabs={tabs}
-      value={sideTab}
-      onChange={setSideTab}
-    >
+    <aside className={shown ? "side col art-on" : "side col"} aria-label={t("assistant")}>
       {infoCard && <InfoCard info={infoCard} onClose={() => setInfoCard(null)} />}
-      <Tabs.Panel value="takeoff" keepMounted tabIndex={-1} className="side-panel">
-        <TakeoffPanel
-          items={items}
-          totals={itemTotals}
-          selectedId={selectedId}
-          onSelect={selectRow}
-          onRemove={removeRow}
-          onRename={renameRow}
-          boq={bill}
-          onLink={linkRow}
-          precision={drafting?.precision ?? 3}
-        />
-      </Tabs.Panel>
-      <Tabs.Panel value="boq" keepMounted tabIndex={-1} className="side-panel">
-        <BoqPanel
-          boq={bill}
-          generated={generated}
-          onShowGenerated={takeoff.showGenerated}
-          takeoff={items}
-          selectedCode={boqCode}
-          onSelect={selectBoq}
-          onImport={info ? onImportBoq : undefined}
-          onTolerance={setTolerance}
-        />
-      </Tabs.Panel>
-      <Tabs.Panel value="conflicts" keepMounted tabIndex={-1} className="side-panel">
-        <ConflictsPanel
-          conflicts={conflicts}
-          compared={compared}
-          hasBoq={bill !== null}
-          onCompare={info ? onCompare : undefined}
-          onExport={info ? onExportConflicts : undefined}
-          onShow={showConflict}
-          onResolve={resolveConflict}
-          onOpenBoq={openBoqTab}
-        />
-      </Tabs.Panel>
-      <Tabs.Panel value="comments" keepMounted tabIndex={-1} className="side-panel">
-        <CommentsPanel
-          comments={comments.comments}
-          sheets={info?.sheets ?? []}
-          onRefresh={comments.refresh}
-          onShow={comments.show}
-        />
-      </Tabs.Panel>
-      <Tabs.Panel value="review" keepMounted tabIndex={-1} className="side-panel">
-        <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null}
-          revision={recognition.revision} run={recognition.run} />
-      </Tabs.Panel>
-      <Tabs.Panel value="projects" keepMounted tabIndex={-1} className="side-panel"><ProjectsPanel active={sideTab === "projects"} /></Tabs.Panel>
-      <Tabs.Panel value="assistant" keepMounted tabIndex={-1} className="side-panel">
-        <AssistantPanel
-          showTechnicalDetails={showTechnicalDetails}
-          assistant={assistant}
-          history={conversationHistory}
-          onShow={showCard}
-          onUndo={undoCard}
-          onSettings={openSettings}
-          pointing={pointing}
-        />
-      </Tabs.Panel>
-    </SideTabs>
+      <AssistantPanel
+        showTechnicalDetails={showTechnicalDetails}
+        assistant={assistant}
+        history={conversationHistory}
+        onShow={showCard}
+        onUndo={undoCard}
+        onSettings={openSettings}
+        pointing={pointing}
+        artifact={{ shown, node: frames, onBack: () => setSideTab("assistant") }}
+        onCompare={onSlashCompare}
+      />
+    </aside>
   );
 }

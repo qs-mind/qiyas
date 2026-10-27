@@ -129,17 +129,17 @@ test("dragging a panel nearly shut folds it; dragging a folded one open unfolds 
 
 test("widths stay between each panel's narrowest and widest, and are kept on this computer", () => {
   const first = renderHook(() => usePanelRails());
-  expect(first.result.current.width).toEqual({ left: 220, right: 340, rightWide: 620 });
+  expect(first.result.current.width).toEqual({ left: 220, right: 440, rightWide: 672 });
   act(() => first.result.current.resize("left", 10));
   act(() => first.result.current.resize("right", 5000));
   expect(first.result.current.width).toMatchObject({ left: PANEL_WIDTH.left.min, right: PANEL_WIDTH.right.max });
   act(() => first.result.current.resize("left", 300.4));
   first.unmount();
   const second = renderHook(() => usePanelRails());
-  expect(second.result.current.width).toEqual({ left: 300, right: PANEL_WIDTH.right.max, rightWide: 620 });
+  expect(second.result.current.width).toEqual({ left: 300, right: PANEL_WIDTH.right.max, rightWide: 672 });
   localStorage.setItem("qiyas.panels.width", '{"left":"wide","right":null}');
   const third = renderHook(() => usePanelRails());
-  expect(third.result.current.width).toEqual({ left: 220, right: 340, rightWide: 620 });
+  expect(third.result.current.width).toEqual({ left: 220, right: 440, rightWide: 672 });
 });
 
 test("each side has its own labels, in English and in Arabic", () => {
@@ -216,7 +216,7 @@ test("a click on a folded panel's strip opens it; a drag does not count as a cli
 test("the wide tabs keep their own width with the same handle", () => {
   const { result } = renderHook(() => usePanelRails());
   act(() => result.current.resize("rightWide", 700));
-  expect(result.current.width).toEqual({ left: 220, right: 340, rightWide: 700 });
+  expect(result.current.width).toEqual({ left: 220, right: 440, rightWide: 700 });
   const onResize = vi.fn();
   render(<PanelHandle side="right" slot="rightWide" hidden={false} width={700} onToggle={() => {}} onFold={() => {}} onResize={onResize} />);
   const sep = screen.getByRole("separator");

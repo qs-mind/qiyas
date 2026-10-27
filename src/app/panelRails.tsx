@@ -1,4 +1,4 @@
-// The two side panels (layers and properties; take-off, BOQ, conflicts, Mizan) can be dragged
+// The two side panels (layers and properties; Mizan's column with its outputs) can be dragged
 // wider or narrower and folded away to give the drawing the whole width. Between each panel and
 // the drawing is a handle: drag it to resize, double-click it (or its round button) to fold or
 // unfold, arrows on the keyboard to resize. Widths and folds are remembered on this computer.
@@ -6,7 +6,7 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useT } from "../i18n";
 
 export type PanelSide = "left" | "right";
-/** What a width is kept for: each panel, and the right panel on its wide tabs (BOQ, conflicts). */
+/** What a width is kept for: each panel, and the right column while it shows an output. */
 export type WidthSlot = PanelSide | "rightWide";
 
 const KEY = "qiyas.panels.hidden";
@@ -15,8 +15,8 @@ const WIDTH_KEY = "qiyas.panels.width";
 /** Each panel's width in CSS pixels: the default, the narrowest and the widest it can be. */
 export const PANEL_WIDTH: Record<WidthSlot, { initial: number; min: number; max: number }> = {
   left: { initial: 220, min: 180, max: 480 },
-  right: { initial: 340, min: 260, max: 760 },
-  rightWide: { initial: 620, min: 260, max: 1000 },
+  right: { initial: 440, min: 300, max: 760 },
+  rightWide: { initial: 672, min: 360, max: 1000 },
 };
 /** A drag that leaves less than this much of a panel folds it. */
 const FOLD_BELOW = 0.6;

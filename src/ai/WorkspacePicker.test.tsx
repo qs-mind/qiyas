@@ -14,9 +14,12 @@ vi.mock("../api", () => ({
   aiModels: async () => ({ models: [{ id: "one", label: "One" }], from_service: true, error: null }),
 }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+/** The picker is one small icon in the box; its choices open from it. */
+const openPicker = () => fireEvent.click(screen.getByRole("button", { name: /^Model:/ }));
 test("the drawing picker uses that provider's saved model without saving global settings", async () => {
   const change = vi.fn(async () => {});
   const { rerender } = render(<LanguageProvider><WorkspacePicker choice={{ provider: "anthropic", model: "one", effort: "high" }} busy={false} onChange={change} /></LanguageProvider>);
+  openPicker();
   await waitFor(() => expect(screen.getByRole("option", { name: "One — one", hidden: true })).toBeTruthy());
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "openai_compatible" } });
   expect(change).toHaveBeenCalledWith({ provider: "openai_compatible", model: "two", effort: "low" });
@@ -28,6 +31,7 @@ test("the drawing picker uses that provider's saved model without saving global 
 test("Claude choices require an explicit check and preserve Default effort when editing the model", async () => {
   const change = vi.fn(async () => {});
   render(<LanguageProvider><WorkspacePicker choice={{ provider: "claude_code", model: "", effort: null }} busy={false} onChange={change} /></LanguageProvider>);
+  openPicker();
   await waitFor(() => expect(screen.getByLabelText("Provider").closest("fieldset")?.disabled).toBe(false));
   expect(subscription.claude).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Check Claude Code", hidden: true }));
@@ -40,6 +44,7 @@ test("Claude choices require an explicit check and preserve Default effort when 
 test("ChatGPT model choices clear effort unsupported by the selected model", async () => {
   const change = vi.fn(async () => {});
   render(<LanguageProvider><WorkspacePicker choice={{ provider: "chatgpt_plan", model: "", effort: "max" }} busy={false} onChange={change} /></LanguageProvider>);
+  openPicker();
   await waitFor(() => expect(screen.getByLabelText("Provider").closest("fieldset")?.disabled).toBe(false));
   expect(subscription.models).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Read the list again", hidden: true }));

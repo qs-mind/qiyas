@@ -6,6 +6,7 @@ import {
   aiConversations, aiDeleteConversation, aiDeleteConversations, type ConversationSummary,
 } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { Glyph } from "../shell/glyphs";
 import "./history.css";
 
 export type ConversationHistoryState = {
@@ -87,9 +88,8 @@ export function ConversationHistory({ history, disabled }: { history: Conversati
   const chats = history.chats.filter((chat) => all || chat.drawing === history.drawing);
   const unavailable = disabled || history.pending;
   return <><Popover.Root open={open} onOpenChange={setOpen} modal={false}>
-    <Popover.Trigger className="chat-history-trigger" disabled={unavailable}>
-      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 4.5V8l2.5 1.5" /></svg>
-      {t("ai.history")}
+    <Popover.Trigger className="chat-history-trigger ib" disabled={unavailable} aria-label={t("ai.history")} title={t("ai.history")}>
+      <Glyph name="history" />
     </Popover.Trigger>
     <Popover.Portal>
       <Popover.Positioner className="chat-history-positioner" side="bottom" align="start" sideOffset={6} collisionPadding={8}>

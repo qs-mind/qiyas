@@ -10,7 +10,10 @@ import type { Theme } from "../viewport/gl";
 import type { ViewportHandle } from "../viewport/Viewport";
 import { initialTheme, THEME_KEY } from "./shared";
 
-export type SideTab = "takeoff" | "boq" | "conflicts" | "comments" | "review" | "projects" | "assistant";
+/** What the one right-hand column shows (W4, design B): Mizan's conversation, or one of the
+ *  outputs Mizan produced (the take-off, the BOQ, the conflicts, the take-off report) in the same
+ *  column, with a way back. There is no tab strip. */
+export type SideTab = "assistant" | "takeoff" | "boq" | "conflicts" | "review";
 
 export function useShell() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -23,8 +26,8 @@ export function useShell() {
   /** The toast of the notice and of the error on screen, so the next one takes its place. */
   const noticeToast = useRef<string | number | null>(null);
   const errorToast = useRef<string | number | null>(null);
-  /** The right panel's tab. */
-  const [sideTab, setSideTab] = useState<SideTab>("takeoff");
+  /** The right column's view: the conversation, or an output. */
+  const [sideTab, setSideTab] = useState<SideTab>("assistant");
   const viewport = useRef<ViewportHandle>(null);
   const viewportBox = useRef<HTMLDivElement>(null);
 

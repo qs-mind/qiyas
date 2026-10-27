@@ -1,4 +1,5 @@
 import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
+import { slashCommand, slashMatches, slashWord, type SlashCommand } from "./slashCommands";
 import { uiError, userError } from "../i18n/errors";
 import { listen } from "@tauri-apps/api/event";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
@@ -13,6 +14,8 @@ import { ConversationHistory, type ConversationHistoryState } from "./Conversati
 import { recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
 import { ToolCard } from "./ToolCard";
+import { Glyph } from "../shell/glyphs";
+import type { OutputId } from "../shell/outputs";
 import type { Assistant } from "./useAssistant";
 import { useStickToBottom } from "./useStickToBottom";
 
@@ -29,6 +32,11 @@ type Props = {
    *  that takes them along. Without it the message goes alone. */
   pointing?: Pointing;
   history?: ConversationHistoryState;
+  /** The right column's outputs (the take-off, the BOQ...): `node` holds them all, mounted; while
+   *  one is `shown` it takes the conversation's place, and the box below stays. */
+  artifact?: { shown: OutputId | null; node: ReactNode; onBack(): void };
+  /** The /compare command: ask for a BOQ and find its conflicts with the drawings. */
+  onCompare?(): void;
   /** Reads a picture pasted, dropped or picked (tests give their own). */
   read?(file: File): Promise<Picture>;
 };
@@ -54,6 +62,8 @@ export const AssistantPanel = memo(function AssistantPanel({
   onSettings,
   pointing,
   history,
+  artifact,
+  onCompare,
   read = readPicture,
 }: Props) {
   const t = useT();
@@ -89,6 +99,9 @@ export const AssistantPanel = memo(function AssistantPanel({
   const filePicker = useRef<HTMLInputElement>(null);
   /** The pictures to send with the next message. */
   const [pictureError, setPictureError] = useState<string | null>(null);
+  /** Slash commands: the row chosen in the list, and whether Escape closed it for this text. */
+  const [slashAt, setSlashAt] = useState(0);
+  const [slashOff, setSlashOff] = useState(false);
 
   // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
   const focusKey = pointing?.focusKey ?? 0;
@@ -128,8 +141,9 @@ export const AssistantPanel = memo(function AssistantPanel({
   // where they are and a button offers the way back.
   const thread = useStickToBottom([transcript, busy]);
 
-  async function submit() {
-    const text = [draft.trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
+  /** Sends the box (or `prompt`, a slash command's words in its place) with its pictures and files. */
+  async function submit(prompt?: string) {
+    const text = [(prompt ?? draft).trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
     if ((!text && pictures.length === 0) || unavailable) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
@@ -147,6 +161,21 @@ export const AssistantPanel = memo(function AssistantPanel({
       setDocuments([]);
       setPictureError(null);
     }
+  }
+
+  const slashList = slashOff || unavailable ? [] : slashMatches(draft, lang);
+  const slashRow = Math.min(slashAt, Math.max(0, slashList.length - 1));
+
+  /** Runs a slash command: a prompt goes to Mizan as the user's message, an action is the window's. */
+  function runSlash(command: SlashCommand) {
+    setSlashAt(0);
+    if (command.kind === "prompt") {
+      void submit(t(`ai.slash.${command.id}.prompt`));
+      return;
+    }
+    setDraft("");
+    if (command.id === "new") assistant.clear();
+    else if (command.id === "compare") onCompare?.();
   }
 
   // Undo is offered on the card whose change is the assistant's newest still in the take-off.
@@ -324,38 +353,30 @@ export const AssistantPanel = memo(function AssistantPanel({
   }
 
   const empty = transcript.items.length === 0;
+  const shownOutput = artifact?.shown ?? null;
+  const firstAsk = transcript.items.find((item) => item.kind === "user");
+  const title = firstAsk && firstAsk.kind === "user" ? chatText(firstAsk.text).trim().replace(/\s+/g, " ").slice(0, 60) : "";
+  const questions = [...transcript.items].reverse().find((item) => item.kind === "user" || item.kind === "question");
+  const asked = questions?.kind === "question" ? questions.questions.length : 0;
   return (
-    <section className="assistant-panel" aria-label={t("assistant")}>
+    <section className={shownOutput ? "assistant-panel has-art" : "assistant-panel"} aria-label={t("assistant")}>
+      <div className="art-slot" hidden={!shownOutput}>{artifact?.node}</div>
+      <div className="chat-slot" hidden={!!shownOutput}>
       <div className="assistant-head">
-        <button
-          type="button"
-          className="new-chat"
-          onClick={assistant.clear}
-          disabled={unavailable || empty}
-          title={t("ai.newChatTip")}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 3.5v9M3.5 8h9" />
-          </svg>
-          {t("ai.newChat")}
-        </button>
+        <MizanMark />
+        <span className="chat-title heading">{t("assistant")}</span>
         {history && <ConversationHistory history={history} disabled={busy} />}
         <button
           type="button"
-          className="icon gear"
-          aria-haspopup="dialog"
-          aria-label={t("settings")}
-          title={t("settings")}
-          onClick={onSettings}
+          className="ib new-chat"
+          onClick={assistant.clear}
+          disabled={unavailable || empty}
+          aria-label={t("ai.newChat")}
+          title={t("ai.newChatTip")}
         >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="2.2" />
-            <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
-            <circle cx="8" cy="8" r="4.6" />
-          </svg>
+          <Glyph name="newChat" />
         </button>
       </div>
-      {assistant.choice && assistant.choose && <WorkspacePicker choice={assistant.choice} busy={busy} onChange={assistant.choose} />}
       {assistant.phase === "queued" && <p className="msg notice" role="status">{t("workspace.queued")}</p>}
       {assistant.memoryLimited && busy && <p className="msg notice" role="status">{t("workspace.memory")}</p>}
       {assistant.away != null && <p className="msg notice">{t("workspace.away")} {assistant.away || t(`workspace.${assistant.phase || "done"}`)}</p>}
@@ -412,6 +433,16 @@ export const AssistantPanel = memo(function AssistantPanel({
           </button>
         )}
         </div>
+      </div>
+      {shownOutput && (
+        <button type="button" className="back-strip" onClick={artifact?.onBack}>
+          <i className={busy ? "live" : undefined} aria-hidden="true" />
+          <span><b>{t("assistant")}</b>{asked > 0 ? ` · ${t(asked === 1 ? "ai.oneQuestion" : "ai.nQuestions", { n: asked })}` : ""}</span>
+          <span className="grow" />
+          <span className="back-title" dir="auto">{title || t("outputs.backToChat")}</span>
+          <Glyph name="next" mirror size={14} />
+        </button>
+      )}
       {error && (
         <div className="error" role="alert">
           {errorText(error)}
@@ -436,6 +467,25 @@ export const AssistantPanel = memo(function AssistantPanel({
           addPictures(files);
         }}
       >
+        {slashList.length > 0 && (
+          <div className="slash" role="listbox" aria-label={t("ai.slash.title")}>
+            {slashList.map((command, k) => (
+              <button
+                key={command.id}
+                id={`slash-${command.id}`}
+                type="button"
+                role="option"
+                aria-selected={k === slashRow}
+                className={k === slashRow ? "sl on" : "sl"}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => runSlash(command)}
+              >
+                <span className="cmd" dir="auto">/{slashWord(command, lang)}</span>
+                <span className="d">{t(`ai.slash.${command.id}.desc`)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {(pointing?.selection || pointing?.region || pictures.length > 0) && (
           <div className="composer-chips">
             {pointing?.selection && (
@@ -496,84 +546,116 @@ export const AssistantPanel = memo(function AssistantPanel({
             {pictureError}
           </p>
         )}
-        <textarea
-          ref={box}
-          dir="auto"
-          rows={3}
-          aria-label={t("ai.placeholder")}
-          placeholder={t("ai.placeholder")}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onPaste={(e) => {
-            const files = [...(e.clipboardData?.files ?? [])].filter((file) => isPicture(file) || file.type === "application/pdf");
-            if (files.length === 0) return;
-            e.preventDefault();
-            addPictures(files);
-          }}
-          onKeyDown={(e) => {
-            // Enter sends, Shift+Enter is a new line; not while an input method is composing.
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+        <div className="box">
+          <textarea
+            ref={box}
+            dir="auto"
+            rows={3}
+            aria-label={shownOutput ? t(`outputs.ask.${shownOutput}`) : t("ai.placeholder")}
+            placeholder={shownOutput ? t(`outputs.ask.${shownOutput}`) : t("ai.placeholder")}
+            role={slashList.length > 0 ? "combobox" : undefined}
+            aria-expanded={slashList.length > 0 || undefined}
+            aria-activedescendant={slashList.length > 0 ? `slash-${slashList[slashRow].id}` : undefined}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setSlashOff(false);
+              setSlashAt(0);
+            }}
+            onPaste={(e) => {
+              const files = [...(e.clipboardData?.files ?? [])].filter((file) => isPicture(file) || file.type === "application/pdf");
+              if (files.length === 0) return;
               e.preventDefault();
-              submit();
-            }
-          }}
-        />
-        {documents.map((document) => (
-          <div className="pointing-chip" key={document.path}>
-            <span>{document.name} · {document.pages} {t("ai.pdfPages")}</span>
-            <button type="button" aria-label={t("ai.removeDocument")} disabled={unavailable}
-              onClick={() => setDocuments((now) => now.filter((item) => item.path !== document.path))}>×</button>
-          </div>
-        ))}
-        <input
-          ref={filePicker}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
-          multiple
-          hidden
-          onChange={(e) => {
-            addPictures([...(e.target.files ?? [])]);
-            e.target.value = "";
-          }}
-        />
-        <div className="composer-buttons">
-          {pointing && (
+              addPictures(files);
+            }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (slashList.length > 0) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashAt((slashRow + (e.key === "ArrowDown" ? 1 : slashList.length - 1)) % slashList.length);
+                  return;
+                }
+                if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+                  e.preventDefault();
+                  runSlash(slashList[slashRow]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSlashOff(true);
+                  return;
+                }
+              }
+              // Enter sends, Shift+Enter is a new line; not while an input method is composing.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                const whole = slashCommand(draft);
+                if (whole && !unavailable) runSlash(whole);
+                else submit();
+              }
+            }}
+          />
+          {documents.map((document) => (
+            <div className="pointing-chip" key={document.path}>
+              <span>{document.name} · {document.pages} {t("ai.pdfPages")}</span>
+              <button type="button" aria-label={t("ai.removeDocument")} disabled={unavailable}
+                onClick={() => setDocuments((now) => now.filter((item) => item.path !== document.path))}>×</button>
+            </div>
+          ))}
+          <input
+            ref={filePicker}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+            multiple
+            hidden
+            onChange={(e) => {
+              addPictures([...(e.target.files ?? [])]);
+              e.target.value = "";
+            }}
+          />
+          <div className="composer-buttons">
             <button
               type="button"
-              className="icon"
-              aria-label={t("ai.markArea")}
-              title={t("ai.markArea")}
-              onClick={pointing.markArea}
+              className="ib"
+              aria-label={t("ai.attach")}
+              title={t("ai.attach")}
+              disabled={pictures.length >= MAX_PICTURES}
+              onClick={() => filePicker.current?.click()}
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
-                <path d="M8 6v4M6 8h4" />
+              <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="12" height="10" rx="1.5" />
+                <circle cx="6" cy="6.5" r="1.2" />
+                <path d="M2.5 11.5l3.5-3 2.5 2 2-1.5 3 2.5" />
               </svg>
             </button>
-          )}
-          <button
-            type="button"
-            className="icon"
-            aria-label={t("ai.attach")}
-            title={t("ai.attach")}
-            disabled={pictures.length >= MAX_PICTURES}
-            onClick={() => filePicker.current?.click()}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="2" y="3" width="12" height="10" rx="1.5" />
-              <circle cx="6" cy="6.5" r="1.2" />
-              <path d="M2.5 11.5l3.5-3 2.5 2 2-1.5 3 2.5" />
-            </svg>
-          </button>
-          {busy ? (
-            <button type="button" className="primary" onClick={assistant.cancel}>
-              {t("ai.stop")}
-            </button>
-          ) : (
-            <button type="submit" className="primary" disabled={unavailable || (!draft.trim() && pictures.length === 0 && documents.length === 0)}>
-              {t("ai.send")}
-            </button>
-          )}
+            {pointing && (
+              <button
+                type="button"
+                className="ib"
+                aria-label={t("ai.markArea")}
+                title={t("ai.markArea")}
+                onClick={pointing.markArea}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
+                  <path d="M8 6v4M6 8h4" />
+                </svg>
+              </button>
+            )}
+            {assistant.choice && assistant.choose && <WorkspacePicker choice={assistant.choice} busy={busy} onChange={assistant.choose} />}
+            <span className="grow" />
+            {busy ? (
+              <button type="button" className="send" aria-label={t("ai.stop")} title={t("ai.stop")} onClick={assistant.cancel}>
+                <Glyph name="stop" />
+              </button>
+            ) : (
+              <button type="submit" className="send" aria-label={t("ai.send")} title={t("ai.send")} disabled={unavailable || (!draft.trim() && pictures.length === 0 && documents.length === 0)}>
+                <Glyph name="arrowUp" />
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </section>

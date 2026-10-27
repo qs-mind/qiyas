@@ -1,6 +1,8 @@
 /** The window's top bar: the ribbon, and the language, theme, settings and About buttons. */
 import { clearRecents, recents as readRecents, redo, undo, views as readViews, type DrawingInfo, type NamedView } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { OutputsMenu } from "../shell/OutputsMenu";
+import type { OutputId, OutputInfo } from "../shell/outputs";
 import { Ribbon } from "../shell/Ribbon";
 import { RibbonIcon } from "../shell/ribbonIcons";
 import type { Measure } from "./shared";
@@ -34,6 +36,10 @@ type Props = {
   takeoff: Takeoff;
   plot: Plot;
   options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit">;
+  /** What Mizan produced, and the one the right column shows (the "Outputs" menu). */
+  outputs: OutputInfo[];
+  shownOutput: OutputId | null;
+  onOpenOutput(id: OutputId): void;
   parametric: Pick<Parametric, "openParameters" | "setBarHidden">;
   onCommandLine?(line: string): void;
 };
@@ -55,6 +61,9 @@ export function Header({
   plot,
   options,
   parametric,
+  outputs,
+  shownOutput,
+  onOpenOutput,
   onCommandLine,
 }: Props) {
   const t = useT();
@@ -181,6 +190,7 @@ export function Header({
         })}
       />
       <div className="prefs">
+        <OutputsMenu outputs={outputs} shown={shownOutput} onOpen={onOpenOutput} />
         {/* One switch each: the language button names the other language in its own script; the
             theme button shows where it goes (a moon in light, a sun in dark). */}
         <button

@@ -13,6 +13,7 @@ import { CommandLine } from "../shell/CommandLine";
 import { StatusBar } from "../shell/StatusBar";
 import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
+import { outputList } from "../shell/outputs";
 import { Notices } from "../ui/notices";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
@@ -26,7 +27,6 @@ import { useAttach } from "./useAttach";
 import { useBlocks } from "./useBlocks";
 import { useCommandLine } from "./useCommandLine";
 import { type Commands, useCommands, useToolChoice } from "./useCommands";
-import { useComments } from "./useComments";
 import { useDrafting } from "./useDrafting";
 import { useAutosave, useDrawings, useFileTabs } from "./useDrawings";
 import { useLayers } from "./useLayers";
@@ -47,8 +47,8 @@ export default function App() {
   /** Counts up when the canvas menu's Properties asks for the palette (it may be folded away). */
   const [revealProperties, setRevealProperties] = useState(0);
   const shell = useShell();
-  // The BOQ and conflicts tabs want a wider right panel: their width is kept apart.
-  const rightSlot = shell.sideTab === "boq" || shell.sideTab === "conflicts" ? "rightWide" : "right";
+  // An output in the right column wants a wider panel than the conversation: its width is kept apart.
+  const rightSlot = shell.sideTab === "assistant" ? "right" : "rightWide";
   const options = useOptions({ t, info, setError: shell.setError });
   const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, focusDrawing } =
     shell;
@@ -346,7 +346,6 @@ export default function App() {
   const { highlight, overlay } = useOverlay({
     tool, measure, batch, selected, boqLinked, conflictLinked, aiHighlight, revealOverlay: sheets.revealOverlay,
   });
-  const comments = useComments({ sideTab: shell.sideTab, viewport, sheet, chooseSheet, switchGen, info, batch });
 
   // An empty model is said next to the file name, not counted as a reading problem.
   const problems = info ? readProblems(info) : [];
@@ -375,6 +374,9 @@ export default function App() {
         plot={plot}
         options={options}
         parametric={parametric}
+        outputs={outputList(takeoffState)}
+        shownOutput={shell.sideTab === "assistant" ? null : shell.sideTab}
+        onOpenOutput={shell.setSideTab}
         onCommandLine={(line) => {
           void startCommand(line).catch((error) => shell.setError(uiError(error)));
         }}
@@ -462,7 +464,8 @@ export default function App() {
           takeoff={takeoff}
           ai={ai}
           conversationHistory={conversationHistory}
-          comments={comments}
+          onExportTakeoff={info ? drawings.exportFile : undefined}
+          onSlashCompare={info ? takeoff.importAndCompare : undefined}
           recognition={{ revision: batch, run: runDrawingCommand }}
         />
       </div>

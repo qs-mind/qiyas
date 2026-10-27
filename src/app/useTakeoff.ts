@@ -162,11 +162,12 @@ export function useTakeoff({
     refreshTakeoffAndBoq,
   } = takeoffState;
 
-  /** Asks for an Excel BOQ and makes it the drawing's BOQ (an undo step), then shows it. */
-  async function importBoqFile() {
-    if (!info) return;
+  /** Asks for an Excel BOQ and makes it the drawing's BOQ (an undo step), then shows it. True when a
+   *  BOQ was imported. */
+  async function importBoqFile(): Promise<boolean> {
+    if (!info) return false;
     const path = await open({ filters: [{ name: "Excel", extensions: ["xlsx", "xlsm"] }] });
-    if (typeof path !== "string") return;
+    if (typeof path !== "string") return false;
     let changed = false;
     await run(async () => {
       await importBoq(path);
@@ -176,6 +177,12 @@ export function useTakeoff({
       await refreshTakeoffAndBoq();
     });
     if (changed) await autosave();
+    return changed;
+  }
+
+  /** The /compare command: asks for a BOQ, then finds its conflicts with the drawings. */
+  async function importAndCompare() {
+    if (await importBoqFile()) await compareNow();
   }
 
   // Stable for the memoised BOQ panel, which would otherwise re-render on every pointer move.
@@ -354,6 +361,7 @@ export function useTakeoff({
   return {
     showGenerated,
     importBoqFile,
+    importAndCompare,
     onImportBoq,
     compareNow,
     onCompare,

@@ -60,7 +60,7 @@ test("empty state offers three examples; one fills the box", () => {
   const examples = screen.getAllByRole("listitem");
   expect(examples).toHaveLength(3);
   fireEvent.click(screen.getByText("Count the doors on this sheet"));
-  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe(
+  expect((screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement).value).toBe(
     "Count the doors on this sheet",
   );
   expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
@@ -170,7 +170,7 @@ test("Undo is only offered on the newest change, and not while busy", () => {
   cleanup();
   setup({ items: [card] }, true);
   expect(screen.queryByText("Undo")).toBeNull();
-  expect(screen.getByText("Stop")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
   expect(screen.getByText("Working…")).toBeTruthy();
   // The Qiyas mark, alive, beside the text (not dots, not a ring), hidden from assistive technology.
   const mark = screen.getByText("Working…").querySelector(".mizan-mark.mizan-mark-md");
@@ -202,7 +202,7 @@ test("a crash says so and offers a new conversation; the status line announces t
 
 test("Enter sends and empties the box; Shift+Enter does not send", async () => {
   const { assistant } = setup();
-  const box = screen.getByLabelText("Type your request…") as HTMLTextAreaElement;
+  const box = screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Count the doors" } });
   fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
   expect(assistant.send).not.toHaveBeenCalled();
@@ -400,7 +400,7 @@ test("what the user points at shows as chips above the box; × leaves it out", (
 
 test("a pasted picture shows as a thumbnail and goes with the message", async () => {
   const { send: sendPointed, read } = pointingSetup({ selection: null, region: null });
-  const box = screen.getByLabelText("Type your request…");
+  const box = screen.getByLabelText("Ask Mizan, or type / for commands");
   const photo = new File(["x"], "site.jpg", { type: "image/jpeg" });
   fireEvent.paste(box, { clipboardData: { files: [photo] } });
   await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(1));
@@ -420,7 +420,7 @@ test("a pasted picture shows as a thumbnail and goes with the message", async ()
 
 test("at most four pictures go with one message", async () => {
   pointingSetup({ selection: null, region: null });
-  const box = screen.getByLabelText("Type your request…");
+  const box = screen.getByLabelText("Ask Mizan, or type / for commands");
   const files = [1, 2, 3, 4, 5].map((n) => new File(["x"], `p${n}.png`, { type: "image/png" }));
   fireEvent.paste(box, { clipboardData: { files } });
   await waitFor(() => expect(screen.getAllByAltText("Picture")).toHaveLength(4));
@@ -551,10 +551,10 @@ test("composer drafts belong to their drawing", () => {
   const assistant = { transcript: EMPTY, busy: false, error: null, send: vi.fn(), cancel: vi.fn(), clear: vi.fn() };
   const panel = (workspace: number) => <AssistantPanel assistant={{ ...assistant, workspace }} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />;
   const { rerender } = render(panel(1));
-  fireEvent.change(screen.getByLabelText("Type your request…"), { target: { value: "First drawing draft" } });
+  fireEvent.change(screen.getByLabelText("Ask Mizan, or type / for commands"), { target: { value: "First drawing draft" } });
   rerender(panel(2));
-  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe("");
-  fireEvent.change(screen.getByLabelText("Type your request…"), { target: { value: "Second drawing draft" } });
+  expect((screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement).value).toBe("");
+  fireEvent.change(screen.getByLabelText("Ask Mizan, or type / for commands"), { target: { value: "Second drawing draft" } });
   rerender(panel(1));
-  expect((screen.getByLabelText("Type your request…") as HTMLTextAreaElement).value).toBe("First drawing draft");
+  expect((screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement).value).toBe("First drawing draft");
 });
