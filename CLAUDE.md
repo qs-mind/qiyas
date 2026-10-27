@@ -58,7 +58,7 @@ three late refs are `measureRef` (`useSheets` cancels the tool when the sheet ch
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
 with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
 
-Mizan's waiting (the "Working…" line, a running tool card, the busy assistant tab) is the Qiyas mark
+Mizan's waiting (the "Working…" line and a running tool card) is the Qiyas mark
 itself, `src/ai/MizanMark.tsx`: the brand drawing, its mesh drawn line by line round the centre, then
 wiped and drawn again (CSS, still and drawn under reduced motion). Waiting is shown by `src/shell/DotLoader.tsx` (clean-room, our own design: do not copy code from any
 dot-matrix loader library, whose licence forbids it): `<DotLoader pattern="scan|spiral|pulse|chase"
@@ -74,12 +74,11 @@ brand tokens in `theme.css` (no Tailwind, no shadcn, no `motion`; CSS transition
 `prefers-reduced-motion`). `LanguageProvider` hands Base UI the direction (`DirectionProvider`), so
 arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) stubs `ResizeObserver`,
 `matchMedia` and `scrollIntoView` for jsdom.
-- `@base-ui/react`: Tabs (the ribbon's and the side panel's: one `Tabs.Indicator`, moved by a CSS
-  transform, is the chosen tab's face; `SideTabs.tsx` never wraps; the active tab and pinned Mizan tab stay visible, and other tabs fold into a "⋯"
-  menu when the panel is too narrow); Tooltip (`shell/Tooltip.tsx`: the
+- `@base-ui/react`: Tabs (the ribbon's: one `Tabs.Indicator`, moved by a CSS transform, is the
+  chosen tab's face; there is no side tab strip any more, see W4); Tooltip (`shell/Tooltip.tsx`: the
   `Tip` wrapper keeps its API, the delay is 400 ms, the next card shows at once within 300 ms, and a
-  click's focus shows none); Menu (`shell/RibbonFlyout.tsx`: a group's "⋯" and the tabs' "More", where
-  the side panel's "More" is a menu button and never replaces the selected panel value); Context Menu (`viewport/CanvasMenu.tsx`:
+  click's focus shows none); Menu (`shell/RibbonFlyout.tsx`: a group's "⋯" and the tabs' "More"; the
+  Outputs menu and the artifact head's switch are Menus too); Context Menu (`viewport/CanvasMenu.tsx`:
   Move, Copy, Erase, Properties, Zoom extents on a right-click of the drawing); Popover (the status
   bar's list of recovered problems); Dialog (`ui/ModalDialog.tsx`, behind the Settings, Plot, Purge,
   Audit and Recovery dialogs: Escape closes unless `dismissible` is false, a click outside does not,
@@ -121,7 +120,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   bottom; scrolled up it leaves them and offers "Jump to latest". There is no propose-and-approve flow
   for BOQ changes (the tools apply and each card can be undone), so there are no suggestion cards.
 - The side panels' widths and folds are our own handle (`app/panelRails.tsx`: drag, double click, arrows;
-  kept on this computer), not `react-resizable-panels`.
+  kept on this computer), not `react-resizable-panels`. Mizan's column is 440 px (672 px while an
+  output is open, its own remembered width), the layers panel 260 px.
 - Dependencies (all MIT; `tslib`, 0BSD, comes with them, text in `LICENSES/tslib-0BSD.txt`):
   `@base-ui/react`, `@tanstack/react-table`, `@tanstack/react-virtual` (3.14.13: the newest that passes
   pnpm's release-age gate), `@headless-tree/core` and `/react`, `cmdk`, `sonner`, and
@@ -464,7 +464,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   vision hints snap to CAD geometry or raster ink, with raster interpretations requiring review.
   Recognition uses types with empty plan recipes to retain the source graphics. It currently
   operates on the drawing's own top-level entities; xref content remains read-only.
-- The window's Review tab accepts, fixes or rejects candidates in English and Arabic.
+- The take-off report (Outputs menu, "Take-off report"; `RecognitionPanel`) accepts, fixes or rejects candidates in English and Arabic.
   `qiyas_read document {path,pages?}` reads plain PDF text through the pdfium worker without
   changing a drawing. `qiyas_capture` source `document` renders a PDF page with a coordinate
   caption. The composer accepts PDFs up to 20 MiB under the Qiyas data home's `attachments/`;
@@ -491,7 +491,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Lines retain expressions, operands, inclusion decisions, method/clause/source and handle/sheet/
   assigned grid. Missing grids and uncovered objects are reported. Invalid or unreviewed objects
   withhold quantities. All data round-trips with the DWG/DXF. No manually typed generated quantity.
-- Settings selects method names: POMI (RICS), NRM2 (RICS), SMM7, CESMM4, local practice in
+- Settings selects method names: POMI, NRM2, SMM7, CESMM4 (never with the publishing body's name:
+  W4; a saved "POMI (RICS)" is shown and saved as "POMI"), local practice in
   Egypt/KSA/UAE, Other (free text), or None (geometric quantities). Labels are English/Arabic;
   saved `measurement_method` is the name string (null for None). Optional `methods/*.json`
   files remain extra name choices. Files are matched by their declared name, not filename.
@@ -798,10 +799,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `morning-report.md` (default `<project>.output/`). Workbook sheets include Generated BOQ,
   Dimension sheets, Queries, Register, Drawings and a chunked lossless project record.
   Failed drawings retain partial output and exit 1; incomplete checks exit 2.
-- The bilingual Projects side panel lists projects, creates/opens them, adds/removes drawings,
-  runs the shared engine and shows status and output paths. Its project history works without
-  an open drawing. Mizan's host uses the same workspace and may open members of its selected
-  project without repeatedly asking for file approval.
+- The Projects side panel is gone (W4: a project is a folder you open); the commands
+  (`project.*`, `qiyas-cli project run`) and the project workspace stay. Mizan's host uses that
+  workspace and may open members of its selected project without repeatedly asking for file approval.
 - The take-off workflow includes the project path. The kit explicitly says it is complete;
   discovery for commands covered by it returns their short kit entry. The 6,144-byte cap stays.
 - `bench projects --set quick --mode prepared|autonomy` and the full quick runs score projects
@@ -856,8 +856,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   authored elements without recognition and legacy/manual quantities use 0.5, never assumed 100%.
   This is conservative evidence confidence, not a statistically proven probability.
 - Shared bands: low <0.6, medium [0.6,0.9), high >=0.9. Reports list lowest confidence first and
-  include counts by band. Normal and interrupted Mizan completions emit the confidence report;
-  project reports retain summaries. Confidence never adds a review or approval gate.
+  include counts by band. The numbers stay in the engine and its reports; the window never shows a
+  confidence percentage or band and Mizan no longer appends a confidence report (W4, founder's
+  ruling). Confidence never adds a review or approval gate.
 - Benchmark submissions retain confidence before truth is opened. Each case and the overall
   JSON/Markdown report compare confidence with correctness using the existing strict tolerances.
   Extras fail; valid aggregate duplicates do not count twice; missing predictions have no confidence.
@@ -1132,9 +1133,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `ListComments` (`Outcome::Comments`) lists every sheet's clouds with the label's text (edited
   like any MText), else the cloud's.
 - Window: COMMENT (`commentCloud` in `dimTools.ts`: click the corners, Enter, type the comment);
-  the side panel's Comments tab (`useComments`, `CommentsPanel`) lists them and shows one on a
-  click. No ribbon button yet (the ribbon layout is being redone). Mizan: `add_comment`,
-  `list_comments`.
+  the clouds stay on the drawing (the Comments tab went in W4). No ribbon button yet. Mizan:
+  `add_comment`, `list_comments`.
 
 ## Parametric
 
@@ -2155,7 +2155,7 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   `useAssistantWiring`): the Select tool's selection (or its one pick inside a block, with its
   chain) shows as a chip above the composer ("Selection · 3", its kinds), × leaves it out until
   it changes; the composer's area button starts the `mizanArea` tool (drag a box, or click
-  corners and Enter or double click; it then goes back to the tool before and opens Mizan's tab)
+  corners and Enter or double click; it then goes back to the tool before and shows Mizan's conversation)
   and an "Area · w × h m · n entities" chip; the canvas menu's "Ask Mizan about this" opens the
   tab with the selection. `ai_send { text, context: { selection, region, view, picture }, images }`:
   `Agent::run_turn_with(UserMessage)` adds to `[state]` the view on screen, the selection and the
@@ -2854,7 +2854,7 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   language; the kit keeps its existing size bound. Prior injected workflow guidance is removed
   at the next turn, then supplied only for the current job in the current chat language.
   Mizan supplies the chat language itself. Drawing budget notices ask for requested checks
-  and remaining work. Confidence and interrupted take-off reports run only for quantity jobs and follow the chat language.
+  and remaining work. Interrupted take-off reports run only for quantity jobs and follow the chat language.
 - `finish` never calls Save, opens Save As, or reports a saved drawing. The default desktop host
   records completion only. Explicit Save and headless EOF retention remain separate operations.
 - An identical failed or ineffective input gets advice on attempts two through five; only
@@ -2933,9 +2933,8 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   fonts load. Inputs and lists use their visible value, excluding unchosen options. User resizing starts at the rendered width. A hidden panel cannot zero its row
   estimates. Markup measurements show Note and no unit; the footer counts Notes separately
   from measured totals. Totals wrap and isolate their numeric values in either language.
-- SideTabs keeps its real selected value even while the menu is open. The active tab and the
-  pinned Mizan tab (including busy mark) remain visible. Selecting a menu item promotes that tab
-  into the strip; all panel bodies remain mounted and the selected one remains shown.
+- (Replaced by W4: the side tab strip and `SideTabs` are gone. The conversation and every output
+  stay mounted in Mizan's column, one shown.)
 - Arabic chat has a complete Thmanyah face for prose, inherited line height and baseline inline
   elements. Body text explicitly disables swash; headings keep it. Latin identifiers still use
   isolated `bdi` runs. The original raised words are plain text in the DOM; local HarfBuzz gives
@@ -3306,7 +3305,7 @@ New untitled drawings skip placeholder names already present in chat history or 
   optimization is retained. Broader P5/P6 deferral remains unfinished.
 - Dev builds optimize `qiyas-core` and `qiyas-param` at level 3, retaining debug assertions and
   normal floating-point semantics. The offline clinic fixture preserves all 85 supplied calls
-  and applies the name-only `POMI (RICS)` method first. Its release guard uses the existing CPU
+  and applies the name-only `POMI (RICS)` method first (a fixture name, never shown). Its release guard uses the existing CPU
   reference. Exact comparison retains quantities, handles, findings and revision counters.
 - Validation and measured gates are recorded in `docs/2026-10-25-qiyas-goal-P.md`.
   Absolute clinic gates pass with exact results; the stricter relative clinic guard still
@@ -3355,4 +3354,49 @@ Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas
 - Cache: the Responses body of a long turn only appends between trims (`chatgpt_plan/responses.rs`
   test `a_long_turn_only_appends_between_trims...`); the live miss rate is provider side (see the
   report). Both fixed prompts stay under 900 words.
+
+## W4: the new window shell (27 October 2026)
+
+Design B, `.local/design/2026-10-26-shell/b-column.html`. What changed per note, the shortcut audit and
+what was not seen in the real window: `docs/2026-10-27-qiyas-W4.md`. Chromium renders of the real
+React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
+
+- One column on the end side (`SidePanel` in `app/Panels.tsx`, `ai/AssistantPanel.tsx`). `shell.sideTab` is
+  `"assistant"` (the conversation) or an output: `takeoff`, `boq`, `conflicts`, `review`
+  (`shell/outputs.ts`). An output shows in the same column in place of the chat (`ArtifactFrame`: back
+  arrow, a switch menu, its meta, one action, close) with a strip under it back to the chat
+  (`.back-strip`) and the box still below ("Ask Mizan about this BOQ"). The top bar's Outputs menu
+  (`OutputsMenu`) opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
+  Projects, Comments tabs and `SideTabs` are removed; the conversation and all outputs stay mounted.
+- The box (`.composer`): attach, mark an area and the model icon (`WorkspacePicker`, now a popover:
+  provider, model, effort of this drawing) under the text, send at the end. Typing "/" lists commands
+  (`ai/slashCommands.ts`: takeoff, boq, compare, sheet, check, connect, new; English words in the
+  English window, `حصر مقايسة مقارنة لوحة فحص ربط جديد` in the Arabic one, either language's word runs
+  when typed whole). A prompt command sends its prompt (`ai.slash.<id>.prompt`); `compare` asks for
+  a BOQ then compares (`useTakeoff.importAndCompare`), `connect` opens "Connect an AI app", `new`
+  starts a chat.
+- Questions (`ai/QuestionList.tsx`): a plain numbered list in Mizan's message, no boxes, the
+  recommended option in the accent with "· recommended"; clicking an option puts it in the box, "Other"
+  is the box. Runs of identical finished reads are one line with a count (`messages.ts readRuns`).
+- File tabs: a dot before the name while Mizan works (animated, still under reduced motion, no
+  words), a dot after it while unsaved. Ribbon: double-click a tab, the arrow at the end of the row or
+  Ctrl+F1 collapses it (`qiyas.ribbon.collapsed`); a tab clicked while collapsed shows its panel over
+  the drawing until Esc, a click elsewhere or a tool. Layout tabs (`SheetTabs`): no scrollbar; the
+  edge with more fades and has an arrow. Layer names wrap and are their own tooltip.
+- "Connect an AI app" (`shell/ConnectAiDialog.tsx`; plug in the top bar, `/connect`, the empty chat):
+  one click turns the MCP server on through the settings (`set_settings` restarts it) and shows the
+  Claude Code command and Claude Desktop config. Security as before: 127.0.0.1, the token (made if
+  missing), no other web origin, off by default.
+- Save (`useDrawings.askSavePath`, `app/saveName.ts`): a toast "Choose where to save the drawing…"
+  before the native dialog; an untitled drawing is offered a real name (title block project or
+  title, else the first text that reads as a name, else "Qiyas drawing <date>") in the last used
+  folder or Documents; "Saved <name>" after. The `.qiyas` is `<name>.qiyas` beside the drawing (it
+  was always written; `crates/qiyas-core/tests/blank.rs` now proves it comes back).
+- Shortcuts (`tools/shortcuts.ts`, `app/useCommandLine.ts`): Ctrl+Shift+S, Ctrl+O, Ctrl+P, Ctrl+F
+  (find; AutoCAD's is the object snap, F3 here), Ctrl+A, Ctrl+X, "/" and Ctrl+K (Mizan's box),
+  Ctrl+/ (cheat sheet, `shell/ShortcutsDialog.tsx`, `shortcutList.ts`, also SHORTCUTS), Enter and a tap
+  of Space repeat the last tool, a second Esc leaves the tool. File keys work while typing in Mizan's
+  box. Undo, redo, erase, cut, select all and F3/F7/F8/F10 say what they did (toasts).
+- Numbers: no confidence percentage or band anywhere in the window, and no professional body in
+  method names or Mizan's words (`shell/methodName.ts`: `plainMethod`, `withoutBody`).
 

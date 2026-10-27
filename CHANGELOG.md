@@ -7,7 +7,11 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
-Nothing yet.
+- The right side is one Mizan column: the take-off, BOQ, conflicts and take-off report open in it in place of the chat. The prompt box has a small model icon and bilingual slash commands; questions are a plain numbered list.
+- A one-click "Connect an AI app" turns on the MCP server and shows the commands to copy.
+- Ctrl+S on a new drawing says it is asking where to save and offers a real name; Ctrl+Shift+S, Ctrl+O, Ctrl+P, Ctrl+F, Ctrl+A, Ctrl+X, Ctrl+K and a shortcuts list on Ctrl+/ were added, and the keys say what they did.
+- The drawing tab is one compact line with a dot while Mizan works; the ribbon collapses on a double-click; the layout tabs have no scrollbar; layer names are readable.
+- Measurement methods read "POMI", "NRM2"; no confidence percentage is shown anywhere.
 
 ## [0.0.1] - 2026-10-26
 
