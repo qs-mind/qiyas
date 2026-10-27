@@ -683,8 +683,17 @@ fn schedules_placed_by_themselves_on_a_sheet_stay_on_the_paper_and_clear_of_the_
             &mut s,
             json!({"type":"label_spaces","query":{"seeds":[{"name":"Hall","point":[3.0*k,3.0*k]}]}}),
         );
-        run(&mut s, json!({"type":"make_sheet","name":"A-101","title":"Plan"}));
-        let block = s.drawing.sheets().into_iter().find(|x| x.name == "A-101").unwrap().block;
+        run(
+            &mut s,
+            json!({"type":"make_sheet","name":"A-101","title":"Plan"}),
+        );
+        let block = s
+            .drawing
+            .sheets()
+            .into_iter()
+            .find(|x| x.name == "A-101")
+            .unwrap()
+            .block;
         run(&mut s, json!({"type":"set_sheet","block":block.clone()}));
         let a = added(&mut s, json!({"type":"opening_schedule"}))[0];
         let b = added(&mut s, json!({"type":"room_schedule"}))[0];
@@ -702,12 +711,21 @@ fn schedules_placed_by_themselves_on_a_sheet_stay_on_the_paper_and_clear_of_the_
         for row in rows {
             assert!([a, b].contains(&row.handle));
             let t = row.bounds;
-            assert!(t[0][0] >= 20.0 && t[1][0] <= paper.w_mm - 10.0, "units {units}: {t:?}");
-            assert!(t[0][1] >= 10.0 && t[1][1] <= paper.h_mm - 10.0, "units {units}: {t:?}");
+            assert!(
+                t[0][0] >= 20.0 && t[1][0] <= paper.w_mm - 10.0,
+                "units {units}: {t:?}"
+            );
+            assert!(
+                t[0][1] >= 10.0 && t[1][1] <= paper.h_mm - 10.0,
+                "units {units}: {t:?}"
+            );
             let apart = |o: [[f64; 2]; 2]| {
                 t[1][0] <= o[0][0] || o[1][0] <= t[0][0] || t[1][1] <= o[0][1] || o[1][1] <= t[0][1]
             };
-            assert!(apart(view), "units {units}: table {t:?} over the view {view:?}");
+            assert!(
+                apart(view),
+                "units {units}: table {t:?} over the view {view:?}"
+            );
             for other in &seen {
                 assert!(apart(*other), "tables overlap: {t:?} {other:?}");
             }
