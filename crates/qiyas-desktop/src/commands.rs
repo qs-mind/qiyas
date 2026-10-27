@@ -1307,7 +1307,10 @@ async fn new_agent(
         }
         None => Agent::new(provider, state.session.clone(), settings),
     };
-    Ok(agent.with_country(country).with_log(log))
+    Ok(agent
+        .with_country(country)
+        .with_second_reading(true)
+        .with_log(log))
 }
 
 /// Runs one turn, forwarding its events to the window while its conversation is current.

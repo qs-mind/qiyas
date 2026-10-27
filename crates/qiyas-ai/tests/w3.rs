@@ -384,3 +384,208 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         std::fs::write(std::path::Path::new(&folder).join("evidence.txt"), text).unwrap();
     }
 }
+
+// ---- W6: the blind second reading, through the production agent ----
+
+/// A main script, and a second reader that answers by item: the 1000 mm door is read as 2 where
+/// the first reading is 1 (a seeded disagreement); everything else is read as the first was.
+struct Blind {
+    main: Mutex<VecDeque<Calls>>,
+    reader_prompts: Arc<Mutex<Vec<String>>>,
+    reader_tools: Arc<Mutex<Vec<String>>>,
+}
+
+impl Provider for Blind {
+    fn stream_turn<'a>(
+        &'a self,
+        request: TurnRequest,
+        _: Sink<'a>,
+    ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+        let result = if request.system.contains("second reader") {
+            let prompt = match &request.messages[0].content[0] {
+                ContentBlock::Text { text } => text.clone(),
+                other => panic!("the reader starts with words: {other:?}"),
+            };
+            if request.messages.len() == 1 {
+                self.reader_prompts.lock().unwrap().push(prompt);
+                for tool in &request.tools {
+                    self.reader_tools
+                        .lock()
+                        .unwrap()
+                        .push(tool.input_schema["properties"]["op"]["enum"].to_string());
+                }
+                // A fresh reader: nothing but the item. It looks at the drawing's texts, then
+                // also tries to read the take-off (refused), then answers.
+                TurnResult {
+                    content: vec![
+                        ContentBlock::ToolUse {
+                            id: "r1".into(),
+                            name: READ.into(),
+                            input: json!({"op":"query","args":{"kind":"texts"}}),
+                        },
+                        ContentBlock::ToolUse {
+                            id: "r2".into(),
+                            name: READ.into(),
+                            input: json!({"op":"state","args":{}}),
+                        },
+                    ],
+                    stop_reason: StopReason::ToolUse,
+                    usage: Default::default(),
+                }
+            } else {
+                let first_line = prompt.lines().next().unwrap_or_default().to_string();
+                let quantity = if first_line.contains("1000x") { 2.0 } else if first_line.contains("900x") { 2.0 } else { 1.0 };
+                // The refused read comes back as an error result, not as a figure.
+                let refused = request.messages.iter().any(|m| {
+                    m.content.iter().any(|b| matches!(b,
+                        ContentBlock::ToolResult { is_error: true, content, .. }
+                        if content.iter().any(|p| matches!(p, qiyas_ai::ResultPart::Text(t) if t.contains("Not allowed")))))
+                });
+                assert!(refused, "the state read must be refused in a second reading");
+                TurnResult {
+                    content: vec![ContentBlock::Text {
+                        text: format!("{{\"quantity\": {quantity}}}"),
+                    }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Default::default(),
+                }
+            }
+        } else {
+            match self.main.lock().unwrap().pop_front() {
+                Some(calls) => TurnResult {
+                    content: calls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(n, (name, input))| ContentBlock::ToolUse {
+                            id: format!("main_{}_{n}", request.messages.len()),
+                            name: name.into(),
+                            input,
+                        })
+                        .collect(),
+                    stop_reason: StopReason::ToolUse,
+                    usage: Default::default(),
+                },
+                None => TurnResult {
+                    content: vec![ContentBlock::Text { text: "Done.".into() }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Default::default(),
+                },
+            }
+        };
+        Box::pin(async move { Ok(result) })
+    }
+}
+
+#[tokio::test]
+async fn a_seeded_disagreement_never_reaches_the_boq_and_appears_as_a_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("w6.dwg"), 6);
+    let cite = json!({"source":"Test method","clause":"1"});
+    let count = |id: &str, element: &str| {
+        json!({"id":id,"kind":"count","basis":"geometric","element_type":element,"unit":"pcs",
+            "terms":[{"label":"Count","operation":"add","factors":["pieces"],"citation":cite}],
+            "citation":cite})
+    };
+    for command in [
+        json!({"type":"walls","runs":[{"points":[[0,0],[20,0]]}],"thickness":0.2,
+            "openings":[{"run":0,"at":2,"width":0.9,"kind":"door"},
+                        {"run":0,"at":5,"width":0.9,"kind":"door"},
+                        {"run":0,"at":8,"width":1.0,"kind":"door"},
+                        {"run":0,"at":12,"width":1.2,"kind":"window"}]}),
+        json!({"type":"measurement","kind":"set_mappings","mappings":[
+            {"rule":"doors","code":"A-D01","description_en":"Doors","description_ar":"أبواب","section":"Openings","trade":"Doors","unit":"pcs","citation":cite},
+            {"rule":"windows","code":"A-W01","description_en":"Windows","description_ar":"شبابيك","section":"Openings","trade":"Windows","unit":"pcs","citation":cite}]}),
+        json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
+            "version":1,"name":"Test method","title":"Test","based_on":"test","source_note":"test",
+            "rules":[count("doors","Legacy door"),count("windows","Legacy window")]}}),
+    ] {
+        session.run_input(&command, qiyas_core::Source::User).unwrap();
+    }
+    let session: Shared = Arc::new(Mutex::new(Some(session)));
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let tools = Arc::new(Mutex::new(Vec::new()));
+    let provider = Blind {
+        main: Mutex::new(vec![vec![exec("compare", json!({}))]].into()),
+        reader_prompts: prompts.clone(),
+        reader_tools: tools.clone(),
+    };
+    let mut agent = Agent::new(Box::new(provider), session.clone(), AgentSettings::default())
+        .with_second_reading(true);
+    let (tx, mut rx) = mpsc::channel(10_000);
+    agent
+        .run_turn("compare".to_string(), tx, CancellationToken::new())
+        .await
+        .unwrap();
+    while let Ok(_event) = rx.try_recv() {}
+
+    // Three items were read, each by a fresh reader that saw no quantity and had only reads.
+    let prompts = prompts.lock().unwrap();
+    assert_eq!(prompts.len(), 3, "{prompts:?}");
+    for p in prompts.iter() {
+        assert!(!p.to_lowercase().contains("quantity"), "{p}");
+        assert!(p.starts_with("Item "), "{p}");
+    }
+    for t in tools.lock().unwrap().iter() {
+        assert!(!t.contains("records") && !t.contains("state"), "{t}");
+    }
+
+    let guard = session.lock().unwrap();
+    let s = guard.as_ref().unwrap();
+    let report = s.measurement_report().unwrap();
+    let differing: Vec<_> = report.items.iter().filter(|i| i.second_differs()).collect();
+    assert_eq!(differing.len(), 1, "{:?}", report.items);
+    assert!(differing[0].code.contains("1000x"));
+    assert!(report
+        .items
+        .iter()
+        .filter(|i| !i.second_differs())
+        .all(|i| i.second_reading.is_some()));
+
+    // It is not a BOQ row; it is a query with both readings.
+    let boq = qiyas_core::deliverables::drawing(
+        s,
+        qiyas_core::deliverables::Kind::Boq,
+        qiyas_core::deliverables::Language::En,
+        None,
+    )
+    .unwrap();
+    assert!(boq.rows.iter().all(|r| r["code"] != differing[0].code.as_str()));
+    assert_eq!(boq.rows.len(), 2);
+    let query = s
+        .conflicts
+        .iter()
+        .find(|c| c.hash_key.contains("second_reading"))
+        .expect("the disagreement is a query");
+    assert_eq!((query.expected, query.found), (Some(1.0), Some(2.0)));
+
+    // A second pass in the same conversation has nothing left to read.
+    drop(guard);
+    let again = qiyas_ai::blind_reader::run_pass(
+        &Blind {
+            main: Mutex::new(VecDeque::new()),
+            reader_prompts: Arc::default(),
+            reader_tools: Arc::default(),
+        },
+        &session,
+        &AgentSettings::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(again.read.is_empty() && again.failed.is_empty() && again.left == 0, "{again:?}");
+}
+
+#[tokio::test]
+async fn a_model_cannot_write_a_second_reading_through_the_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let session: Shared = Arc::new(Mutex::new(Some(Session::new_blank(&dir.path().join("x.dwg"), 6))));
+    let mut guard = session.lock().unwrap();
+    let out = qiyas_ai::surface::run_session(
+        guard.as_mut().unwrap(),
+        EXECUTE,
+        "run",
+        &json!({"command":{"type":"second_reading","kind":"record","code":"A","quantity":1.0}}),
+        qiyas_core::Source::Ai,
+    );
+    assert!(out.is_err(), "an internal command is refused: {out:?}");
+}

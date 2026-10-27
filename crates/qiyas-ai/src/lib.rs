@@ -15,6 +15,7 @@ mod advice;
 pub mod agent;
 pub mod anthropic;
 mod artifact;
+pub mod blind_reader;
 pub mod chatgpt_plan;
 pub mod claude_code;
 pub mod context;

@@ -271,6 +271,9 @@ pub struct Agent {
     known_contracts: BTreeMap<String, Value>,
     /// The user's country or practice, from Settings: a default, so Mizan does not ask for it.
     country: Option<String>,
+    /// Runs the blind second reading before a quantity reaches the BOQ (W6). Off for headless
+    /// evaluation, so no run changes its cost; the window turns it on.
+    second_reading: bool,
 }
 
 /// What a user turn starts from: the `[state]` block, the session's epoch (none without a
@@ -304,6 +307,8 @@ struct TurnCounts {
     asked_save: bool,
     /// The answer was sent back once for being in the wrong language.
     language_retried: bool,
+    /// A fresh reader has measured the unchecked items once in this turn (W6).
+    second_read: bool,
 }
 
 impl TurnCounts {
@@ -360,7 +365,15 @@ impl Agent {
             rebuild: None,
             known_contracts: BTreeMap::new(),
             country: None,
+            second_reading: false,
         }
+    }
+
+    /// Turns the blind second reading on: before a quantity reaches the BOQ or the comparison a
+    /// fresh reader with read-only tools measures the unchecked items again (`blind_reader`).
+    pub fn with_second_reading(mut self, on: bool) -> Self {
+        self.second_reading = on;
+        self
     }
 
     /// The country or practice Settings names; written in `[state]` each turn as the default.
@@ -1543,7 +1556,18 @@ impl Agent {
                             ran
                         }
                         Ok(Route::Session { tool, op, args }) => {
-                            let (block, event, changed) = self
+                            // W6: before a quantity reaches the BOQ or the comparison, a fresh
+                            // reader measures the unchecked items without seeing the first figure.
+                            let second = if self.second_reading
+                                && !counts.second_read
+                                && crate::blind_reader::triggers(&tool, &op, &args)
+                            {
+                                counts.second_read = true;
+                                self.second_reading_pass(cancel).await
+                            } else {
+                                None
+                            };
+                            let (mut block, event, changed) = self
                                 .run_tool(
                                     id,
                                     (&tool, &op),
@@ -1553,6 +1577,9 @@ impl Agent {
                                     surface::mutating(name, input),
                                 )
                                 .await;
+                            if let Some(advice) = second {
+                                append_advice(&mut block, advice);
+                            }
                             edited = changed;
                             counts.changed_drawing |= changed;
                             (block, event)
@@ -1875,6 +1902,21 @@ impl Agent {
             }
         };
         (result.0, result.1, changed)
+    }
+
+    /// The blind second reading of the items nobody has read twice (W6). Its advice goes on the
+    /// result of the call that sends a quantity on; nothing is done when there is nothing to read.
+    async fn second_reading_pass(&self, cancel: &CancellationToken) -> Option<Value> {
+        let pass = crate::blind_reader::run_pass(
+            self.provider.as_ref(),
+            &self.session,
+            &self.settings,
+            cancel,
+        )
+        .await
+        .ok()?;
+        self.log("SECOND READING", || pass.advice().to_string());
+        (!pass.read.is_empty() || !pass.failed.is_empty()).then(|| pass.advice())
     }
 
     /// Runs a window tool (see `crate::window`) off the async workers: the window first, then
