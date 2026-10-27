@@ -3,7 +3,7 @@
  *  is typed whole. A command is a prompt sent to Mizan, or an action of the window. */
 import type { Lang } from "../i18n";
 
-export type SlashId = "takeoff" | "boq" | "compare" | "sheet" | "check" | "new";
+export type SlashId = "takeoff" | "boq" | "compare" | "sheet" | "check" | "connect" | "new";
 
 export type SlashCommand = {
   id: SlashId;
@@ -19,6 +19,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { id: "compare", en: "compare", ar: "مقارنة", kind: "app" },
   { id: "sheet", en: "sheet", ar: "لوحة", kind: "prompt" },
   { id: "check", en: "check", ar: "فحص", kind: "prompt" },
+  { id: "connect", en: "connect", ar: "ربط", kind: "app" },
   { id: "new", en: "new", ar: "جديد", kind: "app" },
 ];
 

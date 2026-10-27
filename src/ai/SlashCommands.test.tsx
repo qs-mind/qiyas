@@ -47,6 +47,7 @@ test("a slash opens the commands, in English in the English window, and narrows 
     `/compare${en["ai.slash.compare.desc"]}`,
     `/sheet${en["ai.slash.sheet.desc"]}`,
     `/check${en["ai.slash.check.desc"]}`,
+    `/connect${en["ai.slash.connect.desc"]}`,
     `/new${en["ai.slash.new.desc"]}`,
   ]);
   type(box(), "/ta");

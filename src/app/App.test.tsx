@@ -1317,3 +1317,15 @@ test("an untitled drawing keeps its own Continue offer through its placeholder p
     expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();
   });
 });
+
+test("Connect an AI app opens from the top bar and from the /connect command (note 19)", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: en["connect.tip"] }));
+  await until(() => expect(screen.getByRole("heading", { name: en["connect.title"] })).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: en["connect.close"] }));
+  await until(() => expect(screen.queryByRole("heading", { name: en["connect.title"] })).toBeNull());
+  const box = screen.getByLabelText(en["ai.placeholder"]);
+  fireEvent.change(box, { target: { value: "/connect" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await until(() => expect(screen.getByRole("heading", { name: en["connect.title"] })).toBeTruthy());
+});

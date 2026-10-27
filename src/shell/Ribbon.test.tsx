@@ -616,8 +616,8 @@ test("the tabs' row scrolls sideways and stops short of the preferences instead 
   expect(reserve + 560).toBeLessThanOrEqual(1024);
   expect(rule(".prefs")).toContain("min-width: var(--prefs-width)");
   expect(css).toMatch(/\.ribbon-tabs::-webkit-scrollbar \{\s*height: 6px/);
-  // The prefs take a row of their own under 900px.
-  const stacked = css.match(/@media \(max-width: 900px\) \{([\s\S]*?)\n\}/)![1];
+  // The prefs take a row of their own under 1000px.
+  const stacked = css.match(/@media \(max-width: 1000px\) \{([\s\S]*?)\n\}/)![1];
   expect(stacked).toContain("position: static");
   expect(stacked).toMatch(/\.ribbon-tabs \{\s*margin-inline-end: 0/);
   expect(css).not.toMatch(/max-width: (1500|1020|700|1420)px/);

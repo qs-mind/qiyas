@@ -330,13 +330,15 @@ type SideProps = {
   onExportTakeoff?(): void;
   /** The /compare command: ask for a BOQ and find its conflicts. */
   onSlashCompare?(): void;
+  /** Opens "Connect an AI app". */
+  onConnect?(): void;
 };
 
 /** The right column (design B): Mizan's conversation, and, when Mizan's work is opened, the take-off,
  *  BOQ, conflicts or take-off report in the same column in place of the conversation, with a way
  *  back. The conversation and every output stay mounted, one shown, so a draft, a search or a
  *  running answer survives the switch. */
-export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare }: SideProps) {
+export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -436,6 +438,7 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
         pointing={pointing}
         artifact={{ shown, node: frames, onBack: () => setSideTab("assistant") }}
         onCompare={onSlashCompare}
+        onConnect={onConnect}
       />
     </aside>
   );

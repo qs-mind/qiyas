@@ -38,6 +38,8 @@ type Props = {
   artifact?: { shown: OutputId | null; node: ReactNode; onBack(): void };
   /** The /compare command: ask for a BOQ and find its conflicts with the drawings. */
   onCompare?(): void;
+  /** The /connect command and the empty chat's link: the "Connect an AI app" dialog. */
+  onConnect?(): void;
   /** Reads a picture pasted, dropped or picked (tests give their own). */
   read?(file: File): Promise<Picture>;
 };
@@ -65,6 +67,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   history,
   artifact,
   onCompare,
+  onConnect,
   read = readPicture,
 }: Props) {
   const t = useT();
@@ -177,6 +180,7 @@ export const AssistantPanel = memo(function AssistantPanel({
     setDraft("");
     if (command.id === "new") assistant.clear();
     else if (command.id === "compare") onCompare?.();
+    else if (command.id === "connect") onConnect?.();
   }
 
   // Undo is offered on the card whose change is the assistant's newest still in the take-off.
@@ -387,6 +391,7 @@ export const AssistantPanel = memo(function AssistantPanel({
                 onClick={() => { void history.resume(history.latest!); }}>
                 {t("ai.continue", { title: history.latest.title })}
               </button>}
+              {onConnect && <button type="button" className="connect-link" onClick={onConnect}>{t("ai.connectLink")}</button>}
               <ul>
                 {EXAMPLES.map((key) => (
                   <li key={key}>

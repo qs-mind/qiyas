@@ -50,7 +50,7 @@ export default function App() {
   // An output in the right column wants a wider panel than the conversation: its width is kept apart.
   const rightSlot = shell.sideTab === "assistant" ? "right" : "rightWide";
   const options = useOptions({ t, info, setError: shell.setError });
-  const { theme, settingsOpen, setSettingsOpen, commandAliases, setError, setNotice, setSideTab, viewport, focusDrawing } =
+  const { theme, settingsOpen, setSettingsOpen, setConnectOpen, commandAliases, setError, setNotice, setSideTab, viewport, focusDrawing } =
     shell;
   /** User commands end Mizan's animation before running. Background refreshes use shell.run. */
   const cancelRevealRef = useRef<(() => void) | null>(null);
@@ -377,6 +377,7 @@ export default function App() {
         outputs={outputList(takeoffState)}
         shownOutput={shell.sideTab === "assistant" ? null : shell.sideTab}
         onOpenOutput={shell.setSideTab}
+        onConnect={() => setConnectOpen(true)}
         onCommandLine={(line) => {
           void startCommand(line).catch((error) => shell.setError(uiError(error)));
         }}
@@ -466,6 +467,7 @@ export default function App() {
           conversationHistory={conversationHistory}
           onExportTakeoff={info ? drawings.exportFile : undefined}
           onSlashCompare={info ? takeoff.importAndCompare : undefined}
+          onConnect={() => setConnectOpen(true)}
           recognition={{ revision: batch, run: runDrawingCommand }}
         />
       </div>

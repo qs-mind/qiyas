@@ -19,6 +19,8 @@ export function useShell() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The "Connect an AI app" dialog. */
+  const [connectOpen, setConnectOpen] = useState(false);
   /** The user's command line aliases from the settings. */
   const [userAliases, setUserAliases] = useState<Record<string, string>>({});
   const [words, setWords] = useState<CommandWord[]>([]);
@@ -92,6 +94,8 @@ export function useShell() {
     setAboutOpen,
     settingsOpen,
     setSettingsOpen,
+    connectOpen,
+    setConnectOpen,
     commandAliases,
     words,
     loadAliases,

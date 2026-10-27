@@ -1,6 +1,7 @@
 /** The window's top bar: the ribbon, and the language, theme, settings and About buttons. */
 import { clearRecents, recents as readRecents, redo, undo, views as readViews, type DrawingInfo, type NamedView } from "../api";
 import { useLanguage, useT } from "../i18n";
+import { Glyph } from "../shell/glyphs";
 import { OutputsMenu } from "../shell/OutputsMenu";
 import type { OutputId, OutputInfo } from "../shell/outputs";
 import { Ribbon } from "../shell/Ribbon";
@@ -40,6 +41,8 @@ type Props = {
   outputs: OutputInfo[];
   shownOutput: OutputId | null;
   onOpenOutput(id: OutputId): void;
+  /** Opens "Connect an AI app". */
+  onConnect(): void;
   parametric: Pick<Parametric, "openParameters" | "setBarHidden">;
   onCommandLine?(line: string): void;
 };
@@ -64,6 +67,7 @@ export function Header({
   outputs,
   shownOutput,
   onOpenOutput,
+  onConnect,
   onCommandLine,
 }: Props) {
   const t = useT();
@@ -211,6 +215,16 @@ export function Header({
           onClick={() => chooseTheme(theme === "dark" ? "light" : "dark")}
         >
           <RibbonIcon name={theme === "dark" ? "sun" : "moon"} />
+        </button>
+        <button
+          type="button"
+          className="rb"
+          aria-haspopup="dialog"
+          aria-label={t("connect.tip")}
+          title={t("connect.tip")}
+          onClick={onConnect}
+        >
+          <Glyph name="plug" size={18} />
         </button>
         <button
           type="button"

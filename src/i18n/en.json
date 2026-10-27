@@ -1849,5 +1849,18 @@
   "ribbon.collapse": "Collapse the ribbon",
   "ribbon.expand": "Expand the ribbon",
   "sheets.earlier": "Earlier layouts",
-  "sheets.later": "More layouts"
+  "sheets.later": "More layouts",
+  "connect.title": "Connect an AI app",
+  "connect.lead": "Let Claude or another AI app open, read and edit the drawing you have open, directly. It works on this computer only (127.0.0.1) and needs a secret token.",
+  "connect.off": "Off. Nothing can connect.",
+  "connect.turnOn": "Turn on and connect",
+  "connect.working": "Turning on…",
+  "connect.turnOff": "Turn off",
+  "connect.steps": "Copy the command for your app and run it once. Then ask your AI app to work on this drawing.",
+  "connect.warn": "Anyone who has the token can change your open drawings. Keep it private.",
+  "connect.more": "More options in Settings",
+  "connect.close": "Close",
+  "connect.tip": "Connect an AI app",
+  "ai.slash.connect.desc": "Connect Claude or another AI app to this drawing",
+  "ai.connectLink": "Or use Claude or another AI app: connect an AI app"
 }

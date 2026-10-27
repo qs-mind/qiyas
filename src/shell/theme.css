@@ -187,7 +187,7 @@ body {
    of `--prefs-width`, the overlay's width) and scrolls sideways inside what is left: a tab can
    never lie under them. Its menus are placed `fixed`, so the scrolling does not clip them. */
 :root {
-  --prefs-width: 160px;
+  --prefs-width: 330px;
 }
 .ribbon-tabs {
   display: flex;
@@ -568,9 +568,9 @@ body {
   font-size: 14px;
 }
 /* Narrow windows: the prefs sit beside the ribbon tabs' row (app name, quick-access bar, three
-   tabs and "More": about 560px) and take their own row under 900px. `--prefs-width` is the
+   tabs and "More": about 560px) and take their own row under 1000px. `--prefs-width` is the
    overlay's real width and a little spare. */
-@media (max-width: 900px) {
+@media (max-width: 1000px) {
   .ribbon-tabs {
     margin-inline-end: 0;
   }
@@ -4047,4 +4047,33 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .tool-repeat {
   color: var(--muted);
   font-weight: 400;
+}
+
+/* "Connect an AI app": the dialog, and the link in an empty chat. */
+.connect-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.connect-ai p {
+  margin: 0;
+}
+.connect-state {
+  font-weight: 500;
+}
+.assistant-empty .connect-link {
+  margin-block: 2px 12px;
+  padding-inline: 0;
+  color: var(--accent);
+  text-align: start;
+}
+.settings .snippet pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--panel);
+  border-radius: 6px;
+  font: 11.5px/1.45 "Thmanyah Sans", ui-monospace, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
