@@ -57,7 +57,7 @@ impl Session {
         Some(count)
     }
 
-    fn mark_openings(&mut self, source: Handle) -> Result<(), CoreError> {
+    pub(crate) fn mark_openings(&mut self, source: Handle) -> Result<(), CoreError> {
         let sheet = self
             .drawing
             .doc
@@ -137,6 +137,7 @@ impl Session {
         &mut self,
         at: [f64; 2],
         sheet: Option<&str>,
+        language: Option<crate::rooms::LabelLanguage>,
     ) -> Result<u64, CoreError> {
         let name = sheet.unwrap_or(if self.sheet.eq_ignore_ascii_case("*Model_Space") {
             &self.sheet
@@ -154,6 +155,9 @@ impl Session {
             .handle;
         let mut spec = legacy_recipe("opening")?;
         spec.at = at;
+        if language.or(self.sheet_language()) == Some(crate::rooms::LabelLanguage::Ar) {
+            spec.language = Some("ar".into());
+        }
         spec.filter = ObjectFilter {
             sheet: Some(name.into()),
             ..spec.filter

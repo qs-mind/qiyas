@@ -140,9 +140,13 @@ impl Session {
                 tol,
                 &mut budget,
             );
+            // A layout's own viewport (number 1) and a switched-off one draw nothing: they are
+            // not geometry this check missed.
+            let silent_viewport = matches!(entity, EntityType::Viewport(v) if v.id == 1 || !v.status.is_on);
             if flat.truncated
                 || (flat.paths.is_empty()
-                    && matches!(entity, EntityType::MultiLeader(_) | EntityType::Viewport(_)))
+                    && matches!(entity, EntityType::MultiLeader(_) | EntityType::Viewport(_))
+                    && !silent_viewport)
             {
                 out.incomplete.push(owner);
             }

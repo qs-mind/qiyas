@@ -1,5 +1,93 @@
-//! Advise when a quantity note has no measured source; keep the model's decision.
+//! Advise when a quantity note has no measured source; keep the model's decision. A sheet shows
+//! values, never where Qiyas keeps them: `internal_id` finds the identifiers that must not be
+//! printed (take-off ids, row references, handles, unique ids).
 use crate::{CoreError, Session, Source};
+
+fn word_start(bytes: &[u8], at: usize) -> bool {
+    at == 0 || !bytes[at - 1].is_ascii_alphanumeric()
+}
+
+fn is_uuid_at(b: &[u8]) -> bool {
+    b.len() >= 36
+        && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+        && b[..36]
+            .iter()
+            .enumerate()
+            .all(|(i, c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit())
+}
+
+/// What internal identifier `text` shows, if any: a take-off id (`takeoff:…`), a BOQ row
+/// reference (`boq-row:…`), a unique id, a drawing handle (`handle 1234`, `0x1A2B`) or one of
+/// Qiyas's own application names.
+pub(crate) fn internal_id(text: &str) -> Option<&'static str> {
+    let lower = text.to_lowercase();
+    for (marker, what) in [
+        ("takeoff:", "a take-off id"),
+        ("boq-row:", "a BOQ row reference"),
+        ("qiyas_", "an internal name"),
+    ] {
+        if lower.contains(marker) {
+            return Some(what);
+        }
+    }
+    let b = lower.as_bytes();
+    for at in 0..b.len() {
+        if is_uuid_at(&b[at..]) && word_start(b, at) {
+            return Some("a unique id");
+        }
+        if b[at..].starts_with(b"0x")
+            && word_start(b, at)
+            && b.get(at + 2..at + 4)
+                .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit))
+        {
+            return Some("a drawing handle");
+        }
+        if b[at..].starts_with(b"handle") && word_start(b, at) {
+            let rest = lower[at + 6..].trim_start_matches([' ', ':', '=', '#']);
+            if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return Some("a drawing handle");
+            }
+        }
+    }
+    None
+}
+
+/// The numbers `text` states with a metre unit, in the order written (Arabic digits read).
+fn stated_numbers(text: &str) -> Vec<f64> {
+    let text = crate::numbers::western(&text.to_lowercase()).into_owned();
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && (chars[j].is_ascii_digit() || matches!(chars[j], '.' | ',')) {
+            j += 1;
+        }
+        let number: String = chars[i..j].iter().filter(|c| **c != ',').collect();
+        let mut k = j;
+        while k < chars.len() && chars[k].is_whitespace() {
+            k += 1;
+        }
+        let tail: String = chars[k..].iter().collect();
+        if ["m", "metre", "meter", "square m", "cubic m", "م", "متر"]
+            .iter()
+            .any(|u| {
+                tail.strip_prefix(u)
+                    .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphabetic()))
+            })
+        {
+            if let Ok(n) = number.parse::<f64>() {
+                out.push(n);
+            }
+        }
+        i = j.max(i + 1);
+    }
+    out
+}
 
 pub(crate) fn states_measurement(text: &str) -> bool {
     let text = text.to_lowercase();
@@ -44,38 +132,105 @@ pub(crate) fn states_measurement(text: &str) -> bool {
     false
 }
 impl Session {
+    /// Advice for text going on a sheet: an internal id is never printed there.
+    pub(crate) fn check_sheet_text(&mut self, text: &str, source: Source) {
+        if !matches!(source, Source::Ai | Source::Mcp) {
+            return;
+        }
+        if let Some(what) = internal_id(text) {
+            let already = self
+                .last_advice
+                .iter()
+                .any(|a| a["code"] == "internal_id_in_text");
+            if !already {
+                self.last_advice.push(serde_json::json!({"code":"internal_id_in_text","message":format!("This text shows {what}. A client sheet shows values, never internal ids, handles or row references: write the quantity itself (and its source in words), then edit the text."),"message_ar":"يحتوي النص على معرّف داخلي. اللوحة تعرض القيم فقط، لا المعرّفات ولا أرقام الصفوف: اكتب الكمية نفسها ومصدرها بالكلمات."}));
+            }
+        }
+    }
+
     pub(crate) fn check_quantity_note(
         &mut self,
         text: &str,
         source: Source,
     ) -> Result<(), CoreError> {
-        if !matches!(source, Source::Ai | Source::Mcp) || !states_measurement(text) {
+        if !matches!(source, Source::Ai | Source::Mcp) {
             return Ok(());
         }
-        let cited = self.takeoff.items.iter().any(|row| {
-            row.unit != "markup"
-                && row.available()
-                && (!row.handles.is_empty() || row.points.len() >= 2 || row.block_name.is_some())
-                && text
-                    .match_indices(&format!("takeoff:{}", row.id))
-                    .any(|(at, citation)| {
-                        text[at + citation.len()..]
-                            .chars()
-                            .next()
-                            .is_none_or(|c| !c.is_alphanumeric() && c != '-' && c != '_')
-                    })
+        self.check_sheet_text(text, source);
+        if !states_measurement(text) {
+            return Ok(());
+        }
+        // A note is measured when each value it states is a take-off row's value as that row
+        // shows it (to the centimetre); a `takeoff:<id>` citation still counts, though it must
+        // not be printed.
+        let rows: Vec<_> = self
+            .takeoff
+            .items
+            .iter()
+            .filter(|row| {
+                row.unit != "markup"
+                    && row.available()
+                    && (!row.handles.is_empty()
+                        || row.points.len() >= 2
+                        || row.block_name.is_some())
+            })
+            .collect();
+        let numbers = stated_numbers(text);
+        let by_value = !numbers.is_empty()
+            && numbers
+                .iter()
+                .all(|n| rows.iter().any(|row| (row.shown - n).abs() <= 0.0051));
+        let by_id = rows.iter().any(|row| {
+            text.match_indices(&format!("takeoff:{}", row.id))
+                .any(|(at, citation)| {
+                    text[at + citation.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !c.is_alphanumeric() && c != '-' && c != '_')
+                })
         });
-        if cited {
+        if by_value || by_id {
             Ok(())
         } else {
-            self.last_advice.push(serde_json::json!({"code":"uncited_quantity","message":"This note states a quantity without a measured take-off citation. Consider measure_entity, measure_room or count_block and cite takeoff:<row id>; label_spaces can label room areas. The note does not establish a measured quantity."}));
+            self.last_advice.push(serde_json::json!({"code":"uncited_quantity","message":"This note states a quantity that matches no measured take-off row. Measure it first (measure_entity, measure_room or count_block; label_spaces labels room areas) and write the value as the row shows it. Never print a take-off id or row number on the sheet. The note does not establish a measured quantity."}));
             Ok(())
         }
     }
 }
 #[cfg(test)]
 mod tests {
-    use super::states_measurement;
+    use super::{internal_id, states_measurement};
+    #[test]
+    fn internal_ids_are_found_and_ordinary_text_is_not() {
+        for s in [
+            "takeoff:34f348f7-aaaa-bbbb-cccc-1234567890ab",
+            "Plan basis: TAKEOFF:abc",
+            "see boq-row:7",
+            "34f348f7-1234-4abc-8def-0123456789ab",
+            "handle 1234",
+            "Handle: 77",
+            "ref 0x1A2B",
+            "QIYAS_OBJECT",
+        ] {
+            assert!(internal_id(s).is_some(), "{s}");
+        }
+        for s in [
+            "Handle with care",
+            "Door D1, 900 x 2100",
+            "Area 17.81 m²",
+            "Room 0 and 0xyz",
+            "Plan basis: 12.0 x 15.0 m, ground floor",
+            "المساحة ١٧٫٨١ م²",
+        ] {
+            assert_eq!(internal_id(s), None, "{s}");
+        }
+    }
+    #[test]
+    fn stated_numbers_are_the_values_with_a_metre_unit() {
+        assert_eq!(super::stated_numbers("Area 17.81 m² and 3,200.5 m"), [17.81, 3200.5]);
+        assert_eq!(super::stated_numbers("المساحة ١٧٫٨١ م²"), [17.81]);
+        assert!(super::stated_numbers("Room 2, 1200 mm").is_empty());
+    }
     #[test]
     fn detects_english_and_arabic_values_without_confusing_other_units_or_names() {
         for s in [

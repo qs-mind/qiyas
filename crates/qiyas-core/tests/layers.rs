@@ -812,7 +812,7 @@ fn find_replace_and_sync_attributes_leave_locked_entities_but_fields_follow() {
 
     // The rectangle (layer 0) grows: its field on the locked layer follows in the same step (a
     // field is a derived value; the lock stops the user, not the field), and undo puts it back.
-    assert_eq!(value(&s, field), "2.000");
+    assert_eq!(value(&s, field), "2.00 m²");
     s.run(Command::Modify(qiyas_core::ModifySpec::Scale {
         targets: vec![t(rect)],
         base: [100.0, 100.0],
@@ -820,20 +820,20 @@ fn find_replace_and_sync_attributes_leave_locked_entities_but_fields_follow() {
         copy: false,
     }))
     .unwrap();
-    assert_eq!(value(&s, field), "8.000");
+    assert_eq!(value(&s, field), "8.00 m²");
     assert!(s.undo());
-    assert_eq!(value(&s, field), "2.000");
+    assert_eq!(value(&s, field), "2.00 m²");
     assert!(s.redo());
-    assert_eq!(value(&s, field), "8.000");
+    assert_eq!(value(&s, field), "8.00 m²");
     assert!(matches!(
         s.run(Command::UpdateFields).unwrap(),
         Outcome::Changed
     ));
-    assert_eq!(value(&s, field), "8.000");
+    assert_eq!(value(&s, field), "8.00 m²");
     // Find and replace still leaves the locked field text as it is.
     let out = s
         .run(Command::FindReplace {
-            find: "8.000".into(),
+            find: "8.00".into(),
             replace: "9".into(),
             scope: qiyas_core::TextScope::Drawing,
             match_case: true,
@@ -851,7 +851,7 @@ fn find_replace_and_sync_attributes_leave_locked_entities_but_fields_follow() {
         ),
         "{out:?}"
     );
-    assert_eq!(value(&s, field), "8.000");
+    assert_eq!(value(&s, field), "8.00 m²");
 
     // TAG has no MARK definition: syncing would drop the locked reference's MARK.
     let out = s

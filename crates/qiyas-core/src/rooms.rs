@@ -281,7 +281,7 @@ impl Session {
                 room.point,
             ),
         };
-        let language = language.unwrap_or_else(|| {
+        let language = language.or(self.sheet_language()).unwrap_or_else(|| {
             let arabic = !self.is_untitled() && room.from_text.is_some() && room.name.as_deref().unwrap_or_default().chars().any(|c| {
                 matches!(c, '\u{0600}'..='\u{06ff}' | '\u{0750}'..='\u{077f}' | '\u{08a0}'..='\u{08ff}')
             });

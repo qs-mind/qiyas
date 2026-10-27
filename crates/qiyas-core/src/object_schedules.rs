@@ -21,13 +21,14 @@ fn invalid(message: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(message.into())
 }
 
-pub(crate) fn object_value_code(ids: &[u64], name: &str, decimals: usize) -> String {
+pub(crate) fn object_value_code(ids: &[u64], name: &str, decimals: usize, arabic: bool) -> String {
     let ids = ids
         .iter()
         .map(|id| format!("{id:X}"))
         .collect::<Vec<_>>()
         .join(",");
-    format!(r#"%<\AcVar QiyasObject "{ids}" "{name}" {decimals}>%"#)
+    let ar = if arabic { " ar" } else { "" };
+    format!(r#"%<\AcVar QiyasObject "{ids}" "{name}" {decimals}{ar}>%"#)
 }
 
 pub(crate) fn legacy_recipe(kind: &str) -> Result<ObjectSchedule, CoreError> {
@@ -108,6 +109,17 @@ fn template(session: &Session, record: &ObjectRecord, text: &str) -> Result<Stri
 }
 
 impl Session {
+    /// A cell as shown: its fields worked out, with the unit after a measured number unless the
+    /// column heading gives it.
+    fn show_cell(&self, data: &[Vec<String>], row: usize, column: usize, owner: Handle) -> String {
+        let units = row == 0 || !crate::numbers::heading_gives_unit(&data[0][column]);
+        if units {
+            self.evaluate_fields(&data[row][column], owner)
+        } else {
+            self.evaluate_cell_fields(&data[row][column], owner)
+        }
+    }
+
     pub(crate) fn schedule_value(
         &self,
         spec: &ObjectSchedule,
@@ -124,6 +136,12 @@ impl Session {
                 return Ok(Some(value.clone()));
             }
         }
+        let arabic = spec.language.as_deref() == Some("ar");
+        if let Some(text) = arabic.then(|| spec.ar_templates.get(name)).flatten() {
+            // An Arabic sheet reads its numbers in Arabic digits too.
+            return template(self, record, text)
+                .map(|s| Some(Value::String(crate::numbers::arabic_numerals(&s))));
+        }
         if let Some(text) = spec.templates.get(name) {
             return template(self, record, text).map(|s| Some(Value::String(s)));
         }
@@ -137,6 +155,7 @@ impl Session {
         name: &str,
     ) -> Result<bool, CoreError> {
         if spec.templates.contains_key(name)
+            || spec.ar_templates.contains_key(name)
             || name == "id"
             || spec.group_by.iter().any(|n| n == name)
         {
@@ -175,7 +194,11 @@ impl Session {
             return Ok(object_value_code(
                 ids,
                 name,
-                spec.decimals.get(name).copied().unwrap_or(3),
+                spec.decimals
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| crate::numbers::default_decimals(name)),
+                spec.language.as_deref() == Some("ar"),
             ));
         }
         if records.is_empty() {
@@ -251,7 +274,10 @@ impl Session {
                 }
             }
         }
-        let mut rows = vec![if spec.headers.is_empty() {
+        let arabic = spec.language.as_deref() == Some("ar");
+        let mut rows = vec![if arabic && !spec.ar_headers.is_empty() {
+            spec.ar_headers.clone()
+        } else if spec.headers.is_empty() {
             spec.columns.clone()
         } else {
             spec.headers.clone()
@@ -264,21 +290,56 @@ impl Session {
             rows.push(row);
         }
         if !spec.totals.is_empty() {
-            let ids = spec
-                .ids
-                .clone()
-                .unwrap_or_else(|| selected.iter().map(|r| r.instance.id).collect());
-            let mut total = Vec::new();
-            for name in &spec.columns {
-                total.push(match spec.totals.get(name) {
-                    Some(text) if text.is_empty() => {
-                        object_value_code(&ids, name, spec.decimals.get(name).copied().unwrap_or(3))
+            // One total per kind when the schedule says so; otherwise over what it shows.
+            let mut parts: BTreeMap<String, (Vec<u64>, String)> = BTreeMap::new();
+            if spec.total_by.is_empty() {
+                let ids = spec
+                    .ids
+                    .clone()
+                    .unwrap_or_else(|| selected.iter().map(|r| r.instance.id).collect());
+                parts.insert(String::new(), (ids, String::new()));
+            } else {
+                for record in &selected {
+                    let mut labels = Vec::new();
+                    for name in &spec.total_by {
+                        labels.push(display(
+                            &self.schedule_value(spec, record, name)?.ok_or_else(|| {
+                                invalid(format!("Unknown schedule total_by {name}"))
+                            })?,
+                        ));
                     }
-                    Some(text) => text.clone(),
-                    None => String::new(),
-                });
+                    let label = labels.join(" / ");
+                    parts
+                        .entry(label.clone())
+                        .or_insert_with(|| (Vec::new(), label))
+                        .0
+                        .push(record.instance.id);
+                }
             }
-            rows.push(total);
+            for (ids, label) in parts.into_values() {
+                let mut total = Vec::new();
+                for name in &spec.columns {
+                    let text = arabic
+                        .then(|| spec.ar_totals.get(name))
+                        .flatten()
+                        .or_else(|| spec.totals.get(name));
+                    total.push(match text {
+                        Some(text) if text.is_empty() => object_value_code(
+                            &ids,
+                            name,
+                            spec.decimals
+                                .get(name)
+                                .copied()
+                                .unwrap_or_else(|| crate::numbers::default_decimals(name)),
+                            arabic,
+                        ),
+                        Some(text) if label.is_empty() => text.clone(),
+                        Some(text) => format!("{text} {label}"),
+                        None => String::new(),
+                    });
+                }
+                rows.push(total);
+            }
         }
         if rows.len() == 1 {
             rows.push(vec![String::new(); spec.columns.len()]);
@@ -337,9 +398,12 @@ impl Session {
         let owner = self
             .sheet_owner()
             .ok_or_else(|| invalid("Choose a sheet"))?;
-        let shown: Vec<Vec<String>> = data
-            .iter()
-            .map(|row| row.iter().map(|v| self.evaluate_fields(v, owner)).collect())
+        let shown: Vec<Vec<String>> = (0..data.len())
+            .map(|r| {
+                (0..data[r].len())
+                    .map(|c| self.show_cell(&data, r, c, owner))
+                    .collect()
+            })
             .collect();
         let (width, height) = self.table_sizes(0.0, 0.0, &shown);
         let saved = self.current.clone();
@@ -433,11 +497,10 @@ impl Session {
             spec.at = [table.insertion_point.x, table.insertion_point.y];
             self.stamp_object_schedule(table.common.handle.value(), &spec)?;
             let data = self.object_schedule_data(&spec)?;
-            let shown = data
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| self.evaluate_fields(cell, table.common.owner_handle))
+            let shown = (0..data.len())
+                .map(|r| {
+                    (0..data[r].len())
+                        .map(|c| self.show_cell(&data, r, c, table.common.owner_handle))
                         .collect()
                 })
                 .collect();
@@ -496,7 +559,7 @@ impl Session {
             for (r, row) in data.iter().enumerate() {
                 let mut shown_row = Vec::new();
                 for (c, text) in row.iter().enumerate() {
-                    let shown = self.evaluate_fields(text, table.common.owner_handle);
+                    let shown = self.show_cell(&data, r, c, table.common.owner_handle);
                     let escaped = crate::text::escape_mtext(&shown);
                     let keep_override = spec.preserve_overrides
                         && previous

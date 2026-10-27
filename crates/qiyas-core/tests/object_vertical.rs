@@ -110,7 +110,7 @@ fn union_preserves_separate_levels_bases_and_heights_but_accepts_level_name_case
             .map(|column| table.cell_text(1, column).unwrap().to_owned())
             .collect::<Vec<_>>()
     };
-    assert_eq!(table_row(&session), ["Band", "3.960", "12.680"]);
+    assert_eq!(table_row(&session), ["Band", "3.96 m²", "12.680"]);
     let steps = session.history_steps().0.len();
     run(
         &mut session,
@@ -119,11 +119,11 @@ fn union_preserves_separate_levels_bases_and_heights_but_accepts_level_name_case
     assert_eq!(session.history_steps().0.len(), steps + 1);
     near(totals(&session).0, 3.92);
     near(totals(&session).1, 12.56);
-    assert_eq!(table_row(&session), ["Band", "3.920", "12.560"]);
+    assert_eq!(table_row(&session), ["Band", "3.92 m²", "12.560"]);
     assert!(session.undo());
     near(totals(&session).0, 3.96);
     near(totals(&session).1, 12.68);
-    assert_eq!(table_row(&session), ["Band", "3.960", "12.680"]);
+    assert_eq!(table_row(&session), ["Band", "3.96 m²", "12.680"]);
 }
 
 #[test]

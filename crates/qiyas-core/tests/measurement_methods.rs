@@ -62,8 +62,16 @@ fn name_only_reopen_reuses_authored_rules_and_project_override_in_all_units() {
                     let report =
                         qiyas_core::deliverables::drawing(&session, kind, language, None).unwrap();
                     let rendered = serde_json::to_string(&report.table().unwrap()).unwrap();
-                    assert!(rendered.contains("client method"));
-                    assert!(rendered.contains("Invented test method; not a published standard /"));
+                    // An Arabic BOQ leaves out English method and source columns (W3); the
+                    // dimension sheets keep them in both languages.
+                    if kind == qiyas_core::deliverables::Kind::Dimensions
+                        || language == qiyas_core::deliverables::Language::En
+                    {
+                        assert!(rendered.contains("client method"));
+                        assert!(
+                            rendered.contains("Invented test method; not a published standard /")
+                        );
+                    }
                 }
             }
             let history = session.history_steps();
@@ -213,7 +221,12 @@ fn an_old_drawing_with_the_long_name_keeps_its_rules_and_exports_the_bare_name()
                 .table()
                 .unwrap();
             let rendered = serde_json::to_string(&table).unwrap();
-            assert!(rendered.contains("POMI"));
+            // The Arabic BOQ leaves the English method column out; the body is never named.
+            if kind == qiyas_core::deliverables::Kind::Dimensions
+                || language == qiyas_core::deliverables::Language::En
+            {
+                assert!(rendered.contains("POMI"));
+            }
             assert!(!rendered.contains("RICS"), "{rendered}");
         }
     }

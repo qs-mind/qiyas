@@ -168,7 +168,7 @@
           "ar": "الكمية"
         },
         "width": 1,
-        "total": true
+        "total": false
       },
       {
         "field": "method",
@@ -347,7 +347,7 @@
           "ar": "التغيير"
         },
         "width": 1,
-        "total": true
+        "total": false
       },
       {
         "field": "elements",

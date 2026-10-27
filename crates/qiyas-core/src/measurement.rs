@@ -155,6 +155,10 @@ pub struct Mapping {
     /// Must equal the measured unit, or use {unit} to follow method bands.
     pub unit: String,
     pub citation: Citation,
+    /// A figure to inform (a gross floor area, a circulation share) that nobody buys or builds
+    /// as an item: it stays in the dimension sheets and is left out of the BOQ.
+    #[serde(default)]
+    pub informational: bool,
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MethodSelection {
@@ -257,6 +261,9 @@ pub struct GeneratedItem {
     pub mapping_citations: Vec<Citation>,
     pub coverage: Vec<CoverageNote>,
     pub lines: Vec<DimensionLine>,
+    /// Left out of the BOQ: see `Mapping::informational`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub informational: bool,
 }
 impl GeneratedItem {
     pub fn methods(&self) -> String {
@@ -594,6 +601,7 @@ impl MeasurementReport {
     pub fn comparison_measurements(&self, units: crate::Units) -> Vec<crate::Measurement> {
         self.items
             .iter()
+            .filter(|item| !item.informational)
             .map(|item| {
                 let mut m = crate::Measurement::new(
                     crate::Kind::Item,

@@ -385,6 +385,10 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
             session,
             json!({"type":"place_objects","objects":[{"type":"Tag target","points":[[0,0]]}]}),
         );
+        // The by-category example tags every object of a category; the fixture's is "Example".
+        if example.get("category").is_some() {
+            example["category"] = json!("Example");
+        }
     } else if name == "edit_text" {
         handles = added_by(
             session,
@@ -522,6 +526,14 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
         {
             example["expression"] = json!((length / session.drawing.units.to_metres()).to_string());
         }
+    } else if name == "make_sheet" {
+        // A plan to put on the sheet: 12 x 15 m, whatever the unit.
+        let k = 1.0 / session.drawing.units.to_metres();
+        handles = added_by(
+            session,
+            json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[12.0*k,15.0*k]}),
+        );
+        example["model_bounds"] = json!([[0, 0], [12.0 * k, 15.0 * k]]);
     } else if matches!(name, "title_block" | "mview") {
         session
             .run(

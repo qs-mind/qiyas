@@ -235,6 +235,10 @@ pub enum Command {
         at: Option<[f64; 2]>,
         #[serde(default)]
         source_sheet: Option<String>,
+        /// The schedule's wording and digits; the user's language by default. Totals are per kind
+        /// (doors, windows), never one sum across them.
+        #[serde(default)]
+        language: Option<crate::rooms::LabelLanguage>,
     },
 
     /// Length along `points`, in drawing coordinates. Needs 2 points or more.
@@ -1099,6 +1103,17 @@ pub enum Command {
         #[serde(default)]
         orientation: crate::LayoutOrientation,
     },
+    /// Makes a printable sheet from Model in one step: a sized layout (the smallest paper from A3
+    /// on that holds the model at 1:100 or larger, unless paper is given), a viewport at the
+    /// largest standard scale that fits with margins, a captioned title block (project, title,
+    /// drawing number, scale, date, drawn by Qiyas, revision, status For review) in the user's
+    /// language, a scale bar and general notes at a readable height. Fields it is not given stay
+    /// empty and are listed. Pass `language` ("ar" or "en") from the user's request. One undo
+    /// step; the sheet on screen is unchanged. `Outcome::Sheet` says paper, scale and the least
+    /// model text height that reads at that scale. plot then prints it as it is.
+    #[schemars(extend("x-category" = "layouts", "x-words" = ["MAKESHEET"]))]
+    #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Villa", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
+    MakeSheet(crate::sheet_setup::SheetSpec),
     /// Renames a paper layout, refusing a name already taken. One undo step.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "rename_layout", "from": "Layout1", "to": "Ground floor"}))]
@@ -1395,13 +1410,19 @@ pub enum Command {
     /// Adds live labels for a text or number property of selected objects, including door/window
     /// marks. Labels follow the object and its property through edits and saves. Height uses
     /// drawing units; default 2.5 mm on paper. Existing labels are reused. One undo step.
+    /// Instead of targets, `category` tags every object of that category on the sheet on screen:
+    /// {"category":"opening","property":"mark"} tags all doors and windows with their schedule marks.
     #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type":"object_tags","targets":[{"handle":1234}],"property":"mark"}))]
+    #[schemars(example = json!({"type":"object_tags","category":"opening","property":"mark"}))]
     ObjectTags {
+        #[serde(default)]
         targets: Vec<Target>,
         property: String,
         #[serde(default)]
         height: Option<f64>,
+        #[serde(default)]
+        category: Option<String>,
     },
     /// Finds clear positions for a rectangle or existing annotation using plotted geometry and
     /// rendered text. Coordinates and sizes are drawing units; clearance is paper millimetres.
@@ -1651,6 +1672,7 @@ impl Command {
             | Command::SetLayoutPaper { .. }
             | Command::RenameLayout { .. }
             | Command::TitleBlock { .. }
+            | Command::MakeSheet(_)
             | Command::MView { .. }
             | Command::RedefineBlock { .. }
             // The layers, linetypes, styles and blocks the pasted entities bring.
@@ -1797,6 +1819,10 @@ pub enum Outcome {
     /// Entities added to the drawing, by handle.
     Added {
         handles: Vec<u64>,
+    },
+    /// The sheet `MakeSheet` made.
+    Sheet {
+        report: Box<crate::sheet_setup::SheetReport>,
     },
     /// Generated title block and the standard or supplied fields left empty.
     TitleBlock {
@@ -1972,7 +1998,13 @@ impl Session {
                         format,
                         layout.as_deref(),
                         &path,
-                        language,
+                        language.unwrap_or(
+                            if self.sheet_language() == Some(crate::rooms::LabelLanguage::Ar) {
+                                crate::deliverables::Language::Ar
+                            } else {
+                                crate::deliverables::Language::En
+                            },
+                        ),
                         project.as_deref(),
                     )?),
                 });
@@ -2124,9 +2156,16 @@ impl Session {
                     result: self.walls(spec)?,
                 });
             }
-            Command::OpeningSchedule { at, source_sheet } => {
-                let h =
-                    self.add_opening_schedule(at.unwrap_or([0.0, 0.0]), source_sheet.as_deref())?;
+            Command::OpeningSchedule {
+                at,
+                source_sheet,
+                language,
+            } => {
+                let h = self.add_opening_schedule(
+                    at.unwrap_or([0.0, 0.0]),
+                    source_sheet.as_deref(),
+                    language,
+                )?;
                 self.place_new_table(h, at.is_none())?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
@@ -2181,6 +2220,11 @@ impl Session {
             } => {
                 self.set_layout_paper(&name, &paper, orientation)?;
                 return Ok(Outcome::Changed);
+            }
+            Command::MakeSheet(spec) => {
+                return Ok(Outcome::Sheet {
+                    report: Box::new(self.make_sheet(spec)?),
+                });
             }
             Command::TitleBlock {
                 fields,
@@ -2563,6 +2607,7 @@ impl Session {
                 value,
                 style,
             } => {
+                self.check_sheet_text(&value, source);
                 let h = self.add_text(at, height, rotation, value, style.as_deref())?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
@@ -2573,6 +2618,7 @@ impl Session {
                 value,
                 style,
             } => {
+                self.check_sheet_text(&value, source);
                 let h = self.add_mtext(at, width, height, &value, style.as_deref())?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
@@ -2691,6 +2737,7 @@ impl Session {
                 col,
                 text,
             } => {
+                self.check_sheet_text(&text, source);
                 self.edit_cell(&target, row, col, &text)?;
                 return Ok(Outcome::Changed);
             }
@@ -3039,9 +3086,10 @@ impl Session {
                 targets,
                 property,
                 height,
+                category,
             } => {
                 return Ok(Outcome::Added {
-                    handles: self.object_tags(&targets, &property, height)?,
+                    handles: self.object_tags(&targets, &property, height, category.as_deref())?,
                 });
             }
             Command::FreeSpace { query } => {

@@ -440,7 +440,7 @@ fn an_area_field_follows_the_rectangle_it_reads() {
             field,
         })
         .unwrap());
-    assert_eq!(text_of(&s, h), "12.000");
+    assert_eq!(text_of(&s, h), "12.00 m²");
     assert_eq!(field_of(&s, h).as_deref(), Some(code.as_str()));
     // The code is kept in the file (DXF and DWG).
     for name in ["field.dxf", "field.dwg"] {
@@ -458,11 +458,11 @@ fn an_area_field_follows_the_rectangle_it_reads() {
         copy: false,
     }))
     .unwrap();
-    assert_eq!(text_of(&s, h), "48.000");
+    assert_eq!(text_of(&s, h), "48.00 m²");
     assert!(s.undo());
-    assert_eq!(text_of(&s, h), "12.000", "undone with the scale");
+    assert_eq!(text_of(&s, h), "12.00 m²", "undone with the scale");
     assert!(s.redo());
-    assert_eq!(text_of(&s, h), "48.000");
+    assert_eq!(text_of(&s, h), "48.00 m²");
 
     // A length field; erased, the entity it read leaves "####".
     let line = wall_line(&s);
@@ -473,7 +473,7 @@ fn an_area_field_follows_the_rectangle_it_reads() {
             field: FieldKind::Length { target: t(line) },
         })
         .unwrap());
-    assert_eq!(text_of(&s, len), "10.000");
+    assert_eq!(text_of(&s, len), "10.00 m");
     s.run(Command::DeleteEntities {
         targets: vec![t(line)],
     })
@@ -574,7 +574,7 @@ fn fields_in_table_cells_follow_too() {
         text: format!("{code} m2"),
     })
     .unwrap();
-    assert_eq!(table(&s, h).cell_text(1, 1), Some("12.000 m2"));
+    assert_eq!(table(&s, h).cell_text(1, 1), Some("12.00 m2"));
     let info = s.entity_info(h, &[]).unwrap().table.unwrap();
     assert_eq!(info.fields, [[1, 1]]);
     // A row inserted above moves the field with its cell.
@@ -590,13 +590,13 @@ fn fields_in_table_cells_follow_too() {
         copy: false,
     }))
     .unwrap();
-    assert_eq!(table(&s, h).cell_text(2, 1), Some("48.000 m2"));
+    assert_eq!(table(&s, h).cell_text(2, 1), Some("48.00 m2"));
     assert!(
-        block_texts(&s, h).contains(&"48.000 m2".to_string()),
+        block_texts(&s, h).contains(&"48.00 m2".to_string()),
         "block rebuilt"
     );
     assert!(s.undo());
-    assert_eq!(table(&s, h).cell_text(2, 1), Some("12.000 m2"));
+    assert_eq!(table(&s, h).cell_text(2, 1), Some("12.00 m2"));
     // Typed over, the cell is plain text again.
     s.run(Command::EditCell {
         target: t(h),
@@ -758,7 +758,7 @@ fn area_and_length_fields_read_in_metres() {
             field: FieldKind::Area { target: t(square) },
         })
         .unwrap());
-    assert_eq!(text_of(&s, area), "1.000");
+    assert_eq!(text_of(&s, area), "1.00 m²");
     let line = wall_line(&s);
     let h = one(s
         .run(Command::Field {
@@ -767,7 +767,7 @@ fn area_and_length_fields_read_in_metres() {
             field: FieldKind::Length { target: t(line) },
         })
         .unwrap());
-    assert_eq!(text_of(&s, h), "0.010");
+    assert_eq!(text_of(&s, h), "0.01 m");
 }
 
 #[test]
@@ -814,8 +814,8 @@ fn find_and_replace_leaves_fields_alone_and_says_so() {
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(text_of(&s, text), "m2 12.000");
-    assert_eq!(texts(&table(&s, h)), [["sqm note", "12.000 m2"]]);
+    assert_eq!(text_of(&s, text), "m2 12.00 m²");
+    assert_eq!(texts(&table(&s, h)), [["sqm note", "12.00 m2"]]);
 }
 
 /// A cell whose text wraps makes its row taller, as AutoCAD's tables do: a schedule's "Main

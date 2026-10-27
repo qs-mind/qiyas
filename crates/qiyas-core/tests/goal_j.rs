@@ -18,10 +18,10 @@ fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
         let id = s.takeoff.items[0].id.clone();
         for source in [Source::Ai, Source::Mcp] {
             for text in [
-                "Area 20 m²",
+                "Area 21 m²",
                 "Length 5 m",
                 "Volume 60 m³",
-                "المساحة ٢٠ م²",
+                "المساحة ٢١ م²",
                 "الحجم ٦٠ متر مكعب",
             ] {
                 let before = s.takeoff.items.len();
@@ -33,24 +33,34 @@ fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
                 let mut cited = v;
                 cited["text"] = json!(format!("{text} [takeoff:{id}]"));
                 let out = json!(s.run_input(&cited, source).unwrap());
-                assert_eq!(out["advice"], json!([]));
+                // Still cited (old drawings), but the id on the sheet is advised against.
+                let codes: Vec<_> = out["advice"].as_array().unwrap().iter().map(|a| a["code"].clone()).collect();
+                assert_eq!(codes, [json!("internal_id_in_text")]);
                 assert!(s.takeoff.items.last().unwrap().description.contains(&id));
             }
         }
         let markup = s.takeoff.items.last().unwrap().id.clone();
         for v in [
-            json!({"type":"set_description","id":markup,"text":"20 m²"}),
-            json!({"type":"set_note","id":markup,"text":"٢٠ م²"}),
-            json!({"type":"comment","points":[[0,0],[k,0],[k,k]],"text":"20 m²"}),
-            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"20 m² [takeoff:missing]"}),
-            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("20 m² [takeoff:{id}-missing]")}),
-            json!({"type":"add_measurement","kind":"item","unit":"markup","value":0,"points":[[k,k]],"description":"Check this room","note":"٢٠ م²","empty_item":true}),
+            json!({"type":"set_description","id":markup,"text":"21 m²"}),
+            json!({"type":"set_note","id":markup,"text":"٢١ م²"}),
+            json!({"type":"comment","points":[[0,0],[k,0],[k,k]],"text":"21 m²"}),
+            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"21 m² [takeoff:missing]"}),
+            json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("21 m² [takeoff:{id}-missing]")}),
+            json!({"type":"add_measurement","kind":"item","unit":"markup","value":0,"points":[[k,k]],"description":"Check this room","note":"٢١ م²","empty_item":true}),
         ] {
-            assert_eq!(run(&mut s, v)["advice"][0]["code"], "uncited_quantity");
+            let out = run(&mut s, v);
+            assert!(
+                out["advice"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["code"] == "uncited_quantity"),
+                "{out}"
+            );
         }
         let out = json!(s
             .run_input(
-                &json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"20 m²"}),
+                &json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":"21 m²"}),
                 Source::User
             )
             .unwrap());

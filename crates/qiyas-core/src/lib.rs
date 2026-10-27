@@ -66,6 +66,7 @@ mod room_objects;
 pub mod rooms;
 pub mod script;
 mod session;
+pub mod sheet_setup;
 mod sheetset;
 mod snap;
 mod table;

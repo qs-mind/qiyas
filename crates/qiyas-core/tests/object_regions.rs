@@ -256,7 +256,7 @@ fn legacy_room_uses_shared_drawing_recipe_and_quantity_fields() {
         .drawing
         .doc
         .entities()
-        .any(|entity| matches!(entity,EntityType::Text(text) if text.value=="Zone A: 22.000")));
+        .any(|entity| matches!(entity,EntityType::Text(text) if text.value=="Zone A: 22.00 m²")));
     assert!(session.undo());
     assert_eq!(
         session.entity_info(label, &[]).unwrap().text.as_deref(),

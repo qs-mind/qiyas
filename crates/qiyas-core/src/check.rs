@@ -20,9 +20,11 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 23] = [
+pub const RULES: [&str; 25] = [
     "placement",
     "literal_newline",
+    "internal_id_in_text",
+    "opening_untagged",
     "duplicate",
     "overlap",
     "dangling_end",
@@ -50,9 +52,11 @@ pub const RULES: [&str; 23] = [
 pub fn rule_pack(rule: &str) -> &'static str {
     match rule {
         "placement" => "placement",
-        "room_open" | "room_size_text_differs" | "room_area_mismatch" | "unlinked_takeoff" => {
-            "construction"
-        }
+        "room_open"
+        | "room_size_text_differs"
+        | "room_area_mismatch"
+        | "unlinked_takeoff"
+        | "opening_untagged" => "construction",
         _ => "general",
     }
 }
@@ -92,7 +96,8 @@ pub struct CheckScope {
     /// dangling_end, overshoot, tiny_segment, room_open, room_size_text_differs,
     /// dim_override_mismatch, text_overlaps_text, text_over_lines, text_height_vs_scale,
     /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark,
-    /// room_area_mismatch, annotation_overlap, annotation_over_grid, label_outside_room, object_tag_mismatch.
+    /// room_area_mismatch, annotation_overlap, annotation_over_grid, label_outside_room, object_tag_mismatch,
+    /// internal_id_in_text, opening_untagged.
     #[schemars(extend("items" = serde_json::json!({"type":"string","enum":RULES})))]
     pub rules: Vec<String>,
 }
@@ -398,6 +403,8 @@ impl Session {
                     .layers
                     .get(&e.common().layer)
                     .is_some_and(|l| !l.is_plottable || l.flags.off || l.flags.frozen)
+                // A retained room boundary is a record of the enclosure, drawn by nothing.
+                || crate::room_objects::is_room_boundary(e)
             {
                 continue;
             }
@@ -590,11 +597,50 @@ impl Session {
                 }
             }
         }
+        if wanted("internal_id_in_text") {
+            for e in entities
+                .iter()
+                .filter(|e| active(e.common().handle.value()))
+            {
+                if e.common().invisible
+                    || doc
+                        .layers
+                        .get(&e.common().layer)
+                        .is_some_and(|l| !l.is_plottable || l.flags.off || l.flags.frozen)
+                {
+                    continue;
+                }
+                let found = match e {
+                    EntityType::Text(t) => crate::quantity_notes::internal_id(&t.value),
+                    EntityType::MText(t) => crate::quantity_notes::internal_id(&t.value),
+                    EntityType::Table(t) => (0..t.rows.len())
+                        .flat_map(|r| (0..t.columns.len()).map(move |c| (r, c)))
+                        .filter_map(|(r, c)| t.cell_text(r, c))
+                        .find_map(crate::quantity_notes::internal_id),
+                    _ => None,
+                };
+                if let Some(what) = found {
+                    push(Finding {
+                        rule: "internal_id_in_text",
+                        pack: "general",
+                        severity: Severity::Warning,
+                        handles: vec![e.common().handle.value()],
+                        at: None,
+                        message: format!(
+                            "the text shows {what}: a client sheet shows values, never internal ids, handles or row references"
+                        ),
+                    });
+                }
+            }
+        }
         let mut not_checked = ink.incomplete.clone();
         self.check_layout_ink(&ink, &sheet, to_m, paper_scale, &active, &mut push);
 
         if wanted("object_tag_mismatch") {
             self.check_object_tags(&sheet, &active, &mut push);
+        }
+        if wanted("opening_untagged") {
+            self.check_opening_tags(&sheet, &active, &mut push);
         }
 
         if wanted("room_area_mismatch") {
@@ -1511,6 +1557,8 @@ pub fn layout_rule(rule: &str) -> bool {
             | "text_over_lines"
             | "text_height_vs_scale"
             | "object_tag_mismatch"
+            | "internal_id_in_text"
+            | "opening_untagged"
     )
 }
 impl CheckScope {

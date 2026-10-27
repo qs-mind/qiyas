@@ -111,6 +111,13 @@ fn reference(
         evidence: sources,
     }
 }
+/// An error about one object says which.
+fn on_object(error: CoreError, id: u64) -> CoreError {
+    match error {
+        CoreError::InvalidCommand(message) => invalid(format!("Object {id}: {message}")),
+        other => other,
+    }
+}
 fn line(
     context: &Context<'_>,
     term: &Term,
@@ -126,9 +133,16 @@ fn line(
         .map(|s| context.number(s))
         .collect::<Result<Vec<_>, _>>()?;
     if timesing < 0.0 || factors.iter().any(|v| *v < 0.0) {
-        return Err(invalid(
-            "Dimension operands must be nonnegative; use a deduct operation",
-        ));
+        let negative: Vec<String> = std::iter::once((&term.timesing, timesing))
+            .chain(term.factors.iter().zip(factors.iter().copied()))
+            .filter(|(_, value)| *value < 0.0)
+            .map(|(expression, value)| format!("`{expression}` = {value}"))
+            .collect();
+        return Err(invalid(format!(
+            "Dimension operands must be nonnegative; use a deduct operation to subtract. Term \"{}\" has {}. A negative value usually means one property is smaller than another (a head below its sill): check the object's properties, or write max(expression, 0)",
+            term.label,
+            negative.join(" and ")
+        )));
     }
     let magnitude = std::iter::once(timesing)
         .chain(factors.iter().copied())
@@ -199,6 +213,81 @@ fn template(template: &str, context: &Context<'_>) -> Result<String, CoreError> 
     Ok(result)
 }
 
+/// Placeholders that already make a BOQ line per size or mark.
+const SIZE_PLACEHOLDERS: [&str; 7] = [
+    "{mark}", "{size}", "{width}", "{height}", "{head}", "{sill}", "{depth}",
+];
+
+/// A line for a gross floor area, a circulation share or another figure that is information,
+/// not an item to buy or build, by what its own description says.
+fn reads_as_information(description_en: &str, description_ar: &str, section: &str) -> bool {
+    let text = format!("{description_en} {description_ar} {section}").to_lowercase();
+    [
+        "gross floor area",
+        "gfa",
+        "informational",
+        "for information",
+        "المسطح الإجمالي",
+        "إجمالي المسطح",
+        "المساحة الإجمالية",
+        "معلوماتي",
+    ]
+    .iter()
+    .any(|marker| {
+        text.match_indices(marker).any(|(at, _)| {
+            // "gfa" inside another word is not the abbreviation.
+            *marker != "gfa"
+                || (!text[..at].ends_with(|c: char| c.is_alphanumeric())
+                    && !text[at + 3..].starts_with(|c: char| c.is_alphanumeric()))
+        })
+    })
+}
+
+/// What tells this object's size apart from another's in the same BOQ line: its mark (as the
+/// schedule shows it), else for an opening its width and height. `(code part, description part)`.
+fn size_label(s: &Session, object: &ObjectRecord, unit: &str) -> Option<(String, String)> {
+    let text = |name: &str| {
+        object
+            .instance
+            .props
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    // Doors and windows only: any other counted object keeps the mapping's own code, which a
+    // client BOQ is matched by.
+    if !object.category.eq_ignore_ascii_case("opening") || !matches!(unit, "pcs" | "nr" | "count")
+    {
+        return None;
+    }
+    if let Some(mark) = text("mark") {
+        return Some((mark.clone(), mark));
+    }
+    if let Some(mark) = s
+        .drawing
+        .doc
+        .get_entity(Handle::new(object.instance.id))
+        .and_then(crate::opening_schedule::mark)
+    {
+        return Some((mark.clone(), mark));
+    }
+    let number = |name: &str| object.instance.props.get(name).and_then(Value::as_f64);
+    let mm = |metres: f64| (metres * 1000.0).round() as i64;
+    let width = number("width").filter(|w| *w > 0.0)?;
+    let height = number("head")
+        .map(|head| head - number("sill").unwrap_or(0.0))
+        .filter(|h| *h > 0.0);
+    Some(match height {
+        Some(h) => (
+            format!("{}x{}", mm(width), mm(h)),
+            format!("{} × {} mm", mm(width), mm(h)),
+        ),
+        None => (format!("{}", mm(width)), format!("{} mm", mm(width))),
+    })
+}
+
 pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
     #[cfg(any(test, feature = "fixtures"))]
     let _profile = crate::fixtures::profile::span("measurement.evaluate.derive");
@@ -223,7 +312,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
         .filter(|o| !exclusions.entity(s, o.instance.id))
         .collect();
     let evidence = s.recognition_evidence()?;
-    let mut items = BTreeMap::<String, GeneratedItem>::new();
+    type ItemKey = (String, String, String, String, String, String);
+    let mut items = BTreeMap::<ItemKey, GeneratedItem>::new();
     for object in &objects {
         if !object.valid
             || evidence.iter().any(|c| {
@@ -305,7 +395,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     method,
                     &citations,
                     vec![source.clone()],
-                )?);
+                )
+                .map_err(|e| on_object(e, object.instance.id))?);
             }
             for deduction in deductions {
                 for void in objects.iter().filter(|v| {
@@ -341,7 +432,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                         method,
                         &refs,
                         vec![source.clone(), reference(s, void, &evidence)],
-                    )?;
+                    )
+                    .map_err(|e| on_object(e, object.instance.id))?;
                     entry.included = included;
                     entry.decision = Some(format!(
                         "{} void; {predicate} = {included}",
@@ -351,11 +443,40 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 }
             }
             let raw = total(&context, &lines)?;
-            if raw < 0.0 {
-                return Err(invalid(format!(
-                    "Deductions exceed gross quantity for {} on {}",
-                    rule.id, object.instance.id
-                )));
+            let limited = raw < 0.0;
+            if limited {
+                // Never a negative quantity, and never a refused method: the quantity is limited
+                // to nothing, the working says so, and the report names what to look at.
+                let gross: f64 = lines
+                    .iter()
+                    .filter(|l| l.included && l.value > 0.0)
+                    .map(|l| l.value)
+                    .sum();
+                report.warnings.push(format!(
+                    "Rule {} on object {} ({}): deductions of {:.3} {unit} exceed its gross quantity of {gross:.3} {unit}, so its quantity is limited to 0. If the rule deducts from geometry.volume, geometry.net_area or another net figure, those already exclude the hosted openings: deduct from geometry.gross_volume or geometry.gross_area instead, or drop the deduction. Otherwise check the openings on this object",
+                    rule.id,
+                    object.instance.id,
+                    object.instance.type_name,
+                    gross - raw,
+                ));
+                lines.push(DimensionLine {
+                    label: "Deductions limited to the gross quantity".into(),
+                    operation: Operation::Add,
+                    timesing: 1.0,
+                    factors: vec![-raw],
+                    source_expressions: vec![format!("{}", -raw)],
+                    expression: format!("({})", -raw),
+                    value: -raw,
+                    unit: unit.clone(),
+                    method: super::canonical_method_name(&method.name),
+                    citations: vec![rule.citation.clone()],
+                    sources: vec![source.clone()],
+                    included: true,
+                    decision: Some(format!(
+                        "deductions {:.3} exceed gross {gross:.3}: limited to 0",
+                        gross - raw
+                    )),
+                });
             }
             if let Some(rounding) = &rule.rounding {
                 let scale = 10_f64.powi(rounding.decimals as i32);
@@ -386,7 +507,12 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     decision: None,
                 });
             }
-            let quantity = total(&context, &lines)?;
+            // Never a negative quantity (a limited one is exactly nothing, not rounding dust).
+            let quantity = if limited {
+                0.0
+            } else {
+                total(&context, &lines)?.max(0.0)
+            };
             let confidence =
                 lines
                     .iter()
@@ -424,7 +550,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             mapped_context
                 .values
                 .insert("unit".into(), EValue::Text(unit.clone()));
-            let item = GeneratedItem {
+            let mut item = GeneratedItem {
                 confidence,
                 tolerances: rule.tolerance.clone().into_iter().collect(),
                 code: template(&mapping.code, &mapped_context)?,
@@ -437,6 +563,12 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 mapping_citations: vec![mapping.citation.clone()],
                 coverage: rule.coverage.clone(),
                 lines,
+                informational: mapping.informational
+                    || reads_as_information(
+                        &mapping.description_en,
+                        &mapping.description_ar,
+                        &mapping.section,
+                    ),
             };
             if item.unit != *unit {
                 return Err(invalid(format!(
@@ -444,15 +576,27 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     item.code, item.unit
                 )));
             }
-            if let Some(existing) = items.get_mut(&item.code) {
-                if existing.unit != item.unit
-                    || existing.description_en != item.description_en
-                    || existing.description_ar != item.description_ar
-                    || existing.section != item.section
-                    || existing.trade != item.trade
-                {
-                    return Err(invalid(format!("BOQ code {} groups incompatible descriptions or units; include the varying property in its template", item.code)));
+            // A BOQ line is one description. Doors and windows of different sizes or marks are
+            // different lines unless the mapping's own text already says which size.
+            let sized = [&mapping.code, &mapping.description_en, &mapping.description_ar]
+                .iter()
+                .any(|t| SIZE_PLACEHOLDERS.iter().any(|p| t.contains(p)));
+            if !sized && !item.informational {
+                if let Some((code, label)) = size_label(s, object, unit) {
+                    item.code = format!("{}-{code}", item.code);
+                    item.description_en = format!("{} — {label}", item.description_en);
+                    item.description_ar = format!("{} — {label}", item.description_ar);
                 }
+            }
+            let key = (
+                item.code.clone(),
+                item.description_en.clone(),
+                item.description_ar.clone(),
+                item.section.clone(),
+                item.trade.clone(),
+                item.unit.clone(),
+            );
+            if let Some(existing) = items.get_mut(&key) {
                 for t in item.tolerances {
                     if !existing.tolerances.contains(&t) {
                         existing.tolerances.push(t);
@@ -460,7 +604,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 }
                 existing.confidence = existing.confidence.min(item.confidence);
                 existing.lines.extend(item.lines);
-                existing.quantity = total(&context, &existing.lines)?;
+                existing.quantity = total(&context, &existing.lines)?.max(0.0);
                 for c in item.mapping_citations {
                     if !existing.mapping_citations.contains(&c) {
                         existing.mapping_citations.push(c);
@@ -472,7 +616,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     }
                 }
             } else {
-                items.insert(item.code.clone(), item);
+                items.insert(key, item);
             }
         }
         if measured && source.grid.is_none() {
@@ -487,6 +631,27 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 object.instance.id, object.instance.type_name
             ));
         }
+    }
+    // One code, several descriptions: keep every line, number the codes, tell the author.
+    let mut by_code = BTreeMap::<String, usize>::new();
+    for item in items.values() {
+        *by_code.entry(item.code.clone()).or_default() += 1;
+    }
+    let mut seen = BTreeMap::<String, usize>::new();
+    for item in items.values_mut() {
+        if by_code[&item.code] > 1 {
+            let n = seen.entry(item.code.clone()).or_default();
+            *n += 1;
+            if *n > 1 {
+                item.code = format!("{}-{n}", item.code);
+            }
+        }
+    }
+    for (code, n) in by_code.iter().filter(|(_, n)| **n > 1) {
+        report.warnings.push(format!("BOQ code {code} was given to {n} different descriptions or units; the later ones were numbered {code}-2…. Put the property that differs in the mapping's code or description template"));
+    }
+    for item in items.values().filter(|i| i.informational) {
+        report.warnings.push(format!("BOQ line {} is informational, so it is left out of the BOQ (it stays in the dimension sheets)", item.code));
     }
     report.items = items.into_values().collect();
     report.items.sort_by(|a, b| {

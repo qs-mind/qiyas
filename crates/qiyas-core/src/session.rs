@@ -157,6 +157,9 @@ pub struct Session {
     untitled: bool,
     /// A host-selected visible folder for exports until the drawing has its first saved file.
     export_directory: Option<PathBuf>,
+    /// The language of the user's request, set by the host: what labels, schedules and title
+    /// blocks that Qiyas writes use when a command does not say (an explicit `language` wins).
+    sheet_language: Option<crate::rooms::LabelLanguage>,
     /// The curve tolerance of the sheet on screen when zoomed in past `batch_tol` (`zoom_tol`);
     /// `None` draws at `batch_tol`.
     zoom_tol: std::cell::Cell<Option<f64>>,
@@ -765,6 +768,7 @@ impl Session {
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             untitled: false,
             export_directory: None,
+            sheet_language: None,
             zoom_tol: std::cell::Cell::new(None),
             document_revision: 0,
             saved_revision: 0,
@@ -900,6 +904,16 @@ impl Session {
     /// Desktop hosts select Documents; headless hosts keep their isolated drawing folder.
     pub fn set_export_directory(&mut self, directory: PathBuf) {
         self.export_directory = Some(directory);
+    }
+
+    /// The language generated sheet text follows when a command gives none (the host sets it from
+    /// the user's request; it is not part of the drawing).
+    pub fn set_sheet_language(&mut self, language: Option<crate::rooms::LabelLanguage>) {
+        self.sheet_language = language;
+    }
+
+    pub fn sheet_language(&self) -> Option<crate::rooms::LabelLanguage> {
+        self.sheet_language
     }
 
     pub fn export_folder(&self) -> &Path {

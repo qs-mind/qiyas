@@ -12,7 +12,8 @@
 //! Area and length fields follow the entity they read: after every modify, edit and erase they
 //! are worked out again in the same undo step (`Session::follow_fields`). Dates, file names and
 //! counts change on `UpdateFields`. Areas and lengths are in square metres and metres (as the
-//! take-off shows them), 3 decimals; an entity gone, or a code Qiyas does not know, shows `####`.
+//! take-off shows them), 2 decimals and, in a text that does not give the unit itself, with it
+//! (`17.81 m²`; the take-off keeps full precision); an entity gone, or a code Qiyas does not know, shows `####`.
 
 pub(crate) use crate::xdata::chunks;
 use opencadcodec::entities::Table;
@@ -92,7 +93,8 @@ enum Code {
     RoomArea { handles: Vec<u64>, decimals: usize },
     Count(String),
     OpeningCount(u64, String),
-    ObjectValue(Vec<u64>, String, usize),
+    /// Object ids, quantity name, decimals, and whether the sheet is in Arabic (digits too).
+    ObjectValue(Vec<u64>, String, usize, bool),
     Unknown,
 }
 
@@ -181,10 +183,15 @@ fn parse_code(code: &str) -> Code {
                         .map_or(Code::Unknown, |ids| {
                             let decimals = parts
                                 .get(4)
-                                .and_then(|s| s.trim().parse::<usize>().ok())
-                                .unwrap_or(3)
+                                .and_then(|s| s.trim().split_whitespace().next()?.parse::<usize>().ok())
+                                .unwrap_or_else(|| crate::numbers::default_decimals(name))
                                 .min(6);
-                            Code::ObjectValue(ids, (*name).into(), decimals)
+                            Code::ObjectValue(
+                                ids,
+                                (*name).into(),
+                                decimals,
+                                parts.get(4).is_some_and(|s| s.split_whitespace().nth(1) == Some("ar")),
+                            )
                         }),
                     _ => Code::Unknown,
                 }
@@ -230,7 +237,7 @@ fn parse_code(code: &str) -> Code {
 }
 
 /// Today's date (UTC) as `yyyy-MM-dd`.
-fn today() -> String {
+pub(crate) fn today() -> String {
     let d = time::OffsetDateTime::now_utc().date();
     format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
 }
@@ -333,20 +340,59 @@ impl Session {
     }
 
     /// `template` with every field code replaced by its value now; `sheet` is the block the text
-    /// sits in (counts are counted there).
+    /// sits in (counts are counted there). A measured area or length is shown with its unit
+    /// unless the text after it gives one (`Area %<…>% m²`).
     pub(crate) fn evaluate_fields(&self, template: &str, sheet: Handle) -> String {
+        self.evaluate_fields_with(template, sheet, true)
+    }
+
+    /// The same for a table cell, whose column heading gives the unit.
+    pub(crate) fn evaluate_cell_fields(&self, template: &str, sheet: Handle) -> String {
+        self.evaluate_fields_with(template, sheet, false)
+    }
+
+    fn evaluate_fields_with(&self, template: &str, sheet: Handle, units: bool) -> String {
         let _read = self.evaluation_read().ok();
         let mut out = String::with_capacity(template.len());
         let mut at = 0;
+        let arabic_text = crate::numbers::has_arabic(template);
         for (a, b) in code_spans(template) {
             out.push_str(&template[at..a]);
-            let value = self.field_value(&template[a..b], sheet);
-            if template.contains("المساحة") || template.contains("مساحة مرشحة") {
-                out.extend(value.chars().map(|c| match c {
-                    '0'..='9' => char::from_u32('٠' as u32 + c as u32 - '0' as u32).unwrap(),
-                    '.' => '٫',
-                    _ => c,
-                }));
+            let code = &template[a..b];
+            let value = self.field_value(code, sheet);
+            let (dim, flagged) = match parse_code(code) {
+                Code::Area(_) | Code::Sum { area: true, .. } | Code::RoomArea { .. } => {
+                    (Some(crate::numbers::Dim::Area), false)
+                }
+                Code::Length(_) | Code::Sum { area: false, .. } => {
+                    (Some(crate::numbers::Dim::Length), false)
+                }
+                Code::ObjectValue(_, name, _, arabic) => {
+                    (crate::numbers::dim_of_name(&name), arabic)
+                }
+                _ => (None, false),
+            };
+            let arabic = arabic_text || flagged;
+            if let (Some(dim), true) = (dim, value.parse::<f64>().is_ok()) {
+                if units || flagged {
+                    out.push_str(&crate::numbers::with_unit(
+                        &value,
+                        dim,
+                        arabic,
+                        &template[b..],
+                    ));
+                } else if arabic {
+                    out.push_str(&crate::numbers::arabic_digits(&value));
+                } else {
+                    out.push_str(&value);
+                }
+            } else if flagged && value.parse::<f64>().is_ok() {
+                // A count or another number in an Arabic schedule: Arabic digits.
+                out.push_str(&crate::numbers::arabic_digits(&value));
+            } else if arabic_text
+                && (template.contains("المساحة") || template.contains("مساحة مرشحة"))
+            {
+                out.push_str(&crate::numbers::arabic_digits(&value));
             } else {
                 out.push_str(&value);
             }
@@ -377,7 +423,7 @@ impl Session {
             };
             // In metres and square metres, as the take-off shows them.
             let (_, shown) = in_metres(kind, v, self.drawing.units);
-            Some(format!("{shown:.3}"))
+            Some(format!("{shown:.2}"))
         };
         let value = match parse_code(code) {
             Code::RoomArea { handles, decimals } => self.room_field_value(&handles, decimals),
@@ -405,7 +451,7 @@ impl Session {
                     )
                 })
                 .collect::<Option<Vec<_>>>()
-                .map(|values| format!("{:.3}", values.iter().sum::<f64>())),
+                .map(|values| format!("{:.2}", values.iter().sum::<f64>())),
             Code::Count(block) => {
                 let name = normalize_name(&block);
                 let sheet = doc.block_records.iter().find(|b| b.handle == sheet);
@@ -425,7 +471,7 @@ impl Session {
             Code::OpeningCount(source, mark) => self
                 .opening_count(Handle::new(source), &mark)
                 .map(|count| count.to_string()),
-            Code::ObjectValue(ids, name, decimals) => {
+            Code::ObjectValue(ids, name, decimals, _) => {
                 self.object_field_value(&ids, &name, decimals)
             }
             Code::Unknown => None,
@@ -535,7 +581,17 @@ impl Session {
                         if !wanted(&code, h.value()) {
                             continue;
                         }
-                        let value = escape_mtext(&self.evaluate_fields(&code, sheet));
+                        // The column heading gives a measured number's unit when it has one.
+                        let units = r == 0
+                            || !t
+                                .cell_text(0, c)
+                                .is_some_and(crate::numbers::heading_gives_unit);
+                        let shown = if units {
+                            self.evaluate_fields(&code, sheet)
+                        } else {
+                            self.evaluate_cell_fields(&code, sheet)
+                        };
+                        let value = escape_mtext(&shown);
                         if table.cell_text(r, c).is_some_and(|now| now != value) {
                             crate::table::set_cell_value(&mut table, r, c, &value);
                             any = true;
@@ -586,7 +642,7 @@ impl Session {
             for (a, b) in code_spans(text) {
                 out.push_str(&text[at..a]);
                 let original = &text[a..b];
-                if let Code::ObjectValue(ids, name, decimals) = parse_code(original) {
+                if let Code::ObjectValue(ids, name, decimals, arabic) = parse_code(original) {
                     let mut replaced = std::collections::BTreeSet::new();
                     for id in ids {
                         replaced.extend(mapping.get(&id).cloned().unwrap_or_else(|| vec![id]));
@@ -595,6 +651,7 @@ impl Session {
                         &replaced.into_iter().collect::<Vec<_>>(),
                         &name,
                         decimals,
+                        arabic,
                     ));
                     at = b;
                     continue;

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use opencadcodec::objects::{Layout, ObjectType};
+use opencadcodec::entities::AttachmentPoint;
 use opencadcodec::{CadDocument, EntityType, MText, Vector3};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -79,6 +80,46 @@ pub(crate) const TITLE_FIELDS: [&str; 7] = [
     "drawn_by",
     "sheet",
 ];
+
+/// The rows of a captioned title block (`make_sheet`), top to bottom.
+pub(crate) const SHEET_FIELDS: [&str; 9] = [
+    "project",
+    "title",
+    "drawing_no",
+    "scale",
+    "date",
+    "drawn_by",
+    "revision",
+    "status",
+    "sheet",
+];
+
+/// A title block's field captions in the sheet's language.
+pub(crate) fn caption(key: &str, language: crate::rooms::LabelLanguage) -> String {
+    use crate::rooms::LabelLanguage::{Ar, En};
+    match (key, language) {
+        ("project", En) => "Project",
+        ("project", Ar) => "المشروع",
+        ("title", En) => "Title",
+        ("title", Ar) => "عنوان اللوحة",
+        ("drawing_no", En) => "Drawing no.",
+        ("drawing_no", Ar) => "رقم اللوحة",
+        ("scale", En) => "Scale",
+        ("scale", Ar) => "مقياس الرسم",
+        ("date", En) => "Date",
+        ("date", Ar) => "التاريخ",
+        ("drawn_by", En) => "Drawn by",
+        ("drawn_by", Ar) => "رسم بواسطة",
+        ("revision", En) => "Revision",
+        ("revision", Ar) => "المراجعة",
+        ("status", En) => "Status",
+        ("status", Ar) => "الحالة",
+        ("sheet", En) => "Sheet",
+        ("sheet", Ar) => "اللوحة",
+        (other, _) => return other.replace('_', " "),
+    }
+    .to_string()
+}
 
 fn size_layout(layout: &mut Layout, paper: &Paper, orientation: LayoutOrientation) {
     layout.paper_size = paper.name.clone();
@@ -340,6 +381,19 @@ impl Session {
         binding_mm: f64,
         layer: &str,
     ) -> Result<Vec<u64>, CoreError> {
+        self.title_block_with(fields, margin_mm, binding_mm, layer, None)
+    }
+
+    /// The same, with a caption on each row in `captions`' language (`make_sheet`): the value
+    /// at 3 mm, the sheet's title at 4 mm, the caption at 2.5 mm; Arabic reads from the right.
+    pub(crate) fn title_block_with(
+        &mut self,
+        fields: &BTreeMap<String, String>,
+        margin_mm: f64,
+        binding_mm: f64,
+        layer: &str,
+        captions: Option<crate::rooms::LabelLanguage>,
+    ) -> Result<Vec<u64>, CoreError> {
         let paper = self
             .paper()
             .ok_or_else(|| invalid("Title blocks need a sized layout: use new_layout to create one or set_layout_paper to size an existing layout, then set_sheet to select it"))?;
@@ -359,7 +413,11 @@ impl Session {
                 "A title-block value contains a null character or is too long",
             ));
         }
-        let order = TITLE_FIELDS;
+        let order: &[&str] = if captions.is_some() {
+            &SHEET_FIELDS
+        } else {
+            &TITLE_FIELDS
+        };
         let mut rows: Vec<&str> = order.to_vec();
         rows.extend(
             fields
@@ -367,10 +425,13 @@ impl Session {
                 .filter(|k| !order.contains(&k.as_str()))
                 .map(String::as_str),
         );
+        let heights: Vec<f64> = rows
+            .iter()
+            .map(|k| if captions.is_some() && *k == "title" { 14.0 } else { 8.0 })
+            .collect();
         let (left, bottom) = (margin_mm.max(binding_mm), margin_mm);
         let (right, top) = (paper.w_mm - margin_mm, paper.h_mm - margin_mm);
-        let row_h = 8.0;
-        let block_h = row_h * rows.len() as f64;
+        let block_h: f64 = heights.iter().sum();
         if right - left < 40.0 || top - bottom < block_h {
             return Err(invalid("The margins and title block do not fit this paper"));
         }
@@ -394,28 +455,62 @@ impl Session {
             })?);
         }
         let style = self.text_style();
+        let arabic = captions == Some(crate::rooms::LabelLanguage::Ar);
+        // Caption column 40 mm wide; the value beside it. Arabic mirrors both.
+        let (caption_w, gap) = (40.0_f64.min(block_w / 3.0), 4.0);
         for (i, key) in rows.into_iter().enumerate() {
-            let y = bottom + block_h - i as f64 * row_h;
+            let y = bottom + block_h - heights[..i].iter().sum::<f64>();
             if i > 0 {
                 entities.extend(self.draw_entities(DrawSpec::Line {
                     a: [block_left, y],
                     b: [right, y],
                 })?);
             }
-            if let Some(value) = fields.get(key).filter(|v| !v.is_empty()) {
+            let put = |entities: &mut Vec<EntityType>,
+                           text: &str,
+                           x: f64,
+                           width: f64,
+                           height: f64,
+                           right_aligned: bool| {
                 // Keep values literal: title-block dates and names never become generated fields.
-                let mut text = MText::with_value(
-                    escape_mtext(value),
-                    Vector3::new(block_left + 2.0, y - 2.0, 0.0),
-                )
-                .with_height(if key == "title" { 3.5 } else { 2.5 });
-                text.rectangle_width = block_w - 4.0;
+                let mut text = MText::with_value(escape_mtext(text), Vector3::new(x, y - 2.0, 0.0))
+                    .with_height(height);
+                text.rectangle_width = width;
                 text.style = style.clone();
+                if right_aligned {
+                    text.attachment_point = AttachmentPoint::TopRight;
+                }
                 mark_logical(&mut text.common);
                 entities.push(EntityType::MText(text));
+            };
+            if let Some(language) = captions {
+                let name = caption(key, language);
+                if arabic {
+                    put(&mut entities, &name, right - 2.0, caption_w - 2.0, 2.5, true);
+                } else {
+                    put(&mut entities, &name, block_left + 2.0, caption_w - 2.0, 2.5, false);
+                }
+            }
+            if let Some(value) = fields.get(key).filter(|v| !v.is_empty()) {
+                let height = match (captions.is_some(), key) {
+                    (true, "title") => 4.0,
+                    (true, _) => 3.0,
+                    (false, "title") => 3.5,
+                    (false, _) => 2.5,
+                };
+                if captions.is_some() {
+                    let width = block_w - caption_w - gap - 2.0;
+                    if arabic {
+                        put(&mut entities, value, right - caption_w - gap, width, height, true);
+                    } else {
+                        put(&mut entities, value, block_left + caption_w + gap, width, height, false);
+                    }
+                } else {
+                    put(&mut entities, value, block_left + 2.0, block_w - 4.0, height, false);
+                }
             }
         }
-        if !fields.is_empty() {
+        if !fields.is_empty() || captions.is_some() {
             self.register_text_app();
         }
         self.add_on_annotation_layer(layer, entities, false)

@@ -61,7 +61,7 @@ pub(crate) fn room_area(entity: &EntityType) -> Option<f64> {
 }
 
 pub(crate) fn room_area_code(handles: &[u64], decimals: usize) -> String {
-    crate::object_schedules::object_value_code(handles, "net_floor_area", decimals)
+    crate::object_schedules::object_value_code(handles, "net_floor_area", decimals, false)
 }
 
 impl Session {
@@ -222,6 +222,24 @@ impl Session {
             .map(|(_, h, room)| (h, room))
     }
 
+    /// The retained room on `sheet` whose boundary is exactly `ring` (the same corners).
+    fn room_with_ring(&self, sheet: &str, ring: &[[f64; 2]]) -> Option<u64> {
+        let tol = self.measure_tol() * 100.0;
+        self.drawing.doc.entities_in_block(sheet).find_map(|entity| {
+            room_object(entity)?;
+            let EntityType::LwPolyline(p) = entity else {
+                return None;
+            };
+            let same = p.vertices.len() == ring.len()
+                && ring.iter().all(|c| {
+                    p.vertices
+                        .iter()
+                        .any(|v| (v.location.x - c[0]).hypot(v.location.y - c[1]) <= tol)
+                });
+            same.then(|| entity.common().handle.value())
+        })
+    }
+
     /// Keeps one actual region as a reusable object; repeated labelling reuses its handle.
     pub(crate) fn keep_room(
         &mut self,
@@ -252,15 +270,22 @@ impl Session {
             }
             return Ok(h);
         }
+        // The same enclosure seeded elsewhere (another name, another point) is the same room:
+        // one retained boundary per region, never two over each other.
+        if let Some(h) = self.room_with_ring(&self.sheet, ring) {
+            return Ok(h);
+        }
         if !self.drawing.doc.layers.contains(BOUNDARY_LAYER) {
             self.new_layer(BOUNDARY_LAYER)?;
-            self.drawing
-                .doc
-                .layers
-                .get_mut(BOUNDARY_LAYER)
-                .expect("created layer")
-                .is_plottable = false;
         }
+        // Retained boundaries are records, not drawing: they never plot, even when the layer
+        // was made beforehand.
+        self.drawing
+            .doc
+            .layers
+            .get_mut(BOUNDARY_LAYER)
+            .expect("boundary layer")
+            .is_plottable = false;
         let app_handle = self.register_room_app(ROOM_APP);
         let mut p = polyline(ring, bulges.first().map_or(&[], Vec::as_slice));
         p.common.layer = BOUNDARY_LAYER.to_string();
@@ -387,9 +412,10 @@ impl Session {
             ));
         }
         let mut spec = crate::object_schedules::legacy_recipe("room")?;
-        if language == Some(crate::rooms::LabelLanguage::Ar) {
+        if language.or(self.sheet_language()) == Some(crate::rooms::LabelLanguage::Ar) {
             spec.headers = vec!["الغرفة".into(), "المساحة (م²)".into()];
             spec.totals.insert("name".into(), "إجمالي المساحة".into());
+            spec.language = Some("ar".into());
         }
         spec.at = at;
         spec.ids = Some(rooms.clone());

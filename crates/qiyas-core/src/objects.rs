@@ -213,6 +213,21 @@ pub struct ObjectSchedule {
     pub ids: Option<Vec<u64>>,
     #[serde(default)]
     pub totals: BTreeMap<String, String>,
+    /// A total only adds like with like: with `total_by` (column names) the totals row is one
+    /// row per distinct value of those columns ("Total Door", "Total Window"), never one sum
+    /// across them. Without it the sum is over everything the schedule shows.
+    #[serde(default)]
+    pub total_by: Vec<String>,
+    /// "ar": the schedule's wording, digits and units follow `ar_headers`, `ar_templates` and
+    /// `ar_totals`; anything else is English.
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub ar_headers: Vec<String>,
+    #[serde(default)]
+    pub ar_templates: BTreeMap<String, String>,
+    #[serde(default)]
+    pub ar_totals: BTreeMap<String, String>,
     #[serde(default)]
     pub default_layer: Option<String>,
     #[serde(default)]
@@ -232,6 +247,32 @@ pub struct ObjectRecord {
 }
 fn invalid(message: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(message.into())
+}
+/// `placeholder` in `label` replaced by the number as a client reads it: a whole number as it
+/// is, a measured area or length to two decimals with its unit (unless the label gives one
+/// after it), any other number to two decimals.
+fn label_number(label: &str, placeholder: &str, key: &str, n: f64) -> String {
+    let dim = crate::numbers::dim_of_name(key);
+    let arabic = crate::numbers::has_arabic(label);
+    let mut out = String::with_capacity(label.len());
+    let mut rest = label;
+    while let Some(at) = rest.find(placeholder) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + placeholder.len()..];
+        let text = if dim.is_none() && n.fract() == 0.0 && n.abs() < 1e12 {
+            format!("{n:.0}")
+        } else {
+            format!("{n:.2}")
+        };
+        match dim {
+            Some(dim) => out.push_str(&crate::numbers::with_unit(&text, dim, arabic, after)),
+            None if arabic => out.push_str(&crate::numbers::arabic_digits(&text)),
+            None => out.push_str(&text),
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 fn expression(text: &str) -> Result<Expr, CoreError> {
     Expr::parse(text).map_err(|e| invalid(e.to_string()))
@@ -1894,12 +1935,12 @@ impl Session {
                 .replace("{type}", &definition.name)
                 .replace("{id}", &object.id.to_string());
             for (key, value) in &context.values {
-                let text = match value {
-                    ExprValue::Number(n) => format!("{n:.3}"),
-                    ExprValue::Text(s) => s.clone(),
-                    ExprValue::Bool(b) => b.to_string(),
+                let placeholder = format!("{{{key}}}");
+                label = match value {
+                    ExprValue::Number(n) => label_number(&label, &placeholder, key, *n),
+                    ExprValue::Text(s) => label.replace(&placeholder, s),
+                    ExprValue::Bool(b) => label.replace(&placeholder, &b.to_string()),
                 };
-                label = label.replace(&format!("{{{key}}}"), &text);
             }
             let height = definition
                 .plan

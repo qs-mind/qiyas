@@ -21,8 +21,9 @@ pub enum DeliverableCommand {
         #[serde(default)]
         layout: Option<String>,
         path: String,
+        /// The report's language; the user's language by default (English without one).
         #[serde(default)]
-        language: Language,
+        language: Option<Language>,
         #[serde(default)]
         project: Option<String>,
     },
@@ -155,6 +156,9 @@ pub struct Export {
 pub struct TableRow {
     pub cells: Vec<Value>,
     pub heading: bool,
+    /// A section or trade title row (the writers draw it as a band across the table).
+    #[serde(default)]
+    pub section: bool,
 }
 fn invalid(s: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(s.into())
@@ -270,6 +274,7 @@ impl Report {
             result.push(TableRow {
                 cells: vec![json!(section.heading.text(self.language))],
                 heading: true,
+                section: true,
             });
             let mut groups: BTreeMap<Vec<String>, Vec<&Value>> = BTreeMap::new();
             for row in &self.rows {
@@ -296,14 +301,20 @@ impl Report {
                     .map(|c| json!(c.heading.text(self.language)))
                     .collect(),
                 heading: true,
+                section: false,
             });
             for (key, rows) in groups {
                 if !key.is_empty() {
                     result.push(TableRow {
                         cells: vec![json!(key.join(" / "))],
                         heading: true,
+                        section: true,
                     });
                 }
+                let one_item = rows.len() > 1
+                    && rows.iter().all(|r| {
+                        !r["code"].is_null() && r["code"] == rows[0]["code"] && r["unit"] == rows[0]["unit"]
+                    });
                 let mut totals = vec![0.; self.layout.columns.len()];
                 let mut total_decimals = vec![0; self.layout.columns.len()];
                 for row in rows {
@@ -323,12 +334,16 @@ impl Report {
                     result.push(TableRow {
                         cells,
                         heading: false,
+                        section: false,
                     });
                 }
-                if self.layout.columns.iter().any(|c| c.total) {
+                // A total only adds like with like: rows of one item (one code) in one unit.
+                // Different items, even in the same unit, are never summed into one figure.
+                if self.layout.columns.iter().any(|c| c.total) && one_item {
                     result.push(TableRow {
                         cells: vec![json!(self.layout.total_heading.text(self.language))],
                         heading: true,
+                        section: false,
                     });
                     result.push(TableRow {
                         cells: self
@@ -346,6 +361,7 @@ impl Report {
                             })
                             .collect(),
                         heading: true,
+                        section: false,
                     });
                 }
             }
@@ -434,10 +450,19 @@ fn precision(row: &Value, field: &str) -> usize {
             field,
             "quantity" | "a_quantity" | "b_quantity" | "delta" | "value" | "squaring"
         );
+    // Areas and lengths read to the centimetre in a client table, volumes to the litre; a
+    // method's own rounding rule wins. The lossless record keeps the full figure.
+    let default = match row["unit"].as_str() {
+        Some("m2" | "m²" | "m") => 2,
+        _ => 3,
+    };
     if count {
         0
     } else {
-        row["presentation_decimals"].as_u64().unwrap_or(3).min(12) as usize
+        row["presentation_decimals"]
+            .as_u64()
+            .unwrap_or(default)
+            .min(12) as usize
     }
 }
 fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
@@ -520,6 +545,49 @@ pub fn display(v: &Value) -> String {
     }
 }
 
+/// The method and source columns of a client BOQ are in the report's language or not shown:
+/// a column whose every entry is written in the other language (English clauses in an Arabic
+/// BOQ) is left out of the printed table, and the report says so. The dimension sheets and the
+/// lossless record keep the full citations.
+fn drop_foreign_columns(
+    layout: &mut Layout,
+    rows: &[Value],
+    language: Language,
+    warnings: &mut Vec<String>,
+) {
+    if layout.client.is_some() {
+        return;
+    }
+    let wanted_arabic = language == Language::Ar;
+    let mut dropped = Vec::new();
+    layout.columns.retain(|column| {
+        if !matches!(column.field.as_str(), "method" | "citations") {
+            return true;
+        }
+        let texts: Vec<String> = rows
+            .iter()
+            .map(|r| display(&present(&r[&column.field], &column.field, r, language)))
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        let foreign = !texts.is_empty()
+            && texts
+                .iter()
+                .all(|t| crate::numbers::has_arabic(t) != wanted_arabic);
+        if foreign {
+            dropped.push(column.field.clone());
+        }
+        !foreign
+    });
+    if !dropped.is_empty() {
+        warnings.push(format!(
+            "The {} column(s) are written in {}, not in the report's language, so the printed BOQ leaves them out (the dimension sheets keep them). Write the method and its clauses in {} to show them.",
+            dropped.join(" and "),
+            if wanted_arabic { "English" } else { "Arabic" },
+            if wanted_arabic { "Arabic" } else { "English" },
+        ));
+    }
+}
+
 fn localized(rows: &mut [Value], language: Language) {
     for row in rows {
         for name in ["description", "reason"] {
@@ -537,6 +605,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
     if kind == Kind::Boq {
         return items
             .iter()
+            .filter(|i| !i.informational)
             .map(|i| {
                 let mut v = json!(i);
                 v["drawing"] = json!(drawing);
@@ -607,7 +676,7 @@ pub fn drawing(
     language: Language,
     layout: Option<&str>,
 ) -> Result<Report, CoreError> {
-    let layout: Layout = match layout {
+    let mut layout: Layout = match layout {
         Some(name) => serde_json::from_value(
             knowledge::get(&session.drawing.doc, knowledge::Kind::Reports, name)?
                 .ok_or_else(|| {
@@ -679,6 +748,9 @@ pub fn drawing(
         }
     }
     localized(&mut rows, language);
+    if kind == Kind::Boq {
+        drop_foreign_columns(&mut layout, &rows, language, &mut warnings);
+    }
     Ok(Report {
         kind,
         language,

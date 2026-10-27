@@ -702,7 +702,7 @@ fn measured_hatch_and_area_field_follow_all_material_when_a_hosted_cut_splits_it
         text.value.clone()
     };
     near(s.takeoff.items[0].shown, 0.8);
-    assert_eq!(field_text(&s), "0.800");
+    assert_eq!(field_text(&s), "0.80 m²");
     let cut = added(
         &mut s,
         json!({"type":"place_objects","objects":[{"type":"Cut","points":[[1,0]],"host":host}]}),
@@ -716,11 +716,11 @@ fn measured_hatch_and_area_field_follow_all_material_when_a_hosted_cut_splits_it
             Some(EntityType::Hatch(_))
         ));
     }
-    assert_eq!(field_text(&s), "0.700");
+    assert_eq!(field_text(&s), "0.70 m²");
     assert!(s.undo());
     near(s.takeoff.items[0].shown, 0.8);
     assert_eq!(s.takeoff.items[0].handles, [hatch]);
-    assert_eq!(field_text(&s), "0.800");
+    assert_eq!(field_text(&s), "0.80 m²");
     assert!(s.redo());
     near(s.takeoff.items[0].shown, 0.7);
     run(
@@ -738,11 +738,11 @@ fn measured_hatch_and_area_field_follow_all_material_when_a_hosted_cut_splits_it
             .count(),
         1
     );
-    assert_eq!(field_text(&s), "0.800");
+    assert_eq!(field_text(&s), "0.80 m²");
     assert!(s.undo());
     near(s.takeoff.items[0].shown, 0.7);
     assert_eq!(s.takeoff.items[0].handles.len(), 2);
-    assert_eq!(field_text(&s), "0.700");
+    assert_eq!(field_text(&s), "0.70 m²");
 }
 
 #[test]

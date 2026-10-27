@@ -79,13 +79,55 @@ impl Session {
         targets: &[Target],
         property: &str,
         height: Option<f64>,
+        category: Option<&str>,
     ) -> Result<Vec<u64>, CoreError> {
+        let from_category: Vec<Target>;
+        let targets = match category {
+            Some(category) if targets.is_empty() => {
+                from_category = self
+                    .objects(&crate::objects::ObjectFilter {
+                        category: Some(category.into()),
+                        sheet: Some(self.sheet.clone()),
+                        ..Default::default()
+                    })?
+                    .into_iter()
+                    .filter(|o| o.valid)
+                    .map(|o| Target {
+                        handle: o.instance.id,
+                        chain: vec![],
+                    })
+                    .collect::<Vec<_>>();
+                &from_category[..]
+            }
+            Some(_) => return Err(invalid("Give targets or a category, not both")),
+            None => targets,
+        };
         let targets = self.object_edit_targets(targets);
         let handles = self.sheet_targets(&targets)?;
         if handles.is_empty() {
             return Err(invalid("Choose objects to label"));
         }
-        let objects = self.objects_for(&handles.iter().map(|h| h.value()).collect::<Vec<_>>())?;
+        let mut objects =
+            self.objects_for(&handles.iter().map(|h| h.value()).collect::<Vec<_>>())?;
+        // Door and window marks are assigned from their size: give them out first, so tagging
+        // works before an opening schedule exists.
+        if property == "mark"
+            && objects.iter().any(|o| {
+                o.category.eq_ignore_ascii_case("opening")
+                    && o.instance
+                        .props
+                        .get("mark")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none_or(|m| m.trim().is_empty())
+            })
+        {
+            if let Some(block) = self.drawing.doc.block_records.get(&self.sheet) {
+                let handle = block.handle;
+                self.mark_openings(handle)?;
+                objects = self
+                    .objects_for(&handles.iter().map(|h| h.value()).collect::<Vec<_>>())?;
+            }
+        }
         let height = height.unwrap_or_else(|| self.default_text_height());
         let mut added = Vec::new();
         let app = crate::xdata::register(&mut self.drawing.doc, APP);
@@ -275,5 +317,52 @@ impl Session {
                 });
             }
         }
+    }
+
+    /// Doors and windows that no tag shows on the plan, when an opening schedule exists: the
+    /// marks in the schedule are what the tags say, so an untagged opening cannot be found in it.
+    pub(crate) fn check_opening_tags(
+        &self,
+        sheet: &str,
+        active: &impl Fn(u64) -> bool,
+        push: &mut impl FnMut(crate::check::Finding),
+    ) {
+        if !self.has_opening_schedules() {
+            return;
+        }
+        let Ok(openings) = self.objects(&crate::objects::ObjectFilter {
+            category: Some("opening".into()),
+            sheet: Some(sheet.into()),
+            ..Default::default()
+        }) else {
+            return;
+        };
+        let tagged: std::collections::BTreeSet<String> = self
+            .drawing
+            .doc
+            .entities()
+            .filter_map(|e| crate::xdata::read_json::<Link>(e.common(), APP))
+            .filter(|link| link.property == "mark")
+            .map(|link| link.identity)
+            .collect();
+        let missing: Vec<u64> = openings
+            .iter()
+            .filter(|o| o.valid && active(o.instance.id) && !tagged.contains(&o.identity))
+            .map(|o| o.instance.id)
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        push(crate::check::Finding {
+            rule: "opening_untagged",
+            pack: "construction",
+            severity: crate::check::Severity::Warning,
+            message: format!(
+                "{} doors or windows have no tag on the plan, so their schedule marks cannot be found: object_tags {{\"category\":\"opening\",\"property\":\"mark\"}} tags them all",
+                missing.len()
+            ),
+            handles: missing.into_iter().take(100).collect(),
+            at: None,
+        });
     }
 }

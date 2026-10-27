@@ -20,6 +20,16 @@ fn cells(s: &Session, handle: u64) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The schedule totals one kind at a time ("Total Door", "Total Window"); never doors and
+/// windows in one sum. This adds the kinds' totals for the checks on how many openings exist.
+fn all_openings(cells: &[Vec<String>]) -> usize {
+    cells
+        .iter()
+        .filter(|r| r[0].starts_with("Total"))
+        .map(|r| r[3].parse::<usize>().unwrap())
+        .sum()
+}
+
 #[test]
 fn opening_schedule_measures_all_openings_tracks_sizes_counts_and_undo_in_every_unit() {
     for units in [4, 5, 6, 1] {
@@ -42,10 +52,11 @@ fn opening_schedule_measures_all_openings_tracks_sizes_counts_and_undo_in_every_
         let table = handles[0];
         let initial = cells(&s, table);
         assert_eq!(s.history_steps().0.len(), before + 1);
-        assert_eq!(initial.len(), 4);
+        assert_eq!(initial.len(), 5);
         assert_eq!(initial[1], ["D-800x2100", "Door", "800 x 2100", "14"]);
         assert_eq!(initial[2], ["W-800x1200", "Window", "800 x 1200", "13"]);
-        assert_eq!(initial[3][3], "27");
+        assert_eq!(initial[3], ["Total Door", "", "", "14"]);
+        assert_eq!(initial[4], ["Total Window", "", "", "13"]);
         let EntityType::Table(t) = s.drawing.doc.get_entity(Handle::new(table)).unwrap() else {
             panic!()
         };
@@ -68,9 +79,9 @@ fn opening_schedule_measures_all_openings_tracks_sizes_counts_and_undo_in_every_
             json!({"type":"edit_wall_opening","insert":insert,"width":k,"head":2.0}),
         );
         let resized = cells(&s, table);
-        assert_eq!(resized.len(), 5);
+        assert_eq!(resized.len(), 6);
         assert!(resized.iter().any(|r| r[0] == "D-1000x2000" && r[3] == "1"));
-        assert_eq!(resized.last().unwrap()[3], "27");
+        assert_eq!(all_openings(&resized), 27);
         s.undo();
         assert_eq!(cells(&s, table), initial);
         s.redo();
@@ -81,7 +92,7 @@ fn opening_schedule_measures_all_openings_tracks_sizes_counts_and_undo_in_every_
             &mut s,
             json!({"type":"remove_wall_openings","inserts":[window]}),
         );
-        assert_eq!(cells(&s, table).last().unwrap()[3], "26");
+        assert_eq!(all_openings(&cells(&s, table)), 26);
         s.undo();
         assert_eq!(cells(&s, table), resized);
         let groups = s.wall_groups(None).unwrap();
@@ -90,7 +101,7 @@ fn opening_schedule_measures_all_openings_tracks_sizes_counts_and_undo_in_every_
             &mut s,
             json!({"type":"add_wall_openings","centreline":centreline,"openings":[{"at":90.0*k,"width":1.5*k,"kind":"window"}]}),
         );
-        assert_eq!(cells(&s, table).last().unwrap()[3], "28");
+        assert_eq!(all_openings(&cells(&s, table)), 28);
         assert!(cells(&s, table)
             .iter()
             .any(|r| r[0] == "W-1500x1200" && r[3] == "1"));
@@ -106,7 +117,7 @@ fn opening_schedule_measures_all_openings_tracks_sizes_counts_and_undo_in_every_
                 &mut reopened,
                 json!({"type":"remove_wall_openings","inserts":[insert]}),
             );
-            assert_eq!(cells(&reopened, table).last().unwrap()[3], "27");
+            assert_eq!(all_openings(&cells(&reopened, table)), 27);
             reopened.save_as_headless(&path).unwrap();
             let mut again = Session::open(&path).unwrap();
             run(&mut again, json!({"type":"update_fields"}));

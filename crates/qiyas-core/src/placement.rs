@@ -254,7 +254,14 @@ impl Session {
                 let boundary = self.room_boundary_in(&self.sheet, point, &Default::default());
                 matches!(boundary, crate::Boundary::Ring { .. }).then_some((boundary, point))
             }) {
-                self.fit_room_label(handle.value(), &boundary, point)?;
+                // Text that merely sits inside a closed region (an opening's tag on a wall) is
+                // not a room label: when it cannot be kept inside, it goes to free space.
+                if self
+                    .fit_room_label(handle.value(), &boundary, point)
+                    .is_err()
+                {
+                    self.place_in_free_space(handle, near, side, clearance_mm)?;
+                }
             } else if matches!(e, EntityType::Dimension(_)) {
                 self.place_dimension_clear(handle, clearance_mm.unwrap_or(2.5))?;
             } else {
@@ -264,27 +271,7 @@ impl Session {
                 ) {
                     return Err(invalid("Choose labels, tables or linear dimensions"));
                 }
-                let space = self.free_space(&SpaceQuery {
-                    entity: Some(handle.value()),
-                    near,
-                    side,
-                    clearance_mm,
-                    ..Default::default()
-                })?;
-                let best = space
-                    .positions
-                    .first()
-                    .ok_or_else(|| invalid("No clear position was found"))?;
-                let delta = best.delta.unwrap();
-                if delta != [0.0, 0.0] {
-                    self.modify(crate::modify::ModifySpec::Move {
-                        targets: vec![Target {
-                            handle: handle.value(),
-                            chain: vec![],
-                        }],
-                        delta,
-                    })?;
-                }
+                self.place_in_free_space(handle, near, side, clearance_mm)?;
             }
             let ink = self.sheet_ink(&self.sheet);
             let bounds = ink::union(
@@ -324,6 +311,37 @@ impl Session {
             });
         }
         Ok(placed)
+    }
+    /// Moves a text or table to the best clear position `free_space` finds.
+    fn place_in_free_space(
+        &mut self,
+        handle: opencadcodec::Handle,
+        near: Option<[f64; 2]>,
+        side: Side,
+        clearance_mm: Option<f64>,
+    ) -> Result<(), CoreError> {
+        let space = self.free_space(&SpaceQuery {
+            entity: Some(handle.value()),
+            near,
+            side,
+            clearance_mm,
+            ..Default::default()
+        })?;
+        let best = space
+            .positions
+            .first()
+            .ok_or_else(|| invalid("No clear position was found"))?;
+        let delta = best.delta.unwrap();
+        if delta != [0.0, 0.0] {
+            self.modify(crate::modify::ModifySpec::Move {
+                targets: vec![Target {
+                    handle: handle.value(),
+                    chain: vec![],
+                }],
+                delta,
+            })?;
+        }
+        Ok(())
     }
     pub(crate) fn place_new_table(
         &mut self,

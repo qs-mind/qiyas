@@ -59,14 +59,14 @@ fn deleting_union_owner_preserves_shared_material_references_and_undo() {
     )["handles"][0]
         .as_u64()
         .unwrap();
-    assert_eq!(field_text(&session, field), "2.400");
+    assert_eq!(field_text(&session, field), "2.40 m²");
     let steps = session.history_steps().0.len();
     run(
         &mut session,
         json!({"type":"delete_entities","targets":[{"handle":drivers[0]},{"handle":drivers[1]}]}),
     );
     assert_eq!(session.history_steps().0.len(), steps + 1);
-    assert_eq!(field_text(&session, field), "0.800");
+    assert_eq!(field_text(&session, field), "0.80 m²");
     assert!((session.takeoff.items[0].shown - 0.8).abs() < 1e-8);
     assert_eq!(session.takeoff.items[0].handles, [hatch]);
     assert!(matches!(
@@ -74,10 +74,10 @@ fn deleting_union_owner_preserves_shared_material_references_and_undo() {
         Some(EntityType::Hatch(_))
     ));
     assert!(session.undo());
-    assert_eq!(field_text(&session, field), "2.400");
+    assert_eq!(field_text(&session, field), "2.40 m²");
     assert!((session.takeoff.items[0].shown - 2.4).abs() < 1e-8);
     assert!(session.redo());
-    assert_eq!(field_text(&session, field), "0.800");
+    assert_eq!(field_text(&session, field), "0.80 m²");
     for extension in ["dwg", "dxf"] {
         let path = dir.path().join(format!("remaining.{extension}"));
         session.save_as(&path).unwrap();
@@ -86,7 +86,7 @@ fn deleting_union_owner_preserves_shared_material_references_and_undo() {
             &mut reopened,
             json!({"type":"set_object_props","targets":[drivers[2]],"props":{"width":0.4}}),
         );
-        assert_eq!(field_text(&reopened, field), "1.600");
+        assert_eq!(field_text(&reopened, field), "1.60 m²");
         assert!((reopened.takeoff.items[0].shown - 1.6).abs() < 1e-8);
         assert_eq!(reopened.takeoff.items[0].handles, [hatch]);
     }
