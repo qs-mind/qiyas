@@ -51,7 +51,10 @@ server.stdin.flush()
 tool("qiyas_read", "digest", {})
 kit = tool("qiyas_read", "takeoff_kit", {"detail": "full"})
 if method:
-    assert kit["measurement_method"]["name"] == method
+    # Qiyas tells the model the method without the body that publishes it ("POMI (RICS)" is "POMI").
+    import re
+    bare = re.sub(r"\s*[(\[]\s*RICS\s*[)\]]|\bRICS\b\s*", "", method, flags=re.I).strip() or method
+    assert kit["measurement_method"]["name"] == bare, kit["measurement_method"]["name"]
     assert "Write rules from your knowledge" in kit["measurement_method"]["instruction"]
 batch = kit["batch"]
 for command in batch["commands"]:
