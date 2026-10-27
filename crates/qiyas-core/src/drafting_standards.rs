@@ -615,7 +615,10 @@ mod tests {
         assert_eq!(egypt.limit.basis, "code");
         assert!(egypt.limit.evidence_read);
         assert!(!egypt.fallback);
-        assert_eq!(egypt.limit.clause.as_deref(), Some("Article 100"));
+        assert_eq!(
+            egypt.limit.clause.as_deref(),
+            Some("Article 100 (text substituted by decree 109/2013)")
+        );
         assert!((egypt.value() - 0.17).abs() < 1e-12);
         let ksa = limit_for("stair_riser_max_m", Some("ksa")).unwrap();
         assert_eq!(ksa.limit.basis, "practice_default");

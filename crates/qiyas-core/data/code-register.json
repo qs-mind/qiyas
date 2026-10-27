@@ -18,7 +18,7 @@
           "official_url_read": false,
           "evidence_url": "https://lawyeregypt.net/?p=3758",
           "evidence_read": true,
-          "evidence_note": "Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it. Articles 93, 94, 96, 97, 100 and 103 were read in Arabic and each limit below quotes its article.",
+          "evidence_note": "Arabic text of decree 144/2009 read on a legal-reference site (not the gazette). Articles 94 and 100 now stand in the wording substituted by decree 109/2013 (Gazette issue 66, 20 March 2013), read on manshurat.org with the same values. Amendments 200/2010, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025 were read and do not touch articles 93 to 103. Decree 67/2014 was not read. Each limit below quotes its article.",
           "status": "read",
           "use": "Room sizes, ceiling height, openings, doors, stairs, railings (limits below)."
         },
@@ -80,6 +80,19 @@
       "name_en": "Saudi Arabia",
       "name_ar": "المملكة العربية السعودية",
       "codes": [
+        {
+          "id": "momah_residential_requirements_2024",
+          "title_en": "Residential Buildings Construction Requirements (Ministerial Decree 1/4500943139, 2024)",
+          "title_ar": "اشتراطات إنشاء المباني السكنية (القرار الوزاري 1/4500943139، 1446هـ)",
+          "publisher": "Ministry of Municipalities and Housing (MOMAH)",
+          "official_url": "https://momah.gov.sa/ar/node/15715",
+          "official_url_read": true,
+          "evidence_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+          "evidence_read": true,
+          "evidence_note": "Arabic PDF read on momah.gov.sa (July 2024; the November 2025 re-issue has the same values). Applies to villas (R-3) and apartment buildings (R-2). It refers ceiling height, risers, treads, headroom and door widths to SBC 201 and SBC 1101, whose numeric text is not public, so those stay practice defaults.",
+          "status": "read",
+          "use": "Room and space sizes, corridor, villa entrance, daylight glazing, main stair width, guards (limits below)."
+        },
         {
           "id": "sbc_201",
           "title_en": "Saudi Building Code SBC 201: General",
@@ -166,16 +179,29 @@
       "codes": [
         {
           "id": "dubai_building_code_2021",
-          "title_en": "Dubai Building Code (Decree No. 45 of 2021)",
+          "title_en": "Dubai Building Code, 2021 edition (Decree No. 45 of 2021)",
           "title_ar": "كود دبي للبناء (المرسوم رقم 45 لسنة 2021)",
           "publisher": "Dubai Municipality",
           "official_url": "https://www.dm.gov.ae/",
           "official_url_read": true,
-          "evidence_url": "https://dlp.dubai.gov.ae/Legislation%20Reference/2021/Decree%20No.%20%2845%29%20of%202021%20Concerning%20the%20Dubai%20Building%20Code.html",
+          "evidence_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
           "evidence_read": true,
-          "evidence_note": "The decree defines the code and says it is published on the Dubai Municipality website. The text of the code (Part B, villas) was not read: no value from it is used below.",
+          "evidence_note": "Read in full from Dubai Municipality's own PDF of the 2021 edition: Part K (villas and townhouses) gives the limits below and Part B (apartment buildings) is quoted in their notes. Administrative Resolution 225/2024, which amends some specifications, was read and does not change these limits.",
           "status": "read",
-          "use": "Buildings in Dubai."
+          "use": "Buildings in Dubai. The UAE limits below are Dubai villa values."
+        },
+        {
+          "id": "abu_dhabi_private_housing_manual_2022",
+          "title_en": "Private Housing Manual, version 2.0 (2022): technical provisions for private residential villas in Abu Dhabi",
+          "title_ar": "دليل السكن الخاص، الإصدار 2.0 (2022)",
+          "publisher": "Abu Dhabi Department of Municipalities and Transport (DMT)",
+          "official_url": "https://www.dmt.gov.ae",
+          "official_url_read": true,
+          "evidence_url": "https://www.dmt.gov.ae/-/media/Project/DMT/DMT/E-Library/0001-Manuals/_-_20220328.pdf",
+          "evidence_read": true,
+          "evidence_note": "Read in DMT's PDF (28 March 2022). Covers private villas only; its values are quoted in the notes of the UAE limits where they differ from Dubai. Its 3.0 m floor height is measured to the structural soffit.",
+          "status": "read",
+          "use": "Private villas in Abu Dhabi."
         },
         {
           "id": "abu_dhabi_building_codes",
@@ -218,7 +244,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "مقاسً من مستوى السطح النهائى للأرضية حتى بطنيه سقفه الظاهر فى جميع الدوار 2.7 متر",
       "evidence_read": true,
-      "note": "Clear height from finished floor to the underside of the exposed ceiling, every floor. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Clear height from finished floor to the underside of the exposed ceiling, every floor. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "ceiling_height_service_min_m",
@@ -231,7 +257,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "ويجوز أن يقل الارتفاع إلى 2.30 متر بالنسبة للمداخل و الطرقات الداخلية والحمامات وغرف الغسيل",
       "evidence_read": true,
-      "note": "Entrances, internal corridors, bathrooms, laundry rooms, guards' rooms and similar spaces. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Entrances, internal corridors, bathrooms, laundry rooms, guards' rooms and similar spaces. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "room_area_min_m2",
@@ -240,11 +266,11 @@
       "unit": "m2",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "غرف سكنية 7.5 2.5",
       "evidence_read": true,
-      "note": "Residential rooms. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Residential rooms. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "room_width_min_m",
@@ -253,11 +279,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "غرف سكنية 7.5 2.5",
       "evidence_read": true,
-      "note": "Residential rooms, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Residential rooms, smallest dimension. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "kitchen_area_min_m2",
@@ -266,11 +292,11 @@
       "unit": "m2",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "مطابخ 3.00 1.50",
       "evidence_read": true,
-      "note": "Kitchens. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Kitchens. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "kitchen_width_min_m",
@@ -279,11 +305,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "مطابخ 3.00 1.50",
       "evidence_read": true,
-      "note": "Kitchens, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Kitchens, smallest dimension. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "bathroom_area_min_m2",
@@ -292,11 +318,11 @@
       "unit": "m2",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "حمامات 1.50 1.20",
       "evidence_read": true,
-      "note": "Bathrooms. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Bathrooms. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "bathroom_width_min_m",
@@ -305,11 +331,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "حمامات 1.50 1.20",
       "evidence_read": true,
-      "note": "Bathrooms, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Bathrooms, smallest dimension. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "wc_area_min_m2",
@@ -318,11 +344,11 @@
       "unit": "m2",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "دورة مياة 0.80 0.80",
       "evidence_read": true,
-      "note": "Toilets. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Toilets. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "wc_width_min_m",
@@ -331,11 +357,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 94",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 94 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "دورة مياة 0.80 0.80",
       "evidence_read": true,
-      "note": "Toilets, smallest dimension. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Toilets, smallest dimension. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "window_area_ratio_habitable_min",
@@ -348,7 +374,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "( 8 % ) من مسطح أرضية الغرف السكنية .",
       "evidence_read": true,
-      "note": "Openings for light and ventilation: 8% of the floor area of residential rooms. Living, dining and reception count as residential rooms. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Openings for light and ventilation: 8% of the floor area of residential rooms. Living, dining and reception count as residential rooms. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "window_area_ratio_service_min",
@@ -361,7 +387,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "( 10 % ) من مسطح أى مرفق من مرافق البناء ( حمام – مطبخ – دورة مياه – بئر سلم بالدور – وما إليه )",
       "evidence_read": true,
-      "note": "10% of the floor area of a bathroom, kitchen, toilet or stairwell. Distribution halls, corridors and entrances are exempt. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "10% of the floor area of a bathroom, kitchen, toilet or stairwell. Distribution halls, corridors and entrances are exempt. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "door_to_stair_min_m",
@@ -374,7 +400,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "فى حالة وجود باب يفتح مباشرة على درج سلم فإنه يجب أن تفصل بينهما مسافة لا تقل عن متر واحد",
       "evidence_read": true,
-      "note": "A door that opens directly onto a stair flight must be at least one metre from it. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "A door that opens directly onto a stair flight must be at least one metre from it. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "window_sill_height_min_m",
@@ -387,7 +413,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "الا يقل ارتفاع جلسات الشبابيك عن 0.9 من المتر",
       "evidence_read": true,
-      "note": "Window sill, unless a balcony, terrace or a railing of at least 0.9 m is in front of it. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Window sill, unless a balcony, terrace or a railing of at least 0.9 m is in front of it. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "door_width_min_room_m",
@@ -400,7 +426,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "الغرف السكنية والمكاتب 80 سم",
       "evidence_read": true,
-      "note": "Residential rooms and offices. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Residential rooms and offices. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "door_width_min_service_m",
@@ -413,7 +439,7 @@
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "المطابخ والحمامات ودورات المياة 70 سم",
       "evidence_read": true,
-      "note": "Kitchens, bathrooms and toilets. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Kitchens, bathrooms and toilets. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "stair_width_min_m",
@@ -422,11 +448,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 100",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 100 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "110 سم إذا كان عدد الوحدات بالدور لا يزيد على اربع وحدات",
       "evidence_read": true,
-      "note": "Clear length of the step where a floor has up to four units (a villa has one). Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Clear length of the step where a floor has up to four units (a villa has one). Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "stair_going_min_m",
@@ -435,11 +461,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 100",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 100 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "النائمة لا تقل عن 27 سم",
       "evidence_read": true,
-      "note": "Tread not less than 27 cm. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Tread not less than 27 cm. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "stair_riser_max_m",
@@ -448,11 +474,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 100",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 100 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "القائمة لا تزيد عن 17 سم",
       "evidence_read": true,
-      "note": "Riser not more than 17 cm. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Riser not more than 17 cm. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "stair_steps_per_flight_max",
@@ -461,11 +487,11 @@
       "unit": "steps",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 100",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 100 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "14 درجة تليها صدفة لا يقل عرضها عن أربع نوائم",
       "evidence_read": true,
-      "note": "At most 14 consecutive steps, then a landing at least four treads wide. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "At most 14 consecutive steps, then a landing at least four treads wide. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "stair_headroom_min_m",
@@ -474,11 +500,11 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 100",
-      "source_url": "https://lawyeregypt.net/?p=3758",
+      "clause": "Article 100 (text substituted by decree 109/2013)",
+      "source_url": "https://manshurat.org/sites/default/files/docs/pdf/006830.pdf",
       "quote_ar": "يجب أن يكون الحد الأدنى لصافى الارتفاع فوق درجة 2.1 متر",
       "evidence_read": true,
-      "note": "Clear height above any step. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Clear height above any step. Arabic text of decree 144/2009 read on a legal-reference site, and this article in the 109/2013 Gazette text (same value); checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
     },
     {
       "id": "guard_height_min_m",
@@ -487,11 +513,388 @@
       "unit": "m",
       "basis": "code",
       "code": "Egypt Building Law 119/2008, executive regulations (decree 144/2009)",
-      "clause": "Article 100 and Article 103",
+      "clause": "Article 100 (text substituted by decree 109/2013) and Article 103",
       "source_url": "https://lawyeregypt.net/?p=3758",
       "quote_ar": "ألا يقل ارتفاع درابزين الشرفات والبلكونات والسلالم المكشوفة عن 0.9 من المتر بالنسبة للأدوار الخمسة الأولى",
       "evidence_read": true,
-      "note": "Stair railing 0.90 m. Terrace and balcony railings 0.90 m for the first five floors, plus 5 cm for each floor after, up to 1.20 m; it must stop objects of 10 cm or more falling. Arabic text of decree 144/2009 as first issued, read on a legal-reference site (not the gazette). Later amendments (decree 774/2014) were not read; confirm the current edition before relying on it."
+      "note": "Stair railing 0.90 m. Terrace and balcony railings 0.90 m for the first five floors, plus 5 cm for each floor after, up to 1.20 m; it must stop objects of 10 cm or more falling. Arabic text of decree 144/2009 read on a legal-reference site; checked against amendments 200/2010, 109/2013, 272/2013, 774/2014, 296/2021, 410/2021, 943/2024, 120/2025 and 1505/2025, none of which changes this value. Decree 67/2014 was not read."
+    },
+    {
+      "id": "room_area_min_m2",
+      "market": "ksa",
+      "value": 6.5,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table (مساحات الغرف والفراغات السكنية)",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "غرف النوم — الحد الأدنى للمساحة (م2): 6.5 — الحد الأدنى للعرض (م): 2.1",
+      "evidence_read": true,
+      "note": "Bedroom minimum (also driver, guard and maid rooms). The majlis, dining room or hall needs 11.2 m2 and 2.8 m wide. Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "room_width_min_m",
+      "market": "ksa",
+      "value": 2.1,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "غرف النوم — 6.5 — 2.1",
+      "evidence_read": true,
+      "note": "Bedroom minimum width. The majlis, dining room or hall needs 2.8 m. Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "kitchen_area_min_m2",
+      "market": "ksa",
+      "value": 5.0,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "المطبخ — 5 — 1.8",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "kitchen_width_min_m",
+      "market": "ksa",
+      "value": 1.8,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "المطبخ — 5 — 1.8",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "bathroom_area_min_m2",
+      "market": "ksa",
+      "value": 2.8,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "الحمام — 2.8 — 1.4",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "bathroom_width_min_m",
+      "market": "ksa",
+      "value": 1.4,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "الحمام — 2.8 — 1.4",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "wc_area_min_m2",
+      "market": "ksa",
+      "value": 1.5,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "دورة المياه (المرحاض) — 1.5 — 1",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "wc_width_min_m",
+      "market": "ksa",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "دورة المياه (المرحاض) — 1.5 — 1",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "corridor_width_min_m",
+      "market": "ksa",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-4 item 2, table",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "الممرات الداخلية — - — 0.90",
+      "evidence_read": true,
+      "note": "Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "door_width_entrance_min_m",
+      "market": "ksa",
+      "value": 0.8,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-7 item 2 (المداخل)",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "الحد الأدنى لعرض المدخل في الفلل الخاصة (0.80م) وفق متطلبات الكود السعودي السكني (SBC 1101).",
+      "evidence_read": true,
+      "note": "Villa (R-3) entrance. For apartment buildings the entrance width follows the occupant load under SBC 201, with no fixed number. Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "window_area_ratio_habitable_min",
+      "market": "ksa",
+      "value": 0.08,
+      "unit": "ratio of floor area",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-15 item 2 (التهوية والإضاءة الطبيعية)",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "يجب ألا تقل مساحة الزجاج المستخدم للإضاءة الطبيعية عن (8%) من مساحة أرضية الغرفة",
+      "evidence_read": true,
+      "note": "Glazed area for daylight; the openable part must be at least 4% of the room area. Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "stair_width_min_m",
+      "market": "ksa",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-12 item 2 (الدرج)",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "الحد الأدنى لصافي عرض الدرج الرئيسي والبسطة 0.9م في الفلل السكنية مجموعة (R3)",
+      "evidence_read": true,
+      "note": "Main stair and landing in a villa (R-3). In an apartment building (R-2) the common main stair needs 1.2 m. Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "guard_height_min_m",
+      "market": "ksa",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "code",
+      "code": "Saudi MOMAH Residential Buildings Construction Requirements (decree 1/4500943139, 2024)",
+      "clause": "Clause 5-1-11 item 5 and clause 5-1-1 item 1",
+      "source_url": "https://momah.gov.sa/sites/default/files/2024-07/ashtratat%20a%27nsha%20almbany%20alsknyt%20almnshwrt%20%60ly%20mwq%60%20alwzart%20.pdf",
+      "quote_ar": "ويجب أن لا يقل عن (90 سم) في العمائر السكنية",
+      "evidence_read": true,
+      "note": "Balcony guards in all buildings and railings in apartment buildings. For villa balcony and open-stair railings the text gives a band of 85 to 95 cm. Read in the MOMAH PDF (2024; same values in the November 2025 re-issue). These are the ministry's requirements; the full SBC 1101 and SBC 201 numeric text is not public and was not read."
+    },
+    {
+      "id": "ceiling_height_min_m",
+      "market": "uae",
+      "value": 2.7,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.3.2, Table K.3",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Living and bedroom spaces 2.7",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 8 (8), item 10): 3 m measured to the structural soffit. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "ceiling_height_service_min_m",
+      "market": "uae",
+      "value": 2.3,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.3.2, Table K.3",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Any other spaces 2.3 ... Staircases 2.3 ... Rooms under staircases (non-habitable only) 2.03",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "room_area_min_m2",
+      "market": "uae",
+      "value": 10.5,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.3.1, Table K.2",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Living space (bedroom, living room, etc.) 10.5 3",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 11, table of additional elements, row 7): 9 m2. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "room_width_min_m",
+      "market": "uae",
+      "value": 3.0,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.3.1, Table K.2",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Minimum dimension – length and width of a room (m) ... Living space (bedroom, living room, etc.) 10.5 3",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 11, table of additional elements, row 7): 3 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "kitchen_area_min_m2",
+      "market": "uae",
+      "value": 5.4,
+      "unit": "m2",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.3.1, Table K.2",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Enclosed kitchen 5.4 1.8",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 11, basic elements table, row 6): 12 m2. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "kitchen_width_min_m",
+      "market": "uae",
+      "value": 1.8,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.3.1, Table K.2",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Enclosed kitchen 5.4 1.8",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 11, basic elements table, row 6): 3 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "corridor_width_min_m",
+      "market": "uae",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.5.1",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Hallways and corridors shall have a minimum clear width of 1.0 m and a clear headroom of 2.3 m",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 18, item 10; Appendix A (egress corridors)): 0.915 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "door_width_entrance_min_m",
+      "market": "uae",
+      "value": 0.915,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.4.1, Table K.4",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Entry doors, general 915",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 18, item 8): 1.2 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "door_width_min_service_m",
+      "market": "uae",
+      "value": 0.71,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.4.1, Table K.4",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Bathrooms and toilets 710",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Dubai apartment buildings (Part B, B.6.5.1, Table B.7): 0.815 m. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 18, item 9): 0.815 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "window_area_ratio_habitable_min",
+      "market": "uae",
+      "value": 0.1,
+      "unit": "ratio of floor area",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.4.2.1",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "bedrooms, living rooms and kitchens shall be equipped with windows with net glazing area not less than 10% of the habitable space floor area",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 12, item 1): 0.08 ratio of floor area. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "window_sill_height_min_m",
+      "market": "uae",
+      "value": 0.9,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.4.2.1 (b)",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "The window sill shall be positioned at a height of not less than 900 mm from the interior FFL.",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "stair_width_min_m",
+      "market": "uae",
+      "value": 1.0,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.5.2.2",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "All stairways shall have at least 1,000 mm clear width.",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Dubai apartment buildings (Part B, B.6.4.1.3): 1.2 m. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 13, item 4): 1.2 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "stair_going_min_m",
+      "market": "uae",
+      "value": 0.28,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.5.2.3",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Minimum stair tread depth shall be not less than 280 mm",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 13, item 5): 0.28 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "stair_riser_max_m",
+      "market": "uae",
+      "value": 0.18,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.5.2.3",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Stair riser height as measured in Figure K.25 shall be in the range 100 mm to 180 mm.",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 13, item 5): 0.18 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "stair_headroom_min_m",
+      "market": "uae",
+      "value": 2.3,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.5.2.10",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "Head room in stairways shall be not less than 2.3 m, measured vertically above a plane",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Dubai apartment buildings (Part B, B.6.4.1.15): 2.03 m. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 13, item 6): 2.05 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
+    },
+    {
+      "id": "guard_height_min_m",
+      "market": "uae",
+      "value": 1.2,
+      "unit": "m",
+      "basis": "code",
+      "code": "Dubai Building Code 2021, Part K (villas)",
+      "clause": "K.5.2.5.2; K.5.5.2.6",
+      "source_url": "https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf",
+      "quote_en": "The guard height from FFL (or lowest stepping feature), shall be not less than 1,200 mm.",
+      "evidence_read": true,
+      "note": "Dubai villa or townhouse value. Abu Dhabi private villas (DMT Private Housing Manual 2022, Article 10, items 3(c) and 4; Article 18 (pool barrier)): 1.2 m. Read in Dubai Municipality's PDF of the 2021 edition; Administrative Resolution 225/2024 checked and does not change it. Abu Dhabi apartment values and the federal fire code were not read."
     },
     {
       "id": "ceiling_height_min_m",

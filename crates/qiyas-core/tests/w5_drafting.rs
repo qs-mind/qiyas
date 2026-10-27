@@ -2,7 +2,7 @@
 //! entities in mm, cm, metres and inches. Included by the single integration-test binary.
 
 use opencadcodec::{EntityType, Handle};
-use qiyas_core::drafting_standards::{check_register, limits};
+use qiyas_core::drafting_standards::{check_register, limit_for, limits};
 use qiyas_core::registry::{effect_of, Effect};
 use qiyas_core::space_planning::{run_checks, PlanModel};
 use qiyas_core::{Command, Outcome, Session, Source};
@@ -452,8 +452,8 @@ fn egypt_limits_are_code_values_quoting_the_arabic_article() {
         // Each value quotes the Arabic article it comes from, figure included.
         let quote = limit["quote_ar"].as_str().unwrap();
         assert!(quote.chars().count() > 10, "{id}");
-        // The caveat about the edition travels with the finding.
-        assert!(limit["note"].as_str().unwrap().contains("774/2014"), "{id}");
+        // The amendments checked, and the one not read, travel with the finding.
+        assert!(limit["note"].as_str().unwrap().contains("67/2014"), "{id}");
         assert!(limit.get("reference_to_confirm").is_none(), "{id}");
     }
     let law = &register["markets"]["egypt"]["codes"][0];
@@ -464,8 +464,9 @@ fn egypt_limits_are_code_values_quoting_the_arabic_article() {
 
 #[test]
 fn practice_defaults_are_labelled_and_never_report_code_errors() {
-    // Egypt's limits are code values since 27 October 2026 (see the test below).
-    for market in [None, Some("ksa"), Some("uae")] {
+    // Egypt, KSA and UAE carry code values since 27 October 2026 (see the tests below).
+    {
+        let market: Option<&str> = None;
         let report = run_checks(&bad_plan(), market).unwrap();
         assert!(!report.findings.is_empty());
         assert_eq!(report.errors, 0);
@@ -502,10 +503,58 @@ fn egypt_code_findings_cite_the_article_its_source_and_the_edition_caveat() {
         assert!(finding
             .caveat
             .as_deref()
-            .is_some_and(|c| c.contains("774/2014")));
+            .is_some_and(|c| c.contains("67/2014")));
     }
     for finding in report.findings.iter().filter(|f| f.basis != "code") {
         assert_eq!(finding.basis, "practice_default");
         assert_ne!(finding.severity, "error");
     }
+}
+
+#[test]
+fn gulf_code_findings_cite_their_document_and_the_rest_stay_practice_defaults() {
+    let mut plan = serde_json::to_value(bad_plan()).unwrap();
+    plan["floors"][0]["rooms"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"Bedroom 4","area_m2":5,"width_m":1.9}));
+    let plan: PlanModel = serde_json::from_value(plan).unwrap();
+    for (market, document) in [
+        ("ksa", "Residential Buildings Construction Requirements"),
+        ("uae", "Dubai Building Code 2021"),
+    ] {
+        let report = run_checks(&plan, Some(market)).unwrap();
+        let code: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.basis == "code")
+            .collect();
+        assert!(!code.is_empty(), "{market}: {report:#?}");
+        for finding in &code {
+            assert!(
+                finding
+                    .source
+                    .as_deref()
+                    .is_some_and(|s| s.contains(document)),
+                "{market}: {finding:?}"
+            );
+            assert!(finding
+                .source_url
+                .as_deref()
+                .is_some_and(|u| u.starts_with("https://")));
+            assert!(finding.caveat.as_deref().is_some_and(|c| !c.is_empty()));
+        }
+        for finding in report.findings.iter().filter(|f| f.basis != "code") {
+            assert_eq!(finding.basis, "practice_default");
+            assert_ne!(finding.severity, "error");
+            assert!(finding.source.is_none() && finding.source_url.is_none());
+        }
+    }
+    // A KSA value the ministry text leaves to the unpublished SBC numbers stays a default.
+    let riser = limit_for("stair_riser_max_m", Some("ksa")).unwrap();
+    assert_eq!(riser.limit.basis, "practice_default");
+    assert!(riser.fallback);
+    let riser = limit_for("stair_riser_max_m", Some("uae")).unwrap();
+    assert_eq!(riser.limit.basis, "code");
+    assert!((riser.value() - 0.18).abs() < 1e-12);
 }
