@@ -3918,7 +3918,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qiyas-ai"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3949,7 +3949,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-boq"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "calamine",
  "qiyas-core",
@@ -3964,7 +3964,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "calamine",
  "chrono",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "image",
  "libc",
@@ -4015,7 +4015,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-desktop"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arboard",
  "getrandom 0.4.3",
@@ -4042,7 +4042,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-geom"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "cavalier_contours",
  "opencadcodec",
@@ -4051,7 +4051,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-mcp"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "qiyas-ai",
  "qiyas-core",
@@ -4064,7 +4064,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-param"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nalgebra",
  "serde",
@@ -4073,7 +4073,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-pdf"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "image",
  "opencadcodec",
@@ -4086,7 +4086,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-plot"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "flate2",
  "libc",
@@ -4105,7 +4105,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-render"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ab_glyph",
  "opencadcodec",
@@ -4119,7 +4119,7 @@ dependencies = [
 
 [[package]]
 name = "qiyas-takeoff"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "qiyas-core",
  "serde_json",

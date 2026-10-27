@@ -7,11 +7,39 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-27
+
+### Added
+
+- A blind second reading: before the BOQ, a fresh read-only reader measures every item again, and
+  any item outside its tolerance is marked for review with both figures in the BOQ.
+- A drawing-pack check card before take-off. It checks known units, the annotation scale,
+  vector or calibrated scan, orientation, and sheet number and revision. Each line passes or names
+  the fix.
+- An evidence PDF beside the BOQ: every BOQ item highlighted on its sheet with its item number
+  and a legend, in the BOQ's language, marked "For review". Export it from the Outputs menu.
+- Drafting knowledge for Mizan: sheet-set and drawing standards, door, stair, level and
+  section symbols, and space-planning checks for a proposed villa plan.
+- A code register. Egypt's room, opening, stair and guard limits quote the Building Law's
+  executive regulations by article. Saudi limits come from the Ministry of Municipalities and
+  Housing residential requirements (2024), and UAE limits from the Dubai Building Code 2021.
+  Every other value is labelled as a practice default for the engineer to confirm.
+- Mizan asks structured questions, will not finish while steps are open, keeps the chat's
+  language, and refuses to export a BOQ whose quantity check failed.
 - The right side is one Mizan column: the take-off, BOQ, conflicts and take-off report open in it in place of the chat. The prompt box has a small model icon and bilingual slash commands; questions are a plain numbered list.
 - A one-click "Connect an AI app" turns on the MCP server and shows the commands to copy.
 - Ctrl+S on a new drawing says it is asking where to save and offers a real name; Ctrl+Shift+S, Ctrl+O, Ctrl+P, Ctrl+F, Ctrl+A, Ctrl+X, Ctrl+K and a shortcuts list on Ctrl+/ were added, and the keys say what they did.
 - The drawing tab is one compact line with a dot while Mizan works; the ribbon collapses on a double-click; the layout tabs have no scrollbar; layer names are readable.
 - Measurement methods read "POMI", "NRM2"; no confidence percentage is shown anywhere.
+
+### Changed
+
+- Faster window: moving the pointer no longer redraws the whole window. Idle CPU dropped from about
+  9% to 0.4% of a core. Large layer lists and edits on big drawings are several times quicker. The
+  first frame uses the theme's background instead of a white flash.
+- Client outputs: Arabic schedules read right to left, totals add like with like, BOQ lines use
+  the right information words and size codes, every output says "For review", and all exports
+  go to one folder.
 
 ## [0.0.1] - 2026-10-26
 
