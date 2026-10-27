@@ -1040,3 +1040,226 @@ fn an_untitled_drawing_plots_into_the_export_folder_not_its_hidden_placeholder_f
     );
     assert_eq!(std::fs::read_dir(&hidden).unwrap().count(), 0);
 }
+
+// W6: the same 12 x 15 m villa and opening sizes used by the W3 offline replay.
+fn evidence_villa(long_description: bool) -> (tempfile::TempDir, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("villa.dwg"), 6);
+    let mut run = |command| {
+        s.run_input(&command, qiyas_core::Source::User).unwrap();
+    };
+    run(json!({"type":"walls","thickness":0.2,"height":3.0,
+        "runs":[{"points":[[0,0],[12,0],[12,15],[0,15]],"closed":true},
+                {"points":[[0,7.5],[12,7.5]]}],
+        "openings":[{"run":0,"at":2,"width":0.9,"kind":"door"},
+                    {"run":0,"at":6,"width":1.2,"kind":"window"},
+                    {"run":0,"at":9,"width":1.0,"kind":"door"},
+                    {"run":0,"at":18,"width":1.2,"kind":"window"},
+                    {"run":1,"at":3,"width":0.9,"kind":"door"}]}));
+    let citation = json!({"source":"Villa assumptions","clause":"1"});
+    let description = if long_description {
+        "Doors for the villa, including frame and ironmongery. ".repeat(160)
+    } else {
+        "Doors, various sizes".into()
+    };
+    run(
+        json!({"type":"measurement","kind":"set_mappings","mappings":[
+        {"rule":"doors","code":"A-D01","description_en":description,
+         "description_ar":"أبواب بمقاسات متنوعة","section":"Openings","trade":"Doors","unit":"pcs","citation":citation},
+        {"rule":"windows","code":"A-W01","description_en":"Windows, various sizes",
+         "description_ar":"شبابيك بمقاسات متنوعة","section":"Openings","trade":"Windows","unit":"pcs","citation":citation}]}),
+    );
+    let count = |id, element| {
+        json!({"id":id,"kind":"count","basis":"geometric",
+        "element_type":element,"unit":"pcs",
+        "terms":[{"label":"Count","operation":"add","factors":["pieces"],"citation":citation}],
+        "citation":citation})
+    };
+    run(
+        json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
+        "version":1,"name":"Villa geometric quantities","title":"Villa","based_on":"drawing",
+        "source_note":"Villa assumptions","rules":[count("doors","Legacy door"),count("windows","Legacy window")]}}),
+    );
+    (dir, s)
+}
+
+// Read the actual painted glyphs, honoring the plot writer's per-glyph ActualText overrides.
+// lopdf's convenience extractor ignores those overrides for shared Arabic glyph shapes.
+fn evidence_text(doc: &lopdf::Document, page: lopdf::ObjectId) -> String {
+    let fonts = doc.get_page_fonts(page).unwrap();
+    let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+    let mut font = Vec::new();
+    let mut actual = None;
+    let mut text = String::new();
+    for op in content.operations {
+        match op.operator.as_str() {
+            "Tf" => font = op.operands[0].as_name().unwrap().to_vec(),
+            "BDC" => {
+                actual = op
+                    .operands
+                    .get(1)
+                    .and_then(|o| o.as_dict().ok())
+                    .and_then(|d| d.get(b"ActualText").ok())
+                    .and_then(|v| v.as_str().ok())
+                    .map(|bytes| {
+                        let units: Vec<_> = bytes[2..]
+                            .chunks_exact(2)
+                            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                            .collect();
+                        String::from_utf16(&units).unwrap()
+                    });
+            }
+            "EMC" => actual = None,
+            "Tj" => {
+                if let Some(chars) = &actual {
+                    text.push_str(chars);
+                } else {
+                    let encoding = fonts[&font].get_font_encoding(doc).unwrap();
+                    text.push_str(
+                        &lopdf::Document::decode_text(&encoding, op.operands[0].as_str().unwrap())
+                            .unwrap(),
+                    );
+                }
+            }
+            "ET" => text.push('\n'),
+            _ => {}
+        }
+    }
+    text
+}
+
+#[test]
+fn villa_evidence_marks_every_boq_item_beside_the_boq_in_its_language() {
+    use qiyas_core::deliverables::{self, Kind, Language};
+    for language in [Language::En, Language::Ar] {
+        let (_dir, s) = evidence_villa(false);
+        let boq = deliverables::drawing(&s, Kind::Boq, language, None).unwrap();
+        assert_eq!(boq.rows.len(), 3, "two door sizes and one window size");
+        let boq_path = s.export_folder().join("villa boq.pdf");
+        qiyas_plot::report::write(&boq_path, &boq).unwrap();
+        let before = s.history_steps();
+        let out = qiyas_plot::evidence::export(&s, None, language).unwrap();
+        assert_eq!(out.path.parent(), boq_path.parent());
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+        assert_eq!(s.history_steps(), before, "export leaves the drawing alone");
+        let page = read(&out.path);
+        let text = evidence_text(&page.doc, page.page);
+        for row in &boq.rows {
+            let code = row["code"].as_str().unwrap();
+            let measured = s.measurement_report().unwrap();
+            let item = measured
+                .items
+                .iter()
+                .find(|item| item.code == code)
+                .unwrap();
+            let sources: std::collections::BTreeSet<_> = item
+                .lines
+                .iter()
+                .flat_map(|line| &line.sources)
+                .map(|source| source.handle)
+                .collect();
+            assert!(
+                text.matches(code).count() > sources.len(),
+                "{code} beside every element and in the legend: {text}"
+            );
+        }
+        // Each item has both heavy coloured drawing strokes and matching coloured labels.
+        for rgb in [[0xB3, 0x29, 0x36], [0, 0x6E, 0x90], [0x74, 0x46, 0xA0]] {
+            let color = rgb.map(|v| v as f32 / 255.0);
+            assert!(
+                page.strokes().iter().any(|(paint, _, _)| {
+                    close(paint.width, 0.8 * PT_PER_MM, 0.01)
+                        && paint
+                            .stroke
+                            .iter()
+                            .zip(color)
+                            .all(|(a, b)| close(*a, b, 0.001))
+                }),
+                "a heavy outline for {rgb:?}"
+            );
+            assert!(page.glyphs.iter().any(|g| g
+                .fill
+                .iter()
+                .zip(color)
+                .all(|(a, b)| close(*a, b, 0.001))));
+        }
+        let notice = if language == Language::Ar {
+            "للمراجعة"
+        } else {
+            "For review"
+        };
+        // lopdf reads the glyph stream's visual order for RTL, unlike a bidi-aware viewer.
+        assert!(
+            text.contains(notice) || text.contains(&notice.chars().rev().collect::<String>()),
+            "{text}"
+        );
+        if language == Language::Ar {
+            assert!(!text.contains("For review") && !text.contains("pcs"));
+        }
+    }
+}
+
+#[test]
+fn every_evidence_continuation_page_carries_for_review_and_the_drawing() {
+    let (_dir, s) = evidence_villa(true);
+    let out =
+        qiyas_plot::evidence::export(&s, None, qiyas_core::deliverables::Language::En).unwrap();
+    let doc = lopdf::Document::load(&out.path).unwrap();
+    let pages = doc.get_pages();
+    assert!(pages.len() > 1, "long descriptions need continuation pages");
+    for (number, id) in pages {
+        assert!(doc.extract_text(&[number]).unwrap().contains("For review"));
+        let content = lopdf::content::Content::decode(&doc.get_page_content(id)).unwrap();
+        assert!(content.operations.iter().any(|op| op.operator == "S"));
+        assert!(content.operations.iter().any(|op| op.operator == "Tj"));
+    }
+}
+
+#[test]
+fn evidence_uses_the_boq_export_folder_for_an_untitled_drawing() {
+    let (dir, mut s) = evidence_villa(false);
+    let documents = dir.path().join("Documents");
+    std::fs::create_dir(&documents).unwrap();
+    s.set_export_directory(documents.clone());
+    let path = qiyas_plot::evidence::output_path(&s, Some("evidence.pdf")).unwrap();
+    assert_eq!(path.parent(), Some(documents.as_path()));
+    assert!(qiyas_plot::evidence::output_path(&s, Some("../outside.pdf")).is_err());
+    assert!(qiyas_plot::evidence::output_path(&s, Some("evidence.xlsx")).is_err());
+}
+
+#[test]
+fn evidence_includes_each_sheet_that_has_measured_elements() {
+    let (_dir, mut s) = evidence_villa(false);
+    s.run(Command::NewLayout {
+        name: "Upper floor".into(),
+        paper: "ISO A3".into(),
+        orientation: qiyas_core::LayoutOrientation::Landscape,
+    })
+    .unwrap();
+    let sheet = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sheet| sheet.name == "Upper floor")
+        .unwrap();
+    s.set_sheet(&sheet.block).unwrap();
+    s.run_input(
+        &json!({"type":"walls","thickness":0.2,"height":3.0,
+        "runs":[{"points":[[0,0],[12,0]]}],
+        "openings":[{"run":0,"at":2,"width":0.9,"kind":"door"}]}),
+        qiyas_core::Source::User,
+    )
+    .unwrap();
+    let out =
+        qiyas_plot::evidence::export(&s, None, qiyas_core::deliverables::Language::En).unwrap();
+    let doc = lopdf::Document::load(out.path).unwrap();
+    assert_eq!(doc.get_pages().len(), 2);
+    let mut titles = String::new();
+    for page in doc.get_pages().keys() {
+        let text = doc.extract_text(&[*page]).unwrap();
+        assert!(text.contains("For review"));
+        assert!(text.contains("A-D01"));
+        titles.push_str(&text);
+    }
+    assert!(titles.contains("Upper floor") && titles.contains("Model"));
+}

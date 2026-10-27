@@ -151,6 +151,30 @@ pub async fn save_plot_style(path: String, style: PlotStyle) -> Result<(), Strin
     style.save(path).map_err(|e| e.to_string())
 }
 
+/// Exports the generated BOQ's marked source sheets beside the BOQ. Like plotting, capture
+/// plain data under the session lock and write the PDF on a blocking thread.
+#[tauri::command]
+pub async fn export_evidence(
+    workspace: Option<u32>,
+    path: Option<String>,
+    language: Option<qiyas_core::deliverables::Language>,
+    state: State<'_, AppState>,
+) -> Result<PlotOutput, String> {
+    let state = state.scoped(workspace)?;
+    let (path, snapshot) = with_session(&state, |s| {
+        Ok(qiyas_plot::evidence::output_path(s, path.as_deref()).and_then(|path| {
+            let language = language.unwrap_or_else(|| qiyas_plot::evidence::language(s));
+            Ok((path, qiyas_plot::evidence::snapshot(s, language)?))
+        }))
+    })?
+    .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        qiyas_plot::evidence::write(&snapshot, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::save_dialog_pdf;

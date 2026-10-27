@@ -342,6 +342,15 @@ pub fn snapshot(session: &Session, job: &PlotJob) -> Result<PlotSnapshot, PlotEr
 /// Writes `snapshot` to the PDF at `path` (beside it, then moved over it): draws its pictures,
 /// embeds its fonts. Needs no session.
 pub fn write_pdf(snapshot: &PlotSnapshot, path: &Path) -> Result<PlotOutput, PlotError> {
+    let (mut doc, skipped) = pdf_document(snapshot);
+    save_document(&mut doc, path)?;
+    Ok(PlotOutput {
+        path: path.to_path_buf(),
+        skipped,
+    })
+}
+
+fn pdf_document(snapshot: &PlotSnapshot) -> (Document, Vec<String>) {
     let layers: Vec<Layer> = snapshot
         .layers
         .iter()
@@ -376,11 +385,8 @@ pub fn write_pdf(snapshot: &PlotSnapshot, path: &Path) -> Result<PlotOutput, Plo
     for layer in &layers {
         p.draw(layer, &bytes);
     }
-    p.write(path, &snapshot.page, &snapshot.title)?;
-    Ok(PlotOutput {
-        path: path.to_path_buf(),
-        skipped: p.skipped,
-    })
+    p.finish(&snapshot.page, &snapshot.title);
+    (p.doc, p.skipped)
 }
 
 impl Plotter<'_> {
@@ -745,7 +751,7 @@ impl Plotter<'_> {
         Some(name)
     }
 
-    fn write(&mut self, path: &Path, page: &PageMap, title: &str) -> Result<(), PlotError> {
+    fn finish(&mut self, page: &PageMap, title: &str) {
         let doc = &mut self.doc;
         let pages = doc.new_object_id();
         let fonts = self.fonts.write(doc);
@@ -778,25 +784,27 @@ impl Plotter<'_> {
         });
         doc.trailer.set("Root", catalog);
         doc.trailer.set("Info", info);
-
-        let name = path
-            .file_name()
-            .ok_or_else(|| PlotError::Output("Give the PDF a file name".into()))?;
-        let tmp = path.with_file_name(format!(".{}.qiyas-tmp", name.to_string_lossy()));
-        let written = (|| -> Result<(), PlotError> {
-            let file = std::fs::File::create(&tmp).map_err(write_error)?;
-            let mut w = std::io::BufWriter::new(file);
-            doc.save_to(&mut w)
-                .map_err(|e| PlotError::Write(e.to_string()))?;
-            w.flush().map_err(write_error)?;
-            drop(w);
-            std::fs::rename(&tmp, path).map_err(write_error)
-        })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        written
     }
+}
+
+fn save_document(doc: &mut Document, path: &Path) -> Result<(), PlotError> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| PlotError::Output("Give the PDF a file name".into()))?;
+    let tmp = path.with_file_name(format!(".{}.qiyas-tmp", name.to_string_lossy()));
+    let written = (|| -> Result<(), PlotError> {
+        let file = std::fs::File::create(&tmp).map_err(write_error)?;
+        let mut w = std::io::BufWriter::new(file);
+        doc.save_to(&mut w)
+            .map_err(|e| PlotError::Write(e.to_string()))?;
+        w.flush().map_err(write_error)?;
+        drop(w);
+        std::fs::rename(&tmp, path).map_err(write_error)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 fn write_error(e: std::io::Error) -> PlotError {
@@ -819,3 +827,6 @@ fn adjustments(flags: u32) -> (bool, f64, f64, f64) {
         byte(24) / 100.0,
     )
 }
+
+#[path = "evidence.rs"]
+pub mod evidence;

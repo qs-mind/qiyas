@@ -247,3 +247,6 @@ pub fn spool_dir() -> Result<PathBuf, PlotError> {
 }
 
 pub mod report;
+
+/// Marked drawing sheets supporting the generated BOQ.
+pub use plotter::evidence;

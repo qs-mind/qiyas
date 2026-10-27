@@ -6,7 +6,14 @@ use qiyas_geom::Xform;
 use qiyas_render::{LaidText, TextEngine, CAP_EM};
 use std::path::Path;
 
-fn laid(engine: &mut TextEngine, chain: &[u16], text: &str, x: f64, y: f64, size: f64) -> LaidText {
+pub(crate) fn laid(
+    engine: &mut TextEngine,
+    chain: &[u16],
+    text: &str,
+    x: f64,
+    y: f64,
+    size: f64,
+) -> LaidText {
     let shaped = engine.shape_line(chain, text, false);
     LaidText {
         top: 0,
@@ -19,7 +26,13 @@ fn laid(engine: &mut TextEngine, chain: &[u16], text: &str, x: f64, y: f64, size
         text: text.into(),
     }
 }
-fn wrap(engine: &mut TextEngine, chain: &[u16], text: &str, width: f64, size: f64) -> Vec<String> {
+pub(crate) fn wrap(
+    engine: &mut TextEngine,
+    chain: &[u16],
+    text: &str,
+    width: f64,
+    size: f64,
+) -> Vec<String> {
     let mut lines = vec![];
     for paragraph in text.split('\n') {
         let mut line = String::new();
@@ -52,7 +65,7 @@ fn wrap(engine: &mut TextEngine, chain: &[u16], text: &str, width: f64, size: f6
     lines
 }
 /// A cell that is a number reads in Arabic digits in an Arabic report.
-fn arabic_number(text: &str, language: Language) -> String {
+pub(crate) fn arabic_number(text: &str, language: Language) -> String {
     if language != Language::Ar || text.parse::<f64>().is_err() {
         return text.to_string();
     }

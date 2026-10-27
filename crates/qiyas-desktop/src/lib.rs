@@ -109,6 +109,7 @@ pub fn run() {
             commands::save_drawing,
             commands::save_drawing_as,
             commands::export_takeoff,
+            plot::export_evidence,
             commands::export_table,
             commands::import_boq,
             commands::boq,

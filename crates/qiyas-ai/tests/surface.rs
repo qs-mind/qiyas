@@ -3047,3 +3047,47 @@ fn plot_writes_the_sheet_as_a_pdf_beside_the_drawing() {
         .to_string();
     assert!(error.contains("1:50"), "{error}");
 }
+
+#[test]
+fn evidence_export_is_available_through_the_agent_surface_beside_the_boq() {
+    let (dir, mut session) = sample();
+    let kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"batch","args":kit["batch"]}),
+    )
+    .unwrap();
+    assert!(!session.measurement_report().unwrap().items.is_empty());
+    let boq = call(&mut session, EXECUTE, json!({"op":"run","args":{"command":{
+        "type":"deliverable.export","kind":"boq","format":"excel","path":"BOQ_DRAFT.xlsx","language":"ar"
+    }}})).unwrap();
+    assert!(dir.path().join("BOQ_DRAFT.xlsx").is_file(), "{boq}");
+    let output = call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"export_evidence","args":{
+            "path":"Evidence_DRAFT.pdf","language":"ar"
+        }}),
+    )
+    .unwrap();
+    let path = std::path::Path::new(output["written"].as_str().unwrap());
+    assert_eq!(path.parent().unwrap(), dir.path().canonicalize().unwrap());
+    assert!(std::fs::read(path).unwrap().starts_with(b"%PDF"));
+    assert!(call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"export_evidence","args":{
+            "path":"../outside.pdf"
+        }})
+    )
+    .is_err());
+    assert!(call(
+        &mut session,
+        EXECUTE,
+        json!({"op":"export_evidence","args":{
+            "language":"invalid"
+        }})
+    )
+    .is_err());
+}
