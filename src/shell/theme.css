@@ -4103,17 +4103,23 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .tool-card.error .tool-state { color: var(--muted); }
 .support-log { margin-block: 12px; }
 
-/* Arabic chat runs keep their letters and combining marks in one complete font face. */
-:is(.md, .msg.user):lang(ar) {
+/* Arabic chat runs keep their letters and combining marks in one complete font face (Mizan's
+   questions too: "مستطيلاً" once rose above the line there). */
+:is(.md, .msg.user, .question-list):lang(ar) {
   font-family: "Thmanyah Arabic", "Thmanyah Sans", sans-serif;
   line-height: 1.65;
   font-feature-settings: "swsh" 0;
 }
-:is(.md, .msg.user) :is(bdi, span, strong, em) {
+/* Inside them every element keeps that face: the general `:lang(ar)` rule above names the
+   ranged Thmanyah Sans on each Arabic element, which put the raised words back. */
+:is(.md, .msg.user, .question-list):lang(ar) :not(code, pre, kbd, bdi[dir="ltr"]) {
+  font-family: inherit;
+}
+:is(.md, .msg.user, .question-list) :is(bdi, span, strong, em) {
   vertical-align: baseline;
   line-height: inherit;
 }
-:is(.md, .msg.user) bdi[dir="ltr"] {
+:is(.md, .msg.user, .question-list) bdi[dir="ltr"] {
   font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
 }
 .md h4 { font-feature-settings: "swsh"; }

@@ -2947,9 +2947,10 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   stay mounted in Mizan's column, one shown.)
 - Arabic chat has a complete Thmanyah face for prose, inherited line height and baseline inline
   elements. Body text explicitly disables swash; headings keep it. Latin identifiers still use
-  isolated `bdi` runs. The original raised words are plain text in the DOM; local HarfBuzz gives
-  their base letters zero vertical offsets. WebKitGTK painted confirmation remains unavailable
-  in this sandbox, so these safeguards are not a claim of a visually verified glyph fix.
+  isolated `bdi` runs. Cause (seen in WebKitGTK, 28 Oct 2026): an alef carrying tanween ("مستطيلاً")
+  rises above the line in a `unicode-range` face. The complete "Thmanyah Arabic" face fixes it, so
+  `.md`, `.msg.user` and `.question-list` in Arabic use it on every descendant (`font-family:
+  inherit`, beating the general `:lang(ar)` rule; code and Latin `bdi` keep theirs).
 - Settings stores `show_technical_details` through the existing settings IPC and settings.json;
   old files default to false. The app reads it at startup and applies saved changes immediately.
   Tool cards, review-plan diagnostics and refusal diagnostics hide disclosures when off. The

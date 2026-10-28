@@ -100,6 +100,9 @@ export function useFileTabs() {
 
 export type FileTabsState = ReturnType<typeof useFileTabs>;
 
+/** The core's answer when no drawing is open (the same words `i18n/errors.ts` reads). */
+const NO_DRAWING = /no drawing|no document|drawing.*not open/i;
+
 /** Saving the take-off next to the drawing after every change. */
 export function useAutosave(t: T, setError: (error: string | null) => void) {
   /** Set when autosave failed for this drawing, so the error shows once, not after every click. A new
@@ -113,6 +116,8 @@ export function useAutosave(t: T, setError: (error: string | null) => void) {
     try {
       await saveProject();
     } catch (e) {
+      // With no drawing open there is nothing to save: not a failure (it once showed as one).
+      if (NO_DRAWING.test(String(e))) return;
       autosaveOff.current = true;
       setError(t("project.autosaveOff", { error: uiError(e) }));
     }

@@ -43,3 +43,20 @@ test("once answered it is only a record: the options do nothing and the 'Other' 
   expect((screen.getByRole("button", { name: /Egypt/ }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByText(en["ai.questionOther"])).toBeNull();
 });
+
+test("Arabic questions read right to left in Arabic, whatever the window's language, and keep their words as written", () => {
+  const ar: Question[] = [
+    { id: "q1", question: "ما أبعاد الأرض؟", allow_other: true,
+      options: [{ label: "أرسل الأبعاد", recommended: true }, { label: "افترض مسطحًا مستطيلاً ومدخلاً" }] },
+    { id: "q2", question: "هل أفترض التوزيع؟", allow_other: false, options: [{ label: "نعم" }, { label: "لا" }] },
+  ];
+  render(<LanguageProvider><QuestionList questions={ar} onPick={() => {}} /></LanguageProvider>);
+  const list = document.querySelector(".question-list")!;
+  expect(list.getAttribute("dir")).toBe("rtl");
+  expect(list.getAttribute("lang")).toBe("ar");
+  const markers = [...document.querySelectorAll(".qo .k")].map((k) => k.textContent);
+  expect(markers.slice(0, 3)).toEqual(["أ", "ب", "ج"]);
+  expect(list.textContent).toContain("· موصى به");
+  // The words stay as written; the complete Arabic face (theme.css) keeps them on the line.
+  expect(list.textContent).toContain("مستطيلاً ومدخلاً");
+});

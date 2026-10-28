@@ -33,6 +33,9 @@ test("Arabic prose has a complete Thmanyah face, baseline inlines and no body sw
   expect(theme).toContain('.md h4 { font-feature-settings: "swsh"; }');
   expect(theme).toContain('vertical-align: baseline;\n  line-height: inherit;');
   expect(theme).toContain('line-height: 1.65;');
+  expect(theme).toContain(':is(.md, .msg.user, .question-list):lang(ar) {');
+  // The general :lang(ar) rule must not hand children the ranged face again.
+  expect(theme).toContain(':is(.md, .msg.user, .question-list):lang(ar) :not(code, pre, kbd, bdi[dir="ltr"]) {\n  font-family: inherit;');
   expect(markdown).not.toMatch(/vertical-align:\s*(super|sub)|translateY/);
 });
 
