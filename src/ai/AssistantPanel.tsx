@@ -412,7 +412,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           />}
           {empty ? (
             <div className="assistant-empty">
-              <p>{t("ai.emptyTitle")}</p>
+              <p className="sr-only">{t("ai.emptyTitle")}</p>
               {history?.latest && <button type="button" className="continue-chat" disabled={busy || history.pending}
                 onClick={() => { void history.resume(history.latest!); }}>
                 {t("ai.continue", { title: history.latest.title })}

@@ -2,7 +2,8 @@
 // window reloading itself (see scripts/live-plugin.ts).
 import { build, preview } from "vite";
 
-const watcher = await build({ mode: "live", build: { watch: {} }, logLevel: "warn" });
+const watcher = await build({ mode: "live", build: { watch: {}, emptyOutDir: false }, logLevel: "warn" });
+// The folder is never emptied, so a window reloading mid-build still finds its files.
 // Serve only once the first bundle is written, so the window never opens on an empty folder.
 await new Promise((resolve, reject) => {
   watcher.on("event", (event) => {

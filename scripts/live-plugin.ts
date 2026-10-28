@@ -6,7 +6,7 @@ import type { Plugin } from "vite";
 // one process; they share the open windows through globalThis). Normal builds carry none of it.
 const CLIENT = "live-reload.js";
 type Client = { write(chunk: string): unknown };
-const shared = globalThis as { qiyasLiveClients?: Set<Client> };
+const shared = globalThis as { qiyasLiveClients?: Set<Client>; qiyasLiveTimer?: ReturnType<typeof setTimeout> };
 const clients = (shared.qiyasLiveClients ??= new Set<Client>());
 
 export function liveReload(): Plugin {
@@ -28,7 +28,12 @@ export function liveReload(): Plugin {
       });
     },
     writeBundle() {
-      if (live) for (const window of clients) window.write("data: reload\n\n");
+      if (!live) return;
+      // Several saves in a row rebuild several times: reload once, after the last one.
+      clearTimeout(shared.qiyasLiveTimer);
+      shared.qiyasLiveTimer = setTimeout(() => {
+        for (const window of clients) window.write("data: reload\n\n");
+      }, 400);
     },
     configurePreviewServer(server) {
       if (!live) return;
