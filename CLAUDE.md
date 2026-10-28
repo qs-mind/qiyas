@@ -1939,7 +1939,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Goal S adds `claude_code` and `chatgpt_plan` Settings profiles alongside the unchanged
   API-key profiles. Claude Code uses the user's installed executable on PATH or their selected
   absolute path; an empty model lets Claude Code choose. Sign-in stays in the user's terminal:
-  run `claude`, then `/login`. Settings checks are explicit, not polled. Runtime help must
+  run `claude`, then `/login`. Settings reads Claude Code once when it is chosen and its path rests (no check
+  button, founder 28 Oct 2026), never polled. Runtime help must
   document strict MCP, permission mode and settings/tool isolation, or the turn is refused.
 - Claude Code owns one `-p` process per user message. It gets only Qiyas's three MCP tools,
   no built-in tools, no inherited provider credentials/endpoint overrides, and an empty
@@ -3019,7 +3020,8 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   documented model examples and Other for a full model name; effort offers Default and the
   documented levels. A missing flag hides its control; checking an older compatible executable
   clears choices it cannot accept. A late status from a previous provider cannot change the
-  current choice. Checks remain explicit, never polled.
+  current choice. Model lists and Claude Code status are read by themselves when shown (no
+  refresh or check button; the model button's popover reads them when it opens), never polled.
   Default omits the flag; an explicit model or effort must contain only ASCII letters, digits,
   `.`, `_`, `:`, or `-` and must not start with `-`. Values are separate process arguments.
   Legacy global API effort no longer migrates into a subscription profile.

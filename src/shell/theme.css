@@ -4047,7 +4047,7 @@ span.grid-sort {
   opacity: 1;
 }
 
-/* The AI model list in the settings: a filter for long lists, the list with its refresh button,
+/* The AI model list in the settings: a filter for long lists, the list (read by itself; dots while it reads),
    an id field for "Other…", and why the built-in list shows. */
 .model-picker {
   display: flex;
@@ -4056,7 +4056,8 @@ span.grid-sort {
 }
 .model-row {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
 }
 .model-row select {
   flex: 1;

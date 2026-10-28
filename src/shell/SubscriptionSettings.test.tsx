@@ -18,12 +18,11 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
 
-test("Claude instructions and explicit checks never sign in or poll", async () => {
+test("Claude is read once by itself and never signs in or polls", async () => {
   render(<SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} />);
   expect(screen.getByText("Open a terminal and run claude, then type /login.")).toBeTruthy();
   expect(api.claudeCodeStatus).not.toHaveBeenCalled();
   expect(api.chatgptSignIn).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
   await screen.findByText(/Claude Code is not installed/);
   expect(api.claudeCodeStatus).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "Install Claude Code" }));
@@ -127,7 +126,6 @@ test.each(["en", "ar"])("Claude shows only help-listed model and effort choices 
   render(<LanguageProvider><SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} model="" onModel={onModel} /></LanguageProvider>);
   const modelLabel = language === "en" ? "Model" : "النموذج";
   expect(screen.queryByRole("combobox", { name: modelLabel })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: language === "en" ? "Check Claude Code" : "تحقق من Claude Code" }));
   const model = await screen.findByRole("combobox", { name: modelLabel }) as HTMLSelectElement;
   expect(Array.from(model.options, (o) => o.value)).toEqual(["", "fable", "opus", "sonnet", "\u0000other"]);
   expect(Array.from((screen.getByRole("combobox", { name: language === "en" ? "Effort" : "مستوى الجهد" }) as HTMLSelectElement).options, (o) => o.value))
@@ -165,17 +163,17 @@ test("Claude hides unsupported flags and forgets capabilities when the program c
     supports_model: false, supports_effort: false, model_aliases: [], effort_levels: [] })
     .mockResolvedValueOnce({ installed: true, compatible: true, signed_in: true, code: null,
       supports_model: true, supports_effort: true, model_aliases: ["fable"], effort_levels: ["high"] });
-  render(<SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} />);
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  const { rerender } = render(<SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} />);
   await screen.findByText("Claude Code is ready.");
   expect(screen.queryByLabelText("Model")).toBeNull();
   expect(screen.queryByLabelText("Effort")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
-  await screen.findByLabelText("Effort");
   fireEvent.change(screen.getByLabelText("Claude Code program (optional)"), { target: { value: "/test/claude" } });
+  rerender(<SubscriptionSettings provider="claude_code" executable="/test/claude" onExecutable={() => {}} />);
   expect(screen.queryByLabelText("Model")).toBeNull();
   expect(screen.queryByLabelText("Effort")).toBeNull();
+  await screen.findByLabelText("Effort");
   expect(api.claudeCodeStatus).toHaveBeenCalledTimes(2);
+  expect(api.claudeCodeStatus).toHaveBeenLastCalledWith("/test/claude");
 });
 
 
@@ -185,7 +183,6 @@ test("checking an older Claude program clears choices its help no longer support
   const onModel = vi.fn();
   const onEffort = vi.fn();
   render(<SubscriptionSettings provider="claude_code" executable="" onExecutable={() => {}} model="sonnet" effort="high" onModel={onModel} onEffort={onEffort} />);
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
   await waitFor(() => expect(onModel).toHaveBeenCalledWith(""));
   expect(onEffort).toHaveBeenCalledWith(null);
   expect(screen.queryByLabelText("Model")).toBeNull();
@@ -199,7 +196,7 @@ test("a late Claude status cannot change the newly selected provider", async () 
   const onModel = vi.fn();
   const props = { executable: "", onExecutable: () => {}, model: "sonnet", onModel };
   const { rerender } = render(<SubscriptionSettings {...props} provider="claude_code" />);
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
+  await waitFor(() => expect(api.claudeCodeStatus).toHaveBeenCalled());
   rerender(<SubscriptionSettings {...props} provider="chatgpt_plan" />);
   resolve({ installed: true, compatible: true, supports_model: false, supports_effort: false });
   await screen.findByRole("button", { name: "Continue with ChatGPT" });

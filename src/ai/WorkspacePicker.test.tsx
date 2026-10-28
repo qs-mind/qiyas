@@ -28,13 +28,11 @@ test("the drawing picker uses that provider's saved model without saving global 
 });
 
 
-test("Claude choices require an explicit check and preserve Default effort when editing the model", async () => {
+test("Claude choices are read when the picker opens and preserve Default effort when editing the model", async () => {
   const change = vi.fn(async () => {});
   render(<LanguageProvider><WorkspacePicker choice={{ provider: "claude_code", model: "", effort: null }} busy={false} onChange={change} /></LanguageProvider>);
   openPicker();
   await waitFor(() => expect(screen.getByLabelText("Provider").closest("fieldset")?.disabled).toBe(false));
-  expect(subscription.claude).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code", hidden: true }));
   await waitFor(() => expect(screen.getByRole("option", { name: "High", hidden: true })).toBeTruthy());
   expect(screen.queryByRole("option", { name: "Low", hidden: true })).toBeNull();
   fireEvent.change(screen.getByLabelText("Model"), { target: { value: "sonnet" } });
@@ -46,8 +44,6 @@ test("ChatGPT model choices clear effort unsupported by the selected model", asy
   render(<LanguageProvider><WorkspacePicker choice={{ provider: "chatgpt_plan", model: "", effort: "max" }} busy={false} onChange={change} /></LanguageProvider>);
   openPicker();
   await waitFor(() => expect(screen.getByLabelText("Provider").closest("fieldset")?.disabled).toBe(false));
-  expect(subscription.models).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Read the list again", hidden: true }));
   await waitFor(() => expect(screen.getByRole("option", { name: "Plan model", hidden: true })).toBeTruthy());
   fireEvent.change(screen.getByLabelText("Model"), { target: { value: "plan-model" } });
   expect(change).toHaveBeenCalledWith({ provider: "chatgpt_plan", model: "plan-model", effort: null });

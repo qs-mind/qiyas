@@ -5,6 +5,7 @@ import { useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 import { Glyph } from "../shell/glyphs";
 import { ModelPicker } from "../shell/ModelPicker";
+import { DotLoader } from "../shell/DotLoader";
 
 /** What the button says when no model is chosen yet: the service. */
 const PROVIDER_NAMES: Record<WorkspaceChoice["provider"], string> = {
@@ -53,7 +54,7 @@ export function WorkspacePicker({ choice, busy, onChange }: {
         </select>
       </label>
       {choice.provider === "claude_code" || choice.provider === "chatgpt_plan" ?
-        <SubscriptionChoice key={choice.provider} choice={choice} executable={defaults?.claude_executable} onChange={change} /> : <>
+        <SubscriptionChoice key={choice.provider} choice={choice} ready={!!defaults} executable={defaults?.claude_executable} onChange={change} /> : <>
       <label>{t("settings.model")}</label>
       <ModelPicker provider={choice.provider} baseUrl={choice.base_url ?? defaults?.providers[choice.provider]?.base_url ?? null}
         value={choice.model} onChange={model => change({ ...choice, model })} />
@@ -73,9 +74,9 @@ export function WorkspacePicker({ choice, busy, onChange }: {
 }
 
 
-/** Subscription choices come from documented CLI help or the account's model metadata. */
-function SubscriptionChoice({ choice, executable, onChange }: {
-  choice: WorkspaceChoice; executable?: string | null; onChange(choice: WorkspaceChoice): void;
+/** Subscription choices come from documented CLI help or the account's model metadata, read when they open. */
+function SubscriptionChoice({ choice, ready, executable, onChange }: {
+  choice: WorkspaceChoice; ready: boolean; executable?: string | null; onChange(choice: WorkspaceChoice): void;
 }) {
   const t = useT();
   const [claude, setClaude] = useState<ClaudeCodeStatus | null>(null);
@@ -107,10 +108,10 @@ function SubscriptionChoice({ choice, executable, onChange }: {
     } catch (error) { if (mounted.current) setError(uiError(error)); }
     finally { if (mounted.current) setLoading(false); }
   }
-  return <div>
-    <button type="button" disabled={loading} onClick={() => void readChoices()}>
-      {t(isClaude ? "settings.claudeCheck" : "settings.modelRefresh")}
-    </button>
+  // Read once when the choices open (the founder: no refresh button, the list is just there).
+  useEffect(() => { if (ready) void readChoices(); }, [ready, executable]);
+  return <div aria-busy={loading}>
+    {loading && <DotLoader pattern="spiral" size="sm" label={t("settings.modelsLoading")} />}
     {isClaude && claude?.supports_model && <label>{t("settings.model")}
       <input aria-label={t("settings.model")} dir="ltr" value={choice.model} placeholder={t("settings.subscriptionDefault")}
         onChange={event => onChange({ ...choice, model: event.target.value })} />

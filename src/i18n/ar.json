@@ -261,6 +261,7 @@
   "settings.modelFilter": "تصفية النماذج",
   "settings.modelOther": "آخر…",
   "settings.modelSaved": "(المحفوظ)",
+  "settings.modelsLoading": "جارٍ قراءة النماذج…",
   "settings.modelRefresh": "اقرأ القائمة من جديد",
   "settings.modelCustom": "معرّف النموذج",
   "settings.modelBuiltin": "تعذّرت قراءة قائمة المزوّد ({why}): تظهر نماذج Claude.",

@@ -261,6 +261,7 @@
   "settings.modelFilter": "Filter models",
   "settings.modelOther": "Other…",
   "settings.modelSaved": "(saved)",
+  "settings.modelsLoading": "Reading the models…",
   "settings.modelRefresh": "Read the list again",
   "settings.modelCustom": "Model id",
   "settings.modelBuiltin": "Couldn't read the provider's list ({why}): showing Claude's models.",

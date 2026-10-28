@@ -120,22 +120,7 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onIm
           ))}
           <option value={OTHER}>{t("settings.modelOther")}</option>
         </select>
-        <button
-          type="button"
-          className="icon"
-          aria-label={t("settings.modelRefresh")}
-          title={t("settings.modelRefresh")}
-          onClick={refresh}
-          disabled={loading}
-        >
-          {loading ? (
-            <DotLoader pattern="spiral" size="sm" />
-          ) : (
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3" />
-            </svg>
-          )}
-        </button>
+        {loading && <DotLoader pattern="spiral" size="sm" label={t("settings.modelsLoading")} />}
       </div>
       {typing && (
         <input

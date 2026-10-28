@@ -4,6 +4,7 @@ import {
   claudeCodeStatus, subscriptionLink, chatgptModels, chatgptSelectAccount, chatgptResumePlan,
   EFFORTS, type ChatgptAccount, type ClaudeCodeStatus, type Provider, type PlanModel,
 } from "../api";
+import { DotLoader } from "./DotLoader";
 import { useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 
@@ -59,6 +60,22 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
     return () => { mounted = false; };
   }, [provider, account]);
 
+  // Claude Code is read once the path rests (the founder: no check button, the choices are just there).
+  useEffect(() => {
+    if (provider !== "claude_code") return;
+    const timer = window.setTimeout(() => void act(async () => {
+      const generation = statusGeneration.current;
+      const status = await claudeCodeStatus(executable);
+      if (generation !== statusGeneration.current) return;
+      setClaude(status);
+      if (status.compatible) {
+        if (!status.supports_model && model) onModel?.("");
+        if (effort && (!status.supports_effort || !status.effort_levels?.includes(effort))) onEffort?.(null);
+      }
+    }), 500);
+    return () => window.clearTimeout(timer);
+  }, [provider, executable]);
+
   const selectedModel = models.find((item) => item.id === model) ?? models[0];
   const modelAliases = claude?.model_aliases ?? [];
   const customModel = otherModel || !!(model && !modelAliases.includes(model));
@@ -81,16 +98,7 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
         <input dir="ltr" value={executable} disabled={busy} onChange={(e) => { onExecutable(e.target.value); setClaude(null); setOtherModel(false); }} />
       </label>
       <p>{t("settings.claudePathHint")}</p>
-      <button type="button" disabled={busy} onClick={() => void act(async () => {
-        const generation = statusGeneration.current;
-        const status = await claudeCodeStatus(executable);
-        if (generation !== statusGeneration.current) return;
-        setClaude(status);
-        if (status.compatible) {
-          if (!status.supports_model && model) onModel?.("");
-          if (effort && (!status.supports_effort || !status.effort_levels?.includes(effort))) onEffort?.(null);
-        }
-      })}>{t("settings.claudeCheck")}</button>
+      {busy && !claude && <DotLoader pattern="spiral" size="sm" label={t("settings.modelsLoading")} />}
       {claude && <p role="status">
         {claude.code ? t("ai.error." + claude.code) : claude.signed_in === true
           ? t("settings.claudeReady") : claude.signed_in === false

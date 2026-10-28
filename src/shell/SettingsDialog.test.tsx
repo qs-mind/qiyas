@@ -355,7 +355,6 @@ test("subscription choices never ask for an API key or fetch API models", async 
   expect(screen.queryByLabelText("Model")).toBeNull();
   api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true, code: null,
     supports_model: true, model_aliases: ["sonnet"], supports_effort: true, effort_levels: ["low", "high"] });
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
   await screen.findByLabelText("Model");
   fireEvent.change(screen.getByLabelText("Model"), { target: { value: "sonnet" } });
   fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "high" } });
@@ -386,7 +385,6 @@ test("Claude Other accepts a full model name and Default omits effort", async ()
   api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true, code: null,
     supports_model: true, model_aliases: ["opus"], supports_effort: true, effort_levels: ["max"] });
   fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "claude_code" } });
-  fireEvent.click(screen.getByRole("button", { name: "Check Claude Code" }));
   fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "\u0000other" } });
   fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "claude-full-1.2:test" } });
   fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "max" } });
