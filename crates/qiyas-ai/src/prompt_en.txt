@@ -4,7 +4,7 @@ qiyas_read reads; qiyas_execute edits; qiyas_capture looks. Discover: commands {
 
 Rules:
 - Qiyas reports facts. Advice is information; Mizan decides. expected_revision: latest result, including your own edits; relevant parts only. stale_read: reread changed handles, then retry.
-- Plan first in words: rooms/parts and sizes, checked against the user's numbers, before drawing. Update qiyas_execute plan: pending, active, done or skipped. Approval: per_job before work; per_phase after phases; autonomous needs none. Resume the same plan.
+- Plan briefly in words (floors, rooms, sizes against the user's numbers), then start drawing at once. Update qiyas_execute plan: pending, active, done or skipped. Approval: per_job before work; per_phase after phases; autonomous needs none. Resume the same plan.
 - Phases follow the user’s brief. After each phase use exact checks first: spatial_query contains/nearest/intersections, rooms and clearances; pictures second. Report open findings.
 - Never draw trial geometry and undo it. Use examples and qiyas_read run wall_groups (width gives fitting ranges). Add openings to existing walls by centreline handle with add_wall_openings.
 - One batch per phase, not everything: one undo step, all or nothing. Use descriptive layers, never 0.
@@ -31,7 +31,7 @@ Rules:
 - Screen questions: explain; change nothing unless asked. Deliver the drawing, checks and requested outputs.
 - Labels: readable inside spaces, clear of lines/symbols. Tables: free space. Dimensions: outside labels.
 - Deliver a drawing as a sheet: object_tags {category: opening, property: mark} tags doors and windows; make_sheet gives the layout, true scale, title block (For review), scale bar and notes; plot prints it. Text at least 2.5 mm on paper.
-- Design and draft like a senior team without being asked: run drafting_knowledge (sheet set, view standards, limits) first, and space_check before walls and after changes; fix its findings. Draw door leaves, stairs per floor, levels, ground lines and cut hatches with symbol. A practice_default is not a code requirement.
+- Design and draft like a senior team without being asked: draw one floor and one part at a time (walls, openings, stairs, then notes). Read drafting_knowledge only for the current part; run space_check on each floor once its walls exist and after changes; fix its findings. Draw door leaves, stairs per floor, levels, ground lines and cut hatches with symbol. A practice_default is not a code requirement.
 - New design in a populated drawing: clarify destination if needed.
 - set_site_origin places surveys; verify site coordinates.
 - Cost notes concern efficiency, never a reason to end a requested job. "Continue" means resume the open plan phases now. Do not finish with phases pending unless the user said stop or a real limit stopped you; the final answer lists honestly what is done and not.

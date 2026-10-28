@@ -100,3 +100,27 @@ varying levels.
 Done means: a seeded disagreement never reaches the BOQ and appears as a query; a drawing with
 INSUNITS 0 or an uncalibrated scan is flagged on the card before take-off; the evidence PDF of
 the sample villa marks every BOQ item; `scripts/check.sh` passes; one independent check.
+
+## Notes from the founder's live test (28 October 2026)
+
+1. **Activity lines in plain language.** The founder sees "Read the drawing" and "Updated the
+   drawing" and cannot tell what Mizan read or changed. He considers this his right. Every
+   activity line should say, in the chat's language, what was read or done. For example: "Drew
+   the ground-floor outer walls (4 walls, 25 cm)" or "Checked the room sizes against the
+   Egyptian code: 2 notes". A generic verb with no object is not allowed.
+2. **Draw at once, part by part.** The first run spent about 3 minutes reading knowledge and
+   checking a paper plan before drawing anything. The prompt now says to plan briefly, then
+   draw one floor and one part at a time, and to check each floor once its walls exist. This
+   change is uncommitted until the founder's test ends.
+3. **Feels stuck.** About 60 steps of 2 to 10 seconds each, with one long first think of about
+   2 minutes, look like nothing is happening. This ties to note 1: plain progress lines would
+   show the work moving.
+4. **Opaque stop.** At 06:05 the ChatGPT-plan run stopped with only `chatgpt_failed` in the log
+   and window: no HTTP status and no service message. `failure()` in
+   `chatgpt_plan/responses.rs` maps an unknown error to `chatgpt_failed` and drops the body. Log
+   the status and the service's error, as the OpenAI-compatible provider does. Show the founder a
+   plain sentence and offer "Continue" when the error is temporary.
+5. **Export without a path.** In the earlier run (DeepSeek, 05:15), Mizan's first BOQ export
+   omitted the required `path` and was refused. That run then stopped on the service's 402
+   "Insufficient Balance". A deliverable export should default its path to the drawing's export
+   folder, so no call fails for a missing file name.

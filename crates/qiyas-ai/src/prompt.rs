@@ -349,8 +349,10 @@ mod tests {
     #[test]
     fn drafting_is_planned_and_checked_one_phase_at_a_time() {
         for rule in [
-            "Plan first in words",
-            "checked against the user's numbers, before drawing",
+            "Plan briefly in words",
+            "then start drawing at once",
+            "draw one floor and one part at a time",
+            "run space_check on each floor once its walls exist",
             "qiyas_execute plan",
             "pending, active, done or skipped",
             "After each phase use exact checks first",

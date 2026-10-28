@@ -3541,7 +3541,7 @@ straight stairs with floor-specific UP/cut or DN/void/handrails, elevation level
 ground/foundation lines and labelled material hatches through the existing drawing,
 block, text and leader APIs in one undo step. Coordinates use drawing units and
 `_m` fields stay in metres. Mizan accesses them through the ordinary registry tools;
-read knowledge before a package and check the proposed villa plan before walls.
+draw at once, one floor and one part at a time; read only the knowledge the current part needs and check each floor once its walls exist (changed 28 October 2026 at the founder's request).
 Outputs remain for review, with design and approval assigned to the engineer.
 `tests/w5_drafting.rs` is included in `tests/all.rs`; the registry-index ceiling is
 5,000 bytes. This handoff has not yet been compiled or tested.
