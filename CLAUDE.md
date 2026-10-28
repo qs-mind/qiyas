@@ -3365,7 +3365,7 @@ Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas
   (`judgement::language_mismatch`) is sent back once (`ai.error.language_retry`).
 - Saving (`agent.rs` `keep_work`): after a finished phase that changed a titled drawing the agent
   saves through the host; an untitled or repaired one is never saved and Save As never opens
-  (founder, 28 October 2026): the engineer saves it when they choose. Nothing is saved when Mizan changed nothing.
+  (founder, 28 October 2026): the engineer saves it when they choose. Nothing is saved when Mizan changed nothing. The app, not Mizan, says at the end of the turn what was saved, or why an untitled or repaired drawing was not; the prompts forbid Mizan to state save status.
 - Drawing on assumptions the engineer allowed: Mizan puts them on the sheet as general
   notes (title block status "For review") and lists them in the answer. Qiyas draws; loads, design
   calculations and approval are the engineer's and the company's (company policy).

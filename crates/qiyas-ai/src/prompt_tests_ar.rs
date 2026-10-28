@@ -53,7 +53,7 @@ fn arabic_rules_use_the_three_tools_and_preserve_measurement_safeguards() {
         "لا تشرح كيف يعمل قياس أو يخطئ إلا إذا أظهرت ذلك نتيجة أداة",
         "ولا تستخدم LaTeX أبدًا",
         "الملفات: افتح المخططات أو بدّل بينها أو أنشئها أو أغلقها فقط حين يُطلب منك",
-        "يحفظ التطبيق بعد المراحل",
+        "التطبيق يحفظ ويعلن ذلك",
         "qiyas_read drawings",
         "qiyas_execute new_drawing",
     ] {

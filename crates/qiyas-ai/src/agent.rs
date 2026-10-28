@@ -2529,8 +2529,18 @@ impl Agent {
         }
         // An untitled or repaired drawing is the engineer's to name: Mizan never opens Save As
         // (founder, 28 October 2026). The window's own Save asks when they choose to save.
+        // The app, not Mizan, says what was saved (Mizan once wrote "not saved" just before the
+        // app saved), so an end of turn that leaves the drawing unsaved says why.
         if untitled || repaired {
-            return None;
+            return end.then(|| {
+                match (self.chat_language, untitled) {
+                    (Lang::En, true) => "\n\nNot saved yet: the drawing has no name. Save it when you choose.",
+                    (Lang::En, false) => "\n\nNot saved yet: the drawing was repaired when it opened. Save it under a new name when you choose.",
+                    (Lang::Ar, true) => "\n\nلم يُحفظ بعد: الرسم بلا اسم. احفظه حين تريد.",
+                    (Lang::Ar, false) => "\n\nلم يُحفظ بعد: الرسم أُصلح عند فتحه. احفظه باسم جديد حين تريد.",
+                }
+                .to_string()
+            });
         }
         let session = self.session.clone();
         let (cancel, text) = (cancel.clone(), self.turn_text.clone());

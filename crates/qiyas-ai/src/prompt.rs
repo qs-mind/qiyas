@@ -481,8 +481,8 @@ mod tests {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
             "Files: open, switch, make or close drawings only when asked",
-            "The app saves after finished phases",
-            "say when work is unsaved",
+            "The app saves and reports it",
+            "never state save status",
             "offer a recent drawing (qiyas_read drawings) or a new one (qiyas_execute new_drawing)",
         ] {
             assert!(en.contains(rule), "{rule}");
