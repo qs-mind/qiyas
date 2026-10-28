@@ -3379,7 +3379,7 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   (`.back-strip`) and the box still below ("Ask Mizan about this BOQ"). Its head carries the
   output's buttons (Export take-off; Import BOQ; Compare and Export conflicts; Refresh), so the
   panels under it have no heading or buttons of their own. The Artifacts icon in Mizan's header,
-  after History (`OutputsMenu`, its count as a small badge; Arabic says المخرجات), opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
+  just before History (left of it in English) (`OutputsMenu`, its count as a small badge; Arabic says المخرجات), opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
   Projects, Comments tabs and `SideTabs` are removed; the conversation and all outputs stay mounted.
 - The box (`.composer`): attach, mark an area and the model pill (`WorkspacePicker`, a popover: the model's name, or the
   provider's, with a spark; provider, model, effort of this drawing) under the text, send at the end. Typing "/" lists commands

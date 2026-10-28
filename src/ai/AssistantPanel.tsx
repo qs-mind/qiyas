@@ -385,8 +385,8 @@ export const AssistantPanel = memo(function AssistantPanel({
       <div className="assistant-head">
         <MizanMark still={!busy} />
         <span className="chat-title heading">{t("assistant")}</span>
-        {history && <ConversationHistory history={history} disabled={busy} />}
         {artifacts}
+        {history && <ConversationHistory history={history} disabled={busy} />}
         <button
           type="button"
           className="ib new-chat"
