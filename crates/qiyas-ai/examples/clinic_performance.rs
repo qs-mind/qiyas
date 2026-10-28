@@ -140,6 +140,19 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
             "START {label} call={i} {tool}.{op} live_ms={}",
             call["live_ms"]
         );
+        // Small labels now shrink or become linked notes; the recorded failed batch must
+        // succeed. Keep every other recorded refusal and rollback assertion unchanged.
+        let label_fit_refusal = call["error"]
+            .as_str()
+            .and_then(|e| serde_json::from_str::<Value>(e).ok())
+            .is_some_and(|e| {
+                e["command"] == "label_spaces"
+                    && e["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("The room is too small for"))
+            });
+        // Undo keeps the handle counter moving on, so the refused state is restored whole.
+        let refused_doc = label_fit_refusal.then(|| s.drawing.doc.clone());
         // The untouched snapshot is for rollback evidence, outside the timed interval.
         let before_structure = s.drawing.doc.snapshot_structure();
         let before_entities: BTreeMap<_, _> = s
@@ -212,7 +225,13 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
             }
             Err(e) => (None, Some(e.json()), 0),
         };
-        let expected_error = !call["error"].is_null();
+        let expected_error = !call["error"].is_null() && !label_fit_refusal;
+        if label_fit_refusal && error.is_none() {
+            // The recording continued from the refused state: take the step back so the later
+            // recorded handles still name the same entities.
+            assert!(s.undo(), "the label step is undoable at call {i}");
+            s.drawing.doc = refused_doc.expect("saved before the label step");
+        }
         let rollback_equal = if error.is_some() {
             Some(
                 before_structure == s.drawing.doc.snapshot_structure()

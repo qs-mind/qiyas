@@ -7,6 +7,9 @@ import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import { ArtifactFrame } from "./ArtifactFrame";
 import { filledOutputs, type OutputInfo } from "./outputs";
+import { openOutputFile, revealOutputFile } from "./outputFileActions";
+
+vi.mock("./outputFileActions", () => ({ openOutputFile: vi.fn().mockResolvedValue(undefined), revealOutputFile: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: vi.fn(), aiAttachPdf: vi.fn() }));
 afterEach(cleanup);
@@ -20,6 +23,19 @@ const outputs: OutputInfo[] = [
 
 test("filledOutputs counts the outputs that hold something", () => {
   expect(filledOutputs(outputs)).toBe(2);
+});
+
+test("a file frame names the file, opens it, reveals it, and returns to the conversation", () => {
+  const file = { path: new URL("../../samples/evidence.pdf", import.meta.url).pathname, name: "evidence.pdf" };
+  const onBack = vi.fn();
+  render(<ArtifactFrame id="file" file={file} outputs={[]} onSelect={vi.fn()} onBack={onBack}><p>For review</p></ArtifactFrame>);
+  expect(screen.getByRole("heading", { name: file.name })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.openFile"] }));
+  expect(openOutputFile).toHaveBeenCalledWith(file.path);
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.showInFolder"] }));
+  expect(revealOutputFile).toHaveBeenCalledWith(file.path);
+  fireEvent.click(screen.getByRole("button", { name: en["outputs.back"] }));
+  expect(onBack).toHaveBeenCalledOnce();
 });
 
 test("an output has a way back, a menu to the others, its meta and one action", async () => {
@@ -43,8 +59,9 @@ test("an output has a way back, a menu to the others, its meta and one action", 
   fireEvent.click(screen.getByRole("button", { name: en["outputs.close"] }));
   expect(onBack).toHaveBeenCalledTimes(2);
   fireEvent.click(screen.getByRole("button", { name: en["outputs.switch"] }));
-  fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Conflicts/ }));
-  expect(onSelect).toHaveBeenCalledWith("conflicts");
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Take-off/ }));
+  expect(onSelect).toHaveBeenCalledWith("takeoff");
+  expect(screen.queryByRole("menuitemradio", { name: /^Conflicts/ })).toBeNull();
 });
 
 test("while an output is shown it takes the conversation's place, the box stays with its draft, and the strip goes back", () => {

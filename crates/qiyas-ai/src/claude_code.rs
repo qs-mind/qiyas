@@ -687,6 +687,7 @@ impl Provider for ClaudeCode {
 fn ui_event(ui: Value) -> StreamEvent {
     StreamEvent::Activity(Box::new(AgentEvent::ToolResult {
         id: "claude-ui".into(),
+        activity: None,
         summary: String::new(),
         count: None,
         handles: Vec::new(),
@@ -719,7 +720,7 @@ struct Events {
     text: String,
     message_streamed: bool,
     session_id: Option<String>,
-    calls: HashMap<String, String>,
+    calls: HashMap<String, (String, Value)>,
     partial_calls: HashMap<u64, PartialCall>,
     completed: HashSet<String>,
     usage: Usage,
@@ -758,7 +759,7 @@ impl Events {
         if self.calls.contains_key(&id) {
             return Ok(());
         }
-        self.calls.insert(id.clone(), name.into());
+        self.calls.insert(id.clone(), (name.into(), input.clone()));
         sink(StreamEvent::Activity(Box::new(AgentEvent::ToolCall {
             id,
             name: name.into(),
@@ -914,7 +915,13 @@ impl Events {
                     }
                     sink(StreamEvent::Activity(Box::new(AgentEvent::ToolResult {
                         id: id.into(),
-                        summary: crate::log::clip(&text),
+                        activity: self
+                            .calls
+                            .get(id)
+                            .filter(|_| block["is_error"] != true)
+                            .map(|(name, input)| crate::activity::refine(name, input, &data)),
+                        summary: crate::output_files::summary(&data)
+                            .unwrap_or_else(|| crate::log::clip(&text)),
                         count: crate::activity::count(&data),
                         handles: Vec::new(),
                         ui: None,
@@ -1850,6 +1857,10 @@ mod tests {
         state.read(json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":[{"type":"text","text":"{\"total\":2}"}]}]}}), &mut |e| events.push(e)).unwrap();
         assert!(events.iter().any(|e| matches!(e, StreamEvent::Activity(a) if matches!(a.as_ref(), AgentEvent::ToolCall { activity: Some(_), .. }))));
         assert!(events.iter().any(|e| matches!(e, StreamEvent::Activity(a) if matches!(a.as_ref(), AgentEvent::ToolResult { count: Some(2), .. }))));
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Activity(a) if matches!(a.as_ref(),
+            AgentEvent::ToolResult { activity: Some(activity), .. }
+                if activity.detail.as_ref().is_some_and(|detail| detail.key == "activity.line.read" && detail.params["n"] == 2)
+        ))));
         for category in [
             "authentication_failed",
             "rate_limit",

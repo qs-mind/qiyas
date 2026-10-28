@@ -254,7 +254,12 @@ impl Session {
                         .chain(metadata.hole_bulges)
                         .collect(),
                 };
-                self.fit_room_label(handle.value(), &boundary, near.unwrap_or(metadata.seed))?;
+                self.fit_room_label(
+                    handle.value(),
+                    &boundary,
+                    near.unwrap_or(metadata.seed),
+                    metadata.seed,
+                )?;
             } else if let Some((boundary, point)) = match e {
                 EntityType::Text(t) => Some([t.insertion_point.x, t.insertion_point.y]),
                 EntityType::MText(t) => Some([t.insertion_point.x, t.insertion_point.y]),
@@ -267,10 +272,10 @@ impl Session {
             }) {
                 // Text that merely sits inside a closed region (an opening's tag on a wall) is
                 // not a room label: when it cannot be kept inside, it goes to free space.
-                if self
-                    .fit_room_label(handle.value(), &boundary, point)
-                    .is_err()
-                {
+                if !matches!(
+                    self.fit_room_label_inside(handle.value(), &boundary, point),
+                    Ok(Some(_))
+                ) {
                     self.place_in_free_space(handle, near, side, clearance_mm)?;
                 }
             } else if matches!(e, EntityType::Dimension(_)) {
@@ -409,14 +414,190 @@ impl Session {
 }
 
 impl Session {
-    /// Fit a live area label without changing its text height or field binding. Try its full
-    /// width first, then wrap; an impossible room is an error rather than unreadable text.
+    /// Fit a live area label, shrinking only to the readable paper minimum, then using
+    /// a linked note beside the room. The field and room binding survive every fallback.
     pub(crate) fn fit_room_label(
         &mut self,
         handle: u64,
         boundary: &crate::Boundary,
         near: [f64; 2],
-    ) -> Result<([f64; 2], bool), CoreError> {
+        room_point: [f64; 2],
+    ) -> Result<([f64; 2], &'static str), CoreError> {
+        let h = opencadcodec::Handle::new(handle);
+        let original = self
+            .drawing
+            .doc
+            .get_entity(h)
+            .ok_or_else(|| invalid("Label not found"))?
+            .clone();
+        let height = match &original {
+            EntityType::Text(t) => t.height,
+            EntityType::MText(t) => t.height,
+            _ => return Err(invalid("Choose a text label")),
+        };
+        let minimum = self.paper_distance(crate::check::PAPER_MIN_MM);
+        let mut heights = vec![height.max(minimum)];
+        for fraction in [0.75, 0.5, 0.25, 0.0] {
+            let next = (height * fraction).max(minimum);
+            if next < *heights.last().expect("initial height") {
+                heights.push(next);
+            }
+        }
+        for next in heights {
+            let mut label = original.clone();
+            match &mut label {
+                EntityType::Text(t) => t.height = next,
+                EntityType::MText(t) => t.height = next,
+                _ => unreachable!(),
+            }
+            *self.drawing.doc.get_entity_mut(h).expect("label exists") = label;
+            if let Some((at, wrapped)) = self.fit_room_label_inside(handle, boundary, near)? {
+                let placement = match (next < height, wrapped) {
+                    (true, true) => "shrunk_wrapped",
+                    (true, false) => "shrunk",
+                    (false, true) => "wrapped",
+                    (false, false) => "inside",
+                };
+                return Ok((at, placement));
+            }
+        }
+        // The final inside attempt restored the original orientation at the readable minimum.
+        let crate::Boundary::Ring { ring, bulges, .. } = boundary else {
+            return Err(invalid("The room has no closed boundary"));
+        };
+        let ring = self.layout_ring(ring, bulges.first().map_or(&[], Vec::as_slice));
+        let b = ink::bounds(&ring);
+        // Leaders use an MText annotation. Keep the existing handle, field and room metadata.
+        if let Some(EntityType::Text(t)) = self.drawing.doc.get_entity(h).cloned() {
+            let mut note = opencadcodec::MText::with_value(
+                crate::text::escape_mtext(&t.value),
+                t.insertion_point,
+            )
+            .with_height(t.height);
+            note.common = t.common;
+            note.style = t.style;
+            note.rotation = t.rotation;
+            *self.drawing.doc.get_entity_mut(h).expect("label exists") = EntityType::MText(note);
+        }
+        let sheet = self.sheet_block(None);
+        let plotted = self.sheet_ink(&sheet);
+        let label_bounds = ink::union(
+            plotted
+                .pieces
+                .iter()
+                .filter(|p| p.owner == handle)
+                .map(|p| p.bounds),
+        )
+        .ok_or_else(|| invalid("The label has no plotted geometry"))?;
+        let size = [
+            label_bounds[1][0] - label_bounds[0][0],
+            label_bounds[1][1] - label_bounds[0][1],
+        ];
+        let gap = self.paper_distance(2.5);
+        let reach =
+            (size[0].max(size[1]) + 4.0 * gap).max((b[1][0] - b[0][0]).hypot(b[1][1] - b[0][1]));
+        // Search four nearby strips, never another position inside the room. Bounded
+        // searches avoid sending the note to a distant drawing's outermost edge.
+        let strips = [
+            [
+                [b[1][0], b[0][1] - reach],
+                [b[1][0] + reach, b[1][1] + reach],
+            ],
+            [
+                [b[0][0] - reach, b[0][1] - reach],
+                [b[0][0], b[1][1] + reach],
+            ],
+            [
+                [b[0][0] - reach, b[1][1]],
+                [b[1][0] + reach, b[1][1] + reach],
+            ],
+            [
+                [b[0][0] - reach, b[0][1] - reach],
+                [b[1][0] + reach, b[0][1]],
+            ],
+        ];
+        let mut candidates = Vec::new();
+        for strip in strips {
+            let report = self.free_space(&SpaceQuery {
+                entity: Some(handle),
+                near: Some(near),
+                clearance_mm: Some(2.5),
+                within: Some(ink::corners(strip).to_vec()),
+                ..Default::default()
+            })?;
+            candidates.extend(report.positions);
+        }
+        candidates.sort_by(|a, b| {
+            let distance = |p: &Space| (p.at[0] - near[0]).hypot(p.at[1] - near[1]);
+            distance(a).total_cmp(&distance(b))
+        });
+        let Some(best) = candidates.first() else {
+            *self.drawing.doc.get_entity_mut(h).expect("label exists") = original;
+            return Err(invalid(
+                "No free space was found near the room for a readable label",
+            ));
+        };
+        self.modify(crate::modify::ModifySpec::Move {
+            targets: vec![Target {
+                handle,
+                chain: vec![],
+            }],
+            delta: best.delta.expect("existing label"),
+        })?;
+        let at = match self.drawing.doc.get_entity(h).expect("label exists") {
+            EntityType::Text(t) => [t.insertion_point.x, t.insertion_point.y],
+            EntityType::MText(t) => [t.insertion_point.x, t.insertion_point.y],
+            _ => unreachable!(),
+        };
+        // End just clear of the text box; the existing live label is the annotation.
+        let end = [
+            room_point[0].clamp(best.bounds[0][0] - gap, best.bounds[1][0] + gap),
+            room_point[1].clamp(best.bounds[0][1] - gap, best.bounds[1][1] + gap),
+        ];
+        let leader = self.add_leader(&[room_point, end], "", false)?[0];
+        if let Some(EntityType::Leader(l)) = self
+            .drawing
+            .doc
+            .get_entity_mut(opencadcodec::Handle::new(leader))
+        {
+            l.annotation_handle = h;
+            l.creation_type = opencadcodec::entities::LeaderCreationType::WithText;
+        }
+        self.drawing
+            .doc
+            .get_entity_mut(h)
+            .expect("label exists")
+            .common_mut()
+            .reactors
+            .push(opencadcodec::Handle::new(leader));
+        Ok((
+            at,
+            if minimum < height {
+                "shrunk_outside"
+            } else {
+                "outside"
+            },
+        ))
+    }
+
+    /// Only an actual linked leader makes an outside room label intentional.
+    pub(crate) fn room_label_has_leader(&self, handle: u64) -> bool {
+        let h = opencadcodec::Handle::new(handle);
+        self.drawing.doc.get_entity(h).is_some_and(|label| {
+            label.common().reactors.iter().any(|leader| {
+                matches!(self.drawing.doc.get_entity(*leader), Some(EntityType::Leader(l))
+                    if l.annotation_handle == h && l.vertices.len() >= 2)
+            })
+        })
+    }
+
+    /// Try full width, wrapping and rotation at one height, without losing the field binding.
+    fn fit_room_label_inside(
+        &mut self,
+        handle: u64,
+        boundary: &crate::Boundary,
+        near: [f64; 2],
+    ) -> Result<Option<([f64; 2], bool)>, CoreError> {
         #[cfg(any(test, feature = "fixtures"))]
         let _profile = crate::fixtures::profile::span("placement.fit_room_label");
         let crate::Boundary::Ring {
@@ -508,14 +689,56 @@ impl Session {
                         EntityType::MText(t) => [t.insertion_point.x, t.insertion_point.y],
                         _ => best.at,
                     };
-                    return Ok((
+                    return Ok(Some((
                         at,
                         fraction > 0.0 || matches!(original, EntityType::MText(_)),
-                    ));
+                    )));
                 }
             }
         }
         *self.drawing.doc.get_entity_mut(h).expect("label exists") = original;
-        Err(invalid("The room is too small for this label at its current height. Use a larger drawing scale or place a linked note outside the room"))
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod room_label_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_label_is_refused_only_when_nearby_space_is_occupied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new_blank(&dir.path().join("blocked.dxf"), 6);
+        for command in [
+            json!({"type":"annotation_scale","name":"1:100"}),
+            json!({"type":"draw","kind":"hatch","points":[[-100,-100],[100,-100],[100,100],[-100,100]]}),
+        ] {
+            session.run_input(&command, crate::Source::User).unwrap();
+        }
+        let handle = session
+            .add_text([0.2, 0.2], 0.5, 0.0, "Area 0.16 m²".into(), None)
+            .unwrap();
+        let h = opencadcodec::Handle::new(handle);
+        let original = session.drawing.doc.get_entity(h).unwrap().clone();
+        let error = session
+            .fit_room_label(
+                handle,
+                &crate::Boundary::Ring {
+                    ring: vec![[0.0, 0.0], [0.4, 0.0], [0.4, 0.4], [0.0, 0.4]],
+                    holes: vec![],
+                    bulges: vec![],
+                },
+                [0.2, 0.2],
+                [0.2, 0.2],
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("No free space was found near the room"),
+            "{error}"
+        );
+        assert_eq!(session.drawing.doc.get_entity(h).unwrap(), &original);
     }
 }

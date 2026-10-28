@@ -44,6 +44,48 @@ pub(crate) fn untitled_path(state: &AppState) -> Result<PathBuf, String> {
         .ok_or_else(|| "No name left for a new drawing".to_string())
 }
 
+/// A named Mizan drawing shares the untitled storage and recovery rules.
+pub(crate) fn named_untitled_path(state: &AppState, name: &str) -> Result<PathBuf, String> {
+    let safe: String = name
+        .chars()
+        .filter(|c| !c.is_control() && !"<>:\"/\\|?*".contains(*c))
+        .collect();
+    let safe = safe.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if safe.is_empty() {
+        return Err("Give the drawing a name, such as Villa G+1 plans".into());
+    }
+    // Windows device names remain reserved even with an extension.
+    let stem = safe.split('.').next().unwrap_or(safe).to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+    let safe = if reserved {
+        format!("{safe} drawing")
+    } else {
+        safe.to_string()
+    };
+    let dir = state.config_dir.join("untitled");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let open: Vec<_> = snapshot(state).tabs.into_iter().map(|t| t.path).collect();
+    let history = crate::conversations::Store::new(&state.config_dir).drawing_paths()?;
+    (1u32..)
+        .map(|n| {
+            dir.join(if n == 1 {
+                format!("{safe}.dwg")
+            } else {
+                format!("{safe} {n}.dwg")
+            })
+        })
+        .find(|p| {
+            p.symlink_metadata().is_err()
+                && qiyas_core::autosave_path(p).symlink_metadata().is_err()
+                && !open.iter().any(|old| same_file(Path::new(old), p))
+                && !history.iter().any(|old| same_file(old, p))
+        })
+        .ok_or_else(|| "No name left for a new drawing".into())
+}
+
 /// Metadata refresh never waits for a busy drawing. It returns the last committed state.
 pub(crate) fn snapshot(state: &AppState) -> Tabs {
     let (active, workspaces) = {

@@ -13,13 +13,16 @@ use std::{
 pub enum DeliverableCommand {
     /// Export dimensions, BOQ, queries, variation or register using a stored layout. The
     /// shorthand deliverable.export accepts kind as the report kind; canonical wire uses report.
-    #[schemars(example=serde_json::json!({"kind":"export","report":"boq","format":"excel","path":"boq.xlsx"}))]
+    #[schemars(example=serde_json::json!({"kind":"export","report":"boq","format":"excel"}))]
     #[schemars(extend("x-takeoff-kit" = {"order":90}))]
     Export {
         report: Kind,
         format: Format,
         #[serde(default)]
         layout: Option<String>,
+        /// Omitted or empty: <drawing name> - <report>.xlsx (or .pdf) in the export folder.
+        /// Existing names get a numbered suffix, so an earlier export is kept.
+        #[serde(default)]
         path: String,
         /// The report's language; the user's language by default (English without one).
         #[serde(default)]
@@ -964,11 +967,41 @@ impl Session {
         } else {
             (self.export_source(), drawing(self, kind, language, layout)?)
         };
-        let path = confined(&source, path)?;
         let ext = if format == Format::Excel {
             "xlsx"
         } else {
             "pdf"
+        };
+        let path = if path.trim().is_empty() {
+            // Even a project report defaults beside this drawing's other exports. Explicit
+            // project-relative paths and client templates retain their existing anchor.
+            let source = self.export_source();
+            let drawing = source.file_stem().unwrap_or_default().to_string_lossy();
+            let report_name = match kind {
+                Kind::Dimensions => "Dimensions",
+                Kind::Boq => "BOQ",
+                Kind::Queries => "Queries",
+                Kind::Variation => "Variation",
+                Kind::Register => "Register",
+            };
+            let base = format!("{drawing} - {report_name}");
+            let mut n = 1u32;
+            loop {
+                let name = if n == 1 {
+                    format!("{base}.{ext}")
+                } else {
+                    format!("{base} {n}.{ext}")
+                };
+                // A taken symlink name is skipped too; never follow it for a default export.
+                if source.with_file_name(&name).symlink_metadata().is_err() {
+                    break confined(&source, &name)?;
+                }
+                n = n
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("No export name is available"))?;
+            }
+        } else {
+            confined(&source, path)?
         };
         if !path
             .extension()

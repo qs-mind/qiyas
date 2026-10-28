@@ -229,7 +229,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. commands and takeoff_kit use offset for pages; repeated contracts are referenced by name/version/artifact. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} schemas and examples in one call, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any read command, including drafting_knowledge for sheet sets, view standards and sourced limits, and space_check for villa planning findings); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
+            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. takeoff_kit uses offset for pages. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} compact inline contracts with one example (up to 8 names), {name, full:true} for the full schema, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any read command, including drafting_knowledge for sheet sets, view standards and sourced limits, and space_check for villa planning findings); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -243,7 +243,7 @@ pub fn tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EXECUTE,
-            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); ask ({questions: [{question, options: [{label, description?, recommended?}]}]}: every question you need, in one call, 2 to 4 options each, at most one recommended, free text always allowed; ends your turn, the answer is the next message); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index; symbol draws doors, floor-specific stairs, levels, ground lines and labelled material hatches, grid draws axes; e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({units: \"m\"|\"cm\"|\"mm\"}); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted); export_evidence ({path?, language?: en|ar}: all generated BOQ source sheets marked in one review PDF beside the BOQ; use its language); plot ({sheet?, paper?, orientation?, scale?, path?}: one sheet as a PDF in the drawing's folder, as printed; a layout plots its own paper at 1:1, Model fits ISO A1; scale is fit or 1:50). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
+            description: "Plan the task or change the drawing, take-off or view. ops: plan ({phases: [{id, title, status: pending|active|done|skipped}]}: full checklist, stable ids, one active phase; no drawing change or undo step); ask ({questions: [{question, options: [{label, description?, recommended?}]}]}: every question you need, in one call, 2 to 4 options each, at most one recommended, free text always allowed; ends your turn, the answer is the next message); type ({line}: a complete typed command, e.g. PLINE 0,0 10,0 C; words and aliases come from commands; an incomplete line returns a prompt, then resend the complete line); run ({command, layer?, color?}: any command of the index; symbol draws doors, floor-specific stairs, levels, ground lines and labelled material hatches, grid draws axes; e.g. {\"command\": {\"type\": \"draw\", \"kind\": \"line\", \"a\": [0,0], \"b\": [5,0]}}); batch ({commands: [1 to 200 commands], layer, color}: one undo step, all or nothing; a value {\"$step\": i, \"pointer\": \"/added/0\"} takes what step i gave); set_records ({collection, updates: [{key, path, value}]}); create_entities ({entities: [{type, data}]}); undo_own and redo_own ({}: only your own newest step); select ({handles, zoom?}); view ({handles} or {bounds}, optional sheet); new_drawing ({name: a required drawing name such as Villa G+1 plans, units: \"m\"|\"cm\"|\"mm\"}: creates a named unsaved drawing); open_drawing ({path}); switch_drawing ({id}: tab id from qiyas_read drawings); save_drawing ({}: saves the current drawing); finish ({answer?}: records completion and a headless end report; never saves the drawing); close_drawing ({id?}: defaults to current tab); import_boq ({path}); compare ({}); export_takeoff and export_conflicts ({path?}: workbook in the drawing's folder, a default name when omitted); export_evidence ({path?, language?: en|ar}: all generated BOQ source sheets marked in one review PDF beside the BOQ; use its language); plot ({sheet?, paper?, orientation?, scale?, path?}: one sheet as a PDF in the drawing's folder, as printed; a layout plots its own paper at 1:1, Model fits ISO A1; scale is fit or 1:50). Use expected_revision from the read you act on, in args or the envelope. Every result carries revision; stale_read refuses an edit and lists changes. Core edits report added, changed, removed, handle_map and checks. Advice is information; Mizan decides.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1439,21 +1439,50 @@ fn finish_kit(kit: &mut Value) {
     kit["measurement_rules"] = json!("basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).");
 }
 
+fn operation_contract(mut info: Value, full: bool) -> Value {
+    if full {
+        return info;
+    }
+    let name = info["name"].as_str().unwrap_or_default();
+    let signature = crate::command_contract::signature(name, &info["schema"]);
+    let summary = info["doc"]
+        .as_str()
+        .unwrap_or(name)
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let example = info
+        .get("example")
+        .cloned()
+        .unwrap_or_else(|| info["examples"][0].clone());
+    let object = info.as_object_mut().expect("operation contract");
+    object.remove("schema");
+    object.remove("examples");
+    object.remove("doc");
+    object.insert("signature".into(), json!(signature));
+    object.insert("summary".into(), json!(summary));
+    object.insert("example".into(), example);
+    info
+}
+
 fn commands(args: &Value) -> Result<Value, ToolError> {
     let reg = registry();
     if let Some(names) = args["names"].as_array() {
         let results = names
             .iter()
-            .map(|name| commands(&json!({"name":name})))
+            .map(|name| commands(&json!({"name":name,"full":args["full"]})))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(json!({"commands":results}));
     }
     if let Some(name) = args.get("name").and_then(Value::as_str) {
         if name.eq_ignore_ascii_case("plan") {
-            return Ok(plan_info());
+            return Ok(operation_contract(plan_info(), args["full"] == true));
         }
         if name.eq_ignore_ascii_case("ask") {
-            return Ok(ask_info());
+            return Ok(operation_contract(ask_info(), args["full"] == true));
         }
         let normalized = name.trim().to_ascii_lowercase();
         let operations: Vec<_> = OPERATIONS.iter().filter(|operation| {
@@ -1461,7 +1490,7 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
                 || (normalized == operation.op && reg.get(name).is_none())
         }).map(|operation| {
             let (schema, example) = crate::surface_args::contract(operation.tool, operation.op);
-            json!({"name":format!("{}.{}", operation.tool, operation.op),"tool":operation.tool,"op":operation.op,"schema":schema,"example":example})
+            operation_contract(json!({"name":format!("{}.{}", operation.tool, operation.op),"tool":operation.tool,"op":operation.op,"schema":schema,"example":example}), args["full"] == true)
         }).collect();
         if operations.len() == 1 {
             return Ok(operations[0].clone());
@@ -1479,10 +1508,8 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
                     close_commands(name).join(", ")
                 ))
             })?;
-        if let Some(entry) = qiyas_core::takeoff_kit::short_entry(info) {
-            return Ok(
-                json!({"name":info.name,"doc":info.summary,"in_takeoff_kit":true,"complete":true,"entry":entry}),
-            );
+        if args["full"] != true {
+            return Ok(crate::command_contract::compact(info));
         }
         return Ok(json!({
             "name": info.name,
@@ -1532,7 +1559,7 @@ fn commands(args: &Value) -> Result<Value, ToolError> {
     Ok(json!({
         "index": crate::prompt::command_index(),
         "operations": std::iter::once(plan_info()).chain(OPERATIONS.iter().filter(|o| o.op != "plan").map(|o| json!({"name":format!("{}.{}",o.tool,o.op),"tool":o.tool,"op":o.op}))).collect::<Vec<_>>(),
-        "next": "qiyas_read commands {\"name\": \"…\"} gives a command or operation schema and examples",
+        "next": "qiyas_read commands {\"name\": \"…\"} gives a compact inline contract and one example; add full:true for the schema",
     }))
 }
 

@@ -48,7 +48,7 @@ function setup(transcript: Transcript = EMPTY, busy = false, error: string | nul
 test("a lost connection keeps completed work and offers Continue", () => {
   const { assistant } = setup({ items: [card] }, false,
     JSON.stringify({ code: "ai.error.network", message: "Connection failed", message_ar: "انقطع الاتصال" }));
-  expect(screen.getByText("Connection lost")).toBeTruthy();
+  expect(screen.getByText("The connection to the AI service was lost. Your drawing work so far is kept. Continue picks up where Mizan stopped.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(assistant.send).toHaveBeenCalledWith("Continue from the last completed step. Keep the finished work.");
   expect(assistant.clear).not.toHaveBeenCalled();
@@ -150,16 +150,17 @@ test("a transcript shows messages, Markdown and a tool card with Show and Undo",
   expect(onUndo).toHaveBeenCalledWith(card);
 });
 
-test("tool cards translate registry categories and effects without exposing command labels", () => {
+test("tool cards name their objects and layers without exposing command labels", () => {
   setup({
     items: [
-      { ...card, id: "line", label: "draw.line", activity: { category: "draw", effect: "edit" } },
-      { ...card, id: "ellipse", label: "draw.ellipse", activity: { category: "draw", effect: "edit" } },
-      { ...card, id: "read", name: "qiyas_read", label: null, activity: { category: "drawing", effect: "read" }, mutating: false },
+      { ...card, id: "line", label: "draw.line", activity: { category: "draw", effect: "edit", detail: { key: "activity.line.draw", params: { what: "line", n: 4, layer: "A-WALL" } } } },
+      { ...card, id: "ellipse", label: "draw.ellipse", activity: { category: "draw", effect: "edit", detail: { key: "activity.line.draw", params: { what: "ellipse", n: 1 } } } },
+      { ...card, id: "read", name: "qiyas_read", label: null, activity: { category: "drawing", effect: "read", detail: { key: "activity.line.read", params: { what: "layer" } } }, mutating: false },
     ],
   });
-  expect(screen.getAllByText("Updated the drawing.")).toHaveLength(2);
-  expect(screen.getByText("Read the drawing.")).toBeTruthy();
+  expect(screen.getByText("Drew 4 lines on A-WALL")).toBeTruthy();
+  expect(screen.getByText("Drew 1 ellipse")).toBeTruthy();
+  expect(screen.getByText("Read the drawing's layers")).toBeTruthy();
   expect(document.querySelector(".tool-card")?.getAttribute("title")).toBeNull();
 });
 
@@ -560,10 +561,19 @@ test("composer drafts belong to their drawing", () => {
 });
 
 test("a run of identical reads shows as one line with its count (note 18)", () => {
-  const read = (id: string): ToolCardItem => ({ ...card, id, label: "records", mutating: false, handles: [], activity: { category: "drawing", effect: "read" }, summary: "" });
+  const read = (id: string): ToolCardItem => ({ ...card, id, label: "records", mutating: false, handles: [], activity: { category: "drawing", effect: "read", detail: { key: "activity.line.read", params: { what: "wall", n: 37, layer: "A-WALL" } } }, summary: "" });
   setup({ items: [{ kind: "user", text: "Look" }, read("a"), read("b"), read("c"), read("d")] });
   expect(document.querySelectorAll(".tool-card")).toHaveLength(1);
-  expect(document.querySelector(".tool-repeat")?.textContent).toContain("×4");
+  expect(document.querySelector(".tool-name")?.textContent).toBe("Read 37 walls on A-WALL (4 times)");
+});
+
+test("running activities use the present and plan updates name the completed steps", () => {
+  setup({ items: [
+    { ...card, status: "running", activity: { category: "draw", effect: "edit", detail: { key: "activity.line.draw", params: { n: 4, what: "wall", layer: "A-WALL" } } } },
+    { ...card, id: "plan", label: "plan", mutating: false, handles: [], activity: { category: "drawing", effect: "view", detail: { key: "activity.line.plan", params: { n: 3, total: 7 } } } },
+  ] });
+  expect(screen.getByText("Drawing 4 walls on A-WALL…")).toBeTruthy();
+  expect(screen.getByText("Updated the plan: 3 of 7 steps done")).toBeTruthy();
 });
 
 test("choosing an option of a question puts it in the box without sending, and the question is a record after the reply", () => {

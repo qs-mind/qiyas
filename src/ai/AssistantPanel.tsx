@@ -1,6 +1,7 @@
 import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
 import { slashCommand, slashMatches, slashWord, type SlashCommand } from "./slashCommands";
 import { uiError, userError } from "../i18n/errors";
+import { providerFailure } from "./providerFailure";
 import { listen } from "@tauri-apps/api/event";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { aiAttachPdf, type PdfAttachment } from "../api";
@@ -52,12 +53,7 @@ type Props = {
 const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
 
 function connectionLost(error: string): boolean {
-  try {
-    return ["ai.error.network", "ai.error.timeout", "ai.error.stream", "ai.error.service_error", "ai.error.chatgpt_temporary"]
-      .includes(JSON.parse(error).code);
-  } catch {
-    return false;
-  }
+  return providerFailure(error, "en")?.canContinue ?? false;
 }
 
 /** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
@@ -221,7 +217,8 @@ export const AssistantPanel = memo(function AssistantPanel({
   }
 
   function errorText(e: string) {
-    if (connectionLost(e)) return t("ai.connectionLost");
+    const failure = providerFailure(e, lang);
+    if (failure) return failure.text;
     if (e === "busy") return t("ai.busy");
     if (e === "no_api_key") return t("ai.noKey");
     if (e === "no_base_url") return t("ai.noBaseUrl");
@@ -331,7 +328,7 @@ export const AssistantPanel = memo(function AssistantPanel({
             </details>}
           </div>;
         }
-        if (item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error") return null;
+        if (item.name === "qiyas_execute" && item.label === "plan" && !item.activity?.detail && item.status !== "error") return null;
         if (runs.hidden.has(i)) return null;
         const canShow = item.handles.length > 0 || !!item.ui?.bounds;
         const canUndo = !unavailable && item === undoable;
@@ -358,7 +355,10 @@ export const AssistantPanel = memo(function AssistantPanel({
       case "stopped":
         return (
           <div key={i} className="msg notice stopped" role="note">
-            {stopText(item.reason)}
+            {providerFailure(item.reason, lang)?.text ?? stopText(item.reason)}
+            {connectionLost(item.reason) ? <button type="button" disabled={busy}
+              onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>
+              : providerFailure(item.reason, lang) && <button type="button" className="link" onClick={onSettings}>{t("settings")}</button>}
           </div>
         );
     }
@@ -468,7 +468,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           {errorText(error)}
           {connectionLost(error) && <button type="button" disabled={busy}
             onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>}
-          <button type="button" className="link" onClick={onSettings}>{t(showTechnicalDetails ? "support.details" : "settings")}</button>
+          {!connectionLost(error) && <button type="button" className="link" onClick={onSettings}>{t("settings")}</button>}
         </div>
       )}
       <form

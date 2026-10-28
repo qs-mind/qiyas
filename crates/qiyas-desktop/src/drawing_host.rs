@@ -231,6 +231,23 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         self.shown(format!("New drawing {title} on screen, unsaved"))
     }
 
+    fn new_named_drawing(&self, name: &str, units: &str) -> Result<Value, String> {
+        let state = self.state();
+        let units = insunits_of(units)?;
+        let path = tabs::named_untitled_path(&state, name)?;
+        let title = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let mut session = Session::new_blank(&path, units);
+        tabs::set_untitled_export_folder(&self.app, &mut session)?;
+        tabs::add_checked(&state, session, self.expected_revision.as_ref())?;
+        let mut result = self.shown(format!("New drawing {title} on screen, unsaved"))?;
+        result["name"] = json!(title);
+        Ok(result)
+    }
+
     fn project(&self, input: &Value, source: qiyas_core::Source) -> Result<Value, String> {
         crate::projects::execute_checked(
             &self.state(),
@@ -304,7 +321,9 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
             session.save().map_err(|e| e.to_string())?;
             session.drawing.path.display().to_string()
         };
-        Ok(json!({ "message": format!("Saved {path}"), "ui": { "action": "redraw" } }))
+        Ok(
+            json!({ "path": path, "message": format!("Saved {path}"), "ui": { "action": "redraw" } }),
+        )
     }
 
     fn close(&self, id: Option<u32>) -> Result<Value, String> {
@@ -404,6 +423,170 @@ mod tests {
     }
 
     #[test]
+    fn named_drawings_keep_arabic_and_choose_unused_names() {
+        let (_dir, app) = app();
+        let state = app.state::<AppState>();
+        let path = tabs::named_untitled_path(&state, "  فيلا G+1: plans /?*<>|\\\"  ").unwrap();
+        assert_eq!(path.file_name().unwrap(), "فيلا G+1 plans.dwg");
+        assert_eq!(path.parent().unwrap(), state.config_dir.join("untitled"));
+        assert!(tabs::named_untitled_path(&state, " ").is_err());
+        assert!(tabs::named_untitled_path(&state, "/?*.").is_err());
+        assert_eq!(
+            tabs::named_untitled_path(&state, "CON")
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "CON drawing.dwg"
+        );
+        std::fs::write(&path, b"existing drawing").unwrap();
+        let second = tabs::named_untitled_path(&state, "فيلا G+1 plans").unwrap();
+        assert_eq!(second.file_name().unwrap(), "فيلا G+1 plans 2.dwg");
+        std::fs::write(qiyas_core::autosave_path(&second), b"recovery").unwrap();
+        let third = tabs::named_untitled_path(&state, "فيلا G+1 plans").unwrap();
+        assert_eq!(third.file_name().unwrap(), "فيلا G+1 plans 3.dwg");
+        tabs::add(&state, qiyas_core::Session::new_blank(&third, 6)).unwrap();
+        assert_eq!(tabs::snapshot(&state).tabs[0].title, "فيلا G+1 plans 3.dwg");
+        assert_eq!(
+            tabs::named_untitled_path(&state, "فيلا G+1 plans")
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "فيلا G+1 plans 4.dwg"
+        );
+    }
+
+    #[test]
+    fn new_drawing_op_returns_the_requested_name_and_does_not_reuse_another_name() {
+        let (_dir, app) = app();
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
+        };
+        let first = qiyas_ai::host::run_host(
+            &host,
+            "new_drawing",
+            &json!({"name":"Villa G+1 plans","units":"m"}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first["name"], "Villa G+1 plans");
+        assert!(first["message"]
+            .as_str()
+            .unwrap()
+            .contains("Villa G+1 plans"));
+        let second = qiyas_ai::host::run_host(
+            &host,
+            "new_drawing",
+            &json!({"name":"Villa G+1 plans","units":"m"}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(second["name"], "Villa G+1 plans 2");
+        let tabs = tabs::snapshot(&app.state::<AppState>());
+        assert_eq!(tabs.tabs[0].title, "Villa G+1 plans.dwg");
+        assert_eq!(tabs.tabs[1].title, "Villa G+1 plans 2.dwg");
+    }
+
+    #[test]
+    fn deliverable_without_a_path_writes_in_the_drawing_export_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("exports");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut session = qiyas_core::Session::new_blank(&dir.path().join("Villa plans.dwg"), 6);
+        session.set_export_directory(folder.clone());
+        for (command, filename) in [
+            (
+                json!({"type":"deliverable","kind":"export","report":"register","format":"excel"}),
+                "Villa plans - Register.xlsx",
+            ),
+            (
+                json!({"type":"deliverable.export","kind":"register","format":"excel"}),
+                "Villa plans - Register 2.xlsx",
+            ),
+        ] {
+            let output = qiyas_ai::surface::run_session(
+                &mut session,
+                qiyas_ai::surface::EXECUTE,
+                "run",
+                &json!({"command":command}),
+                qiyas_core::Source::User,
+            )
+            .unwrap();
+            let qiyas_ai::ToolOutput::Json(result) = output else {
+                panic!("export result")
+            };
+            let path = folder.join(filename);
+            assert_eq!(result["written"], path.to_string_lossy().as_ref());
+            assert!(path.is_file());
+            assert_eq!(&std::fs::read(&path).unwrap()[..2], b"PK");
+        }
+        assert!(folder.join("Villa plans - Register.xlsx").is_file());
+    }
+
+    #[test]
+    fn mizan_edits_report_whole_part_overlaps_and_arrange_clears_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = qiyas_core::Session::new_blank(&dir.path().join("Villa.dwg"), 6);
+        let run = |s: &mut qiyas_core::Session, command: Value| {
+            let result = qiyas_ai::surface::run_session(
+                s,
+                qiyas_ai::surface::EXECUTE,
+                "run",
+                &json!({"command":command}),
+                qiyas_core::Source::Ai,
+            )
+            .unwrap();
+            let qiyas_ai::ToolOutput::Json(value) = result else {
+                panic!("drawing result")
+            };
+            value
+        };
+        run(
+            &mut session,
+            json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[10,8]}),
+        );
+        let table = run(
+            &mut session,
+            json!({"type":"table","at":[2,7],"rows":2,"cols":1,
+            "row_height":0.5,"col_width":2,"data":[["Rooms"],["Living"]]}),
+        );
+        assert!(
+            table["check"]["counts"]["part_overlap"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        let arranged = run(&mut session, json!({"type":"arrange"}));
+        assert_eq!(
+            arranged["check"]["counts"]["part_overlap"]
+                .as_u64()
+                .unwrap_or(0),
+            0
+        );
+        let moved = arranged["outcome"]["moves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["label"] == "Table")
+            .unwrap();
+        let delta = [0, 1].map(|axis| {
+            moved["from"][axis].as_f64().unwrap() - moved["to"][axis].as_f64().unwrap()
+        });
+        let overlap = run(
+            &mut session,
+            json!({"type":"modify","kind":"move",
+            "targets":[{"handle":moved["handles"][0]}],"delta":delta}),
+        );
+        assert!(
+            overlap["check"]["counts"]["part_overlap"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+    }
+
+    #[test]
     fn checked_file_operations_refuse_stale_drawings_under_the_mutation_lock() {
         let (_dir, app) = app();
         let host = AppHost {
@@ -439,7 +622,7 @@ mod tests {
             assert_eq!(error["code"], "stale_read");
         }
         for (name, args) in [
-            ("new_drawing", json!({"units":"m"})),
+            ("new_drawing", json!({"name":"Villa plans","units":"m"})),
             ("save_drawing", json!({})),
             ("close_drawing", json!({})),
         ] {
@@ -454,7 +637,7 @@ mod tests {
         qiyas_ai::host::run_host(
             &host,
             "new_drawing",
-            &json!({"units":"cm","expected_revision":fresh}),
+            &json!({"name":"Villa plans","units":"cm","expected_revision":fresh}),
             None,
         )
         .unwrap();

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
 import { Ribbon } from "./Ribbon";
 import css from "./theme.css?raw";
 
-afterEach(cleanup);
+// Tool-layout tests exercise the user's expanded choice.
+beforeEach(() => localStorage.setItem("qiyas.ribbon.collapsed", "0"));
+afterEach(() => { cleanup(); localStorage.removeItem("qiyas.ribbon.collapsed"); });
 
 const props = { active: "select" as const, onTool() {}, onOpen() {}, onZoomExtents() {} };
 
@@ -686,7 +688,7 @@ test("the quick-access arrows skip a disabled button and mirror in Arabic", () =
 const panel = () => document.querySelector(".ribbon-panel");
 
 test("double-clicking a tab collapses the ribbon to its tabs, and again expands it; the choice is kept", () => {
-  localStorage.removeItem("qiyas.ribbon.collapsed");
+  localStorage.setItem("qiyas.ribbon.collapsed", "0");
   render(<Ribbon {...props} />);
   expect(panel()).not.toBeNull();
   const measure = screen.getByRole("tab", { name: "Measure" });
@@ -726,7 +728,7 @@ test("a tool chosen from the shown panel puts the panel away again", () => {
 });
 
 test("without a mouse: Ctrl+F1 and the arrow at the row's end collapse and expand", () => {
-  localStorage.removeItem("qiyas.ribbon.collapsed");
+  localStorage.setItem("qiyas.ribbon.collapsed", "0");
   render(<Ribbon {...props} />);
   const arrow = screen.getByRole("button", { name: "Collapse the ribbon" });
   expect(arrow.getAttribute("aria-expanded")).toBe("true");
@@ -738,4 +740,20 @@ test("without a mouse: Ctrl+F1 and the arrow at the row's end collapse and expan
   fireEvent.keyDown(window, { key: "F1", ctrlKey: true });
   expect(panel()).toBeNull();
   localStorage.removeItem("qiyas.ribbon.collapsed");
+});
+
+test("a fresh ribbon is collapsed and remembers an explicit expansion across mounts", () => {
+  localStorage.removeItem("qiyas.ribbon.collapsed");
+  const first = render(<Ribbon {...props} />);
+  expect(panel()).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Expand the ribbon" }));
+  expect(panel()).not.toBeNull();
+  expect(localStorage.getItem("qiyas.ribbon.collapsed")).toBe("0");
+  first.unmount();
+  const second = render(<Ribbon {...props} />);
+  expect(panel()).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Collapse the ribbon" }));
+  second.unmount();
+  render(<Ribbon {...props} />);
+  expect(panel()).toBeNull();
 });

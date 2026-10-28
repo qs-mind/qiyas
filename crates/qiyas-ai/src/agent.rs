@@ -203,6 +203,9 @@ pub enum AgentEvent {
     },
     ToolResult {
         id: String,
+        /// Result-refined presentation metadata; absent in older conversations.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<crate::activity::Activity>,
         /// Diagnostic summary for the card's technical details and the log.
         summary: String,
         /// A count from the structured result, never from its English summary.
@@ -1447,7 +1450,7 @@ impl Agent {
                 .as_ref()
                 .is_some_and(|key| counts.ineffective.get(key).copied().unwrap_or(0) >= 5);
             let mut edited = false;
-            let (mut block, event) = if let Some(why) = stopped.as_deref() {
+            let (mut block, mut event) = if let Some(why) = stopped.as_deref() {
                 (error_result(id, why), error_event(id, why))
             } else if repeated {
                 let why = match self.chat_language {
@@ -1748,6 +1751,32 @@ impl Agent {
                 )
                 .await;
             }
+            if let AgentEvent::ToolResult {
+                activity,
+                is_error: false,
+                ..
+            } = &mut event
+            {
+                if activity
+                    .as_ref()
+                    .is_none_or(|activity| activity.detail.is_none())
+                {
+                    let value = match &block {
+                        ContentBlock::ToolResult { content, .. } => content
+                            .iter()
+                            .find_map(|part| {
+                                if let ResultPart::Text(text) = part {
+                                    serde_json::from_str::<Value>(text).ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(Value::Null),
+                        _ => Value::Null,
+                    };
+                    *activity = Some(crate::activity::refine(name, input, &value));
+                }
+            }
             if let Some(last) = self.history.last_mut() {
                 last.content.push(block);
             }
@@ -1977,22 +2006,33 @@ impl Agent {
         match output {
             Err(why) => (error_result(id, &why), error_event(id, &why)),
             Ok(ToolOutput::Json(value)) => {
-                let event = json_result(id, &value).1;
+                let mut event = json_result(id, &value).1;
                 let call = self
                     .history
                     .iter()
                     .flat_map(Message::tool_uses)
                     .find(|(call_id, _, _)| *call_id == id)
                     .map(|(_, name, input)| {
+                        let input = crate::normalise::envelope(name, input)
+                            .map(|(input, _)| input)
+                            .unwrap_or_else(|_| input.clone());
                         (
                             name.to_owned(),
                             input["op"].as_str().unwrap_or_default().to_owned(),
-                            surface::args_of(input).unwrap_or_default(),
+                            surface::args_of(&input).unwrap_or_default(),
                         )
                     });
                 let (tool, op, args) = call.unwrap_or_else(|| {
                     (surface::READ.into(), String::new(), serde_json::json!({}))
                 });
+                // Use the full result before model-facing compaction shortens batch outcomes.
+                if let AgentEvent::ToolResult { activity, .. } = &mut event {
+                    *activity = Some(crate::activity::refine(
+                        &tool,
+                        &serde_json::json!({"op": op, "args": args}),
+                        &value,
+                    ));
+                }
                 match surface::format_result(&tool, &op, &args, ToolOutput::Json(value)) {
                     Ok(ToolOutput::Json(mut value)) => {
                         if args["detail"] != "full" {
@@ -2033,6 +2073,7 @@ impl Agent {
                 self.last_picture = Some(hash);
                 let event = AgentEvent::ToolResult {
                     id: id.to_string(),
+                    activity: None,
                     summary: caption.clone(),
                     count: None,
                     handles: Vec::new(),
@@ -2616,6 +2657,7 @@ fn ineffective(block: &ContentBlock) -> bool {
 fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
     let event = AgentEvent::ToolResult {
         id: id.to_string(),
+        activity: None,
         summary: summary(value),
         count: crate::activity::count(value),
         handles: handles(value),
@@ -2903,6 +2945,7 @@ fn error_result(id: &str, why: &str) -> ContentBlock {
 fn error_event(id: &str, why: &str) -> AgentEvent {
     AgentEvent::ToolResult {
         id: id.to_string(),
+        activity: None,
         summary: crate::errors::message(why),
         count: None,
         handles: Vec::new(),
@@ -2913,6 +2956,9 @@ fn error_event(id: &str, why: &str) -> AgentEvent {
 
 /// One line about a tool's JSON result.
 fn summary(value: &Value) -> String {
+    if let Some(files) = crate::output_files::summary(value) {
+        return files;
+    }
     let value = value
         .get("outcome")
         .filter(|v| v.is_object())

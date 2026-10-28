@@ -4,6 +4,8 @@
 //! again. One binary links once. A new test file must be listed here; the test
 //! `every_test_file_is_listed` fails when one is missing.
 
+#[path = "arrange.rs"]
+mod arrange;
 #[path = "audit.rs"]
 mod audit;
 #[path = "autosave.rs"]

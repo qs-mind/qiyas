@@ -6,6 +6,75 @@ use opencadcodec::{EntityType, Handle};
 use std::collections::HashSet;
 
 impl Session {
+    pub(crate) fn check_parts(
+        &self,
+        ink: &SheetInk,
+        sheet: &str,
+        active: &impl Fn(u64) -> bool,
+        push: &mut impl FnMut(Finding),
+    ) {
+        // Only a paper layout is a sheet; Model and block definitions (*D1, *T1, door blocks) are not.
+        let paper = self
+            .drawing
+            .doc
+            .block_records
+            .get(sheet)
+            .map(|b| b.handle)
+            .is_some_and(|owner| {
+                self.drawing.doc.objects.values().any(|o| {
+                    matches!(o, opencadcodec::objects::ObjectType::Layout(l)
+                        if l.block_record == owner)
+                })
+            });
+        let model = sheet.eq_ignore_ascii_case("*Model_Space");
+        if !paper && !model {
+            return;
+        }
+        let (to_m, scale) = self.check_space(sheet);
+        let parts = self.drawing_parts(sheet, ink, 15.0 * 0.001 * scale / to_m / 2.0);
+        for (i, a) in parts.iter().enumerate().filter(|(_, p)| !p.frame) {
+            for b in parts.iter().skip(i + 1).filter(|p| !p.frame) {
+                if !a.handles.iter().chain(&b.handles).any(|h| active(*h))
+                    || !crate::arrange::overlaps(a.bounds, b.bounds)
+                {
+                    continue;
+                }
+                // Keep every member, not just a representative: the post-edit surface filters
+                // findings by the original touched handles after its broader spatial check.
+                let handles = a.handles.iter().chain(&b.handles).copied().collect();
+                push(Finding {
+                    rule: "part_overlap",
+                    pack: "general",
+                    severity: Severity::Warning,
+                    handles,
+                    at: Some(b.bounds[0]),
+                    message: format!(
+                        "{} ({}) overlaps {} ({}); use arrange to separate the parts",
+                        a.label, a.handles[0], b.label, b.handles[0]
+                    ),
+                });
+            }
+        }
+        let content: Vec<_> = parts
+            .iter()
+            .filter(|p| !p.frame)
+            .flat_map(|p| &p.handles)
+            .copied()
+            .collect();
+        if paper
+            && !model
+            && !content.is_empty()
+            && !parts.iter().any(|p| p.title && !p.frame)
+            && content.iter().any(|h| active(*h))
+        {
+            push(Finding {
+                rule: "sheet_without_title_block", pack: "general", severity: Severity::Warning,
+                handles: content, at: None,
+                message: "This sheet has content but no title block; make the sheet with make_sheet or add title_block".into(),
+            });
+        }
+    }
+
     pub(crate) fn check_layout_ink(
         &self,
         ink: &SheetInk,
@@ -94,7 +163,9 @@ impl Session {
                                         .collect::<Vec<_>>()
                                 })
                                 .unwrap_or_default();
-                            if !polygon_inside(&a.points, &ring.points, &holes) {
+                            if !polygon_inside(&a.points, &ring.points, &holes)
+                                && !self.room_label_has_leader(a.owner)
+                            {
                                 report(
                                     "label_outside_room",
                                     a.owner,

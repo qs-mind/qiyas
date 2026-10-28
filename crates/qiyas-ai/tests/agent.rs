@@ -1599,6 +1599,12 @@ impl qiyas_ai::DrawingHost for FakeHost {
         *self.session.lock().unwrap() = Some(blank);
         Ok(json!({ "message": "New drawing Untitled-1.dwg on screen" }))
     }
+    fn new_named_drawing(&self, name: &str, units: &str) -> Result<Value, String> {
+        self.calls.lock().unwrap().push(format!("new {units}"));
+        let blank = Session::new_blank(&self.dir.join(format!("{name}.dwg")), 6);
+        *self.session.lock().unwrap() = Some(blank);
+        Ok(json!({ "message": format!("New drawing {name}.dwg on screen") }))
+    }
     fn open(&self, path: &str, user_named: bool) -> Result<Value, String> {
         self.calls
             .lock()
@@ -1626,7 +1632,7 @@ impl qiyas_ai::DrawingHost for FakeHost {
 async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_the_user() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let mock = serve(|n| match n {
-            0 => tool_turn(&[("toolu_1", "qiyas_execute", &[r#"{"op":"new_drawing","args":{"units":"m"}}"#])]),
+            0 => tool_turn(&[("toolu_1", "qiyas_execute", &[r#"{"op":"new_drawing","args":{"units":"m","name":"Test"}}"#])]),
             1 => tool_turn(&[(
                 "toolu_2",
                 "qiyas_execute",
@@ -1673,7 +1679,7 @@ async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_
             })
             .collect();
         assert!(results.iter().all(|(_, err, _)| !err), "{results:?}");
-        assert_eq!(results[0].2, "New drawing Untitled-1.dwg on screen");
+        assert_eq!(results[0].2, "New drawing Test.dwg on screen");
         assert_eq!(results[2].2, "The Save dialog is open for the user");
 
         // The line is in the new drawing, which is still untitled: nothing saved it.
@@ -1698,7 +1704,7 @@ async fn file_tools_without_a_host_say_to_use_the_app() {
             0 => tool_turn(&[(
                 "toolu_1",
                 "qiyas_execute",
-                &[r#"{"op":"new_drawing","args":{"units":"m"}}"#],
+                &[r#"{"op":"new_drawing","args":{"units":"m","name":"Test"}}"#],
             )]),
             _ => text_turn(&["Use New in Qiyas."]),
         })

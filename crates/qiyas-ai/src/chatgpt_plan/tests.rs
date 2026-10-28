@@ -182,6 +182,255 @@ fn diagnostics_redact_all_token_material() {
         .contains("fake-"));
 }
 
+fn tokens_with_account() -> Tokens {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    let mut tokens = tokens(&[PLAN_SCOPE]);
+    let payload = URL_SAFE_NO_PAD.encode(
+        json!({"https://api.openai.com/auth":{"chatgpt_account_id":"fake-account-id"}}).to_string(),
+    );
+    tokens.id_token = format!("fake-header.{payload}.fake-signature");
+    tokens
+}
+
+#[test]
+fn responses_request_has_conversation_routing_and_protocol_headers() {
+    let tokens = tokens_with_account();
+    let account_id = responses::account_id(&tokens.id_token);
+    assert_eq!(account_id.as_deref(), Some("fake-account-id"));
+    let req = request();
+    let built = crate::provider::http_client()
+        .post("http://localhost/responses")
+        .headers(responses::request_headers(&req.cache_key, account_id.as_deref()).unwrap())
+        .build()
+        .unwrap();
+    let headers = built.headers();
+    for name in ["session_id", "conversation_id"] {
+        assert_eq!(headers[name].to_str().unwrap(), req.cache_key);
+    }
+    assert_eq!(headers["openai-beta"], "responses=experimental");
+    assert_eq!(headers["accept"], "text/event-stream");
+    assert_eq!(headers["originator"], "qiyas");
+    assert_eq!(headers["chatgpt-account-id"], "fake-account-id");
+    assert!(headers["chatgpt-account-id"].is_sensitive());
+
+    let headers = responses::request_headers("", None).unwrap();
+    for name in ["session_id", "conversation_id", "chatgpt-account-id"] {
+        assert!(!headers.contains_key(name));
+    }
+    assert_eq!(headers["accept"], "text/event-stream");
+    for id_token in [
+        "fake-id-secret",
+        "header.!.signature",
+        "header.e30.signature",
+    ] {
+        assert_eq!(responses::account_id(id_token), None);
+    }
+    assert!(responses::request_headers("bad\r\nheader", None).is_err());
+    assert!(responses::request_headers("", Some("bad\r\nheader")).is_err());
+}
+
+#[test]
+fn streamed_unknown_and_server_failures_are_temporary_but_client_errors_are_not() {
+    let tokens = tokens(&[PLAN_SCOPE]);
+    for (detail, expected) in [
+        (json!({"code":"new_backend_failure"}), "chatgpt_temporary"),
+        (json!({}), "chatgpt_temporary"),
+        (json!({"code":"server_error"}), "chatgpt_temporary"),
+        (json!({"code":"internal_error"}), "chatgpt_temporary"),
+        (json!({"code":"overloaded"}), "chatgpt_temporary"),
+        (json!({"type":"timeout"}), "chatgpt_temporary"),
+        (json!({"code":"invalid_request_error"}), "chatgpt_failed"),
+        (
+            json!({"code":"new_client_error","type":"invalid_request_error"}),
+            "chatgpt_failed",
+        ),
+        (json!({"code":"invalid_prompt"}), "chatgpt_failed"),
+        (
+            json!({"code":"context_length_exceeded","type":"invalid_request_error"}),
+            "context_too_long",
+        ),
+        (
+            json!({"code":"subscription_sharing_unsupported_capability"}),
+            "chatgpt_capability",
+        ),
+        (json!({"code":"invalid_api_key"}), "chatgpt_access"),
+        (json!({"code":"rate_limit_exceeded"}), "chatgpt_limit"),
+    ] {
+        for event in [
+            json!({"type":"response.failed","response":{"error":detail}}),
+            json!({"type":"error","error":detail}),
+        ] {
+            let mut seen = Vec::new();
+            let error = responses::Events::with_tokens(&tokens)
+                .read(event, &mut |e| seen.push(e))
+                .unwrap_err();
+            assert_eq!(error.code(), expected, "{detail}");
+            assert!(
+                matches!(seen.as_slice(), [crate::StreamEvent::Diagnostic { kind, text }]
+                if kind == "PROVIDER ERROR" && text.starts_with("ChatGPT stream:"))
+            );
+        }
+    }
+    for event in [
+        json!({"type":"response.failed"}),
+        json!({"type":"error","code":"server_error","message":"Try again"}),
+    ] {
+        assert_eq!(
+            responses::Events::with_tokens(&tokens)
+                .read(event, &mut |_| {})
+                .unwrap_err()
+                .code(),
+            "chatgpt_temporary"
+        );
+    }
+    assert_eq!(
+        responses::failure(400, &json!({"code":"unknown_client_error"})).code(),
+        "chatgpt_failed"
+    );
+}
+
+#[test]
+fn provider_error_diagnostics_scrub_before_clipping_unicode_text() {
+    let tokens = tokens_with_account();
+    let detail = json!({
+        "code": tokens.access_token,
+        "type": tokens.refresh_token,
+        "message": format!("{} fake-account-id {}", tokens.id_token, "ع".repeat(600)),
+    });
+    let event = responses::error_diagnostic("503", &detail, Some(&tokens), Some("fake-account-id"));
+    let crate::StreamEvent::Diagnostic { kind, text } = event else {
+        panic!("expected provider diagnostic");
+    };
+    assert_eq!(kind, "PROVIDER ERROR");
+    assert!(text.starts_with("ChatGPT 503: code=[key hidden]; type=[key hidden]; message="));
+    assert_eq!(text.chars().count(), 500);
+    for secret in [
+        tokens.access_token.as_str(),
+        tokens.refresh_token.as_deref().unwrap(),
+        tokens.id_token.as_str(),
+        "fake-account-id",
+    ] {
+        assert!(!text.contains(secret));
+    }
+
+    let mut seen = Vec::new();
+    responses::Events::with_tokens(&tokens)
+        .read(
+            json!({"type":"error","code":"server_error","message":format!("Service failed: {} {} {}", tokens.access_token, tokens.refresh_token.as_deref().unwrap(), tokens.id_token)}),
+            &mut |e| seen.push(e),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(seen.as_slice(), [crate::StreamEvent::Diagnostic { kind, text }]
+        if kind == "PROVIDER ERROR"
+            && text.contains("code=server_error")
+            && text.contains("type=error")
+            && text.contains("message=Service failed:")
+            && !text.contains(&tokens.access_token)
+            && !text.contains(tokens.refresh_token.as_deref().unwrap())
+            && !text.contains(&tokens.id_token))
+    );
+}
+
+#[tokio::test]
+async fn mock_unknown_http_client_errors_log_details_without_retrying() {
+    let _serial = SERIAL.lock().await;
+    for body in [
+        json!({"error":{"code":"new_client_error","type":"invalid_request_error","message":"Service refused fake-access-secret"}}),
+        json!("Service refused fake-access-secret"),
+    ] {
+        let (base, server) = mock_server(vec![(400, body)]).await;
+        let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+        let mut seen = Vec::new();
+        let error = provider
+            .stream_turn(request(), &mut |e| seen.push(e))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "chatgpt_failed");
+        assert!(seen.iter().any(
+            |e| matches!(e, crate::StreamEvent::Diagnostic { kind, text }
+            if kind == "PROVIDER ERROR" && text.starts_with("ChatGPT 400:")
+                && text.contains("Service refused [key hidden]"))
+        ));
+        assert!(!seen
+            .iter()
+            .any(|e| matches!(e, crate::StreamEvent::Retrying { .. })));
+        assert_eq!(server.await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn mock_http_and_stream_failures_retry_with_stable_headers_and_discard_partial_output() {
+    let _serial = SERIAL.lock().await;
+    let tokens = tokens_with_account();
+    let detail = json!({"code":"new_backend_failure","type":"server_error",
+        "message":format!("Service failed: {} fake-account-id", tokens.access_token)});
+    let partial = json!({"type":"response.output_text.delta","delta":"Unfinished answer"});
+    let failed = json!({"type":"response.failed","response":{"error":detail}});
+    let done = json!({"type":"response.completed","response":{"output":[
+        {"type":"message","content":[{"type":"output_text","text":"Finished answer"}]}],"usage":{}}});
+    let (base, server) = mock_server(vec![
+        (503, json!({"error":detail})),
+        (200, json!(format!("data: {partial}\n\ndata: {failed}\n\n"))),
+        (200, json!(format!("data: {done}\n\n"))),
+    ])
+    .await;
+    let provider = ChatgptPlan::new(memory(tokens), local_protocol(&base));
+    let mut seen = Vec::new();
+    let result = provider
+        .stream_turn(request(), &mut |e| seen.push(e))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.content.as_slice(), [ContentBlock::Text { text }]
+        if text == "Finished answer")
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|e| matches!(e, crate::StreamEvent::Retrying {
+            code, discard_partial: true, ..
+        } if code == "ai.error.chatgpt_temporary"))
+            .count(),
+        2
+    );
+    let diagnostics: Vec<_> = seen
+        .iter()
+        .filter_map(|e| match e {
+            crate::StreamEvent::Diagnostic { kind, text } if kind == "PROVIDER ERROR" => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(diagnostics.len(), 2);
+    assert!(diagnostics[0].starts_with("ChatGPT 503:"));
+    assert!(diagnostics[1].starts_with("ChatGPT stream:"));
+    for text in diagnostics {
+        assert!(
+            text.contains("code=new_backend_failure; type=server_error; message=Service failed:")
+        );
+        assert!(!text.contains("fake-access-secret"));
+        assert!(!text.contains("fake-account-id"));
+    }
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 3);
+    let mut bodies = Vec::new();
+    for request in &requests {
+        let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+        let headers = headers.to_ascii_lowercase();
+        for header in [
+            "session_id: offline-test-conversation",
+            "conversation_id: offline-test-conversation",
+            "openai-beta: responses=experimental",
+            "accept: text/event-stream",
+            "originator: qiyas",
+            "chatgpt-account-id: fake-account-id",
+        ] {
+            assert!(headers.lines().any(|line| line == header));
+        }
+        bodies.push(body);
+    }
+    assert!(bodies.windows(2).all(|pair| pair[0] == pair[1]));
+}
+
 /// Synthetic loopback transport. No real service, login or credential is involved.
 async fn mock_server(
     replies: Vec<(u16, serde_json::Value)>,
@@ -196,7 +445,7 @@ async fn mock_server(
         let mut requests = Vec::new();
         for (status, reply) in replies {
             let (mut socket, _) =
-                tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+                tokio::time::timeout(std::time::Duration::from_secs(60), listener.accept())
                     .await
                     .unwrap()
                     .unwrap();
@@ -247,7 +496,6 @@ fn local_protocol(base: &str) -> oauth::Protocol {
     }
 }
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_refresh_rotates_atomically_and_omits_scope_and_secret() {
     let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
@@ -275,7 +523,6 @@ async fn mock_refresh_rotates_atomically_and_omits_scope_and_secret() {
     assert!(!requests[3].contains("fake-access-secret"));
 }
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_terminal_refresh_clears_only_tokens_and_network_failures_keep_them() {
     let _serial = SERIAL.lock().await;
     for code in [
@@ -345,7 +592,6 @@ async fn mock_terminal_refresh_clears_only_tokens_and_network_failures_keep_them
     server.await.unwrap();
 }
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_revocation_accepts_empty_200_and_retries_server_failure() {
     let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
@@ -367,7 +613,6 @@ async fn mock_revocation_accepts_empty_200_and_retries_server_failure() {
 }
 
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_unsupported_feature_changes_the_next_body_and_reports_activity() {
     let _serial = SERIAL.lock().await;
     let done = json!({"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Measured."}]}],"usage":{}}});
@@ -397,7 +642,6 @@ async fn mock_unsupported_feature_changes_the_next_body_and_reports_activity() {
     assert!(!format!("{events:?}").contains("fake-id-secret"));
 }
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_admission_limit_stops_next_request_and_401_keeps_credentials() {
     let _serial = SERIAL.lock().await;
     for (status, body, expected) in [
@@ -452,7 +696,6 @@ async fn mock_admission_limit_stops_next_request_and_401_keeps_credentials() {
     }
 }
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_broken_stream_never_succeeds_or_executes_partial_tools() {
     let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![(
@@ -675,7 +918,6 @@ async fn cancelled_keychain_waiter_keeps_the_lock_until_the_write_finishes() {
     );
 }
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_cancelled_rotation_commits_before_another_account_operation() {
     let _serial = SERIAL.lock().await;
     let (base, server) = mock_server(vec![
@@ -778,7 +1020,6 @@ fn refused_reasoning_survives_conversation_state_without_account_material() {
 }
 
 #[tokio::test]
-#[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
 async fn mock_cache_key_and_prefix_survive_plan_followup() {
     let _serial = SERIAL.lock().await;
     let done = json!({"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Measured."}]}],"usage":{}}});

@@ -2130,8 +2130,10 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.
-- Mizan assumes before asking (`prompt.rs`, W1): it states assumptions and proceeds. When only the
-  user can decide it calls `qiyas_execute ask` once, with every question together (see "W1:
+- Mizan never assumes on its own (founder, 28 October 2026): engineering decisions are the
+  engineer's. It assumes only when the engineer asks it to assume or to use best practice, and then
+  writes each assumption down. When a step needs a missing fact or decision it stops at that step
+  and calls `qiyas_execute ask` once, with every question that step needs together (see "W1:
   Mizan's behaviour and cost" below); the turn ends and the answer is the next message. A plain
   text question still ends the turn cleanly (`agent.rs` test `a_question_ends_the_turn_cleanly...`).
   The fixed prompt
@@ -3346,7 +3348,7 @@ Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas
 - Saving (`agent.rs` `keep_work`): after a finished phase that changed a titled drawing the agent
   saves through the host; an untitled one is not touched mid-work, and at the turn's end the host
   opens the window's Save As once and the answer says so. Nothing is saved when Mizan changed nothing.
-- Drawing on assumptions: Mizan draws on written assumptions, puts them on the sheet as general
+- Drawing on assumptions the engineer allowed: Mizan puts them on the sheet as general
   notes (title block status "For review") and lists them in the answer. Qiyas draws; loads, design
   calculations and approval are the engineer's and the company's (company policy).
 - Exports (`surface.rs` `quantity_gate`): `export_takeoff` and `deliverable.export` of boq,

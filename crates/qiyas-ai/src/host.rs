@@ -83,6 +83,10 @@ pub trait DrawingHost: Send + Sync {
     fn list(&self) -> Result<Value, String>;
     /// A new, empty drawing in `units` ("m", "cm" or "mm") on screen in a new tab.
     fn new_drawing(&self, units: &str) -> Result<Value, String>;
+    /// Creates a drawing with a non-empty name. Hosts must preserve that name in its path.
+    fn new_named_drawing(&self, _name: &str, _units: &str) -> Result<Value, String> {
+        Err("This host cannot create a named drawing".into())
+    }
     /// Opens the drawing at `path` (or shows its tab). `user_named`: the user wrote this path in
     /// their message. A path that is neither that, a recent drawing nor an open tab is asked
     /// about in the window first.
@@ -164,7 +168,15 @@ pub fn dispatch_host<H: DrawingHost + ?Sized>(
         ),
         "list_drawings" => host.list(),
         "new_drawing" => match input.get("units").and_then(Value::as_str) {
-            Some(units @ ("m" | "cm" | "mm")) => host.new_drawing(units),
+            Some(units @ ("m" | "cm" | "mm")) => {
+                let name = input
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .ok_or("name is required")?;
+                host.new_named_drawing(name, units)
+            }
             _ => Err("units must be \"m\", \"cm\" or \"mm\"; ask the user which".into()),
         },
         "open_drawing" => {
@@ -233,6 +245,13 @@ mod tests {
             self.calls.lock().unwrap().push(format!("new {units}"));
             Ok(json!({}))
         }
+        fn new_named_drawing(&self, name: &str, units: &str) -> Result<Value, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("new {name} {units}"));
+            Ok(json!({}))
+        }
         fn open(&self, path: &str, user_named: bool) -> Result<Value, String> {
             self.calls
                 .lock()
@@ -261,7 +280,14 @@ mod tests {
             |name: &str, input: Value, text: Option<&str>| run_host(&host, name, &input, text);
         assert!(run("new_drawing", json!({}), None).is_err());
         assert!(run("new_drawing", json!({ "units": "km" }), None).is_err());
-        run("new_drawing", json!({ "units": "cm" }), None).unwrap();
+        assert!(run("new_drawing", json!({"units":"cm"}), None).is_err());
+        assert!(run("new_drawing", json!({"units":"cm","name":" "}), None).is_err());
+        run(
+            "new_drawing",
+            json!({ "units": "cm", "name":"Villa plans" }),
+            None,
+        )
+        .unwrap();
         run(
             "open_drawing",
             json!({ "path": "/jobs/villa.dwg" }),
@@ -284,7 +310,7 @@ mod tests {
         assert_eq!(
             *host.calls.lock().unwrap(),
             [
-                "new cm",
+                "new Villa plans cm",
                 "open /jobs/villa.dwg true",
                 "open /etc/x.dwg false",
                 "open /jobs/villa.dwg false",

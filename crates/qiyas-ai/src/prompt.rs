@@ -403,11 +403,11 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_says_assume_and_proceed_and_ask_once_with_options() {
+    fn the_prompt_never_assumes_and_asks_at_the_step_with_options() {
         let en = system_prompt(Lang::En, &DrawingFacts::none());
         for rule in [
-            "Never ask what you can assume or a tool can tell you",
-            "state assumptions and proceed",
+            "Never assume what the brief, drawing or engineer did not give unless asked to assume or use best practice",
+            "Never ask what a tool can tell you",
             "Country/practice: use [state]'s",
             "call qiyas_execute ask once with every question together",
             "2 to 4 options each, one marked recommended (free text is always allowed)",
@@ -447,7 +447,12 @@ mod tests {
             "Room areas from rooms and label_spaces are unapproved candidates",
             "Use text, tables and inserted blocks for annotations, schedules and legends",
             "One batch per phase, not everything: one undo step, all or nothing",
-            "New design in a populated drawing: clarify destination if needed",
+            "(placement in a populated drawing too)",
+            "stop there and call qiyas_execute ask once with every question together for that step",
+            "name a new drawing after the job",
+            "each floor with its schedules on its own make_sheet sheet",
+            "arrange keeps plans, tables, notes apart",
+            "Fix overlap findings before the next part",
         ] {
             assert!(en.contains(rule), "{rule}");
         }

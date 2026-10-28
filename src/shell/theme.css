@@ -2366,13 +2366,31 @@ span.grid-sort {
   flex-direction: column;
 }
 .art-head {
-  height: 48px;
+  min-height: 48px;
   display: flex;
   align-items: center;
   gap: 8px;
   padding-inline: 10px 12px;
   border-bottom: 1px solid var(--rule);
   flex: none;
+}
+.art-heading {
+  margin: 0;
+  min-width: 0;
+}
+.art-heading .art-title {
+  height: auto;
+  min-height: 30px;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.art-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
 }
 .art-title {
   display: inline-flex;
@@ -2416,6 +2434,36 @@ span.grid-sort {
 .outputs-menu {
   grid-auto-flow: row;
   min-width: 220px;
+  max-width: min(460px, calc(100vw - 16px));
+  max-height: min(640px, var(--available-height));
+  overflow-y: auto;
+}
+.outputs-label {
+  padding: 9px 10px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.outputs-note {
+  padding: 8px 10px;
+  color: var(--muted);
+  white-space: normal;
+}
+.output-file-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.output-name {
+  min-width: 0;
+  flex: 1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.output-reveal {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
 }
 .outputs-menu .rb-item {
   gap: 14px;
@@ -2438,10 +2486,17 @@ span.grid-sort {
   border-color: var(--fg);
 }
 .obtn-count {
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--bg);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-weight: 400;
 }
 .obtn.on .obtn-count {
+  background: var(--fg);
   color: inherit;
   opacity: 0.65;
 }
@@ -2832,6 +2887,10 @@ span.grid-sort {
   border: 1px solid var(--rule);
   border-radius: 8px;
   color: var(--muted);
+}
+.msg.stopped > button,
+.assistant-panel .error > button {
+  margin-inline-start: 8px;
 }
 .msg.refused {
   color: var(--fg);

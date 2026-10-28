@@ -1160,6 +1160,12 @@ pub enum Command {
     #[schemars(extend("x-category" = "layouts", "x-words" = ["MAKESHEET"]))]
     #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Villa", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
     MakeSheet(Box<crate::sheet_setup::SheetSpec>),
+    /// Arrange plans, tables, notes and legends in rows with paper-sized gaps. Each item moves
+    /// whole in one undo step; omitted items are grouped automatically. Paper layouts keep
+    /// their margins, sheet frame and title block clear.
+    #[schemars(extend("x-category" = "layouts"))]
+    #[schemars(example = json!({"type":"arrange"}))]
+    Arrange(Box<crate::arrange::Arrange>),
     /// Renames a paper layout, refusing a name already taken. One undo step.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type": "rename_layout", "from": "Layout1", "to": "Ground floor"}))]
@@ -1408,7 +1414,9 @@ pub enum Command {
     /// current layer by default), `height` metres tall (the name's height by default), to
     /// `decimals` places (2), in English unless `language` is given. Existing Arabic names in
     /// a supplied drawing may keep Arabic. One undo step. `Outcome::Rooms` with
-    /// each label's handle.
+    /// each label's handle and placement. Labels first shrink to 2.5 mm on paper, then
+    /// move beside the room with a linked leader if needed. Refuses only when no nearby
+    /// free space can hold the label.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
     LabelSpaces {
@@ -1616,6 +1624,7 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::Arrange(_) => Some(Part::Document { tables: true, takeoff: true }),
             Command::Project(command) => if command.is_read() {None} else {Some(Part::ProjectFile)},
             Command::Deliverable(_) | Command::CompareRevisions { .. } => None,
             Command::CarryKnowledge { .. } | Command::VariationReport { .. } => Some(Part::Document { tables: true, takeoff: false }),
@@ -1872,6 +1881,10 @@ pub enum Outcome {
     Added {
         handles: Vec<u64>,
     },
+    Arranged {
+        #[serde(flatten)]
+        report: crate::arrange::Arrangement,
+    },
     /// The sheet `MakeSheet` made.
     Sheet {
         report: Box<crate::sheet_setup::SheetReport>,
@@ -2035,6 +2048,11 @@ impl Session {
     /// is marked as made by `source`.
     pub(crate) fn execute(&mut self, cmd: Command, source: Source) -> Result<Outcome, CoreError> {
         let mut measurement = match cmd {
+            Command::Arrange(spec) => {
+                return Ok(Outcome::Arranged {
+                    report: self.arrange(*spec)?,
+                })
+            }
             Command::Deliverable(command) => {
                 let crate::deliverables::DeliverableCommand::Export {
                     report,

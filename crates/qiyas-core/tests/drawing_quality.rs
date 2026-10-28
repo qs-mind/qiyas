@@ -112,6 +112,119 @@ fn room_labels_fit_or_wrap_and_unknown_rules_are_errors() {
     }
 }
 #[test]
+fn oversized_room_labels_shrink_inside_without_losing_readability() {
+    for units in [4, 5, 6, 1] {
+        for language in ["en", "ar"] {
+            let mut s = blank(units);
+            let k = 1.0 / s.drawing.units.to_metres();
+            run(&mut s, json!({"type":"annotation_scale","name":"1:100"}));
+            add(
+                &mut s,
+                json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[4.0*k,4.0*k]}),
+            );
+            let result = run(
+                &mut s,
+                json!({"type":"label_spaces","height":4.0,
+                "language":language,"query":{"seeds":[{"point":[2.0*k,2.0*k]}]}}),
+            );
+            let room = &result["report"]["rooms"][0];
+            assert!(
+                matches!(
+                    room["placement"].as_str(),
+                    Some("shrunk" | "shrunk_wrapped")
+                ),
+                "{result}"
+            );
+            let h = room["label_handle"].as_u64().unwrap();
+            let entity = s
+                .drawing
+                .doc
+                .get_entity(opencadcodec::Handle::new(h))
+                .unwrap();
+            let height = match entity {
+                opencadcodec::EntityType::Text(t) => t.height,
+                opencadcodec::EntityType::MText(t) => t.height,
+                _ => panic!("text label"),
+            };
+            assert!(height < 4.0 * k);
+            assert!(height >= 0.25 * k - 1e-8);
+            assert!(!has(&s, "label_outside_room", h));
+            assert!(!has(&s, "text_over_lines", h));
+        }
+    }
+}
+
+#[test]
+fn tiny_rooms_get_linked_outside_labels_and_the_whole_batch_undoes() {
+    for units in [4, 5, 6, 1] {
+        for language in ["en", "ar"] {
+            let mut s = blank(units);
+            let k = 1.0 / s.drawing.units.to_metres();
+            run(&mut s, json!({"type":"annotation_scale","name":"1:100"}));
+            add(
+                &mut s,
+                json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[0.4*k,0.4*k]}),
+            );
+            let before = s.drawing.entities_in("*Model_Space").count();
+            let result = run(
+                &mut s,
+                json!({"type":"batch","commands":[
+                    {"type":"text","at":[8.0*k,8.0*k],"value":"Note"},
+                    {"type":"label_spaces","height":0.5,"language":language,
+                        "query":{"seeds":[{"name":"Room","point":[0.2*k,0.2*k]}]}}
+                ]}),
+            );
+            let room = &result["outcomes"][1]["report"]["rooms"][0];
+            assert_eq!(room["placement"], "shrunk_outside", "{result}");
+            let h = room["label_handle"].as_u64().unwrap();
+            let handle = opencadcodec::Handle::new(h);
+            let label = s.drawing.doc.get_entity(handle).unwrap();
+            let leader = label
+                .common()
+                .reactors
+                .iter()
+                .find_map(|id| match s.drawing.doc.get_entity(*id) {
+                    Some(opencadcodec::EntityType::Leader(l)) if l.annotation_handle == handle => {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .expect("outside label has a linked leader");
+            let height = match label {
+                opencadcodec::EntityType::Text(t) => t.height,
+                opencadcodec::EntityType::MText(t) => t.height,
+                _ => panic!("text label"),
+            };
+            assert!((height - 0.25 * k).abs() < 1e-8);
+            assert!(!has(&s, "label_outside_room", h));
+            assert!(!has(&s, "text_over_lines", h));
+            assert!(!has(&s, "text_height_vs_scale", h));
+            let after = s.drawing.entities_in("*Model_Space").count();
+            assert!(s.undo());
+            assert_eq!(s.drawing.entities_in("*Model_Space").count(), before);
+            assert!(s.drawing.doc.get_entity(handle).is_none());
+            assert!(s.drawing.doc.get_entity(leader).is_none());
+            assert!(s.redo());
+            assert_eq!(s.drawing.entities_in("*Model_Space").count(), after);
+            // The same outside label is still a live room label accepted by schedules.
+            let schedule = run(
+                &mut s,
+                json!({"type":"room_schedule","labels":[{"handle":h}]}),
+            );
+            assert!(schedule["handles"].as_array().is_some());
+            run(
+                &mut s,
+                json!({"type":"delete_entities","targets":[{"handle":leader.value()}]}),
+            );
+            assert!(
+                has(&s, "label_outside_room", h),
+                "an unlinked outside label still needs review"
+            );
+        }
+    }
+}
+
+#[test]
 fn checks_inspect_text_after_the_former_two_thousand_limit() {
     let mut s = blank(6);
     for i in 0..2002 {

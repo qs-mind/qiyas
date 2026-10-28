@@ -18,6 +18,7 @@ test("a registry command added in Customize starts typed prompts without a windo
   const onTool = vi.fn();
   render(<Ribbon active="select" onOpen={() => {}} onZoomExtents={() => {}} onTool={onTool}
     layout={layout} onCommandLine={onCommandLine} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Registry" }));
   const button = screen.getByRole("button", { name: "WIDGET" });
   expect(button.querySelector("svg rect")).not.toBeNull();
   fireEvent.click(button);

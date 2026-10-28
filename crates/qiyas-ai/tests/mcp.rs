@@ -311,7 +311,7 @@ async fn tool_errors_are_error_results() {
     let result = call(
         &client,
         "qiyas_execute",
-        json!({"op":"new_drawing","args":{"units":"m"}}),
+        json!({"op":"new_drawing","args":{"units":"m","name":"Test"}}),
     )
     .await;
     assert_eq!(result.is_error, Some(true));

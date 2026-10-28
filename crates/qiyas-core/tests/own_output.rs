@@ -784,7 +784,14 @@ fn registry_drawing_examples_pass_the_general_check_in_every_unit() {
                     produced.insert(info.name.clone());
                 }
                 for report in check_added(&session, &added) {
-                    if report.errors + report.warnings > 0 {
+                    // A bare layout from a one-command example is not a delivered sheet; the
+                    // title-block finding is checked in tests/arrange.rs.
+                    let bare_sheet = report
+                        .findings
+                        .iter()
+                        .filter(|f| f.severity != Severity::Info)
+                        .all(|f| f.rule == "sheet_without_title_block");
+                    if report.errors + report.warnings > 0 && !bare_sheet {
                         problems.push(format!(
                             "{} example {i} units={units}, block {}: {:?}",
                             info.name,

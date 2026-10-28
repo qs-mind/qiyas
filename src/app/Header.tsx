@@ -3,7 +3,10 @@ import { clearRecents, recents as readRecents, redo, undo, views as readViews, t
 import { useLanguage, useT } from "../i18n";
 import { Glyph } from "../shell/glyphs";
 import { OutputsMenu } from "../shell/OutputsMenu";
+import { useMemo } from "react";
 import type { OutputId, OutputInfo } from "../shell/outputs";
+import { transcriptFiles } from "../shell/outputFiles";
+import type { Transcript } from "../ai/messages";
 import { Ribbon } from "../shell/Ribbon";
 import { RibbonIcon } from "../shell/ribbonIcons";
 import type { Measure } from "./shared";
@@ -39,6 +42,7 @@ type Props = {
   options: Pick<Options, "ribbon" | "setOptionsOpen" | "setCustomizeOpen" | "setAliasesOpen" | "openPurge" | "openAudit">;
   /** What Mizan produced, and the one the right column shows (the "Outputs" menu). */
   outputs: OutputInfo[];
+  transcript: Transcript;
   shownOutput: OutputId | null;
   onOpenOutput(id: OutputId): void;
   /** Opens "Connect an AI app". */
@@ -65,6 +69,7 @@ export function Header({
   options,
   parametric,
   outputs,
+  transcript,
   shownOutput,
   onOpenOutput,
   onConnect,
@@ -96,6 +101,7 @@ export function Header({
     scriptLine,
   } = drawings;
   const { importBoqFile, compareNow, exportConflictsFile, exportEvidenceFile } = takeoff;
+  const outputFiles = useMemo(() => transcriptFiles(transcript), [transcript]);
 
   return (
     // A running script: the ribbon waits (its Stop is beside the status bar).
@@ -194,7 +200,8 @@ export function Header({
         })}
       />
       <div className="prefs">
-        <OutputsMenu outputs={outputs} shown={shownOutput} onOpen={onOpenOutput} onExportEvidence={info ? exportEvidenceFile : undefined} />
+        <OutputsMenu outputs={outputs} shown={shownOutput} onOpen={onOpenOutput} onExportEvidence={info ? exportEvidenceFile : undefined}
+          sheets={info?.sheets} sheet={sheets.sheet} onSheet={sheets.chooseSheet} files={outputFiles} />
         {/* One switch each: the language button names the other language in its own script; the
             theme button shows where it goes (a moon in light, a sun in dark). */}
         <button

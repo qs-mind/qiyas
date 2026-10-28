@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 25] = [
+pub const RULES: [&str; 27] = [
     "placement",
     "literal_newline",
     "internal_id_in_text",
@@ -35,6 +35,8 @@ pub const RULES: [&str; 25] = [
     "room_area_mismatch",
     "dim_override_mismatch",
     "object_tag_mismatch",
+    "part_overlap",
+    "sheet_without_title_block",
     "annotation_overlap",
     "annotation_over_grid",
     "label_outside_room",
@@ -97,7 +99,7 @@ pub struct CheckScope {
     /// dim_override_mismatch, text_overlaps_text, text_over_lines, text_height_vs_scale,
     /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark,
     /// room_area_mismatch, annotation_overlap, annotation_over_grid, label_outside_room, object_tag_mismatch,
-    /// internal_id_in_text, opening_untagged.
+    /// internal_id_in_text, opening_untagged, part_overlap, sheet_without_title_block.
     #[schemars(extend("items" = serde_json::json!({"type":"string","enum":RULES})))]
     pub rules: Vec<String>,
 }
@@ -635,6 +637,9 @@ impl Session {
         }
         let mut not_checked = ink.incomplete.clone();
         self.check_layout_ink(&ink, &sheet, to_m, paper_scale, &active, &mut push);
+        if wanted("part_overlap") || wanted("sheet_without_title_block") {
+            self.check_parts(&ink, &sheet, &active, &mut push);
+        }
 
         if wanted("object_tag_mismatch") {
             self.check_object_tags(&sheet, &active, &mut push);
@@ -1550,7 +1555,9 @@ fn segments(path: &qiyas_geom::Path) -> impl Iterator<Item = ([f64; 2], [f64; 2]
 pub fn layout_rule(rule: &str) -> bool {
     matches!(
         rule,
-        "annotation_overlap"
+        "part_overlap"
+            | "sheet_without_title_block"
+            | "annotation_overlap"
             | "annotation_over_grid"
             | "label_outside_room"
             | "text_overlaps_text"

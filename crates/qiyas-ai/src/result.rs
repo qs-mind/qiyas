@@ -20,11 +20,23 @@ pub(crate) fn format(
     if op == "artifact" {
         return Ok(ToolOutput::Json(value));
     }
-    let full = args["detail"] == "full";
+    // Named compact contracts are already complete. Never save, page, shorten or
+    // replace them by an artifact reference, including on repeated lookups.
+    let compact_commands =
+        tool == surface::READ && op == "commands" && crate::command_contract::is_compact(&value);
+    if compact_commands {
+        return Ok(ToolOutput::Json(value));
+    }
+    let full = args["detail"] == "full" || (op == "commands" && args["full"] == true);
     let execute = tool == surface::EXECUTE;
     let discovery =
         tool == surface::READ && matches!(op, "commands" | "record_schema" | "takeoff_kit");
-    let large = value.to_string().len() > SMALL;
+    let inline_bytes = if tool == surface::READ && op == "commands" {
+        crate::command_contract::INLINE_BYTES
+    } else {
+        SMALL
+    };
+    let large = value.to_string().len() > inline_bytes;
     if !execute && !large && !discovery && args.get("fields").is_none() {
         return Ok(ToolOutput::Json(value));
     }
@@ -51,6 +63,11 @@ pub(crate) fn format(
         out = json!({"value":out});
     }
     if execute {
+        let mut adjustments = Vec::new();
+        label_adjustments(&value, &mut adjustments);
+        if !adjustments.is_empty() {
+            out["label_adjustments"] = json!(adjustments);
+        }
         if value.get("status").is_none() {
             out["status"] = json!(if value["ok"] == false { "error" } else { "ok" });
         }
@@ -418,6 +435,31 @@ fn check_summary(check: &Value) -> Value {
         "findings":groups.into_iter().map(|(rule,(count,handles))| json!({"rule":rule,"count":count,"handles":handles.into_iter().take(SAMPLE).collect::<Vec<_>>()})).collect::<Vec<_>>()})
 }
 
+/// Room reports may be shortened in a large batch. Keep every changed placement visible.
+fn label_adjustments(value: &Value, out: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(placement) = value["placement"].as_str() {
+                if value["label_handle"].is_u64()
+                    && (placement.contains("shrunk") || placement.contains("outside"))
+                {
+                    out.push(json!({"label_handle":value["label_handle"],
+                        "name":value["name"],"placement":placement}));
+                }
+            }
+            for child in map.values() {
+                label_adjustments(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                label_adjustments(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn compact_contracts(value: &Value) -> Value {
     let mut out = value.clone();
     if let Some(name) = value["name"].as_str() {
@@ -501,6 +543,9 @@ fn compact_contracts(value: &Value) -> Value {
 
 /// Only the new reply changes; previous discovery messages never move or lose their schema.
 pub(crate) fn deduplicate(value: &mut Value, known: &mut BTreeMap<String, Value>) {
+    if crate::command_contract::is_compact(value) {
+        return;
+    }
     if let (Some(name), Some(version)) = (value["name"].as_str(), value["version"].as_str()) {
         let key = format!("{name}:{version}");
         if let Some(reference) = known.get(&key) {
@@ -522,6 +567,27 @@ pub(crate) fn deduplicate(value: &mut Value, known: &mut BTreeMap<String, Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_batches_keep_all_room_label_adjustments_inline() {
+        let rooms: Vec<_> = (0..50)
+            .map(|i| {
+                json!({"name":format!("Room {i}"),
+            "label_handle":i+1,"placement":"shrunk_outside","candidate_area_m2":0.25})
+            })
+            .collect();
+        let value = reply(
+            surface::EXECUTE,
+            "batch",
+            json!({}),
+            json!({"outcomes":[{"report":{"rooms":rooms}}]}),
+        );
+        let adjustments = value["label_adjustments"].as_array().unwrap();
+        assert_eq!(adjustments.len(), 50);
+        assert_eq!(adjustments[49]["label_handle"], 50);
+        assert_eq!(adjustments[49]["placement"], "shrunk_outside");
+    }
+
     fn reply(tool: &str, op: &str, args: Value, value: Value) -> Value {
         let ToolOutput::Json(value) = format(tool, op, &args, ToolOutput::Json(value)).unwrap()
         else {

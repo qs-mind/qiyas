@@ -6,10 +6,14 @@ import { HOVER_DELAY } from "./Tooltip";
 
 const props = { active: "select" as const, onTool() {}, onOpen() {}, onZoomExtents() {} };
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+  localStorage.setItem("qiyas.ribbon.collapsed", "0");
+});
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  localStorage.removeItem("qiyas.ribbon.collapsed");
 });
 
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));

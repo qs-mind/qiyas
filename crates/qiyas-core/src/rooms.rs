@@ -93,7 +93,7 @@ pub struct RoomRow {
     /// Persistent closed boundary used by labels, schedules and take-off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary_handle: Option<u64>,
-    /// How a generated label fits: inside or wrapped.
+    /// How a label fits: inside, wrapped, shrunk, shrunk_wrapped, outside or shrunk_outside.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placement: Option<String>,
 }
@@ -315,7 +315,8 @@ impl Session {
     /// just under its name (or at its seed point), on `layer` (made when missing; the current
     /// layer when none), `height` metres tall (the name's height, else 2.5 mm at the annotation
     /// scale), to `decimals` places, in English by default; supplied Arabic room-name text
-    /// may keep its language. One undo step.
+    /// may keep its language. Labels shrink to 2.5 mm on paper, then move beside the room
+    /// with a linked leader when needed; each room reports its placement. One undo step.
     pub(crate) fn label_spaces(
         &mut self,
         q: &RoomsQuery,
@@ -376,9 +377,9 @@ impl Session {
                 s.current.layer = layer.clone();
                 let handle = s.add_text(at, h, 0.0, template.replace("{area}", &code), None)?;
                 s.mark_room_label(handle, boundary, decimals);
-                let (at, wrapped) = s.fit_room_label(handle, &room.boundary, at)?;
+                let (at, placement) = s.fit_room_label(handle, &room.boundary, at, room.point)?;
                 points.push(at);
-                placements.push(if wrapped { "wrapped" } else { "inside" });
+                placements.push(placement);
                 handles.push(handle);
             }
             s.current = previous;

@@ -6,6 +6,7 @@
 //! viewports, the user coordinate system, sheet sets, autosave and recovery, and parametric
 //! constraints.
 
+pub mod arrange;
 pub mod audit;
 mod autosave;
 mod blocks;

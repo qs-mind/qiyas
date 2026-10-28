@@ -12,6 +12,7 @@ mod mcp;
 pub mod methods;
 #[cfg(debug_assertions)]
 mod mock;
+mod output_files;
 mod pdf;
 mod plot;
 mod projects;
@@ -56,6 +57,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            output_files::open_output_file,
+            output_files::reveal_output_file,
             projects::project_command,
             projects::project_history,
             commands::open_drawing,

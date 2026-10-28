@@ -379,6 +379,7 @@ export default function App() {
         options={options}
         parametric={parametric}
         outputs={outputList(takeoffState)}
+        transcript={assistant.transcript}
         shownOutput={shell.sideTab === "assistant" ? null : shell.sideTab}
         onOpenOutput={shell.setSideTab}
         onConnect={() => setConnectOpen(true)}

@@ -32,8 +32,8 @@ const PLAN = "/d/plan.dwg";
 
 /** Opens an output (take-off, BOQ, conflicts, report) in Mizan's column, from the top bar's Outputs menu. */
 async function openOutput(name: string) {
-  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}\\s*(\\d+|${en["outputs.empty"]})$`) }));
+  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}(?:\\s*\\d+)?$`) }));
 }
 
 /** The status bar's message (Mizan's box has its own, screen-reader-only, live region). */
@@ -368,6 +368,8 @@ beforeEach(() => {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1512 });
   // The folder the last dialog used is kept on this computer: each test starts without one.
   try { localStorage.removeItem("qiyas.files.lastFolder"); } catch { /* none */ }
+  // The ribbon starts folded for a new user; these tests drive its tools, so it starts open.
+  try { localStorage.setItem("qiyas.ribbon.collapsed", "0"); } catch { /* none */ }
   events.clear();
   core.cursor = 0; core.workspaceCalls = [];
   openDialog.mockImplementation(async () => core.chosen);
@@ -570,16 +572,15 @@ test.each(["none", "imported BOQ", "manual", "generated"])("the pack check follo
 
 test("Outputs exports the evidence PDF for the displayed drawing and names the written file in a toast", async () => {
   await mount();
-  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
-  const disabled = await screen.findByRole("menuitem", { name: en.exportEvidence });
-  expect(disabled.getAttribute("aria-disabled")).toBe("true");
-  fireEvent.click(disabled);
+  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).queryByRole("menuitem", { name: en.exportEvidence })).toBeNull();
   expect(core.calls.some((call) => call.startsWith("export_evidence"))).toBe(false);
-  fireEvent.keyDown(disabled, { key: "Escape" });
-  await until(() => expect(screen.queryByRole("menuitem", { name: en.exportEvidence })).toBeNull());
+  fireEvent.keyDown(menu, { key: "Escape" });
+  await until(() => expect(screen.queryByRole("menu")).toBeNull());
 
   await clickOpen();
-  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
+  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
   fireEvent.click(await screen.findByRole("menuitem", { name: en.exportEvidence }));
   await until(() => expect(core.calls).toContain('export_evidence {"path":null,"language":null,"workspace":1}'));
   await expectToasts([en["export.done"].replace("{path}", "/d/plan evidence.pdf")]);
@@ -589,7 +590,7 @@ test("an evidence export failure uses the existing export error toast", async ()
   core.evidenceError = "private diagnostic";
   await mount();
   await clickOpen();
-  fireEvent.click(screen.getByRole("button", { name: en["outputs.title"] }));
+  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
   fireEvent.click(await screen.findByRole("menuitem", { name: en.exportEvidence }));
   await expectToasts([en["export.failed"].replace("{error}", en["err.unknown"])]);
   expect(toasts().some((text) => text?.includes("plan evidence.pdf"))).toBe(false);
@@ -1046,6 +1047,11 @@ test("the side panels fold away behind their handles, resize, and the choice com
   fireEvent.keyDown(screen.getByRole("separator", { name: en["panels.resize.left"] }), { key: "ArrowRight" });
   expect((again as HTMLElement).style.getPropertyValue("--left-w")).toBe("276px");
   // An output in the column (the BOQ) keeps its own, wider width.
+  core.generated = {
+    items: [{ code: "A", description_en: "Wall", description_ar: "جدار", section: "Walls", trade: "Walls", unit: "m", quantity: 12, lines: [] }],
+    warnings: [],
+  };
+  await clickOpen();
   expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("440px");
   await openOutput(en["outputs.boq"]);
   await until(() => expect((again as HTMLElement).style.getPropertyValue("--side-w")).toBe("672px"));
@@ -1175,9 +1181,12 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
   core.hasBoq = true;
   await mount();
   await clickOpen();
-  await openOutput(en["outputs.conflicts"]);
-  await until(() => expect(screen.getByRole("region", { name: en["outputs.conflicts"] })).toBeTruthy());
-  const panel = within(screen.getByRole("region", { name: en["outputs.conflicts"] }));
+  // Empty outputs stay mounted but are no longer offered in the menu.
+  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).queryByText(en["outputs.conflicts"])).toBeNull();
+  fireEvent.keyDown(menu, { key: "Escape" });
+  const panel = within(document.querySelector<HTMLElement>(`.art[aria-label="${en["outputs.conflicts"]}"]`)!);
   expect(panel.getByText(en["conflicts.notCompared"])).toBeTruthy();
 
   await agentEvent({
@@ -1653,24 +1662,32 @@ test("audit: '/' typed in a text field is just a slash", async () => {
 });
 
 test("an output's buttons are in its head (one heading), and every action is still reachable", async () => {
+  core.measurements = [row("Wall", 12, "m", null)];
+  core.generated = {
+    items: [{ code: "A", description_en: "Wall", description_ar: "جدار", section: "Walls", trade: "Walls", unit: "m", quantity: 12, lines: [] }],
+    warnings: [],
+  };
   await mount();
   await clickOpen();
-  // Conflicts: Compare and Export conflicts in the head; Export waits for conflicts.
-  await openOutput(en["outputs.conflicts"]);
+  // Compare opens even an empty result; the Outputs menu hides it when there are no conflicts.
+  await typeLine("COMPARE");
+  await until(() => expect(screen.getByRole("region", { name: en["outputs.conflicts"] })).toBeTruthy());
   const conflicts = within(screen.getByRole("region", { name: en["outputs.conflicts"] }));
-  expect(conflicts.queryAllByRole("heading")).toHaveLength(0);
+  expect(conflicts.queryAllByRole("heading")).toHaveLength(1);
   expect((conflicts.getByRole("button", { name: en.exportConflicts }) as HTMLButtonElement).disabled).toBe(true);
   core.calls.length = 0;
   fireEvent.click(conflicts.getByRole("button", { name: en.compare }));
   await until(() => expect(core.calls.some((c) => c.startsWith("compare"))).toBe(true));
   // BOQ: Import BOQ in the head asks for the workbook.
   await openOutput(en["outputs.boq"]);
-  const boq = within(screen.getByRole("region", { name: en["outputs.boq"] }));
-  expect(boq.queryAllByRole("heading")).toHaveLength(0);
+  const boqRegion = screen.getByRole("region", { name: en["outputs.boq"] });
+  const boq = within(boqRegion);
+  // One heading in the head; the generated BOQ below keeps its own section title.
+  expect(within(boqRegion.querySelector<HTMLElement>(".art-head")!).queryAllByRole("heading")).toHaveLength(1);
   openDialog.mockClear();
   fireEvent.click(boq.getByRole("button", { name: en.importBoq }));
   await until(() => expect(openDialog).toHaveBeenCalled());
-  // Take-off: Export take-off waits for rows; the report: Refresh.
+  // Take-off: Export take-off is available for the measured rows; the report: Refresh.
   await openOutput(en["outputs.takeoff"]);
   expect(within(screen.getByRole("region", { name: en["outputs.takeoff"] })).getByRole("button", { name: en.exportTakeoff })).toBeTruthy();
   await openOutput(en["outputs.review"]);

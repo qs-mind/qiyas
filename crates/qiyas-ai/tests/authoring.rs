@@ -318,7 +318,14 @@ fn five_trades_are_defined_drawn_measured_scheduled_and_round_trip_as_data() {
         ] {
             let docs = read(&mut s, "commands", json!({"name":name})).unwrap();
             assert_eq!(docs["name"], name);
-            assert!(!docs["doc"].as_str().unwrap().is_empty(), "{docs}");
+            assert!(
+                !docs["doc"]
+                    .as_str()
+                    .or(docs["summary"].as_str())
+                    .unwrap()
+                    .is_empty(),
+                "{docs}"
+            );
         }
         let definitions = read(
             &mut s,

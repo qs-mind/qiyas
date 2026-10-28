@@ -1048,7 +1048,7 @@ mod tests {
             json!({"op":"type","args":{"line":"SHEET *Model_Space"}}),
             json!({"op":"view","args":{"sheet":"Model"}}),
             json!({"op":"undo_own"}),
-            json!({"op":"new_drawing","args":{"units":"m"}}),
+            json!({"op":"new_drawing","args":{"units":"m","name":"Test"}}),
             json!({"op":"open_drawing","args":{"path":"drawing.dxf"}}),
             json!({"op":"switch_drawing","args":{"id":1}}),
             json!({"op":"close_drawing"}),
@@ -1158,8 +1158,9 @@ mod tests {
         let ToolOutput::Json(again) = next.run(surface::READ, &call).unwrap() else {
             panic!("JSON")
         };
-        assert_eq!(again["known"], true);
-        assert_eq!(first["artifact"], again["artifact"]);
+        // Compact contracts are small and always come back whole, on a new connection too.
+        assert!(again["signature"].is_string());
+        assert_eq!(first["signature"], again["signature"]);
         let ToolOutput::Json(picture) = next
             .run(
                 surface::CAPTURE,

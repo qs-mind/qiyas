@@ -4,7 +4,7 @@ use super::*;
 
 /// Keep streamed items until completion. A completed response can omit any of them.
 #[derive(Default)]
-pub(super) struct Events {
+pub(in crate::chatgpt_plan) struct Events {
     pub(super) unsupported: Option<String>,
     pub(super) result: Option<TurnResult>,
     items: BTreeMap<usize, Value>,
@@ -12,13 +12,14 @@ pub(super) struct Events {
     announced: HashSet<String>,
     emitted: HashMap<(usize, usize), String>,
     tokens: Option<Tokens>,
+    pub(super) account_id: Option<String>,
     finalizing: bool,
     thinking: String,
     emitted_thinking: String,
 }
 
 impl Events {
-    pub(super) fn with_tokens(tokens: &Tokens) -> Self {
+    pub(in crate::chatgpt_plan) fn with_tokens(tokens: &Tokens) -> Self {
         Self {
             tokens: Some(tokens.clone()),
             ..Self::default()
@@ -150,7 +151,11 @@ impl Events {
         }
     }
 
-    pub(super) fn read(&mut self, value: Value, sink: Sink<'_>) -> Result<bool, AiError> {
+    pub(in crate::chatgpt_plan) fn read(
+        &mut self,
+        value: Value,
+        sink: Sink<'_>,
+    ) -> Result<bool, AiError> {
         match value["type"].as_str().unwrap_or("") {
             "response.output_item.added" | "response.output_item.done" => {
                 self.merge_item(&value, value["item"].clone(), false, sink)?;
@@ -356,7 +361,13 @@ impl Events {
                     .or_else(|| value.get("error"))
                     .unwrap_or(&value);
                 self.unsupported = detail["param"].as_str().map(str::to_owned);
-                return Err(failure(400, detail));
+                sink(error_diagnostic(
+                    "stream",
+                    detail,
+                    self.tokens.as_ref(),
+                    self.account_id.as_deref(),
+                ));
+                return Err(classify_failure(None, detail));
             }
             _ => {}
         }

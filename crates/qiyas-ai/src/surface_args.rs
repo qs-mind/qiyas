@@ -129,7 +129,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (READ, "commands") => (
             object(
-                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":40,"items":string},"search":nullable(&string),"category":nullable(&string),"offset":{"type":"integer","minimum":0}}),
+                json!({"name":nullable(&string),"names":{"type":"array","minItems":1,"maxItems":40,"items":string},"full":{"type":"boolean"},"search":nullable(&string),"category":nullable(&string),"offset":{"type":"integer","minimum":0}}),
                 &[],
             ),
             json!({"name":"draw.line"}),
@@ -198,10 +198,10 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (EXECUTE, "new_drawing") => (
             object(
-                json!({"units":{"type":"string","enum":["mm","cm","m"]}}),
-                &["units"],
+                json!({"name":{"type":"string","minLength":1},"units":{"type":"string","enum":["mm","cm","m"]}}),
+                &["name", "units"],
             ),
-            json!({"units":"m"}),
+            json!({"name":"Villa G+1 plans","units":"m"}),
         ),
         (EXECUTE, "open_drawing" | "import_boq") => (
             object(json!({"path":string}), &["path"]),

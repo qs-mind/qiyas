@@ -893,7 +893,7 @@ fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
     let mut info = call(
         &mut session,
         READ,
-        json!({"op":"commands","args":{"name":"plan"}}),
+        json!({"op":"commands","args":{"name":"plan","full":true}}),
     )
     .unwrap();
     assert_eq!(info["op"], "plan");
@@ -1883,7 +1883,7 @@ fn revision_kit_runs_through_generic_tools_and_typed_commands() {
 }
 
 #[test]
-fn kit_commands_return_the_complete_short_entry_without_rediscovery() {
+fn kit_commands_return_complete_inline_signatures_without_rediscovery() {
     let (_, mut session) = sample();
     let kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
     assert_eq!(kit["complete"], true);
@@ -1899,12 +1899,14 @@ fn kit_commands_return_the_complete_short_entry_without_rediscovery() {
             json!({"op":"commands","args":{"name":name}}),
         )
         .unwrap();
-        assert_eq!(result["in_takeoff_kit"], true);
+        assert!(result["signature"].as_str().unwrap().starts_with(name));
         assert!(result.get("schema").is_none());
-        assert!(result["entry"]["example"].is_object());
-        if !name.starts_with("project.") {
-            assert_eq!(result["entry"], kit["commands"][name]);
-        }
+        assert!(result["example"].is_object());
+        assert!(result.get("artifact").is_none());
+        assert_eq!(
+            result["example"],
+            qiyas_core::registry::registry().get(name).unwrap().examples[0]
+        );
     }
     let family = call(
         &mut session,
@@ -1912,11 +1914,12 @@ fn kit_commands_return_the_complete_short_entry_without_rediscovery() {
         json!({"op":"commands","args":{"name":"measurement"}}),
     )
     .unwrap();
-    assert_eq!(family["in_takeoff_kit"], true);
-    assert_eq!(
-        family["entry"]["commands"]["measurement.set_mappings"],
-        kit["commands"]["measurement.set_mappings"]
-    );
+    assert!(family["signature"]
+        .as_str()
+        .unwrap()
+        .contains("set_mappings"));
+    assert!(family["example"].is_object());
+    assert!(family.get("artifact").is_none());
     assert!(matches!(
         qiyas_ai::surface::route(
             READ,
@@ -2680,9 +2683,11 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
             );
             assert_eq!(notice.contains("استُخدمت"), arabic);
             assert!(notice.contains("not a reason to stop") || notice.contains("ليس سببًا للتوقف"));
-            // The original schema remains, after far more than three results.
+            // The original contract remains, after far more than three results.
             let contract = last.messages.iter().flat_map(|m| &m.content).find(|b| matches!(b,qiyas_ai::ContentBlock::ToolResult{tool_use_id,..} if tool_use_id == "call_0")).unwrap();
-            assert!(serde_json::to_string(contract).unwrap().contains("schema"));
+            assert!(serde_json::to_string(contract)
+                .unwrap()
+                .contains("signature"));
             assert!(!serde_json::to_string(contract)
                 .unwrap()
                 .contains("tool result summary"));
@@ -2896,8 +2901,16 @@ fn goal_c_operation_discovery_and_scoped_text_queries() {
             "qiyas_capture.picture",
         ] {
             let v = call(&mut s, READ, json!({"op":"commands","args":{"name":name}})).unwrap();
-            assert!(v["schema"].is_object(), "{name}: {v}");
+            assert!(v["signature"].is_string(), "{name}: {v}");
+            assert!(v.get("schema").is_none(), "{name}: {v}");
             assert!(v["example"].is_object(), "{name}: {v}");
+            let full = call(
+                &mut s,
+                READ,
+                json!({"op":"commands","args":{"name":name,"full":true}}),
+            )
+            .unwrap();
+            assert!(full["schema"].is_object(), "{name}: {full}");
         }
     }
 }

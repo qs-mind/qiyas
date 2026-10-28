@@ -144,7 +144,7 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
       </div>
       {account?.notice && <p role="status">{t("ai.error." + account.notice)}</p>}
       {account?.paused && <>
-        <p role="alert">{t("ai.error.chatgpt_limit")}</p>
+        <p role="alert">{t("settings.chatgpt_paused")}</p>
         <button type="button" disabled={busy} onClick={() => void act(async () => {
           setAccount(await chatgptResumePlan());
         })}>{t("settings.chatgptResume")}</button>

@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Instant;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 
 use super::{PlanModel, Tokens};
@@ -28,6 +30,9 @@ pub(super) async fn stream(
     {
         body.as_object_mut().unwrap().remove("reasoning");
     }
+    // Decode identity once for this turn; all retries keep the same routing headers.
+    let account_id = account_id(&tokens.id_token);
+    let headers = request_headers(&req.cache_key, account_id.as_deref())?;
     let client = http_client();
     let mut retry = RetryBackoff::default();
     let started = Instant::now();
@@ -47,6 +52,7 @@ pub(super) async fn stream(
         let response = client
             .post(endpoint)
             .bearer_auth(&tokens.access_token)
+            .headers(headers.clone())
             .json(&body)
             .send()
             .await;
@@ -61,13 +67,25 @@ pub(super) async fn stream(
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse().ok());
-                // Provider detail and message fields are diagnostic only and never logged.
-                let detail = response.json::<Value>().await.unwrap_or(Value::Null);
-                unsupported = detail["error"]["param"].as_str().map(str::to_owned);
-                Err(failure(status, &detail["error"]))
+                let body = response.text().await.unwrap_or_default();
+                let value = serde_json::from_str::<Value>(&body)
+                    .unwrap_or_else(|_| json!({"message": body}));
+                let detail = value
+                    .get("error")
+                    .filter(|v| v.is_object())
+                    .unwrap_or(&value);
+                unsupported = detail["param"].as_str().map(str::to_owned);
+                sink(error_diagnostic(
+                    &status.to_string(),
+                    detail,
+                    Some(tokens),
+                    account_id.as_deref(),
+                ));
+                Err(failure(status, detail))
             }
             Ok(response) => {
                 let mut events = Events::with_tokens(tokens);
+                events.account_id = account_id.clone();
                 let read = read_events(response, |event| {
                     let value = serde_json::from_str(&tokens.scrub(&event.data))
                         .map_err(|_| AiError::Subscription("chatgpt_incomplete"))?;
@@ -133,17 +151,38 @@ pub(super) async fn stream(
 }
 
 pub(super) fn failure(status: u16, detail: &Value) -> AiError {
-    let code = match detail["code"]
+    classify_failure(Some(status), detail)
+}
+
+fn classify_failure(status: Option<u16>, detail: &Value) -> AiError {
+    // A specific code wins over a broad type (e.g. context length vs invalid request).
+    let code = detail["code"]
         .as_str()
-        .or_else(|| detail["type"].as_str())
-        .unwrap_or("")
-    {
+        .and_then(known_failure)
+        .or_else(|| detail["type"].as_str().and_then(known_failure))
+        .unwrap_or(match status {
+            Some(401) => "chatgpt_access",
+            Some(403) => "chatgpt_policy",
+            Some(429) => "chatgpt_limit",
+            Some(500..=599) | None => "chatgpt_temporary",
+            _ => "chatgpt_failed",
+        });
+    AiError::Subscription(code)
+}
+
+fn known_failure(code: &str) -> Option<&'static str> {
+    Some(match code {
         "subscription_sharing_user_not_eligible" => "chatgpt_ineligible",
         "subscription_sharing_usage_limit_exceeded" | "rate_limit_exceeded" => "chatgpt_limit",
         "subscription_sharing_usage_unavailable"
         | "subscription_sharing_user_unavailable"
         | "server_error"
-        | "overloaded_error" => "chatgpt_temporary",
+        | "internal_error"
+        | "overloaded"
+        | "overloaded_error"
+        | "timeout" => "chatgpt_temporary",
+        "context_length_exceeded" => "context_too_long",
+        "invalid_request_error" | "invalid_prompt" => "chatgpt_failed",
         "subscription_sharing_unsupported_capability" => "chatgpt_capability",
         "subscription_sharing_route_not_supported"
         | "chatpass_v2_scope_not_authorized"
@@ -151,15 +190,69 @@ pub(super) fn failure(status: u16, detail: &Value) -> AiError {
         "subscription_sharing_invalid_user" | "invalid_api_key" | "authentication_error" => {
             "chatgpt_access"
         }
-        _ => match status {
-            401 => "chatgpt_access",
-            403 => "chatgpt_policy",
-            429 => "chatgpt_limit",
-            500..=599 => "chatgpt_temporary",
-            _ => "chatgpt_failed",
-        },
-    };
-    AiError::Subscription(code)
+        _ => return None,
+    })
+}
+
+pub(super) fn account_id(id_token: &str) -> Option<String> {
+    // OAuth has already validated the token. This only reads its optional routing claim.
+    let payload = id_token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    claims["https://api.openai.com/auth"]["chatgpt_account_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+pub(super) fn request_headers(
+    cache_key: &str,
+    account_id: Option<&str>,
+) -> Result<HeaderMap, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "openai-beta",
+        HeaderValue::from_static("responses=experimental"),
+    );
+    headers.insert("accept", HeaderValue::from_static("text/event-stream"));
+    headers.insert("originator", HeaderValue::from_static("qiyas"));
+    if !cache_key.is_empty() {
+        let session = HeaderValue::from_str(cache_key)
+            .map_err(|_| AiError::Subscription("chatgpt_failed"))?;
+        headers.insert("session_id", session.clone());
+        headers.insert("conversation_id", session);
+    }
+    if let Some(account_id) = account_id {
+        let mut account = HeaderValue::from_str(account_id)
+            .map_err(|_| AiError::Subscription("chatgpt_failed"))?;
+        account.set_sensitive(true);
+        headers.insert("chatgpt-account-id", account);
+    }
+    Ok(headers)
+}
+
+pub(super) fn error_diagnostic(
+    status: &str,
+    detail: &Value,
+    tokens: Option<&Tokens>,
+    account_id: Option<&str>,
+) -> StreamEvent {
+    let mut text = format!(
+        "ChatGPT {status}: code={}; type={}; message={}",
+        detail["code"].as_str().unwrap_or(""),
+        detail["type"].as_str().unwrap_or(""),
+        detail["message"].as_str().unwrap_or(""),
+    );
+    if let Some(tokens) = tokens {
+        text = tokens.scrub(&text);
+    }
+    if let Some(account_id) = account_id {
+        text = crate::provider::scrub(&text, account_id);
+    }
+    StreamEvent::Diagnostic {
+        kind: "PROVIDER ERROR".into(),
+        text: text.chars().take(500).collect(),
+    }
 }
 
 /// Remove only the specific optional feature identified by the provider. Required
@@ -363,7 +456,7 @@ fn request(req: &TurnRequest) -> Result<Value, AiError> {
 }
 
 mod streamed;
-use streamed::Events;
+pub(super) use streamed::Events;
 
 #[cfg(test)]
 mod tests {

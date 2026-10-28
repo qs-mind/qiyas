@@ -146,14 +146,28 @@ fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
         let whole: Value = serde_json::from_str(&text)
             .map_err(|_| ToolError::BadInput("The evidence could not be read.".into()))?;
         let Some(part) = whole.pointer(pointer) else {
-            let keys: Vec<_> = match &whole {
-                Value::Object(map) => map.keys().take(40).cloned().collect(),
-                Value::Array(items) => vec![format!("0..{}", items.len())],
-                _ => Vec::new(),
+            let keys = |value: &Value| -> String {
+                match value {
+                    Value::Object(map) => {
+                        map.keys().take(40).cloned().collect::<Vec<_>>().join(", ")
+                    }
+                    Value::Array(items) => format!("indices 0..{} (exclusive)", items.len()),
+                    _ => "(no child keys)".into(),
+                }
             };
+            let mut deepest = pointer;
+            while whole.pointer(deepest).is_none() {
+                deepest = deepest.rsplit_once('/').map_or("", |(parent, _)| parent);
+            }
             return Err(ToolError::BadInput(format!(
-                "The evidence has nothing at {pointer}. Top level: {}",
-                keys.join(", ")
+                "The evidence has nothing at {pointer}. Top level: {}. Keys at {}: {}",
+                keys(&whole),
+                if deepest.is_empty() {
+                    "(root)"
+                } else {
+                    deepest
+                },
+                keys(whole.pointer(deepest).expect("existing pointer"))
             )));
         };
         let part = part.to_string();
@@ -221,6 +235,28 @@ fn page(text: &str, offset: u64, id: &str, revision: Value) -> Result<Value, Too
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_pointers_show_the_deepest_existing_keys_including_escaped_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = save_in(
+            dir.path(),
+            &json!({"commands":[{"name":"text","examples":[]}],
+            "a/b":{"~key":{"present":1}}}),
+        )
+        .unwrap();
+        for (pointer, expected) in [
+            ("/commands/0/example", "Keys at /commands/0: examples, name"),
+            ("/commands/99/example", "Keys at /commands: indices 0..1"),
+            ("/a~1b/~0key/missing/child", "Keys at /a~1b/~0key: present"),
+        ] {
+            let error = read_in(dir.path(), &json!({"id":id,"pointer":pointer}))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("Top level: a/b, commands"), "{error}");
+            assert!(error.contains(expected), "{error}");
+        }
+    }
 
     #[test]
     fn pages_reassemble_exact_quantities_and_arabic_and_reject_paths() {

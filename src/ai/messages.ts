@@ -166,6 +166,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
           ...card,
           status: action.is_error ? "error" : "done",
           summary: action.summary,
+          activity: action.activity ?? card.activity,
           count: action.count,
           handles: action.handles,
           ui: action.ui,
@@ -248,7 +249,7 @@ export function recoveringCard(items: Item[], index: number, busy: boolean): boo
       && item.name === failed.name && item.label === failed.label);
 }
 
-/** Runs of identical finished reads ("Read the drawing." eight times in a row) are one line with a
+/** Runs of identical finished reads (same object, count and scope) are one line with a
  *  count (founder's note 18, 26 October 2026). For the first card of each run, how many cards it
  *  stands for, and the indices of the others, left out. Only quiet reads join: a card with
  *  something to show or undo, a running or failed one, or any edit stays a line of its own. Items
@@ -262,7 +263,7 @@ export function readRuns(items: Item[]): { counts: Map<number, number>; hidden: 
     const quiet =
       item.kind === "thinking" ||
       item.kind === "cache_usage" ||
-      (item.kind === "tool" && item.name === "qiyas_execute" && item.label === "plan" && item.status !== "error");
+      (item.kind === "tool" && item.name === "qiyas_execute" && item.label === "plan" && !item.activity?.detail && item.status !== "error");
     if (quiet) return;
     if (item.kind !== "tool") {
       head = -1;
@@ -274,7 +275,12 @@ export function readRuns(items: Item[]): { counts: Map<number, number>; hidden: 
       head = -1;
       return;
     }
-    const mine = `${effect}|${item.activity?.category ?? "drawing"}`;
+    const detail = item.activity?.detail;
+    const canonical = (value: unknown): string => JSON.stringify(value, (_key, v: unknown) =>
+      v && typeof v === "object" && !Array.isArray(v)
+        ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v) ?? "";
+    const mine = detail ? `${effect}|${canonical(detail)}`
+      : `${effect}|${item.activity?.category ?? "drawing"}|${item.count ?? ""}`;
     if (head >= 0 && mine === key) {
       counts.set(head, (counts.get(head) ?? 1) + 1);
       hidden.add(i);

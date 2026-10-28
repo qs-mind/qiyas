@@ -1754,7 +1754,15 @@ export type PlanPhase = {
 };
 
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
-export type Activity = { category: string; effect: string };
+export type Activity = {
+  category: string;
+  effect: string;
+  detail?: {
+    key: string;
+    params: Record<string, string | number>;
+    parts?: NonNullable<Activity["detail"]>[];
+  } | null;
+};
 
 /** One question Mizan asks (`qiyas_ai::surface::Question`): 2 to 4 options, at most one
  *  recommended, and a free-text answer always allowed. All of a turn's questions come in one
@@ -1776,6 +1784,7 @@ export type AgentEvent =
   | {
       type: "tool_result";
       id: string;
+      activity?: Activity | null;
       summary: string;
       count?: number | null;
       handles: number[];

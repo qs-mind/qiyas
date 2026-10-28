@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
-import type { AgentEvent, TranscriptEntry } from "../api";
+import type { Activity, AgentEvent, TranscriptEntry } from "../api";
+import { translate } from "../i18n";
+import { activityLine } from "./ToolCard";
 import { EMPTY, readRuns, reduce, startNewOffered, undoableCard, type Action, type Item, type ToolCardItem, type Transcript } from "./messages";
 
 const run = (actions: Action[], from: Transcript = EMPTY) => actions.reduce(reduce, from);
@@ -321,4 +323,72 @@ test("a run of identical finished reads is one line with a count; nothing else j
 test("an assistant message ends a run, so reads before and after it stay two lines", () => {
   const items: Item[] = [readCard("a"), readCard("b"), { kind: "assistant", text: "Done so far", finished: true }, readCard("c"), readCard("d")];
   expect([...readRuns(items).counts]).toEqual([[0, 2], [3, 2]]);
+});
+
+const line = (detail: NonNullable<Activity["detail"]>, status: "running" | "done" = "done", lang: "en" | "ar" = "en") =>
+  activityLine(detail, status, (key, params) => translate(lang, key, params));
+
+test("draw batches name the kinds, counts and shared layer", () => {
+  const detail = { key: "activity.line.batch", params: {}, parts: [
+    { key: "activity.line.draw", params: { what: "line", n: 12, layer: "A-WALL" } },
+    { key: "activity.line.draw", params: { what: "arc", n: 4, layer: "A-WALL" } },
+  ] };
+  expect(line(detail)).toBe("Drew 12 lines and 4 arcs on A-WALL");
+  expect(line(detail, "running")).toBe("Drawing 12 lines and 4 arcs on A-WALL…");
+  expect(line({ ...detail, params: { more: 5 } })).toBe("Drew 12 lines and 4 arcs on A-WALL and 5 more steps");
+  expect(line({ ...detail, parts: [detail.parts[0], { ...detail.parts[1], params: { ...detail.parts[1].params, layer: "A-DOOR" } }] }))
+    .toBe("Drew 12 lines on A-WALL and 4 arcs on A-DOOR");
+});
+
+test("sheet, records, lookup and export lines name their objects", () => {
+  expect(line({ key: "activity.line.make", params: { what: "sheet", name: "A-101 Ground floor", paper: "A1", scale: "1:100" } }))
+    .toBe('Made sheet "A-101 Ground floor" (A1, 1:100)');
+  expect(line({ key: "activity.line.read", params: { what: "table", n: 6, layer: "A-TABLE", sheet: "Ground floor" } }))
+    .toBe('Read 6 tables on A-TABLE on sheet "Ground floor"');
+  expect(line({ key: "activity.line.lookup", params: { what: "command", name: "make_sheet, table" } }))
+    .toBe("Looked up how to use make_sheet, table");
+  expect(line({ key: "activity.line.export", params: { what: "file", file: "boq.xlsx" } }))
+    .toBe("Exported boq.xlsx");
+  expect(line({ key: "activity.line.add", params: { what: "table", name: "Door schedule", rows: 6 } }))
+    .toBe('Added the table "Door schedule" (6 rows)');
+  expect(line({ key: "activity.line.move", params: { what: "text", n: 1 } })).toBe("Moved 1 text");
+  expect(line({ key: "activity.line.check", params: { what: "room_size", notes: 2 } })).toBe("Checked room sizes: 2 notes");
+  expect(line({ key: "activity.line.capture", params: { what: "view", name: "the ground floor" } })).toBe("Took a picture of the ground floor");
+});
+
+test("Arabic activities use Arabic word order and keep names and scale intact", () => {
+  const readable = (text: string) => text.replace(/[\u2068\u2069]/g, "");
+  expect(readable(line({ key: "activity.line.draw", params: { what: "wall", n: 4, layer: "A-WALL" } }, "done", "ar")))
+    .toBe("رسم 4 حوائط على A-WALL");
+  expect(readable(line({ key: "activity.line.make", params: { what: "sheet", name: "A-101 Ground floor", paper: "A1", scale: "1:100" } }, "done", "ar")))
+    .toBe("عمل اللوحة «A-101 Ground floor» (A1، 1:100)");
+  expect(line({ key: "activity.line.read", params: { what: "layer" } }, "done", "ar")).toBe("قرأ طبقات الرسم");
+});
+
+test("result details replace running details and survive restoring a conversation", () => {
+  const running: Activity = { category: "records", effect: "read", detail: { key: "activity.line.read", params: { what: "wall", layer: "A-WALL" } } };
+  const finished: Activity = { ...running, detail: { key: "activity.line.read", params: { what: "wall", layer: "A-WALL", n: 37 } } };
+  const started = { ...call("a", "records", false), activity: running };
+  const ended = result("a", { activity: finished, count: 37, handles: [] });
+  const transcript = run([started, ended]);
+  expect(transcript.items[0]).toMatchObject({ activity: finished, status: "done", count: 37 });
+  const entries: TranscriptEntry[] = [{ type: "event", event: started }, { type: "event", event: ended }];
+  expect(run([{ type: "restore", entries }]).items[0]).toMatchObject({ activity: finished, status: "done" });
+  expect(run([started, result("a")]).items[0]).toMatchObject({ activity: running });
+  expect(run([call("old"), result("old")]).items[0]).toMatchObject({ status: "done", activity: undefined });
+});
+
+test("only identical detail lines merge, regardless of parameter insertion order", () => {
+  const activity = (n: number, layer: string): Activity => ({ category: "drawing", effect: "read", detail: { key: "activity.line.read", params: { what: "wall", n, layer } } });
+  const items = [
+    readCard("a", { activity: activity(37, "A-WALL") }),
+    readCard("b", { activity: { category: "drawing", effect: "read", detail: { key: "activity.line.read", params: { layer: "A-WALL", n: 37, what: "wall" } } } }),
+    readCard("c", { activity: activity(38, "A-WALL") }),
+    readCard("d", { activity: activity(38, "A-DOOR") }),
+    readCard("e", { activity: { category: "drawing", effect: "read", detail: { key: "activity.line.lookup", params: { what: "command", name: "table" } } } }),
+    readCard("f", { activity: { category: "drawing", effect: "read", detail: { key: "activity.line.lookup", params: { what: "command", name: "make_sheet" } } } }),
+    readCard("legacy"),
+  ];
+  expect([...readRuns(items).counts]).toEqual([[0, 2]]);
+  expect([...readRuns(items).hidden]).toEqual([1]);
 });
