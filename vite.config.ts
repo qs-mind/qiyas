@@ -1,8 +1,9 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { liveReload } from "./scripts/live-plugin";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), liveReload()],
   clearScreen: false,
   server: {
     port: 1420,
