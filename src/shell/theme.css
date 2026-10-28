@@ -2820,11 +2820,14 @@ span.grid-sort {
   overflow-wrap: anywhere;
   user-select: text;
 }
+/* The empty chat keeps its few suggestions low, just above the box, as plain lines. */
 .assistant-empty {
+  margin-top: auto;
   color: var(--muted);
+  font-size: 12.5px;
 }
 .assistant-empty p {
-  margin: 8px 0;
+  margin: 0 0 4px;
 }
 .assistant-empty ul {
   list-style: none;
@@ -2832,15 +2835,19 @@ span.grid-sort {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
-.assistant-empty button {
+.assistant-empty ul button {
   width: 100%;
   text-align: start;
   color: var(--fg);
-  background: var(--bg);
-  border-color: var(--rule);
-  padding: 6px 10px;
+  background: none;
+  border: 0;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+.assistant-empty ul button:hover,
+.assistant-empty ul button:focus-visible {
+  color: var(--accent);
 }
 .msg {
   overflow-wrap: anywhere;
@@ -4140,12 +4147,6 @@ code, kbd, .chip { unicode-bidi: isolate; }
 }
 .connect-state {
   font-weight: 500;
-}
-.assistant-empty .connect-link {
-  margin-block: 2px 12px;
-  padding-inline: 0;
-  color: var(--accent);
-  text-align: start;
 }
 .settings .snippet pre {
   margin: 0;

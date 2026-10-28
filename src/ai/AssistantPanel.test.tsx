@@ -1,6 +1,6 @@
 import { SupportLog } from "../shell/SupportLog";
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AssistantPanel } from "./AssistantPanel";
 import { LanguageProvider } from "../i18n";
@@ -59,10 +59,11 @@ test("empty state offers three examples; one fills the box", () => {
   setup();
   const examples = screen.getAllByRole("listitem");
   expect(examples).toHaveLength(3);
-  fireEvent.click(screen.getByText("Count the doors on this sheet"));
-  expect((screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement).value).toBe(
-    "Count the doors on this sheet",
-  );
+  const first = examples[0].textContent!;
+  fireEvent.click(within(examples[0]).getByRole("button"));
+  expect((screen.getByLabelText("Ask Mizan, or type / for commands") as HTMLTextAreaElement).value).toBe(first);
+  // No "connect an AI app" line in the empty chat; connecting lives in the header and settings.
+  expect(screen.queryByText(/connect an AI app/)).toBeNull();
   expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
 });
 

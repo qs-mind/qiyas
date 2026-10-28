@@ -50,7 +50,11 @@ type Props = {
   read?(file: File): Promise<Picture>;
 };
 
-const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3"];
+const EXAMPLES = ["ai.example1", "ai.example2", "ai.example3", "ai.example4", "ai.example5", "ai.example6", "ai.example7", "ai.example8"];
+/** Three different examples each time the empty chat shows. */
+function pickExamples(): string[] {
+  return [...EXAMPLES].sort(() => Math.random() - 0.5).slice(0, 3);
+}
 
 function connectionLost(error: string): boolean {
   return providerFailure(error, "en")?.canContinue ?? false;
@@ -78,6 +82,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   const chatLang = contentLanguage([...assistant.transcript.items].reverse().find((item) => item.kind === "user")?.text ?? "", lang);
   const { transcript, busy, error } = assistant;
   const [attaching, setAttaching] = useState(false);
+  const [examples] = useState(pickExamples);
   const unavailable = busy || !!history?.pending || attaching;
   type Draft = { text: string; pictures: Picture[]; documents: PdfAttachment[] };
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -412,9 +417,8 @@ export const AssistantPanel = memo(function AssistantPanel({
                 onClick={() => { void history.resume(history.latest!); }}>
                 {t("ai.continue", { title: history.latest.title })}
               </button>}
-              {onConnect && <button type="button" className="connect-link" onClick={onConnect}>{t("ai.connectLink")}</button>}
               <ul>
-                {EXAMPLES.map((key) => (
+                {examples.map((key) => (
                   <li key={key}>
                     <button
                       type="button"
