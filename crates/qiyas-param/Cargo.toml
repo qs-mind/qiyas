@@ -8,6 +8,6 @@ rust-version.workspace = true
 [dependencies]
 # Dense Cholesky for the solver's damped Gauss-Newton steps (Apache-2.0, as are simba and approx
 # it brings; LICENSES/nalgebra-Apache-2.0.txt).
-nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 serde.workspace = true
 thiserror.workspace = true
