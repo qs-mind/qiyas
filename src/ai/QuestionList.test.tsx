@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { Question } from "../api";
 import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
-import { QuestionList } from "./QuestionList";
+import { QuestionList, answerText } from "./QuestionList";
 
 afterEach(cleanup);
 
@@ -26,15 +26,17 @@ test("one question is a numbered list, the recommended option in the accent with
   // No cards: nothing here draws its own box.
   expect(document.querySelectorAll(".qcard, .card")).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: /Saudi Arabia/ }));
-  expect(onPick).toHaveBeenCalledWith("Saudi Arabia");
+  expect(onPick).toHaveBeenCalledWith("q1", "Saudi Arabia");
 });
 
-test("several questions are numbered and their options lettered; an option answers with its question's number", () => {
+test("several questions are numbered and their options lettered; the chosen one is marked", () => {
   const onPick = vi.fn();
-  render(<LanguageProvider><QuestionList questions={two} onPick={onPick} /></LanguageProvider>);
+  render(<LanguageProvider><QuestionList questions={two} picked={{ q2: "High-end" }} onPick={onPick} /></LanguageProvider>);
   expect(screen.getByText(/^2\. /).textContent).toContain("Which finish?");
-  fireEvent.click(screen.getByRole("button", { name: /High-end/ }));
-  expect(onPick).toHaveBeenCalledWith("2. High-end");
+  expect(screen.getByRole("button", { name: /High-end/ }).className).toContain("picked");
+  expect(screen.getByRole("button", { name: /High-end/ }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
+  expect(onPick).toHaveBeenCalledWith("q2", "Standard");
   expect(screen.getAllByRole("listitem")[0].textContent).toContain("a");
 });
 
@@ -59,4 +61,13 @@ test("Arabic questions read right to left in Arabic, whatever the window's langu
   expect(list.textContent).toContain("· موصى به");
   // The words stay as written; the complete Arabic face (theme.css) keeps them on the line.
   expect(list.textContent).toContain("مستطيلاً ومدخلاً");
+});
+
+test("the answer message: chosen options numbered, typed words for the one question left open, else after them", () => {
+  expect(answerText(one, { q1: "Egypt" }, "")).toBe("Egypt");
+  expect(answerText(one, {}, "Oman")).toBe("Oman");
+  expect(answerText(two, { q1: "Egypt", q2: "Standard" }, "")).toBe("1. Egypt\n2. Standard");
+  expect(answerText(two, { q1: "Egypt" }, "Marble floors")).toBe("1. Egypt\n2. Marble floors");
+  const three = [...two, { id: "q3", question: "Storeys?", allow_other: true, options: [{ label: "One" }, { label: "Two" }] }];
+  expect(answerText(three, { q2: "Standard" }, "Ask me later")).toBe("2. Standard\nAsk me later");
 });

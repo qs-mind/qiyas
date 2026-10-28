@@ -3393,8 +3393,10 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   a BOQ then compares (`useTakeoff.importAndCompare`), `connect` opens "Connect an AI app", `new`
   starts a chat.
 - Questions (`ai/QuestionList.tsx`): a plain numbered list in Mizan's message, no boxes, the
-  recommended option in the accent with "· recommended"; clicking an option puts it in the box, "Other"
-  is the box. Runs of identical finished reads are one line with a count (`messages.ts readRuns`).
+  recommended option in the accent with "· recommended", in the questions' own language and direction.
+  Clicking an option marks it on the question (a filled disc; again takes it off), never the box; once
+  every question has one the answers go at once. Words typed in the box and sent answer the one
+  question left open, else follow the choices (`answerText`; founder, 28 Oct 2026). "Other" is the box. Runs of identical finished reads are one line with a count (`messages.ts readRuns`).
 - File tabs: a dot before the name while Mizan works (animated, still under reduced motion, no
   words), a dot after it while unsaved. Ribbon: double-click a tab, the arrow at the end of the row or
   Ctrl+F1 collapses it (`qiyas.ribbon.collapsed`); a tab clicked while collapsed shows its panel over

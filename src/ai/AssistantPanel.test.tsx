@@ -577,10 +577,47 @@ test("running activities use the present and plan updates name the completed ste
   expect(screen.getByText("Updated the plan: 3 of 7 steps done")).toBeTruthy();
 });
 
-test("choosing an option of a question puts it in the box without sending, and the question is a record after the reply", () => {
+test("an option is chosen on the question itself, not in the box, and one question's choice sends at once", async () => {
   const question = { kind: "question" as const, questions: [{ id: "q", question: "Which country?", allow_other: true, options: [{ label: "Egypt", recommended: true }, { label: "UAE" }] }] };
   const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, question] });
   fireEvent.click(screen.getByRole("button", { name: /UAE/ }));
-  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("UAE");
+  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("UAE"));
+});
+
+const three = { kind: "question" as const, questions: ["q1", "q2", "q3"].map((id, n) => ({
+  id, question: `Question ${n + 1}?`, allow_other: true, options: [{ label: `Yes ${n + 1}` }, { label: `No ${n + 1}` }],
+})) };
+
+test("several questions: choices are marked and go by themselves once every question has one", async () => {
+  const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, three] });
+  fireEvent.click(screen.getByRole("button", { name: /Yes 1/ }));
+  fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
+  expect(screen.getByRole("button", { name: /Yes 1/ }).getAttribute("aria-pressed")).toBe("true");
+  expect(document.querySelectorAll(".qopt.picked")).toHaveLength(2);
   expect(assistant.send).not.toHaveBeenCalled();
+  // The same option again takes it off; another one replaces it.
+  fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
+  expect(document.querySelectorAll(".qopt.picked")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: /Yes 2/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Yes 3/ }));
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("1. Yes 1\n2. Yes 2\n3. Yes 3"));
+});
+
+test("several questions: what is typed in the box answers the one left open, sent with Enter", async () => {
+  const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, three] });
+  fireEvent.click(screen.getByRole("button", { name: /Yes 1/ }));
+  fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
+  const box = screen.getByRole("textbox");
+  fireEvent.change(box, { target: { value: "The street is on the north" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("1. Yes 1\n2. No 2\n3. The street is on the north"));
+});
+
+
+test("an alef carrying tanween is written with the tanween first in the box, so the word stays on the line", () => {
+  setup();
+  const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "مستطيلاً ومدخلاً" } });
+  expect(box.value).toBe("مستطيلًا ومدخلًا");
 });

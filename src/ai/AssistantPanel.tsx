@@ -15,7 +15,7 @@ import { PackCheckCard } from "./PackCheckCard";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
 import { readRuns, recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
 import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
-import { QuestionList } from "./QuestionList";
+import { QuestionList, answerText } from "./QuestionList";
 import { ToolCard } from "./ToolCard";
 import { Glyph } from "../shell/glyphs";
 import type { OutputId } from "../shell/outputs";
@@ -87,17 +87,23 @@ export const AssistantPanel = memo(function AssistantPanel({
   const [attaching, setAttaching] = useState(false);
   const [examples] = useState(pickExamples);
   const unavailable = busy || !!history?.pending || attaching;
-  type Draft = { text: string; pictures: Picture[]; documents: PdfAttachment[] };
+  /** `picks`: the options chosen on Mizan's open questions, by question id. */
+  type Draft = { text: string; pictures: Picture[]; documents: PdfAttachment[]; picks?: Record<string, string> };
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const key = String(assistant.workspace ?? "lobby");
   const current = drafts[key] ?? { text: "", pictures: [], documents: [] };
   const draft = current.text;
   const pictures = current.pictures;
   const documents = current.documents;
+  const picks = current.picks ?? {};
   function editDraft(change: (before: Draft) => Draft) {
     setDrafts(all => ({ ...all, [key]: change(all[key] ?? { text: "", pictures: [], documents: [] }) }));
   }
-  const setDraft = (text: string) => editDraft(before => ({ ...before, text }));
+  const setDraft = (text: string) => editDraft(before => ({ ...before, text: boxArabic(text) }));
+  /** In the box an alef carrying tanween ("مستطيلاً") is written with the tanween first ("مستطيلًا"),
+   *  the same word: WebKitGTK raises the first spelling above the line in a text box whatever the
+   *  font (in the chat the complete Arabic face is enough). */
+  function boxArabic(text: string) { return text.replace(/\u0627\u064B/g, "\u064B\u0627"); }
   const setPictures = (next: Picture[] | ((old: Picture[]) => Picture[])) =>
     editDraft(before => ({ ...before, pictures: typeof next === "function" ? next(before.pictures) : next }));
   const setDocuments = (next: PdfAttachment[] | ((old: PdfAttachment[]) => PdfAttachment[])) =>
@@ -163,9 +169,28 @@ export const AssistantPanel = memo(function AssistantPanel({
   // where they are and a button offers the way back.
   const thread = useStickToBottom([transcript, busy]);
 
-  /** Sends the box (or `prompt`, a slash command's words in its place) with its pictures and files. */
+  /** Mizan's questions still waiting for an answer: the last ones, when nothing was sent after them. */
+  let lastQuestion = transcript.items.length - 1;
+  while (lastQuestion >= 0 && transcript.items[lastQuestion].kind !== "question") lastQuestion--;
+  const openItem = lastQuestion >= 0 && !transcript.items.slice(lastQuestion + 1).some((next) => next.kind === "user")
+    ? transcript.items[lastQuestion] : undefined;
+  const openQuestions = openItem?.kind === "question" ? openItem.questions : [];
+  const answering = openQuestions.length > 0 && Object.keys(picks).length > 0;
+
+  /** Chooses an option (the same again takes it off); when every question has one, the answers go. */
+  function pick(questionId: string, label: string) {
+    const next = { ...picks };
+    if (next[questionId] === label) delete next[questionId];
+    else next[questionId] = label;
+    editDraft(before => ({ ...before, picks: next }));
+    if (openQuestions.every((q) => next[q.id])) void submit(answerText(openQuestions, next, draft));
+  }
+
+  /** Sends the box (or `prompt`, a slash command's words in its place) with its pictures and files.
+   *  With options chosen on open questions, the box's words go with them (`answerText`). */
   async function submit(prompt?: string) {
-    const text = [(prompt ?? draft).trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
+    const typed = prompt ?? (answering ? answerText(openQuestions, picks, draft) : draft);
+    const text = [typed.trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
     if ((!text && pictures.length === 0) || unavailable) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
@@ -178,9 +203,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           })
         : await assistant.send(text);
     if (sent) {
-      setDraft("");
-      setPictures([]);
-      setDocuments([]);
+      editDraft(() => ({ text: "", pictures: [], documents: [] }));
       setPictureError(null);
     }
   }
@@ -272,16 +295,14 @@ export const AssistantPanel = memo(function AssistantPanel({
             ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
           onChange={() => box.current?.focus()} />;
       case "question":
-        // Plain numbered list in Mizan's message (design B); the answer is typed, or an option
-        // is put in the box. Once the user has replied it is only a record.
+        // Plain numbered list in Mizan's message (design B): options are chosen on it, the box
+        // answers the rest. Once the user has replied it is only a record.
         return (
           <QuestionList
             key={i}
             questions={item.questions}
-            onPick={unavailable || transcript.items.slice(i + 1).some((next) => next.kind === "user") ? undefined : (text) => {
-              setDraft(draft.trim() ? `${draft.trim()}\n${text}` : text);
-              box.current?.focus();
-            }}
+            picked={item === openItem ? picks : undefined}
+            onPick={unavailable || item !== openItem ? undefined : pick}
           />
         );
       case "user":
@@ -672,7 +693,7 @@ export const AssistantPanel = memo(function AssistantPanel({
                 <Glyph name="stop" />
               </button>
             ) : (
-              <button type="submit" className="send" aria-label={t("ai.send")} title={t("ai.send")} disabled={unavailable || (!draft.trim() && pictures.length === 0 && documents.length === 0)}>
+              <button type="submit" className="send" aria-label={t("ai.send")} title={t("ai.send")} disabled={unavailable || (!draft.trim() && !answering && pictures.length === 0 && documents.length === 0)}>
                 <Glyph name="arrowUp" />
               </button>
             )}
