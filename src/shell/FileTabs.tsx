@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import { FileName } from "./FileName";
 import type { TabInfo } from "../api";
 import { useT } from "../i18n";
 import { useRoving } from "./useRoving";
@@ -54,7 +55,7 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
             {tab.status && tab.status !== "idle" && (
               <span className={`tab-dot ${tab.status}`} role="img" title={t(`workspace.${tab.status}`)} aria-label={t(`workspace.${tab.status}`)} />
             )}
-            <bdi>{tab.title}</bdi>
+            <FileName name={tab.title} />
             {tab.dirty && <span className="dirty" role="img" title={t("tab.unsaved")} aria-label={t("tab.unsaved")} />}
           </button>
           <button

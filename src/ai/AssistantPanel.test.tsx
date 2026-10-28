@@ -621,3 +621,27 @@ test("an alef carrying tanween is written with the tanween first in the box, so 
   fireEvent.change(box, { target: { value: "مستطيلاً ومدخلاً" } });
   expect(box.value).toBe("مستطيلًا ومدخلًا");
 });
+
+test("an Arabic conversation shows Mizan's steps and its waiting line in Arabic in an English window", () => {
+  const user = { kind: "user" as const, text: "ارسم فيلا صغيرة" };
+  const lookup: ToolCardItem = { ...card, id: "t2", label: "commands", mutating: false, handles: [],
+    activity: { category: "drawing", effect: "read", detail: { key: "activity.line.lookup", params: { what: "command", name: "drafting_knowledge, space_check" } } } };
+  setup({ items: [user, lookup] }, true);
+  const line = document.querySelector(".tool-card")!;
+  expect(line.getAttribute("lang")).toBe("ar");
+  expect(line.getAttribute("dir")).toBe("rtl");
+  expect(line.textContent).toContain("بحث عن طريقة استخدام");
+  // Never the commands' own names.
+  expect(line.textContent).not.toMatch(/drafting_knowledge|space_check/);
+  expect(document.querySelector(".working")?.textContent).toBe(ar["ai.working"]);
+  // The window's own words stay in its language.
+  expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Ask Mizan, or type / for commands");
+});
+
+test("answers chosen on a question with tanween send the word as written", async () => {
+  const asked = { kind: "question" as const, questions: [{ id: "q1", question: "ما شكل الأرض؟",
+    options: [{ label: "افترض مسطحاً مستطيلاً" }, { label: "لا توجد بيانات" }], allow_other: true }] };
+  const { assistant } = setup({ items: [{ kind: "user", text: "ارسم" }, asked] });
+  fireEvent.click(screen.getByRole("button", { name: /افترض/ }));
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("افترض مسطحاً مستطيلاً"));
+});

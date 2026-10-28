@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
 import type { TabInfo } from "../api";
 import { cycleTab, FileTabs } from "./FileTabs";
+import { FileName } from "./FileName";
 
 afterEach(cleanup);
 
@@ -86,4 +87,11 @@ test("a drawing Mizan works on has a dot before its name and no words (note 9)",
   expect(screen.queryByText(/working/i)).toBeNull();
   // Done is a still dot; an idle drawing has none.
   expect(screen.getAllByRole("tab")[1].querySelector(".tab-dot.done")).not.toBeNull();
+});
+
+test("an Arabic file name keeps its extension at its end", () => {
+  render(<FileName name="فيلا صغيرة.dwg" />);
+  const outer = document.querySelector("bdi[dir='ltr']")!;
+  expect(outer.firstElementChild?.textContent).toBe("فيلا صغيرة");
+  expect(outer.lastChild?.textContent).toBe(".dwg");
 });

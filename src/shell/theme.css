@@ -2952,7 +2952,9 @@ span.grid-sort {
   align-self: flex-end;
   max-width: 90%;
   padding: 9px 13px;
-  white-space: pre-wrap;
+  /* Line breaks kept, runs of spaces not: WebKitGTK raises an alef with tanween ("مستطيلاً") above
+     the line wherever every space is kept (pre-wrap, break-spaces, a textarea). */
+  white-space: pre-line;
   background: var(--panel);
   border-radius: 14px;
   font-size: 14px;

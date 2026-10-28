@@ -1,22 +1,20 @@
-import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
-import { slashCommand, slashMatches, slashWord, type SlashCommand } from "./slashCommands";
-import { uiError, userError } from "../i18n/errors";
-import { providerFailure } from "./providerFailure";
-import { listen } from "@tauri-apps/api/event";
+import { chatText } from "./content";
+import { errorText, connectionLost } from "./chatErrors";
+import { uiError } from "../i18n/errors";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { aiAttachPdf, type PdfAttachment } from "../api";
 import type { Pointing } from "../app/useAssistantWiring";
 import { translate, useLanguage, useT } from "../i18n";
-import { WorkspacePicker } from "./WorkspacePicker";
 import { MizanMark } from "./MizanMark";
-import { Markdown } from "./Markdown";
-import { PlanChecklist } from "./PlanChecklist";
 import { PackCheckCard } from "./PackCheckCard";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
-import { readRuns, recoveringCard, startNewOffered, TOO_LONG, undoableCard, type Item, type ToolCardItem } from "./messages";
-import { isPicture, MAX_PICTURES, readPicture, type Picture } from "./pictures";
-import { QuestionList, answerText } from "./QuestionList";
-import { ToolCard } from "./ToolCard";
+import { readRuns, startNewOffered, undoableCard, type ToolCardItem } from "./messages";
+import { readPicture, type Picture } from "./pictures";
+import { answerText } from "./QuestionList";
+import type { SlashCommand } from "./slashCommands";
+import { Composer } from "./Composer";
+import { ThreadItem, type ThreadContext } from "./ThreadItem";
+import { chatLanguage, openQuestions, recoveryGroups } from "./thread";
+import { useDrafts } from "./useDrafts";
 import { Glyph } from "../shell/glyphs";
 import type { OutputId } from "../shell/outputs";
 import type { Assistant } from "./useAssistant";
@@ -58,12 +56,8 @@ function pickExamples(): string[] {
   return [...EXAMPLES].sort(() => Math.random() - 0.5).slice(0, 3);
 }
 
-function connectionLost(error: string): boolean {
-  return providerFailure(error, "en")?.canContinue ?? false;
-}
-
-/** The in-app agent, Mizan: the conversation, the tools it ran, and a box to write in; or its log.
- *  Memoised: the app re-renders on every pointer move. */
+/** The in-app agent, Mizan: the conversation (`ThreadItem`), or an output in its place, and the box
+ *  (`Composer`). Memoised: the app re-renders on every pointer move. */
 export const AssistantPanel = memo(function AssistantPanel({
   assistant,
   showTechnicalDetails = false,
@@ -82,118 +76,46 @@ export const AssistantPanel = memo(function AssistantPanel({
 }: Props) {
   const t = useT();
   const { lang } = useLanguage();
-  const chatLang = contentLanguage([...assistant.transcript.items].reverse().find((item) => item.kind === "user")?.text ?? "", lang);
   const { transcript, busy, error } = assistant;
-  const [attaching, setAttaching] = useState(false);
+  const items = transcript.items;
+  const chatLang = chatLanguage(items, lang);
+  const blocked = busy || !!history?.pending;
+  const drafts = useDrafts(assistant.workspace);
+  const { draft } = drafts;
   const [examples] = useState(pickExamples);
-  const unavailable = busy || !!history?.pending || attaching;
-  /** `picks`: the options chosen on Mizan's open questions, by question id. */
-  type Draft = { text: string; pictures: Picture[]; documents: PdfAttachment[]; picks?: Record<string, string> };
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const key = String(assistant.workspace ?? "lobby");
-  const current = drafts[key] ?? { text: "", pictures: [], documents: [] };
-  const draft = current.text;
-  const pictures = current.pictures;
-  const documents = current.documents;
-  const picks = current.picks ?? {};
-  function editDraft(change: (before: Draft) => Draft) {
-    setDrafts(all => ({ ...all, [key]: change(all[key] ?? { text: "", pictures: [], documents: [] }) }));
-  }
-  const setDraft = (text: string) => editDraft(before => ({ ...before, text: boxArabic(text) }));
-  /** In the box an alef carrying tanween ("مستطيلاً") is written with the tanween first ("مستطيلًا"),
-   *  the same word: WebKitGTK raises the first spelling above the line in a text box whatever the
-   *  font (in the chat the complete Arabic face is enough). */
-  function boxArabic(text: string) { return text.replace(/\u0627\u064B/g, "\u064B\u0627"); }
-  const setPictures = (next: Picture[] | ((old: Picture[]) => Picture[])) =>
-    editDraft(before => ({ ...before, pictures: typeof next === "function" ? next(before.pictures) : next }));
-  const setDocuments = (next: PdfAttachment[] | ((old: PdfAttachment[]) => PdfAttachment[])) =>
-    editDraft(before => ({ ...before, documents: typeof next === "function" ? next(before.documents) : next }));
-  useEffect(() => {
-    let gone = false;
-    let off: (() => void) | undefined;
-    void listen<number>("workspace:closed", ({ payload }) => {
-      setDrafts(all => { const kept = { ...all }; delete kept[String(payload)]; return kept; });
-    }).then(unlisten => { if (gone) unlisten(); else off = unlisten; }).catch(() => {});
-    return () => { gone = true; off?.(); };
-  }, []);
   const box = useRef<HTMLTextAreaElement>(null);
-  const filePicker = useRef<HTMLInputElement>(null);
-  /** The pictures to send with the next message. */
-  const [pictureError, setPictureError] = useState<string | null>(null);
-  /** Slash commands: the row chosen in the list, and whether Escape closed it for this text. */
-  const [slashAt, setSlashAt] = useState(0);
-  const [slashOff, setSlashOff] = useState(false);
+  const focusBox = () => box.current?.focus();
 
   // `/` or Ctrl+K: the box takes the focus (a slash typed in it lists the commands).
   useEffect(() => {
     if (!ask || ask.n === 0) return;
-    box.current?.focus();
-    if (ask.text && !draft) setDraft(ask.text);
+    focusBox();
+    if (ask.text && !draft.text) drafts.setText(ask.text);
   }, [ask?.n]);
 
   // "Ask Mizan" on the canvas menu, or an area marked: the box takes the focus.
   const focusKey = pointing?.focusKey ?? 0;
   useEffect(() => {
-    if (focusKey > 0) box.current?.focus();
+    if (focusKey > 0) focusBox();
   }, [focusKey]);
-
-  /** Adds the pictures among `files`, up to `MAX_PICTURES` in all. */
-  async function addPictures(files: File[]) {
-    if (unavailable) return;
-    const pdfs = files.filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
-    if (pdfs.length) {
-      setAttaching(true);
-      setPictureError(null);
-      try {
-        if (documents.length + pdfs.length > MAX_PICTURES) throw userError(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
-        for (const file of pdfs) {
-          if (file.size > 20 * 1024 * 1024) throw userError(t("ai.pdfTooLarge"));
-          const attachment = await aiAttachPdf(file.name, Array.from(new Uint8Array(await file.arrayBuffer())));
-          setDocuments((now) => [...now, attachment]);
-        }
-      } catch (error) { setPictureError(uiError(error)); }
-      finally { setAttaching(false); }
-    }
-    const wanted = files.filter(isPicture);
-    if (wanted.length === 0) return;
-    setPictureError(null);
-    const room = MAX_PICTURES - pictures.length;
-    if (wanted.length > room) setPictureError(t("ai.tooManyPictures", { n: String(MAX_PICTURES) }));
-    const results = await Promise.allSettled(wanted.slice(0, Math.max(0, room)).map((file) => read(file)));
-    const ok = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-    if (ok.length < results.length) setPictureError(t("ai.pictureFailed"));
-    setPictures((now) => [...now, ...ok].slice(0, MAX_PICTURES));
-  }
 
   // The newest message stays in view while the reader is at the bottom; scrolled up, they are left
   // where they are and a button offers the way back.
   const thread = useStickToBottom([transcript, busy]);
 
-  /** Mizan's questions still waiting for an answer: the last ones, when nothing was sent after them. */
-  let lastQuestion = transcript.items.length - 1;
-  while (lastQuestion >= 0 && transcript.items[lastQuestion].kind !== "question") lastQuestion--;
-  const openItem = lastQuestion >= 0 && !transcript.items.slice(lastQuestion + 1).some((next) => next.kind === "user")
-    ? transcript.items[lastQuestion] : undefined;
-  const openQuestions = openItem?.kind === "question" ? openItem.questions : [];
-  const answering = openQuestions.length > 0 && Object.keys(picks).length > 0;
+  const open = openQuestions(items);
+  const picks = open ? draft.picks : {};
+  const answering = !!open && Object.keys(picks).length > 0;
 
-  /** Chooses an option (the same again takes it off); when every question has one, the answers go. */
-  function pick(questionId: string, label: string) {
-    const next = { ...picks };
-    if (next[questionId] === label) delete next[questionId];
-    else next[questionId] = label;
-    editDraft(before => ({ ...before, picks: next }));
-    if (openQuestions.every((q) => next[q.id])) void submit(answerText(openQuestions, next, draft));
-  }
-
-  /** Sends the box (or `prompt`, a slash command's words in its place) with its pictures and files.
-   *  With options chosen on open questions, the box's words go with them (`answerText`). */
+  /** Sends `text` (the box's words by default) with the box's pictures and PDFs. */
   async function submit(prompt?: string) {
-    const typed = prompt ?? (answering ? answerText(openQuestions, picks, draft) : draft);
-    const text = [typed.trim(), ...documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`)].filter(Boolean).join("\n\n");
-    if ((!text && pictures.length === 0) || unavailable) return;
+    const typed = prompt ?? (open && answering ? answerText(open.questions, picks, draft.text) : draft.text);
+    const files = draft.documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`);
+    const text = [typed.trim(), ...files].filter(Boolean).join("\n\n");
+    if ((!text && draft.pictures.length === 0) || blocked) return;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
+    const pictures = draft.pictures;
     const sent = pointing
       ? await pointing.send(text, pictures)
       : pictures.length > 0
@@ -202,30 +124,31 @@ export const AssistantPanel = memo(function AssistantPanel({
             shown: { images: pictures.map((p) => p.url) },
           })
         : await assistant.send(text);
-    if (sent) {
-      editDraft(() => ({ text: "", pictures: [], documents: [] }));
-      setPictureError(null);
-    }
+    if (sent) drafts.clear();
   }
 
-  const slashList = slashOff || unavailable ? [] : slashMatches(draft, lang);
-  const slashRow = Math.min(slashAt, Math.max(0, slashList.length - 1));
+  /** Chooses an option on the open questions (the same again takes it off); when every question has
+   *  one, the answers go at once with whatever is in the box. */
+  function pick(questionId: string, label: string) {
+    if (!open) return;
+    const next = { ...picks };
+    if (next[questionId] === label) delete next[questionId];
+    else next[questionId] = label;
+    drafts.setPicks(next);
+    if (open.questions.every((q) => next[q.id])) void submit(answerText(open.questions, next, draft.text));
+  }
 
-  /** Runs a slash command: a prompt goes to Mizan as the user's message, an action is the window's. */
+  /** A prompt command goes to Mizan as the user's message; an action is the window's. */
   function runSlash(command: SlashCommand) {
-    setSlashAt(0);
     if (command.kind === "prompt") {
       void submit(t(`ai.slash.${command.id}.prompt`));
       return;
     }
-    setDraft("");
+    drafts.setText("");
     if (command.id === "new") assistant.clear();
     else if (command.id === "compare") onCompare?.();
     else if (command.id === "connect") onConnect?.();
   }
-
-  // Undo is offered on the card whose change is the assistant's newest still in the take-off.
-  const undoable = undoableCard(transcript);
 
   // Said once per turn to screen readers, instead of reading out the streaming log.
   const [announce, setAnnounce] = useState("");
@@ -236,251 +159,84 @@ export const AssistantPanel = memo(function AssistantPanel({
     wasBusy.current = busy;
   }, [busy]);
 
-  function stopText(reason: string) {
-    if (reason === "cancelled") return t("ai.cancelled");
-    if (reason === "repeated_ineffective_edit") return translate(chatLang, "ai.repeatedEdit");
-    if (reason === "drawing_checks_unresolved") return translate(chatLang, "ai.unresolvedChecks");
-    if (reason === TOO_LONG) return t("ai.tooLong");
-    if (reason === "max_tokens") return t("ai.maxTokens");
-    const steps = /^stopped after (\d+) steps$/.exec(reason);
-    if (steps) return t("ai.steps", { n: steps[1] });
-    return uiError(reason, lang);
-  }
+  const cx: ThreadContext = {
+    items, busy, unavailable: blocked, chatLang, showTechnicalDetails,
+    openIndex: open?.index ?? null, picks, onPick: pick,
+    runs: readRuns(items), recovery: recoveryGroups(items, busy), undoable: undoableCard(transcript),
+    onShow, onUndo, onSettings, send: (text) => { void assistant.send(text); }, focusBox,
+  };
 
-  function errorText(e: string) {
-    const failure = providerFailure(e, lang);
-    if (failure) return failure.text;
-    if (e === "busy") return t("ai.busy");
-    if (e === "no_api_key") return t("ai.noKey");
-    if (e === "no_base_url") return t("ai.noBaseUrl");
-    if (e === "no_model") return t("ai.noModel");
-    const missingModel = /^(.+) has no model (.+): choose one in Settings$/.exec(e);
-    if (missingModel) return t("ai.modelNotFound", { service: missingModel[1], model: missingModel[2] });
-    if (e === "restarted") return t("ai.restarted");
-    if (e === "crashed") return t("ai.crashed");
-    return uiError(e, lang);
-  }
-
-  // Group recoverable failures within their own user turn. Stored cards and the support log
-  // stay intact, and a failure with no recovery still renders as an ordinary stopped card.
-  const recovery = new Map<number, { indices: number[]; pending: boolean }>();
-  let turn = 0;
-  transcript.items.forEach((item, i) => {
-    if (item.kind === "user") turn = i;
-    if (item.kind !== "tool" || item.status !== "error" || !recoveringCard(transcript.items, i, busy)) return;
-    const group = recovery.get(turn) ?? { indices: [], pending: false };
-    group.indices.push(i);
-    group.pending ||= !recoveringCard(transcript.items, i, false);
-    recovery.set(turn, group);
-  });
-  const recoveredIndices = new Set([...recovery.values()].flatMap((group) => group.indices));
-  // A run of identical reads is one line with a count.
-  const runs = readRuns(transcript.items);
-  const recoveryHeads = new Map([...recovery.values()].map((group) => [group.indices[0], group]));
-
-  function show(item: Item, i: number): ReactNode {
-    if (item.kind === "provider_status") return <p key={i} className="msg notice" role="status">{t(item.code)}</p>;
-    if (item.kind === "retrying") return <p key={i} className="msg notice" role="status">
-      {["ai.error.context_retry", "ai.error.finish_gate", "ai.error.language_retry"].includes(item.code) ? t(item.code) : t("ai.error.retrying", { seconds: item.seconds })}
-    </p>;
-    switch (item.kind) {
-      case "cache_usage":
-        return showTechnicalDetails ? <details key={i} className="technical-details">
-          <summary>{t("technical.details")}</summary>
-          <p>{t("ai.cacheUsage", { percent: (100 * item.cached / item.total).toFixed(1), cached: item.cached, total: item.total })}</p>
-        </details> : null;
-      case "plan":
-        return <PlanChecklist key={i} phases={item.phases} stale={item.stale} language={chatLang} showTechnicalDetails={showTechnicalDetails}
-          onApprove={item.awaitingApproval && !unavailable && !transcript.items.slice(i + 1).some((next) => next.kind === "user")
-            ? () => { void assistant.send(translate(chatLang, "ai.approvedMessage")); } : undefined}
-          onChange={() => box.current?.focus()} />;
-      case "question":
-        // Plain numbered list in Mizan's message (design B): options are chosen on it, the box
-        // answers the rest. Once the user has replied it is only a record.
-        return (
-          <QuestionList
-            key={i}
-            questions={item.questions}
-            picked={item === openItem ? picks : undefined}
-            onPick={unavailable || item !== openItem ? undefined : pick}
-          />
-        );
-      case "user":
-        return (
-          <div key={i} className="msg user" lang={contentLanguage(item.text, lang)} dir={contentLanguage(item.text, lang) === "ar" ? "rtl" : "ltr"}>
-            {((item.pointed?.length ?? 0) > 0 || (item.images?.length ?? 0) > 0) && (
-              <div className="msg-attached">
-                {item.pointed?.map((label) => (
-                  <span key={label} className="chip">
-                    {label}
-                  </span>
-                ))}
-                {item.images?.map((url, k) => (
-                  url === "[picture removed]"
-                    ? <span key={k} className="chip">{t("ai.pictureRemoved")}</span>
-                    : <img key={k} src={url} alt={t("ai.picture")} className="thumb" />
-                ))}
-              </div>
-            )}
-            {messageFiles(item.text).map((file, k) => <span key={k} className="chip"><bdi>{file.name}</bdi> · {t("ai.pdfPageCount", { n: file.pages })}</span>)}
-            {isolateRuns(chatText(item.text))}
-          </div>
-        );
-      case "assistant":
-        return (
-          <div key={i} className="msg assistant">
-            <Markdown text={item.text} />
-          </div>
-        );
-      case "open_findings":
-        return <div key={i} className="msg notice" role="note">
-          <strong className="heading">{t("ai.openFindings")}</strong>
-          <ul>{[...new Set(item.findings.map(finding => finding.rule))].map(rule =>
-            <li key={rule}>{t(`ai.finding.${rule}`)} ({item.findings.filter(finding => finding.rule === rule).length})</li>,
-          )}</ul>
-          {showTechnicalDetails && <details className="technical-details"><summary>{t("technical.details")}</summary><pre dir="ltr">{JSON.stringify(item.findings, null, 2)}</pre></details>}
-        </div>;
-      case "thinking":
-        return null;
-      case "tool": {
-        if (recoveredIndices.has(i)) {
-          const group = recoveryHeads.get(i);
-          if (!group) return null;
-          return <div key={i} className="msg notice recovery-summary" role="note">
-            {t(group.pending ? "activity.fixing" : "activity.recovered")}
-            {showTechnicalDetails && <details className="technical-details">
-              <summary>{t("technical.details")}</summary>
-              <pre dir="ltr">{group.indices.map((index) => {
-                const failed = transcript.items[index] as ToolCardItem;
-                return `${failed.label ?? failed.name}\n${JSON.stringify(failed.input, null, 2)}\n${failed.summary}`;
-              }).join("\n\n")}</pre>
-            </details>}
-          </div>;
-        }
-        if (item.name === "qiyas_execute" && item.label === "plan" && !item.activity?.detail && item.status !== "error") return null;
-        if (runs.hidden.has(i)) return null;
-        const canShow = item.handles.length > 0 || !!item.ui?.bounds;
-        const canUndo = !unavailable && item === undoable;
-        return (
-          <ToolCard
-            key={i}
-            card={item}
-            repeat={runs.counts.get(i)}
-            showTechnicalDetails={showTechnicalDetails}
-            recovering={recoveringCard(transcript.items, i, busy)}
-            onShow={canShow ? () => onShow(item) : undefined}
-            onUndo={canUndo ? () => onUndo(item) : undefined}
-          />
-        );
-      }
-      case "refused":
-        return (
-          <div key={i} className="msg notice refused" role="note">
-            <strong className="heading">{t("ai.refused")}</strong>
-            {item.text && <Markdown text={item.text} />}
-            {showTechnicalDetails && item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
-          </div>
-        );
-      case "stopped":
-        return (
-          <div key={i} className="msg notice stopped" role="note">
-            {providerFailure(item.reason, lang)?.text ?? stopText(item.reason)}
-            {connectionLost(item.reason) ? <button type="button" disabled={busy}
-              onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>
-              : providerFailure(item.reason, lang) && <button type="button" className="link" onClick={onSettings}>{t("settings")}</button>}
-          </div>
-        );
-    }
-  }
-
-  const empty = transcript.items.length === 0;
+  const empty = items.length === 0;
   const shownOutput = artifact?.shown ?? null;
-  const firstAsk = transcript.items.find((item) => item.kind === "user");
+  const firstAsk = items.find((item) => item.kind === "user");
   const title = firstAsk && firstAsk.kind === "user" ? chatText(firstAsk.text).trim().replace(/\s+/g, " ").slice(0, 60) : "";
-  const questions = [...transcript.items].reverse().find((item) => item.kind === "user" || item.kind === "question");
-  const asked = questions?.kind === "question" ? questions.questions.length : 0;
+  const asked = open?.questions.length ?? 0;
   return (
     <section className={shownOutput ? "assistant-panel has-art" : "assistant-panel"} aria-label={t("assistant")}>
       <div className="art-slot" hidden={!shownOutput}>{artifact?.node}</div>
       <div className="chat-slot" hidden={!!shownOutput}>
-      <div className="assistant-head">
-        <MizanMark still={!busy} />
-        <span className="chat-title heading">{t("assistant")}</span>
-        {artifacts}
-        {history && <ConversationHistory history={history} disabled={busy} />}
-        <button
-          type="button"
-          className="ib new-chat"
-          onClick={assistant.clear}
-          disabled={unavailable || empty}
-          aria-label={t("ai.newChat")}
-          title={t("ai.newChatTip")}
-        >
-          <Glyph name="newChat" />
-        </button>
-      </div>
-      {assistant.phase === "queued" && <p className="msg notice" role="status">{t("workspace.queued")}</p>}
-      {assistant.memoryLimited && busy && <p className="msg notice" role="status">{t("workspace.memory")}</p>}
-      {assistant.away != null && <p className="msg notice">{t("workspace.away")} {assistant.away || t(`workspace.${assistant.phase || "done"}`)}</p>}
-      <p className="sr-only" role="status" aria-live="polite">
-        {announce}
-      </p>
-      {history?.error && <p className="msg notice" role="alert">{uiError(history.error, lang)}</p>}
+        <div className="assistant-head">
+          <MizanMark still={!busy} />
+          <span className="chat-title heading">{t("assistant")}</span>
+          {artifacts}
+          {history && <ConversationHistory history={history} disabled={busy} />}
+          <button type="button" className="ib new-chat" onClick={assistant.clear} disabled={blocked || empty}
+            aria-label={t("ai.newChat")} title={t("ai.newChatTip")}>
+            <Glyph name="newChat" />
+          </button>
+        </div>
+        {assistant.phase === "queued" && <p className="msg notice" role="status">{t("workspace.queued")}</p>}
+        {assistant.memoryLimited && busy && <p className="msg notice" role="status">{t("workspace.memory")}</p>}
+        {assistant.away != null && <p className="msg notice">{t("workspace.away")} {assistant.away || t(`workspace.${assistant.phase || "done"}`)}</p>}
+        <p className="sr-only" role="status" aria-live="polite">{announce}</p>
+        {history?.error && <p className="msg notice" role="alert">{uiError(history.error, lang)}</p>}
         <div className="assistant-thread">
-        <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
-          {drawing && !drawing.hasTakeoff && !shownOutput && <PackCheckCard
-            key={`${assistant.workspace ?? "drawing"}:${drawing.path}`}
-            drawing={drawing.path}
-            workspace={assistant.workspace}
-            revision={drawing.revision}
-            busy={busy}
-          />}
-          {empty ? (
-            <div className="assistant-empty">
-              <p className="sr-only">{t("ai.emptyTitle")}</p>
-              {history?.latest && <button type="button" className="continue-chat" disabled={busy || history.pending}
-                onClick={() => { void history.resume(history.latest!); }}>
-                {t("ai.continue", { title: history.latest.title })}
-              </button>}
-              <ul>
-                {examples.map((key) => (
-                  <li key={key}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDraft(t(key));
-                        box.current?.focus();
-                      }}
-                    >
-                      {t(key)}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            transcript.items.map(show)
-          )}
-          {busy && (
-            <p className="working">
-              <MizanMark size="md" />
-              {t("ai.working")}
-            </p>
-          )}
-          {!unavailable && (startNewOffered(transcript) || error === "crashed") && (
-            <button type="button" className="primary new-conversation" onClick={assistant.clear}>
-              {t("ai.newConversation")}
+          <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
+            {drawing && !drawing.hasTakeoff && !shownOutput && <PackCheckCard
+              key={`${assistant.workspace ?? "drawing"}:${drawing.path}`}
+              drawing={drawing.path}
+              workspace={assistant.workspace}
+              revision={drawing.revision}
+              busy={busy}
+            />}
+            {empty ? (
+              <div className="assistant-empty">
+                <p className="sr-only">{t("ai.emptyTitle")}</p>
+                {history?.latest && <button type="button" className="continue-chat" disabled={busy || history.pending}
+                  onClick={() => { void history.resume(history.latest!); }}>
+                  {t("ai.continue", { title: history.latest.title })}
+                </button>}
+                <ul>
+                  {examples.map((key) => (
+                    <li key={key}>
+                      <button type="button" onClick={() => { drafts.setText(t(key)); focusBox(); }}>{t(key)}</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              items.map((item, i) => <ThreadItem key={i} item={item} i={i} cx={cx} />)
+            )}
+            {busy && (
+              <p className="working" lang={chatLang} dir={chatLang === "ar" ? "rtl" : "ltr"}>
+                <MizanMark size="md" />
+                {translate(chatLang, "ai.working")}
+              </p>
+            )}
+            {!blocked && (startNewOffered(transcript) || error === "crashed") && (
+              <button type="button" className="primary new-conversation" onClick={assistant.clear}>
+                {t("ai.newConversation")}
+              </button>
+            )}
+          </div>
+          {thread.away && (
+            <button type="button" className="jump-latest" onClick={() => thread.jump()}>
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 3v9M4.5 8.5L8 12l3.5-3.5" />
+              </svg>
+              {t("ai.jumpLatest")}
             </button>
           )}
-        </div>
-        {thread.away && (
-          <button type="button" className="jump-latest" onClick={() => thread.jump()}>
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 3v9M4.5 8.5L8 12l3.5-3.5" />
-            </svg>
-            {t("ai.jumpLatest")}
-          </button>
-        )}
         </div>
       </div>
       {shownOutput && (
@@ -494,212 +250,26 @@ export const AssistantPanel = memo(function AssistantPanel({
       )}
       {error && (
         <div className="error" role="alert">
-          {errorText(error)}
-          {connectionLost(error) && <button type="button" disabled={busy}
-            onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>}
-          {!connectionLost(error) && <button type="button" className="link" onClick={onSettings}>{t("settings")}</button>}
+          {errorText(error, lang)}
+          {connectionLost(error)
+            ? <button type="button" disabled={busy} onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>
+            : <button type="button" className="link" onClick={onSettings}>{t("settings")}</button>}
         </div>
       )}
-      <form
-        className="composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-        onDragOver={(e) => {
-          if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault();
-        }}
-        onDrop={(e) => {
-          const files = [...e.dataTransfer.files];
-          if (files.length === 0) return;
-          e.preventDefault();
-          addPictures(files);
-        }}
-      >
-        {slashList.length > 0 && (
-          <div className="slash" role="listbox" aria-label={t("ai.slash.title")}>
-            {slashList.map((command, k) => (
-              <button
-                key={command.id}
-                id={`slash-${command.id}`}
-                type="button"
-                role="option"
-                aria-selected={k === slashRow}
-                className={k === slashRow ? "sl on" : "sl"}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => runSlash(command)}
-              >
-                <span className="cmd" dir="auto">/{slashWord(command, lang)}</span>
-                <span className="d">{t(`ai.slash.${command.id}.desc`)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {(pointing?.selection || pointing?.region || pictures.length > 0) && (
-          <div className="composer-chips">
-            {pointing?.selection && (
-              <span className="chip" title={pointing.selection.kinds}>
-                {t("ai.chip.selection", { n: String(pointing.selection.count) })}
-                {pointing.selection.kinds && <span className="chip-detail">{pointing.selection.kinds}</span>}
-                <button
-                  type="button"
-                  className="chip-remove"
-                  aria-label={t("ai.chip.remove")}
-                  title={t("ai.chip.remove")}
-                  onClick={pointing.detachSelection}
-                >
-                  ×
-                </button>
-              </span>
-            )}
-            {pointing?.region && (
-              <span className="chip">
-                {t("ai.chip.area", {
-                  w: pointing.region.width.toFixed(2),
-                  h: pointing.region.height.toFixed(2),
-                })}
-                {pointing.region.count !== null && (
-                  <span className="chip-detail">
-                    {t("ai.chip.entities", { n: String(pointing.region.count) })}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="chip-remove"
-                  aria-label={t("ai.chip.remove")}
-                  title={t("ai.chip.remove")}
-                  onClick={pointing.clearRegion}
-                >
-                  ×
-                </button>
-              </span>
-            )}
-            {pictures.map((p, k) => (
-              <span key={k} className="chip picture">
-                <img src={p.url} alt={t("ai.picture")} className="thumb" />
-                <button
-                  type="button"
-                  className="chip-remove"
-                  aria-label={t("ai.removePicture")}
-                  title={t("ai.removePicture")}
-                  onClick={() => setPictures((now) => now.filter((_, j) => j !== k))}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {pictureError && (
-          <p className="composer-note" role="alert">
-            {pictureError}
-          </p>
-        )}
-        <div className="box">
-          <textarea
-            ref={box}
-            dir="auto"
-            rows={3}
-            aria-label={shownOutput ? t(`outputs.ask.${shownOutput}`) : t("ai.placeholder")}
-            placeholder={shownOutput ? t(`outputs.ask.${shownOutput}`) : t("ai.placeholder")}
-            role={slashList.length > 0 ? "combobox" : undefined}
-            aria-expanded={slashList.length > 0 || undefined}
-            aria-activedescendant={slashList.length > 0 ? `slash-${slashList[slashRow].id}` : undefined}
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setSlashOff(false);
-              setSlashAt(0);
-            }}
-            onPaste={(e) => {
-              const files = [...(e.clipboardData?.files ?? [])].filter((file) => isPicture(file) || file.type === "application/pdf");
-              if (files.length === 0) return;
-              e.preventDefault();
-              addPictures(files);
-            }}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return;
-              if (slashList.length > 0) {
-                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                  e.preventDefault();
-                  setSlashAt((slashRow + (e.key === "ArrowDown" ? 1 : slashList.length - 1)) % slashList.length);
-                  return;
-                }
-                if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
-                  e.preventDefault();
-                  runSlash(slashList[slashRow]);
-                  return;
-                }
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setSlashOff(true);
-                  return;
-                }
-              }
-              // Enter sends, Shift+Enter is a new line; not while an input method is composing.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                const whole = slashCommand(draft);
-                if (whole && !unavailable) runSlash(whole);
-                else submit();
-              }
-            }}
-          />
-          {documents.map((document) => (
-            <div className="pointing-chip" key={document.path}>
-              <span>{document.name} · {document.pages} {t("ai.pdfPages")}</span>
-              <button type="button" aria-label={t("ai.removeDocument")} disabled={unavailable}
-                onClick={() => setDocuments((now) => now.filter((item) => item.path !== document.path))}>×</button>
-            </div>
-          ))}
-          <input
-            ref={filePicker}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
-            multiple
-            hidden
-            onChange={(e) => {
-              addPictures([...(e.target.files ?? [])]);
-              e.target.value = "";
-            }}
-          />
-          <div className="composer-buttons">
-            <button
-              type="button"
-              className="ib"
-              aria-label={t("ai.attach")}
-              title={t("ai.attach")}
-              disabled={pictures.length >= MAX_PICTURES}
-              onClick={() => filePicker.current?.click()}
-            >
-              <Glyph name="attach" size={18} />
-            </button>
-            {pointing && (
-              <button
-                type="button"
-                className="ib"
-                aria-label={t("ai.markArea")}
-                title={t("ai.markArea")}
-                onClick={pointing.markArea}
-              >
-                <Glyph name="area" size={18} />
-              </button>
-            )}
-            {assistant.choice && assistant.choose && <WorkspacePicker choice={assistant.choice} busy={busy} onChange={assistant.choose} />}
-            <span className="grow" />
-            {busy ? (
-              <button type="button" className="send" aria-label={t("ai.stop")} title={t("ai.stop")} onClick={assistant.cancel}>
-                <Glyph name="stop" />
-              </button>
-            ) : (
-              <button type="submit" className="send" aria-label={t("ai.send")} title={t("ai.send")} disabled={unavailable || (!draft.trim() && !answering && pictures.length === 0 && documents.length === 0)}>
-                <Glyph name="arrowUp" />
-              </button>
-            )}
-          </div>
-        </div>
-      </form>
+      <Composer
+        drafts={drafts}
+        box={box}
+        busy={busy}
+        blocked={blocked}
+        answering={answering}
+        pointing={pointing}
+        shownOutput={shownOutput}
+        model={assistant}
+        read={read}
+        onSubmit={() => void submit()}
+        onSlash={runSlash}
+        onCancel={assistant.cancel}
+      />
     </section>
   );
 });

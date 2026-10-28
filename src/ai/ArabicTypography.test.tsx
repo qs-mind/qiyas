@@ -37,6 +37,10 @@ test("Arabic prose has a complete Thmanyah face, baseline inlines and no body sw
   // The general :lang(ar) rule must not hand children the ranged face again.
   expect(theme).toContain(':is(.md, .msg.user, .question-list):lang(ar) :not(code, pre, kbd, bdi[dir="ltr"]) {\n  font-family: inherit;');
   expect(markdown).not.toMatch(/vertical-align:\s*(super|sub)|translateY/);
+  // Keeping every space (pre-wrap) is what raised "مستطيلاً" in the user's bubble; line breaks stay.
+  const bubble = theme.match(/\.msg\.user \{[^}]+\}/)![0];
+  expect(bubble).toContain("white-space: pre-line;");
+  expect(bubble).not.toContain("white-space: pre-wrap");
 });
 
 test("grid prose has no line clamp or ellipsis and totals can wrap in narrow panels", () => {

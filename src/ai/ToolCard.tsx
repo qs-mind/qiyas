@@ -1,4 +1,4 @@
-import { useT } from "../i18n";
+import { translate, useT, type Lang } from "../i18n";
 import type { Activity } from "../api";
 import { MizanMark } from "./MizanMark";
 import type { ToolCardItem } from "./messages";
@@ -13,6 +13,8 @@ type Props = {
   showTechnicalDetails?: boolean;
   /** Undoes the card's change; absent when it can't be undone from here. */
   onUndo?(): void;
+  /** The conversation's language, when it is not the window's: the line speaks it. */
+  language?: Lang;
 };
 
 type Detail = NonNullable<Activity["detail"]>;
@@ -34,6 +36,7 @@ function objectText(detail: Detail, t: Translate): string {
     object = commandKey ? t(commandKey) : t("activity.line.command_name", { name: p.command });
     if (p.n != null) object = t("activity.line.command_count", { object, n: p.n });
   }
+  if (p.name && detail.key === "activity.line.lookup") return lookedUp(String(p.name), t);
   if (p.name) {
     const namedKey = `activity.line.object.${p.what}.one`;
     const namedWhat = p.command || p.n != null ? object : t(namedKey) === namedKey ? what : t(namedKey);
@@ -50,11 +53,25 @@ function objectText(detail: Detail, t: Translate): string {
   return object;
 }
 
+/** The commands Mizan read how to use: their plain names when the window has them, else how many
+ *  ("4 commands"): a command's own name (`drafting_knowledge`) is not for the engineer. */
+function lookedUp(names: string, t: Translate): string {
+  const list = names.split(",").map((name) => name.trim()).filter(Boolean);
+  const plain = list.map((name) => [`activity.line.command.${name}`, `command.${name}`].find((key) => t(key) !== key));
+  if (plain.every(Boolean)) return join(plain.map((key) => t(key!)), t);
+  return t("activityFormat.numbered", { n: list.length, what: t(`activity.line.object.command.${list.length === 1 ? "one" : "many"}`) });
+}
+
+/** Model space by its name in the window, not its block's (`*Model_Space`). */
+function sheetName(name: string | number, t: Translate): string | number {
+  return typeof name === "string" && name.toLowerCase() === "*model_space" ? t("model") : name;
+}
+
 function withScope(text: string, params: Detail["params"], t: Translate): string {
   for (const field of ["layer", "sheet", "block", "collection"] as const) {
     const value = params[field];
     if (value != null) {
-      const name = field === "collection" ? t(`activity.line.object.${value}.many`) : value;
+      const name = field === "collection" ? t(`activity.line.object.${value}.many`) : field === "sheet" ? sheetName(value, t) : value;
       text = t(`activity.line.${field}`, { line: text, name });
     }
   }
@@ -104,8 +121,9 @@ export function activityLine(detail: Detail, status: "running" | "done", t: Tran
 }
 
 /** A translated activity sentence; raw tool input and output stay in support details. */
-export function ToolCard({ card, onShow, onUndo, recovering = false, repeat, showTechnicalDetails = false }: Props) {
-  const t = useT();
+export function ToolCard({ card, onShow, onUndo, recovering = false, repeat, showTechnicalDetails = false, language }: Props) {
+  const uiT = useT();
+  const t: Translate = language ? (key, vars) => translate(language, key, vars) : uiT;
   const subjectKey = `activity.subject.${card.activity?.category ?? "drawing"}`;
   const subject = t(subjectKey) === subjectKey ? t("activity.subject.drawing") : t(subjectKey);
   const effect = card.activity?.effect ?? (card.mutating ? "edit" : "read");
@@ -113,7 +131,7 @@ export function ToolCard({ card, onShow, onUndo, recovering = false, repeat, sho
     : card.activity?.detail ? activityLine(card.activity.detail, card.status, t)
       : t(`activity.${["read", "view", "edit", "file", "session"].includes(effect) ? effect : "edit"}.${card.status}`, { subject });
   return (
-    <div className={`tool-card ${card.status}`}>
+    <div className={`tool-card ${card.status}`} lang={language} dir={language ? (language === "ar" ? "rtl" : "ltr") : undefined}>
       <div className="tool-head">
         <span className="tool-state" aria-hidden="true">
           {card.status === "running" ? (

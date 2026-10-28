@@ -345,8 +345,16 @@ test("sheet, records, lookup and export lines name their objects", () => {
     .toBe('Made sheet "A-101 Ground floor" (A1, 1:100)');
   expect(line({ key: "activity.line.read", params: { what: "table", n: 6, layer: "A-TABLE", sheet: "Ground floor" } }))
     .toBe('Read 6 tables on A-TABLE on sheet "Ground floor"');
+  // A command's own name is not for the engineer: plain names when the window has them, else a count.
   expect(line({ key: "activity.line.lookup", params: { what: "command", name: "make_sheet, table" } }))
-    .toBe("Looked up how to use make_sheet, table");
+    .toBe("Looked up how to use 2 commands");
+  expect(line({ key: "activity.line.lookup", params: { what: "command", name: "rooms, free_space" } }))
+    .toBe("Looked up how to use room search and available space");
+  expect(line({ key: "activity.line.lookup", params: { what: "command", name: "drafting_knowledge" } }))
+    .toBe("Looked up how to use 1 command");
+  // Model space by its window name, not its block's.
+  expect(line({ key: "activity.line.read", params: { what: "table", n: 2, sheet: "*Model_Space" } }))
+    .toBe('Read 2 tables on sheet "Model"');
   expect(line({ key: "activity.line.export", params: { what: "file", file: "boq.xlsx" } }))
     .toBe("Exported boq.xlsx");
   expect(line({ key: "activity.line.add", params: { what: "table", name: "Door schedule", rows: 6 } }))

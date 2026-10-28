@@ -2951,6 +2951,9 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   rises above the line in a `unicode-range` face. The complete "Thmanyah Arabic" face fixes it, so
   `.md`, `.msg.user` and `.question-list` in Arabic use it on every descendant (`font-family:
   inherit`, beating the general `:lang(ar)` rule; code and Latin `bdi` keep theirs).
+  Wherever every space is kept (`white-space: pre-wrap` or `break-spaces`, and any `<textarea>`)
+  the word rises whatever the font: the user's bubble is `pre-line`, and Mizan's box writes the
+  tanween before the alef (`useDrafts.boxArabic`, the same word).
 - Settings stores `show_technical_details` through the existing settings IPC and settings.json;
   old files default to false. The app reads it at startup and applies saved changes immediately.
   Tool cards, review-plan diagnostics and refusal diagnostics hide disclosures when off. The
@@ -3385,6 +3388,13 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   panels under it have no heading or buttons of their own. The Artifacts icon in Mizan's header,
   just before History (left of it in English) (`OutputsMenu`, its count as a small badge; Arabic says المخرجات), opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
   Projects, Comments tabs and `SideTabs` are removed; the conversation and all outputs stay mounted.
+- Mizan's panel is in parts (28 Oct 2026): `AssistantPanel` (head, thread, output slot),
+  `ThreadItem` (one entry), `Composer` (the box), `useDrafts` (one draft per drawing: text,
+  pictures, PDFs, chosen options), `thread.ts` (open questions, the chat's language, recovered
+  failures), `chatErrors.ts`. What Mizan shows in the thread (step lines, plan, findings, the
+  waiting line) speaks the conversation's language, not the window's; step lines never show a
+  command's own name (`lookedUp`) or `*Model_Space` (shown as Model). File tabs keep an Arabic
+  name's extension at its end (`shell/FileName.tsx`).
 - The box (`.composer`): attach, mark an area and the model pill (`WorkspacePicker`, a popover: the model's name, or the
   provider's, with a spark; provider, model, effort of this drawing) under the text, send at the end. Typing "/" lists commands
   (`ai/slashCommands.ts`: takeoff, boq, compare, sheet, check, connect, new; English words in the
