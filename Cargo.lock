@@ -2252,7 +2252,7 @@ dependencies = [
  "rand 0.10.3",
  "rand_pcg",
  "robust",
- "rstar",
+ "rstar 0.12.2",
  "sif-itree",
 ]
 
@@ -2264,7 +2264,7 @@ checksum = "777d18aa0f12f8b285331cd867133ee14422b3f023f6d388034c47d43e28786a"
 dependencies = [
  "approx",
  "num-traits",
- "rstar",
+ "rstar 0.12.2",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -4571,7 +4571,7 @@ dependencies = [
  "console_log",
  "itertools 0.15.0",
  "js-sys",
- "libloading 0.7.4",
+ "libloading 0.9.0",
  "log",
  "maybe-owned",
  "once_cell",
@@ -5050,7 +5050,7 @@ dependencies = [
  "qiyas-pdf",
  "qiyas-render",
  "regex",
- "rstar",
+ "rstar 0.13.0",
  "schemars 1.2.2",
  "serde",
  "serde-reflection",
@@ -5182,7 +5182,7 @@ dependencies = [
  "opencadkernel",
  "qiyas-core",
  "qiyas-geom",
- "rstar",
+ "rstar 0.13.0",
  "rustybuzz",
  "unicode-bidi",
  "unicode-general-category",
@@ -5654,6 +5654,17 @@ name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "421400d13ccfd26dfa5858199c30a5d76f9c54e0dba7575273025b43c5175dbb"
+dependencies = [
+ "heapless",
+ "num-traits",
+ "smallvec",
+]
+
+[[package]]
+name = "rstar"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5912b862fa5ffb462607bfd1e35036c458c537921f508c8235a83d5f3987edfe"
 dependencies = [
  "heapless",
  "num-traits",
