@@ -4,6 +4,8 @@ import type { OutputFile } from "./outputFiles";
 
 export type OutputId = "takeoff" | "boq" | "conflicts" | "review";
 
+export type ShownOutput = OutputId | "file";
+
 export const OUTPUT_IDS: OutputId[] = ["takeoff", "boq", "conflicts", "review"];
 
 export type OutputInfo = {

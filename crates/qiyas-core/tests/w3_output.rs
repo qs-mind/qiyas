@@ -288,8 +288,8 @@ fn the_boq_lists_doors_and_windows_by_size_even_when_the_mapping_says_various() 
         assert_eq!(
             doors,
             [
-                ("Doors, various sizes — 1000 × 2100 mm".to_string(), 1.0),
-                ("Doors, various sizes — 900 × 2100 mm".to_string(), 2.0)
+                ("Doors, various sizes - 1000 × 2100 mm".to_string(), 1.0),
+                ("Doors, various sizes - 900 × 2100 mm".to_string(), 2.0)
             ],
             "units {units}"
         );
@@ -634,6 +634,38 @@ fn make_sheet_speaks_the_requested_language_and_takes_the_user_language_by_defau
 }
 
 #[test]
+fn make_sheet_translates_explicit_review_status_only_on_arabic_sheets() {
+    for (language, status, expected) in [
+        ("ar", "For review", "للمراجعة"),
+        ("ar", "  fOr ReViEw  ", "للمراجعة"),
+        ("ar", "  Approved  ", "Approved"),
+        ("en", "  For review  ", "For review"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("status.dwg"), 6);
+        run(
+            &mut s,
+            json!({"type":"make_sheet","name":"Status","language":language,
+                "status":status,"model_bounds":[[0,0],[12,15]]}),
+        );
+        let block = s
+            .drawing
+            .sheets()
+            .into_iter()
+            .find(|sheet| sheet.name == "Status")
+            .unwrap()
+            .block;
+        let texts = layout_texts(&s, &block);
+        assert!(texts.iter().any(|(text, _)| text == expected), "{texts:?}");
+        if language == "ar" && expected == "للمراجعة" {
+            assert!(!texts
+                .iter()
+                .any(|(text, _)| text.to_lowercase().contains("for review")));
+        }
+    }
+}
+
+#[test]
 fn tags_and_room_labels_live_together_on_a_walled_plan_in_every_unit() {
     for units in UNITS {
         let dir = tempfile::tempdir().unwrap();
@@ -809,8 +841,8 @@ fn door_lines_come_from_the_size_whatever_was_made_first_and_roll_up_for_a_clien
     let before = lines(&s);
     assert!(
         before.iter().any(|l| l.0 == "A-D01-900x2100"
-            && l.1 == "Doors, various sizes — 900 × 2100 mm"
-            && l.2 == "أبواب بمقاسات متنوعة — ٩٠٠ × ٢١٠٠ مم"),
+            && l.1 == "Doors, various sizes - 900 × 2100 mm"
+            && l.2 == "أبواب بمقاسات متنوعة - ٩٠٠ × ٢١٠٠ مم"),
         "{before:?}"
     );
     // A schedule and the tags give every opening a mark: the lines do not change.
@@ -856,7 +888,7 @@ fn the_arabic_boq_reads_in_arabic_words_digits_and_units() {
         .collect::<Vec<_>>()
         .join("|");
     assert!(
-        text.contains("أبواب بمقاسات متنوعة — ٩٠٠ × ٢١٠٠ مم"),
+        text.contains("أبواب بمقاسات متنوعة - ٩٠٠ × ٢١٠٠ مم"),
         "{text}"
     );
     assert!(text.contains("عدد"), "the unit is in Arabic: {text}");

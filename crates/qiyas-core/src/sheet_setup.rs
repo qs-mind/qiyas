@@ -186,7 +186,6 @@ impl Session {
         );
         // Paper, orientation and scale.
         let imperial = matches!(self.drawing.units, Units::Inches | Units::Feet);
-        let catalog = crate::layouts::paper_catalog();
         let candidates: Vec<String> = match &spec.paper {
             Some(name) => vec![name.clone()],
             None if imperial => ["ANSI B", "ANSI C", "ANSI D", "ANSI E"]
@@ -199,10 +198,7 @@ impl Session {
         let forced = spec.scale.as_deref().map(ratio).transpose()?;
         let mut chosen = None;
         for (i, name) in candidates.iter().enumerate() {
-            let paper = catalog
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case(name.trim()))
-                .ok_or_else(|| invalid(format!("No paper size {name} in the paper catalog")))?;
+            let paper = crate::layouts::lookup_paper(name)?;
             let orientations = match spec.orientation {
                 Some(o) => vec![o],
                 None => vec![LayoutOrientation::Landscape, LayoutOrientation::Portrait],
@@ -365,13 +361,14 @@ impl Session {
             ),
         );
         put("revision", Some(spec.revision.as_deref().unwrap_or("P01")));
+        let status = spec.status.as_deref().unwrap_or("For review").trim();
         put(
             "status",
-            Some(spec.status.as_deref().unwrap_or(if arabic {
+            Some(if arabic && status.eq_ignore_ascii_case("For review") {
                 "للمراجعة"
             } else {
-                "For review"
-            })),
+                status
+            }),
         );
         put("sheet", Some(spec.name.trim()));
         let empty_fields: Vec<String> = crate::layouts::SHEET_FIELDS

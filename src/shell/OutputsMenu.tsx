@@ -7,13 +7,14 @@ import { useT } from "../i18n";
 import { Glyph } from "./glyphs";
 import { outputGroups, type OutputId, type OutputInfo } from "./outputs";
 import type { OutputFile } from "./outputFiles";
-import { openOutputFile, revealOutputFile } from "./outputFileActions";
+import { revealOutputFile } from "./outputFileActions";
 
 type Props = {
   outputs: OutputInfo[];
   /** The output on screen, if one is. */
-  shown: OutputId | null;
+  shown: OutputId | "file" | null;
   onOpen(id: OutputId): void;
+  onOpenFile?(file: OutputFile): void;
   onExportEvidence?(): void;
   sheets?: readonly Sheet[];
   sheet?: string;
@@ -21,13 +22,13 @@ type Props = {
   files?: readonly OutputFile[];
 };
 
-export function OutputsMenu({ outputs, shown, onOpen, onExportEvidence, sheets = [], sheet, onSheet, files = [] }: Props) {
+export function OutputsMenu({ outputs, shown, onOpen, onOpenFile, onExportEvidence, sheets = [], sheet, onSheet, files = [] }: Props) {
   const t = useT();
   const groups = outputGroups(outputs, sheets, files);
   const [fileError, setFileError] = useState(false);
-  async function fileAction(path: string, reveal = false) {
+  async function fileAction(path: string) {
     setFileError(false);
-    try { await (reveal ? revealOutputFile(path) : openOutputFile(path)); }
+    try { await revealOutputFile(path); }
     catch { setFileError(true); }
   }
   return (
@@ -50,11 +51,11 @@ export function OutputsMenu({ outputs, shown, onOpen, onExportEvidence, sheets =
             {groups.files.length > 0 && <Menu.Group>
               <Menu.GroupLabel className="outputs-label">{t("outputs.files")}</Menu.GroupLabel>
               {groups.files.map((file) => <div className="output-file-row" key={file.path}>
-                <Menu.Item className="rb-item output-name" title={file.path} closeOnClick={false} onClick={() => void fileAction(file.path)}>
+                <Menu.Item className="rb-item output-name" title={file.path} onClick={() => onOpenFile?.(file)} disabled={!onOpenFile}>
                   <bdi>{file.name}</bdi>
                 </Menu.Item>
                 <Menu.Item className="rb-item output-reveal" closeOnClick={false} aria-label={t("outputs.revealFile", { name: file.name })}
-                  onClick={() => void fileAction(file.path, true)}>{t("outputs.showInFolder")}</Menu.Item>
+                  onClick={() => void fileAction(file.path)}>{t("outputs.showInFolder")}</Menu.Item>
               </div>)}
             </Menu.Group>}
             {(groups.takeoff.length > 0 || onExportEvidence) && <Menu.Group>

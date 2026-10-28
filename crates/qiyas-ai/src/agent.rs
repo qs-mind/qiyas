@@ -595,6 +595,32 @@ impl Agent {
     }
 
     async fn emit(&self, events: &mpsc::Sender<AgentEvent>, event: AgentEvent) {
+        let mut event = event;
+        match &mut event {
+            AgentEvent::Text { text }
+            | AgentEvent::Thinking { text }
+            | AgentEvent::Refused { text, .. } => *text = crate::dashes::plain_dashes(text),
+            AgentEvent::Question { questions } => {
+                for question in questions {
+                    question.question = crate::dashes::plain_dashes(&question.question);
+                    for option in &mut question.options {
+                        option.label = crate::dashes::plain_dashes(&option.label);
+                        if let Some(description) = &mut option.description {
+                            *description = crate::dashes::plain_dashes(description);
+                        }
+                    }
+                }
+            }
+            AgentEvent::Plan { phases }
+            | AgentEvent::AwaitingApproval {
+                plan: surface::Plan { phases },
+            } => {
+                for phase in phases {
+                    phase.title = crate::dashes::plain_dashes(&phase.title);
+                }
+            }
+            _ => {}
+        }
         conversation::append(
             &mut self
                 .transcript
@@ -2501,11 +2527,10 @@ impl Agent {
         if !dirty {
             return None;
         }
+        // An untitled or repaired drawing is the engineer's to name: Mizan never opens Save As
+        // (founder, 28 October 2026). The window's own Save asks when they choose to save.
         if untitled || repaired {
-            if !end || counts.asked_save {
-                return None;
-            }
-            counts.asked_save = true;
+            return None;
         }
         let session = self.session.clone();
         let (cancel, text) = (cancel.clone(), self.turn_text.clone());
@@ -2520,11 +2545,10 @@ impl Agent {
         let lang = self.chat_language;
         match ran {
             Ok(Ok(value)) if value["asked_user"] == true => {
-                self.log("SAVE", || "asked the user for a name (Save As)".into());
-                Some(match lang {
-                    Lang::En => "\n\nI opened Save As so this work is kept: please choose a name for the drawing.".into(),
-                    Lang::Ar => "\n\nفتحت نافذة «حفظ باسم» حتى يُحفظ هذا العمل: اختر اسمًا للرسم.".into(),
-                })
+                self.log("SAVE", || {
+                    "the host asked for a name; left to the user".into()
+                });
+                None
             }
             Ok(Ok(_)) => {
                 self.log("SAVE", || format!("saved {file}"));

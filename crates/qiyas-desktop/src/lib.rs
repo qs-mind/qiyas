@@ -59,6 +59,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             output_files::open_output_file,
             output_files::reveal_output_file,
+            output_files::file_view_info,
+            output_files::file_view_pdf_page,
+            output_files::file_view_workbook,
+            output_files::file_view_bytes,
             projects::project_command,
             projects::project_history,
             commands::open_drawing,

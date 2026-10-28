@@ -4,6 +4,7 @@
 mod dimensions;
 mod export;
 mod import;
+pub mod preview;
 pub mod report;
 
 pub use export::{export_table, export_takeoff, export_takeoff_with_report, BoqError};

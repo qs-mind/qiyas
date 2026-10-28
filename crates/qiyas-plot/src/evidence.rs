@@ -82,6 +82,19 @@ fn error(message: impl ToString) -> PlotError {
     PlotError::Output(message.to_string())
 }
 
+fn evidence_title(title: &str, language: Language) -> String {
+    if language == Language::Ar {
+        let title = if title == "Model" {
+            "النموذج"
+        } else {
+            title
+        };
+        format!("دليل الحصر - {title}")
+    } else {
+        format!("Take-off evidence - {title}")
+    }
+}
+
 /// Every BOQ source must be markable; refuse a partial evidence package rather than silently
 /// leave an item out. Informational items and unresolved second-reading disagreements follow
 /// the BOQ's own filtering in `deliverables::drawing`.
@@ -112,7 +125,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
         legends.insert(
             cell("code"),
             format!(
-                "{} — {} — {} {}",
+                "{} - {} - {} {}",
                 cell("code"),
                 cell("description"),
                 number,
@@ -209,11 +222,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
             let mut page = base.clone();
             let mut overlay = marks.clone();
             let arabic = language == Language::Ar;
-            let title = if arabic {
-                format!("دليل الحصر — {}", base.title)
-            } else {
-                format!("Take-off evidence — {}", base.title)
-            };
+            let title = evidence_title(&base.title, language);
             add_text(
                 &mut overlay,
                 &mut engine,
@@ -249,9 +258,9 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                 arabic,
             );
             let heading = if arabic {
-                "البند — الوصف — الكمية والوحدة"
+                "البند - الوصف - الكمية والوحدة"
             } else {
-                "Item — Description — Quantity / unit"
+                "Item - Description - Quantity / unit"
             };
             let x = if arabic {
                 (WIDTH - 10.0) * PT_PER_MM
@@ -438,4 +447,31 @@ pub fn write(snapshot: &EvidenceSnapshot, path: &Path) -> Result<PlotOutput, Plo
         path: path.to_path_buf(),
         skipped,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evidence_titles_translate_only_the_exact_model_title_in_arabic() {
+        assert_eq!(
+            evidence_title("Model", Language::Ar),
+            "دليل الحصر - النموذج"
+        );
+        assert_eq!(
+            evidence_title("Model", Language::En),
+            "Take-off evidence - Model"
+        );
+        for title in ["A-101", "Model details", "model", "المسقط الأفقي"] {
+            assert_eq!(
+                evidence_title(title, Language::Ar),
+                format!("دليل الحصر - {title}")
+            );
+            assert_eq!(
+                evidence_title(title, Language::En),
+                format!("Take-off evidence - {title}")
+            );
+        }
+    }
 }

@@ -15,7 +15,7 @@ import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
 import { outputList } from "../shell/outputs";
 import { OutputsMenu } from "../shell/OutputsMenu";
-import { transcriptFiles } from "../shell/outputFiles";
+import { transcriptFiles, type OutputFile } from "../shell/outputFiles";
 import { Notices } from "../ui/notices";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
@@ -49,8 +49,12 @@ export default function App() {
   /** Counts up when the canvas menu's Properties asks for the palette (it may be folded away). */
   const [revealProperties, setRevealProperties] = useState(0);
   const shell = useShell();
+  const [shownFile, setShownFile] = useState<OutputFile | null>(null);
+  const fileShown = shell.sideTab === "assistant" ? shownFile : null;
+  useEffect(() => { if (shell.sideTab !== "assistant") setShownFile(null); }, [shell.sideTab]);
+  const openFileOutput = (file: OutputFile) => { shell.setSideTab("assistant"); setShownFile(file); };
   // An output in the right column wants a wider panel than the conversation: its width is kept apart.
-  const rightSlot = shell.sideTab === "assistant" ? "right" : "rightWide";
+  const rightSlot = shell.sideTab === "assistant" && !fileShown ? "right" : "rightWide";
   const options = useOptions({ t, info, setError: shell.setError });
   // A key that asks for Mizan's box opens the column if it is folded away.
   useEffect(() => {
@@ -475,9 +479,13 @@ export default function App() {
           onConnect={() => setConnectOpen(true)}
           ask={shell.mizanAsk}
           recognition={{ revision: batch, run: runDrawingCommand }}
+          shownFile={fileShown}
+          onCloseFile={() => setShownFile(null)}
+          onOpenFile={openFileOutput}
+          files={outputFiles}
           artifacts={
-            <OutputsMenu outputs={outputList(takeoffState)} shown={shell.sideTab === "assistant" ? null : shell.sideTab}
-              onOpen={shell.setSideTab} onExportEvidence={info ? takeoff.exportEvidenceFile : undefined}
+            <OutputsMenu outputs={outputList(takeoffState)} shown={fileShown ? "file" : shell.sideTab === "assistant" ? null : shell.sideTab}
+              onOpen={shell.setSideTab} onOpenFile={openFileOutput} onExportEvidence={info ? takeoff.exportEvidenceFile : undefined}
               sheets={info?.sheets} sheet={sheet} onSheet={sheets.chooseSheet} files={outputFiles} />
           }
         />

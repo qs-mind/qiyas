@@ -6,7 +6,7 @@ import type { Pointing } from "../app/useAssistantWiring";
 import { useLanguage, useT } from "../i18n";
 import { uiError, userError } from "../i18n/errors";
 import { Glyph } from "../shell/glyphs";
-import type { OutputId } from "../shell/outputs";
+import type { ShownOutput } from "../shell/outputs";
 import { isPicture, MAX_PICTURES, type Picture } from "./pictures";
 import { slashCommand, slashMatches, slashWord, type SlashCommand } from "./slashCommands";
 import type { Drafts } from "./useDrafts";
@@ -23,7 +23,7 @@ type Props = {
   answering: boolean;
   pointing?: Pointing;
   /** The output on screen in place of the chat: the box asks about it. */
-  shownOutput: OutputId | null;
+  shownOutput: ShownOutput | null;
   model?: Partial<Pick<Assistant, "choice" | "choose">>;
   read(file: File): Promise<Picture>;
   onSubmit(): void;

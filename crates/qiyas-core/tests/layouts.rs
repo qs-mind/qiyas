@@ -50,6 +50,69 @@ fn values(s: &Session) -> BTreeSet<String> {
 }
 
 #[test]
+fn layout_commands_and_make_sheet_share_iso_paper_aliases() {
+    for paper in qiyas_core::paper_catalog()
+        .into_iter()
+        .filter(|paper| paper.name.starts_with("ISO ") || paper.name == "ANSI B")
+    {
+        let bare = paper.name.strip_prefix("ISO ").unwrap_or(&paper.name);
+        for input in [bare.to_string(), format!(" {} ", bare.to_lowercase())] {
+            let (_dir, mut s) = blank(6);
+            s.run(Command::NewLayout {
+                name: "Alias".into(),
+                paper: input.clone(),
+                orientation: LayoutOrientation::Portrait,
+            })
+            .unwrap();
+            let block = s
+                .drawing
+                .sheets()
+                .into_iter()
+                .find(|sheet| sheet.name == "Alias")
+                .unwrap()
+                .block;
+            s.set_sheet(&block).unwrap();
+            assert_eq!(s.paper(), Some(paper.clone()));
+            s.run(Command::SetLayoutPaper {
+                name: "Alias".into(),
+                paper: input.clone(),
+                orientation: LayoutOrientation::Landscape,
+            })
+            .unwrap();
+            let landscape = s.paper().unwrap();
+            assert_eq!(landscape.name, paper.name);
+            assert_eq!((landscape.w_mm, landscape.h_mm), (paper.h_mm, paper.w_mm));
+            s.set_sheet(MODEL).unwrap();
+            s.run_input(
+                &json!({"type":"make_sheet","name":"Made","paper":input,
+                    "orientation":"portrait","model_bounds":[[0,0],[1,1]]}),
+                qiyas_core::Source::User,
+            )
+            .unwrap();
+            let block = s
+                .drawing
+                .sheets()
+                .into_iter()
+                .find(|sheet| sheet.name == "Made")
+                .unwrap()
+                .block;
+            s.set_sheet(&block).unwrap();
+            assert_eq!(s.paper(), Some(paper.clone()));
+        }
+    }
+    let (_dir, mut s) = blank(6);
+    for paper in ["A5", "B", "ISO A5"] {
+        assert!(s
+            .run(Command::NewLayout {
+                name: "Unknown".into(),
+                paper: paper.into(),
+                orientation: LayoutOrientation::Portrait,
+            })
+            .is_err());
+    }
+}
+
+#[test]
 fn new_drawings_have_template_paper_without_a_history_step() {
     for (units, name, size) in [
         (4, "ISO A3", (420.0, 297.0)),

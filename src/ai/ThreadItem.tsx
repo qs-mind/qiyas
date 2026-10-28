@@ -2,7 +2,7 @@
  *  and the notices between them. */
 import type { ReactNode } from "react";
 import { translate, useLanguage, useT, type Lang } from "../i18n";
-import { chatText, contentLanguage, isolateRuns, messageFiles } from "./content";
+import { chatText, contentLanguage, isolateRuns, messageFiles, plainDashes } from "./content";
 import { connectionLost, stopText } from "./chatErrors";
 import { Markdown } from "./Markdown";
 import { PlanChecklist } from "./PlanChecklist";
@@ -81,7 +81,7 @@ export function ThreadItem({ item, i, cx }: { item: Item; i: number; cx: ThreadC
       );
     }
     case "assistant":
-      return <div className="msg assistant"><Markdown text={item.text} /></div>;
+      return <div className="msg assistant"><Markdown text={plainDashes(item.text)} /></div>;
     case "open_findings":
       return <div className="msg notice" role="note" lang={cx.chatLang} dir={cx.chatLang === "ar" ? "rtl" : "ltr"}>
         <strong className="heading">{said("ai.openFindings")}</strong>
@@ -119,7 +119,7 @@ export function ThreadItem({ item, i, cx }: { item: Item; i: number; cx: ThreadC
       return (
         <div className="msg notice refused" role="note">
           <strong className="heading">{t("ai.refused")}</strong>
-          {item.text && <Markdown text={item.text} />}
+          {item.text && <Markdown text={plainDashes(item.text)} />}
           {cx.showTechnicalDetails && item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
         </div>
       );

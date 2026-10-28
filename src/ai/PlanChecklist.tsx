@@ -1,9 +1,10 @@
+import { plainDashes } from "./content";
 import { withoutBody } from "../shell/methodName";
 import type { PlanPhase } from "../api";
 import { translate, useT, type Lang } from "../i18n";
 import "./plan.css";
 
-const MARK = { pending: "○", active: "●", done: "✓", skipped: "–" };
+const MARK = { pending: "○", active: "●", done: "✓", skipped: "-" };
 
 /** The latest phase snapshot for one turn, kept above that turn's answer. */
 export function PlanChecklist({ phases, stale = false, onApprove, onChange, language, showTechnicalDetails = false }: {
@@ -19,7 +20,7 @@ export function PlanChecklist({ phases, stale = false, onApprove, onChange, lang
   function title(phase: PlanPhase) {
     if (phase.id === "drawing-check") return t("ai.reviewDrawingErrors");
     if (phase.id === "drawing-check-review") return t("ai.reviewDrawingErrors");
-    return withoutBody(phase.title);
+    return plainDashes(withoutBody(phase.title));
   }
   return (
     <section className="mizan-plan" aria-label={t("ai.plan")}>
@@ -30,7 +31,7 @@ export function PlanChecklist({ phases, stale = false, onApprove, onChange, lang
           <li key={phase.id} data-status={phase.status} aria-current={phase.status === "active" ? "step" : undefined}>
             <span className="plan-mark" aria-hidden="true">{MARK[phase.status]}</span>
             <span className="plan-title" dir="auto">{title(phase)}</span>
-            {showTechnicalDetails && phase.id === "drawing-check-review" && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{phase.title}</pre></details>}
+            {showTechnicalDetails && phase.id === "drawing-check-review" && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{plainDashes(phase.title)}</pre></details>}
             <span className="plan-status">{t(`ai.plan.${phase.status}`)}</span>
           </li>
         ))}

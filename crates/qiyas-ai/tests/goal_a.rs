@@ -321,12 +321,11 @@ fn brief_checks_measure_sizes_site_direction_and_every_stated_deliverable() {
         {"id":"size","text":"A four metre edge","verify":{"kind":"length","targets":[{"handle":h}],"value":4,"in_metres":true}},
         {"id":"east","text":"Move the west corner 1.5 m east","read":{"op":"run","args":{"command":{"type":"site_coordinates","targets":[h]}},"pointer":"/outcome/report/rows/0/site_metres/0","subtract":[0,0],"expected":[1.5,0],"tolerance":0.000001}},
         {"id":"takeoff","text":"Deliver the requested take-off","read":{"op":"state","args":{},"pointer":"/takeoff_rows","expected":1}},
-        {"id":"rooms","text":"Two room outlines","verify":{"kind":"count","entity_type":"LwPolyline","value":2}},
-        {"id":"untied","text":"Four metres must be drawn","verify":{"kind":"distance","points":[[0,0],[4,0]],"value":4}}
+        {"id":"rooms","text":"Two room outlines","verify":{"kind":"count","entity_type":"LwPolyline","value":2}}
     ]})).unwrap();
     assert_eq!(s.revision(), before);
     assert_eq!(out["passed"], 1, "{out}");
-    assert_eq!(out["failed"], 4, "{out}");
+    assert_eq!(out["failed"], 3, "{out}");
     assert_eq!(out["results"][1]["measured"], json!([-0.5, 0.]));
     assert_eq!(out["results"][2]["measured"], 0);
     let refused=call(&mut s,surface::READ,"brief_check",json!({"expectations":[{"id":"unsafe","text":"Cannot use an edit as evidence","read":{"op":"run","args":{"command":{"type":"delete_entities","targets":[h]}},"pointer":"/added","expected":[]}}]})).unwrap();

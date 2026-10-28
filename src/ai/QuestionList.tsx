@@ -7,11 +7,11 @@
  *  one's options lettered. */
 import type { Question } from "../api";
 import { translate, useLanguage } from "../i18n";
-import { contentLanguage, isolateRuns } from "./content";
+import { contentLanguage, isolateRuns, plainDashes } from "./content";
 import { withoutBody } from "../shell/methodName";
 
 /** Latin words and sizes are isolated as in Mizan's answers, so they keep the Latin face. */
-const shown = (text: string) => isolateRuns(withoutBody(text));
+const shown = (text: string) => isolateRuns(plainDashes(withoutBody(text)));
 
 type Props = {
   questions: Question[];

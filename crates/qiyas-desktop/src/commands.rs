@@ -1984,6 +1984,12 @@ mod tests {
             let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
             let app = mock_builder()
                 .invoke_handler(tauri::generate_handler![
+                    crate::output_files::open_output_file,
+                    crate::output_files::reveal_output_file,
+                    crate::output_files::file_view_info,
+                    crate::output_files::file_view_pdf_page,
+                    crate::output_files::file_view_workbook,
+                    crate::output_files::file_view_bytes,
                     open_drawing,
                     new_drawing,
                     drawing_info,

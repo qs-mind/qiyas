@@ -21,6 +21,7 @@ pub mod claude_code;
 mod command_contract;
 pub mod context;
 pub mod conversation;
+mod dashes;
 pub mod errors;
 mod execute;
 pub mod host;

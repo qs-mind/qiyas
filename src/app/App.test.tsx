@@ -726,7 +726,7 @@ test("PLOT: a window clicked in the drawing (usePlot through the command line) i
     output: null,
   };
   expect(core.calls).toEqual(["drawing_info {\"workspace\":1}", `plot_pdf_to ${JSON.stringify({ job, path: "/d/plan.pdf", workspace: 1 })}`]);
-  await expectToasts(["Plotted to \u2068/d/plan.pdf\u2069 — pictures not plotted: 2"]);
+  await expectToasts(["Plotted to \u2068/d/plan.pdf\u2069 - pictures not plotted: 2"]);
   // The status bar goes back to the drawing's name.
   expect(status()).toBe("plan.dwg");
 });

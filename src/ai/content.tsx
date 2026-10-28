@@ -34,3 +34,8 @@ export function isolateRuns(text: string): ReactNode {
   return text.split(/([A-Za-z0-9][A-Za-z0-9_.:/\\×+−%²³-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.:/\\×+−%²³-]*)*)/g)
     .map((part, i) => i % 2 ? <bdi key={i} dir="ltr">{part}</bdi> : <Fragment key={i}>{part}</Fragment>);
 }
+
+/** Saved Mizan messages use the same plain dashes as new answers. */
+export function plainDashes(text: string): string {
+  return text.replace(/ [—–] /g, " - ").replace(/[—–―]/g, "-");
+}

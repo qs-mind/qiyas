@@ -565,8 +565,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     item.base_description_en = item.description_en.clone();
                     item.base_description_ar = item.description_ar.clone();
                     item.code = format!("{}-{code}", item.code);
-                    item.description_en = format!("{} — {en}", item.description_en);
-                    item.description_ar = format!("{} — {ar}", item.description_ar);
+                    item.description_en = format!("{} - {en}", item.description_en);
+                    item.description_ar = format!("{} - {ar}", item.description_ar);
                 }
             }
             let key = (

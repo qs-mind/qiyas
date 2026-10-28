@@ -582,7 +582,7 @@ async fn nothing_is_saved_when_nothing_changed() {
 }
 
 #[tokio::test]
-async fn an_untitled_drawing_is_not_asked_about_mid_work_but_once_at_the_end() {
+async fn an_untitled_drawing_is_never_saved_or_asked_about() {
     let dir = tempfile::tempdir().unwrap();
     let mut blank = Session::new_blank(&dir.path().join("Untitled-1.dwg"), 6);
     blank.mark_untitled();
@@ -600,7 +600,11 @@ async fn an_untitled_drawing_is_not_asked_about_mid_work_but_once_at_the_end() {
     let mut a =
         Agent::new(Box::new(provider), session, AgentSettings::default()).with_host(host.clone());
     let events = turn(&mut a, "Draw the plans").await;
-    assert_eq!(*host.saves.lock().unwrap(), 1, "asked once, at the end");
+    assert_eq!(
+        *host.saves.lock().unwrap(),
+        0,
+        "no Save As: naming is the engineer's"
+    );
     let said: String = events
         .iter()
         .filter_map(|e| match e {
@@ -608,7 +612,7 @@ async fn an_untitled_drawing_is_not_asked_about_mid_work_but_once_at_the_end() {
             _ => None,
         })
         .collect();
-    assert!(said.contains("Save As"), "{said}");
+    assert!(!said.contains("Save As"), "{said}");
 }
 
 // ---------------------------------------------------------------------------------------------

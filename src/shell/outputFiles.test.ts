@@ -40,3 +40,11 @@ test("ignores requested paths, ordinary messages, failed or running writes and m
 test("a new conversation has no files from the previous conversation", () => {
   expect(transcriptFiles({ items: [] })).toEqual([]);
 });
+
+test("collects all supported written output extensions and still requires an absolute path", () => {
+  const extensions = ["xlsm", "xls", "csv", "txt", "md", "json", "png", "jpg", "jpeg", "webp", "gif"];
+  const paths = extensions.map(ext => file(`output.${ext.toUpperCase()}`));
+  expect(transcriptFiles({ items: [card({ written: paths })] }).map(value => value.path)).toEqual(paths);
+  expect(transcriptFiles({ items: [card({ written: extensions.flatMap(ext => [`relative.${ext}`, `https://host/file.${ext}`, `/bad\nname.${ext}`]) })] })).toEqual([]);
+  expect(transcriptFiles({ items: [card({ written: ["C:\\files\\bill.xls", "\\\\server\\share\\photo.jpg"] })] }).map(value => value.name)).toEqual(["bill.xls", "photo.jpg"]);
+});

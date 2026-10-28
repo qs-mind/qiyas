@@ -2700,24 +2700,42 @@ fn export(session: &Session, op: &str, args: &Value) -> Result<Value, ToolError>
     } else {
         None
     };
-    if op == "export_takeoff" {
+    let mut out = if op == "export_takeoff" {
         let totals = session.takeoff.totals();
+        let report = session
+            .measurement_report()
+            .map_err(|e| ToolError::Failed(e.to_string()))?;
         qiyas_boq::export_takeoff_with_queries(
             &path,
             &session.takeoff.items,
             &totals,
             &stem,
-            &session
-                .measurement_report()
-                .map_err(|e| ToolError::Failed(e.to_string()))?,
+            &report,
             &session.conflicts,
         )
         .map_err(|e| ToolError::Failed(e.to_string()))?;
+        let generated_items = report
+            .items
+            .iter()
+            .filter(|item| !item.second_differs())
+            .count();
+        let dimension_lines: usize = report
+            .items
+            .iter()
+            .map(|item| qiyas_core::deliverables::printed_lines(item).len())
+            .sum();
+        json!({
+            "written": path.to_string_lossy(),
+            "rows": session.takeoff.items.len(),
+            "manual_rows": session.takeoff.items.len(),
+            "generated_items": generated_items,
+            "dimension_lines": dimension_lines,
+        })
     } else {
         qiyas_boq::report::export_conflicts(&path, &session.conflicts)
             .map_err(|e| ToolError::Failed(e.to_string()))?;
-    }
-    let mut out = json!({ "written": path.to_string_lossy(), "rows": if op == "export_takeoff" { session.takeoff.items.len() } else { session.conflicts.len() } });
+        json!({ "written": path.to_string_lossy(), "rows": session.conflicts.len() })
+    };
     if let Some(found) = draft {
         out["draft"] = json!(true);
         crate::advice::append(&mut out, draft_note(found));

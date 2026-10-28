@@ -65,6 +65,15 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
             "brief_check needs 1 to 100 expectations".into(),
         ));
     }
+    if items.iter().any(|item| {
+        item.verify.as_ref().is_some_and(|expectation| {
+            expectation.targets.is_empty() && expectation.kind != qiyas_core::VerifyKind::Count
+        })
+    }) {
+        return Err(ToolError::BadInput(
+            "Literal arithmetic cannot verify the drawing: use the drawing handles as `targets`, or a `read` item (op, args, pointer, expected) that measures the drawing. لا تتحقق العمليات الحسابية المجردة من الرسم: استخدم معرّفات عناصر الرسم في `targets`، أو بند `read` (op, args, pointer, expected) يقيس الرسم.".into(),
+        ));
+    }
     let mut ids = std::collections::BTreeSet::new();
     let mut results = Vec::new();
     for item in items {
@@ -77,8 +86,8 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
         let checked = match (item.verify, item.read) {
             (Some(expectation), None) => {
                 let r = session.verify(&[expectation])?.remove(0);
-                json!({"passed":r.passed && r.tied_to_drawing,"measured":r.measured,"expected":r.expected,"tolerance":r.tolerance,
-                    "evidence":r,"message":if r.tied_to_drawing {r.message.clone()} else {"Literal arithmetic does not verify the drawing".into()}})
+                json!({"passed":r.passed,"measured":r.measured,"expected":r.expected,"tolerance":r.tolerance,
+                    "evidence":r,"message":r.message})
             }
             (None, Some(read)) => {
                 // No recursive checklist, captures, file mutations or conversational reads.

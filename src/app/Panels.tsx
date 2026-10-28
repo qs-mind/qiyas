@@ -9,6 +9,7 @@ import { AssistantPanel } from "../ai/AssistantPanel";
 import type { ConversationHistoryState } from "../ai/ConversationHistory";
 import { BoqPanel } from "../boq/BoqPanel";
 import { ConflictsPanel } from "../boq/ConflictsPanel";
+import type { OutputFile } from "../shell/outputFiles";
 import { ArtifactFrame } from "../shell/ArtifactFrame";
 import { OUTPUT_IDS, outputList, type OutputId } from "../shell/outputs";
 import { useT } from "../i18n";
@@ -341,13 +342,17 @@ type SideProps = {
   ask?: { n: number; text: string };
   /** The Artifacts button of Mizan's head (sheets, files and take-off outputs). */
   artifacts?: ReactNode;
+  shownFile?: OutputFile | null;
+  onCloseFile?(): void;
+  onOpenFile?(file: OutputFile): void;
+  files?: readonly OutputFile[];
 };
 
 /** The right column (design B): Mizan's conversation, and, when Mizan's work is opened, the take-off,
  *  BOQ, conflicts or take-off report in the same column in place of the conversation, with a way
  *  back. The conversation and every output stay mounted, one shown, so a draft, a search or a
  *  running answer survives the switch. */
-export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect, ask, artifacts }: SideProps) {
+export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect, ask, artifacts, shownFile, onCloseFile, onOpenFile, files }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -366,7 +371,9 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
     openBoqTab,
   } = takeoff;
   const { assistant, showCard, undoCard, openSettings, pointing } = ai;
-  const shown: OutputId | null = sideTab === "assistant" ? null : sideTab;
+  const shown = shownFile ? "file" : sideTab === "assistant" ? null : sideTab;
+  const back = () => { onCloseFile?.(); setSideTab("assistant"); };
+  const selectOutput = (id: OutputId) => { onCloseFile?.(); setSideTab(id); };
   const drawing = info?.path.split(/[\\/]/).pop() ?? "";
   const outputs = outputList(takeoffState);
   /** The take-off report reads again when its head's Refresh is pressed. */
@@ -437,14 +444,16 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
     }
   };
   const frames = OUTPUT_IDS.map((id) => (
-    <div key={id} className="art-item" hidden={sideTab !== id}>
+    <div key={id} className="art-item" hidden={!!shownFile || sideTab !== id}>
       <ArtifactFrame
         id={id}
         outputs={outputs}
         meta={meta(id)}
         actions={actionsOf(id)}
-        onSelect={setSideTab}
-        onBack={() => setSideTab("assistant")}
+        onSelect={selectOutput}
+        files={files}
+        onSelectFile={onOpenFile}
+        onBack={back}
       >
         <div className="side-panel">{body(id)}</div>
       </ArtifactFrame>
@@ -463,7 +472,10 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
         onUndo={undoCard}
         onSettings={openSettings}
         pointing={pointing}
-        artifact={{ shown, node: frames, onBack: () => setSideTab("assistant") }}
+        artifact={{ shown, node: <>{frames}{shownFile && <div className="art-item">
+          <ArtifactFrame key={shownFile.path} id="file" file={shownFile} outputs={outputs} files={files}
+            onSelectFile={onOpenFile} onSelect={selectOutput} onBack={back} />
+        </div>}</>, onBack: back }}
         onCompare={onSlashCompare}
         onConnect={onConnect}
         ask={ask}

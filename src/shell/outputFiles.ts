@@ -6,7 +6,7 @@ export type OutputFile = { path: string; name: string };
 export function transcriptFiles(transcript: Transcript): OutputFile[] {
   const paths = new Set<string>();
   function written(value: unknown) {
-    if (typeof value === "string" && /\.(pdf|xlsx)$/i.test(value) && !/[\0\r\n]/.test(value)
+    if (typeof value === "string" && /\.(pdf|xlsx|xlsm|xls|csv|txt|md|json|png|jpg|jpeg|webp|gif)$/i.test(value) && !/[\0\r\n]/.test(value)
       && (/^\//.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\/.test(value))) {
       paths.add(value);
     } else if (Array.isArray(value)) value.forEach(written);

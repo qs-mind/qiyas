@@ -581,6 +581,82 @@ fn exports_refuse_new_files_beneath_a_symlink_outside_the_drawing_folder() {
 }
 
 #[test]
+fn takeoff_export_reports_manual_generated_and_dimension_rows() {
+    let (dir, mut s) = sample();
+    let empty = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"export_takeoff","args":{"path":"empty.xlsx"}}),
+    )
+    .unwrap();
+    for key in ["rows", "manual_rows", "generated_items", "dimension_lines"] {
+        assert_eq!(empty[key], 0, "{key}: {empty}");
+    }
+    let kit = call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
+    call(&mut s, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    let report = s.measurement_report().unwrap();
+    let generated = report
+        .items
+        .iter()
+        .filter(|item| !item.second_differs())
+        .count();
+    let lines: usize = report
+        .items
+        .iter()
+        .map(|item| qiyas_core::deliverables::printed_lines(item).len())
+        .sum();
+    assert!(generated > 0 && lines > 0);
+    assert!(s.takeoff.items.is_empty());
+    let written = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"export_takeoff","args":{"path":"generated DRAFT.xlsx"}}),
+    )
+    .unwrap();
+    assert_eq!(written["rows"], 0);
+    assert_eq!(written["manual_rows"], 0);
+    assert_eq!(written["generated_items"], generated);
+    assert_eq!(written["dimension_lines"], lines);
+    assert_eq!(
+        written["written"],
+        dir.path()
+            .join("generated DRAFT.xlsx")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(dir.path().join("generated DRAFT.xlsx").is_file());
+}
+
+#[test]
+fn brief_check_refuses_the_whole_call_for_literal_only_verification() {
+    let (_dir, mut s) = sample();
+    let revision = s.revision();
+    let error = call(
+        &mut s,
+        READ,
+        json!({"op":"brief_check","args":{"expectations":[
+            {"id":"count","text":"No circles","verify":{"kind":"count","entity_type":"Circle","value":0}},
+            {"id":"width","text":"A twelve metre width","verify":{"kind":"distance","targets":[],"points":[[0,0],[12,0]],"value":12}}
+        ]}}),
+    )
+    .unwrap_err();
+    let message = match error {
+        ToolError::BadInput(message) => message,
+        ToolError::Structured { code, message, .. } if code == "invalid_value" => message,
+        other => panic!("expected bad input, got {other:?}"),
+    };
+    for instruction in [
+        "drawing handles",
+        "`targets`",
+        "`read`",
+        "op, args, pointer, expected",
+    ] {
+        assert!(message.contains(instruction), "{message}");
+    }
+    assert_eq!(s.revision(), revision);
+}
+
+#[test]
 fn every_name_in_the_prompt_index_exists_in_the_registry() {
     let registry = qiyas_core::registry::registry();
     let index = qiyas_ai::prompt::command_index();

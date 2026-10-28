@@ -1,6 +1,28 @@
 /** Thin wrappers over the Tauri commands of qiyas-desktop (crates/qiyas-desktop/src/commands.rs). */
 import { invoke, setWorkspace, retainWorkspaces } from "./workspaceIpc";
 
+export type FileViewInfo = {
+  kind: "pdf" | "workbook" | "image" | "text";
+  name: string;
+  size_bytes: number;
+  pages: number | null;
+};
+export type FileViewSheet = {
+  name: string;
+  hidden: boolean;
+  rows: string[][];
+  rows_total: number;
+  cols_total: number;
+  truncated: boolean;
+};
+export type FileViewWorkbook = { sheets: FileViewSheet[] };
+
+export const fileViewInfo = (path: string) => invoke<FileViewInfo>("file_view_info", { path });
+export const fileViewPdfPage = (path: string, page: number, widthPx: number) =>
+  invoke<ArrayBuffer>("file_view_pdf_page", { path, page, widthPx });
+export const fileViewWorkbook = (path: string) => invoke<FileViewWorkbook>("file_view_workbook", { path });
+export const fileViewBytes = (path: string) => invoke<ArrayBuffer>("file_view_bytes", { path });
+
 export type Sheet = { name: string; block: string; is_model: boolean };
 
 export type LayerInfo = {

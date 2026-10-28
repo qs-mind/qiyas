@@ -4360,3 +4360,42 @@ code, kbd, .chip { unicode-bidi: isolate; }
 
 /* A layers-panel row that holds its own margins, so the virtual list measures its whole height. */
 .layer-vrow { display: flow-root; }
+
+/* Files share the output column and leave the composer below it. */
+.file-viewer, .file-workbook, .file-sheet {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.file-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.file-controls { display: flex; flex: none; gap: 6px; padding: 8px 12px; overflow-x: auto; border-bottom: 1px solid var(--rule); }
+.file-controls button { flex: none; padding: 5px 10px; border: 1px solid var(--rule); border-radius: 6px; }
+.file-controls [aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
+.file-controls button:focus-visible, .file-image:focus-visible, .file-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.file-status { display: flex; align-items: center; gap: 8px; padding: 12px; margin: 0; color: var(--muted); }
+.file-pages { background: var(--panel); }
+.file-page { margin: 12px; }
+.file-page figcaption { margin-bottom: 6px; color: var(--muted); }
+.file-page-picture { position: relative; background: var(--paper); }
+.file-page-picture canvas { display: block; width: 100%; height: 100%; }
+.file-page-picture .file-status { position: absolute; inset-block-start: 0; inset-inline-start: 0; background: var(--bg); }
+.file-table { min-width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+.file-table th, .file-table td { padding: 8px 10px; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; border-inline-end: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--bg); text-align: start; }
+.file-table thead { position: sticky; top: 0; z-index: 2; }
+.file-table th { background: var(--panel); }
+.file-table tr > :first-child { position: sticky; z-index: 1; }
+.file-table:dir(ltr) tr > :first-child { left: 0; }
+.file-table:dir(rtl) tr > :first-child { right: 0; }
+.file-table td.file-spacer { position: static; padding: 0; border: 0; }
+.file-image { display: block; width: 100%; padding: 12px; cursor: zoom-in; }
+.file-image img { display: block; max-width: 100%; height: auto; margin: auto; }
+.file-image.actual { width: max-content; min-width: 100%; cursor: zoom-out; }
+.file-image.actual img { max-width: none; }
+.file-text { padding: 12px; }
+.file-text pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 "Thmanyah Sans", ui-monospace, monospace; }
+@media (prefers-reduced-motion: reduce) {
+  .file-viewer *, .file-viewer *::before, .file-viewer *::after { transition: none; }
+}

@@ -1365,7 +1365,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `qiyas-core/src/layouts.rs` owns `Paper { name, w_mm, h_mm }` and `paper_catalog()` (ISO A0
   to A4, ANSI A to E, ARCH A to E1, portrait), re-exported by `qiyas-plot` to avoid a dependency
   cycle. `NewLayout { name, paper, orientation }` creates a sized paper layout through the
-  codec's `add_layout`; `paper` is a catalog name such as `"ISO A1"`, and orientation is
+  codec's `add_layout`; `paper` is a catalog name such as `"ISO A1"` (`"A1"` without ISO works too, `lookup_paper`), and orientation is
   `portrait` (default) or `landscape`. It leaves the sheet on screen selected. A taken name
   (any case), invalid name or collision with the backing paper-space block is refused.
   `RenameLayout { from, to }` changes the layout and dictionary entry while keeping its block.
@@ -3194,6 +3194,8 @@ New untitled drawings skip placeholder names already present in chat history or 
   Each item returns pass/fail, measured value and evidence. The caller supplies the user's
   actual words and thresholds; the engine has no room, villa or trade-specific brief rules.
   An `artifact` read checks only existence/size of an export beside the drawing, not contents.
+  A `verify` with no targets is refused unless it is a count: literal points prove nothing
+  about the drawing (a tied verify passes or fails on its own result).
   Unmet items are appended to the final answer. Later edits mark earlier checks as needing
   rechecking; the saved checklist survives a conversation restart conservatively.
 
@@ -3353,8 +3355,8 @@ Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas
 - Reply language: the latest message decides; an answer clearly in the other language
   (`judgement::language_mismatch`) is sent back once (`ai.error.language_retry`).
 - Saving (`agent.rs` `keep_work`): after a finished phase that changed a titled drawing the agent
-  saves through the host; an untitled one is not touched mid-work, and at the turn's end the host
-  opens the window's Save As once and the answer says so. Nothing is saved when Mizan changed nothing.
+  saves through the host; an untitled or repaired one is never saved and Save As never opens
+  (founder, 28 October 2026): the engineer saves it when they choose. Nothing is saved when Mizan changed nothing.
 - Drawing on assumptions the engineer allowed: Mizan puts them on the sheet as general
   notes (title block status "For review") and lists them in the answer. Qiyas draws; loads, design
   calculations and approval are the engineer's and the company's (company policy).
@@ -3412,6 +3414,18 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   Ctrl+F1 collapses it (`qiyas.ribbon.collapsed`); a tab clicked while collapsed shows its panel over
   the drawing until Esc, a click elsewhere or a tool. Layout tabs (`SheetTabs`): no scrollbar; the
   edge with more fades and has an arrow. Layer names wrap and are their own tooltip.
+- Built-in file viewer (28 Oct 2026): a written file in the Artifacts menu (or the output head's
+  switch) opens inside Mizan's column, never in another app (`shell/FileViewer.tsx`): PDF pages drawn
+  by pdfium as they scroll into view (IPC `file_view_pdf_page`, the `underlay_image` byte layout,
+  200 to 2400 px wide), workbooks as sheet tabs (`file_view_workbook`, `qiyas_boq::preview`, at most
+  5000 rows and 80 columns a sheet, hidden sheets left out), images, CSV as a table, Markdown and
+  text (`file_view_bytes`, 25 MB and 2 MB). `file_view_info` gives kind, name, size and pages.
+  Paths are absolute, canonical, regular files with one of pdf, xlsx, xlsm, xls, csv, txt, md, json,
+  png, jpg, jpeg, webp, gif (`output_files.rs`); "Show in folder" stays.
+- No long dash in Mizan's words (founder, 28 Oct 2026): both prompts forbid "—"; `qiyas-ai/src/dashes.rs`
+  turns —, – and ― into "-" in every text, question, plan and refusal event, and `content.tsx`
+  `plainDashes` does the same for saved chats. Qiyas's own client text (BOQ descriptions, evidence
+  PDF, code register quotes) uses " - " too.
 - Settings is in sections (`SettingsDialog`, a vertical Base UI Tabs: Mizan, Measurement, General,
   Connected apps, Support; every panel `keepMounted`, so Save reads them all).
 - "Connect an AI app" (`shell/ConnectAiDialog.tsx`; plug in the top bar, `/connect`, the empty chat):
@@ -3492,7 +3506,7 @@ villa request in Arabic through the scripted provider).
   nothing. `ObjectSchedule.language: "ar"` (`ar_headers`, `ar_templates`, `ar_totals`) gives Arabic
   headers, kinds and digits; `opening_schedule` and `room_schedule` take `language`.
 - BOQ: lines split by size or mark for doors and windows when the mapping does not say it
-  (`{mark}`, `{width}`, `{size}`... in its text): code `A-D01-D-900x2100`, description `… — 900 × 2100 mm`.
+  (`{mark}`, `{width}`, `{size}`... in its text): code `A-D01-D-900x2100`, description `… - 900 × 2100 mm`.
   Other objects keep the mapping's code (a client BOQ is matched by it). One code with several descriptions
   is numbered (`-2`), with a warning, not refused. `Mapping.informational` (also read from "gross floor
   area", "GFA", "إجمالي المسطح"…) keeps a line out of the BOQ and the comparison; the dimension sheets keep it.

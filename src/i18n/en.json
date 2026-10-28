@@ -76,7 +76,7 @@
   "plot.cancel": "Cancel",
   "plot.plotting": "Plotting…",
   "plot.done": "Plotted to {path}",
-  "plot.doneSkipped": "Plotted to {path} — pictures not plotted: {n}",
+  "plot.doneSkipped": "Plotted to {path} - pictures not plotted: {n}",
   "plot.sentTo": "Sent to {printer}",
   "plot.sentDefault": "Sent to the default printer",
   "plot.openedViewer": "Opened in the PDF viewer: print from there",
@@ -2255,5 +2255,15 @@
   "outputs.showInFolder": "Show in folder",
   "outputs.revealFile": "Show {name} in folder",
   "outputs.none": "Sheets and files will appear here as you work.",
-  "outputs.fileActionFailed": "Could not open this file or its folder. It may have moved or been deleted."
+  "outputs.fileActionFailed": "Could not open this file or its folder. It may have moved or been deleted.",
+  "fileView.loading": "Loading file…",
+  "fileView.page": "Page {n} of {total}",
+  "fileView.zoomOut": "Zoom out",
+  "fileView.zoomIn": "Zoom in",
+  "fileView.fitWidth": "Fit width",
+  "fileView.actualSize": "Actual size",
+  "fileView.sheets": "Workbook sheets",
+  "fileView.truncated": "Preview limited: showing {rows} of {total} rows; the sheet has {cols} columns.",
+  "fileView.empty": "Nothing to show in this file.",
+  "outputs.ask.file": "Ask about this file…"
 }

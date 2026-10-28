@@ -16,6 +16,8 @@ mod fixture;
 mod goal_u_exports;
 #[path = "import.rs"]
 mod import;
+#[path = "preview.rs"]
+mod preview;
 #[path = "queries.rs"]
 mod queries;
 #[path = "report.rs"]

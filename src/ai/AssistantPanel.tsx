@@ -16,7 +16,7 @@ import { ThreadItem, type ThreadContext } from "./ThreadItem";
 import { chatLanguage, openQuestions, recoveryGroups } from "./thread";
 import { useDrafts } from "./useDrafts";
 import { Glyph } from "../shell/glyphs";
-import type { OutputId } from "../shell/outputs";
+import type { ShownOutput } from "../shell/outputs";
 import type { Assistant } from "./useAssistant";
 import { useStickToBottom } from "./useStickToBottom";
 
@@ -35,7 +35,7 @@ type Props = {
   history?: ConversationHistoryState;
   /** The right column's outputs (the take-off, the BOQ...): `node` holds them all, mounted; while
    *  one is `shown` it takes the conversation's place, and the box below stays. */
-  artifact?: { shown: OutputId | null; node: ReactNode; onBack(): void };
+  artifact?: { shown: ShownOutput | null; node: ReactNode; onBack(): void };
   /** The drawing on screen and the same revision used by the take-off report. */
   drawing?: { path: string; revision: unknown; hasTakeoff: boolean };
   /** The /compare command: ask for a BOQ and find its conflicts with the drawings. */

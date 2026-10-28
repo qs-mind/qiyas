@@ -1,6 +1,7 @@
 /** An output in the right column (design B): it takes the conversation's place, with a way back.
  *  Its head has the back arrow, its name (a menu to the other outputs), what it holds, an action
  *  and a close button. */
+import { FileViewer } from "./FileViewer";
 import { Menu } from "@base-ui/react/menu";
 import { useState, type ReactNode } from "react";
 import { useT } from "../i18n";
@@ -19,10 +20,12 @@ type Props = ({ id: OutputId; file?: never } | { id: "file"; file: OutputFile })
   actions?: { id: string; label: string; onClick(): void; disabled?: boolean; primary?: boolean }[];
   onSelect(id: OutputId): void;
   onBack(): void;
-  children: ReactNode;
+  children?: ReactNode;
+  files?: readonly OutputFile[];
+  onSelectFile?(file: OutputFile): void;
 };
 
-export function ArtifactFrame({ id, file, outputs, meta, actions = [], onSelect, onBack, children }: Props) {
+export function ArtifactFrame({ id, file, outputs, meta, actions = [], onSelect, onBack, children, files = [], onSelectFile }: Props) {
   const t = useT();
   const title = id === "file" ? file.name : t(`outputs.${id}`);
   const [fileError, setFileError] = useState(false);
@@ -39,9 +42,9 @@ export function ArtifactFrame({ id, file, outputs, meta, actions = [], onSelect,
           <Glyph name="next" mirror />
         </button>
         <h2 className="art-heading" aria-label={title}>
-        {file ? <bdi className="art-title heading">{title}</bdi> : <Menu.Root modal={false}>
+        <Menu.Root modal={false}>
           <Menu.Trigger className="art-title heading" aria-label={t("outputs.switch")}>
-            {t(`outputs.${id}`)}
+            <bdi>{title}</bdi>
             <Glyph name="down" size={14} />
           </Menu.Trigger>
           <Menu.Portal>
@@ -55,10 +58,12 @@ export function ArtifactFrame({ id, file, outputs, meta, actions = [], onSelect,
                     </Menu.RadioItem>
                   ))}
                 </Menu.RadioGroup>
+                {files.map(item => <Menu.Item key={item.path} className={item.path === file?.path ? "rb-item on" : "rb-item"}
+                  disabled={!onSelectFile} onClick={() => onSelectFile?.(item)}><bdi>{item.name}</bdi></Menu.Item>)}
               </Menu.Popup>
             </Menu.Positioner>
           </Menu.Portal>
-        </Menu.Root>}
+        </Menu.Root>
         </h2>
         <span className="grow" />
         <button type="button" className="ib" aria-label={t("outputs.close")} title={t("outputs.close")} onClick={onBack}>
@@ -77,7 +82,7 @@ export function ArtifactFrame({ id, file, outputs, meta, actions = [], onSelect,
         ))}
       </div>}
       {fileError && <p className="outputs-note" role="alert">{t("outputs.fileActionFailed")}</p>}
-      <div className="art-body">{children}</div>
+      <div className="art-body">{file ? <FileViewer path={file.path} /> : children}</div>
     </section>
   );
 }

@@ -50,19 +50,22 @@ test("the menu labels its groups and count, opens a sheet, and hides empty outpu
 });
 
 test("files open in the viewer and have a separate Show in folder action", async () => {
-  render(<OutputsMenu outputs={[]} files={[file]} shown={null} onOpen={vi.fn()} />);
+  const onOpenFile = vi.fn();
+  render(<OutputsMenu outputs={[]} files={[file]} shown={null} onOpen={vi.fn()} onOpenFile={onOpenFile} />);
   fireEvent.click(screen.getByRole("button"));
   fireEvent.click(await screen.findByRole("menuitem", { name: "plan.pdf" }));
-  expect(openOutputFile).toHaveBeenCalledWith(file.path);
-  fireEvent.click(screen.getByRole("menuitem", { name: en["outputs.revealFile"].replace("{name}", file.name) }));
+  expect(onOpenFile).toHaveBeenCalledWith(file);
+  expect(openOutputFile).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: en["outputs.revealFile"].replace("{name}", file.name) }));
   expect(revealOutputFile).toHaveBeenCalledWith(file.path);
-  expect(openOutputFile).toHaveBeenCalledTimes(1);
+  expect(openOutputFile).not.toHaveBeenCalled();
 });
 
 test("file action failures are explained in the menu", async () => {
-  vi.mocked(openOutputFile).mockRejectedValueOnce(new Error("missing"));
+  vi.mocked(revealOutputFile).mockRejectedValueOnce(new Error("missing"));
   render(<OutputsMenu outputs={[]} files={[file]} shown={null} onOpen={vi.fn()} />);
   fireEvent.click(screen.getByRole("button"));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "plan.pdf" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: en["outputs.revealFile"].replace("{name}", file.name) }));
   expect((await screen.findByRole("alert")).textContent).toBe(en["outputs.fileActionFailed"]);
 });

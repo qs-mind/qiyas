@@ -50,6 +50,20 @@ pub fn paper_catalog() -> Vec<Paper> {
     .collect()
 }
 
+pub(crate) fn lookup_paper(name: &str) -> Result<Paper, CoreError> {
+    let name = name.trim();
+    paper_catalog()
+        .into_iter()
+        .find(|paper| {
+            paper.name.eq_ignore_ascii_case(name)
+                || paper
+                    .name
+                    .strip_prefix("ISO ")
+                    .is_some_and(|iso| iso.eq_ignore_ascii_case(name))
+        })
+        .ok_or_else(|| invalid(format!("No paper size {name} in the paper catalog")))
+}
+
 /// The orientation of a new layout's paper.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -251,10 +265,7 @@ impl Session {
         orientation: LayoutOrientation,
     ) -> Result<(), CoreError> {
         let name = check_name(name)?;
-        let paper = paper_catalog()
-            .into_iter()
-            .find(|p| p.name.eq_ignore_ascii_case(paper.trim()))
-            .ok_or_else(|| invalid(format!("No paper size {paper} in the paper catalog")))?;
+        let paper = lookup_paper(paper)?;
         let doc = &mut self.drawing.doc;
         if let Some(old) = doc.objects.values().find_map(|o| match o {
             ObjectType::Layout(layout) if layout.name.eq_ignore_ascii_case(name) => Some(layout),
@@ -301,10 +312,7 @@ impl Session {
         paper: &str,
         orientation: LayoutOrientation,
     ) -> Result<(), CoreError> {
-        let paper = paper_catalog()
-            .into_iter()
-            .find(|p| p.name.eq_ignore_ascii_case(paper.trim()))
-            .ok_or_else(|| invalid(format!("No paper size {paper} in the paper catalog")))?;
+        let paper = lookup_paper(paper)?;
         let layout = self
             .drawing
             .doc
