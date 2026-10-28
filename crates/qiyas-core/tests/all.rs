@@ -184,6 +184,8 @@ mod w5_drafting;
 mod wall_copy_mirror;
 #[path = "wall_defaults.rs"]
 mod wall_defaults;
+#[path = "wall_face_areas.rs"]
+mod wall_face_areas;
 #[path = "wall_object_recipes.rs"]
 mod wall_object_recipes;
 #[path = "wall_persistence.rs"]

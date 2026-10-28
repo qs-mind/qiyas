@@ -426,7 +426,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     .map(|l| l.value)
                     .sum();
                 report.warnings.push(format!(
-                    "Rule {} on object {} ({}): deductions of {:.3} {unit} exceed its gross quantity of {gross:.3} {unit}, so its quantity is limited to 0. If the rule deducts from geometry.volume, geometry.net_area or another net figure, those already exclude the hosted openings: deduct from geometry.gross_volume or geometry.gross_area instead, or drop the deduction. Otherwise check the openings on this object",
+                    "Rule {} on object {} ({}): deductions of {:.3} {unit} exceed its gross quantity of {gross:.3} {unit}, so its quantity is limited to 0. If the rule deducts from geometry.volume, geometry.net_area, geometry.internal_face_area, geometry.external_face_area or another net figure, those already exclude the hosted openings: deduct from geometry.gross_volume, geometry.gross_area or the corresponding geometry.gross_internal_face_area / geometry.gross_external_face_area instead, or drop the deduction. Otherwise check the openings on this object",
                     rule.id,
                     object.instance.id,
                     object.instance.type_name,

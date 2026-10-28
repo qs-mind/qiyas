@@ -404,6 +404,15 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Data-defined elements (Phase 16)
 
+- Band geometry exposes `geometry.external_face_area`, `geometry.internal_face_area`,
+  `geometry.gross_external_face_area` and `geometry.gross_internal_face_area` in m².
+  Faces follow the uncut union at each vertical span: outer rings are external, room holes
+  internal. Net faces exclude each hosted opening on every face it crosses; gross faces do not.
+- Face edges belong to their generating strip, with smallest driver id breaking ties;
+  junction hull edges belong to the smallest driver contributing an endpoint. Face allocations
+  are nonnegative and sum to the assembly, without prefix differencing. Wall masonry uses
+  `geometry.volume`; internal plaster and external render use separate net face quantities.
+
 - `knowledge.rs`: versioned JSON XRecords in `NOD/QIYAS_KNOWLEDGE`, with subdictionaries
   types, levels, tables, rules, sheets, mappings, views and measurement. Objects and the NOD
   pointer participate in undo; stale DWG raw payloads are cleared on write. Knowledge and

@@ -28,6 +28,14 @@ pub(crate) struct BandCut {
     pub height_m: f64,
 }
 
+#[derive(Default)]
+pub(crate) struct FaceAreas {
+    pub external: f64,
+    pub internal: f64,
+    pub gross_external: f64,
+    pub gross_internal: f64,
+}
+
 pub(crate) struct BandDerived {
     pub geometry: walls::Walls,
     pub gross_volume: f64,
@@ -139,6 +147,104 @@ pub(crate) fn derive_band(
         gross_volume,
         net_volume,
     })
+}
+
+/// Faces of one complete assembly, using the same validated inputs and placed cuts as its
+/// band geometry. Kept separate from prefix volume derivation and cached by the caller.
+pub(crate) fn derive_faces(
+    members: &[BandMember],
+    cuts: &[BandCut],
+    geometry: &walls::Walls,
+    factor: f64,
+    tolerance: f64,
+) -> Result<BTreeMap<u64, FaceAreas>, CoreError> {
+    #[cfg(any(test, feature = "fixtures"))]
+    let _profile = crate::fixtures::profile::span("object_bands.derive_faces");
+    let indices: BTreeMap<_, _> = members.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
+    let runs: Vec<_> = members
+        .iter()
+        .map(|m| walls::Run {
+            points: m.points.clone(),
+            closed: m.closed,
+            thickness: Some(m.width_m / factor),
+            justification: Some(m.justification),
+        })
+        .collect();
+    let width = runs[0].thickness.expect("evaluated width");
+    let mut levels: Vec<_> = members
+        .iter()
+        .flat_map(|m| [m.base_m, m.base_m + m.height_m])
+        .collect();
+    levels.sort_by(f64::total_cmp);
+    levels.dedup();
+    let mut faces: BTreeMap<u64, FaceAreas> = members
+        .iter()
+        .map(|m| (m.id, FaceAreas::default()))
+        .collect();
+    for span in levels.windows(2) {
+        let mut active_members: Vec<_> = members
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.base_m < span[1] && m.base_m + m.height_m > span[0])
+            .collect();
+        if active_members.is_empty() {
+            continue;
+        }
+        active_members.sort_by_key(|(_, m)| m.id);
+        let face_runs: Vec<_> = active_members
+            .iter()
+            .map(|(i, _)| runs[*i].clone())
+            .collect();
+        let boundary = walls::boundary_faces(&face_runs, width, tolerance)
+            .map_err(|error| invalid(error.to_string()))?;
+        // Cuts subdivide only face integration; existing volume arithmetic stays unchanged.
+        let mut face_levels = vec![span[0], span[1]];
+        for cut in cuts {
+            face_levels.extend([
+                cut.base_m.clamp(span[0], span[1]),
+                (cut.base_m + cut.height_m).clamp(span[0], span[1]),
+            ]);
+        }
+        face_levels.sort_by(f64::total_cmp);
+        face_levels.dedup();
+        for face_span in face_levels.windows(2) {
+            let openings: Vec<_> = cuts
+                .iter()
+                .zip(&geometry.openings)
+                .filter(|(cut, _)| {
+                    let host = &members[indices[&cut.host]];
+                    cut.base_m < face_span[1]
+                        && cut.base_m + cut.height_m > face_span[0]
+                        && host.base_m < face_span[1]
+                        && host.base_m + host.height_m > face_span[0]
+                })
+                .map(|(_, opening)| *opening)
+                .collect();
+            let scale = factor * (face_span[1] - face_span[0]);
+            for face in &boundary {
+                let values = faces
+                    .get_mut(&active_members[face.run].1.id)
+                    .expect("member");
+                let gross = face.length() * scale;
+                let net = face.net_length(&openings) * scale;
+                if face.external {
+                    values.gross_external += gross;
+                    values.external += net;
+                } else {
+                    values.gross_internal += gross;
+                    values.internal += net;
+                }
+            }
+        }
+    }
+    if faces.values().any(|v| {
+        [v.external, v.internal, v.gross_external, v.gross_internal]
+            .iter()
+            .any(|v| !v.is_finite())
+    }) {
+        return Err(invalid("Band face area exceeds the finite numeric range"));
+    }
+    Ok(faces)
 }
 
 /// The same recipe produces faces, filled regions and path graphics for every element type.

@@ -98,6 +98,10 @@ pub enum Command {
     Recognition(Box<crate::recognition::RecognitionCommand>),
     /// Stores an element type as drawing knowledge. Properties and quantities are data;
     /// no trade is built in. Numeric property units are metres, m², m³, degrees or counts.
+    /// Band quantities include geometry.volume and geometry.gross_volume in m³, plus
+    /// geometry.external_face_area, geometry.internal_face_area, geometry.gross_external_face_area
+    /// and geometry.gross_internal_face_area in m². Gross union outer rings are external;
+    /// holes are internal. Net faces exclude hosted openings; allocations sum to the assembly.
     /// One undo step includes the knowledge dictionary.
     #[schemars(extend("x-category" = "objects", "x-words" = ["DEFINEOBJECTTYPE"], "x-takeoff-step" = "2 define types"))]
     #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]

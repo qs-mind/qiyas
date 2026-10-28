@@ -552,7 +552,15 @@ fn host_fact_available(name: &str) -> bool {
     qiyas_param::expr::is_name(name)
         && !matches!(
             fact,
-            "area" | "gross_area" | "net_area" | "volume" | "gross_volume"
+            "area"
+                | "gross_area"
+                | "net_area"
+                | "volume"
+                | "gross_volume"
+                | "external_face_area"
+                | "internal_face_area"
+                | "gross_external_face_area"
+                | "gross_internal_face_area"
         )
 }
 fn reserved(name: &str) -> bool {
@@ -572,6 +580,10 @@ fn reserved(name: &str) -> bool {
             | "net_area"
             | "volume"
             | "gross_volume"
+            | "external_face_area"
+            | "internal_face_area"
+            | "gross_external_face_area"
+            | "gross_internal_face_area"
             | "rotation"
     ) || name.strip_prefix("host.").is_some_and(host_fact_available)
         || name.strip_prefix("geometry.").is_some_and(|n| {
@@ -591,6 +603,10 @@ fn reserved(name: &str) -> bool {
                     | "net_area"
                     | "volume"
                     | "gross_volume"
+                    | "external_face_area"
+                    | "internal_face_area"
+                    | "gross_external_face_area"
+                    | "gross_internal_face_area"
                     | "rotation"
             )
         })
@@ -1595,6 +1611,28 @@ impl Session {
         if let Some(band) = self.evaluation.borrow().bands.get(&key) {
             return Ok(Some(band.clone()));
         }
+        let (members, cuts) = self.band_inputs(&members, definition)?;
+        let band = std::sync::Arc::new(crate::object_bands::derive_band(
+            &members,
+            &cuts,
+            self.drawing.units.to_metres(),
+            self.measure_tol(),
+        )?);
+        self.evaluation.borrow_mut().bands.insert(key, band.clone());
+        Ok(Some(band))
+    }
+    /// Evaluated inputs shared by volume prefixes and whole-assembly faces.
+    fn band_inputs(
+        &self,
+        members: &[ObjectInstance],
+        definition: &ObjectType,
+    ) -> Result<
+        (
+            Vec<crate::object_bands::BandMember>,
+            Vec<crate::object_bands::BandCut>,
+        ),
+        CoreError,
+    > {
         let members = members
             .iter()
             .map(|member| self.band_member(member, definition))
@@ -1637,15 +1675,42 @@ impl Session {
                 .then_with(|| a.base_m.total_cmp(&b.base_m))
                 .then_with(|| a.height_m.total_cmp(&b.height_m))
         });
-        let band = std::sync::Arc::new(crate::object_bands::derive_band(
+        Ok((members, cuts))
+    }
+
+    fn band_face_areas(
+        &self,
+        object: &ObjectInstance,
+        definition: &ObjectType,
+    ) -> Result<Option<std::sync::Arc<BTreeMap<u64, crate::object_bands::FaceAreas>>>, CoreError>
+    {
+        let _read = self.evaluation_read()?;
+        if definition.plan.band_faces.is_none() {
+            return Ok(None);
+        }
+        let members = self.band_members(object, definition)?;
+        let key = json!([definition, members]).to_string();
+        if let Some(faces) = self.evaluation.borrow().band_faces.get(&key) {
+            return Ok(Some(faces.clone()));
+        }
+        let Some(band) = self.band_geometry(object, definition, None)? else {
+            return Ok(None);
+        };
+        let (members, cuts) = self.band_inputs(&members, definition)?;
+        let faces = std::sync::Arc::new(crate::object_bands::derive_faces(
             &members,
             &cuts,
+            &band.geometry,
             self.drawing.units.to_metres(),
             self.measure_tol(),
         )?);
-        self.evaluation.borrow_mut().bands.insert(key, band.clone());
-        Ok(Some(band))
+        self.evaluation
+            .borrow_mut()
+            .band_faces
+            .insert(key, faces.clone());
+        Ok(Some(faces))
     }
+
     fn band_facts(
         &self,
         object: &ObjectInstance,
@@ -1699,6 +1764,21 @@ impl Session {
             context
                 .values
                 .insert("geometry.area".into(), ExprValue::Number(net));
+        }
+        if let Some(assembly_faces) = self.band_face_areas(object, definition)? {
+            if let Some(faces) = assembly_faces.get(&object.id) {
+                for (name, value) in [
+                    ("external_face_area", faces.external),
+                    ("internal_face_area", faces.internal),
+                    ("gross_external_face_area", faces.gross_external),
+                    ("gross_internal_face_area", faces.gross_internal),
+                ] {
+                    context.values.insert(name.into(), ExprValue::Number(value));
+                    context
+                        .values
+                        .insert(format!("geometry.{name}"), ExprValue::Number(value));
+                }
+            }
         }
         Ok(())
     }
@@ -1783,6 +1863,10 @@ impl Session {
                         | "net_area"
                         | "volume"
                         | "gross_volume"
+                        | "external_face_area"
+                        | "internal_face_area"
+                        | "gross_external_face_area"
+                        | "gross_internal_face_area"
                         | "count"
                 )
             });

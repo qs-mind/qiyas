@@ -29,6 +29,7 @@ pub(crate) struct Evaluation {
     pub expressions: BTreeMap<String, Expr>,
     pub contexts: BTreeMap<(String, usize), BTreeMap<String, ExprValue>>,
     pub bands: BTreeMap<String, Arc<crate::object_bands::BandDerived>>,
+    pub band_faces: BTreeMap<String, Arc<BTreeMap<u64, crate::object_bands::FaceAreas>>>,
     pub room_keys: BTreeMap<String, String>,
 }
 

@@ -14,6 +14,7 @@
 use cavalier_contours::polyline::{
     BooleanOp, PlineCreation, PlineSource, PlineSourceMut, PlineVertex, Polyline,
 };
+use cavalier_contours::static_aabb2d_index::StaticAABB2DIndexBuilder;
 
 /// One run of wall. Curves are represented by points along a polyline approximation.
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +218,273 @@ pub fn build_walls_justified(
     walls.gross_area *= thickness * thickness;
     walls.net_area *= thickness * thickness;
     Ok(walls)
+}
+
+/// One vertical face of the uncut union. `run` indexes the supplied runs; callers order
+/// runs by driver identity to break shared-face ties. Coordinates and lengths are drawing units.
+#[derive(Debug, Clone)]
+pub struct BoundaryFace {
+    pub run: usize,
+    pub external: bool,
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+}
+
+impl BoundaryFace {
+    pub fn length(&self) -> f64 {
+        dist(self.a, self.b)
+    }
+
+    /// Remaining face length after the union of opening rectangles. This clips the original
+    /// face, so opening jambs never become measured faces and overlapping cuts count once.
+    pub fn net_length(&self, openings: &[Placed]) -> f64 {
+        let mut intervals = Vec::new();
+        for opening in openings {
+            let local = |p| {
+                let d = difference(p, opening.centre);
+                [
+                    d[0] * opening.dir[0] + d[1] * opening.dir[1],
+                    cross(opening.dir, d),
+                ]
+            };
+            let a = local(self.a);
+            let b = local(self.b);
+            let mut low: f64 = 0.0;
+            let mut high: f64 = 1.0;
+            // Match the through-wall rectangle used by build_normalized.
+            for (axis, half) in [(0, opening.width / 2.0), (1, opening.thickness * 0.6)] {
+                let delta = b[axis] - a[axis];
+                if delta.abs() <= f64::EPSILON * opening.thickness {
+                    if a[axis].abs() > half {
+                        high = -1.0;
+                    }
+                } else {
+                    let p = (-half - a[axis]) / delta;
+                    let q = (half - a[axis]) / delta;
+                    low = low.max(p.min(q));
+                    high = high.min(p.max(q));
+                }
+            }
+            if high > low {
+                intervals.push((low, high));
+            }
+        }
+        intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut end: f64 = 0.0;
+        let mut removed = 0.0;
+        for (low, high) in intervals {
+            removed += (high - low.max(end)).max(0.0);
+            end = end.max(high);
+        }
+        self.length() * (1.0 - removed).max(0.0)
+    }
+}
+
+/// Attribute the gross union boundary to its generating strip faces. Split collinear edges
+/// at ownership changes; the first run owns ties. Junction hull edges belong to the first
+/// member contributing an endpoint. Work in the same local frame as the wall booleans.
+pub fn boundary_faces(
+    runs: &[Run],
+    thickness: f64,
+    tol: f64,
+) -> Result<Vec<BoundaryFace>, WallError> {
+    let (runs, origin) = normalize_runs(runs, thickness, tol, Justification::Centre)?;
+    let tol = (tol / thickness).max(1e-8);
+    let gross = build_normalized(&runs, &[], tol, thickness)?;
+    let mut candidates = Vec::new();
+    let mut caps = Vec::new();
+    let mut add = |run, a, b| {
+        if dist(a, b) > tol {
+            candidates.push(BoundaryFace {
+                run,
+                external: false,
+                a,
+                b,
+            });
+        }
+    };
+    for chain in join_runs(&runs, tol) {
+        let (left, right) = strip_corners(&chain);
+        let n = chain.points.len();
+        for side in [&left, &right] {
+            for (i, &owner) in chain.owners.iter().enumerate() {
+                add(
+                    owner,
+                    *side[i].last().expect("corner"),
+                    side[(i + 1) % n][0],
+                );
+            }
+            for (i, corner) in side.iter().enumerate() {
+                if corner.len() > 1 {
+                    let before = chain.owners[(i + chain.owners.len() - 1) % chain.owners.len()];
+                    let after = chain.owners[i % chain.owners.len()];
+                    add(before.min(after), corner[0], corner[1]);
+                }
+            }
+        }
+        if !chain.closed {
+            for (i, owner) in [
+                (0, chain.owners[0]),
+                (n - 1, *chain.owners.last().expect("segment")),
+            ] {
+                add(owner, left[i][0], right[i][0]);
+                caps.push((chain.points[i], left[i][0], right[i][0], owner));
+            }
+        }
+    }
+    let mut cap_index = StaticAABB2DIndexBuilder::new(caps.len());
+    for cap in &caps {
+        cap_index.add(cap.0[0], cap.0[1], cap.0[0], cap.0[1]);
+    }
+    let cap_index = cap_index.build().map_err(|error| bad(error.to_string()))?;
+    let mut hull_candidates = Vec::new();
+    for cap in &caps {
+        let group: Vec<_> = cap_index
+            .query(
+                cap.0[0] - tol,
+                cap.0[1] - tol,
+                cap.0[0] + tol,
+                cap.0[1] + tol,
+            )
+            .into_iter()
+            .map(|i| &caps[i])
+            .filter(|other| dist(cap.0, other.0) <= tol)
+            .collect();
+        if group.len() < 2 {
+            continue;
+        }
+        let hull = convex_hull(
+            &group
+                .iter()
+                .flat_map(|c| [c.1, c.2])
+                .chain([cap.0])
+                .collect::<Vec<_>>(),
+        );
+        for (&a, &b) in hull
+            .iter()
+            .zip(hull.iter().cycle().skip(1))
+            .take(hull.len())
+        {
+            let owner = group
+                .iter()
+                .filter(|c| {
+                    [c.1, c.2]
+                        .iter()
+                        .any(|p| dist(*p, a) <= tol || dist(*p, b) <= tol)
+                })
+                .map(|c| c.3)
+                .min()
+                .unwrap_or(cap.3);
+            if dist(a, b) > tol {
+                hull_candidates.push(BoundaryFace {
+                    run: owner,
+                    external: false,
+                    a,
+                    b,
+                });
+            }
+        }
+    }
+    // Spatial queries select only nearby candidates before testing exact collinearity.
+    // Preserve strip priority and id tie-breaking independently of index traversal order.
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .map(|c| (c, false))
+        .chain(hull_candidates.into_iter().map(|c| (c, true)))
+        .collect();
+    let mut candidate_index = StaticAABB2DIndexBuilder::new(candidates.len());
+    for (c, _) in &candidates {
+        candidate_index.add(
+            c.a[0].min(c.b[0]),
+            c.a[1].min(c.b[1]),
+            c.a[0].max(c.b[0]),
+            c.a[1].max(c.b[1]),
+        );
+    }
+    let candidate_index = candidate_index
+        .build()
+        .map_err(|error| bad(error.to_string()))?;
+    let mut faces = Vec::new();
+    for region in gross.regions {
+        for (ring, external) in
+            std::iter::once((&region.outer, true)).chain(region.holes.iter().map(|h| (h, false)))
+        {
+            for (&a, &b) in ring
+                .iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+            {
+                let length = dist(a, b);
+                if length <= tol {
+                    continue;
+                }
+                let dir = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+                let along = |p| {
+                    let d = difference(p, a);
+                    d[0] * dir[0] + d[1] * dir[1]
+                };
+                let padding = 2.0 * tol;
+                let matching: Vec<_> = candidate_index
+                    .query(
+                        a[0].min(b[0]) - padding,
+                        a[1].min(b[1]) - padding,
+                        a[0].max(b[0]) + padding,
+                        a[1].max(b[1]) + padding,
+                    )
+                    .into_iter()
+                    .map(|i| (&candidates[i].0, candidates[i].1))
+                    .filter(|(c, _)| {
+                        cross(dir, difference(c.a, a)).abs() <= tol
+                            && cross(dir, difference(c.b, a)).abs() <= tol
+                    })
+                    .map(|(c, hull)| {
+                        (
+                            c.run,
+                            along(c.a).min(along(c.b)),
+                            along(c.a).max(along(c.b)),
+                            hull,
+                        )
+                    })
+                    .collect();
+                let mut stops = vec![0.0, length];
+                for &(_, low, high, _) in &matching {
+                    stops.extend([low.clamp(0.0, length), high.clamp(0.0, length)]);
+                }
+                stops.sort_by(f64::total_cmp);
+                stops.dedup();
+                for pair in stops.windows(2) {
+                    if pair[1] <= pair[0] {
+                        continue;
+                    }
+                    let mid = (pair[0] + pair[1]) / 2.0;
+                    let owner = matching
+                        .iter()
+                        .filter(|(_, low, high, _)| mid >= low - tol && mid <= high + tol)
+                        // Prefer a real strip face over the junction fill's fallback owner.
+                        .min_by_key(|(owner, _, _, hull)| (*hull, *owner))
+                        .map(|(owner, _, _, _)| *owner)
+                        .ok_or_else(|| bad("Union boundary has no generating strip face"))?;
+                    let point = |at| {
+                        [
+                            (a[0] + dir[0] * at) * thickness + origin[0],
+                            (a[1] + dir[1] * at) * thickness + origin[1],
+                        ]
+                    };
+                    let (a, b) = (point(pair[0]), point(pair[1]));
+                    // Nearby projected stops can round to the same drawing coordinate.
+                    if a != b {
+                        faces.push(BoundaryFace {
+                            run: owner,
+                            external,
+                            a,
+                            b,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(faces)
 }
 
 /// Checks dimensions before moving the drawing to a local, thickness-normalised frame.
@@ -740,16 +1008,19 @@ struct Chain {
     closed: bool,
     /// Left and right offsets for each segment, following its direction.
     offsets: Vec<(f64, f64)>,
+    owners: Vec<usize>,
 }
 
 /// Runs joined end to end where exactly two ends meet (and no run passes through).
 fn join_runs(runs: &[Run], tol: f64) -> Vec<Chain> {
     let chains: Vec<Chain> = runs
         .iter()
-        .map(|r| Chain {
+        .enumerate()
+        .map(|(owner, r)| Chain {
             points: r.points.clone(),
             closed: r.closed,
             offsets: vec![offsets(r); r.points.len() - usize::from(!r.closed)],
+            owners: vec![owner; r.points.len() - usize::from(!r.closed)],
         })
         .collect();
     let mut links = vec![[None; 2]; chains.len()];
@@ -800,20 +1071,24 @@ fn join_runs(runs: &[Run], tol: f64) -> Vec<Chain> {
         let mut entering = links[start][0].is_some() && links[start][1].is_none();
         let mut points = Vec::new();
         let mut offsets = Vec::new();
+        let mut owners = Vec::new();
         let mut closed = false;
         loop {
             seen[current] = true;
             let mut next = chains[current].points.clone();
             let mut next_offsets = chains[current].offsets.clone();
+            let mut next_owners = chains[current].owners.clone();
             if entering {
                 next.reverse();
                 next_offsets.reverse();
+                next_owners.reverse();
                 for (left, right) in &mut next_offsets {
                     (*left, *right) = (-*right, -*left);
                 }
             }
             points.extend(next.into_iter().skip(usize::from(!points.is_empty())));
             offsets.extend(next_offsets);
+            owners.extend(next_owners);
             match links[current][usize::from(!entering)] {
                 Some((other, _)) if other == start => {
                     points.pop();
@@ -831,6 +1106,7 @@ fn join_runs(runs: &[Run], tol: f64) -> Vec<Chain> {
             points,
             closed,
             offsets,
+            owners,
         });
     }
     result
@@ -861,7 +1137,9 @@ fn passes_through(chains: &[Chain], p: [f64; 2], tol: f64) -> bool {
 type EndCap = ([f64; 2], [f64; 2], [f64; 2]);
 type Strip = (Vec<Vec<[f64; 2]>>, Vec<EndCap>);
 
-fn strip(c: &Chain) -> Strip {
+type Corners = Vec<Vec<[f64; 2]>>;
+
+fn strip_corners(c: &Chain) -> (Corners, Corners) {
     let pts = &c.points;
     let n = pts.len();
     // Each corner may have two vertices: a collinear change in thickness is a step.
@@ -892,6 +1170,13 @@ fn strip(c: &Chain) -> Strip {
         left.push(side(true));
         right.push(side(false));
     }
+    (left, right)
+}
+
+fn strip(c: &Chain) -> Strip {
+    let pts = &c.points;
+    let n = pts.len();
+    let (left, right) = strip_corners(c);
     let mut caps = Vec::new();
     if c.closed {
         // Overlap a full segment at each seam. Touching mitre edges alone can be
