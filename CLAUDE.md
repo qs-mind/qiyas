@@ -78,7 +78,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   chosen tab's face; there is no side tab strip any more, see W4); Tooltip (`shell/Tooltip.tsx`: the
   `Tip` wrapper keeps its API, the delay is 400 ms, the next card shows at once within 300 ms, and a
   click's focus shows none); Menu (`shell/RibbonFlyout.tsx`: a group's "⋯" and the tabs' "More"; the
-  Outputs menu and the artifact head's switch are Menus too); Context Menu (`viewport/CanvasMenu.tsx`:
+  Artifacts menu and the artifact head's switch are Menus too); Context Menu (`viewport/CanvasMenu.tsx`:
   Move, Copy, Erase, Properties, Zoom extents on a right-click of the drawing); Popover (the status
   bar's list of recovered problems); Dialog (`ui/ModalDialog.tsx`, behind the Settings, Plot, Purge,
   Audit and Recovery dialogs: Escape closes unless `dismissible` is false, a click outside does not,
@@ -3378,11 +3378,11 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   arrow, a switch menu, its meta, one action, close) with a strip under it back to the chat
   (`.back-strip`) and the box still below ("Ask Mizan about this BOQ"). Its head carries the
   output's buttons (Export take-off; Import BOQ; Compare and Export conflicts; Refresh), so the
-  panels under it have no heading or buttons of their own. The top bar's Outputs menu
-  (`OutputsMenu`) opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
+  panels under it have no heading or buttons of their own. The Artifacts icon in Mizan's header,
+  after History (`OutputsMenu`, its count as a small badge; Arabic says المخرجات), opens one; `setSideTab("boq")` etc. from the take-off hooks still work. The
   Projects, Comments tabs and `SideTabs` are removed; the conversation and all outputs stay mounted.
-- The box (`.composer`): attach, mark an area and the model icon (`WorkspacePicker`, now a popover:
-  provider, model, effort of this drawing) under the text, send at the end. Typing "/" lists commands
+- The box (`.composer`): attach, mark an area and the model pill (`WorkspacePicker`, a popover: the model's name, or the
+  provider's, with a spark; provider, model, effort of this drawing) under the text, send at the end. Typing "/" lists commands
   (`ai/slashCommands.ts`: takeoff, boq, compare, sheet, check, connect, new; English words in the
   English window, `حصر مقايسة مقارنة لوحة فحص ربط جديد` in the Arabic one, either language's word runs
   when typed whole). A prompt command sends its prompt (`ai.slash.<id>.prompt`); `compare` asks for
@@ -3396,6 +3396,8 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   Ctrl+F1 collapses it (`qiyas.ribbon.collapsed`); a tab clicked while collapsed shows its panel over
   the drawing until Esc, a click elsewhere or a tool. Layout tabs (`SheetTabs`): no scrollbar; the
   edge with more fades and has an arrow. Layer names wrap and are their own tooltip.
+- Settings is in sections (`SettingsDialog`, a vertical Base UI Tabs: Mizan, Measurement, General,
+  Connected apps, Support; every panel `keepMounted`, so Save reads them all).
 - "Connect an AI app" (`shell/ConnectAiDialog.tsx`; plug in the top bar, `/connect`, the empty chat):
   one click turns the MCP server on through the settings (`set_settings` restarts it) and shows the
   Claude Code command and Claude Desktop config. Security as before: 127.0.0.1, the token (made if

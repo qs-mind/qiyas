@@ -30,9 +30,11 @@ function goTab(name: string) {
 
 const PLAN = "/d/plan.dwg";
 
-/** Opens an output (take-off, BOQ, conflicts, report) in Mizan's column, from the top bar's Outputs menu. */
+/** Opens an output (take-off, BOQ, conflicts, report) in Mizan's column, from the Artifacts button in Mizan's head. */
 async function openOutput(name: string) {
-  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  // While an artifact is open the chat (and its head) is hidden: go back to it first.
+  if (!screen.queryByRole("button", { name: /^Artifacts:/ })) fireEvent.click(document.querySelector<HTMLElement>(".back-strip")!);
+  fireEvent.click(await screen.findByRole("button", { name: /^Artifacts:/ }));
   fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}(?:\\s*\\d+)?$`) }));
 }
 
@@ -570,9 +572,9 @@ test.each(["none", "imported BOQ", "manual", "generated"])("the pack check follo
   }
 });
 
-test("Outputs exports the evidence PDF for the displayed drawing and names the written file in a toast", async () => {
+test("Artifacts exports the evidence PDF for the displayed drawing and names the written file in a toast", async () => {
   await mount();
-  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Artifacts:/ }));
   const menu = await screen.findByRole("menu");
   expect(within(menu).queryByRole("menuitem", { name: en.exportEvidence })).toBeNull();
   expect(core.calls.some((call) => call.startsWith("export_evidence"))).toBe(false);
@@ -580,7 +582,7 @@ test("Outputs exports the evidence PDF for the displayed drawing and names the w
   await until(() => expect(screen.queryByRole("menu")).toBeNull());
 
   await clickOpen();
-  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Artifacts:/ }));
   fireEvent.click(await screen.findByRole("menuitem", { name: en.exportEvidence }));
   await until(() => expect(core.calls).toContain('export_evidence {"path":null,"language":null,"workspace":1}'));
   await expectToasts([en["export.done"].replace("{path}", "/d/plan evidence.pdf")]);
@@ -590,7 +592,7 @@ test("an evidence export failure uses the existing export error toast", async ()
   core.evidenceError = "private diagnostic";
   await mount();
   await clickOpen();
-  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Artifacts:/ }));
   fireEvent.click(await screen.findByRole("menuitem", { name: en.exportEvidence }));
   await expectToasts([en["export.failed"].replace("{error}", en["err.unknown"])]);
   expect(toasts().some((text) => text?.includes("plan evidence.pdf"))).toBe(false);
@@ -1182,7 +1184,7 @@ test("Mizan's compare label marks an empty comparison as complete", async () => 
   await mount();
   await clickOpen();
   // Empty outputs stay mounted but are no longer offered in the menu.
-  fireEvent.click(screen.getByRole("button", { name: /^Outputs:/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Artifacts:/ }));
   const menu = await screen.findByRole("menu");
   expect(within(menu).queryByText(en["outputs.conflicts"])).toBeNull();
   fireEvent.keyDown(menu, { key: "Escape" });

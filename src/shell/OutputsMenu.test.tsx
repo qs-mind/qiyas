@@ -34,7 +34,7 @@ test("the menu labels its groups and count, opens a sheet, and hides empty outpu
   const onSheet = vi.fn();
   render(<OutputsMenu outputs={outputs} sheets={sheets} files={[file]} shown={null} onOpen={vi.fn()} onSheet={onSheet} />);
   const trigger = screen.getByRole("button", { name: en["outputs.countLabel"].replace("{n}", "3") });
-  expect(trigger.querySelector(".obtn-count")?.textContent).toBe("3");
+  expect(trigger.querySelector(".artifacts-count")?.textContent).toBe("3");
   fireEvent.click(trigger);
   const menu = await screen.findByRole("menu");
   expect(within(menu).getAllByRole("group")).toEqual([

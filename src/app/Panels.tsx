@@ -1,7 +1,7 @@
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and Mizan's column (the conversation, and the outputs in its place) on the right. */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { uiError } from "../i18n/errors";
 import { RecognitionPanel } from "../shell/RecognitionPanel";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
@@ -339,13 +339,15 @@ type SideProps = {
   onConnect?(): void;
   /** A key asked for Mizan's box. */
   ask?: { n: number; text: string };
+  /** The Artifacts button of Mizan's head (sheets, files and take-off outputs). */
+  artifacts?: ReactNode;
 };
 
 /** The right column (design B): Mizan's conversation, and, when Mizan's work is opened, the take-off,
  *  BOQ, conflicts or take-off report in the same column in place of the conversation, with a way
  *  back. The conversation and every output stay mounted, one shown, so a draft, a search or a
  *  running answer survives the switch. */
-export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect, ask }: SideProps) {
+export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoffState, takeoff, ai, conversationHistory, recognition, onExportTakeoff, onSlashCompare, onConnect, ask, artifacts }: SideProps) {
   const t = useT();
   const { sideTab, setSideTab } = shell;
   const { items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared, infoCard, setInfoCard } = takeoffState;
@@ -465,6 +467,7 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
         onCompare={onSlashCompare}
         onConnect={onConnect}
         ask={ask}
+        artifacts={artifacts}
       />
     </aside>
   );

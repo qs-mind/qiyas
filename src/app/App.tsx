@@ -4,7 +4,7 @@ import { uiError } from "../i18n/errors";
  *  the selection) and hands their results to the top bar, the dialogs and the panels. Hooks
  *  that call back into one made later (`apply`, `onCommand`, the tool's `cancel`) reach it
  *  through a ref filled right after it exists. */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { boundaryAt, entityInfo, pick, pickWindow, snap, undo, type AiRegion, type DrawingInfo } from "../api";
 import { EXPLAIN_EVIDENCE, type Evidence } from "../boq/Explain";
 import { useLanguage, useT } from "../i18n";
@@ -14,6 +14,8 @@ import { StatusBar } from "../shell/StatusBar";
 import type { Action } from "../tools/commandParser";
 import { useTool } from "../tools/useTool";
 import { outputList } from "../shell/outputs";
+import { OutputsMenu } from "../shell/OutputsMenu";
+import { transcriptFiles } from "../shell/outputFiles";
 import { Notices } from "../ui/notices";
 import { Dialogs, FileDialogs } from "./Dialogs";
 import { Header } from "./Header";
@@ -353,6 +355,7 @@ export default function App() {
 
   // An empty model is said next to the file name, not counted as a reading problem.
   const problems = info ? readProblems(info) : [];
+  const outputFiles = useMemo(() => transcriptFiles(assistant.transcript), [assistant.transcript]);
   const sheetShown = info?.sheets.find((s) => s.block.toLowerCase() === sheet.toLowerCase());
   // Named views are of model space.
   const onModel = sheetShown?.is_model ?? false;
@@ -378,10 +381,6 @@ export default function App() {
         plot={plot}
         options={options}
         parametric={parametric}
-        outputs={outputList(takeoffState)}
-        transcript={assistant.transcript}
-        shownOutput={shell.sideTab === "assistant" ? null : shell.sideTab}
-        onOpenOutput={shell.setSideTab}
         onConnect={() => setConnectOpen(true)}
         onCommandLine={(line) => {
           void startCommand(line).catch((error) => shell.setError(uiError(error)));
@@ -476,6 +475,11 @@ export default function App() {
           onConnect={() => setConnectOpen(true)}
           ask={shell.mizanAsk}
           recognition={{ revision: batch, run: runDrawingCommand }}
+          artifacts={
+            <OutputsMenu outputs={outputList(takeoffState)} shown={shell.sideTab === "assistant" ? null : shell.sideTab}
+              onOpen={shell.setSideTab} onExportEvidence={info ? takeoff.exportEvidenceFile : undefined}
+              sheets={info?.sheets} sheet={sheet} onSheet={sheets.chooseSheet} files={outputFiles} />
+          }
         />
       </div>
       {commandLineOn && (

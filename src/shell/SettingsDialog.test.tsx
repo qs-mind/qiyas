@@ -133,6 +133,7 @@ test("approval and measurement settings keep the selected values on save", async
   setup();
   const autonomy = await screen.findByLabelText("Plan approval");
   expect((autonomy as HTMLSelectElement).value).toBe("autonomous");
+  fireEvent.click(screen.getByRole("tab", { name: "Measurement" }));
   await screen.findByRole("option", { name: "local-test" });
   expect((screen.getByLabelText("Method of measurement") as HTMLSelectElement).value).toBe("");
   fireEvent.change(autonomy, { target: { value: "per_phase" } });
@@ -167,6 +168,16 @@ test("mcp snippets point at the bridge next to the app", () => {
   );
 });
 
+test("settings are in sections, one shown at a time", async () => {
+  setup();
+  expect(await screen.findByRole("tab", { name: "Mizan" })).toHaveProperty("ariaSelected", "true");
+  for (const name of ["Measurement", "General", "Connected apps", "Support"]) expect(screen.getByRole("tab", { name })).toBeTruthy();
+  expect(screen.queryByRole("checkbox", { name: "Let other AI apps use Qiyas" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Connected apps" }));
+  expect(await screen.findByRole("checkbox", { name: "Let other AI apps use Qiyas" })).toBeTruthy();
+  expect(screen.queryByRole("combobox", { name: "Provider" })).toBeNull();
+});
+
 test("the MCP status line says whether the server listens", async () => {
   setup();
   expect(await screen.findByText("Not running")).toBeTruthy();
@@ -189,6 +200,7 @@ test("the MCP status line says whether the server listens", async () => {
     error: "The MCP server could not start on 127.0.0.1:48123: Address in use",
   });
   render(<SettingsDialog onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Connected apps" }));
   expect(await screen.findByRole("status")).toHaveProperty(
     "textContent",
     "That didn’t work. Technical details are available in Settings.",
@@ -255,7 +267,8 @@ test("a typed key is cleared as soon as its address changes", async () => {
 test("token rotation is only a draft until Save and survives settings readback", async () => {
   setup();
   await screen.findByLabelText("Token");
-  fireEvent.click(screen.getByRole("button", { name: "Replace token on Save" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Connected apps" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Replace token on Save" }));
   const rotated = (screen.getByLabelText("Token") as HTMLInputElement).value;
   expect(rotated).toMatch(/^[0-9a-f]{32}$/);
   expect(rotated).not.toBe(TOKEN);
@@ -272,6 +285,7 @@ test("token rotation is only a draft until Save and survives settings readback",
 test("method choices contain names plus local files without requiring rules", async () => {
   setup();
   const select = await screen.findByLabelText("Method of measurement") as HTMLSelectElement;
+  fireEvent.click(screen.getByRole("tab", { name: "Measurement" }));
   await screen.findByRole("option", { name: "local-test" });
   expect(Array.from(select.options).map((option) => option.text)).toEqual([
     "None (geometric quantities)", "POMI", "NRM2", "SMM7", "CESMM4",
@@ -384,6 +398,7 @@ test("Claude Other accepts a full model name and Default omits effort", async ()
 
 test("technical details default off and save through the existing settings IPC", async () => {
   setup();
+  fireEvent.click(await screen.findByRole("tab", { name: "Support" }));
   const toggle = await screen.findByRole("checkbox", { name: "Show technical details" });
   expect((toggle as HTMLInputElement).checked).toBe(false);
   fireEvent.click(toggle);
@@ -396,6 +411,7 @@ test("technical details default off and save through the existing settings IPC",
   api.getSettings.mockResolvedValue(saved);
   cleanup();
   render(<SettingsDialog onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Support" }));
   expect((await screen.findByRole("checkbox", { name: "Show technical details" }) as HTMLInputElement).checked).toBe(true);
   fireEvent.click(screen.getByRole("checkbox", { name: "Show technical details" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));

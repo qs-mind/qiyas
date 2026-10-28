@@ -46,6 +46,8 @@ type Props = {
   onConnect?(): void;
   /** A key asked for the box (`/`, Ctrl+K): it takes the focus, and `text` goes in it when empty. */
   ask?: { n: number; text: string };
+  /** The Artifacts button, after History in the head. */
+  artifacts?: ReactNode;
   /** Reads a picture pasted, dropped or picked (tests give their own). */
   read?(file: File): Promise<Picture>;
 };
@@ -75,6 +77,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   onCompare,
   onConnect,
   ask,
+  artifacts,
   read = readPicture,
 }: Props) {
   const t = useT();
@@ -383,6 +386,7 @@ export const AssistantPanel = memo(function AssistantPanel({
         <MizanMark still={!busy} />
         <span className="chat-title heading">{t("assistant")}</span>
         {history && <ConversationHistory history={history} disabled={busy} />}
+        {artifacts}
         <button
           type="button"
           className="ib new-chat"
@@ -648,11 +652,7 @@ export const AssistantPanel = memo(function AssistantPanel({
               disabled={pictures.length >= MAX_PICTURES}
               onClick={() => filePicker.current?.click()}
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="3" width="12" height="10" rx="1.5" />
-                <circle cx="6" cy="6.5" r="1.2" />
-                <path d="M2.5 11.5l3.5-3 2.5 2 2-1.5 3 2.5" />
-              </svg>
+              <Glyph name="attach" size={18} />
             </button>
             {pointing && (
               <button
@@ -662,10 +662,7 @@ export const AssistantPanel = memo(function AssistantPanel({
                 title={t("ai.markArea")}
                 onClick={pointing.markArea}
               >
-                <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
-                  <path d="M8 6v4M6 8h4" />
-                </svg>
+                <Glyph name="area" size={18} />
               </button>
             )}
             {assistant.choice && assistant.choose && <WorkspacePicker choice={assistant.choice} busy={busy} onChange={assistant.choose} />}

@@ -6,7 +6,15 @@ import { uiError } from "../i18n/errors";
 import { Glyph } from "../shell/glyphs";
 import { ModelPicker } from "../shell/ModelPicker";
 
-/** The small model icon in Mizan's box (W4): a popover with this drawing's provider, model and
+/** What the button says when no model is chosen yet: the service. */
+const PROVIDER_NAMES: Record<WorkspaceChoice["provider"], string> = {
+  anthropic: "Claude",
+  openai_compatible: "API",
+  claude_code: "Claude Code",
+  chatgpt_plan: "ChatGPT",
+};
+
+/** The model button in Mizan's box (W4): the model's name, which opens a popover with this drawing's provider, model and
  *  effort. Credentials and provider addresses stay in Settings; these choices belong to this drawing. */
 export function WorkspacePicker({ choice, busy, onChange }: {
   choice: WorkspaceChoice; busy: boolean; onChange(choice: WorkspaceChoice): Promise<void>;
@@ -22,8 +30,10 @@ export function WorkspacePicker({ choice, busy, onChange }: {
   };
   const name = choice.model || choice.provider;
   return <Popover.Root modal={false}>
-    <Popover.Trigger className="ib model-button" aria-label={`${t("workspace.model")}: ${name}`} title={`${t("workspace.provider")} · ${name}`}>
-      <Glyph name="model" />
+    <Popover.Trigger className="model-button" aria-label={`${t("workspace.model")}: ${name}`} title={`${t("workspace.provider")} · ${name}`}>
+      <Glyph name="spark" size={15} />
+      <bdi className="model-name">{choice.model || PROVIDER_NAMES[choice.provider]}</bdi>
+      <Glyph name="down" size={12} />
     </Popover.Trigger>
     <Popover.Portal>
       <Popover.Positioner className="model-positioner" side="top" align="start" sideOffset={8} collisionPadding={8}>

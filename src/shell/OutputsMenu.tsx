@@ -1,4 +1,5 @@
-/** Drawing sheets, files written in this conversation, and populated take-off outputs. */
+/** Artifacts, an icon in Mizan's head: drawing sheets, files written in this conversation, and
+ *  populated take-off outputs. */
 import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 import type { Sheet } from "../api";
@@ -31,10 +32,10 @@ export function OutputsMenu({ outputs, shown, onOpen, onExportEvidence, sheets =
   }
   return (
     <Menu.Root modal={false} onOpenChange={() => setFileError(false)}>
-      <Menu.Trigger className={shown ? "obtn on" : "obtn"} aria-label={t("outputs.countLabel", { n: groups.count })}>
-        <Glyph name="outputs" />
-        <span className="obtn-label">{t("outputs.title")}</span>
-        <span className="obtn-count" aria-hidden="true">{groups.count}</span>
+      <Menu.Trigger className={shown ? "ib artifacts-btn on" : "ib artifacts-btn"} aria-label={t("outputs.countLabel", { n: groups.count })}
+        title={t("outputs.title")}>
+        <Glyph name="artifacts" size={17} />
+        {groups.count > 0 && <span className="artifacts-count" aria-hidden="true">{groups.count > 99 ? "99+" : groups.count}</span>}
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner className="rb-flyout-pos" side="bottom" align="end" sideOffset={6} collisionPadding={8}>
