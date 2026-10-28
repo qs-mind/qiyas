@@ -16,6 +16,7 @@ fn check_export(format: Format) {
     let description =
         "Wall finish measured net of openings with all deductions checked. ".repeat(40);
     let report = Report {
+        drawing: None,
         kind: Kind::Boq,
         language: Language::En,
         layout: default_layout(Kind::Boq),

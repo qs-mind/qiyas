@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import { Tabs } from "@base-ui/react/tabs";
 import { FileName } from "./FileName";
 import type { TabInfo } from "../api";
 import { useT } from "../i18n";
@@ -23,10 +24,7 @@ export function cycleTab(tabs: TabInfo[], active: number | null, step: 1 | -1): 
  *  and × to close it (a middle click closes too). */
 export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
   const t = useT();
-  const roving = useRoving(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === active),
-  );
+  const roving = useRoving(tabs.length, tabs.findIndex((tab) => tab.id === active));
   if (tabs.length === 0) return null;
   // The middle button closes, as in a browser; it must not start the web view's autoscroll.
   const middle = (id: number) => (e: MouseEvent) => {
@@ -35,7 +33,11 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
     onClose(id);
   };
   return (
-    <div className="file-tabs" role="tablist" aria-label={t("fileTabs")} {...roving.props}>
+    <Tabs.Root
+      value={active}
+      className="file-tabs"
+      render={<Tabs.List {...roving.props} aria-label={t("fileTabs")} activateOnFocus={false} />}
+    >
       {tabs.map((tab, i) => (
         <div
           key={tab.id}
@@ -45,10 +47,8 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
           onMouseDown={(e) => e.button === 1 && e.preventDefault()}
           onAuxClick={middle(tab.id)}
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab.id === active}
+          <Tabs.Tab
+            value={tab.id}
             tabIndex={roving.tabIndex(i)}
             onClick={() => onSelect(tab.id)}
           >
@@ -57,7 +57,7 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
             )}
             <FileName name={tab.title} />
             {tab.dirty && <span className="dirty" role="img" title={t("tab.unsaved")} aria-label={t("tab.unsaved")} />}
-          </button>
+          </Tabs.Tab>
           <button
             type="button"
             className="close"
@@ -69,6 +69,6 @@ export function FileTabs({ tabs, active, onSelect, onClose }: Props) {
           </button>
         </div>
       ))}
-    </div>
+    </Tabs.Root>
   );
 }

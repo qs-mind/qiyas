@@ -1,5 +1,5 @@
-//! Input checks shared by the command bus and every JSON caller. This deliberately implements
-//! only the JSON Schema vocabulary emitted by our registry, without a validator dependency.
+//! Input checks shared by the command bus and every JSON caller. JSON Schema validation
+//! uses jsonschema; registry diagnostics, defaults and step-reference policy stay here.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -571,19 +571,6 @@ fn validate_at(
     report
 }
 
-fn matches_type(kind: &str, value: &Value) -> bool {
-    match kind {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        "number" => value.is_number(),
-        "integer" => value.as_f64().is_some_and(|n| n.fract() == 0.0),
-        _ => true,
-    }
-}
-
 fn reference(value: &Value, path: &str, step: Option<usize>, out: &mut ValidationReport) -> bool {
     let Some(object) = value.as_object().filter(|o| o.contains_key("$step")) else {
         return false;
@@ -621,14 +608,228 @@ fn reference(value: &Value, path: &str, step: Option<usize>, out: &mut Validatio
     true
 }
 
-/// Walks the registry's schema, collecting every independent error and unknown field.
+/// Validates with JSON Schema, then translates diagnostics into the registry's public wording.
 pub fn validate_schema(schema: &Value, value: &Value) -> ValidationReport {
     let mut report = ValidationReport::default();
     walk(schema, value, "", None, &mut report);
+    report.deduplicate();
     report
 }
 
-fn scalar_choices(schema: &Value) -> Option<Vec<Value>> {
+fn walk(
+    schema: &Value,
+    value: &Value,
+    path: &str,
+    step: Option<usize>,
+    out: &mut ValidationReport,
+) {
+    let schema = input_schema(schema, value, path, step, &[], out);
+    match jsonschema::options().offline().build(&schema) {
+        Ok(validator) => {
+            for error in validator.iter_errors(value) {
+                schema_error(&schema, &error, path, out);
+            }
+        }
+        Err(error) => out.error(
+            "invalid_value",
+            path,
+            format!("Invalid input schema: {error}"),
+        ),
+    }
+}
+
+/// Qiyas input policy, not schema validation: unresolved step values, defaults, and unknown
+/// field warnings. Flattened object parts share their documented field names. All constraints
+/// remain on their original branches, including multiple constraints on the same property.
+fn input_schema(
+    schema: &Value,
+    value: &Value,
+    path: &str,
+    step: Option<usize>,
+    shared: &[String],
+    out: &mut ValidationReport,
+) -> Value {
+    if reference(value, path, step, out) {
+        return Value::Bool(true);
+    }
+    let Some(object) = schema.as_object() else {
+        if schema == &Value::Bool(true) {
+            untyped_references(value, path, step, out);
+        }
+        return schema.clone();
+    };
+    if object.is_empty() {
+        untyped_references(value, path, step, out);
+        return schema.clone();
+    }
+    let mut prepared = schema.clone();
+    let mut known = shared.to_vec();
+    documented_fields(schema, &mut known);
+    known.sort();
+    known.dedup();
+    if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {
+        prepared["allOf"] = Value::Array(
+            parts
+                .iter()
+                .map(|part| input_schema(part, value, path, step, &known, out))
+                .collect(),
+        );
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(variants) = schema.get(keyword).and_then(Value::as_array) {
+            let candidates: Vec<_> = variants
+                .iter()
+                .map(|variant| {
+                    let mut notes = ValidationReport::default();
+                    let adapted = input_schema(variant, value, path, step, shared, &mut notes);
+                    let errors = jsonschema::options()
+                        .offline()
+                        .build(&adapted)
+                        .map_or(usize::MAX, |validator| validator.iter_errors(value).count());
+                    (adapted, notes, errors)
+                })
+                .collect();
+            if let Some((_, notes, _)) = candidates.iter().min_by_key(|(variant, notes, errors)| {
+                branch_rank(variant, value, *errors, notes.warnings.len())
+            }) {
+                out.append(notes.clone());
+            }
+            prepared[keyword] = Value::Array(
+                candidates
+                    .into_iter()
+                    .map(|(schema, _, _)| schema)
+                    .collect(),
+            );
+        }
+    }
+    if let Some(values) = value.as_object() {
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (key, sub) in properties {
+                if let Some(value) = values.get(key) {
+                    prepared["properties"][key] =
+                        input_schema(sub, value, &pointer(path, key), step, &[], out);
+                } else if let Some(default) = sub.get("default") {
+                    out.defaults_used.push(DefaultUsed {
+                        field: pointer(path, key),
+                        value: default.clone(),
+                        unit: None,
+                    });
+                }
+            }
+        }
+        let additional = schema.get("additionalProperties");
+        // Explicit false is a warning for dry/read inputs, promoted for edit commands by
+        // reject_unknown_fields. The library still enforces every other schema keyword.
+        if !known.is_empty() || schema.get("properties").is_some() {
+            if additional == Some(&Value::Bool(false)) {
+                prepared["additionalProperties"] = Value::Bool(true);
+            }
+            for (key, value) in values.iter().filter(|(key, _)| !known.contains(key)) {
+                match additional {
+                    Some(Value::Bool(true)) => {
+                        untyped_references(value, &pointer(path, key), step, out)
+                    }
+                    Some(sub @ Value::Object(_)) => {
+                        if prepared.get("properties").is_none() {
+                            prepared["properties"] = json!({});
+                        }
+                        prepared["properties"][key] =
+                            input_schema(sub, value, &pointer(path, key), step, &[], out);
+                    }
+                    _ if shared.is_empty() => out.warnings.push(InputIssue {
+                        code: "unknown_field".into(),
+                        pointer: pointer(path, key),
+                        message: format!("Unknown field {key}; it is ignored"),
+                    }),
+                    _ => {}
+                }
+            }
+        } else if let Some(sub) = additional {
+            for (key, value) in values {
+                if prepared.get("properties").is_none() {
+                    prepared["properties"] = json!({});
+                }
+                prepared["properties"][key] =
+                    input_schema(sub, value, &pointer(path, key), step, &[], out);
+            }
+        }
+    }
+    if let Some(items) = value.as_array() {
+        // Specialize only supplied positions so $step can stand for any expected item type.
+        // Preserve absent positions and the original tail schema for all other constraints.
+        let mut prefix = schema
+            .get("prefixItems")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for (index, value) in items.iter().enumerate() {
+            let sub = schema
+                .get("prefixItems")
+                .and_then(|p| p.get(index))
+                .or_else(|| schema.get("items"));
+            if let Some(sub) = sub {
+                let adapted = input_schema(
+                    sub,
+                    value,
+                    &pointer(path, &index.to_string()),
+                    step,
+                    &[],
+                    out,
+                );
+                if adapted != *sub {
+                    if prefix.len() <= index {
+                        // Preserve the ordinary item schema before a specialized step value.
+                        let tail = schema.get("items").cloned().unwrap_or(Value::Bool(true));
+                        prefix.resize(index + 1, tail);
+                    }
+                    prefix[index] = adapted;
+                }
+            }
+        }
+        if !prefix.is_empty() {
+            prepared["prefixItems"] = Value::Array(prefix);
+        }
+    }
+    prepared
+}
+
+fn documented_fields(schema: &Value, fields: &mut Vec<String>) {
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        fields.extend(properties.keys().cloned());
+    }
+    if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {
+        for part in parts {
+            documented_fields(part, fields);
+        }
+    }
+}
+
+/// Prefer a known discriminator for actionable errors, without changing union validity.
+fn branch_rank(
+    schema: &Value,
+    value: &Value,
+    errors: usize,
+    warnings: usize,
+) -> (usize, std::cmp::Reverse<usize>, usize, usize) {
+    let (mut mismatches, mut matches) = (0, 0);
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for (key, sub) in properties {
+            if let Some(constant) = sub.get("const") {
+                if value.get(key) == Some(constant) {
+                    matches += 1;
+                } else if value.get(key).is_some() {
+                    mismatches += 1;
+                }
+            } else if value.get(key).is_some() {
+                matches += 1;
+            }
+        }
+    }
+    (mismatches, std::cmp::Reverse(matches), errors, warnings)
+}
+
+/// A compact scalar choice hint is presentation only; the library decides validity.
+fn choice_hint(schema: &Value) -> Option<Vec<Value>> {
     if let Some(value) = schema
         .get("const")
         .filter(|v| !v.is_object() && !v.is_array())
@@ -647,7 +848,7 @@ fn scalar_choices(schema: &Value) -> Option<Vec<Value>> {
         .as_array()?;
     let mut choices = Vec::new();
     for variant in variants {
-        for value in scalar_choices(variant)? {
+        for value in choice_hint(variant)? {
             if !choices.contains(&value) {
                 choices.push(value);
             }
@@ -656,264 +857,66 @@ fn scalar_choices(schema: &Value) -> Option<Vec<Value>> {
     Some(choices)
 }
 
-fn walk(
+fn schema_error(
     schema: &Value,
-    value: &Value,
-    path: &str,
-    step: Option<usize>,
+    error: &jsonschema::ValidationError<'_>,
+    base: &str,
     out: &mut ValidationReport,
 ) {
-    if reference(value, path, step, out) {
-        return;
-    }
-    if schema == &Value::Bool(false) {
-        out.error("invalid_value", path, "This value is not allowed");
-        return;
-    }
-    if schema == &Value::Bool(true) || schema.as_object().is_some_and(|object| object.is_empty()) {
-        untyped_references(value, path, step, out);
-        return;
-    }
-    if let Some(variants) = schema
-        .get("oneOf")
-        .or_else(|| schema.get("anyOf"))
-        .and_then(Value::as_array)
-    {
-        // Documented scalar variants may be separate const/enum branches. Report the union.
-        if let Some(choices) = scalar_choices(schema) {
-            if !choices.contains(value) {
-                out.error(
-                    "invalid_value",
-                    path,
-                    format!("Choose one of {}", json!(choices)),
-                );
-            }
-        } else {
-            let candidates: Vec<_> = variants
-                .iter()
-                .map(|variant| {
-                    let mut candidate = ValidationReport::default();
-                    walk(variant, value, path, step, &mut candidate);
-                    (variant, candidate)
-                })
-                .collect();
-            // Prefer a matching discriminator, so a missing field does not disguise a known kind.
-            let chosen = candidates.iter().min_by_key(|(variant, report)| {
-                let mut mismatches = 0;
-                let mut matches = 0;
-                if let Some(props) = variant.get("properties").and_then(Value::as_object) {
-                    for (key, schema) in props {
-                        if let Some(constant) = schema.get("const") {
-                            if value.get(key) == Some(constant) {
-                                matches += 1;
-                            } else if value.get(key).is_some() {
-                                mismatches += 1;
-                            }
-                        } else if value.get(key).is_some() {
-                            matches += 1;
-                        }
-                    }
-                }
-                (
-                    mismatches,
-                    std::cmp::Reverse(matches),
-                    report.errors.len(),
-                    report.warnings.len(),
-                )
-            });
-            if let Some((_, chosen)) = chosen {
-                out.append(chosen.clone());
-            }
-        }
-    }
-    if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {
-        // Object schemas emitted for flattened enums share the same object. Merge their
-        // properties first; otherwise each part would call the other part's fields unknown.
-        let mut merged = json!({"properties": {}, "required": []});
-        for part in parts {
-            if let Some(props) = part.get("properties").and_then(Value::as_object) {
-                merged["properties"]
-                    .as_object_mut()
-                    .unwrap()
-                    .extend(props.clone());
-            }
-            if let Some(required) = part.get("required").and_then(Value::as_array) {
-                merged["required"]
-                    .as_array_mut()
-                    .unwrap()
-                    .extend(required.clone());
-            }
-            if let Some(additional) = part.get("additionalProperties") {
-                merged["additionalProperties"] = additional.clone();
-            }
-            let mut rest = part.clone();
-            if let Some(object) = rest.as_object_mut() {
-                object.remove("properties");
-                object.remove("required");
-                object.remove("additionalProperties");
-            }
-            walk(&rest, value, path, step, out);
-        }
-        if let Some(props) = schema.get("properties").and_then(Value::as_object) {
-            merged["properties"]
-                .as_object_mut()
-                .unwrap()
-                .extend(props.clone());
-        }
-        walk(&merged, value, path, step, out);
-    }
-    if let Some(expected) = schema.get("type") {
-        let valid = expected
-            .as_str()
-            .map(|t| matches_type(t, value))
-            .unwrap_or_else(|| {
-                expected.as_array().is_none_or(|types| {
-                    types
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .any(|t| matches_type(t, value))
-                })
-            });
-        if !valid {
-            out.error("invalid_value", path, format!("Expected {expected}"));
+    use jsonschema::error::ValidationErrorKind as Kind;
+    let path = format!("{base}{}", error.instance_path());
+    let schema_path = error.schema_path().to_string();
+    let constraint = schema.pointer(&schema_path).unwrap_or(&Value::Null);
+    let message = match error.kind() {
+        Kind::Required { property } => {
+            let key = property.as_str().unwrap_or_default();
+            out.error(
+                "missing_field",
+                &pointer(&path, key),
+                format!("Missing required field {key}"),
+            );
             return;
         }
-    }
-    if schema
-        .get("const")
-        .is_some_and(|constant| constant != value)
-    {
-        out.error(
-            "invalid_value",
-            path,
-            format!("Expected {}", schema["const"]),
-        );
-    }
-    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
-        if !values.contains(value) {
-            out.error(
-                "invalid_value",
-                path,
-                format!("Choose one of {}", schema["enum"]),
-            );
-        }
-    }
-    if let Some(number) = value.as_f64() {
-        for (key, bad) in [
-            (
-                "minimum",
-                schema["minimum"]
-                    .as_f64()
-                    .is_some_and(|bound| number < bound),
-            ),
-            (
-                "maximum",
-                schema["maximum"]
-                    .as_f64()
-                    .is_some_and(|bound| number > bound),
-            ),
-            (
-                "exclusiveMinimum",
-                schema["exclusiveMinimum"]
-                    .as_f64()
-                    .is_some_and(|bound| number <= bound),
-            ),
-            (
-                "exclusiveMaximum",
-                schema["exclusiveMaximum"]
-                    .as_f64()
-                    .is_some_and(|bound| number >= bound),
-            ),
-        ] {
-            if bad {
-                out.error(
-                    "invalid_value",
-                    path,
-                    format!("Number violates {key} {}", schema[key]),
-                );
-            }
-        }
-    }
-    if let Some(object) = value.as_object() {
-        if let Some(required) = schema.get("required").and_then(Value::as_array) {
-            for key in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(key) {
-                    out.error(
-                        "missing_field",
-                        &pointer(path, key),
-                        format!("Missing required field {key}"),
-                    );
-                }
-            }
-        }
-        if schema.get("allOf").is_none() {
-            if let Some(props) = schema.get("properties").and_then(Value::as_object) {
-                for (key, sub) in props {
-                    if let Some(value) = object.get(key) {
-                        walk(sub, value, &pointer(path, key), step, out);
-                    } else if let Some(default) = sub.get("default") {
-                        out.defaults_used.push(DefaultUsed {
-                            field: pointer(path, key),
-                            value: default.clone(),
-                            unit: None,
-                        });
+        Kind::AnyOf { context } | Kind::OneOfNotValid { context } => {
+            let parent = schema_path
+                .rsplit_once('/')
+                .map_or("", |(parent, _)| parent);
+            if let Some(choices) = schema.pointer(parent).and_then(choice_hint) {
+                format!("Choose one of {}", json!(choices))
+            } else {
+                let chosen = context.iter().enumerate().min_by_key(|(index, errors)| {
+                    branch_rank(
+                        &constraint[*index],
+                        error.instance().as_ref(),
+                        errors.len(),
+                        0,
+                    )
+                });
+                if let Some((_, errors)) = chosen.filter(|(_, errors)| !errors.is_empty()) {
+                    for error in errors {
+                        schema_error(schema, error, base, out);
                     }
+                    return;
                 }
-                for (key, value) in object.iter().filter(|(key, _)| !props.contains_key(*key)) {
-                    match schema.get("additionalProperties") {
-                        Some(Value::Bool(true)) => {
-                            untyped_references(value, &pointer(path, key), step, out)
-                        }
-                        Some(sub @ Value::Object(_)) => {
-                            walk(sub, value, &pointer(path, key), step, out)
-                        }
-                        _ => out.warnings.push(InputIssue {
-                            code: "unknown_field".into(),
-                            pointer: pointer(path, key),
-                            message: format!("Unknown field {key}; it is ignored"),
-                        }),
-                    }
-                }
-            } else if let Some(sub) = schema.get("additionalProperties") {
-                for (key, value) in object {
-                    walk(sub, value, &pointer(path, key), step, out);
-                }
+                error.to_string()
             }
         }
-    }
-    if let Some(items) = value.as_array() {
-        for (key, bad) in [
-            (
-                "minItems",
-                schema["minItems"]
-                    .as_u64()
-                    .is_some_and(|n| items.len() < n as usize),
-            ),
-            (
-                "maxItems",
-                schema["maxItems"]
-                    .as_u64()
-                    .is_some_and(|n| items.len() > n as usize),
-            ),
-        ] {
-            if bad {
-                out.error(
-                    "invalid_value",
-                    path,
-                    format!("Array violates {key} {}", schema[key]),
-                );
-            }
+        Kind::Type { .. } => format!("Expected {constraint}"),
+        Kind::Constant { expected_value } => format!("Expected {expected_value}"),
+        Kind::Enum { options } => format!("Choose one of {options}"),
+        Kind::FalseSchema => "This value is not allowed".into(),
+        Kind::Minimum { .. }
+        | Kind::Maximum { .. }
+        | Kind::ExclusiveMinimum { .. }
+        | Kind::ExclusiveMaximum { .. } => {
+            format!("Number violates {} {constraint}", error.kind().keyword())
         }
-        for (index, value) in items.iter().enumerate() {
-            if let Some(sub) = schema
-                .get("prefixItems")
-                .and_then(|v| v.get(index))
-                .or_else(|| schema.get("items"))
-            {
-                walk(sub, value, &pointer(path, &index.to_string()), step, out);
-            }
+        Kind::MinItems { .. } | Kind::MaxItems { .. } => {
+            format!("Array violates {} {constraint}", error.kind().keyword())
         }
-    }
+        _ => error.to_string(),
+    };
+    out.error("invalid_value", &path, message);
 }
 
 fn untyped_references(value: &Value, path: &str, step: Option<usize>, out: &mut ValidationReport) {

@@ -143,6 +143,9 @@ pub struct TemplateItem {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
+    /// Source drawing, or unknown for a report spanning a project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<String>,
     pub kind: Kind,
     pub language: Language,
     pub layout: Layout,
@@ -157,11 +160,19 @@ pub struct Export {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TableRow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<TraceTarget>,
     pub cells: Vec<Value>,
     pub heading: bool,
     /// A section or trade title row (the writers draw it as a band across the table).
     #[serde(default)]
     pub section: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceTarget {
+    pub item: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
 }
 fn invalid(s: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(s.into())
@@ -265,6 +276,7 @@ impl Report {
     /// The line every printed report ends with: Qiyas draws and measures, the engineer approves.
     pub fn status_row(&self) -> TableRow {
         TableRow {
+            target: None,
             cells: vec![json!(match self.language {
                 Language::En => "Status: For review",
                 Language::Ar => "الحالة: للمراجعة",
@@ -287,6 +299,7 @@ impl Report {
         };
         for section in sections {
             result.push(TableRow {
+                target: None,
                 cells: vec![json!(section.heading.text(self.language))],
                 heading: true,
                 section: true,
@@ -309,6 +322,7 @@ impl Report {
                 groups.entry(key).or_default().push(row);
             }
             result.push(TableRow {
+                target: None,
                 cells: self
                     .layout
                     .columns
@@ -321,6 +335,7 @@ impl Report {
             for (key, rows) in groups {
                 if !key.is_empty() {
                     result.push(TableRow {
+                        target: None,
                         cells: vec![json!(key.join(" / "))],
                         heading: true,
                         section: true,
@@ -349,6 +364,9 @@ impl Report {
                         cells.push(present(value, &c.field, row, self.language));
                     }
                     result.push(TableRow {
+                        target: row
+                            .get("target")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok()),
                         cells,
                         heading: false,
                         section: false,
@@ -358,11 +376,13 @@ impl Report {
                 // Different items, even in the same unit, are never summed into one figure.
                 if self.layout.columns.iter().any(|c| c.total) && one_item {
                     result.push(TableRow {
+                        target: None,
                         cells: vec![json!(self.layout.total_heading.text(self.language))],
                         heading: true,
                         section: false,
                     });
                     result.push(TableRow {
+                        target: None,
                         cells: self
                             .layout
                             .columns
@@ -643,6 +663,10 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
             .filter(|i| !i.informational && !i.second_differs())
             .map(|i| {
                 let mut v = json!(i);
+                v["target"] = json!(TraceTarget {
+                    item: format!("generated:{}", i.code),
+                    line: None
+                });
                 v["drawing"] = json!(drawing);
                 v["method"] = json!(i.methods());
                 v["citations"] = json!(i.rule_citations());
@@ -666,6 +690,10 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
         .flat_map(|item| {
             printed_lines(item).into_iter().map(move |line| {
                 let mut row = json!(line);
+                row["target"] = json!(TraceTarget {
+                    item: format!("generated:{}", item.code),
+                    line: (!line.id.is_empty()).then(|| line.id.clone()),
+                });
                 row["code"] = json!(item.code);
                 row["section"] = json!(item.section);
                 row["drawing"] = json!(drawing);
@@ -805,6 +833,7 @@ pub fn drawing(
         drop_foreign_columns(&mut layout, &rows, language, &mut warnings);
     }
     Ok(Report {
+        drawing: (!path.is_empty()).then(|| path.into_owned()),
         kind,
         language,
         layout,
@@ -881,16 +910,28 @@ pub fn project(
         Kind::Boq => p
             .boq
             .iter()
-            .flat_map(|i| item_rows(std::slice::from_ref(&i.item), kind, ""))
+            .enumerate()
+            .flat_map(|(index, i)| {
+                let mut rows = item_rows(std::slice::from_ref(&i.item), kind, "");
+                for row in &mut rows {
+                    row["target"]["item"] = json!(format!("project:{index}"));
+                }
+                rows
+            })
             .collect(),
         Kind::Dimensions => p
             .boq
             .iter()
-            .flat_map(|i| {
-                i.contributions.iter().flat_map(|c| {
+            .enumerate()
+            .flat_map(|(index, i)| {
+                i.contributions.iter().flat_map(move |c| {
                     let mut item = i.item.clone();
                     item.lines = c.lines.clone();
-                    item_rows(&[item], kind, &c.drawing)
+                    let mut rows = item_rows(&[item], kind, &c.drawing);
+                    for row in &mut rows {
+                        row["target"]["item"] = json!(format!("project:{index}"));
+                    }
+                    rows
                 })
             })
             .collect(),
@@ -943,6 +984,7 @@ pub fn project(
         );
     }
     Ok(Report {
+        drawing: None,
         kind,
         language,
         layout,

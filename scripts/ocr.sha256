@@ -1,0 +1,8 @@
+# Release / asset / SHA-256 for scripts/ocr.sh. ONNX Runtime from microsoft/onnxruntime (MIT);
+# models and dictionary from GreatV/oar-ocr v0.3.0 (PaddleOCR PP-OCRv5, Apache-2.0).
+onnxruntime-1.31.1 onnxruntime-linux-x64-1.31.1.tgz c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9
+onnxruntime-1.31.1 onnxruntime-osx-arm64-1.31.1.tgz 2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f
+onnxruntime-1.31.1 onnxruntime-win-x64-1.31.1.zip 5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c
+models-v0.3.0 pp-ocrv5_mobile_det.onnx 1eb7b4f7ab657ebd1c66d5f79bca7497f29768a2e3c15e52daecbba1a8e4a039
+models-v0.3.0 arabic_pp-ocrv5_mobile_rec.onnx 2768206d9a0ce48eba45b59619184e18161dde8f44115f029920ca17a9dc0384
+models-v0.3.0 ppocrv5_arabic_dict.txt 7f92f7dbb9b75a4787a83bfb4f6d14a8ab515525130c9d40a9036f61cf6999e9

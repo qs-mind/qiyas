@@ -1,6 +1,8 @@
 //! Drawing-owned knowledge: NOD / QIYAS_KNOWLEDGE / kind / named JSON XRecord.
 //! There are no trade rules here. Consumers validate their own definition schema.
 
+use std::hash::Hasher;
+
 use opencadcodec::objects::{Dictionary, ObjectType, XRecord, XRecordValue};
 use opencadcodec::{CadDocument, Handle};
 use schemars::JsonSchema;
@@ -19,7 +21,7 @@ pub(crate) fn revision_fingerprint(doc: &CadDocument) -> u64 {
     fn walk(
         doc: &CadDocument,
         h: Handle,
-        hash: &mut u64,
+        hash: &mut fnv::FnvHasher,
         seen: &mut std::collections::BTreeSet<Handle>,
     ) {
         if !seen.insert(h) {
@@ -28,9 +30,7 @@ pub(crate) fn revision_fingerprint(doc: &CadDocument) -> u64 {
         let Some(object) = doc.objects.get(&h) else {
             return;
         };
-        for b in format!("{object:?}").bytes() {
-            *hash = (*hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
-        }
+        hash.write(format!("{object:?}").as_bytes());
         if let ObjectType::Dictionary(d) = object {
             let mut children = d.entries.clone();
             children.sort_by(|a, b| a.0.cmp(&b.0));
@@ -39,11 +39,11 @@ pub(crate) fn revision_fingerprint(doc: &CadDocument) -> u64 {
             }
         }
     }
-    let mut hash = 0xcbf29ce484222325;
+    let mut hash = fnv::FnvHasher::default();
     if let Ok(Some(root)) = child(doc, doc.header.named_objects_dict_handle, DICTIONARY) {
         walk(doc, root, &mut hash, &mut std::collections::BTreeSet::new());
     }
-    hash
+    hash.finish()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

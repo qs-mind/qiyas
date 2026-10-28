@@ -1265,3 +1265,108 @@ fn evidence_includes_each_sheet_that_has_measured_elements() {
     }
     assert!(titles.contains("Upper floor") && titles.contains("Model"));
 }
+
+#[test]
+fn report_trace_regions_follow_wrapping_and_pagination_and_reject_pdf_edits() {
+    use qiyas_core::deliverables::{default_layout, Kind, Language, Report};
+    use qiyas_plot::report::{read_trace, write};
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    for language in [Language::En, Language::Ar] {
+        let mut layout = default_layout(Kind::Dimensions);
+        layout.columns = serde_json::from_value(json!([
+            {"field":"description","heading":{"en":"Working","ar":"الحساب"},"width":1.0,"total":false}
+        ])).unwrap();
+        layout.group_by.clear();
+        layout.page.width_mm = 100.0;
+        layout.page.height_mm = 100.0;
+        layout.page.margin_mm = 10.0;
+        let report = Report {
+            drawing: Some("/drawings/source.dxf".into()),
+            kind: Kind::Dimensions,
+            language,
+            layout,
+            warnings: vec![],
+            rows: vec![
+                json!({"description":"Item", "target":{"item":"generated:W"}}),
+                json!({"description":"Working الحساب ".repeat(300), "target":{"item":"generated:W","line":"line-7"}}),
+            ],
+        };
+        let path = dir.path().join("trace.pdf");
+        write(&path, &report).unwrap();
+        assert_eq!(qiyas_plot::report::read(&path).unwrap(), report);
+        let trace = read_trace(&path).unwrap();
+        assert_eq!(trace.drawing, report.drawing);
+        assert!(trace.pages.len() > 1);
+        let regions: Vec<_> = trace.pages.iter().flat_map(|page| &page.regions).collect();
+        assert_eq!(
+            regions
+                .iter()
+                .filter(|region| region.target.line.is_none())
+                .count(),
+            1
+        );
+        assert!(
+            regions
+                .iter()
+                .filter(|region| region.target.line.as_deref() == Some("line-7"))
+                .count()
+                > 1
+        );
+        for page in &trace.pages {
+            for region in &page.regions {
+                let [x, y, w, h] = region.rect;
+                assert!(x >= 0.0 && y >= 0.0 && w > 0.0 && h > 0.0);
+                assert!(x + w <= page.width && y + h <= page.height);
+            }
+            for pair in page.regions.windows(2) {
+                assert!(pair[0].rect[1] >= pair[1].rect[1] + pair[1].rect[3]);
+            }
+        }
+        let mut pdf = lopdf::Document::load(&path).unwrap();
+        let page = pdf.get_pages()[&1];
+        pdf.get_object_mut(page)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("Rotate", 90);
+        pdf.save(&path).unwrap();
+        assert!(read_trace(&path).is_none());
+        write(&path, &report).unwrap();
+        let mut pdf = lopdf::Document::load(&path).unwrap();
+        let page = pdf.get_pages()[&1];
+        let content = pdf
+            .get_object(page)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Contents")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let stream = pdf
+            .get_object_mut(content)
+            .unwrap()
+            .as_stream_mut()
+            .unwrap();
+        let mut content = b"1 0 0 1 0 20 cm\n".to_vec();
+        content.extend_from_slice(&stream.content);
+        stream.set_content(content);
+        pdf.save(&path).unwrap();
+        assert!(read_trace(&path).is_none());
+        write(&path, &report).unwrap();
+        let mut pdf = lopdf::Document::load(&path).unwrap();
+        let record = pdf
+            .catalog()
+            .unwrap()
+            .get(b"QiyasReport")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let stream = pdf.get_object_mut(record).unwrap().as_stream_mut().unwrap();
+        // An older report still opens, but has no links.
+        stream.set_content(serde_json::to_vec(&report).unwrap());
+        pdf.save(&path).unwrap();
+        assert!(read_trace(&path).is_none());
+    }
+}

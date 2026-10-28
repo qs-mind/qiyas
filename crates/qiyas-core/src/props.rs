@@ -164,6 +164,8 @@ impl Session {
                         &[h.value()],
                         &std::collections::BTreeMap::from([(property.clone(), value.clone())]),
                         None,
+                        &std::collections::BTreeMap::new(),
+                        crate::measurement::PropSource::default(),
                     );
                 }
             }

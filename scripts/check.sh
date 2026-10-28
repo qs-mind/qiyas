@@ -16,6 +16,23 @@ if [ -e "$lib/libpdfium.so" ] || [ -e "$lib/libpdfium.dylib" ] || [ -e "$lib/pdf
     exit 1
   fi
 fi
+# With the OCR runtime installed, run real inference and reject ignored or early-skipped tests.
+ocr_lib=crates/qiyas-desktop/resources/ocr
+if [ -e "$ocr_lib/libonnxruntime.so" ] || [ -e "$ocr_lib/libonnxruntime.dylib" ] || [ -e "$ocr_lib/onnxruntime.dll" ]; then
+  ocr_check() {
+    local output
+    output=$(cargo test "$@" -- --nocapture 2>&1) || { echo "$output"; exit 1; }
+    echo "$output"
+    if echo "$output" | grep -Eq 'skipped:|test result: .* [1-9][0-9]* ignored|running 0 tests'; then
+      echo "OCR is installed in $ocr_lib but its tests did not run" >&2
+      exit 1
+    fi
+  }
+  ocr_check -p qiyas-ocr --test all
+  ocr_check -p qiyas-pdf --test ocr
+  ocr_check -p qiyas-ai --test all document_ocr
+  ocr_check -p qiyas-core --test all recognition_ocr
+fi
 # Release-only speed guard for the pick index (codegen-units = 1 in Cargo.toml).
 cargo test -p qiyas-render --release pick_index_one_million
 # Release-only speed guard for fills inside blocks (triangulated once per fill entity).

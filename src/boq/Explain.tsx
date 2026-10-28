@@ -4,6 +4,7 @@ import { useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 import { ModalDialog } from "../ui/ModalDialog";
 import { TechnicalDetails, ReviewNotes } from "../shell/TechnicalDetails";
+import { trace } from "./trace";
 
 export const EXPLAIN_EVIDENCE = "qiyas:explain-evidence";
 export type Evidence = { handle: number; sheet: string; drawing: string };
@@ -40,7 +41,12 @@ export function Explain({ item, project }: { item: string; project?: string }) {
   const groups = [...new Set(evidence.map(e => JSON.stringify([e.drawing, e.sheet])))];
   const explanations = result?.contributions?.map(c => c.explanation).filter(Boolean) ?? (result ? [result] : []);
   return <>
-    <button type="button" aria-label={title} onClick={e => { e.stopPropagation(); void read(); }}>{t("evidence.explain")}</button>
+    <button type="button" aria-label={title} onClick={e => {
+      e.stopPropagation();
+      // A drawing's own item is traced on the drawing beside its working; a project's is read here.
+      if (project) void read();
+      else trace({ item, panel: true });
+    }}>{t("evidence.explain")}</button>
     {open && <ModalDialog onClose={() => setOpen(false)} labelledBy={id}>
       <div onClick={event => event.stopPropagation()}>
       <h2 id={id}>{title}</h2>

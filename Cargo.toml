@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*"] # Includes qiyas-ocr.
 resolver = "2"
 
 [workspace.package]
@@ -25,6 +25,11 @@ tauri = "2.11"
 tauri-build = "2.6"
 tauri-plugin-dialog = "2.7"
 rstar = "0.12"
+# Planar predicates and polygon topology; no triangulation or threading features.
+geo = { version = "=0.33.1", default-features = false }
+robust = { version = "=1.2.0", default-features = false }
+clipper2-rust = { version = "=1.2.0", default-features = false }
+kurbo = { version = "=0.13.1", default-features = false, features = ["std"] }
 rust_xlsxwriter = "0.99"
 calamine = "0.36"
 tempfile = "3"

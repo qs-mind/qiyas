@@ -12,6 +12,8 @@ import { useStableCallbacks } from "./stableCallbacks";
 import { aliasesFor, isPrimaryGroup } from "./ribbonInfo";
 import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
 import { Tip, TooltipLayer, type TipInfo } from "./Tooltip";
+import { Toolbar } from "@base-ui/react/toolbar";
+import type { BaseUIEvent } from "@base-ui/react/types";
 import { useToolbarRoving } from "./useRoving";
 import { ViewsMenu } from "./ViewsMenu";
 
@@ -114,8 +116,11 @@ type Props = {
 };
 
 // Space is the viewport's pan key: it must never press a focused ribbon button.
-const ignoreSpace = (e: KeyboardEvent) => {
-  if (e.key === " ") e.preventDefault();
+const ignoreSpace = (e: KeyboardEvent & Partial<Pick<BaseUIEvent<KeyboardEvent>, "preventBaseUIHandler">>) => {
+  if (e.key === " ") {
+    e.preventDefault();
+    e.preventBaseUIHandler?.();
+  }
 };
 
 /** The handler each action button runs, by its command; a missing one shows it disabled. */
@@ -275,13 +280,15 @@ function RibbonBody(props: Props) {
   }
 
   /** Headline tools show their names; compact tools keep the name in their tooltip. */
-  function iconButton(b: RibbonButton, key: string, primary: boolean) {
+  function iconButton(b: RibbonButton, key: string, primary: boolean, toolbar: boolean) {
     const r = resolve(b);
     const name = t(r.label);
+    const Button = toolbar ? Toolbar.Button : "button";
     return (
       <Tip key={key} info={tipFor(b.command, name, !r.run)}>
         {(describedBy) => (
-          <button
+          <Button
+            {...(toolbar ? { focusableWhenDisabled: false } : {})}
             type="button"
             className={primary ? "rb primary" : "rb"}
             aria-label={name}
@@ -294,18 +301,19 @@ function RibbonBody(props: Props) {
           >
             <RibbonIcon name={b.kind === "command" ? "aliases" : b.command} />
             {primary && <span className="rb-label">{name}</span>}
-          </button>
+          </Button>
         )}
       </Tip>
     );
   }
 
   /** One button of the layout, as its kind and command say. */
-  function draw(b: RibbonButton, key: string, primary = false) {
+  function draw(b: RibbonButton, key: string, primary = false, toolbar = false) {
     if (b.command === "open" && props.loadRecents && props.onOpenRecent && props.onClearRecents) {
       return (
         <RecentsMenu
           key={key}
+          toolbar={toolbar}
           onOpen={props.onOpen}
           load={props.loadRecents}
           onOpenRecent={props.onOpenRecent}
@@ -328,7 +336,7 @@ function RibbonBody(props: Props) {
         />
       );
     }
-    return iconButton(b, key, primary);
+    return iconButton(b, key, primary, toolbar);
   }
 
   /** A group's buttons: those on show, and those behind its "⋯" button. Views, a menu of its own,
@@ -493,9 +501,13 @@ function RibbonBody(props: Props) {
     >
       <div className="ribbon-tabs">
         <span className="app-name heading">{t("appName")}</span>
-        <div className="quick-access" role="toolbar" aria-label={t("ribbon.quickAccess")} {...quick.props}>
-          {QUICK_ACCESS.map((b) => draw(b, b.command))}
-        </div>
+        <Toolbar.Root
+          {...quick.props}
+          className="quick-access"
+          aria-label={t("ribbon.quickAccess")}
+        >
+          {QUICK_ACCESS.map((b) => draw(b, b.command, false, true))}
+        </Toolbar.Root>
         <Tabs.List className="ribbon-tablist">
           {lead.map((x) => (
             <Tabs.Tab

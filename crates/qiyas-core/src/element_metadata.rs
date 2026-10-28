@@ -165,44 +165,14 @@ pub(crate) fn nearest_label(at: [f64; 2], mut labels: Vec<([f64; 2], String)>) -
     Some(first.1.clone())
 }
 
-pub(crate) fn inside(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
-    let mut result = false;
-    for (a, b) in ring
-        .iter()
-        .zip(ring.iter().cycle().skip(1))
-        .take(ring.len())
-    {
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
-            result = !result;
-        }
-    }
-    result
-}
+pub(crate) use qiyas_geom::predicates::inside;
 
 fn centre(paths: &[Path]) -> Option<[f64; 2]> {
     let mut area = 0.0;
     let mut moment = [0.0; 2];
     for path in paths.iter().filter(|p| p.closed) {
-        let mut twice = 0.0;
-        let mut sum = [0.0; 2];
-        // Subtracting a local origin preserves precision at survey coordinates.
-        let origin = *path.points.first()?;
-        for (a, b) in path
-            .points
-            .iter()
-            .zip(path.points.iter().cycle().skip(1))
-            .take(path.points.len())
-        {
-            let a = [a[0] - origin[0], a[1] - origin[1]];
-            let b = [b[0] - origin[0], b[1] - origin[1]];
-            let cross = a[0] * b[1] - b[0] * a[1];
-            twice += cross;
-            for axis in 0..2 {
-                sum[axis] += (a[axis] + b[axis]) * cross;
-            }
-        }
+        let twice = 2.0 * qiyas_geom::predicates::ring_area(&path.points);
+        let centroid = qiyas_geom::predicates::ring_centroid(&path.points)?;
         if twice.abs() > f64::EPSILON {
             let depth = paths
                 .iter()
@@ -214,7 +184,7 @@ fn centre(paths: &[Path]) -> Option<[f64; 2]> {
                 .count();
             let weight = twice.abs() * if depth % 2 == 0 { 1.0 } else { -1.0 };
             for axis in 0..2 {
-                moment[axis] += (origin[axis] + sum[axis] / (3.0 * twice)) * weight;
+                moment[axis] += centroid[axis] * weight;
             }
             area += weight;
         }

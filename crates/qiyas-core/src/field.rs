@@ -250,26 +250,9 @@ pub(crate) fn today() -> String {
     format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
 }
 
-/// Today's date as the computer's clock says it where it can (Unix: `localtime_r`), else UTC.
+/// Today's date in the computer's local timezone.
 pub(crate) fn local_today() -> String {
-    #[cfg(unix)]
-    {
-        // SAFETY: `time(NULL)` has no preconditions; `localtime_r` writes only into the zeroed
-        // `tm` owned here and returns null on failure, which is checked.
-        unsafe {
-            let now = libc::time(std::ptr::null_mut());
-            let mut tm: libc::tm = std::mem::zeroed();
-            if !libc::localtime_r(&now, &mut tm).is_null() {
-                return format!(
-                    "{:04}-{:02}-{:02}",
-                    tm.tm_year + 1900,
-                    tm.tm_mon + 1,
-                    tm.tm_mday
-                );
-            }
-        }
-    }
-    today()
+    chrono::Local::now().date_naive().to_string()
 }
 
 /// The field code a text keeps, if any.

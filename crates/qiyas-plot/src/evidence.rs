@@ -295,7 +295,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
             );
             for text in &overlay.texts {
                 for glyph in &text.glyphs {
-                    if let Some(bytes) = engine.font_bytes(glyph.font) {
+                    if let Some(bytes) = engine.font_face(glyph.font) {
                         page.fonts.insert(glyph.font, bytes);
                     }
                 }

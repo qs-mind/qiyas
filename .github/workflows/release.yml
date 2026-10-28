@@ -212,6 +212,7 @@ jobs:
             echo "::notice::Fork or unsigned dry run without Thmanyah: using the system Arabic font."
           fi
       - run: scripts/pdfium.sh
+      - run: scripts/ocr.sh
       - run: scripts/build-sidecar.sh ${{ matrix.target }}
       - id: args
         env:

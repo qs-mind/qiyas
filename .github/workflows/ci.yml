@@ -63,6 +63,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # pdfium installed, so check.sh runs the PDF tests and fails if any is ignored.
       - run: scripts/pdfium.sh
+      - run: scripts/ocr.sh
       - run: scripts/check.sh
 
   build-smoke:
@@ -100,6 +101,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: pnpm install --frozen-lockfile
       - run: scripts/pdfium.sh
+      - run: scripts/ocr.sh
       - run: scripts/build-sidecar.sh
       # Compiles the app as a release would, without making installers. Uploads nothing.
       - run: pnpm tauri build --config crates/qiyas-desktop/tauri.bundle.conf.json --no-bundle

@@ -4,6 +4,8 @@
 //! A new conversation saves the current one before dropping its agent. A shared checkpoint keeps
 //! the last complete model step available while the background task owns the agent.
 
+use std::hash::Hasher;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -275,9 +277,9 @@ fn provider_identity(settings: &Settings) -> String {
         .unwrap_or_default()
         .trim()
         .trim_end_matches('/');
-    let hash = endpoint.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
-    });
+    let mut hash = fnv::FnvHasher::default();
+    hash.write(endpoint.as_bytes());
+    let hash = hash.finish();
     format!("{}:{hash:016x}", settings.provider.name())
 }
 

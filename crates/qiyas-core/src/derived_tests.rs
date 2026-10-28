@@ -27,38 +27,9 @@ fn equivalent(s: &mut Session, context: &str) {
     // Include generated geometry, exact handles, metadata, schedules, fields and quantities.
     // A skipped dependency is exposed by the independent full refresh changing this state.
     if before != after {
-        fn differences(a: &Value, b: &Value, path: &str, out: &mut Vec<String>) {
-            match (a, b) {
-                (Value::Object(a), Value::Object(b)) => {
-                    let keys: BTreeSet<_> = a.keys().chain(b.keys()).collect();
-                    for key in keys {
-                        differences(
-                            a.get(key).unwrap_or(&Value::Null),
-                            b.get(key).unwrap_or(&Value::Null),
-                            &format!("{path}/{key}"),
-                            out,
-                        );
-                    }
-                }
-                (Value::Array(a), Value::Array(b)) => {
-                    for i in 0..a.len().max(b.len()) {
-                        differences(
-                            a.get(i).unwrap_or(&Value::Null),
-                            b.get(i).unwrap_or(&Value::Null),
-                            &format!("{path}/{i}"),
-                            out,
-                        );
-                    }
-                }
-                _ if a != b => out.push(format!("{path}: {a} -> {b}")),
-                _ => {}
-            }
-        }
-        let mut diff = Vec::new();
-        differences(&before, &after, "", &mut diff);
         panic!(
             "incremental differs from full derivation after {context}:\n{}",
-            diff.join("\n")
+            json_patch::diff(&before, &after)
         );
     }
     s.drawing.doc = document;

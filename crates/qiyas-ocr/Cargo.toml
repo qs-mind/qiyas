@@ -1,0 +1,15 @@
+[package]
+name = "qiyas-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# oar-ocr 0.10 requires Rust 1.95.
+rust-version = "1.95"
+
+[dependencies]
+oar-ocr = { version = "0.10", default-features = false, features = ["simd"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "std", "ndarray"] }
+image = { version = "0.25", default-features = false }
+
+[dev-dependencies]
+qiyas-pdf = { path = "../qiyas-pdf", features = ["fixtures"] }

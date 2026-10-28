@@ -137,6 +137,7 @@ impl Session {
                 assembly: None,
                 layers: std::collections::BTreeMap::new(),
                 compatibility: None,
+                sources: std::collections::BTreeMap::new(),
             });
             object.id = handle;
             object.compatibility = None;
@@ -211,8 +212,8 @@ impl Session {
                 let seed_matches =
                     (room.seed[0] - point[0]).hypot(room.seed[1] - point[1]) < self.measure_tol();
                 if !seed_matches
-                    && (!inside(&ring.points, point)
-                        || room.holes.iter().any(|hole| inside(hole, point)))
+                    && (!inside(point, &ring.points)
+                        || room.holes.iter().any(|hole| inside(point, hole)))
                 {
                     return None;
                 }
@@ -668,18 +669,7 @@ impl Session {
     }
 }
 
-fn inside(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
-    let mut inside = false;
-    for i in 0..ring.len() {
-        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
-            inside = !inside;
-        }
-    }
-    inside
-}
+use qiyas_geom::predicates::inside;
 
 fn numeric_words(text: &str) -> Vec<f64> {
     crate::numbers::words(crate::numbers::area_text(text).unwrap_or(text))

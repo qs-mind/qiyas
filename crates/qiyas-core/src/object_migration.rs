@@ -377,6 +377,7 @@ impl Session {
                     assembly: None,
                     layers: BTreeMap::new(),
                     compatibility: Some(kind.clone()),
+                    sources: BTreeMap::new(),
                 });
             // Explicitly retyped objects belong to their supplied definition.
             if object.compatibility.is_none() {

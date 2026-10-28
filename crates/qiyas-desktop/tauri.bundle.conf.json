@@ -3,6 +3,7 @@
     "externalBin": ["binaries/qiyas-mcp"],
     "resources": {
       "resources/pdfium/": "resources/pdfium/",
+      "resources/ocr/": "resources/ocr/",
       "../../LICENSES/": "licenses/",
       "../qiyas-render/fonts/NotoSans-OFL.txt": "licenses/NotoSans-OFL.txt",
       "../qiyas-render/fonts/NotoSansArabic-OFL.txt": "licenses/NotoSansArabic-OFL.txt",

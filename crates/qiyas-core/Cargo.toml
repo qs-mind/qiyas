@@ -8,6 +8,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+jsonschema = { version = "0.60", default-features = false }
+fnv = "1"
+rstar.workspace = true
+qiyas-ocr = { path = "../qiyas-ocr" }
 opencadcodec.workspace = true
 opencadkernel.workspace = true
 qiyas-geom = { path = "../qiyas-geom" }
@@ -33,6 +38,7 @@ uuid.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+json-patch = "4"
 tempfile.workspace = true
 # Integration tests don't see the library's cfg(test), so they turn the fixtures on this way.
 qiyas-core = { path = ".", features = ["fixtures"] }

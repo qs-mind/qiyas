@@ -76,6 +76,18 @@ for (const [name, version, licence] of [...seen.values()].sort((a, b) => (a[0] +
   console.log(`| ${name} | ${version} | ${licence} |`);
 }
 NODE
+  echo
+  echo "## Native libraries and models installed beside the app"
+  echo
+  echo 'Not crates: `scripts/pdfium.sh` and `scripts/ocr.sh` install them, each download checked'
+  echo "against its SHA-256. Versions are in those scripts."
+  echo
+  echo "| Component | Licence | Text |"
+  echo "|---|---|---|"
+  echo "| pdfium (bblanchon/pdfium-binaries) | BSD-3-Clause | pdfium-BSD-3.txt |"
+  echo "| ONNX Runtime | MIT | onnxruntime-MIT.txt (its third-party notices ship beside the runtime) |"
+  echo "| PP-OCRv5 detector, Arabic recogniser and dictionary (PaddlePaddle) | Apache-2.0 | oar-ocr-Apache-2.0.txt |"
+  echo "| Oniguruma (built into onig_sys) | BSD-2-Clause | Oniguruma-BSD-2-Clause.txt |"
 } >"$tmp"
 
 mv "$tmp" "$out"

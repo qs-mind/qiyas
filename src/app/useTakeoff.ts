@@ -1,3 +1,4 @@
+import { trace } from "../boq/trace";
 import { uiError, userError } from "../i18n/errors";
 /** The side panel: its state (`useTakeoffState`: the take-off rows and totals, the BOQ, the
  *  conflicts, the inquiry info card, and what each highlights on the drawing) and its handlers
@@ -285,11 +286,11 @@ export function useTakeoff({
     [items, sheet, batch],
   );
 
+  /** A generated item is traced: its elements light up on their sheet, each tagged with what it gives. */
   function showGeneratedItem(code: string): boolean {
     const sources = generated?.items.find((item) => item.code === code)?.lines.flatMap((line) => line.sources) ?? [];
-    const target = sources.find((source) => source.sheet.toLowerCase() === sheet.toLowerCase())?.sheet ?? sources[0]?.sheet;
-    if (!target) return false;
-    showGenerated([...new Set(sources.filter((source) => source.sheet === target).map((source) => source.handle))], target);
+    if (!sources.length) return false;
+    trace({ item: `generated:${code}`, panel: false });
     return true;
   }
   /** Selects a BOQ item: its linked measurements on this sheet light up and fill the view. */

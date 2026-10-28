@@ -615,10 +615,8 @@ fn glyphs(
     pages: &[Vec<u8>],
     kept: Option<&[bool]>,
 ) {
-    let (w, h) = (pixmap.width() as i64, pixmap.height() as i64);
     let side = PAGE_SIZE as usize;
     let [ox, oy] = batch.origin;
-    let data = pixmap.data_mut();
     for (n, q) in batch.quads.iter().enumerate() {
         if kept.is_some_and(|k| !k[n]) {
             continue;
@@ -626,67 +624,50 @@ fn glyphs(
         let Some(page) = pages.get(usize::from(q.page)) else {
             continue;
         };
-        let c: Vec<(f32, f32)> = (0..4)
-            .map(|k| {
-                view.px(
-                    f64::from(q.corners[2 * k]) + ox,
-                    f64::from(q.corners[2 * k + 1]) + oy,
-                )
-            })
-            .collect();
-        let (e1, e2) = (
-            (c[1].0 - c[0].0, c[1].1 - c[0].1),
-            (c[3].0 - c[0].0, c[3].1 - c[0].1),
-        );
-        let det = e1.0 * e2.1 - e1.1 * e2.0;
-        if det.abs() < 1e-6 {
+        let [u0, v0, u1, v1] = q.uv.map(u32::from);
+        if u1 > PAGE_SIZE || v1 > PAGE_SIZE || u1 <= u0 || v1 <= v0 {
             continue;
         }
-        let xs = c.iter().map(|p| p.0);
-        let ys = c.iter().map(|p| p.1);
-        let (x0, x1) = (
-            xs.clone().fold(f32::MAX, f32::min),
-            xs.fold(f32::MIN, f32::max),
-        );
-        let (y0, y1) = (
-            ys.clone().fold(f32::MAX, f32::min),
-            ys.fold(f32::MIN, f32::max),
-        );
-        let [u0, v0, u1, v1] = q.uv.map(f32::from);
+        let Some(mut glyph) = Pixmap::new(u1 - u0, v1 - v0) else {
+            continue;
+        };
         let [_, r, g, b] = q.color.to_be_bytes();
         let [r, g, b] = if [r, g, b] == [255, 255, 255] {
             [0, 0, 0]
         } else {
             [r, g, b]
         };
-        for py in (y0.floor() as i64).max(0)..=(y1.ceil() as i64).min(h - 1) {
-            for px in (x0.floor() as i64).max(0)..=(x1.ceil() as i64).min(w - 1) {
-                // Where the pixel's centre falls in the quad, 0 to 1 along each side.
-                let (dx, dy) = (px as f32 + 0.5 - c[0].0, py as f32 + 0.5 - c[0].1);
-                let s = (dx * e2.1 - dy * e2.0) / det;
-                let t = (e1.0 * dy - e1.1 * dx) / det;
-                if !(0.0..=1.0).contains(&s) || !(0.0..=1.0).contains(&t) {
-                    continue;
-                }
-                let u = (u0 + s * (u1 - u0)) as usize;
-                let v = (v0 + t * (v1 - v0)) as usize;
-                let Some(&cover) = page.get(v.min(side - 1) * side + u.min(side - 1)) else {
-                    continue;
-                };
-                if cover == 0 {
-                    continue;
-                }
-                let a = u32::from(cover);
-                let at = ((py * w + px) * 4) as usize;
-                for (k, channel) in [r, g, b].into_iter().enumerate() {
-                    let under = u32::from(data[at + k]);
-                    data[at + k] = ((u32::from(channel) * a + under * (255 - a)) / 255) as u8;
-                }
-                // An inset starts transparent: what a glyph covers becomes opaque.
-                let under = u32::from(data[at + 3]);
-                data[at + 3] = (a + under * (255 - a) / 255).min(255) as u8;
-            }
+        // Convert only this glyph, not the whole atlas, to premultiplied RGBA.
+        for (i, pixel) in glyph.pixels_mut().iter_mut().enumerate() {
+            let x = u0 as usize + i % (u1 - u0) as usize;
+            let y = v0 as usize + i / (u1 - u0) as usize;
+            let cover = page.get(y * side + x).copied().unwrap_or(0);
+            *pixel = tiny_skia::ColorU8::from_rgba(r, g, b, cover).premultiply();
         }
+        let corner = |k: usize| {
+            view.px(
+                f64::from(q.corners[2 * k]) + ox,
+                f64::from(q.corners[2 * k + 1]) + oy,
+            )
+        };
+        let (tl, tr, bl) = (corner(0), corner(1), corner(3));
+        let (w, h) = ((u1 - u0) as f32, (v1 - v0) as f32);
+        let transform = Transform::from_row(
+            (tr.0 - tl.0) / w,
+            (tr.1 - tl.1) / w,
+            (bl.0 - tl.0) / h,
+            (bl.1 - tl.1) / h,
+            tl.0,
+            tl.1,
+        );
+        pixmap.draw_pixmap(
+            0,
+            0,
+            glyph.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            transform,
+            None,
+        );
     }
 }
 

@@ -1,11 +1,22 @@
 /** Thin wrappers over the Tauri commands of qiyas-desktop (crates/qiyas-desktop/src/commands.rs). */
 import { invoke, setWorkspace, retainWorkspaces } from "./workspaceIpc";
+import type { TraceTarget } from "./boq/trace";
+
+export type FileViewPdfTracePage = {
+  page: number;
+  width: number;
+  height: number;
+  /** Rectangles are [left, bottom, width, height] in PDF points. */
+  regions: { rect: [number, number, number, number]; target: TraceTarget }[];
+};
+export type FileViewPdfTrace = { drawing: string | null; pages: FileViewPdfTracePage[] };
 
 export type FileViewInfo = {
   kind: "pdf" | "workbook" | "image" | "text";
   name: string;
   size_bytes: number;
   pages: number | null;
+  trace?: FileViewPdfTrace | null;
 };
 export type FileViewSheet = {
   name: string;
@@ -14,8 +25,10 @@ export type FileViewSheet = {
   rows_total: number;
   cols_total: number;
   truncated: boolean;
+  /** One-based worksheet row numbers. */
+  targets?: Record<number, TraceTarget> | null;
 };
-export type FileViewWorkbook = { sheets: FileViewSheet[] };
+export type FileViewWorkbook = { sheets: FileViewSheet[]; drawing?: string | null };
 
 export const fileViewInfo = (path: string) => invoke<FileViewInfo>("file_view_info", { path });
 export const fileViewPdfPage = (path: string, page: number, widthPx: number) =>
@@ -902,7 +915,7 @@ export type Current = {
 export type RecognitionCandidate = {
   handle: number; rule: string; confidence: number; state: "pending" | "accepted" | "rejected";
   placement: { type: string; props: Record<string, string | number | boolean> };
-  evidence: { handle?: number; path?: string; page?: number; detail: string }[];
+  evidence: { handle?: number; path?: string; page?: number; detail: string; kind?: SourceKind; confidence?: number; bbox?: [[number, number], [number, number]] }[];
   issues: string[]; unresolved: string[]; object: number | null;
 };
 export type Command =
@@ -1931,7 +1944,17 @@ export type PdfAttachment = { name: string; path: string; pages: number };
 export const aiAttachPdf = (name: string, bytes: number[]) => invoke<PdfAttachment>("ai_attach_pdf", { name, bytes });
 
 export type MeasurementCitation = { source: string; clause: string };
+/** Where one value came from (`qiyas_core::measurement::SourceKind`). */
+export type SourceKind =
+  | "measured" | "drawing_note" | "drawing_attribute" | "drawing_table" | "drawing_block"
+  | "document" | "ocr" | "rule" | "type_default" | "engineer" | "mizan" | "derived" | "unknown";
+export type NamedSource = { name: string; kind: SourceKind; handle?: number; text?: string };
+/** One named value of a dimension line: Length 5.20 m, its source(s). */
+export type Operand = { label: string; expression: string; value: number; unit?: string; sources: NamedSource[] };
 export type DimensionLine = {
+  /** Stable across re-derivation: element identity / rule / term or void. Empty in older reports. */
+  id?: string;
+  operands?: Operand[];
   label: string;
   operation: "add" | "deduct";
   timesing: number;
@@ -2007,8 +2030,32 @@ export type Explanation = {
   evidence: { handle: number; sheet: string; drawing: string }[];
   elements?: unknown[]; recognition?: unknown[]; recognition_rules?: unknown[]; measurement_rules?: unknown[];
   contributions?: { explanation: Explanation }[];
+  /** Each element the item measures: what it gives, its lines and the voids deducted from it. */
+  by_element?: ElementShare[];
+  /** The item, row or quantity as stored (its descriptions, code). */
+  original?: Record<string, unknown>;
   notes?: string[];
 };
+export type ElementShare = {
+  handle: number; sheet: string; value: number; unit: string; lines: string[];
+  voids: { handle: number; sheet: string; value: number; included: boolean; line: string }[];
+  /** The element's generated graphics (outline, hatch, symbol), lit up with it. */
+  parts?: number[];
+};
+/** `explain_item("element:<handle>")`: every item an element feeds (the reverse of an item). */
+export type ElementItems = {
+  picked: number;
+  element: number;
+  parts: number[];
+  object: { type: string; props: Record<string, unknown>; category: string; sheet: string } | null;
+  items: {
+    item: string; code: string; description_en: string; description_ar: string; unit: string;
+    quantity: number; role: "measured" | "deducted"; value: number; lines: string[];
+  }[];
+  quantities: { item: string; rule: string; unit: string; quantity: number; mapped: boolean }[];
+  takeoff: { item: string; description: string; unit: string; quantity: number; boq_code: string | null }[];
+};
+export const elementItems = (handle: number) => invoke<ElementItems>("explain_item", { item: `element:${handle}` });
 export const explainItem = (item: string, project?: string) => invoke<Explanation>("explain_item", { item, project });
 
 /** Explicit check only; Qiyas never opens or scripts Claude login. */

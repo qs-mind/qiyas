@@ -125,8 +125,40 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
         // Internal diagnostics remain lossless, but never become client print pages.
         let record = book.add_worksheet().set_name("Qiyas record")?;
         record.set_hidden(true);
+        let mut data =
+            serde_json::to_value(report).map_err(|e| crate::BoqError::Xlsx(e.to_string()))?;
+        let targets: std::collections::BTreeMap<_, _> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                row.target
+                    .as_ref()
+                    .map(|target| ((index + 1).to_string(), target))
+            })
+            .collect();
+        // Keep the exact visible cells, including headings and totals. A moved or edited
+        // worksheet must invalidate its links, even when the preview is truncated.
+        let cells: Vec<Vec<serde_json::Value>> = rows
+            .iter()
+            .map(|row| {
+                (0..columns)
+                    .map(|column| {
+                        let value = row.cells.get(column).unwrap_or(&serde_json::Value::Null);
+                        if value.is_number() {
+                            value.clone()
+                        } else {
+                            serde_json::json!(qiyas_core::deliverables::display(value))
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        data["trace"] = serde_json::json!({
+            "version": 1, "drawing": report.drawing,
+            "sheets": [{ "name": "Report", "rows": targets, "cells": cells }],
+        });
         let text =
-            serde_json::to_string(report).map_err(|e| crate::BoqError::Xlsx(e.to_string()))?;
+            serde_json::to_string(&data).map_err(|e| crate::BoqError::Xlsx(e.to_string()))?;
         for (i, chunk) in text.chars().collect::<Vec<_>>().chunks(16000).enumerate() {
             record.write_string(i as u32, 0, chunk.iter().collect::<String>())?;
         }

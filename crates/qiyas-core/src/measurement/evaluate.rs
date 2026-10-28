@@ -9,6 +9,46 @@ use crate::objects::{ObjectFilter, ObjectRecord};
 struct Context<'a> {
     session: &'a Session,
     values: BTreeMap<String, EValue>,
+    /// Where each named value came from, for the working an engineer reads.
+    sources: BTreeMap<String, PropSource>,
+    /// Display units of named values ("m", "m2"...), where known.
+    units: BTreeMap<String, String>,
+}
+impl<'a> Context<'a> {
+    fn new(session: &'a Session) -> Self {
+        Self {
+            session,
+            values: BTreeMap::new(),
+            sources: BTreeMap::new(),
+            units: BTreeMap::new(),
+        }
+    }
+}
+/// The unit a geometry fact is in, by the names the engine gives them.
+fn fact_unit(name: &str) -> &'static str {
+    let n = name.to_ascii_lowercase();
+    if n.ends_with("volume") {
+        "m3"
+    } else if n.ends_with("area") {
+        "m2"
+    } else if n == "count" {
+        "nr"
+    } else if n.ends_with("length") || n.ends_with("perimeter") {
+        "m"
+    } else {
+        ""
+    }
+}
+fn kind_unit(kind: crate::objects::UnitKind) -> &'static str {
+    use crate::objects::UnitKind;
+    match kind {
+        UnitKind::Length => "m",
+        UnitKind::Area => "m2",
+        UnitKind::Volume => "m3",
+        UnitKind::Angle => "deg",
+        UnitKind::Count => "nr",
+        UnitKind::Scalar => "",
+    }
 }
 fn typed(value: &Value) -> Option<EValue> {
     match value {
@@ -53,20 +93,80 @@ impl Context<'_> {
             .map_err(|e| invalid(e.to_string()))
     }
     fn add_object(&mut self, object: &ObjectRecord, prefix: &str) {
+        let definition = self.session.object_type(&object.instance.type_name).ok();
         for (k, v) in &object.instance.props {
             if let Some(v) = typed(v) {
                 self.values.insert(format!("{prefix}{k}"), v);
             }
+            let bound = definition.as_ref().and_then(|d| d.property_bindings.get(k));
+            let source = match (object.instance.sources.get(k), bound) {
+                (_, Some(binding)) => PropSource {
+                    kind: SourceKind::Derived,
+                    handle: None,
+                    text: binding.clone(),
+                },
+                (Some(source), None) => source.clone(),
+                (None, None) => PropSource::default(),
+            };
+            self.sources.insert(format!("{prefix}{k}"), source);
+            if let Some(crate::objects::Property::Number { unit, .. }) =
+                definition.as_ref().and_then(|d| d.properties.get(k))
+            {
+                self.units
+                    .insert(format!("{prefix}{k}"), kind_unit(*unit).into());
+            }
         }
+        // A measured figure names what it was measured with, so a volume of a joined wall reads as
+        // its length, plan area and the element's own heights and thicknesses, not a bare number.
+        let mut basis = object
+            .facts
+            .iter()
+            .filter(|(k, _)| {
+                matches!(
+                    k.as_str(),
+                    "length" | "area" | "perimeter" | "volume" | "count"
+                )
+            })
+            .map(|(k, v)| format!("{k} {} {}", round3(*v), fact_unit(k)))
+            .collect::<Vec<_>>();
+        for (k, v) in &object.instance.props {
+            if let (Some(n), Some(unit)) = (v.as_f64(), self.units.get(&format!("{prefix}{k}"))) {
+                basis.push(format!("{k} {} {unit}", round3(n)));
+            }
+        }
+        let measured = PropSource {
+            kind: SourceKind::Measured,
+            handle: Some(object.instance.id),
+            text: basis.join(", "),
+        };
         for (k, v) in &object.facts {
             self.values
                 .insert(format!("{prefix}{k}"), EValue::Number(*v));
             self.values
                 .insert(format!("{prefix}geometry.{k}"), EValue::Number(*v));
+            for name in [format!("{prefix}{k}"), format!("{prefix}geometry.{k}")] {
+                self.sources.insert(name.clone(), measured.clone());
+                self.units.insert(name, fact_unit(k).into());
+            }
         }
         for (k, v) in &object.quantities {
             self.values
                 .insert(format!("{prefix}{k}"), EValue::Number(*v));
+            let recipe = definition
+                .as_ref()
+                .and_then(|d| d.quantities.get(k))
+                .cloned()
+                .unwrap_or_default();
+            self.sources.insert(
+                format!("{prefix}{k}"),
+                PropSource {
+                    kind: SourceKind::Derived,
+                    handle: Some(object.instance.id),
+                    text: recipe,
+                },
+            );
+            self.units
+                .insert(format!("{prefix}{k}"), fact_unit(k).into());
         }
         self.values
             .insert(format!("{prefix}id"), EValue::Text(object.identity.clone()));
@@ -79,6 +179,9 @@ impl Context<'_> {
                 .insert(format!("{prefix}{k}"), EValue::Text(v.into()));
         }
     }
+}
+fn round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
 }
 fn reference(
     s: &Session,
@@ -117,6 +220,99 @@ fn on_object(error: CoreError, id: u64) -> CoreError {
         CoreError::InvalidCommand(message) => invalid(format!("Object {id}: {message}")),
         other => other,
     }
+}
+/// The named values of a term, each with its source, in the order they multiply.
+fn operands(context: &Context<'_>, term: &Term) -> Result<Vec<Operand>, CoreError> {
+    let mut result = Vec::new();
+    let timesing = (term.timesing.trim() != "1").then(|| ("Times".to_string(), &term.timesing));
+    let factors = term.factors.iter().enumerate().map(|(i, expression)| {
+        let label = term
+            .factor_labels
+            .get(i)
+            .filter(|l| !l.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| expression.clone());
+        (label, expression)
+    });
+    for (label, expression) in timesing.into_iter().chain(factors) {
+        let value = context.number(expression)?;
+        let names = context
+            .session
+            .evaluation_expression(expression)
+            .map(|e| e.names())
+            .unwrap_or_default();
+        // A value looked up in a table the drawing knows (a schedule or document table).
+        let tables: Vec<NamedSource> = expression
+            .match_indices("lookup(")
+            .filter_map(|(at, _)| {
+                let rest = expression[at + 7..].trim_start();
+                let rest = rest.strip_prefix('"')?;
+                let name = &rest[..rest.find('"')?];
+                let citation = knowledge::get(&context.session.drawing.doc, Kind::Tables, name)
+                    .ok()
+                    .flatten()
+                    .and_then(|k| k.data.get("citation").cloned())
+                    .map(|c| match c {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    })
+                    .unwrap_or_default();
+                Some(NamedSource {
+                    name: name.to_string(),
+                    source: PropSource {
+                        kind: SourceKind::DrawingTable,
+                        handle: None,
+                        text: citation,
+                    },
+                })
+            })
+            .collect();
+        let sources = if !tables.is_empty() {
+            tables
+                .into_iter()
+                .chain(names.iter().filter_map(|name| {
+                    context.sources.get(name).map(|source| NamedSource {
+                        name: name.clone(),
+                        source: source.clone(),
+                    })
+                }))
+                .collect()
+        } else if names.is_empty() {
+            // A number written in the rule: the rule's citation is its source.
+            vec![NamedSource {
+                name: expression.clone(),
+                source: PropSource {
+                    kind: SourceKind::Rule,
+                    handle: None,
+                    text: format!("{} {}", term.citation.source, term.citation.clause)
+                        .trim()
+                        .to_string(),
+                },
+            }]
+        } else {
+            names
+                .iter()
+                .map(|name| NamedSource {
+                    name: name.clone(),
+                    source: context.sources.get(name).cloned().unwrap_or_default(),
+                })
+                .collect()
+        };
+        let unit = match names.as_slice() {
+            [one] if expression.trim() == one => {
+                context.units.get(one).cloned().unwrap_or_default()
+            }
+            _ => String::new(),
+        };
+        result.push(Operand {
+            label,
+            expression: expression.clone(),
+            value,
+            unit,
+            sources,
+        });
+    }
+    Ok(result)
 }
 fn line(
     context: &Context<'_>,
@@ -161,6 +357,8 @@ fn line(
     let mut refs = citations.to_vec();
     refs.push(term.citation.clone());
     Ok(DimensionLine {
+        id: String::new(),
+        operands: operands(context, term)?,
         label: term.label.clone(),
         operation: term.operation,
         timesing,
@@ -312,10 +510,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             ));
             continue;
         }
-        let mut context = Context {
-            session: s,
-            values: BTreeMap::new(),
-        };
+        let mut context = Context::new(s);
         context.add_object(object, "");
         let source = reference(s, object, &evidence);
         let mut measured = false;
@@ -358,20 +553,21 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 citations.push(band.citation.clone());
             }
             let mut lines = Vec::new();
-            for term in terms {
-                lines.push(
-                    line(
-                        &context,
-                        term,
-                        unit,
-                        method,
-                        &citations,
-                        vec![source.clone()],
-                    )
-                    .map_err(|e| on_object(e, object.instance.id))?,
-                );
+            let line_id = |part: &str| format!("{}/{}/{part}", object.identity, rule.id);
+            for (index, term) in terms.iter().enumerate() {
+                let mut entry = line(
+                    &context,
+                    term,
+                    unit,
+                    method,
+                    &citations,
+                    vec![source.clone()],
+                )
+                .map_err(|e| on_object(e, object.instance.id))?;
+                entry.id = line_id(&format!("t{index}"));
+                lines.push(entry);
             }
-            for deduction in deductions {
+            for (index, deduction) in deductions.iter().enumerate() {
                 for void in objects.iter().filter(|v| {
                     v.instance.host == Some(object.instance.id)
                         && v.instance
@@ -385,8 +581,10 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                         )));
                     }
                     let mut child_context = Context {
-                        session: s,
                         values: context.values.clone(),
+                        sources: context.sources.clone(),
+                        units: context.units.clone(),
+                        ..Context::new(s)
                     };
                     child_context.add_object(void, "void.");
                     let boundary = child_context.condition(&deduction.boundary.when)?;
@@ -407,6 +605,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                         vec![source.clone(), reference(s, void, &evidence)],
                     )
                     .map_err(|e| on_object(e, object.instance.id))?;
+                    entry.id = line_id(&format!("d{index}/{}", void.identity));
                     entry.included = included;
                     entry.decision = Some(format!(
                         "{} void; {predicate} = {included}",
@@ -433,6 +632,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     gross - raw,
                 ));
                 lines.push(DimensionLine {
+                    id: line_id("limited"),
+                    operands: vec![],
                     label: LIMITED_LINE.into(),
                     operation: Operation::Add,
                     timesing: 1.0,
@@ -461,6 +662,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 let expression = format!("{call}(({raw}) * {scale}) / {scale} - ({raw})");
                 let adjustment = context.number(&expression)?;
                 lines.push(DimensionLine {
+                    id: line_id("rounding"),
+                    operands: vec![],
                     label: "Rounding adjustment".into(),
                     operation: if adjustment < 0.0 {
                         Operation::Deduct
@@ -517,8 +720,8 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 continue;
             };
             let mut mapped_context = Context {
-                session: s,
                 values: context.values.clone(),
+                ..Context::new(s)
             };
             mapped_context
                 .values

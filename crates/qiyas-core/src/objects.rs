@@ -159,6 +159,11 @@ pub struct ObjectPlacement {
     pub assembly: Option<String>,
     #[serde(default)]
     pub layers: BTreeMap<String, String>,
+    /// Where each supplied property value came from: the note, schedule, attribute or document
+    /// it was read from (with its handle or words), the engineer, or an assumption. A property
+    /// given without one is recorded as set by whoever ran the command.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, crate::measurement::PropSource>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectInstance {
@@ -177,6 +182,21 @@ pub struct ObjectInstance {
     /// Import marker in transitional files; conversion clears it before shared derivation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<String>,
+    /// Where each property value came from (see `ObjectPlacement::sources`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, crate::measurement::PropSource>,
+}
+
+/// The source recorded for a property value given without one.
+pub(crate) fn given_by(source: crate::Source) -> crate::measurement::PropSource {
+    crate::measurement::PropSource {
+        kind: match source {
+            crate::Source::User => crate::measurement::SourceKind::Engineer,
+            crate::Source::Ai | crate::Source::Mcp => crate::measurement::SourceKind::Mizan,
+        },
+        handle: None,
+        text: String::new(),
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ObjectPart {
@@ -794,6 +814,7 @@ impl Session {
     pub(crate) fn place_objects(
         &mut self,
         placements: Vec<ObjectPlacement>,
+        source: crate::Source,
     ) -> Result<Vec<u64>, CoreError> {
         if placements.is_empty() {
             return Err(invalid("Place at least one object"));
@@ -858,6 +879,21 @@ impl Session {
                     serde_json::from_value(spec).map_err(|e| invalid(e.to_string()))?;
                 self.draw(spec)?[0]
             };
+            // Every value says where it came from: as cited, a type default, or whoever set it.
+            let sources = props
+                .keys()
+                .map(|name| {
+                    let from = match p.sources.get(name) {
+                        Some(cited) => cited.clone(),
+                        None if supplied.contains_key(name) => given_by(source),
+                        None => crate::measurement::PropSource {
+                            kind: crate::measurement::SourceKind::TypeDefault,
+                            ..Default::default()
+                        },
+                    };
+                    (name.clone(), from)
+                })
+                .collect();
             let object = ObjectInstance {
                 id: h,
                 type_name: definition.name,
@@ -867,6 +903,7 @@ impl Session {
                 assembly: p.assembly,
                 layers: p.layers,
                 compatibility: None,
+                sources,
             };
             self.stamp_object(h, &object)?;
             if let Some(source) = p.region {
@@ -881,6 +918,8 @@ impl Session {
         targets: &[u64],
         props: &BTreeMap<String, Value>,
         level: Option<String>,
+        sources: &BTreeMap<String, crate::measurement::PropSource>,
+        given: crate::measurement::PropSource,
     ) -> Result<(), CoreError> {
         if targets.is_empty() {
             return Err(invalid("Choose at least one object"));
@@ -909,6 +948,18 @@ impl Session {
                 return Err(invalid(format!(
                     "Property {name} is bound to an expression; edit its source"
                 )));
+            }
+            // A value set again unchanged, with no new citation, keeps its source: the edit is a no-op.
+            for (name, value) in props {
+                match sources.get(name) {
+                    Some(from) => {
+                        object.sources.insert(name.clone(), from.clone());
+                    }
+                    None if object.props.get(name) != Some(value) => {
+                        object.sources.insert(name.clone(), given.clone());
+                    }
+                    None => {}
+                }
             }
             object.props.extend(props.clone());
             object.props = self

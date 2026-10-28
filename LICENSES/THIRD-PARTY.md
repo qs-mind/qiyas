@@ -14,6 +14,9 @@ where to get the source of the MPL-2.0 libraries.
 | aes | 0.9.3 | MIT OR Apache-2.0 | crates.io |
 | ahash | 0.8.12 | MIT OR Apache-2.0 | crates.io |
 | aho-corasick | 1.1.5 | Unlicense OR MIT | crates.io |
+| aligned | 0.4.3 | MIT OR Apache-2.0 | crates.io |
+| aligned-vec | 0.6.4 | MIT | crates.io |
+| allocator-api2 | 0.2.21 | MIT OR Apache-2.0 | crates.io |
 | alloc-no-stdlib | 3.0.0 | BSD-3-Clause | crates.io |
 | alloc-stdlib | 0.3.0 | BSD-3-Clause | crates.io |
 | anstyle | 1.0.14 | MIT OR Apache-2.0 | crates.io |
@@ -21,8 +24,10 @@ where to get the source of the MPL-2.0 libraries.
 | apple-native-keyring-store | 1.0.2 | MIT OR Apache-2.0 | crates.io |
 | approx | 0.5.1 | Apache-2.0 | crates.io |
 | arboard | 3.6.1 | MIT OR Apache-2.0 | crates.io |
+| arg_enum_proc_macro | 0.3.4 | MIT | crates.io |
 | arrayref | 0.3.9 | BSD-2-Clause | crates.io |
 | arrayvec | 0.7.8 | MIT OR Apache-2.0 | crates.io |
+| as-slice | 0.2.1 | MIT OR Apache-2.0 | crates.io |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 | crates.io |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT | crates.io |
 | async-executor | 1.14.0 | Apache-2.0 OR MIT | crates.io |
@@ -37,22 +42,30 @@ where to get the source of the MPL-2.0 libraries.
 | atk | 0.18.2 | MIT | crates.io |
 | atoi_simd | 0.18.1 | MIT OR Apache-2.0 | crates.io |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT | crates.io |
+| av1-grain | 0.2.5 | BSD-2-Clause | crates.io |
+| avif-serialize | 0.8.9 | BSD-3-Clause | crates.io |
+| av-scenechange | 0.14.1 | MIT | crates.io |
 | axum-core | 0.5.6 | MIT | crates.io |
 | axum | 0.8.9 | MIT | crates.io |
+| base64 | 0.13.1 | MIT/Apache-2.0 | crates.io |
 | base64 | 0.22.1 | MIT OR Apache-2.0 | crates.io |
 | base64 | 0.23.1 | MIT OR Apache-2.0 | crates.io |
+| bit_field | 0.10.3 | Apache-2.0/MIT | crates.io |
 | bitflags | 1.3.2 | MIT/Apache-2.0 | crates.io |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 | crates.io |
 | bit-set | 0.8.0 | Apache-2.0 OR MIT | crates.io |
+| bitstream-io | 4.10.0 | MIT/Apache-2.0 | crates.io |
 | bit-vec | 0.8.0 | Apache-2.0 OR MIT | crates.io |
 | block2 | 0.6.2 | MIT | crates.io |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 | crates.io |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 | crates.io |
 | blocking | 1.7.0 | Apache-2.0 OR MIT | crates.io |
 | block-padding | 0.4.2 | MIT OR Apache-2.0 | crates.io |
+| borrow-or-share | 0.2.4 | MIT-0 | crates.io |
 | brotli-decompressor | 6.0.1 | BSD-3-Clause/MIT | crates.io |
 | brotli | 9.0.0 | BSD-3-Clause AND MIT | crates.io |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 | crates.io |
+| bytecount | 0.6.9 | Apache-2.0/MIT | crates.io |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT | crates.io |
 | byteorder | 1.5.0 | Unlicense OR MIT | crates.io |
@@ -63,6 +76,7 @@ where to get the source of the MPL-2.0 libraries.
 | camino | 1.2.6 | MIT OR Apache-2.0 | crates.io |
 | cargo_metadata | 0.19.2 | MIT | crates.io |
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 | crates.io |
+| castaway | 0.2.4 | MIT | crates.io |
 | cavalier_contours | 0.7.0 | MIT OR Apache-2.0 | crates.io |
 | cbc | 0.2.1 | MIT OR Apache-2.0 | crates.io |
 | cfb | 0.14.0 | MIT | crates.io |
@@ -75,9 +89,13 @@ where to get the source of the MPL-2.0 libraries.
 | clap_lex | 1.1.0 | MIT OR Apache-2.0 | crates.io |
 | clap | 4.6.2 | MIT OR Apache-2.0 | crates.io |
 | clipboard-win | 5.4.1 | BSL-1.0 | crates.io |
+| clipper2-rust | 1.2.0 | BSL-1.0 | crates.io |
 | cmov | 0.5.4 | Apache-2.0 OR MIT | crates.io |
 | codepage | 0.1.3 | Apache-2.0 OR MIT | crates.io |
+| color_quant | 1.1.0 | MIT | crates.io |
+| compact_str | 0.9.1 | MIT | crates.io |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | crates.io |
+| console | 0.16.6 | MIT | crates.io |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT | crates.io |
 | cookie | 0.18.2 | MIT OR Apache-2.0 | crates.io |
 | core_detect | 1.0.0 | MIT/Apache-2.0 | crates.io |
@@ -101,12 +119,21 @@ where to get the source of the MPL-2.0 libraries.
 | cssparser | 0.37.0 | MPL-2.0 | crates.io |
 | ctor | 1.0.13 | Apache-2.0 OR MIT | crates.io |
 | ctutils | 0.4.3 | Apache-2.0 OR MIT | crates.io |
+| daachorse | 3.0.3 | MIT OR Apache-2.0 | crates.io |
+| darling_core | 0.20.11 | MIT | crates.io |
 | darling_core | 0.24.1 | MIT | crates.io |
+| darling_macro | 0.20.11 | MIT | crates.io |
 | darling_macro | 0.24.1 | MIT | crates.io |
+| darling | 0.20.11 | MIT | crates.io |
 | darling | 0.24.1 | MIT | crates.io |
+| dary_heap | 0.3.9 | MIT OR Apache-2.0 | crates.io |
+| data-encoding | 2.11.1 | MIT | crates.io |
 | dbus | 0.9.12 | Apache-2.0/MIT | crates.io |
 | debug_unsafe | 0.1.4 | MIT OR Apache-2.0 | crates.io |
 | deranged | 0.5.8 | MIT OR Apache-2.0 | crates.io |
+| derive_builder_core | 0.20.2 | MIT OR Apache-2.0 | crates.io |
+| derive_builder_macro | 0.20.2 | MIT OR Apache-2.0 | crates.io |
+| derive_builder | 0.20.2 | MIT OR Apache-2.0 | crates.io |
 | derive_more-impl | 2.1.1 | MIT | crates.io |
 | derive_more | 2.1.1 | MIT | crates.io |
 | digest | 0.10.7 | MIT OR Apache-2.0 | crates.io |
@@ -126,18 +153,26 @@ where to get the source of the MPL-2.0 libraries.
 | dyn-clone | 1.0.20 | MIT OR Apache-2.0 | crates.io |
 | ecb | 0.2.1 | MIT OR Apache-2.0 | crates.io |
 | either | 1.19.0 | MIT OR Apache-2.0 | crates.io |
+| email_address | 0.2.9 | MIT | crates.io |
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 | crates.io |
+| encode_unicode | 1.0.0 | Apache-2.0 OR MIT | crates.io |
 | encoding_rs | 0.8.42 | (Apache-2.0 OR MIT) AND BSD-3-Clause | crates.io |
 | endi | 1.1.1 | MIT | crates.io |
 | enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 | crates.io |
 | enumflags2 | 0.7.12 | MIT OR Apache-2.0 | crates.io |
+| equator-macro | 0.4.2 | MIT | crates.io |
+| equator | 0.4.2 | MIT | crates.io |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT | crates.io |
 | erased-discriminant | 1.0.1 | MIT OR Apache-2.0 | crates.io |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 | crates.io |
 | errno | 0.3.14 | MIT OR Apache-2.0 | crates.io |
 | error-code | 3.4.0 | BSL-1.0 | crates.io |
+| esaxx-rs | 0.1.10 | Apache-2.0 | crates.io |
 | event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT | crates.io |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT | crates.io |
+| eventsource-stream | 0.2.3 | MIT OR Apache-2.0 | crates.io |
+| exr | 1.74.2 | BSD-3-Clause | crates.io |
+| fancy-regex | 0.19.2 | MIT | crates.io |
 | fast-float2 | 0.2.4 | MIT OR Apache-2.0 | crates.io |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | crates.io |
 | fax | 0.2.7 | MIT | crates.io |
@@ -146,13 +181,18 @@ where to get the source of the MPL-2.0 libraries.
 | filetime | 0.2.29 | MIT/Apache-2.0 | crates.io |
 | fixedbitset | 0.5.7 | MIT OR Apache-2.0 | crates.io |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | crates.io |
+| float_next_after | 2.0.0 | MIT | crates.io |
+| fluent-uri | 0.4.1 | MIT | crates.io |
 | fnv | 1.0.7 | Apache-2.0 / MIT | crates.io |
 | foldhash | 0.1.5 | Zlib | crates.io |
 | foldhash | 0.2.0 | Zlib | crates.io |
+| fontconfig-parser | 0.5.8 | MIT | crates.io |
+| fontdb | 0.24.0 | MIT | crates.io |
 | foreign-types-macros | 0.2.4 | MIT/Apache-2.0 | crates.io |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 | crates.io |
 | foreign-types | 0.5.0 | MIT/Apache-2.0 | crates.io |
 | form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | crates.io |
+| fraction | 0.17.0 | MIT OR Apache-2.0 | crates.io |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 | crates.io |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | crates.io |
 | futures-executor | 0.3.34 | MIT OR Apache-2.0 | crates.io |
@@ -171,10 +211,14 @@ where to get the source of the MPL-2.0 libraries.
 | gdkx11-sys | 0.18.2 | MIT | crates.io |
 | gdkx11 | 0.18.2 | MIT | crates.io |
 | generic-array | 0.14.7 | MIT | crates.io |
+| geographiclib-rs | 0.2.7 | MIT | crates.io |
+| geo-types | 0.7.20 | MIT OR Apache-2.0 | crates.io |
+| geo | 0.33.1 | MIT OR Apache-2.0 | crates.io |
 | gethostname | 1.1.0 | Apache-2.0 | crates.io |
 | getrandom | 0.2.17 | MIT OR Apache-2.0 | crates.io |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | crates.io |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | crates.io |
+| gif | 0.14.2 | MIT OR Apache-2.0 | crates.io |
 | gio-sys | 0.18.1 | MIT | crates.io |
 | gio | 0.18.4 | MIT | crates.io |
 | glib-macros | 0.18.5 | MIT | crates.io |
@@ -219,60 +263,94 @@ where to get the source of the MPL-2.0 libraries.
 | ident_case | 1.0.1 | MIT/Apache-2.0 | crates.io |
 | idna_adapter | 1.2.2 | Apache-2.0 OR MIT | crates.io |
 | idna | 1.1.0 | MIT OR Apache-2.0 | crates.io |
+| i_float | 1.16.0 | MIT | crates.io |
+| i_key_sort | 0.10.3 | MIT | crates.io |
+| imageproc | 0.27.0 | MIT | crates.io |
 | image | 0.25.10 | MIT OR Apache-2.0 | crates.io |
 | image-webp | 0.2.4 | MIT OR Apache-2.0 | crates.io |
+| imgref | 1.12.3 | CC0-1.0 OR Apache-2.0 | crates.io |
 | indexmap | 1.9.3 | Apache-2.0 OR MIT | crates.io |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | crates.io |
+| indicatif | 0.18.6 | MIT | crates.io |
 | infer | 0.22.0 | MIT | crates.io |
 | inout | 0.2.2 | MIT OR Apache-2.0 | crates.io |
+| i_overlay | 4.5.2 | MIT OR Apache-2.0 | crates.io |
 | ipnet | 2.12.2 | MIT OR Apache-2.0 | crates.io |
+| i_shape | 1.18.0 | MIT | crates.io |
+| itertools | 0.14.0 | MIT OR Apache-2.0 | crates.io |
 | itertools | 0.15.0 | MIT OR Apache-2.0 | crates.io |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | crates.io |
+| i_tree | 0.18.0 | MIT | crates.io |
 | javascriptcore-rs-sys | 1.1.1 | MIT | crates.io |
 | javascriptcore-rs | 1.1.2 | MIT | crates.io |
 | json-patch | 4.2.0 | MIT/Apache-2.0 | crates.io |
 | jsonptr | 0.7.1 | MIT OR Apache-2.0 | crates.io |
+| jsonschema-regex | 0.60.2 | MIT | crates.io |
+| jsonschema | 0.60.2 | MIT | crates.io |
+| jsonschema-value | 0.60.2 | MIT | crates.io |
 | keyboard-types | 0.8.3 | MIT OR Apache-2.0 | crates.io |
 | keyring-core | 1.0.0 | MIT OR Apache-2.0 | crates.io |
 | keyring | 4.2.0 | MIT OR Apache-2.0 | crates.io |
+| kurbo | 0.13.1 | Apache-2.0 OR MIT | crates.io |
+| lebe | 0.5.3 | BSD-3-Clause | crates.io |
 | libc | 0.2.190 | MIT OR Apache-2.0 | crates.io |
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT | crates.io |
 | libloading | 0.7.4 | ISC | crates.io |
+| libloading | 0.9.0 | ISC | crates.io |
 | libm | 0.2.16 | MIT | crates.io |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
 | litemap | 0.8.3 | Unicode-3.0 | crates.io |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | crates.io |
 | log | 0.4.34 | MIT OR Apache-2.0 | crates.io |
+| loop9 | 0.1.5 | MIT | crates.io |
 | lopdf | 0.44.0 | MIT | crates.io |
+| macro_rules_attribute-proc_macro | 0.2.3 | Apache-2.0 OR MIT OR Zlib | crates.io |
+| macro_rules_attribute | 0.2.3 | Apache-2.0 OR MIT OR Zlib | crates.io |
 | markup5ever | 0.39.0 | MIT OR Apache-2.0 | crates.io |
 | matchit | 0.8.4 | MIT AND BSD-3-Clause | crates.io |
 | matrixmultiply | 0.3.11 | MIT/Apache-2.0 | crates.io |
 | maybe-owned | 0.3.4 | MIT OR Apache-2.0 | crates.io |
+| maybe-rayon | 0.1.1 | MIT | crates.io |
 | md-5 | 0.11.0 | MIT OR Apache-2.0 | crates.io |
 | memchr | 2.8.3 | Unlicense OR MIT | crates.io |
 | memmap2 | 0.9.11 | MIT OR Apache-2.0 | crates.io |
 | memoffset | 0.9.1 | MIT | crates.io |
+| micromap | 0.3.0 | MIT | crates.io |
 | mime | 0.3.17 | MIT OR Apache-2.0 | crates.io |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 | crates.io |
 | minisign-verify | 0.2.5 | MIT | crates.io |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | crates.io |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | crates.io |
 | mio | 1.2.4 | MIT | crates.io |
+| monostate-impl | 0.1.18 | MIT OR Apache-2.0 | crates.io |
+| monostate | 0.1.18 | MIT OR Apache-2.0 | crates.io |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 | crates.io |
 | muda | 0.20.0 | Apache-2.0 OR MIT | crates.io |
+| multiversion-macros | 0.9.2 | MIT OR Apache-2.0 | crates.io |
 | multiversion_no_op | 1.0.0 | Apache-2.0 OR MIT | crates.io |
+| multiversion | 0.9.2 | MIT OR Apache-2.0 | crates.io |
+| nalgebra-macros | 0.3.0 | Apache-2.0 | crates.io |
 | nalgebra | 0.33.3 | Apache-2.0 | crates.io |
+| nalgebra | 0.35.0 | Apache-2.0 | crates.io |
+| ndarray | 0.17.2 | MIT OR Apache-2.0 | crates.io |
 | new_debug_unreachable | 1.0.6 | MIT | crates.io |
 | nom | 7.1.3 | MIT | crates.io |
 | nom | 8.0.0 | MIT | crates.io |
+| noop_proc_macro | 0.3.0 | MIT | crates.io |
+| no_std_io2 | 0.9.4 | Apache-2.0 OR MIT | crates.io |
 | num-bigint | 0.4.8 | MIT OR Apache-2.0 | crates.io |
+| num-cmp | 0.1.0 | MIT/Apache-2.0 | crates.io |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 | crates.io |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 | crates.io |
+| num-derive | 0.4.2 | MIT OR Apache-2.0 | crates.io |
 | num-integer | 0.1.47 | MIT OR Apache-2.0 | crates.io |
 | num-iter | 0.1.46 | MIT OR Apache-2.0 | crates.io |
 | num-rational | 0.4.2 | MIT OR Apache-2.0 | crates.io |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | crates.io |
 | num | 0.4.3 | MIT OR Apache-2.0 | crates.io |
+| oar-ocr-core | 0.10.2 | Apache-2.0 | crates.io |
+| oar-ocr-derive | 0.10.2 | Apache-2.0 | crates.io |
+| oar-ocr | 0.10.2 | Apache-2.0 | crates.io |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | objc2-core-foundation | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | objc2-core-graphics | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
@@ -284,13 +362,18 @@ where to get the source of the MPL-2.0 libraries.
 | objc2 | 0.6.5 | MIT | crates.io |
 | objc2-web-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | crates.io |
+| onig_sys | 69.9.3 | MIT | crates.io |
+| onig | 6.5.3 | MIT | crates.io |
 | opencadcodec | 0.5.5 | MPL-2.0 | https://github.com/HakanSeven12/opencadcodec.git @ a35f43e8 |
 | opencadkernel | 0.1.0 | MPL-2.0 | https://github.com/HakanSeven12/opencadkernel.git @ 99b6b489 |
 | openssl-probe | 0.2.1 | MIT OR Apache-2.0 | crates.io |
 | option-ext | 0.2.0 | MPL-2.0 | crates.io |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 | crates.io |
+| ort-sys | 2.0.0-rc.13 | MIT OR Apache-2.0 | crates.io |
+| ort | 2.0.0-rc.13 | MIT OR Apache-2.0 | crates.io |
 | osakit | 0.3.1 | MIT OR Apache-2.0 | crates.io |
 | os_pipe | 1.2.3 | MIT | crates.io |
+| outref | 0.5.2 | MIT | crates.io |
 | owned_ttf_parser | 0.25.1 | Apache-2.0 | crates.io |
 | pango-sys | 0.18.0 | MIT | crates.io |
 | pango | 0.18.3 | MIT | crates.io |
@@ -298,6 +381,7 @@ where to get the source of the MPL-2.0 libraries.
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 | crates.io |
 | parking | 2.2.1 | Apache-2.0 OR MIT | crates.io |
 | paste | 1.0.15 | MIT OR Apache-2.0 | crates.io |
+| pastey | 0.1.1 | MIT OR Apache-2.0 | crates.io |
 | pastey | 0.2.3 | MIT OR Apache-2.0 | crates.io |
 | pdfium-render | 0.9.4 | MIT OR Apache-2.0 | crates.io |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 | crates.io |
@@ -313,38 +397,63 @@ where to get the source of the MPL-2.0 libraries.
 | png | 0.17.16 | MIT OR Apache-2.0 | crates.io |
 | png | 0.18.1 | MIT OR Apache-2.0 | crates.io |
 | polling | 3.11.0 | Apache-2.0 OR MIT | crates.io |
+| polycool | 0.4.0 | MIT OR Apache-2.0 | crates.io |
+| portable-atomic | 1.15.0 | Apache-2.0 OR MIT | crates.io |
 | potential_utf | 0.1.6 | Unicode-3.0 | crates.io |
 | powerfmt | 0.2.1 | MIT OR Apache-2.0 | crates.io |
+| ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 | crates.io |
 | precomputed-hash | 0.1.1 | MIT | crates.io |
+| primal-check | 0.3.4 | MIT OR Apache-2.0 | crates.io |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | crates.io |
 | proc-macro-crate | 1.3.1 | MIT OR Apache-2.0 | crates.io |
 | proc-macro-crate | 2.0.2 | MIT OR Apache-2.0 | crates.io |
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 | crates.io |
 | proc-macro-error-attr | 1.0.4 | MIT OR Apache-2.0 | crates.io |
 | proc-macro-error | 1.0.4 | MIT OR Apache-2.0 | crates.io |
+| profiling-procmacros | 1.0.18 | MIT OR Apache-2.0 | crates.io |
+| profiling | 1.0.18 | MIT OR Apache-2.0 | crates.io |
+| pulp | 0.22.3 | MIT | crates.io |
+| pulp-wasm-simd-flag | 0.1.1 | MIT | crates.io |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 | crates.io |
+| qoi | 0.4.1 | MIT/Apache-2.0 | crates.io |
 | quick-error | 2.0.1 | MIT/Apache-2.0 | crates.io |
 | quick-xml | 0.41.0 | MIT | crates.io |
 | quick-xml | 0.42.0 | MIT | crates.io |
 | quote | 1.0.47 | MIT OR Apache-2.0 | crates.io |
+| rand_chacha | 0.9.0 | MIT OR Apache-2.0 | crates.io |
 | rand_core | 0.10.1 | MIT OR Apache-2.0 | crates.io |
+| rand_core | 0.9.5 | MIT OR Apache-2.0 | crates.io |
+| rand_distr | 0.6.0 | MIT OR Apache-2.0 | crates.io |
+| rand_pcg | 0.10.2 | MIT OR Apache-2.0 | crates.io |
 | rand | 0.10.3 | MIT OR Apache-2.0 | crates.io |
+| rand | 0.9.5 | MIT OR Apache-2.0 | crates.io |
 | rangemap | 1.8.0 | MIT/Apache-2.0 | crates.io |
+| rav1e | 0.8.1 | BSD-2-Clause | crates.io |
+| ravif | 0.13.0 | BSD-3-Clause | crates.io |
+| raw-cpuid | 11.6.0 | MIT | crates.io |
 | rawpointer | 0.2.1 | MIT/Apache-2.0 | crates.io |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | crates.io |
+| rayon-cond | 0.4.0 | Apache-2.0/MIT | crates.io |
 | rayon-core | 1.13.0 | MIT OR Apache-2.0 | crates.io |
 | rayon | 1.12.0 | MIT OR Apache-2.0 | crates.io |
+| reborrow | 0.5.5 | MIT | crates.io |
 | ref-cast-impl | 1.0.27 | MIT OR Apache-2.0 | crates.io |
 | ref-cast | 1.0.27 | MIT OR Apache-2.0 | crates.io |
+| referencing | 0.60.2 | MIT | crates.io |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | crates.io |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | crates.io |
 | regex | 1.13.1 | MIT OR Apache-2.0 | crates.io |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 | crates.io |
 | rfd | 0.16.0 | MIT | crates.io |
+| rgb | 0.8.53 | MIT | crates.io |
 | ring | 0.17.14 | Apache-2.0 AND ISC | crates.io |
 | rmcp | 3.5.1 | Apache-2.0 | crates.io |
+| robust | 1.2.0 | MIT OR Apache-2.0 | crates.io |
+| roxmltree | 0.20.0 | MIT OR Apache-2.0 | crates.io |
 | rstar | 0.12.2 | MIT OR Apache-2.0 | crates.io |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | crates.io |
+| rustdct | 0.7.1 | MIT OR Apache-2.0 | crates.io |
+| rustfft | 6.4.1 | MIT OR Apache-2.0 | crates.io |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
 | rustls-native-certs | 0.8.4 | Apache-2.0 OR ISC OR MIT | crates.io |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | crates.io |
@@ -356,6 +465,7 @@ where to get the source of the MPL-2.0 libraries.
 | rustybuzz | 0.20.1 | MIT | crates.io |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | crates.io |
 | safe_arch | 0.7.4 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| safe_arch | 1.2.0 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | same-file | 1.0.6 | Unlicense/MIT | crates.io |
 | schemars_derive | 0.8.22 | MIT | crates.io |
 | schemars_derive | 1.2.2 | MIT | crates.io |
@@ -386,24 +496,33 @@ where to get the source of the MPL-2.0 libraries.
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 | crates.io |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 | crates.io |
 | sha2 | 0.11.0 | MIT OR Apache-2.0 | crates.io |
+| sif-itree | 0.4.1 | MIT OR Apache-2.0 | crates.io |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 | crates.io |
+| simba | 0.10.2 | Apache-2.0 | crates.io |
 | simba | 0.9.1 | Apache-2.0 | crates.io |
 | simd-adler32 | 0.3.10 | MIT | crates.io |
+| simd_helpers | 0.1.0 | MIT | crates.io |
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 | crates.io |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 | crates.io |
 | slab | 0.4.12 | MIT | crates.io |
+| slotmap | 1.1.1 | Zlib | crates.io |
 | smallvec | 1.16.2 | MIT OR Apache-2.0 | crates.io |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 | crates.io |
 | softbuffer | 0.4.8 | MIT OR Apache-2.0 | crates.io |
 | soup3-sys | 0.5.0 | MIT | crates.io |
 | soup3 | 0.5.0 | MIT | crates.io |
+| spm_precompiled | 0.1.4 | Apache-2.0 | crates.io |
 | sse-stream | 0.2.6 | MIT OR Apache-2.0 | crates.io |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | crates.io |
 | static_aabb2d_index | 2.1.0 | MIT OR Apache-2.0 | crates.io |
+| static_assertions | 1.1.0 | MIT OR Apache-2.0 | crates.io |
+| strength_reduce | 0.2.4 | MIT OR Apache-2.0 | crates.io |
 | strict-num | 0.1.1 | MIT | crates.io |
 | string_cache | 0.9.0 | MIT OR Apache-2.0 | crates.io |
 | stringprep | 0.1.5 | MIT/Apache-2.0 | crates.io |
 | strsim | 0.11.1 | MIT | crates.io |
+| strum_macros | 0.28.0 | MIT | crates.io |
+| strum | 0.28.0 | MIT | crates.io |
 | subsetter | 0.2.6 | MIT OR Apache-2.0 | crates.io |
 | subtle | 2.6.1 | BSD-3-Clause | crates.io |
 | sync_wrapper | 1.0.2 | Apache-2.0 | crates.io |
@@ -439,6 +558,7 @@ where to get the source of the MPL-2.0 libraries.
 | tiny-skia | 0.12.0 | BSD-3-Clause | crates.io |
 | tinystr | 0.8.4 | Unicode-3.0 | crates.io |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| tokenizers | 0.23.2 | Apache-2.0 | crates.io |
 | tokio-macros | 2.7.2 | MIT | crates.io |
 | tokio-rustls | 0.26.6 | MIT OR Apache-2.0 | crates.io |
 | tokio-stream | 0.1.19 | MIT | crates.io |
@@ -459,6 +579,7 @@ where to get the source of the MPL-2.0 libraries.
 | tracing-attributes | 0.1.31 | MIT | crates.io |
 | tracing-core | 0.1.36 | MIT | crates.io |
 | tracing | 0.1.44 | MIT | crates.io |
+| transpose | 0.2.3 | MIT OR Apache-2.0 | crates.io |
 | tree_magic_mini | 3.2.2 | MIT | crates.io |
 | try-lock | 0.2.5 | MIT | crates.io |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 | crates.io |
@@ -467,19 +588,28 @@ where to get the source of the MPL-2.0 libraries.
 | typenum | 1.20.1 | MIT OR Apache-2.0 | crates.io |
 | unicode-bidi-mirroring | 0.4.0 | MIT/Apache-2.0 | crates.io |
 | unicode-bidi | 0.3.18 | MIT OR Apache-2.0 | crates.io |
+| unicode_categories | 0.1.1 | MIT OR Apache-2.0 | crates.io |
 | unicode-ccc | 0.4.0 | MIT/Apache-2.0 | crates.io |
+| unicode-general-category | 1.1.0 | Apache-2.0 | crates.io |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | crates.io |
+| unicode-linebreak | 0.1.5 | Apache-2.0 | crates.io |
+| unicode-normalization-alignments | 0.1.12 | MIT/Apache-2.0 | crates.io |
 | unicode-normalization | 0.1.25 | MIT OR Apache-2.0 | crates.io |
 | unicode-properties | 0.1.4 | MIT/Apache-2.0 | crates.io |
 | unicode-script | 0.5.8 | MIT OR Apache-2.0 | crates.io |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | crates.io |
+| unicode-width | 0.2.3 | MIT OR Apache-2.0 | crates.io |
+| unit-prefix | 0.5.2 | MIT | crates.io |
 | untrusted | 0.9.0 | ISC | crates.io |
 | urlpattern | 0.6.0 | MIT | crates.io |
 | url | 2.5.8 | MIT OR Apache-2.0 | crates.io |
 | utf16string | 0.2.0 | MIT OR Apache-2.0 | crates.io |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT | crates.io |
+| uuid-simd | 0.8.0 | MIT | crates.io |
 | uuid | 1.27.0 | Apache-2.0 OR MIT | crates.io |
 | vecmath | 1.0.0 | MIT | crates.io |
+| v_frame | 0.3.9 | BSD-2-Clause | crates.io |
+| vsimd | 0.8.0 | MIT | crates.io |
 | walkdir | 2.5.0 | Unlicense/MIT | crates.io |
 | want | 0.3.2 | MIT | crates.io |
 | wayland-backend | 0.3.17 | MIT | crates.io |
@@ -498,6 +628,7 @@ where to get the source of the MPL-2.0 libraries.
 | weezl | 0.1.12 | MIT OR Apache-2.0 | crates.io |
 | weezl | 0.2.1 | MIT OR Apache-2.0 | crates.io |
 | wide | 0.7.33 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| wide | 1.7.1 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | winapi-util | 0.1.11 | Unlicense OR MIT | crates.io |
 | winapi | 0.3.9 | MIT/Apache-2.0 | crates.io |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 | crates.io |
@@ -529,6 +660,7 @@ where to get the source of the MPL-2.0 libraries.
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | crates.io |
 | x11 | 2.21.0 | MIT | crates.io |
 | xattr | 1.6.1 | MIT OR Apache-2.0 | crates.io |
+| y4m | 0.8.0 | MIT | crates.io |
 | yoke-derive | 0.8.4 | Unicode-3.0 | crates.io |
 | yoke | 0.8.3 | Unicode-3.0 | crates.io |
 | zbus_macros | 5.19.0 | MIT | crates.io |
@@ -550,6 +682,7 @@ where to get the source of the MPL-2.0 libraries.
 | zmij | 1.0.23 | MIT | crates.io |
 | zopfli | 0.8.3 | Apache-2.0 | crates.io |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | crates.io |
+| zune-inflate | 0.2.54 | MIT OR Apache-2.0 OR Zlib | crates.io |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib | crates.io |
 | zvariant_derive | 5.15.0 | MIT | crates.io |
 | zvariant_utils | 4.2.0 | MIT | crates.io |
@@ -675,6 +808,7 @@ where to get the source of the MPL-2.0 libraries.
 | micromark-util-types | 2.0.3 | MIT |
 | micromark | 4.0.3 | MIT |
 | ms | 2.1.3 | MIT |
+| papaparse | 5.5.3 | MIT |
 | parse-entities | 4.0.2 | MIT |
 | property-information | 7.2.0 | MIT |
 | react-dom | 19.3.0 | MIT |
@@ -709,3 +843,15 @@ where to get the source of the MPL-2.0 libraries.
 | vfile-message | 4.0.3 | MIT |
 | vfile | 6.0.3 | MIT |
 | zwitch | 2.0.4 | MIT |
+
+## Native libraries and models installed beside the app
+
+Not crates: `scripts/pdfium.sh` and `scripts/ocr.sh` install them, each download checked
+against its SHA-256. Versions are in those scripts.
+
+| Component | Licence | Text |
+|---|---|---|
+| pdfium (bblanchon/pdfium-binaries) | BSD-3-Clause | pdfium-BSD-3.txt |
+| ONNX Runtime | MIT | onnxruntime-MIT.txt (its third-party notices ship beside the runtime) |
+| PP-OCRv5 detector, Arabic recogniser and dictionary (PaddlePaddle) | Apache-2.0 | oar-ocr-Apache-2.0.txt |
+| Oniguruma (built into onig_sys) | BSD-2-Clause | Oniguruma-BSD-2-Clause.txt |

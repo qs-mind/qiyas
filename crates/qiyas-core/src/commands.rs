@@ -138,6 +138,12 @@ pub enum Command {
         props: BTreeMap<String, serde_json::Value>,
         #[serde(default)]
         level: Option<String>,
+        /// Where each value was read: `{"thickness": {"kind": "drawing_note", "handle": 1234,
+        /// "text": "200 mm block"}}`. Kinds: drawing_note, drawing_attribute, drawing_table,
+        /// document, engineer (the engineer said so), mizan (an assumption). A value without
+        /// one is recorded as set by whoever ran the command.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        sources: BTreeMap<String, crate::measurement::PropSource>,
     },
     /// Draws a live field table of typed objects, optionally grouped by property or type.
     /// Columns name properties, quantities, geometry facts, id, type, category or level.
@@ -2208,15 +2214,22 @@ impl Session {
             }
             Command::PlaceObjects { objects } => {
                 return Ok(Outcome::Added {
-                    handles: self.place_objects(objects)?,
+                    handles: self.place_objects(objects, source)?,
                 });
             }
             Command::SetObjectProps {
                 targets,
                 props,
                 level,
+                sources,
             } => {
-                self.set_object_props(&targets, &props, level)?;
+                self.set_object_props(
+                    &targets,
+                    &props,
+                    level,
+                    &sources,
+                    crate::objects::given_by(source),
+                )?;
                 return Ok(Outcome::Changed);
             }
             Command::ObjectSchedule(spec) => {

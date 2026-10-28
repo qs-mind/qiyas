@@ -120,6 +120,83 @@ fn dimension_distance(text: &str, default_unit: f64) -> Option<f64> {
     (unit.is_finite() && unit > 0.0 && value.is_finite() && value > 0.0).then_some(value)
 }
 
+/// OCR can cross-check a supplied span, never invent its endpoints or the unit of a bare
+/// number. Require one nearby label and one matching span; supplied dimension text wins.
+pub(super) fn ocr_dimensions<'a>(
+    texts: &'a [qiyas_pdf::PageText],
+    primary: &Calibration,
+    spans: &[Calibration],
+    supplied: &[VisionDimension],
+) -> (Vec<VisionDimension>, Vec<&'a qiyas_pdf::PageText>) {
+    let spans: Vec<_> = std::iter::once(primary).chain(spans).collect();
+    let near = |text: &qiyas_pdf::PageText, span: &Calibration| {
+        let mid = [(span.a[0] + span.b[0]) * 0.5, (span.a[1] + span.b[1]) * 0.5];
+        let height = text.bbox[1][1] - text.bbox[0][1];
+        (0..2).all(|axis| {
+            mid[axis] >= text.bbox[0][axis] - height * 2.0
+                && mid[axis] <= text.bbox[1][axis] + height * 2.0
+        })
+    };
+    let numeric: Vec<_> = texts
+        .iter()
+        .filter(|t| dimension_distance(&t.text, f64::NAN).is_some())
+        .collect();
+    let mut dimensions = Vec::new();
+    let mut evidence = Vec::new();
+    for span in &spans {
+        if supplied.iter().any(|d| {
+            (distance(d.a, span.a) < 1.0 && distance(d.b, span.b) < 1.0)
+                || (distance(d.a, span.b) < 1.0 && distance(d.b, span.a) < 1.0)
+        }) {
+            continue;
+        }
+        let nearby: Vec<_> = numeric.iter().copied().filter(|t| near(t, span)).collect();
+        let [text] = nearby.as_slice() else { continue };
+        if spans.iter().filter(|other| near(text, other)).count() != 1 {
+            continue;
+        }
+        dimensions.push(VisionDimension {
+            a: span.a,
+            b: span.b,
+            text: text.text.clone(),
+            metres_per_unit: 1.0,
+        });
+        evidence.push(*text);
+    }
+    (dimensions, evidence)
+}
+
+/// A second reading of a supplied span is not an independent span. It may increase the
+/// uncertainty, but cannot replace the calibration, clear warnings or improve confidence.
+pub(super) fn cross_check_ocr(
+    calibrated: &mut RasterCalibration,
+    dimensions: &[VisionDimension],
+) -> Result<(), CoreError> {
+    if dimensions.is_empty() {
+        return Ok(());
+    }
+    let scale = calibrated.calibration.drawing_scale(1.0)?;
+    for dimension in dimensions {
+        if let Some(metres) = dimension_distance(&dimension.text, f64::NAN) {
+            let reading = Calibration {
+                a: dimension.a,
+                b: dimension.b,
+                distance_m: metres,
+            };
+            let disagreement = (reading.drawing_scale(1.0)? / scale - 1.0).abs() * 100.0;
+            calibrated.uncertainty_percent = calibrated.uncertainty_percent.max(disagreement);
+        }
+    }
+    calibrated
+        .warnings
+        .push("OCR dimension cross-check reuses supplied endpoints; review required".into());
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "ocr_tests.rs"]
+mod ocr_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -452,6 +452,7 @@ fn u14_radial_dimension_text_follows_the_picked_point_outside_the_circle() {
 fn u3_u4_client_references_are_plain_and_citations_are_unique() {
     use qiyas_core::deliverables::{self, Kind, Language, Report};
     let mut report = Report {
+        drawing: None,
         kind: Kind::Variation,
         language: Language::En,
         layout: deliverables::default_layout(Kind::Variation),

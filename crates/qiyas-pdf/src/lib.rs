@@ -22,6 +22,7 @@
 //! would still block every other caller.)
 
 mod calibration;
+mod ocr;
 mod pages;
 mod raster;
 mod vectors;
@@ -35,6 +36,7 @@ use std::thread;
 use pdfium_render::prelude::{PdfDocument, PdfPageIndex, Pdfium, PdfiumError};
 
 pub use calibration::{refine_raster_span, RasterSpan};
+pub use ocr::{has_text_layer, ocr_page, PageText};
 pub use pages::{page_count, page_rotation, page_size, page_text, thumbnails};
 pub use raster::{render_page, MAX_SIDE};
 pub use vectors::{extract_vectors, FILL_LAYER_PREFIX, LAYER_PREFIX, TEXT_LAYER};

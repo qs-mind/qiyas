@@ -1,4 +1,6 @@
 //! Optimistic reads: a token describes the drawing, knowledge and working context.
+use std::hash::Hasher;
+
 use crate::{Change, CoreError, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -108,10 +110,8 @@ impl Session {
             self.drawing.units.to_metres(),
             self.drawing.path
         ]);
-        let mut hash = 0xcbf29ce484222325u64;
-        for byte in context.to_string().bytes() {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        }
+        let mut hash = fnv::FnvHasher::default();
+        hash.write(context.to_string().as_bytes());
         let mut sheets = self
             .drawing
             .doc
@@ -127,13 +127,9 @@ impl Session {
             self.annotation_scale(),
             sheets
         ]);
-        let sheet_revision = sheet_state
-            .to_string()
-            .bytes()
-            .fold(0xcbf29ce484222325u64, |hash, b| {
-                (hash ^ u64::from(b)).wrapping_mul(0x100000001b3)
-            })
-            & ((1 << 53) - 1);
+        let mut sheet_hash = fnv::FnvHasher::default();
+        sheet_hash.write(sheet_state.to_string().as_bytes());
+        let sheet_revision = sheet_hash.finish() & ((1 << 53) - 1);
         Revision {
             sheet_revision,
             session: self.revision_history.session.clone(),
@@ -147,7 +143,7 @@ impl Session {
                 .as_deref()
                 .unwrap_or(&self.sheet)
                 .into(),
-            context: hash & ((1 << 53) - 1),
+            context: hash.finish() & ((1 << 53) - 1),
         }
     }
 

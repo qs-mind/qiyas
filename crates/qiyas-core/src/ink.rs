@@ -2,10 +2,7 @@
 use crate::Session;
 use opencadcodec::{EntityType, Handle};
 use qiyas_geom::{Paint, Xform};
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) type Bounds = [[f64; 2]; 2];
 #[derive(Clone)]
@@ -26,9 +23,9 @@ pub(crate) struct Ink {
 pub(crate) struct SheetInk {
     pub pieces: Vec<Ink>,
     pub incomplete: Vec<u64>,
-    cells: HashMap<(i64, i64), Vec<usize>>,
-    large: Vec<usize>,
-    cell: f64,
+    tree: rstar::RTree<
+        rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, usize>,
+    >,
 }
 /// Individual primitive shapes survive unrelated edits. References use the normal path,
 /// since their dependencies include block and external drawing contents.
@@ -251,50 +248,29 @@ impl Session {
     }
 }
 impl SheetInk {
-    fn cell_range(&self, b: Bounds) -> ([i64; 2], [i64; 2], i64) {
-        let lo = b[0].map(|v| (v / self.cell).floor() as i64);
-        let hi = b[1].map(|v| (v / self.cell).floor() as i64);
-        let count = hi[0]
-            .saturating_sub(lo[0])
-            .saturating_add(1)
-            .saturating_mul(hi[1].saturating_sub(lo[1]).saturating_add(1));
-        (lo, hi, count)
-    }
     fn index(&mut self) {
-        let b = union(self.pieces.iter().map(|p| p.bounds)).unwrap_or([[0.0; 2]; 2]);
-        self.cell = ((b[1][0] - b[0][0]).max(b[1][1] - b[0][1])
-            / (self.pieces.len().max(1) as f64).sqrt())
-        .max(1e-9);
-        for (i, p) in self.pieces.iter().enumerate() {
-            let (lo, hi, count) = self.cell_range(p.bounds);
-            if count > 4096 {
-                self.large.push(i);
-                continue;
-            }
-            for x in lo[0]..=hi[0] {
-                for y in lo[1]..=hi[1] {
-                    self.cells.entry((x, y)).or_default().push(i);
-                }
-            }
-        }
+        use rstar::primitives::{GeomWithData, Rectangle};
+        self.tree = rstar::RTree::bulk_load(
+            self.pieces
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    GeomWithData::new(Rectangle::from_corners(p.bounds[0], p.bounds[1]), i)
+                })
+                .collect(),
+        );
     }
     pub fn near(&self, b: Bounds) -> impl Iterator<Item = &Ink> {
-        let (lo, hi, count) = self.cell_range(b);
-        let mut ids = if count > 4096 {
-            (0..self.pieces.len()).collect()
-        } else {
-            let mut ids = self.large.clone();
-            for x in lo[0]..=hi[0] {
-                for y in lo[1]..=hi[1] {
-                    if let Some(cell) = self.cells.get(&(x, y)) {
-                        ids.extend(cell);
-                    }
-                }
-            }
-            ids
-        };
+        // Callers supply their clearance in `b`; roundoff padding only broadens candidates.
+        // The original bounds and the exact shape tests still decide the result.
+        let size = b.iter().flatten().map(|v| v.abs()).fold(0.0, f64::max);
+        let query = expand(b, qiyas_geom::tol_near(size, qiyas_geom::SAME_POINT));
+        let mut ids: Vec<_> = self
+            .tree
+            .locate_in_envelope_intersecting(&rstar::AABB::from_corners(query[0], query[1]))
+            .map(|entry| entry.data)
+            .collect();
         ids.sort_unstable();
-        ids.dedup();
         ids.into_iter()
             .map(|i| &self.pieces[i])
             .filter(move |p| intersects(p.bounds, b))
@@ -371,25 +347,5 @@ pub(crate) fn expand(b: Bounds, d: f64) -> Bounds {
 pub(crate) fn intersects(a: Bounds, b: Bounds) -> bool {
     a[0][0] <= b[1][0] && b[0][0] <= a[1][0] && a[0][1] <= b[1][1] && b[0][1] <= a[1][1]
 }
-pub(crate) fn inside(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
-    let mut yes = false;
-    for (a, b) in edges(ring, true) {
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
-            yes = !yes;
-        }
-    }
-    yes
-}
-pub(crate) fn crosses(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
-    let cross = |u: [f64; 2], v: [f64; 2]| u[0] * v[1] - u[1] * v[0];
-    let sub = |u: [f64; 2], v: [f64; 2]| [u[0] - v[0], u[1] - v[1]];
-    let (r, s) = (sub(b, a), sub(d, c));
-    let den = cross(r, s);
-    if den.abs() < 1e-15 {
-        return false;
-    }
-    let (t, u) = (cross(sub(c, a), s) / den, cross(sub(c, a), r) / den);
-    (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)
-}
+pub(crate) use qiyas_geom::predicates::inside;
+pub(crate) use qiyas_geom::predicates::intersects as crosses;

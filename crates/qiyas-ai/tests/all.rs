@@ -10,6 +10,8 @@ mod agent;
 mod authoring;
 #[path = "dashes.rs"]
 mod dashes;
+#[path = "document_ocr.rs"]
+mod document_ocr;
 #[path = "drafting_eval.rs"]
 mod drafting_eval;
 #[path = "goal_a.rs"]

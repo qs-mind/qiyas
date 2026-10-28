@@ -621,66 +621,118 @@ fn error_message(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(300).collect())
 }
 
-/// Reads Server-Sent Events from a byte stream: feed it chunks, take out complete events.
-#[derive(Default)]
-pub(crate) struct SseReader {
-    buffer: Vec<u8>,
-}
+/// The data is self-describing; event names, ids and reconnection hints are not used here.
+pub(crate) type SseEvent = eventsource_stream::Event;
 
-/// One event's `data:` lines joined by newlines. The `event:` line is not needed: the data
-/// carries its own `type`.
-pub(crate) struct SseEvent {
-    pub data: String,
-}
-
-impl SseReader {
-    pub fn push(&mut self, chunk: &[u8]) {
-        // Carriage returns only ever end lines (JSON escapes them inside strings).
-        self.buffer.extend(chunk.iter().filter(|&&b| b != b'\r'));
-    }
-
-    /// The next complete event, if one has fully arrived.
-    pub fn next_event(&mut self) -> Option<SseEvent> {
-        loop {
-            let end = self.buffer.windows(2).position(|w| w == b"\n\n")?;
-            let raw: Vec<u8> = self.buffer.drain(..end + 2).collect();
-            let text = String::from_utf8_lossy(&raw[..end]);
-            let data: Vec<&str> = text
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(|v| v.strip_prefix(' ').unwrap_or(v))
-                .collect();
-            // Comments, and events with no data, are skipped.
-            if !data.is_empty() {
-                return Some(SseEvent {
-                    data: data.join("\n"),
-                });
+/// eventsource-stream 0.2.3 slices a leading UTF-8 BOM at byte 1 instead of byte 3.
+/// Remove only the initial BOM, even when split across chunks, before its UTF-8 decoder.
+fn event_stream<S, B, E>(
+    chunks: S,
+) -> impl futures_util::Stream<Item = Result<SseEvent, eventsource_stream::EventStreamError<E>>>
+where
+    S: futures_util::Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+{
+    use futures_util::StreamExt;
+    let chunks = chunks.scan(Some(Vec::new()), |prefix, chunk| {
+        let chunk = chunk.map(|chunk| {
+            let bytes = chunk.as_ref();
+            if let Some(buffer) = prefix {
+                buffer.extend_from_slice(bytes);
+                if buffer.len() < 3 && b"\xef\xbb\xbf".starts_with(buffer) {
+                    return Vec::new();
+                }
+                let bytes = if buffer.starts_with(b"\xef\xbb\xbf") {
+                    buffer[3..].to_vec()
+                } else {
+                    std::mem::take(buffer)
+                };
+                *prefix = None;
+                bytes
+            } else {
+                bytes.to_vec()
             }
-        }
-    }
+        });
+        std::future::ready(Some(chunk))
+    });
+    eventsource_stream::EventStream::new(chunks)
 }
 
-/// Reads `response` chunk by chunk, calling `on_event` for each SSE event until it returns
-/// `Ok(true)` (finished). A stream that ends first is an error.
+/// Reads events until the provider's terminal event. Dropping this future cancels the read.
 pub(crate) async fn read_events(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     mut on_event: impl FnMut(SseEvent) -> Result<bool, AiError>,
 ) -> Result<(), AiError> {
-    let mut reader = SseReader::default();
-    while let Some(chunk) = response.chunk().await.map_err(|e| match network(e) {
-        AiError::Network(message) => AiError::Stream(message),
-        other => other,
-    })? {
-        reader.push(&chunk);
-        while let Some(event) = reader.next_event() {
-            if on_event(event)? {
-                return Ok(());
-            }
+    use futures_util::StreamExt;
+    let chunks = futures_util::stream::try_unfold(response, |mut response| async move {
+        response
+            .chunk()
+            .await
+            .map(|chunk| chunk.map(|chunk| (chunk, response)))
+    });
+    let mut events = std::pin::pin!(event_stream(chunks));
+    while let Some(event) = events.next().await {
+        let event = event.map_err(|error| match error {
+            eventsource_stream::EventStreamError::Transport(error) => match network(error) {
+                AiError::Network(message) => AiError::Stream(message),
+                other => other,
+            },
+            error => AiError::Stream(error.to_string()),
+        })?;
+        if on_event(event)? {
+            return Ok(());
         }
     }
     Err(AiError::Stream(
         "the connection closed before the answer finished".into(),
     ))
+}
+
+// Keep the existing push/poll test interface over the same library parser as production.
+#[cfg(test)]
+struct SseReader {
+    chunks: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<Vec<u8>>>>,
+    events: std::pin::Pin<
+        Box<
+            dyn futures_util::Stream<
+                Item = Result<
+                    SseEvent,
+                    eventsource_stream::EventStreamError<std::convert::Infallible>,
+                >,
+            >,
+        >,
+    >,
+}
+
+#[cfg(test)]
+impl Default for SseReader {
+    fn default() -> Self {
+        let chunks = std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        let input = std::rc::Rc::clone(&chunks);
+        let stream = futures_util::stream::poll_fn(move |_| match input.borrow_mut().pop_front() {
+            Some(bytes) => std::task::Poll::Ready(Some(Ok(bytes))),
+            None => std::task::Poll::Pending,
+        });
+        Self {
+            chunks,
+            events: Box::pin(event_stream(stream)),
+        }
+    }
+}
+
+#[cfg(test)]
+impl SseReader {
+    fn push(&mut self, chunk: &[u8]) {
+        self.chunks.borrow_mut().push_back(chunk.to_vec());
+    }
+    fn next_event(&mut self) -> Option<SseEvent> {
+        use futures_util::{FutureExt, StreamExt};
+        self.events
+            .next()
+            .now_or_never()
+            .flatten()
+            .map(Result::unwrap)
+    }
 }
 
 #[cfg(test)]

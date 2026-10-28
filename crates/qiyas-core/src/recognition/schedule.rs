@@ -217,6 +217,12 @@ impl Session {
                     Extraction::Constant {
                         value,
                         source: format!("schedule row {}, column {}", index + 1, column.column),
+                        source_kind: Some(crate::measurement::SourceKind::DrawingTable),
+                        handle: match &spec.source {
+                            GridSource::Table { handle, .. } => Some(*handle),
+                            GridSource::Text { handles, .. }
+                            | GridSource::Attributes { handles, .. } => handles.first().copied(),
+                        },
                     },
                 );
             }

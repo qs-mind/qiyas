@@ -128,6 +128,8 @@ type Props = {
   /** The zoom has more than doubled or halved since the batch's glyphs were drawn: draw them
    *  again for `pxPerUnit` screen pixels per drawing unit. Called once the zoom settles. */
   onZoomHint?(pxPerUnit: number): void;
+  /** Quantity tags pinned to drawing points (a traced BOQ item's elements); they follow the view. */
+  labels?: DrawingLabel[];
   /** The underlay pictures held, by image id. */
   pictures?: Map<number, HeldPicture>;
   /** Some underlay picture in view is missing or was drawn for a zoom too far off, or one held is
@@ -147,6 +149,10 @@ const NO_PAGES: AtlasPage[] = [];
 const NO_PICTURES = new Map<number, HeldPicture>();
 
 type Drag = { kind: "pan" | "zoomWindow" | "select"; start: Point; last: Point };
+
+/** A tag at a drawing point: `tone` "void" for something deducted, "focus" for the one chosen. */
+export type DrawingLabel = { key: string; at: Point; text: string; tone?: "host" | "void" | "focus" };
+const NO_LABELS: DrawingLabel[] = [];
 
 /** The drawing canvas: wheel zoom at the cursor, middle or space drag to pan, double middle click
  *  for extents, and a drag rectangle to zoom into when the tool is `zoomWindow`. */
@@ -171,6 +177,7 @@ export function Viewport({
   onZoomHint,
   pictures = NO_PICTURES,
   onPictureHint,
+  labels = NO_LABELS,
   ref,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -184,6 +191,10 @@ export function Viewport({
   const iconMarkRef = useRef<SVGRectElement>(null);
   const ucsRef = useRef(ucs);
   ucsRef.current = ucs;
+  /** The labels' tags, moved on every frame like the UCS icon. */
+  const labelRefs = useRef(new Map<string, HTMLDivElement>());
+  const labelsRef = useRef(labels);
+  labelsRef.current = labels;
   const batchRef = useRef(batch);
   const frame = useRef(0);
   const drag = useRef<Drag | null>(null);
@@ -250,6 +261,7 @@ export function Viewport({
       frame.current = 0;
       renderer.current?.draw(camera.current, lookRef.current);
       placeIcon();
+      placeLabels();
     });
   }
 
@@ -264,6 +276,17 @@ export function Viewport({
     icon.style.color = `rgb(${r}, ${g}, ${b})`;
     iconMarkRef.current?.setAttribute("visibility", place.atOrigin ? "visible" : "hidden");
   }
+
+  function placeLabels() {
+    for (const label of labelsRef.current) {
+      const node = labelRefs.current.get(label.key);
+      if (!node) continue;
+      const [x, y] = worldToScreen(camera.current, label.at);
+      node.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -50%)`;
+    }
+  }
+  // New labels are placed at once, not on the next pan.
+  useEffect(placeLabels, [labels]);
 
   function setCamera(c: Camera, keepView = false) {
     camera.current = c;
@@ -578,6 +601,22 @@ export function Viewport({
             </text>
           </g>
         </svg>
+      )}
+      {labels.length > 0 && (
+        <div className="drawing-labels" aria-hidden="true">
+          {labels.map((label) => (
+            <div
+              key={label.key}
+              className={`drawing-label drawing-label-${label.tone ?? "host"}`}
+              ref={(node) => {
+                if (node) labelRefs.current.set(label.key, node);
+                else labelRefs.current.delete(label.key);
+              }}
+            >
+              <bdi dir="ltr">{label.text}</bdi>
+            </div>
+          ))}
+        </div>
       )}
       {selectBox && (
         <div

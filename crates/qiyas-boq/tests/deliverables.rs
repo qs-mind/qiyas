@@ -235,6 +235,7 @@ fn report_layout_is_undoable_and_paths_are_confined() {
 fn visible_variation_is_readable_and_records_remain_lossless() {
     for language in [Language::En, Language::Ar] {
         let report = deliverables::Report {
+            drawing: None,
             kind: Kind::Variation,
             language,
             layout: deliverables::default_layout(Kind::Variation),
@@ -302,4 +303,95 @@ fn dimension_sheets_leave_out_lines_that_add_nothing() {
     assert_eq!(printed.len(), worth_printing);
     item.lines = vec![zero.clone(), zero];
     assert_eq!(deliverables::printed_lines(&item).len(), 1);
+}
+
+#[test]
+fn trace_preview_uses_visible_row_numbers_and_rejects_edits_outside_the_preview() {
+    use qiyas_boq::preview::preview_workbook;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let session = test_session(&dir.path().join("source.dxf"));
+    for language in [Language::En, Language::Ar] {
+        for kind in [Kind::Boq, Kind::Dimensions] {
+            let report = deliverables::drawing(&session, kind, language, None).unwrap();
+            let path = dir.path().join("trace.xlsx");
+            qiyas_boq::deliverables::write(&Export {
+                path: path.clone(),
+                format: Format::Excel,
+                report: report.clone(),
+            })
+            .unwrap();
+            let preview = preview_workbook(&path, 1, 1).unwrap();
+            assert_eq!(preview.drawing, report.drawing);
+            let targets = preview.sheets[0].targets.as_ref().unwrap();
+            let table = report.table().unwrap();
+            assert_eq!(
+                targets.len(),
+                table.iter().filter(|row| row.target.is_some()).count()
+            );
+            for (index, row) in table.iter().enumerate() {
+                assert_eq!(targets.get(&(index as u32 + 1)), row.target.as_ref());
+            }
+            assert!(
+                !targets.contains_key(&(table.len() as u32 + 1)),
+                "status has no source"
+            );
+            assert!(preview.sheets[0].truncated);
+            assert!(preview
+                .sheets
+                .iter()
+                .filter(|sheet| sheet.hidden)
+                .all(|sheet| sheet.targets.is_none()));
+            // Alter the sheet's numeric cells, leaving its embedded record intact.
+            let contents = entries(&path);
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            for (name, bytes) in contents {
+                writer
+                    .start_file(&name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                if name == "xl/worksheets/sheet1.xml" {
+                    let text = String::from_utf8(bytes).unwrap();
+                    let row = *targets.keys().next().unwrap();
+                    // An extra cell in a source row also invalidates the sheet, even
+                    // though the bounded preview only shows its first cell.
+                    let marker = format!("<row r=\"{row}\"");
+                    let start = text.find(&marker).unwrap();
+                    let end = start + text[start..].find("</row>").unwrap();
+                    let changed = format!(
+                        "{}<c r=\"ZZ{row}\"><v>123</v></c>{}",
+                        &text[..end],
+                        &text[end..]
+                    );
+                    writer.write_all(changed.as_bytes()).unwrap();
+                } else {
+                    writer.write_all(&bytes).unwrap();
+                }
+            }
+            writer.finish().unwrap();
+            let edited = preview_workbook(&path, 1, 1).unwrap();
+            assert!(edited.sheets[0].targets.is_none());
+        }
+    }
+}
+
+#[test]
+fn legacy_workbook_records_do_not_infer_trace_targets() {
+    use rust_xlsxwriter::Workbook;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.xlsx");
+    let mut book = Workbook::new();
+    book.add_worksheet()
+        .set_name("Report")
+        .unwrap()
+        .write_string(0, 0, "generated:S-m2")
+        .unwrap();
+    book.add_worksheet()
+        .set_name("Qiyas record")
+        .unwrap()
+        .write_string(0, 0, "{\"rows\":[{\"code\":\"S-m2\"}]}")
+        .unwrap();
+    book.save(&path).unwrap();
+    let preview = qiyas_boq::preview::preview_workbook(&path, 5000, 80).unwrap();
+    assert!(preview.drawing.is_none());
+    assert!(preview.sheets.iter().all(|sheet| sheet.targets.is_none()));
 }

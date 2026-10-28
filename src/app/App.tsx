@@ -39,6 +39,7 @@ import { usePlot } from "./usePlot";
 import { useSelection } from "./useSelection";
 import { useSheets } from "./useSheets";
 import { useShell } from "./useShell";
+import { useTrace } from "./useTrace";
 import { useTakeoff, useTakeoffState } from "./useTakeoff";
 
 export default function App() {
@@ -311,6 +312,17 @@ export default function App() {
     apply,
   });
   const { selected, boqLinked, conflictLinked } = takeoff;
+  const trace = useTrace({
+    info,
+    sheet,
+    batch,
+    viewport,
+    run,
+    chooseSheet,
+    openPath: drawings.openPath,
+    setAiHighlight,
+    setError,
+  });
   const plot = usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure });
   const { commandLineOn, commandInput, onCommand, typeCommand, startCommand, repeatLast, coreActive, clickDrawing, commandState, prompt, message, waiting, progress } = useCommandLine({
     t,
@@ -451,6 +463,7 @@ export default function App() {
           chooseTool={chooseTool}
           askMizan={ai.pointing}
           onSpaceTap={() => void repeatLast()}
+          trace={trace}
           onProperties={() => {
             panels.setFolded("left", false);
             setRevealProperties((n) => n + 1);

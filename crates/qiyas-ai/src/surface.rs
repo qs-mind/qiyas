@@ -229,7 +229,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. takeoff_kit uses offset for pages. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; scans need a document capture); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} compact inline contracts with one example (up to 8 names), {name, full:true} for the full schema, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any read command, including drafting_knowledge for sheet sets, view standards and sourced limits, and space_check for villa planning findings); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
+            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. takeoff_kit uses offset for pages. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; installed text reading returns scans as marked OCR); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} compact inline contracts with one example (up to 8 names), {name, full:true} for the full schema, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any read command, including drafting_knowledge for sheet sets, view standards and sourced limits, and space_check for villa planning findings); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1971,21 +1971,6 @@ fn command_info(value: &Value) -> Option<&'static qiyas_core::registry::CommandI
 
 /// Close wire names, including a typo that a full-text search cannot match.
 fn close_commands(name: &str) -> Vec<&'static str> {
-    fn distance(a: &str, b: &str) -> usize {
-        let mut row: Vec<usize> = (0..=b.chars().count()).collect();
-        for (i, a) in a.chars().enumerate() {
-            let mut previous = row[0];
-            row[0] = i + 1;
-            for (j, b) in b.chars().enumerate() {
-                let above = row[j + 1];
-                row[j + 1] = (row[j] + 1)
-                    .min(above + 1)
-                    .min(previous + usize::from(a != b));
-                previous = above;
-            }
-        }
-        *row.last().unwrap_or(&0)
-    }
     let name = name.trim().to_ascii_lowercase().replace('-', "_");
     let mut ranked: Vec<_> = registry()
         .commands()
@@ -1994,12 +1979,16 @@ fn close_commands(name: &str) -> Vec<&'static str> {
         .map(|command| {
             let short = command.name.rsplit('.').next().unwrap_or(&command.name);
             (
-                distance(&name, &command.name).min(distance(&name, short)),
+                strsim::levenshtein(&name, &command.name).min(strsim::levenshtein(&name, short)),
                 command.name.as_str(),
             )
         })
         .collect();
-    ranked.extend(OPERATIONS.iter().map(|o| (distance(&name, o.op), o.op)));
+    ranked.extend(
+        OPERATIONS
+            .iter()
+            .map(|o| (strsim::levenshtein(&name, o.op), o.op)),
+    );
     ranked.sort_unstable();
     ranked.dedup();
     ranked.into_iter().take(5).map(|(_, name)| name).collect()

@@ -15,11 +15,12 @@ use ttf_parser::{Face, GlyphId, OutlineBuilder};
 use crate::content::{fmt, Content};
 
 /// Where a font's file comes from: its id in the session's text engine.
-pub type FontBytes<'a> = dyn Fn(u16) -> Option<&'static [u8]> + 'a;
+pub type FontBytes<'a> = dyn Fn(u16) -> Option<(&'static [u8], u32)> + 'a;
 
 struct Font {
     face: Option<Face<'static>>,
     data: &'static [u8],
+    index: u32,
     /// TrueType outlines and embedding allowed.
     embeddable: bool,
     remapper: GlyphRemapper,
@@ -77,8 +78,8 @@ pub fn glyph_chars(
 }
 
 impl Font {
-    fn load(data: &'static [u8]) -> Font {
-        let face = Face::parse(data, 0).ok();
+    fn load(data: &'static [u8], index: u32) -> Font {
+        let face = Face::parse(data, index).ok();
         let embeddable = face.as_ref().is_some_and(|f| {
             f.tables().glyf.is_some()
                 && f.permissions() != Some(ttf_parser::Permissions::Restricted)
@@ -87,6 +88,7 @@ impl Font {
         Font {
             face,
             data,
+            index,
             embeddable,
             remapper: GlyphRemapper::new(),
             unicode: HashMap::new(),
@@ -105,10 +107,10 @@ impl Font {
 impl FontSet {
     fn load(&mut self, id: u16, bytes: &FontBytes) -> bool {
         if let std::collections::btree_map::Entry::Vacant(slot) = self.fonts.entry(id) {
-            let Some(data) = bytes(id) else {
+            let Some((data, index)) = bytes(id) else {
                 return false;
             };
-            slot.insert(Font::load(data));
+            slot.insert(Font::load(data, index));
         }
         true
     }
@@ -148,7 +150,7 @@ impl FontSet {
     pub fn finish(&mut self) {
         for font in self.fonts.values_mut() {
             if font.embeddable && font.remapper.num_gids() > 1 {
-                font.subset = subsetter::subset(font.data, 0, &font.remapper).ok();
+                font.subset = subsetter::subset(font.data, font.index, &font.remapper).ok();
             }
         }
     }

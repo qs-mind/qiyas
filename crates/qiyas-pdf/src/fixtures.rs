@@ -173,3 +173,96 @@ pub fn write_rotated(dir: &Path) -> PathBuf {
     std::fs::write(&path, pdf).expect("write the test PDF");
     path
 }
+
+/// English and Arabic for OCR tests, using only the existing bundled OFL font. The Arabic
+/// presentation forms spell سلام in visual order; no shaping dependency is needed here.
+pub fn write_bilingual_ocr(dir: &Path) -> PathBuf {
+    let mut doc = PdfDocument::new("bilingual OCR");
+    let font = printpdf::ParsedFont::from_bytes(
+        include_bytes!("../../qiyas-render/fonts/NotoSansArabic-Regular.ttf"),
+        0,
+        &mut Vec::new(),
+    )
+    .expect("bundled Arabic font");
+    let arabic = doc.add_font(&font);
+    let mut ops = Vec::new();
+    for (text, font, x, y) in [
+        (
+            "WALL",
+            PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            30.0,
+            75.0,
+        ),
+        (
+            "\u{fee1}\u{fefc}\u{feb3}",
+            PdfFontHandle::External(arabic),
+            100.0,
+            30.0,
+        ),
+    ] {
+        ops.extend([
+            Op::StartTextSection,
+            Op::SetTextCursor {
+                pos: Point { x: Pt(x), y: Pt(y) },
+            },
+            Op::SetFont {
+                font,
+                size: Pt(20.0),
+            },
+            Op::ShowText {
+                items: vec![TextItem::Text(text.into())],
+            },
+            Op::EndTextSection,
+        ]);
+    }
+    save(&mut doc, vec![page(ops)], &dir.join("bilingual-ocr.pdf"))
+}
+
+/// Flatten a fixture to a real scanned PDF with no text layer. An optional quarter turn is
+/// cancelled in the image, so the displayed page and word positions are identical.
+pub fn write_ocr_scan(dir: &Path, source: &Path, rotated: bool) -> PathBuf {
+    let image = image::DynamicImage::ImageRgba8(
+        crate::render_page(source, 1, 300.0, |_| {}).expect("render OCR fixture"),
+    )
+    .into_rgb8();
+    let (w, h) = crate::page_size(source, 1).expect("fixture size");
+    let (image, w, h, rotation) = if rotated {
+        (image::imageops::rotate270(&image), h, w, 90)
+    } else {
+        (image, w, h, 0)
+    };
+    let content = format!("q {w} 0 0 {h} 0 0 cm /Scan Do Q");
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Rotate {rotation} /Contents 4 0 R /Resources << /XObject << /Scan 5 0 R >> >> >>").into_bytes(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    let mut pixels = format!("<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >>\nstream\n", image.width(), image.height(), image.as_raw().len()).into_bytes();
+    pixels.extend_from_slice(image.as_raw());
+    pixels.extend_from_slice(b"\nendstream");
+    objects.push(pixels);
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(object);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    let path = dir.join(if rotated {
+        "ocr-scan-rotated.pdf"
+    } else {
+        "ocr-scan.pdf"
+    });
+    std::fs::write(&path, pdf).expect("write scanned fixture");
+    path
+}

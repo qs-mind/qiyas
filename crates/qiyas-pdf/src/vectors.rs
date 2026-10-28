@@ -58,7 +58,7 @@ pub fn extract_vectors(path: &Path, page: u32, scale: f64) -> Result<Vec<EntityT
             text: &text,
         };
         for object in page.objects().iter() {
-            out.object(&object, &display, 0);
+            out.object(&object, &display, 0)?;
         }
         Ok(out.entities)
     })
@@ -72,24 +72,24 @@ struct Out<'t, 'a> {
 
 impl Out<'_, '_> {
     /// One page object, `to_page` taking its parent's coordinates to the page as shown.
-    fn object(&mut self, object: &PdfPageObject, to_page: &[f64; 6], depth: usize) {
+    fn object(&mut self, object: &PdfPageObject, to_page: &[f64; 6], depth: usize) -> Result<()> {
         match object {
             PdfPageObject::Path(path) => {
-                let Ok(m) = path.matrix() else { return };
+                let Ok(m) = path.matrix() else { return Ok(()) };
                 let xf = then(&matrix(&m), to_page);
                 let stroked = path.is_stroked().unwrap_or(false);
                 let filled = !matches!(path.fill_mode(), Ok(PdfPathFillMode::None) | Err(_));
                 if !stroked && !filled {
-                    return;
+                    return Ok(());
                 }
-                let subpaths = subpaths(path.segments().raw().iter().map(|s| {
+                let subpaths = measured_subpaths(path.segments().raw().iter().map(|s| {
                     let (x, y) = s.point();
                     (
                         s.segment_type(),
                         apply(&xf, f64::from(x.value), f64::from(y.value)),
                         s.is_close(),
                     )
-                }));
+                }))?;
                 if stroked {
                     let color = object.stroke_color().unwrap_or(PdfColor::BLACK);
                     let width = object
@@ -114,19 +114,19 @@ impl Out<'_, '_> {
             }
             PdfPageObject::Text(text) => {
                 if !text.is_visible() {
-                    return;
+                    return Ok(());
                 }
                 let value = self.text.for_object(text);
                 let value = value.trim_end_matches(['\r', '\n', '\0']);
                 if value.trim().is_empty() {
-                    return;
+                    return Ok(());
                 }
-                let Ok(m) = text.matrix() else { return };
+                let Ok(m) = text.matrix() else { return Ok(()) };
                 let [a, b, c, d, e, f] = then(&matrix(&m), to_page);
                 let up = c.hypot(d);
                 let size = f64::from(text.unscaled_font_size().value) * up;
                 if size.is_nan() || size <= 0.0 {
-                    return;
+                    return Ok(());
                 }
                 let mut t = Text::with_value(
                     value.to_string(),
@@ -145,16 +145,17 @@ impl Out<'_, '_> {
             }
             PdfPageObject::XObjectForm(form) => {
                 if depth >= MAX_FORM_DEPTH {
-                    return;
+                    return Ok(());
                 }
-                let Ok(m) = form.matrix() else { return };
+                let Ok(m) = form.matrix() else { return Ok(()) };
                 let xf = then(&matrix(&m), to_page);
                 for child in form.iter() {
-                    self.object(&child, &xf, depth + 1);
+                    self.object(&child, &xf, depth + 1)?;
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// A subpath of page points as a line or polyline in drawing units.
@@ -187,9 +188,9 @@ impl Out<'_, '_> {
 /// Splits path segments (type, point on the page, closes the subpath) into subpaths of points,
 /// each with whether it is closed. Béziers come as three segments (two control points, then the
 /// end) and are flattened. A closed subpath doesn't repeat its first point at the end.
-fn subpaths(
+fn measured_subpaths(
     segments: impl Iterator<Item = (PdfPathSegmentType, [f64; 2], bool)>,
-) -> Vec<(Vec<[f64; 2]>, bool)> {
+) -> Result<Vec<(Vec<[f64; 2]>, bool)>> {
     let mut out: Vec<(Vec<[f64; 2]>, bool)> = Vec::new();
     let mut current: Vec<[f64; 2]> = Vec::new();
     let mut closed = false;
@@ -224,7 +225,12 @@ fn subpaths(
                     if current.is_empty() {
                         current.push(start);
                     }
-                    current.extend(bezier(start, controls[0], controls[1], controls[2]));
+                    current.extend(flatten_bezier(
+                        start,
+                        controls[0],
+                        controls[1],
+                        controls[2],
+                    )?);
                     controls.clear();
                 }
             }
@@ -235,28 +241,61 @@ fn subpaths(
         }
     }
     finish(&mut current, &mut closed);
-    out
+    Ok(out)
 }
 
 /// The points after `p0` along a cubic Bézier, within `FLATNESS_PT` of the curve.
+fn flatten_bezier(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]) -> Result<Vec<[f64; 2]>> {
+    use kurbo::{PathEl, Point};
+    // Reject pathological curves explicitly instead of relaxing the measuring tolerance.
+    // This bounds Kurbo's subdivision work as well as the output allocation.
+    const MAX_POINTS: usize = 65_536;
+    const MAX_EXTENT_PT: f64 = FLATNESS_PT * 1e8;
+    let too_large =
+        || crate::PdfError::Page("A PDF curve exceeds the vector import precision budget".into());
+    if [p0, p1, p2, p3].iter().flatten().any(|v| !v.is_finite())
+        || [p1, p2, p3]
+            .iter()
+            .any(|p| (p[0] - p0[0]).abs().max((p[1] - p0[1]).abs()) > MAX_EXTENT_PT)
+    {
+        return Err(too_large());
+    }
+    // Controls are already transformed to displayed PDF points. The existing 0.1 mm
+    // measuring tolerance applies here, before `push_path` converts to drawing units.
+    let local = |p: [f64; 2]| Point::new(p[0] - p0[0], p[1] - p0[1]);
+    let path = [
+        PathEl::MoveTo(local(p0)),
+        PathEl::CurveTo(local(p1), local(p2), local(p3)),
+    ];
+    let mut points = Vec::new();
+    kurbo::flatten(path, FLATNESS_PT, |element| {
+        if let PathEl::LineTo(p) = element {
+            if points.len() <= MAX_POINTS {
+                points.push([p.x + p0[0], p.y + p0[1]]);
+            }
+        }
+    });
+    if points.len() > MAX_POINTS {
+        return Err(too_large());
+    }
+    // Preserve the PDF's endpoint bits after local-origin arithmetic.
+    if let Some(last) = points.last_mut() {
+        *last = p3;
+    }
+    Ok(points)
+}
+
+// Keep the existing unit-test entry points; production propagates budget errors to the caller.
+#[cfg(test)]
 fn bezier(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]) -> Vec<[f64; 2]> {
-    // Uniform steps are within 3/4 * max second difference / n² of the curve.
-    let dd = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
-        (a[0] - 2.0 * b[0] + c[0]).hypot(a[1] - 2.0 * b[1] + c[1])
-    };
-    let m = dd(p0, p1, p2).max(dd(p1, p2, p3));
-    let n = ((0.75 * m / FLATNESS_PT).sqrt().ceil() as usize).clamp(1, 1000);
-    (1..=n)
-        .map(|i| {
-            let t = i as f64 / n as f64;
-            let u = 1.0 - t;
-            let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            [
-                a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0],
-                a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1],
-            ]
-        })
-        .collect()
+    flatten_bezier(p0, p1, p2, p3).expect("test curve within budget")
+}
+
+#[cfg(test)]
+fn subpaths(
+    segments: impl Iterator<Item = (PdfPathSegmentType, [f64; 2], bool)>,
+) -> Vec<(Vec<[f64; 2]>, bool)> {
+    measured_subpaths(segments).expect("test paths within budget")
 }
 
 fn matrix(m: &PdfMatrix) -> [f64; 6] {

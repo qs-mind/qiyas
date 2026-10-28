@@ -220,8 +220,20 @@ fn visit_defaults(schema: &Value, count: &mut usize) {
                     "{schema}"
                 );
             }
-            for value in object.values() {
-                visit_defaults(value, count);
+            // Keys under `properties` and friends are field names (a field may be called
+            // "default"); default, example and enum values are data, not schemas.
+            for (key, value) in object {
+                match key.as_str() {
+                    "properties" | "patternProperties" | "$defs" | "definitions" => {
+                        if let Value::Object(fields) = value {
+                            for field in fields.values() {
+                                visit_defaults(field, count);
+                            }
+                        }
+                    }
+                    "default" | "examples" | "example" | "const" | "enum" => {}
+                    _ => visit_defaults(value, count),
+                }
             }
         }
         Value::Array(items) => {

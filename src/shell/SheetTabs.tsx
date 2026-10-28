@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Tabs } from "@base-ui/react/tabs";
 import type { Sheet } from "../api";
 import { useT } from "../i18n";
 import { Glyph } from "./glyphs";
@@ -11,12 +12,8 @@ type Props = { sheets: Sheet[]; active: string; onSelect(block: string): void };
  *  that has more fades and an arrow there scrolls to them, and the chosen tab is kept in view. */
 export function SheetTabs({ sheets, active, onSelect }: Props) {
   const t = useT();
-  const roving = useRoving(
-    sheets.length,
-    sheets.findIndex((s) => s.block === active),
-  );
-  // The tab list is the roving hook's element too.
-  const list = roving.props.ref;
+  const list = useRef<HTMLDivElement>(null);
+  const roving = useRoving(sheets.length, sheets.findIndex((sheet) => sheet.block === active), list);
   /** More tabs lie before the first one in view (toward the start edge), or after the last. */
   const [more, setMore] = useState({ start: false, end: false });
 
@@ -53,32 +50,30 @@ export function SheetTabs({ sheets, active, onSelect }: Props) {
   };
 
   return (
-    <div className={`sheet-strip${more.start ? " more-start" : ""}${more.end ? " more-end" : ""}`}>
+    <Tabs.Root value={active} className={`sheet-strip${more.start ? " more-start" : ""}${more.end ? " more-end" : ""}`}>
       {more.start && (
         <button type="button" className="sheet-arrow start" tabIndex={-1} aria-label={t("sheets.earlier")} title={t("sheets.earlier")} onClick={() => scroll(-1)}>
           <Glyph name="next" mirror size={14} />
         </button>
       )}
-      <div className="sheet-tabs" role="tablist" aria-label={t("sheets")} onScroll={measure} {...roving.props}>
+      <Tabs.List {...roving.props} className="sheet-tabs" aria-label={t("sheets")} onScroll={measure} activateOnFocus={false}>
         {sheets.map((s, i) => (
-          <button
+          <Tabs.Tab
             key={s.block}
-            type="button"
-            role="tab"
-            aria-selected={s.block === active}
+            value={s.block}
             tabIndex={roving.tabIndex(i)}
             title={s.is_model ? undefined : s.name}
             onClick={() => onSelect(s.block)}
           >
             {s.is_model ? t("model") : <bdi>{s.name}</bdi>}
-          </button>
+          </Tabs.Tab>
         ))}
-      </div>
+      </Tabs.List>
       {more.end && (
         <button type="button" className="sheet-arrow end" tabIndex={-1} aria-label={t("sheets.later")} title={t("sheets.later")} onClick={() => scroll(1)}>
           <Glyph name="next" mirror size={14} />
         </button>
       )}
-    </div>
+    </Tabs.Root>
   );
 }

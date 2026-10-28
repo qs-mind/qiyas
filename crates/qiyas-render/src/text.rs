@@ -10,6 +10,9 @@ use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::CadDocument;
 use qiyas_geom::{xref_symbol, FlatText, HAlign, TextLayout, VAlign, Xform, XrefDocs};
 use rustybuzz::{Direction, ShapePlan, UnicodeBuffer};
+use unicode_general_category::{get_general_category, GeneralCategory};
+use unicode_script::{Script, UnicodeScript};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::atlas::{Atlas, PageView, PAD, PAGE_SIZE};
 use crate::fonts::Fonts;
@@ -168,6 +171,13 @@ impl TextEngine {
         self.atlas.pages_since(since)
     }
 
+    /// The whole font file and selected collection face, for matching PDF output to shaping.
+    pub fn font_face(&self, id: u16) -> Option<(&'static [u8], u32)> {
+        self.fonts
+            .bytes(id)
+            .map(|data| (data, self.fonts.get(id).index))
+    }
+
     /// The font file of font `id` (as `ShapedGlyph::font` names it), whole, for embedding its
     /// glyphs elsewhere (the PDF plot); `None` for an id this engine never gave out.
     pub fn font_bytes(&self, id: u16) -> Option<&'static [u8]> {
@@ -255,16 +265,21 @@ impl TextEngine {
         before: Option<u16>,
     ) -> Vec<(u16, std::ops::Range<usize>)> {
         let mut pieces: Vec<(u16, std::ops::Range<usize>)> = Vec::new();
-        for (i, c) in text.char_indices() {
+        for (i, cluster) in text.grapheme_indices(true) {
             let current = pieces.last().map(|p| p.0).or(before);
-            let keep = current.filter(|&f| !is_letter(c) && self.fonts.get(f).has(c));
+            let c = cluster.chars().next().expect("nonempty grapheme");
+            // Keep a base and its marks in one shaping face. If no face covers the whole
+            // grapheme, prefer its base instead of detaching the mark into another run.
+            let covers = |f| cluster.chars().all(|c| self.fonts.get(f).has(c));
+            let keep = current.filter(|&f| !is_letter(c) && covers(f));
             let font = keep
+                .or_else(|| chain.iter().copied().find(|&f| covers(f)))
                 .or_else(|| chain.iter().copied().find(|&f| self.fonts.get(f).has(c)))
                 .or(current)
                 .unwrap_or(chain[0]);
             match pieces.last_mut() {
-                Some(p) if p.0 == font => p.1.end = i + c.len_utf8(),
-                _ => pieces.push((font, i..i + c.len_utf8())),
+                Some(p) if p.0 == font => p.1.end = i + cluster.len(),
+                _ => pieces.push((font, i..i + cluster.len())),
             }
         }
         pieces
@@ -519,18 +534,48 @@ impl TextEngine {
         let mut lines: Vec<String> = Vec::new();
         let mut current = String::new();
         let mut used = 0.0;
-        for word in paragraph.split(' ') {
+        let mut start = 0;
+        let mut separator = "";
+        for (end, opportunity) in unicode_linebreak::linebreaks(paragraph) {
+            let span = &paragraph[start..end];
+            start = end;
+            let hard = span.ends_with([
+                '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
+            ]);
+            let span = span.trim_end_matches([
+                '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
+            ]);
+            let word = span.trim_end_matches(' ');
+            let spaces = span.len() - word.len();
             let w = f64::from(self.shape_line(chain, word, arabic_reversed).width);
-            if !current.is_empty() && used + space + w > width {
+            let gap = if separator.is_empty() { 0.0 } else { space };
+            if !current.is_empty() && used + gap + w > width {
                 lines.push(std::mem::take(&mut current));
                 used = 0.0;
             }
             if !current.is_empty() {
-                current.push(' ');
-                used += space;
+                current.push_str(separator);
+                used += gap;
             }
             current.push_str(word);
             used += w;
+            // Retain CAD's ASCII-space advances, including repeated and trailing spaces.
+            for _ in 0..spaces.saturating_sub(usize::from(end < paragraph.len() && !hard)) {
+                if !current.is_empty() && used + space > width {
+                    lines.push(std::mem::take(&mut current));
+                    used = 0.0;
+                }
+                if !current.is_empty() {
+                    current.push(' ');
+                    used += space;
+                }
+            }
+            separator = if spaces > 0 { " " } else { "" };
+            if hard && opportunity == unicode_linebreak::BreakOpportunity::Mandatory {
+                lines.push(std::mem::take(&mut current));
+                used = 0.0;
+                separator = "";
+            }
         }
         lines.push(current);
         lines
@@ -714,28 +759,32 @@ pub fn decode_codes(value: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Arabic letters, marks and presentation forms.
+/// Arabic script and its explicitly shared marks and signs.
 fn is_arabic(c: char) -> bool {
-    matches!(c as u32, 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
+    c.script() == Script::Arabic
+        || c.script_extension()
+            .iter()
+            .any(|script| script == Script::Arabic)
 }
 
-/// Characters that make a text need bidi ordering (Hebrew and Arabic blocks, and the explicit
-/// right-to-left marks and embeddings).
 fn is_rtl_char(c: char) -> bool {
-    matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x200F | 0x202B | 0x202E | 0x2067)
-}
-
-/// Combining marks: Latin diacritics and Arabic vowel signs.
-fn is_mark(c: char) -> bool {
-    matches!(c as u32, 0x0300..=0x036F | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06ED)
+    use unicode_bidi::BidiClass::{AL, AN, R, RLE, RLI, RLO};
+    matches!(unicode_bidi::bidi_class(c), AL | AN | R | RLE | RLI | RLO)
 }
 
 fn is_letter(c: char) -> bool {
-    c.is_alphabetic() && !is_mark(c)
+    matches!(
+        get_general_category(c),
+        GeneralCategory::UppercaseLetter
+            | GeneralCategory::LowercaseLetter
+            | GeneralCategory::TitlecaseLetter
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::OtherLetter
+    )
 }
 
 fn is_digit(c: char) -> bool {
-    c.is_ascii_digit() || matches!(c as u32, 0x0660..=0x0669 | 0x06F0..=0x06F9)
+    get_general_category(c) == GeneralCategory::DecimalNumber
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -876,28 +925,19 @@ pub struct VisualPiece {
 pub fn visual_pieces(text: &str) -> Vec<VisualPiece> {
     let arabic_word = |c: char| is_arabic(c) && !is_digit(c);
     let mut pieces: Vec<VisualPiece> = Vec::new();
-    for (at, c) in text.char_indices() {
-        let rtl = arabic_word(c);
+    for (at, cluster) in text.grapheme_indices(true) {
+        let rtl = cluster.chars().any(arabic_word);
         match pieces.last_mut() {
-            Some(p) if p.rtl == rtl => p.text.push(c),
+            Some(p) if p.rtl == rtl => p.text.push_str(cluster),
             _ => pieces.push(VisualPiece {
                 at,
-                text: c.to_string(),
+                text: cluster.to_string(),
                 rtl,
             }),
         }
     }
     for piece in pieces.iter_mut().filter(|p| p.rtl) {
-        // Letters with their marks (as typed, marks follow their letter), in reverse.
-        let mut clusters: Vec<String> = Vec::new();
-        for c in piece.text.chars() {
-            match clusters.last_mut() {
-                Some(cluster) if is_mark(c) => cluster.push(c),
-                _ => clusters.push(c.to_string()),
-            }
-        }
-        clusters.reverse();
-        piece.text = clusters.concat();
+        piece.text = piece.text.graphemes(true).rev().collect();
     }
     pieces
 }

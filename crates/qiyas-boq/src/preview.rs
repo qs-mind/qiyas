@@ -1,14 +1,17 @@
 //! Bounded, read-only workbook previews.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader, SheetVisible};
 
 use crate::BoqError;
+use qiyas_core::deliverables::TraceTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkbookPreview {
     pub sheets: Vec<SheetPreview>,
+    pub drawing: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +22,8 @@ pub struct SheetPreview {
     pub rows_total: usize,
     pub cols_total: usize,
     pub truncated: bool,
+    /// One-based worksheet row numbers, never indices into a filtered preview.
+    pub targets: Option<BTreeMap<u32, TraceTarget>>,
 }
 
 impl WorkbookPreview {
@@ -35,10 +40,11 @@ impl WorkbookPreview {
                     "rows_total": sheet.rows_total,
                     "cols_total": sheet.cols_total,
                     "truncated": sheet.truncated,
+                    "targets": sheet.targets,
                 })
             })
             .collect();
-        serde_json::json!({ "sheets": sheets })
+        serde_json::json!({ "sheets": sheets, "drawing": self.drawing })
     }
 }
 
@@ -59,6 +65,15 @@ pub fn preview_workbook(
         ));
     }
     let mut book = open_workbook_auto(path).map_err(|e| BoqError::Read(e.to_string()))?;
+    let trace = book.worksheet_range("Qiyas record").ok().and_then(|range| {
+        let text: String = range
+            .rows()
+            .filter_map(|row| row.first())
+            .map(ToString::to_string)
+            .collect();
+        let record: serde_json::Value = serde_json::from_str(&text).ok()?;
+        (record["trace"]["version"] == 1).then(|| record["trace"].clone())
+    });
     let metadata = book.sheets_metadata().to_vec();
     let mut sheets = Vec::with_capacity(metadata.len());
     for sheet in metadata {
@@ -69,6 +84,21 @@ pub fn preview_workbook(
             .end()
             .map(|(row, col)| (row as usize + 1, col as usize + 1))
             .unwrap_or((0, 0));
+        let targets = trace.as_ref().and_then(|trace| {
+            let maps = trace["sheets"].as_array()?;
+            let mut matches = maps
+                .iter()
+                .filter(|map| map["name"].as_str() == Some(sheet.name.as_str()));
+            let map = matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            let formulas = book.worksheet_formula(&sheet.name).ok()?;
+            if formulas.cells().any(|(_, _, formula)| !formula.is_empty()) {
+                return None;
+            }
+            validated_targets(map, &range)
+        });
         let rows = (0..rows_total.min(max_rows))
             .map(|row| {
                 (0..cols_total.min(max_cols))
@@ -88,9 +118,64 @@ pub fn preview_workbook(
             rows_total,
             cols_total,
             truncated: rows_total > max_rows || cols_total > max_cols,
+            targets,
         });
     }
-    Ok(WorkbookPreview { sheets })
+    let drawing = if sheets.iter().any(|sheet| sheet.targets.is_some()) {
+        trace
+            .as_ref()
+            .and_then(|trace| trace["drawing"].as_str())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    Ok(WorkbookPreview { sheets, drawing })
+}
+
+fn validated_targets(
+    map: &serde_json::Value,
+    range: &calamine::Range<Data>,
+) -> Option<BTreeMap<u32, TraceTarget>> {
+    let cells = map["cells"].as_array()?;
+    let (last_row, last_col) = range.end()?;
+    if last_row as usize + 1 != cells.len() {
+        return None;
+    }
+    for (row, expected) in cells.iter().enumerate() {
+        let expected = expected.as_array()?;
+        if last_col as usize >= expected.len() {
+            return None;
+        }
+        for (col, value) in expected.iter().enumerate() {
+            let actual = range
+                .get_value((row as u32, col as u32))
+                .unwrap_or(&Data::Empty);
+            let matches = if let Some(number) = value.as_f64() {
+                match actual {
+                    Data::Float(n) => *n == number,
+                    Data::Int(n) => *n as f64 == number,
+                    _ => false,
+                }
+            } else {
+                match actual {
+                    Data::String(text) => value.as_str() == Some(text.as_str()),
+                    Data::Empty => value.as_str() == Some(""),
+                    _ => false,
+                }
+            };
+            if !matches {
+                return None;
+            }
+        }
+    }
+    let targets: BTreeMap<u32, TraceTarget> = serde_json::from_value(map["rows"].clone()).ok()?;
+    if targets
+        .iter()
+        .any(|(row, target)| *row == 0 || *row as usize > cells.len() || target.item.is_empty())
+    {
+        return None;
+    }
+    Some(targets)
 }
 
 fn display_cell(cell: &Data) -> String {
@@ -139,5 +224,42 @@ mod tests {
         ] {
             assert_eq!(display_cell(&cell), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn map_validation_uses_full_precision_and_exact_rows() {
+        let mut range = calamine::Range::new((0, 0), (2, 1));
+        range.set_value((0, 0), Data::String("Title".into()));
+        range.set_value((1, 0), Data::String("Same label".into()));
+        range.set_value((1, 1), Data::Float(1.00000001));
+        range.set_value((2, 0), Data::String("Same label".into()));
+        range.set_value((2, 1), Data::Float(2.0));
+        let map = json!({
+            "cells": [["Title", ""], ["Same label", 1.00000001], ["Same label", 2.0]],
+            "rows": {"2":{"item":"boq-row:0"},"3":{"item":"boq-row:1"}},
+        });
+        let targets = validated_targets(&map, &range).unwrap();
+        assert_eq!(targets[&2].item, "boq-row:0");
+        assert_eq!(targets[&3].item, "boq-row:1");
+        range.set_value((1, 1), Data::Float(1.00000002));
+        assert_eq!(
+            display_cell(&Data::Float(1.00000001)),
+            display_cell(&Data::Float(1.00000002))
+        );
+        assert!(validated_targets(&map, &range).is_none());
+        range.set_value((1, 1), Data::Float(2.0));
+        range.set_value((2, 1), Data::Float(1.00000001));
+        assert!(validated_targets(&map, &range).is_none());
+        range.set_value((1, 1), Data::Float(1.00000001));
+        range.set_value((2, 1), Data::Float(2.0));
+        let mut invalid = map.clone();
+        invalid["rows"]["0"] = json!({"item":"generated:bad"});
+        assert!(validated_targets(&invalid, &range).is_none());
     }
 }

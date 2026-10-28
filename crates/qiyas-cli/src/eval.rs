@@ -615,7 +615,7 @@ impl SavedProvider {
         let name = value["provider"]
             .as_str()
             .ok_or("No saved provider; choose one in Qiyas Settings")?;
-        if !matches!(name, "anthropic" | "openai_compatible") {
+        if !matches!(name, "anthropic" | "openai_compatible" | "chatgpt_plan") {
             return Err("Unknown saved provider".into());
         }
         let profile = &value["providers"][name];
@@ -653,7 +653,12 @@ impl SavedProvider {
                     .then(|| value["effort"].as_str())
                     .flatten()
                 })
-                .unwrap_or(if name == "anthropic" { "medium" } else { "low" })
+                .unwrap_or(match name {
+                    "anthropic" => "medium",
+                    // The desktop's default for subscriptions (Settings::effective_effort).
+                    "chatgpt_plan" | "claude_code" => "none",
+                    _ => "low",
+                })
                 .into(),
             language: value["language"].as_str().unwrap_or("en").into(),
             method: value["measurement_method"].as_str().map(str::to_owned),
@@ -680,6 +685,14 @@ impl SavedProvider {
         keyring::Entry::store_status()
             .as_ref()
             .map_err(|_| "OS keychain is unavailable".to_string())?;
+        if self.name == "chatgpt_plan" {
+            // The ChatGPT subscription signed in through Qiyas Settings: a flat plan, no key.
+            // No sign-in from here; an expired login fails and asks for Settings.
+            return Ok(Box::new(qiyas_ai::chatgpt_plan::ChatgptPlan::new(
+                Arc::new(PlanKeychain),
+                qiyas_ai::chatgpt_plan::oauth::Protocol::official(),
+            )));
+        }
         let entry = keyring_core::Entry::new("qiyas", &self.name)
             .map_err(|_| "Could not open the provider's OS keychain entry".to_string())?;
         let key =
@@ -709,6 +722,29 @@ impl SavedProvider {
                 .with_strict_budget(),
             ))
         }
+    }
+}
+
+/// Reads and refreshes the same keychain entry as the desktop's subscription sign-in.
+struct PlanKeychain;
+impl qiyas_ai::chatgpt_plan::TokenStore for PlanKeychain {
+    fn load(&self) -> Result<Option<qiyas_ai::chatgpt_plan::Vault>, qiyas_ai::AiError> {
+        let entry = keyring_core::Entry::new("qiyas", qiyas_ai::chatgpt_plan::KEYCHAIN_ACCOUNT)
+            .map_err(|_| qiyas_ai::AiError::Subscription("chatgpt_keychain"))?;
+        match entry.get_password() {
+            Ok(value) => serde_json::from_str(&value)
+                .map(Some)
+                .map_err(|_| qiyas_ai::AiError::Subscription("chatgpt_keychain")),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
+            Err(_) => Err(qiyas_ai::AiError::Subscription("chatgpt_keychain")),
+        }
+    }
+    fn save(&self, vault: &qiyas_ai::chatgpt_plan::Vault) -> Result<(), qiyas_ai::AiError> {
+        let text = serde_json::to_string(vault)
+            .map_err(|_| qiyas_ai::AiError::Subscription("chatgpt_keychain"))?;
+        keyring_core::Entry::new("qiyas", qiyas_ai::chatgpt_plan::KEYCHAIN_ACCOUNT)
+            .and_then(|e| e.set_password(&text))
+            .map_err(|_| qiyas_ai::AiError::Subscription("chatgpt_keychain"))
     }
 }
 

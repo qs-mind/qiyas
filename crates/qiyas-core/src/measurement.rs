@@ -51,6 +51,10 @@ pub struct Term {
     pub timesing: String,
     /// Expressions in physical units. Multiplication is evaluated by qiyas-param.
     pub factors: Vec<String>,
+    /// What each factor is, in the engineer's words and in order: ["Length", "Thickness",
+    /// "Height"]. Shown in the working beside each value; a missing name shows the expression.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub factor_labels: Vec<String>,
     pub citation: Citation,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -182,7 +186,7 @@ pub enum MethodScope {
 pub enum MeasurementCommand {
     /// Apply a validated method snapshot. Null clears this scope; project takes precedence.
     /// Quantities, dimension sheets and BOQ re-derive in the same undo step.
-    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","kind":"length","basis":"geometric","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
+    #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","kind":"length","basis":"geometric","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"factor_labels":["Length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
     #[schemars(extend("x-takeoff-step" = "4 apply selected method"))]
     #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"observed","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"count","kind":"count","basis":"geometric","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"insert"}}],"citation":{"source":"drawing","clause":"insert"}}]}}))]
     #[schemars(extend("x-takeoff-kit" = {"order":50,"example":1,"batch":40}))]
@@ -220,8 +224,75 @@ pub struct DrawingReference {
     pub grid: Option<String>,
     pub evidence: Vec<crate::recognition::Evidence>,
 }
+/// Where one value in a calculation came from. Kinds are generic: any element, any trade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    /// Measured by Qiyas from the drawn geometry.
+    Measured,
+    /// Read from a note, label or section text on the drawing.
+    DrawingNote,
+    /// Read from a block attribute on the drawing.
+    DrawingAttribute,
+    /// Read from a schedule or table on the drawing.
+    DrawingTable,
+    /// The name of the drawn block.
+    DrawingBlock,
+    /// Read from a specification or other document.
+    Document,
+    /// Read locally from a scan; recognition confidence remains an upper bound.
+    Ocr,
+    /// A value written in the measurement rule itself, with its citation.
+    Rule,
+    /// The element type's default value: nothing on the drawing gave this one.
+    TypeDefault,
+    /// The engineer gave it.
+    Engineer,
+    /// Mizan set it without citing where it read it: an assumption to review.
+    Mizan,
+    /// Worked out from other values (a type's quantity, a bound property).
+    Derived,
+    /// Older data that did not record its source.
+    #[default]
+    Unknown,
+}
+/// One property's source, kept on the element with its value.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PropSource {
+    pub kind: SourceKind,
+    /// The note, attribute, table or entity it was read from, when it is on the drawing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<u64>,
+    /// The words it was read from, the document and page, or why it was assumed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+}
+/// A name used by an operand and its source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedSource {
+    pub name: String,
+    #[serde(flatten)]
+    pub source: PropSource,
+}
+/// One value of a dimension line (its timesing or a factor), named, with where it came from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Operand {
+    pub label: String,
+    pub expression: String,
+    pub value: f64,
+    /// "m", "m2", "m3", "deg", "nr" or empty for a pure number.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
+    pub sources: Vec<NamedSource>,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DimensionLine {
+    /// Stable across re-derivation: element identity, rule and term (or void).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// The line's values named, each with its source; empty in older reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operands: Vec<Operand>,
     pub label: String,
     pub operation: Operation,
     pub timesing: f64,

@@ -1,6 +1,8 @@
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and Mizan's column (the conversation, and the outputs in its place) on the right. */
+import { TraceCard } from "../boq/TraceCard";
+import type { Trace } from "./useTrace";
 import { useState, type ReactNode } from "react";
 import { uiError } from "../i18n/errors";
 import { RecognitionPanel } from "../shell/RecognitionPanel";
@@ -149,6 +151,8 @@ type WorkProps = {
   askMizan?: Pick<Pointing, "selection" | "ask">;
   /** A tap of Space in the drawing: repeat the last tool. */
   onSpaceTap?(): void;
+  /** A quantity traced back to the drawing: its tags and "How was it calculated". */
+  trace?: Trace;
 };
 
 /** The drawing: the edit in place's bar, the file tabs, the canvas (with the along prompt, the
@@ -176,6 +180,7 @@ export function WorkArea({
   onProperties,
   askMizan,
   onSpaceTap,
+  trace,
 }: WorkProps) {
   const { theme, setError, run, focusDrawing, viewport, viewportBox } = shell;
   const {
@@ -251,7 +256,9 @@ export function WorkArea({
             onMove={measure.onMove}
             onWindowZoomed={measure.cancel}
             onSpaceTap={onSpaceTap}
+            labels={trace?.labels}
           />
+          {trace?.traced && <TraceCard trace={trace} />}
           {info && !parametric.barHidden && (
             <ConstraintBar
               constraints={parametric.constraints}

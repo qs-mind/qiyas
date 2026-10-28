@@ -1,7 +1,9 @@
 import { Tabs } from "@base-ui/react/tabs";
+import Papa from "papaparse";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { fileViewBytes, fileViewInfo, fileViewPdfPage, fileViewWorkbook, type FileViewInfo, type FileViewWorkbook } from "../api";
+import { useEffect, useRef, useState, type RefObject, type KeyboardEvent } from "react";
+import { fileViewBytes, fileViewInfo, fileViewPdfPage, fileViewWorkbook, type FileViewInfo, type FileViewWorkbook, type FileViewPdfTrace, type FileViewPdfTracePage } from "../api";
+import { trace, type TraceTarget } from "../boq/trace";
 import { Markdown } from "../ai/Markdown";
 import { useLanguage, useT } from "../i18n";
 import { uiError } from "../i18n/errors";
@@ -45,7 +47,7 @@ function FileContent({ path }: { path: string }) {
   }, [path, lang]);
   return <div className="file-viewer">
     {error ? <p className="file-status" role="alert">{error}</p>
-      : info?.kind === "pdf" ? <PdfViewer path={path} pages={info.pages ?? 0} />
+      : info?.kind === "pdf" ? <PdfViewer path={path} pages={info.pages ?? 0} map={info.trace} />
       : book ? <WorkbookViewer book={book} />
       : bytes && info ? info.kind === "image" ? <ImageViewer bytes={bytes} name={info.name} />
         : <TextViewer bytes={bytes} name={info.name} />
@@ -53,7 +55,7 @@ function FileContent({ path }: { path: string }) {
   </div>;
 }
 
-function PdfViewer({ path, pages }: { path: string; pages: number }) {
+function PdfViewer({ path, pages, map }: { path: string; pages: number; map?: FileViewPdfTrace | null }) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -82,13 +84,15 @@ function PdfViewer({ path, pages }: { path: string; pages: number }) {
     <div className="file-scroll file-pages" ref={scroller}>
       {pages === 0 && <p className="file-status">{t("fileView.empty")}</p>}
       {Array.from({ length: pages }, (_, i) => <PdfPage key={i} path={path} page={i + 1} pages={pages}
-        root={scroller} width={displayWidth} widthPx={widthPx} />)}
+        root={scroller} width={displayWidth} widthPx={widthPx}
+        map={map?.pages.find(page => page.page === i + 1)} drawing={map?.drawing} />)}
     </div>
   </>;
 }
 
-function PdfPage({ path, page, pages, root, width, widthPx }: {
+function PdfPage({ path, page, pages, root, width, widthPx, map, drawing }: {
   path: string; page: number; pages: number; root: RefObject<HTMLDivElement | null>; width: number; widthPx: number;
+  map?: FileViewPdfTracePage; drawing?: string | null;
 }) {
   const t = useT();
   const { lang } = useLanguage();
@@ -132,6 +136,13 @@ function PdfPage({ path, page, pages, root, width, widthPx }: {
     <figcaption>{label}</figcaption>
     <div className="file-page-picture" style={{ aspectRatio: ratio }}>
       {near && <canvas ref={canvas} role="img" aria-label={label} />}
+      {near && !loading && !error && map?.regions.map(({ rect: [x, y, w, h], target }, index) =>
+        <button key={index} type="button" className="file-trace-region"
+          aria-label={t("fileView.trace")}
+          title={t("fileView.trace")}
+          onClick={() => trace({ ...target, drawing: drawing ?? null })}
+          style={{ left: `${100 * x / map.width}%`, top: `${100 * (map.height - y - h) / map.height}%`,
+            width: `${100 * w / map.width}%`, height: `${100 * h / map.height}%` }} />)}
       {near && loading && <Loading />}
       {error && <p className="file-status" role="alert">{error}</p>}
     </div>
@@ -150,12 +161,14 @@ function WorkbookViewer({ book }: { book: FileViewWorkbook }) {
     </Tabs.List>
     <Tabs.Panel value={selected} className="file-sheet">
       {sheet.truncated && <p className="file-status" role="note">{t("fileView.truncated", { rows: sheet.rows.length, total: sheet.rows_total, cols: sheet.cols_total })}</p>}
-      <FileTable key={selected} rows={sheet.rows} name={sheet.name} />
+      <FileTable key={selected} rows={sheet.rows} name={sheet.name} targets={sheet.targets} drawing={book.drawing} />
     </Tabs.Panel>
   </Tabs.Root>;
 }
 
-function FileTable({ rows, name }: { rows: string[][]; name: string }) {
+function FileTable({ rows, name, targets, drawing }: {
+  rows: string[][]; name: string; targets?: Record<number, TraceTarget> | null; drawing?: string | null;
+}) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   const header = useRef<HTMLTableSectionElement>(null);
@@ -178,16 +191,30 @@ function FileTable({ rows, name }: { rows: string[][]; name: string }) {
   const bottom = items.length ? Math.max(0, virtual.getTotalSize() - (items.at(-1)!.end - headerHeight)) : 0;
   const cells = (row: string[], head = false) => Array.from({ length: columns }, (_, i) => head
     ? <th key={i} scope="col" dir="auto">{row[i] ?? ""}</th> : <td key={i} dir="auto">{row[i] ?? ""}</td>);
+  const traceRow = (row: number) => {
+    const target = targets?.[row];
+    if (!target) return {};
+    const activate = () => trace({ ...target, drawing: drawing ?? null });
+    return {
+      className: "file-trace-row", tabIndex: 0,
+      title: t("fileView.trace"),
+      "aria-description": t("fileView.trace"),
+      onClick: activate,
+      onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+        if (event.key === "Enter") { event.preventDefault(); activate(); }
+      },
+    };
+  };
   if (!rows.length) return <p className="file-status">{t("fileView.empty")}</p>;
   return <div className="file-scroll" ref={scroller} tabIndex={0} role="region" aria-label={name}>
     <table className="file-table" aria-label={name} aria-rowcount={rows.length} style={{ width: Math.max(1, columns) * 180 }}>
-      <thead ref={header}><tr aria-rowindex={1}>{cells(rows[0], true)}</tr></thead>
+      <thead ref={header}><tr aria-rowindex={1} {...traceRow(1)}>{cells(rows[0], true)}</tr></thead>
       <tbody>
         {many ? <>
           {top > 0 && <tr aria-hidden="true"><td colSpan={columns} className="file-spacer" style={{ height: top }} /></tr>}
-          {items.map(item => <tr key={item.key} data-index={item.index} ref={virtual.measureElement} aria-rowindex={item.index + 2}>{cells(rows[item.index + 1])}</tr>)}
+          {items.map(item => <tr key={item.key} data-index={item.index} ref={virtual.measureElement} aria-rowindex={item.index + 2} {...traceRow(item.index + 2)}>{cells(rows[item.index + 1])}</tr>)}
           {bottom > 0 && <tr aria-hidden="true"><td colSpan={columns} className="file-spacer" style={{ height: bottom }} /></tr>}
-        </> : rows.slice(1).map((row, i) => <tr key={i}>{cells(row)}</tr>)}
+        </> : rows.slice(1).map((row, i) => <tr key={i} {...traceRow(i + 2)}>{cells(row)}</tr>)}
       </tbody>
     </table>
   </div>;
@@ -216,22 +243,15 @@ function ImageViewer({ bytes, name }: { bytes: ArrayBuffer; name: string }) {
 /** Quoted commas, doubled quotes and embedded newlines follow RFC 4180. */
 export function parseCsv(text: string): string[][] {
   if (!text) return [];
-  const rows: string[][] = [];
-  let row: string[] = [], cell = "", quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (char === '"') {
-      if (quoted && text[i + 1] === '"') { cell += '"'; i++; }
-      else if (quoted || !cell) quoted = !quoted;
-      else cell += char;
-    } else if (char === "," && !quoted) { row.push(cell); cell = ""; }
-    else if ((char === "\r" || char === "\n") && !quoted) {
-      row.push(cell); rows.push(row); row = []; cell = "";
-      if (char === "\r" && text[i + 1] === "\n") i++;
-    } else cell += char;
-  }
-  if (cell || row.length || !/[\r\n]$/.test(text)) { row.push(cell); rows.push(row); }
-  return rows;
+  const { data, errors } = Papa.parse<string[]>(text, {
+    delimiter: ",",
+    dynamicTyping: false,
+    skipEmptyLines: false,
+  });
+  // Keep blank records, but a final record separator does not add another row. A newline
+  // inside an unterminated quoted field is content, so leave the parser's recovered row alone.
+  if (!errors.length && /[\r\n]$/.test(text) && data.at(-1)?.length === 1 && data.at(-1)?.[0] === "") data.pop();
+  return data;
 }
 
 function TextViewer({ bytes, name }: { bytes: ArrayBuffer; name: string }) {

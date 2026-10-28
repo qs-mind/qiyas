@@ -4,6 +4,11 @@
 //! again. One binary links once. A new test file must be listed here; the test
 //! `every_test_file_is_listed` fails when one is missing.
 
+#[path = "geometry_libraries.rs"]
+mod geometry_libraries;
+#[path = "library_adapters.rs"]
+mod library_adapters;
+
 #[path = "arrange.rs"]
 mod arrange;
 #[path = "audit.rs"]
@@ -38,6 +43,8 @@ mod conveniences;
 mod conventions;
 #[path = "define_block.rs"]
 mod define_block;
+#[path = "deliverable_trace.rs"]
+mod deliverable_trace;
 #[path = "dimension.rs"]
 mod dimension;
 #[path = "discrepancy.rs"]
@@ -134,6 +141,8 @@ mod query;
 mod read_revision;
 #[path = "recognition.rs"]
 mod recognition;
+#[path = "recognition_ocr.rs"]
+mod recognition_ocr;
 #[path = "record_validation.rs"]
 mod record_validation;
 #[path = "records.rs"]

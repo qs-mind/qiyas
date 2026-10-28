@@ -94,7 +94,17 @@ pub enum Extraction {
     /// The source insert name, for data-defined grouping and descriptions.
     BlockName,
     /// An explicitly cited value, for example a schedule or specification property.
-    Constant { value: Value, source: String },
+    Constant {
+        value: Value,
+        source: String,
+        /// Where it was read: drawing_note, drawing_table, document (default), engineer or
+        /// mizan (an assumption). Shown beside the value in the working.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_kind: Option<crate::measurement::SourceKind>,
+        /// The note or table it was read from, when it is on the drawing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handle: Option<u64>,
+    },
     Attribute {
         tag: String,
         #[serde(default = "one")]
@@ -152,6 +162,13 @@ pub struct Rule {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Evidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::measurement::SourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    /// Displayed PDF points, when the evidence is read from a scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox: Option<[[f64; 2]; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -597,6 +614,10 @@ impl Session {
                 match self.extract_recognition(extraction, row, &rows) {
                     Ok((value, evidence)) => {
                         candidate.placement.props.insert(name.clone(), value);
+                        candidate
+                            .placement
+                            .sources
+                            .insert(name.clone(), extraction_source(extraction, &evidence));
                         candidate.evidence.extend(evidence);
                     }
                     Err(error) => {
@@ -641,9 +662,10 @@ impl Session {
         let factor = self.drawing.units.to_metres();
         match extraction {
             Extraction::BlockName => Ok((json!(row.block_name.as_ref().ok_or_else(||invalid("Block name requires an insert"))?), vec![source_of(e)])),
-            Extraction::Constant { value, source } => Ok((
+            Extraction::Constant { value, source, handle, .. } => Ok((
                 value.clone(),
                 vec![Evidence {
+                    handle: *handle,
                     detail: source.clone(),
                     ..Default::default()
                 }],
@@ -795,7 +817,8 @@ impl Session {
         if candidate.object.is_some() {
             return Err(invalid("This candidate already has an instance"));
         }
-        candidate.object = Some(self.place_objects(vec![candidate.placement.clone()])?[0]);
+        candidate.object =
+            Some(self.place_objects(vec![candidate.placement.clone()], crate::Source::Ai)?[0]);
         candidate.state = ReviewState::Accepted;
         candidate.issues.clear();
         Ok(())
@@ -959,6 +982,8 @@ impl Session {
                             Extraction::Constant {
                                 value,
                                 source: format!("Reviewed correction of source {handle}"),
+                                source_kind: Some(crate::measurement::SourceKind::Engineer),
+                                handle: None,
                             },
                         );
                     }
@@ -1070,4 +1095,34 @@ pub(crate) fn source_of(e: &EntityType) -> Evidence {
     let mut source: Evidence = crate::xdata::read_json(e.common(), SOURCE_APP).unwrap_or_default();
     source.handle = Some(e.common().handle.value());
     source
+}
+
+/// Where an extracted property value came from, for the working an engineer reads.
+fn extraction_source(
+    extraction: &Extraction,
+    evidence: &[Evidence],
+) -> crate::measurement::PropSource {
+    use crate::measurement::{PropSource, SourceKind};
+    let first = evidence.first();
+    let handle = first.and_then(|e| e.handle);
+    let detail = first.map(|e| e.detail.clone()).unwrap_or_default();
+    let (kind, text) = match extraction {
+        Extraction::BlockName => (SourceKind::DrawingBlock, detail),
+        Extraction::Constant {
+            source,
+            source_kind: kind,
+            ..
+        } => {
+            // A cited constant: a schedule, a note, a specification or the engineer's word.
+            (kind.unwrap_or(SourceKind::Document), source.clone())
+        }
+        Extraction::Attribute { tag, .. } => {
+            (SourceKind::DrawingAttribute, format!("attribute {tag}"))
+        }
+        Extraction::Text { .. } => (SourceKind::DrawingNote, detail),
+        Extraction::ParallelDistance { .. } | Extraction::Geometry { .. } => {
+            (SourceKind::Measured, String::new())
+        }
+    };
+    PropSource { kind, handle, text }
 }

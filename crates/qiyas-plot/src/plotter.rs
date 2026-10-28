@@ -76,7 +76,7 @@ pub struct PlotSnapshot {
     /// What each drawn entity (by handle and chain) and picture (empty chain) plots with.
     looks: HashMap<(u64, Vec<u64>), Look>,
     /// The font files the texts use, by font id.
-    fonts: HashMap<u16, &'static [u8]>,
+    fonts: HashMap<u16, (&'static [u8], u32)>,
     style: Option<PlotStyle>,
     lineweights: bool,
     arabic_reversed: bool,
@@ -313,7 +313,7 @@ pub fn snapshot(session: &Session, job: &PlotJob) -> Result<PlotSnapshot, PlotEr
             look(t.entity, chain_at(batch, t.chain));
             for g in &t.glyphs {
                 if let std::collections::hash_map::Entry::Vacant(slot) = fonts.entry(g.font) {
-                    if let Some(bytes) = session.font_bytes(g.font) {
+                    if let Some(bytes) = session.font_face(g.font) {
                         slot.insert(bytes);
                     }
                 }

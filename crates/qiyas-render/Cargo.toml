@@ -6,6 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+unicode-linebreak = "0.1"
+unicode-general-category = "1.1"
+unicode-script = "0.5"
+unicode-segmentation = "1.13"
+fontdb = "0.24"
 opencadcodec.workspace = true
 # Triangulating fills (hatches, solids, wipeouts).
 opencadkernel.workspace = true

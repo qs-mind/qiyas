@@ -1,3 +1,4 @@
+import { Toolbar } from "@base-ui/react/toolbar";
 import { useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Recent } from "../api";
 import { useT } from "../i18n";
@@ -15,12 +16,15 @@ type Props = {
   onKey?(e: KeyboardEvent): void;
   /** The tooltip of the Open button. */
   tip?: TipInfo;
+  /** Both halves are stops of the quick-access toolbar. */
+  toolbar?: boolean;
 };
 
 /** The ribbon's Open split button: Open… and, beside it, the recent drawings (file name, its
  *  folder muted; greyed with "(missing)" when the file is gone), then Clear recents. */
-export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey, tip }: Props) {
+export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey, tip, toolbar = false }: Props) {
   const t = useT();
+  const Button = toolbar ? Toolbar.Button : "button";
   const menu = useMenu<HTMLDivElement>();
   const [list, setList] = useState<Recent[]>([]);
   // The tabs' row scrolls sideways, which would clip a menu inside it: the menu is placed on the
@@ -45,14 +49,14 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey, tip }:
     <div className="split" ref={menu.ref}>
       <Tip info={tip ?? { name: t("open") }}>
         {(describedBy) => (
-          <button type="button" className="rb" aria-label={t("open")} aria-describedby={describedBy} onClick={onOpen} onKeyDown={onKey} onKeyUp={onKey}>
+          <Button type="button" className="rb" aria-label={t("open")} aria-describedby={describedBy} onClick={onOpen} onKeyDown={onKey} onKeyUp={onKey}>
             <RibbonIcon name="open" />
-          </button>
+          </Button>
         )}
       </Tip>
       <Tip info={{ name: t("recent.title") }}>
         {(describedBy) => (
-          <button
+          <Button
             type="button"
             className="rb split-arrow"
             aria-haspopup="menu"
@@ -64,7 +68,7 @@ export function RecentsMenu({ onOpen, load, onOpenRecent, onClear, onKey, tip }:
             onKeyUp={onKey}
           >
             <RibbonIcon name="chevron" />
-          </button>
+          </Button>
         )}
       </Tip>
       {menu.open && (

@@ -73,24 +73,53 @@ impl Session {
         let path = std::path::Path::new(&spec.path);
         let (width, height) = qiyas_pdf::page_size(path, spec.page)?;
         let pixels = qiyas_pdf::render_page(path, spec.page, 144.0, |_| {})?;
-        let calibrated = calibrate_raster(
+        let ocr = if qiyas_ocr::available() && !qiyas_pdf::has_text_layer(path, spec.page)? {
+            qiyas_pdf::ocr_page(path, spec.page)?
+                .into_iter()
+                .filter(|text| {
+                    // A supplied transcription owns its location, even when OCR disagrees.
+                    let pad = (text.bbox[1][1] - text.bbox[0][1]) * 0.5;
+                    !spec.texts.iter().any(|given| {
+                        (0..2).all(|axis| {
+                            given.at[axis] >= text.bbox[0][axis] - pad
+                                && given.at[axis] <= text.bbox[1][axis] + pad
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let (ocr_dimensions, dimension_texts) = super::raster_calibration::ocr_dimensions(
+            &ocr,
+            &spec.calibration,
+            &spec.calibration_spans,
+            &spec.dimensions,
+        );
+        let mut calibrated = calibrate_raster(
             &pixels,
             [width, height],
             &spec.calibration,
             &spec.calibration_spans,
             &spec.dimensions,
         )?;
+        super::raster_calibration::cross_check_ocr(&mut calibrated, &ocr_dimensions)?;
         let scale = calibrated
             .calibration
             .drawing_scale(self.drawing.units.to_metres())?;
-        let mut texts: Vec<_> = spec.texts.iter().map(|t| (t.at, t.text.clone())).collect();
+        let mut texts: Vec<_> = spec
+            .texts
+            .iter()
+            .map(|t| (t.at, t.text.clone(), None))
+            .collect();
         let entities = qiyas_pdf::extract_vectors(path, spec.page, 1.0)?;
         texts.extend(
             super::pdf_text::text_runs(entities.iter())
                 .into_iter()
-                .map(|t| (t.at, t.text)),
+                .map(|t| (t.at, t.text, None)),
         );
-        if texts.iter().any(|(at, text)| {
+        texts.extend(ocr.iter().map(|t| (ocr_centre(t), t.text.clone(), Some(t))));
+        if texts.iter().any(|(at, text, _)| {
             text.trim().is_empty()
                 || !at.iter().all(|v| v.is_finite())
                 || at[0] < 0.0
@@ -142,6 +171,11 @@ impl Session {
                 ),
                 ..Default::default()
             }];
+            evidence.extend(
+                dimension_texts
+                    .iter()
+                    .map(|t| ocr_evidence(t, &spec.path, spec.page)),
+            );
             let mut points = Vec::new();
             let mut issues = calibrated.warnings.clone();
             for page_point in hint.points {
@@ -200,7 +234,7 @@ impl Session {
                     .position;
                 let labels = texts
                     .iter()
-                    .map(|(at, text)| {
+                    .map(|(at, text, _)| {
                         (
                             [
                                 spec.insert_at[0] + at[0] * scale,
@@ -212,6 +246,34 @@ impl Session {
                     .filter(|(at, _)| crate::element_metadata::inside(*at, &points))
                     .collect();
                 if let Some(label) = crate::element_metadata::nearest_label(centre, labels) {
+                    // Recover the same nearest spatial source, retaining its OCR provenance.
+                    if let Some((_, _, Some(text))) = texts
+                        .iter()
+                        .filter(|(at, text, _)| {
+                            *text == label
+                                && crate::element_metadata::inside(
+                                    [
+                                        spec.insert_at[0] + at[0] * scale,
+                                        spec.insert_at[1] + at[1] * scale,
+                                    ],
+                                    &points,
+                                )
+                        })
+                        .min_by(|a, b| {
+                            let d = |p: [f64; 2]| {
+                                distance(
+                                    centre,
+                                    [
+                                        spec.insert_at[0] + p[0] * scale,
+                                        spec.insert_at[1] + p[1] * scale,
+                                    ],
+                                )
+                            };
+                            d(a.0).total_cmp(&d(b.0))
+                        })
+                    {
+                        evidence.push(ocr_evidence(text, &spec.path, spec.page));
+                    }
                     let app = crate::element_metadata::REGION_TEXT_APP;
                     let app_handle = crate::xdata::register(&mut self.drawing.doc, app);
                     let entity = self
@@ -228,6 +290,14 @@ impl Session {
                     });
                 }
             }
+            let ocr_confidence = evidence
+                .iter()
+                .filter(|e| e.kind == Some(crate::measurement::SourceKind::Ocr))
+                .filter_map(|e| e.confidence)
+                .reduce(f64::min);
+            if ocr_confidence.is_some() {
+                issues.push("OCR text supports this raster interpretation; review required".into());
+            }
             let mut candidate = Candidate {
                 handle: driver,
                 rule: "vision".into(),
@@ -235,7 +305,8 @@ impl Session {
                     hint.confidence.min(0.5)
                 } else {
                     hint.confidence
-                },
+                }
+                .min(ocr_confidence.unwrap_or(1.0)),
                 state: ReviewState::Pending,
                 placement: serde_json::from_value(
                     json!({"type":hint.object_type,"driver":driver,"props":hint.props}),
@@ -246,13 +317,39 @@ impl Session {
                 object: None,
                 unresolved: vec![],
             };
-            if candidate.issues.is_empty() && hint.confidence >= threshold() {
+            if candidate.issues.is_empty() && candidate.confidence >= threshold() {
                 self.accept_recognition(&mut candidate)?;
             }
             self.stamp_recognition(&candidate)?;
             candidates.push(candidate);
         }
-        Ok(json!({"candidates":candidates,"calibration":calibrated}))
+        let mut result = json!({"candidates":candidates,"calibration":calibrated});
+        if !ocr.is_empty() {
+            result["texts"] = json!(ocr
+                .iter()
+                .map(|t| ocr_evidence(t, &spec.path, spec.page))
+                .collect::<Vec<_>>());
+        }
+        Ok(result)
+    }
+}
+
+fn ocr_centre(text: &qiyas_pdf::PageText) -> [f64; 2] {
+    [
+        (text.bbox[0][0] + text.bbox[1][0]) * 0.5,
+        (text.bbox[0][1] + text.bbox[1][1]) * 0.5,
+    ]
+}
+
+fn ocr_evidence(text: &qiyas_pdf::PageText, path: &str, page: u32) -> Evidence {
+    Evidence {
+        kind: Some(crate::measurement::SourceKind::Ocr),
+        confidence: Some(f64::from(text.confidence)),
+        bbox: Some(text.bbox),
+        path: Some(path.into()),
+        page: Some(page),
+        detail: text.text.clone(),
+        ..Default::default()
     }
 }
 /// Find the nearest dark pixel in displayed page coordinates. Never move beyond the requested

@@ -135,3 +135,89 @@ test("errors use uiError and late reads do not replace a newly selected file", a
   await act(async () => resolve(info("pdf", "old.pdf", 3)));
   expect(screen.queryByText("Page 1 of 3")).toBeNull();
 });
+
+test("only mapped workbook rows trace, with their worksheet index and export drawing", async () => {
+  const listener = vi.fn();
+  window.addEventListener("qiyas:trace", listener);
+  try {
+    vi.mocked(fileViewInfo).mockResolvedValue(info("workbook", "trace.xlsx"));
+    vi.mocked(fileViewWorkbook).mockResolvedValue({ drawing: "/source.dxf", sheets: [
+      { name: "Report", hidden: false, truncated: false, rows_total: 5, cols_total: 2,
+        rows: [["Title"], ["Item", "Quantity"], ["Wall", "12"], ["Working", "3 × 4"], ["Total", "12"]],
+        targets: { 3: { item: "generated:W" }, 4: { item: "generated:W", line: "dimension-7" } } },
+      { name: "Other", hidden: false, truncated: false, rows_total: 2, cols_total: 1,
+        rows: [["Title"], ["Wall"]] },
+    ] });
+    render(<FileViewer path="/trace.xlsx" />);
+    const cell = await screen.findByRole("cell", { name: "Wall" });
+    const row = cell.closest("tr")!;
+    expect(row.tabIndex).toBe(0);
+    fireEvent.click(cell);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ item: "generated:W", drawing: "/source.dxf" });
+    const dimension = screen.getByRole("cell", { name: "Working" }).closest("tr")!;
+    dimension.focus();
+    expect(document.activeElement).toBe(dimension);
+    fireEvent.keyDown(dimension, { key: "Enter" });
+    expect((listener.mock.calls[1][0] as CustomEvent).detail).toEqual({ item: "generated:W", line: "dimension-7", drawing: "/source.dxf" });
+    fireEvent.click(screen.getByRole("cell", { name: "Total" }));
+    expect(listener).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("tab", { name: "Other" }));
+    const other = await screen.findByRole("cell", { name: "Wall" });
+    expect(other.closest("tr")!.hasAttribute("tabindex")).toBe(false);
+    fireEvent.click(other);
+    expect(listener).toHaveBeenCalledTimes(2);
+  } finally { window.removeEventListener("qiyas:trace", listener); }
+});
+
+test("virtual workbook rows use original row coordinates for their trace targets", async () => {
+  const listener = vi.fn();
+  window.addEventListener("qiyas:trace", listener);
+  try {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.tagName === "TR" ? 36 : 600; });
+    vi.mocked(fileViewInfo).mockResolvedValue(info("workbook", "many.xlsx"));
+    vi.mocked(fileViewWorkbook).mockResolvedValue({ sheets: [{ name: "Many", hidden: false, truncated: false,
+      rows_total: 1001, cols_total: 1, rows: [["Name"], ...Array.from({ length: 1000 }, (_, i) => [`Mapped ${i}`])],
+      targets: { 2: { item: "boq-row:91" } } }] });
+    render(<FileViewer path="/many.xlsx" />);
+    fireEvent.click(await screen.findByRole("cell", { name: "Mapped 0" }));
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ item: "boq-row:91", drawing: null });
+    fireEvent.click(screen.getByRole("cell", { name: "Mapped 1" }));
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener("qiyas:trace", listener); }
+});
+
+test("PDF trace rectangles use bottom-left PDF points, follow zoom, and preserve line identity", async () => {
+  const listener = vi.fn();
+  window.addEventListener("qiyas:trace", listener);
+  try {
+    vi.mocked(fileViewInfo).mockResolvedValue({ ...info("pdf", "trace.pdf", 1), trace: {
+      drawing: "/source.dxf", pages: [{ page: 1, width: 100, height: 200,
+        regions: [{ rect: [10, 40, 80, 20], target: { item: "generated:W", line: "dimension-7" } }] }],
+    } });
+    const picture = new ArrayBuffer(16);
+    const header = new DataView(picture);
+    header.setUint32(0, 1, true); header.setUint32(4, 2, true);
+    vi.mocked(fileViewPdfPage).mockResolvedValue(picture);
+    const { rerender } = render(<FileViewer path="/trace.pdf" />);
+    await screen.findByText("Page 1 of 1");
+    expect(screen.queryByRole("button", { name: en["fileView.trace"] })).toBeNull();
+    act(() => intersections[0].notify(true));
+    let region = await screen.findByRole("button", { name: en["fileView.trace"] });
+    expect(region.style.left).toBe("10%");
+    expect(region.style.top).toBe("70%");
+    expect(region.style.width).toBe("80%");
+    expect(region.style.height).toBe("10%");
+    region.focus();
+    expect(document.activeElement).toBe(region);
+    fireEvent.click(region);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ item: "generated:W", line: "dimension-7", drawing: "/source.dxf" });
+    fireEvent.click(screen.getByRole("button", { name: en["fileView.zoomIn"] }));
+    region = await screen.findByRole("button", { name: en["fileView.trace"] });
+    expect(region.style.top).toBe("70%");
+    expect(region.closest("figure")!.style.width).toBe("750px");
+    vi.mocked(fileViewInfo).mockResolvedValue(info("pdf", "old.pdf", 1));
+    rerender(<FileViewer path="/old.pdf" />);
+    await waitFor(() => expect(fileViewInfo).toHaveBeenLastCalledWith("/old.pdf"));
+    expect(screen.queryByRole("button", { name: en["fileView.trace"] })).toBeNull();
+  } finally { window.removeEventListener("qiyas:trace", listener); }
+});

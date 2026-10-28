@@ -2,6 +2,7 @@ import { entityKind } from "../i18n/entityKind";
 import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Current, EntityInfo, EntityProp, Units } from "../api";
 import { useT } from "../i18n";
+import { ElementItems } from "../boq/ElementItems";
 import { normalizeDigits } from "../tools/commandParser";
 import { metresPerUnit } from "./AttachPdfDialog";
 import { LINEWEIGHTS, weightLabel } from "./lineweights";
@@ -420,6 +421,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
                   </dl>
                 </Section>
               )}
+              {entity && entity.block_path.length === 0 && !entity.xref && <ElementItems handle={entity.handle} />}
             </div>
           )}
         </div>

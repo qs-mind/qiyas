@@ -21,6 +21,8 @@ pub struct FileViewInfo {
     pub name: String,
     pub size_bytes: u64,
     pub pages: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<qiyas_plot::report::PdfTrace>,
 }
 
 fn output_kind(path: &Path) -> Result<FileViewKind, String> {
@@ -85,6 +87,11 @@ pub async fn file_view_info(path: String) -> Result<FileViewInfo, String> {
                 .into_owned(),
             size_bytes,
             pages,
+            trace: if kind == FileViewKind::Pdf {
+                qiyas_plot::report::read_trace(&path)
+            } else {
+                None
+            },
         })
     })
     .await
@@ -409,5 +416,39 @@ mod tests {
             reveal.get_args().collect::<Vec<_>>(),
             vec![dir.path().as_os_str()]
         );
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pdf_file_info_returns_the_validated_trace_map() {
+        if !qiyas_pdf::available() {
+            eprintln!("skipped: needs pdfium (scripts/pdfium.sh)");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace.pdf");
+        let report: qiyas_core::deliverables::Report = serde_json::from_value(json!({
+            "drawing": "/plans/source.dxf", "kind":"boq", "language":"en",
+            "layout": qiyas_core::deliverables::default_layout(qiyas_core::deliverables::Kind::Boq),
+            "warnings": [],
+            "rows": [{"code":"W","section":"Walls","description":"Wall","unit":"m2","quantity":12.5,
+                "method":"Measured","citations":[],"target":{"item":"generated:W"}}],
+        }))
+        .unwrap();
+        qiyas_plot::report::write(&path, &report).unwrap();
+        let info =
+            tauri::async_runtime::block_on(file_view_info(path.to_string_lossy().into_owned()))
+                .unwrap();
+        let trace = info.trace.unwrap();
+        assert_eq!(trace.drawing.as_deref(), Some("/plans/source.dxf"));
+        let targets: Vec<_> = trace.pages.iter().flat_map(|page| &page.regions).collect();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].target.item, "generated:W");
+        assert!(targets[0].target.line.is_none());
     }
 }

@@ -17,11 +17,17 @@ impl Path {
         self.segments().map(|(a, b)| dist(a, b)).sum()
     }
 
-    /// Enclosed area, 0.0 when open. A self-intersecting path is split at its
-    /// crossings and the loop areas are added, so a bowtie counts both lobes.
+    /// Enclosed even-odd area, 0.0 when open. A bowtie counts both lobes;
+    /// repeated coverage cancels and pinched-in holes are subtracted.
     pub fn area(&self) -> f64 {
         if self.closed {
-            loops_area(&self.points)
+            if self.self_intersects() {
+                crate::topology::resolve(&distinct(&self.points, true))
+                    .map(|regions| regions.iter().map(crate::walls::Region::area).sum())
+                    .unwrap_or(f64::NAN)
+            } else {
+                crate::predicates::ring_area(&distinct(&self.points, true)).abs()
+            }
         } else {
             0.0
         }
@@ -29,17 +35,33 @@ impl Path {
 
     /// A closed path split at its crossings into simple loops (itself when it has none); none
     /// when open. A ring that touches itself round a pinched-in hole gives the hole as a loop.
-    pub fn loops(&self) -> Vec<Vec<[f64; 2]>> {
-        let mut out = Vec::new();
-        if self.closed {
-            split_loops(distinct(&self.points, true), &mut out);
+    /// Clipping failures are errors, never an empty measured region.
+    pub fn loops(&self) -> Result<Vec<Vec<[f64; 2]>>, &'static str> {
+        if !self.closed {
+            return Ok(Vec::new());
         }
-        out
+        if !self.self_intersects() {
+            return Ok(vec![distinct(&self.points, true)]);
+        }
+        crate::topology::resolve(&distinct(&self.points, true))
+            .map(|regions| crate::topology::rings(&regions))
     }
 
-    /// True when two non-adjacent segments meet (parallel overlaps are not detected).
+    /// True when non-adjacent segments meet, including collinear overlaps.
     pub fn self_intersects(&self) -> bool {
-        first_crossing(&distinct(&self.points, self.closed), self.closed).is_some()
+        let points = distinct(&self.points, self.closed);
+        let count = edge_count(points.len(), self.closed);
+        (0..count).any(|i| {
+            (i + 2..count).any(|j| {
+                !(self.closed && i == 0 && j == count - 1)
+                    && crate::predicates::intersects(
+                        points[i],
+                        points[(i + 1) % points.len()],
+                        points[j],
+                        points[(j + 1) % points.len()],
+                    )
+            })
+        })
     }
 
     /// `[[min_x, min_y], [max_x, max_y]]`, or `None` for an empty path.
@@ -97,74 +119,4 @@ fn edge_count(n: usize, closed: bool) -> usize {
 
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (b[0] - a[0]).hypot(b[1] - a[1])
-}
-
-fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    [a[0] - b[0], a[1] - b[1]]
-}
-
-fn cross(u: [f64; 2], v: [f64; 2]) -> f64 {
-    u[0] * v[1] - u[1] * v[0]
-}
-
-fn shoelace(points: &[[f64; 2]]) -> f64 {
-    let n = points.len();
-    let twice: f64 = (0..n).map(|i| cross(points[i], points[(i + 1) % n])).sum();
-    (twice / 2.0).abs()
-}
-
-/// The loop areas of a closed ring split at its crossings, added.
-fn loops_area(points: &[[f64; 2]]) -> f64 {
-    let mut loops = Vec::new();
-    split_loops(distinct(points, true), &mut loops);
-    loops.iter().map(|l| shoelace(l)).sum()
-}
-
-/// Splits a closed ring at its first crossing until every loop is simple, into `out`. Each
-/// split leaves both loops with fewer points, so it ends.
-fn split_loops(points: Vec<[f64; 2]>, out: &mut Vec<Vec<[f64; 2]>>) {
-    match first_crossing(&points, true) {
-        None => out.push(points),
-        Some((i, j, x)) => {
-            let mut outer: Vec<[f64; 2]> = points[..=i].to_vec();
-            outer.push(x);
-            outer.extend_from_slice(&points[j + 1..]);
-            let mut inner = vec![x];
-            inner.extend_from_slice(&points[i + 1..=j]);
-            split_loops(distinct(&outer, true), out);
-            split_loops(distinct(&inner, true), out);
-        }
-    }
-}
-
-/// The first pair of non-adjacent segments `(i, j)` with `i < j` that meet, and where.
-/// Segment `k` runs from point `k` to point `k + 1` (wrapping when closed).
-fn first_crossing(points: &[[f64; 2]], closed: bool) -> Option<(usize, usize, [f64; 2])> {
-    let n = points.len();
-    let count = edge_count(n, closed);
-    let seg = |k: usize| (points[k], points[(k + 1) % n]);
-    for i in 0..count {
-        for j in i + 2..count {
-            if closed && i == 0 && j == count - 1 {
-                continue;
-            }
-            let ((a, b), (c, d)) = (seg(i), seg(j));
-            if let Some(x) = segment_hit(a, b, c, d) {
-                return Some((i, j, x));
-            }
-        }
-    }
-    None
-}
-
-/// Where segments `ab` and `cd` meet, ends included; `None` when parallel.
-fn segment_hit(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
-    let (r, s, q) = (sub(b, a), sub(d, c), sub(c, a));
-    let denom = cross(r, s);
-    if denom == 0.0 {
-        return None;
-    }
-    let (t, u) = (cross(q, s) / denom, cross(q, r) / denom);
-    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
-        .then(|| [a[0] + t * r[0], a[1] + t * r[1]])
 }

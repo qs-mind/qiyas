@@ -2,6 +2,8 @@
 mod compare;
 mod matching;
 pub(crate) mod rules;
+use std::hash::Hasher;
+
 use crate::{
     knowledge, measurement::Citation, Command, Conflict, ConflictKind, ConflictStatus, CoreError,
     Outcome, Session, Source,
@@ -49,9 +51,9 @@ pub(super) fn finding(
     reason_ar: String,
 ) -> Conflict {
     let hash_key = format!("{}|{key}", kind.name());
-    let hash = hash_key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    });
+    let mut hash = fnv::FnvHasher::default();
+    hash.write(hash_key.as_bytes());
+    let hash = hash.finish();
     Conflict {
         id: format!("{hash:016x}"),
         kind,

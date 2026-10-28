@@ -245,57 +245,6 @@ impl Session {
     }
 }
 
-fn inside(ring: &[[f64; 2]], point: [f64; 2], tolerance: f64) -> bool {
-    let mut inside = false;
-    for (&a, &b) in ring
-        .iter()
-        .zip(ring.iter().cycle().skip(1))
-        .take(ring.len())
-    {
-        let length2 = (b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2);
-        if length2 > 0.0 {
-            let t = (((point[0] - a[0]) * (b[0] - a[0]) + (point[1] - a[1]) * (b[1] - a[1]))
-                / length2)
-                .clamp(0.0, 1.0);
-            if (point[0] - a[0] - t * (b[0] - a[0])).hypot(point[1] - a[1] - t * (b[1] - a[1]))
-                <= tolerance
-            {
-                return true;
-            }
-        }
-        if (a[1] > point[1]) != (b[1] > point[1])
-            && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
-            inside = !inside;
-        }
-    }
-    inside
-}
+use qiyas_geom::predicates::inside_with_tolerance as inside;
 
-fn segment_inside(ring: &[[f64; 2]], a: [f64; 2], b: [f64; 2], tolerance: f64) -> bool {
-    let d = [b[0] - a[0], b[1] - a[1]];
-    let cross = |a: [f64; 2], b: [f64; 2]| a[0] * b[1] - a[1] * b[0];
-    let mut cuts = vec![0.0, 1.0];
-    for (&p, &q) in ring
-        .iter()
-        .zip(ring.iter().cycle().skip(1))
-        .take(ring.len())
-    {
-        let e = [q[0] - p[0], q[1] - p[1]];
-        let denominator = cross(d, e);
-        if denominator.abs() <= f64::EPSILON {
-            continue;
-        }
-        let relative = [p[0] - a[0], p[1] - a[1]];
-        let t = cross(relative, e) / denominator;
-        let u = cross(relative, d) / denominator;
-        if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-            cuts.push(t);
-        }
-    }
-    cuts.sort_by(f64::total_cmp);
-    cuts.windows(2).all(|pair| {
-        let t = (pair[0] + pair[1]) * 0.5;
-        inside(ring, [a[0] + t * d[0], a[1] + t * d[1]], tolerance)
-    })
-}
+use qiyas_geom::predicates::segment_inside;

@@ -5,8 +5,10 @@ mod exact;
 mod flatten;
 mod paint;
 mod path;
+pub mod predicates;
 mod shapes;
 mod table;
+mod topology;
 mod transform;
 pub mod walls;
 

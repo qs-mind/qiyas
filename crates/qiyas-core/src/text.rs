@@ -40,9 +40,7 @@ pub struct TextMatch {
 
 /// What a find looks for.
 pub(crate) struct Finder {
-    find: Vec<char>,
-    match_case: bool,
-    whole_word: bool,
+    pattern: regex::Regex,
 }
 
 /// An entity with its matches replaced: how many, and whether the result fits.
@@ -70,39 +68,38 @@ impl Finder {
         if find.is_empty() {
             return Err(invalid("Type what to find"));
         }
-        Ok(Finder {
-            find: find.chars().collect(),
-            match_case,
-            whole_word,
-        })
+        let literal = regex::escape(find);
+        let pattern = if whole_word {
+            format!(r"\b{{start-half}}(?:{literal})\b{{end-half}}")
+        } else {
+            literal
+        };
+        let pattern = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!match_case)
+            .build()
+            .map_err(|e| invalid(format!("Cannot search this text: {e}")))?;
+        Ok(Finder { pattern })
     }
 
-    fn same(&self, a: char, b: char) -> bool {
-        a == b || (!self.match_case && a.to_lowercase().eq(b.to_lowercase()))
-    }
-
-    /// The matches in `run` (plain characters only), as char ranges, left to right without
-    /// overlapping. The run's ends count as word boundaries.
+    /// Literal, non-overlapping matches, mapped from UTF-8 bytes to the plain run's chars.
     fn matches(&self, run: &[char]) -> Vec<(usize, usize)> {
-        let n = self.find.len();
-        let word = |c: char| c.is_alphanumeric() || c == '_';
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i + n <= run.len() {
-            let hit = run[i..i + n]
-                .iter()
-                .zip(&self.find)
-                .all(|(&a, &b)| self.same(a, b));
-            let bounded = !self.whole_word
-                || ((i == 0 || !word(run[i - 1])) && (i + n == run.len() || !word(run[i + n])));
-            if hit && bounded {
-                out.push((i, i + n));
-                i += n;
-            } else {
-                i += 1;
-            }
-        }
-        out
+        let text: String = run.iter().collect();
+        let offsets: Vec<_> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain([text.len()])
+            .collect();
+        self.pattern
+            .find_iter(&text)
+            .map(|m| {
+                (
+                    offsets
+                        .binary_search(&m.start())
+                        .expect("character boundary"),
+                    offsets.binary_search(&m.end()).expect("character boundary"),
+                )
+            })
+            .collect()
     }
 
     /// `text` read as `mode`, with every match in its plain runs replaced by `with` (escaped for

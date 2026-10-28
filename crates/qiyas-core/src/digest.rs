@@ -423,8 +423,64 @@ impl Session {
         errors.extend(note_scope::findings(
             &report, &notes, &handles, &evidence, end_report,
         ));
+        // Founder's rule: no element is out of scope. Every valid element is measured by a rule
+        // and every measured quantity reaches a BOQ item (or is marked informational there).
+        let mapped: BTreeSet<&str> = report
+            .items
+            .iter()
+            .flat_map(|i| i.lines.iter().map(|l| l.id.as_str()))
+            .filter(|id| !id.is_empty())
+            .collect();
+        // An element measured in the manual take-off (by its own handle or a part drawn for it)
+        // is measured too.
+        let parts = self.parts_by_owner();
+        let in_takeoff: BTreeSet<u64> = self
+            .takeoff
+            .items
+            .iter()
+            .flat_map(|i| i.handles.iter().copied())
+            .collect();
+        // Unmeasured elements and unmapped quantities keep the check from passing, but do not refuse an export: the
+        // user may have asked for part of the drawing (doors only); Mizan reports the rest.
+        let mut unmeasured = Vec::new();
+        let mut unmapped = Vec::new();
+        for object in objects.iter().filter(|o| o.valid) {
+            let manual = in_takeoff.contains(&object.instance.id)
+                || parts
+                    .get(&object.instance.id)
+                    .is_some_and(|p| p.iter().any(|h| in_takeoff.contains(h)));
+            let measured: Vec<_> = report
+                .quantities
+                .iter()
+                .filter(|q| q.object == object.instance.id)
+                .collect();
+            if measured.is_empty() && !manual {
+                unmeasured.push(json!({"section":"unmeasured_elements","handle":object.instance.id,"type":object.instance.type_name,"message":"No measurement rule measures this element: add a rule for its type from the method of measurement"}));
+            }
+            for q in measured {
+                let ids: Vec<_> = q
+                    .lines
+                    .iter()
+                    .map(|l| l.id.as_str())
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                if !ids.is_empty() && !ids.iter().any(|id| mapped.contains(id)) {
+                    unmapped.push(json!({"section":"unmapped_quantities","handle":object.instance.id,"type":object.instance.type_name,"rule":q.rule,"message":"Measured but in no BOQ item: map it (informational: true when nobody buys it)"}));
+                }
+            }
+            // A value Mizan set without citing where it read it is an assumption: say so.
+            for (prop, source) in &object.instance.sources {
+                if source.kind == crate::measurement::SourceKind::Mizan {
+                    detail.push(json!({"section":"assumed_values","handle":object.instance.id,"property":prop,"message":"Set without a cited source: cite the note, table or document, or report it as an assumption"}));
+                }
+            }
+        }
         let error_count = errors.len();
+        let unmeasured_count = unmeasured.len();
+        let unmapped_count = unmapped.len();
         detail.extend(errors);
+        detail.extend(unmeasured);
+        detail.extend(unmapped);
         let mut basis_warnings = Vec::new();
         if let Some(method) = report.selection.effective() {
             let notes: Vec<_> = self
@@ -482,7 +538,7 @@ impl Session {
             detail.push(json!({"section":"expectations","result":result}));
         }
         detail.extend(entries);
-        let overview = json!({"view_only_entities":view_only,"possible_details":possible_detail_count,"measurement_errors":error_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
+        let overview = json!({"view_only_entities":view_only,"possible_details":possible_detail_count,"measurement_errors":error_count,"unmeasured_elements":unmeasured_count,"unmapped_quantities":unmapped_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && unmeasured_count==0 && unmapped_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
         Ok(page(overview, detail, offset))
     }
 }

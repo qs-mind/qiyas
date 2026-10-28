@@ -24,6 +24,7 @@ qiyas/
                     (conflicts); the BOQ, schedule and conflict types live in qiyas-core
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
+    qiyas-ocr       local Arabic and English scan text, boxes and confidence
     qiyas-plot      plot a sheet to PDF, plot styles (CTB/STB), print through the OS
     qiyas-ai        three generic AI tools over the command registry, the agent loop, the Claude and
                     OpenAI-compatible clients, the MCP server
@@ -147,7 +148,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Only MPL-2.0, Apache-2.0, MIT, BSD, ISC, OFL, Zlib or BSL-1.0 dependencies (ISC: `ring`,
   `rustls-webpki`, `untrusted`; 0BSD, a BSD: `tslib`; Zlib: `foldhash`; BSL-1.0: `clipboard-win`, `error-code` on
   Windows, through `arboard`, the system clipboard, MIT OR Apache-2.0, with its Wayland
-  data-control feature). No code copied from Open CAD Studio (GPL).
+  data-control feature; qiyas-ocr: oar-ocr/PP-OCRv5 Apache-2.0, ort MIT OR Apache-2.0,
+  ONNX Runtime MIT, clipper2-rust BSL-1.0). No code copied from Open CAD Studio (GPL).
 - Thmanyah font files are never committed in readable form (founder's ruling, 23 Oct 2026: the whole of Qiyas stays in this one repo, and installers built on GitHub include Thmanyah). Only `assets/fonts/thmanyah-sans.sealed` is committed: the three Sans weights the window uses, AES-256-GCM sealed by `scripts/fonts-seal.mjs`. Its key is the repository secret `THMANYAH_FONTS_KEY` and, on the founder's computer, `~/.config/qs-mind/thmanyah-fonts.key` (keep a backup; to re-seal, run `node scripts/fonts-seal.mjs seal <key file>`). The release workflow unseals it before building. Locally `scripts/fonts.sh` copies them from `~/Downloads/Thmanyah-Font-Family/thmanyah typeface` into the git-ignored `src/fonts/thmanyah/`. Instrument Sans (OFL) is committed. The viewport draws drawing text with Noto Sans and Noto Sans Arabic (OFL, unhinted Regular, with their licences in `crates/qiyas-render/fonts/`), behind the drawing's own TrueType font when the computer has it.
 - English text says "Qiyas" and "QS Mind"; Arabic text says "قياس" and "كيو إس مايند". Arabic uses Thmanyah Sans; headings use `font-feature-settings: "swsh"`.
 - Measured values are stored in drawing units and displayed in metres, square metres and pieces. Unit factor comes from the drawing header (`insertion_units`): 1 = inches, 2 = feet, 4 = mm, 5 = cm, 6 = m, 0 or unknown = treat as mm and show a warning in the status bar.
@@ -211,7 +213,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   The command-line machine exposes its original completed input through `take_input`; script
   steps keep that raw input beside their plain command. Desktop IPC, scripts, typed commands
   and the shared AI/MCP surface all execute wire commands through `run_input`.
-- Serde defaults appear in each field's registry schema and description. Conventional lengths
+- Serde defaults appear in each field's registry schema and description (a field named `default` or `properties` is a field, not a keyword). Conventional lengths
   are resolved using drawing units and the sheet's annotation scale; the result says which
   values were chosen. Text rotation is zero, MText width zero means no wrapping, polygons are
   inscribed, and hatches are solid when omitted. Geometry that defines a shape remains required.
@@ -548,6 +550,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `qiyas_read takeoff_check {offset?,expectations?}` reports per-layer and per-block explanation,
   closed-region coverage, unexplained handles, unmapped tables, unmatched schedule rules,
   uncertainties and verify results. It reads only. These are evidence shares, not truth coverage.
+  Its overview also counts `unmeasured_elements` (a valid element no rule or manual row measures)
+  and `unmapped_quantities` (a measured quantity in no BOQ item); both fail `passed` but are not
+  `measurement_errors`, so the export gate does not refuse a scope the user narrowed (Mizan names
+  what was left out). `assumed_values` rows list values Mizan set without a citation.
   Unexplained annotations can keep the check incomplete; Mizan must disclose that at the budget
   limit. Multi-sheet recognition evidence is used by measurement derivation and submissions.
 - Autonomous is the default; saved per-job/per-phase choices still apply. Autonomous runs report
@@ -878,6 +884,35 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Empty bands report N/A. Prepared/shared-rule diagnostics remain distinct from live MIZAN ALONE.
 - No new dependencies, trade rules, rates or paid model runs. Phase report:
   `docs/2026-10-22-qiyas-phase23.md`.
+- Provenance (28 Oct 2026, founder: every quantity traced to the drawing and shown in engineering
+  terms; any element, no trade hard-coded). Every property value keeps its source on the element
+  (`ObjectInstance::sources`, `measurement::PropSource { kind, handle, text }`; kinds `SourceKind`:
+  measured, drawing_note, drawing_attribute, drawing_table, drawing_block, document, rule,
+  type_default, engineer, mizan, derived, unknown). Recognition extractions record theirs
+  (`extraction_source`; a `Constant` may cite `source_kind` and `handle`, schedules cite their table);
+  `place_objects` and `set_object_props` take cited `sources` and otherwise record who ran them
+  (`objects::given_by`: the engineer, or Mizan as an assumption); a type default says so.
+  Measured facts carry the element's basis (length, area, volume and numeric props) as text.
+- Each `DimensionLine` has a stable `id` (`<element identity>/<rule>/t<n>`, `d<n>/<void identity>`,
+  `limited`, `rounding`) and `operands`: the timesing ("Times") and each factor, named by the
+  term's optional `factor_labels` (Mizan writes them in the chat language) else the expression,
+  with value, unit and the sources of every name in it; a table lookup cites its table. Older
+  lines without them still read.
+- `explain` adds `by_element` (per host element: summed included value, unit, line ids, voids
+  deducted with their values, and its generated part handles). `boq:<code>` explains a generated
+  item's lines when one exists for the code, else the manual rows (as the BOQ panel shows it).
+  `element:<decimal handle>` is the reverse (`Session::element_items`; a generated part answers
+  for its owner): the generated items it is measured in or deducted from with what it gives,
+  its measured quantities (and whether mapped) and manual rows.
+- Window: `src/boq/trace.ts` `trace({item, line?, drawing?, panel?})` is the one way to trace a
+  quantity: a BOQ row of a generated item, a generated item's heading or line, Explain, the
+  properties palette's "Feeds items" (`boq/ElementItems.tsx`) and a cell of an exported Excel or
+  PDF shown in the file viewer. `app/useTrace.ts` explains it once, opens its drawing and sheet,
+  lights its elements (parts and voids too; one element when focused) with a tag of what each
+  gives (`Viewport` `labels`, moved per frame like the UCS icon; voids in their own colour) and
+  fits the view. `panel: false` shows a small bar with "How was it calculated?"; otherwise
+  `boq/HowCalculated.tsx` shows the working per line as named operands ("Length 5.2 m ×
+  Height 3 m = 15.6 m²"), each operand's sources with a "Show on drawing" for one on it.
 
 ## Drawing
 
@@ -1651,6 +1686,21 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   go on `PDF-RRGGBB`, `PDF-FILL-RRGGBB` and `PDF-TEXT`. Save As rewrites underlay and image
   links for the new folder. Opening another drawing or closing the window with unsaved drawing
   changes asks "Save changes to the drawing?".
+
+## Text reading (OCR)
+
+- `qiyas-ocr` reads Arabic and English scans locally and offline with oar-ocr and PP-OCRv5
+  on ONNX Runtime. Requires Rust 1.95. Run `scripts/ocr.sh` to install the runtime, detector,
+  Arabic recognizer and dictionary into `crates/qiyas-desktop/resources/ocr/` (git-ignored).
+  Build and inference never download files; installers ship `resources/ocr/`.
+- `QIYAS_OCR` overrides the folder; otherwise look in the folder set by the desktop app,
+  beside the program, then the repository resources. Missing files report
+  "Text reading is not installed: run scripts/ocr.sh".
+- Pages without a text layer render at up to 300 dpi, capped at 6000 pixels. `qiyas_read document`
+  returns reading-order text with `ocr: true` and mean confidence rounded to two decimals.
+  Recognition retains spatial OCR evidence and confidence; supplied transcriptions win.
+  A candidate using OCR never exceeds its text's confidence and still requires raster review.
+  Dimension labels with explicit units may cross-check supplied spans; OCR never invents endpoints.
 
 ## Images
 

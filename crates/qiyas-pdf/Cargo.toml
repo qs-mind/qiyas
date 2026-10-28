@@ -6,6 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+kurbo.workspace = true
+qiyas-ocr = { path = "../qiyas-ocr" }
 opencadcodec.workspace = true
 thiserror.workspace = true
 # PDF reading through pdfium (MIT OR Apache-2.0), bound at run time to the pdfium shared library

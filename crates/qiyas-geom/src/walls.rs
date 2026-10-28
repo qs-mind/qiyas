@@ -11,8 +11,11 @@
 //! 4. Everything is united into regions (`union_into`), then each opening's rectangle, 10% wider
 //!    than the wall on each face, is cut out.
 
+pub use crate::predicates::ring_area;
+use crate::predicates::{convex_hull, point_segment};
+
 use cavalier_contours::polyline::{
-    BooleanOp, PlineCreation, PlineSource, PlineSourceMut, PlineVertex, Polyline,
+    BooleanOp, PlineCreation, PlineSource, PlineSourceMut, Polyline,
 };
 use cavalier_contours::static_aabb2d_index::StaticAABB2DIndexBuilder;
 
@@ -597,7 +600,7 @@ fn build_normalized(
     }
     let mut regions: Vec<Region> = Vec::new();
     for p in &polygons {
-        union_into(&mut regions, p);
+        union_into(&mut regions, p)?;
     }
     let gross_area = regions.iter().map(Region::area).sum();
     let mut placed = Vec::new();
@@ -608,7 +611,7 @@ fn build_normalized(
         let shift = (left + right) / 2.0;
         let centre = [point[0] - dir[1] * shift, point[1] + dir[0] * shift];
         let cut = rectangle(centre, dir, o.width, thickness * 1.2);
-        cut_from(&mut regions, &cut);
+        cut_from(&mut regions, &cut)?;
         placed.push(Placed {
             centre,
             dir,
@@ -1281,131 +1284,39 @@ fn to_pline(ring: &[[f64; 2]]) -> Polyline<f64> {
     pl
 }
 
-fn from_pline(pl: &Polyline<f64>) -> Vec<[f64; 2]> {
-    (0..pl.vertex_count())
-        .map(|i| {
-            let v: PlineVertex<f64> = pl.at(i);
-            [v.x, v.y]
-        })
-        .collect()
-}
-
 /// Unites the simple polygon `p` into `regions`.
-fn union_into(regions: &mut Vec<Region>, p: &[[f64; 2]]) {
-    let mut outer = to_pline(p);
-    let mut holes: Vec<Polyline<f64>> = Vec::new();
-    let mut keep = Vec::new();
-    for r in regions.drain(..) {
-        if !bounds_overlap(&r.outer, &from_pline(&outer)) {
-            keep.push(r);
-            continue;
-        }
-        // An isolated wall inside a room is a separate region, not another hole.
-        if r.holes.iter().any(|hole| {
-            matches!(
-                to_pline(hole).boolean(&outer, BooleanOp::Or).result_info,
-                cavalier_contours::polyline::BooleanResultInfo::Pline2InsidePline1
-            )
-        }) {
-            keep.push(r);
-            continue;
-        }
-        let ro = to_pline(&r.outer);
-        let result = ro.boolean(&outer, BooleanOp::Or);
-        let merged = result.pos_plines.len() == 1
-            && !matches!(
-                result.result_info,
-                cavalier_contours::polyline::BooleanResultInfo::Disjoint
-            );
-        if !merged {
-            keep.push(r);
-            continue;
-        }
-        outer = result.pos_plines[0].pline.clone();
-        holes.extend(result.neg_plines.into_iter().map(|n| n.pline));
-        // The region's own holes, less what `p` covers.
-        for hole in &r.holes {
-            let h = to_pline(hole);
-            let cut = h.boolean(&to_pline(p), BooleanOp::Not);
-            holes.extend(cut.pos_plines.into_iter().map(|x| x.pline));
-        }
-    }
-    keep.push(Region {
-        outer: from_pline(&outer),
-        holes: holes
-            .iter()
-            .map(from_pline)
-            .filter(|h| ring_area(h).abs() > 1e-12)
-            .collect(),
-    });
+fn union_into(regions: &mut Vec<Region>, p: &[[f64; 2]]) -> Result<(), WallError> {
+    let (affected, mut keep): (Vec<_>, Vec<_>) =
+        regions.drain(..).partition(|r| bounds_overlap(&r.outer, p));
+    keep.extend(
+        crate::topology::boolean(
+            &crate::topology::rings(&affected),
+            &[p.to_vec()],
+            clipper2_rust::ClipType::Union,
+        )
+        .map_err(bad)?,
+    );
     *regions = keep;
+    Ok(())
 }
 
-/// Cuts the simple polygon `cut` out of `regions`: each region's outline less the cut, then less
-/// each of its holes (a cut that joins a hole to the outside leaves the hole part of the outline).
-fn cut_from(regions: &mut Vec<Region>, cut: &[[f64; 2]]) {
-    let c = to_pline(cut);
-    let mut out = Vec::new();
-    for r in regions.drain(..) {
-        if !bounds_overlap(&r.outer, cut) {
-            out.push(r);
-            continue;
-        }
-        let result = to_pline(&r.outer).boolean(&c, BooleanOp::Not);
-        let mut pieces: Vec<(Polyline<f64>, Vec<Polyline<f64>>)> = match result.result_info {
-            // Untouched: the region as it was.
-            cavalier_contours::polyline::BooleanResultInfo::Disjoint => {
-                out.push(r);
-                continue;
-            }
-            _ => result
-                .pos_plines
-                .into_iter()
-                .map(|p| (p.pline, Vec::new()))
-                .collect(),
-        };
-        for hole in &r.holes {
-            let h = to_pline(hole);
-            let mut next = Vec::new();
-            for (piece, mut holes) in pieces {
-                let res = piece.boolean(&h, BooleanOp::Not);
-                match res.result_info {
-                    cavalier_contours::polyline::BooleanResultInfo::Disjoint => {
-                        next.push((piece, holes))
-                    }
-                    _ if !res.neg_plines.is_empty() => {
-                        // Wholly inside: a hole of this piece.
-                        holes.extend(res.neg_plines.into_iter().map(|n| n.pline));
-                        for p in res.pos_plines {
-                            next.push((p.pline, std::mem::take(&mut holes)));
-                        }
-                    }
-                    // Joined to the outside: the pieces keep the holes that fall inside them.
-                    _ => {
-                        for p in res.pos_plines {
-                            let ring = from_pline(&p.pline);
-                            let mine = holes
-                                .iter()
-                                .filter(|hh| {
-                                    hh.vertex_count() > 0 && inside([hh.at(0).x, hh.at(0).y], &ring)
-                                })
-                                .cloned()
-                                .collect();
-                            next.push((p.pline, mine));
-                        }
-                    }
-                }
-            }
-            pieces = next;
-        }
-        for (piece, holes) in pieces {
-            out.push(Region {
-                outer: from_pline(&piece),
-                holes: holes.iter().map(from_pline).collect(),
-            });
-        }
+/// Clipper's tree carries holes through interior cuts, splits and nested islands.
+fn cut_from(regions: &mut Vec<Region>, cut: &[[f64; 2]]) -> Result<(), WallError> {
+    let (affected, mut keep): (Vec<_>, Vec<_>) = regions
+        .drain(..)
+        .partition(|r| bounds_overlap(&r.outer, cut));
+    if !affected.is_empty() {
+        keep.extend(
+            crate::topology::boolean(
+                &crate::topology::rings(&affected),
+                &[cut.to_vec()],
+                clipper2_rust::ClipType::Difference,
+            )
+            .map_err(bad)?,
+        );
     }
-    *regions = out;
+    *regions = keep;
+    Ok(())
 }
 
 fn bounds_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
@@ -1469,77 +1380,8 @@ fn point_along(r: &Run, at: f64) -> Option<([f64; 2], [f64; 2])> {
     None
 }
 
-fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
-    let mut pts = points.to_vec();
-    pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
-    pts.dedup_by(|a, b| dist(*a, *b) < 1e-12);
-    if pts.len() < 3 {
-        return pts;
-    }
-    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
-        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-    };
-    let mut lower: Vec<[f64; 2]> = Vec::new();
-    for &p in &pts {
-        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
-            lower.pop();
-        }
-        lower.push(p);
-    }
-    let mut upper: Vec<[f64; 2]> = Vec::new();
-    for &p in pts.iter().rev() {
-        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
-            upper.pop();
-        }
-        upper.push(p);
-    }
-    lower.pop();
-    upper.pop();
-    lower.extend(upper);
-    lower
-}
-
-/// Signed area (positive counter-clockwise).
-pub fn ring_area(ring: &[[f64; 2]]) -> f64 {
-    let n = ring.len();
-    let Some(origin) = ring.first() else {
-        return 0.0;
-    };
-    (0..n)
-        .map(|i| {
-            let (p, q) = (ring[i], ring[(i + 1) % n]);
-            (p[0] - origin[0]) * (q[1] - origin[1]) - (q[0] - origin[0]) * (p[1] - origin[1])
-        })
-        .sum::<f64>()
-        / 2.0
-}
-
-fn inside(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
-    let n = ring.len();
-    let mut c = false;
-    for i in 0..n {
-        let (a, b) = (ring[i], ring[(i + 1) % n]);
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
-            c = !c;
-        }
-    }
-    c
-}
-
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
-}
-
-fn point_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = dx * dx + dy * dy;
-    if l2 == 0.0 {
-        return dist(p, a);
-    }
-    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0);
-    dist(p, [a[0] + t * dx, a[1] + t * dy])
 }
 
 #[cfg(test)]

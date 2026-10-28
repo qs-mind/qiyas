@@ -2,7 +2,7 @@
 use crate::{measurement::DimensionLine, CoreError, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub fn unscored() -> f64 {
     0.5
@@ -36,13 +36,46 @@ impl ConfidenceSummary {
     }
 }
 fn missing(item: &str) -> CoreError {
-    CoreError::InvalidCommand(format!("No quantity item {item}; use generated:<code>, boq:<code>, takeoff:<id>, or dimension:<decimal handle>:<rule>"))
+    CoreError::InvalidCommand(format!("No quantity item {item}; use generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule> or element:<decimal handle>"))
+}
+/// What one element gives an item: the host's own lines summed, and each void it deducts.
+fn contributions(lines: &[DimensionLine], parts: &BTreeMap<u64, Vec<u64>>) -> Vec<Value> {
+    let mut hosts: BTreeMap<u64, (String, f64, Vec<String>, Vec<Value>)> = BTreeMap::new();
+    for line in lines {
+        let Some(host) = line.sources.first() else {
+            continue;
+        };
+        let entry = hosts
+            .entry(host.handle)
+            .or_insert_with(|| (host.sheet.clone(), 0.0, vec![], vec![]));
+        if line.included {
+            entry.1 += line.value;
+        }
+        if !line.id.is_empty() {
+            entry.2.push(line.id.clone());
+        }
+        if let Some(void) = line.sources.get(1) {
+            entry.3.push(json!({"handle":void.handle,"sheet":void.sheet,"value":line.value,"included":line.included,"line":line.id}));
+        }
+    }
+    let unit = lines.first().map(|l| l.unit.clone()).unwrap_or_default();
+    hosts
+        .into_iter()
+        .map(|(handle, (sheet, value, ids, voids))| {
+            let drawn = parts.get(&handle).cloned().unwrap_or_default();
+            json!({"handle":handle,"sheet":sheet,"value":value,"unit":unit,"lines":ids,"voids":voids,"parts":drawn})
+        })
+        .collect()
 }
 impl Session {
     /// One read resolves an item to its stored arithmetic, elements, recognition and cited rules.
     pub fn explain(&self, item: &str) -> Result<Value, CoreError> {
-        let report = self.measurement_report()?;
         let (kind, key) = item.split_once(':').unwrap_or(("", item));
+        if kind == "element" {
+            let handle = key.parse::<u64>().map_err(|_| missing(item))?;
+            return self.element_items(handle);
+        }
+        let report = self.measurement_report()?;
         let generated = report.items.iter().find(|i| i.code == key);
         let manual = self.takeoff.items.iter().find(|i| i.id == key);
         let mut lines: Vec<DimensionLine> = vec![];
@@ -66,6 +99,25 @@ impl Session {
             notes
                 .push("Manual measurement: no authored recognition or measurement rule is implied");
             lines.push(crate::measurement::DimensionLine {
+                id: format!("takeoff:{}", i.id),
+                operands: vec![crate::measurement::Operand {
+                    label: "Measured".into(),
+                    expression: i.shown.to_string(),
+                    value: i.shown,
+                    unit: i.unit.clone(),
+                    sources: i
+                        .handles
+                        .iter()
+                        .map(|h| crate::measurement::NamedSource {
+                            name: format!("{h}"),
+                            source: crate::measurement::PropSource {
+                                kind: crate::measurement::SourceKind::Measured,
+                                handle: Some(*h),
+                                text: String::new(),
+                            },
+                        })
+                        .collect(),
+                }],
                 label: i.description.clone(),
                 operation: crate::measurement::Operation::Add,
                 timesing: 1.,
@@ -122,21 +174,26 @@ impl Session {
                     }
                 })
                 .ok_or_else(|| missing(item))?;
-            for i in self.takeoff.items.iter().filter(|i| {
-                !boq.code.is_empty() && i.boq_code.as_deref() == Some(boq.code.as_str())
-            }) {
-                handles.extend(i.handles.iter().copied());
-                handles.extend(i.chain.first().copied());
-                let explained = self.explain(&format!("takeoff:{}", i.id))?;
-                let manual_lines: Vec<DimensionLine> =
-                    serde_json::from_value(explained["dimension_lines"].clone())
-                        .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
-                lines.extend(manual_lines);
-            }
-            let confidence = if let Some(i) = report.items.iter().find(|i| i.code == boq.code) {
+            // As the BOQ panel shows it: a generated item replaces the manual rows of its code.
+            let confidence = if let Some(i) = report
+                .items
+                .iter()
+                .find(|i| !boq.code.is_empty() && i.code == boq.code)
+            {
                 lines.extend(i.lines.clone());
                 i.confidence
             } else {
+                for i in self.takeoff.items.iter().filter(|i| {
+                    !boq.code.is_empty() && i.boq_code.as_deref() == Some(boq.code.as_str())
+                }) {
+                    handles.extend(i.handles.iter().copied());
+                    handles.extend(i.chain.first().copied());
+                    let explained = self.explain(&format!("takeoff:{}", i.id))?;
+                    let manual_lines: Vec<DimensionLine> =
+                        serde_json::from_value(explained["dimension_lines"].clone())
+                            .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
+                    lines.extend(manual_lines);
+                }
                 unscored()
             };
             notes.push("Imported quantity is a client value; linked measurements explain its drawing evidence");
@@ -205,8 +262,102 @@ impl Session {
             }
         }
         Ok(
-            json!({"item":item,"quantity":quantity,"unit":unit,"confidence":confidence,"confidence_band":band(confidence),"confidence_policy":"Minimum recognition and measurement-rule confidence; unscored data uses 0.5","dimension_lines":lines,"elements":objects,"handles":handles,"recognition":candidates,"recognition_rules":recognition_rules,"measurement_rules":rules,"drawings":[self.drawing.path],"evidence":evidence,"original":original,"notes":notes}),
+            json!({"item":item,"quantity":quantity,"unit":unit,"confidence":confidence,"confidence_band":band(confidence),"confidence_policy":"Minimum recognition and measurement-rule confidence; unscored data uses 0.5","dimension_lines":lines,"elements":objects,"handles":handles,"recognition":candidates,"recognition_rules":recognition_rules,"measurement_rules":rules,"drawings":[self.drawing.path],"evidence":evidence,"original":original,"notes":notes,"by_element":contributions(&lines, &self.parts_by_owner())}),
         )
+    }
+    /// The graphics each element's recipe generated (hatches, outlines, symbols), by owner, so a
+    /// traced element lights up as drawn and not only its driver.
+    pub(crate) fn parts_by_owner(&self) -> BTreeMap<u64, Vec<u64>> {
+        let mut parts: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        for entity in self.drawing.doc.entities() {
+            if let Some(part) = crate::xdata::read_json::<crate::objects::ObjectPart>(
+                entity.common(),
+                crate::objects::PART_APP,
+            ) {
+                parts
+                    .entry(part.owner)
+                    .or_default()
+                    .push(entity.common().handle.value());
+            }
+        }
+        parts
+    }
+    /// The reverse of an item: every generated item, measured quantity and manual row an element
+    /// feeds, as its host or as a void it is deducted from, with what it gives each.
+    pub fn element_items(&self, picked: u64) -> Result<Value, CoreError> {
+        // A generated part (a wall's hatch, a symbol) answers for the element that owns it.
+        let handle = self
+            .drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(picked))
+            .and_then(|e| {
+                crate::xdata::read_json::<crate::objects::ObjectPart>(
+                    e.common(),
+                    crate::objects::PART_APP,
+                )
+            })
+            .map_or(picked, |part| part.owner);
+        let report = self.measurement_report()?;
+        let mut items = vec![];
+        for item in &report.items {
+            let own = item
+                .lines
+                .iter()
+                .filter(|l| l.sources.iter().any(|s| s.handle == handle))
+                .collect::<Vec<_>>();
+            if own.is_empty() {
+                continue;
+            }
+            let hosted = own
+                .iter()
+                .any(|l| l.sources.first().is_some_and(|s| s.handle == handle));
+            let value: f64 = own
+                .iter()
+                .filter(|l| l.included)
+                .filter(|l| hosted || l.sources.get(1).is_some_and(|s| s.handle == handle))
+                .map(|l| l.value)
+                .sum();
+            items.push(json!({
+                "item": format!("generated:{}", item.code),
+                "code": item.code,
+                "description_en": item.description_en,
+                "description_ar": item.description_ar,
+                "unit": item.unit,
+                "quantity": item.quantity,
+                "role": if hosted { "measured" } else { "deducted" },
+                "value": value,
+                "lines": own.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+            }));
+        }
+        let quantities = report
+            .quantities
+            .iter()
+            .filter(|q| q.object == handle)
+            .map(|q| {
+                let mapped = report
+                    .items
+                    .iter()
+                    .any(|i| i.lines.iter().any(|l| q.lines.iter().any(|m| m.id == l.id)));
+                json!({"item": format!("dimension:{}:{}", q.object, q.rule), "rule": q.rule, "unit": q.unit, "quantity": q.quantity, "mapped": mapped})
+            })
+            .collect::<Vec<_>>();
+        let manual = self
+            .takeoff
+            .items
+            .iter()
+            .filter(|i| i.handles.contains(&handle) || i.chain.first() == Some(&handle))
+            .map(|i| json!({"item": format!("takeoff:{}", i.id), "description": i.description, "unit": i.unit, "quantity": i.shown, "boq_code": i.boq_code}))
+            .collect::<Vec<_>>();
+        let element = self.objects_for(&[handle])?.pop();
+        Ok(json!({
+            "picked": picked,
+            "element": handle,
+            "parts": self.parts_by_owner().remove(&handle).unwrap_or_default(),
+            "object": element,
+            "items": items,
+            "quantities": quantities,
+            "takeoff": manual,
+        }))
     }
 }
 /// Project contributions retain their explanation from the same run as the quantity.

@@ -230,7 +230,7 @@ impl PlotStyle {
         };
         let mut out = Vec::with_capacity(60 + body.len());
         out.extend_from_slice(header);
-        out.extend(adler32(&body).to_le_bytes());
+        out.extend(adler2::adler32_slice(&body).to_le_bytes());
         out.extend((text.len() as u32).to_le_bytes());
         out.extend((body.len() as u32).to_le_bytes());
         out.extend(body);
@@ -363,19 +363,6 @@ fn number(v: f64) -> String {
     } else {
         v.to_string()
     }
-}
-
-fn adler32(data: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
-    for chunk in data.chunks(5552) {
-        for &byte in chunk {
-            a += u32::from(byte);
-            b += a;
-        }
-        a %= 65521;
-        b %= 65521;
-    }
-    b << 16 | a
 }
 
 /// A parsed block: `key=value` lines and nested blocks, in file order.

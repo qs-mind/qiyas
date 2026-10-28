@@ -167,7 +167,7 @@ pub(crate) struct GeometryCache {
     coarse_centres: BTreeMap<u64, (std::sync::Arc<EntityType>, Option<[f64; 2]>)>,
 }
 
-/// One segment of the line work, for the grid.
+/// One segment of the line work, for the spatial index.
 #[derive(Clone, Copy)]
 struct Seg {
     owner: usize,
@@ -175,95 +175,50 @@ struct Seg {
     b: [f64; 2],
 }
 
-/// Segments by grid cell.
+/// Segment envelopes; IDs stay in source order after every query.
 struct Grid {
     cell: f64,
-    cells: HashMap<(i64, i64), Vec<usize>>,
+    tolerance: f64,
+    tree: rstar::RTree<
+        rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, usize>,
+    >,
     segs: Vec<Seg>,
 }
 
 impl Grid {
-    fn new(segs: Vec<Seg>, cell: f64) -> Grid {
-        let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-        for (i, s) in segs.iter().enumerate() {
-            let (x0, x1) = (s.a[0].min(s.b[0]), s.a[0].max(s.b[0]));
-            let (y0, y1) = (s.a[1].min(s.b[1]), s.a[1].max(s.b[1]));
-            let (cx0, cy0) = ((x0 / cell).floor() as i64, (y0 / cell).floor() as i64);
-            let (cx1, cy1) = ((x1 / cell).floor() as i64, (y1 / cell).floor() as i64);
-            // A very long segment in a fine grid: cap the cells it spans.
-            if cx1
-                .saturating_sub(cx0)
-                .saturating_add(1)
-                .saturating_mul(cy1.saturating_sub(cy0).saturating_add(1))
-                > 4_096
-            {
-                cells.entry((i64::MIN, i64::MIN)).or_default().push(i);
-                continue;
-            }
-            for cx in cx0..=cx1 {
-                for cy in cy0..=cy1 {
-                    cells.entry((cx, cy)).or_default().push(i);
-                }
-            }
-        }
-        Grid { cell, cells, segs }
-    }
-
-    /// Segments in cells touched by a box, each once.
-    fn within(&self, bounds: [[f64; 2]; 2]) -> Vec<usize> {
-        let cell_at = |p: [f64; 2]| {
-            [
-                (p[0] / self.cell).floor() as i64,
-                (p[1] / self.cell).floor() as i64,
-            ]
-        };
-        let (lo, hi) = (cell_at(bounds[0]), cell_at(bounds[1]));
-        let count = hi[0]
-            .saturating_sub(lo[0])
-            .saturating_add(1)
-            .saturating_mul(hi[1].saturating_sub(lo[1]).saturating_add(1));
-        if count > 4_096 {
-            return (0..self.segs.len()).collect();
-        }
-        let mut out = Vec::new();
-        for cx in lo[0]..=hi[0] {
-            for cy in lo[1]..=hi[1] {
-                if let Some(list) = self.cells.get(&(cx, cy)) {
-                    out.extend(list);
-                }
-            }
-        }
-        if let Some(list) = self.cells.get(&(i64::MIN, i64::MIN)) {
-            out.extend(list);
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
-    }
-
-    /// The segments near `p` (within one cell), each once.
-    fn near(&self, p: [f64; 2]) -> Vec<usize> {
-        let (cx, cy) = (
-            (p[0] / self.cell).floor() as i64,
-            (p[1] / self.cell).floor() as i64,
+    fn new(segs: Vec<Seg>, cell: f64, tolerance: f64) -> Grid {
+        use rstar::primitives::{GeomWithData, Rectangle};
+        let tree = rstar::RTree::bulk_load(
+            segs.iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let b = bounds_of(&[s.a, s.b]);
+                    GeomWithData::new(Rectangle::from_corners(b[0], b[1]), i)
+                })
+                .collect(),
         );
-        let mut out: Vec<usize> = Vec::new();
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                if let Some(list) = self
-                    .cells
-                    .get(&(cx.saturating_add(dx), cy.saturating_add(dy)))
-                {
-                    out.extend(list);
-                }
-            }
+        Grid {
+            cell,
+            tolerance,
+            tree,
+            segs,
         }
-        if let Some(list) = self.cells.get(&(i64::MIN, i64::MIN)) {
-            out.extend(list);
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
+    }
+
+    fn within(&self, bounds: [[f64; 2]; 2]) -> Vec<usize> {
+        let size = bounds.iter().flatten().map(|v| v.abs()).fold(0.0, f64::max);
+        let b = crate::ink::expand(bounds, qiyas_geom::tol_near(size, self.tolerance));
+        let mut ids: Vec<_> = self
+            .tree
+            .locate_in_envelope_intersecting(&rstar::AABB::from_corners(b[0], b[1]))
+            .map(|entry| entry.data)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn near(&self, p: [f64; 2]) -> Vec<usize> {
+        self.within(crate::ink::expand([p, p], self.cell))
     }
 }
 
@@ -476,7 +431,7 @@ impl Session {
                 }
             }
         }
-        let grid = Grid::new(segs, unit(NEAR_M).max(tol * 10.0));
+        let grid = Grid::new(segs, unit(NEAR_M).max(tol * 10.0), tol);
         let mut found: Vec<Finding> = Vec::new();
         let mut push = |f: Finding| found.push(f);
         let fmt_m = |d: f64| format!("{:.3} m", d * to_m);
@@ -933,7 +888,7 @@ impl Session {
             .enumerate()
             .flat_map(|(owner, d)| d.straight.iter().map(move |&(a, b)| Seg { owner, a, b }))
             .collect();
-        let grid = Grid::new(straight, grid.cell);
+        let grid = Grid::new(straight, grid.cell, touch);
         // Overlaps: collinear segments of two entities sharing a stretch.
         let mut pairs: HashSet<(usize, usize)> = HashSet::new();
         let candidates: Box<dyn Iterator<Item = (usize, usize)> + '_> =
@@ -1479,29 +1434,7 @@ fn midpoint(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
     [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
 }
 
-fn point_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let len2 = dx * dx + dy * dy;
-    if len2 == 0.0 {
-        return dist(p, a);
-    }
-    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0);
-    dist(p, [a[0] + t * dx, a[1] + t * dy])
-}
-
-/// Where the segment `pq` crosses the segment `ab`, if it does.
-fn crossing(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> Option<[f64; 2]> {
-    let r = [q[0] - p[0], q[1] - p[1]];
-    let s = [b[0] - a[0], b[1] - a[1]];
-    let den = r[0] * s[1] - r[1] * s[0];
-    if den.abs() < 1e-15 {
-        return None;
-    }
-    let t = ((a[0] - p[0]) * s[1] - (a[1] - p[1]) * s[0]) / den;
-    let u = ((a[0] - p[0]) * r[1] - (a[1] - p[1]) * r[0]) / den;
-    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
-        .then(|| [p[0] + t * r[0], p[1] + t * r[1]])
-}
+use qiyas_geom::predicates::{crossing, point_line as point_segment_line, point_segment};
 
 /// How long two collinear segments share, when they are collinear within `tol`.
 fn collinear_overlap(s: Seg, t: Seg, tol: f64) -> Option<f64> {
@@ -1514,16 +1447,6 @@ fn collinear_overlap(s: Seg, t: Seg, tol: f64) -> Option<f64> {
     let (t0, t1) = (proj(t.a).min(proj(t.b)), proj(t.a).max(proj(t.b)));
     let shared = t1.min(len) - t0.max(0.0);
     (shared > 0.0).then_some(shared)
-}
-
-/// Distance from `p` to the infinite line through `a` and `b`.
-fn point_segment_line(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let len = dx.hypot(dy);
-    if len == 0.0 {
-        return dist(p, a);
-    }
-    ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len
 }
 
 fn bounds_of(points: &[[f64; 2]]) -> [[f64; 2]; 2] {

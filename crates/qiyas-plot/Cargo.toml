@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+adler2 = "2"
+unicode-linebreak = "0.1"
+unicode-segmentation = "1.13"
 opencadcodec.workspace = true
 qiyas-core = { path = "../qiyas-core" }
 qiyas-geom = { path = "../qiyas-geom" }

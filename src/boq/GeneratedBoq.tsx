@@ -1,6 +1,8 @@
 import { TechnicalDetails, ReviewNotes } from "../shell/TechnicalDetails";
 import { plainMethod } from "../shell/methodName";
-import { Explain, Formula, quantity } from "./Explain";
+import { Explain, quantity } from "./Explain";
+import { LineFormula } from "./HowCalculated";
+import { trace } from "./trace";
 import type { MeasurementReport } from "../api";
 import { useLanguage, useT } from "../i18n";
 
@@ -12,11 +14,15 @@ export function GeneratedBoq({ report, onShow }: { report: MeasurementReport | n
   return <section className="generated-boq" aria-label={t("boq.generated")}>
     <h3>{t("boq.generated")}</h3>
     {report.items.map((item) => <details key={item.code}>
-      <summary dir="auto">{item.code} · {lang === "ar" ? item.description_ar : item.description_en} · {quantity(item.quantity)} {item.unit}</summary>
+      <summary dir="auto" onClick={() => trace({ item: `generated:${item.code}`, panel: false })}>{item.code} · {lang === "ar" ? item.description_ar : item.description_en} · {quantity(item.quantity)} {item.unit}</summary>
       <Explain item={`generated:${item.code}`} />
       <ol>{item.lines.map((line, index) => <li key={index}>
         <span>{line.label} · {line.included ? t("boq.included") : t("boq.excluded")}</span>
-        <div><Formula {...line} /></div>
+        <div>
+          <button type="button" className="trace-line-link" onClick={() => trace({ item: `generated:${item.code}`, line: line.id, panel: true })}>
+            <LineFormula line={line} />
+          </button>
+        </div>
         <div>{line.citations.map((c) => `${c.source} / ${c.clause}`).join("; ")}</div>
         <TechnicalDetails><pre>{line.expression}{"\n"}{plainMethod(line.method)}{"\n"}{line.decision}</pre></TechnicalDetails>
         {line.sources.map((source) => <button key={`${source.sheet}:${source.handle}`} type="button"

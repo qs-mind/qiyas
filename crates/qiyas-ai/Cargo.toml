@@ -11,9 +11,13 @@ rust-version.workspace = true
 await_holding_lock = "deny"
 
 [dependencies]
+strsim = "0.11"
+eventsource-stream = "0.2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 qiyas-pdf = { path = "../qiyas-pdf" }
+qiyas-ocr = { path = "../qiyas-ocr" }
 qiyas-plot = { path = "../qiyas-plot" }
 qiyas-render = { path = "../qiyas-render" }
 qiyas-takeoff = { path = "../qiyas-takeoff" }

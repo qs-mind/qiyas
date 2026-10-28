@@ -2,7 +2,6 @@
 //! font, and the drawing's own TrueType files when the computer has them.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use ab_glyph::FontRef;
@@ -24,14 +23,20 @@ pub struct Font {
     pub raster: FontRef<'static>,
     /// Font units per em.
     pub upem: f32,
+    pub index: u32,
 }
 
 impl Font {
-    fn parse(data: &'static [u8]) -> Option<Font> {
-        let face = rustybuzz::Face::from_slice(data, 0)?;
-        let raster = FontRef::try_from_slice(data).ok()?;
+    fn parse(data: &'static [u8], index: u32) -> Option<Font> {
+        let face = rustybuzz::Face::from_slice(data, index)?;
+        let raster = FontRef::try_from_slice_and_index(data, index).ok()?;
         let upem = face.units_per_em() as f32;
-        Some(Font { face, raster, upem })
+        Some(Font {
+            face,
+            raster,
+            upem,
+            index,
+        })
     }
 
     /// Whether the font draws `c` (not the missing-glyph box).
@@ -53,7 +58,7 @@ impl Fonts {
     /// The bundled fonts, and the computer's when `system` is true.
     pub fn new(system: bool) -> Fonts {
         let list = [NOTO_SANS_TTF, NOTO_ARABIC_TTF]
-            .map(|data| Font::parse(data).expect("bundled fonts parse"))
+            .map(|data| Font::parse(data, 0).expect("bundled fonts parse"))
             .into();
         Fonts {
             list,
@@ -93,10 +98,12 @@ impl Fonts {
         if let Some(found) = self.by_file.get(&name) {
             return *found;
         }
-        let found = system_font(&name).and_then(Font::parse).map(|font| {
-            self.list.push(font);
-            (self.list.len() - 1) as u16
-        });
+        let found = system_font(&name)
+            .and_then(|(data, index)| Font::parse(data, index))
+            .map(|font| {
+                self.list.push(font);
+                (self.list.len() - 1) as u16
+            });
         self.by_file.insert(name, found);
         found
     }
@@ -112,71 +119,59 @@ fn file_name(file: &str) -> Option<String> {
         .then_some(name)
 }
 
-/// The bytes of the font file `name` (lower case) in the computer's font folders. Read once per
-/// process and kept for its life, so the faces built on them can live in any session.
-fn system_font(name: &str) -> Option<&'static [u8]> {
-    static LOADED: OnceLock<Mutex<HashMap<PathBuf, &'static [u8]>>> = OnceLock::new();
-    let path = font_index().get(name)?;
+/// A loaded face: its bytes, kept for the process lifetime, and its index in a collection.
+type Face = (&'static [u8], u32);
+
+/// System discovery and collection faces belong to fontdb. CAD filenames still win over
+/// family matching. Immutable bytes are kept once per selected face for the process lifetime.
+fn system_font(name: &str) -> Option<Face> {
+    static DB: OnceLock<fontdb::Database> = OnceLock::new();
+    static LOADED: OnceLock<Mutex<HashMap<fontdb::ID, Face>>> = OnceLock::new();
+    let db = DB.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db
+    });
+    let file_face = db
+        .faces()
+        .filter(|face| {
+            let path = match &face.source {
+                fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path,
+                _ => return false,
+            };
+            path.to_str().and_then(file_name).as_deref() == Some(name)
+        })
+        .min_by_key(|face| {
+            (
+                face.style != fontdb::Style::Normal,
+                face.weight.0.abs_diff(fontdb::Weight::NORMAL.0),
+                face.index,
+            )
+        });
+    let id = file_face.map(|face| face.id).or_else(|| {
+        let stem = name.rsplit_once('.')?.0;
+        let family = db
+            .faces()
+            .flat_map(|face| &face.families)
+            .find(|(family, _)| family.eq_ignore_ascii_case(stem))?;
+        db.query(&fontdb::Query {
+            families: &[fontdb::Family::Name(&family.0)],
+            ..Default::default()
+        })
+    })?;
     let mut loaded = LOADED
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if let Some(bytes) = loaded.get(path) {
-        return Some(bytes);
+    if let Some(face) = loaded.get(&id) {
+        return Some(*face);
     }
-    let bytes: &'static [u8] = Box::leak(std::fs::read(path).ok()?.into_boxed_slice());
-    loaded.insert(path.clone(), bytes);
-    Some(bytes)
-}
-
-/// Every font file in the computer's font folders by lower-case file name; built once.
-fn font_index() -> &'static HashMap<String, PathBuf> {
-    static INDEX: OnceLock<HashMap<String, PathBuf>> = OnceLock::new();
-    INDEX.get_or_init(|| {
-        let mut index = HashMap::new();
-        for dir in font_dirs() {
-            walk(&dir, 0, &mut index);
-        }
-        index
-    })
-}
-
-fn font_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![
-        PathBuf::from("/usr/share/fonts"),
-        PathBuf::from("/usr/local/share/fonts"),
-        PathBuf::from("/Library/Fonts"),
-        PathBuf::from("/System/Library/Fonts"),
-        PathBuf::from("/System/Library/Fonts/Supplemental"),
-    ];
-    let windows = std::env::var_os("WINDIR").map_or(PathBuf::from("C:\\Windows"), PathBuf::from);
-    dirs.push(windows.join("Fonts"));
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        dirs.push(home.join(".local/share/fonts"));
-        dirs.push(home.join(".fonts"));
-        dirs.push(home.join("Library/Fonts"));
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-        dirs.push(local.join("Microsoft\\Windows\\Fonts"));
-    }
-    dirs
-}
-
-/// Adds the font files under `dir` to `index`, the first found winning, down to a few folders deep.
-fn walk(dir: &Path, depth: usize, index: &mut HashMap<String, PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if depth < 4 {
-                walk(&path, depth + 1, index);
-            }
-        } else if let Some(name) = path.to_str().and_then(file_name) {
-            index.entry(name).or_insert(path);
-        }
-    }
+    let face = db.with_face_data(id, |data, index| {
+        let data: &'static [u8] = Box::leak(data.to_vec().into_boxed_slice());
+        (data, index)
+    })?;
+    loaded.insert(id, face);
+    Some(face)
 }
 
 #[cfg(test)]

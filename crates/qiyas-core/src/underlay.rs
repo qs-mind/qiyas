@@ -8,6 +8,8 @@
 //! drawing's units (an A1 sheet is 841 units wide in a millimetre drawing), so the entity's scale
 //! is the `scale` asked for (drawing units per PDF point) over the drawing units in one point.
 
+use std::hash::Hasher;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -117,32 +119,27 @@ impl Placed {
     /// Names the picture: file, page or crop, the file's date and size, and the size on the
     /// sheet (a rescaled picture needs another resolution). Cut to 53 bits for JavaScript.
     fn version(&self) -> u64 {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        let mut write = |bytes: &[u8]| {
-            for &b in bytes {
-                hash = (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
-            }
-        };
-        write(self.file.as_os_str().as_encoded_bytes());
+        let mut hash = fnv::FnvHasher::default();
+        hash.write(self.file.as_os_str().as_encoded_bytes());
         match &self.picture {
-            Picture::Pdf { page, .. } => write(&page.to_le_bytes()),
+            Picture::Pdf { page, .. } => hash.write(&page.to_le_bytes()),
             Picture::Raster { crop } => {
                 for v in crop.iter().flatten() {
-                    write(&v.to_le_bytes());
+                    hash.write(&v.to_le_bytes());
                 }
             }
         }
         if let Ok(meta) = std::fs::metadata(&self.file) {
-            write(&meta.len().to_le_bytes());
+            hash.write(&meta.len().to_le_bytes());
             let modified = meta
                 .modified()
                 .ok()
                 .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_nanos());
-            write(&modified.to_le_bytes());
+            hash.write(&modified.to_le_bytes());
         }
-        write(&self.long_units().to_le_bytes());
-        hash & ((1 << 53) - 1)
+        hash.write(&self.long_units().to_le_bytes());
+        hash.finish() & ((1 << 53) - 1)
     }
 }
 
@@ -624,6 +621,7 @@ impl Session {
                         path: Some(path.display().to_string()),
                         page: Some(page),
                         detail: format!("PDF vector; {scale} drawing units per point"),
+                        ..Default::default()
                     };
                     let e = self
                         .drawing

@@ -1,3 +1,5 @@
+use std::hash::Hasher;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Write};
@@ -1240,6 +1242,11 @@ impl Session {
         self.with_sheet(sheet, None, Batch::clone)
     }
 
+    /// The font data and collection face used to shape glyphs in this session.
+    pub fn font_face(&self, id: u16) -> Option<(&'static [u8], u32)> {
+        self.text.borrow().font_face(id)
+    }
+
     /// The font file behind `ShapedGlyph::font` id `id` in this session's batches.
     pub fn font_bytes(&self, id: u16) -> Option<&'static [u8]> {
         self.text.borrow().font_bytes(id)
@@ -1310,17 +1317,17 @@ impl Session {
         match self.zoom_tol.get() {
             None => version,
             Some(tol) => {
-                let mut hash = Fnv::new();
+                let mut hash = fnv::FnvHasher::default();
                 hash.write(&version.to_le_bytes());
                 hash.write(&tol.to_bits().to_le_bytes());
-                hash.0 & ((1 << 53) - 1)
+                hash.finish() & ((1 << 53) - 1)
             }
         }
     }
 
     /// `batch_version` for the sheet `sheet`.
     pub(crate) fn version_of(&self, sheet: &str) -> u64 {
-        let mut hash = Fnv::new();
+        let mut hash = fnv::FnvHasher::default();
         hash.write(&self.epoch.to_le_bytes());
         hash.write(sheet.as_bytes());
         hash.write(&[0xFF]);
@@ -1351,7 +1358,7 @@ impl Session {
             hash.write(&modified.to_le_bytes());
             hash.write(&x.size.unwrap_or(u64::MAX).to_le_bytes());
         }
-        hash.0 & ((1 << 53) - 1)
+        hash.finish() & ((1 << 53) - 1)
     }
 
     /// The batch as `Batch::to_bytes` lays it out, or `None` when `if_version` is the current
@@ -2465,7 +2472,10 @@ impl Session {
                     let mut areas: Vec<f64> = Vec::new();
                     for (i, p) in closed.iter().enumerate() {
                         if crossing[i] {
-                            for points in p.loops() {
+                            let Ok(loops) = p.loops() else {
+                                return f64::NAN;
+                            };
+                            for points in loops {
                                 let area = qiyas_geom::Path {
                                     points: points.clone(),
                                     closed: true,
@@ -2667,71 +2677,7 @@ fn crosses_box([x0, y0, x1, y1]: [f64; 4], lo: [f64; 2], hi: [f64; 2]) -> bool {
     true
 }
 
-/// Whether `p` lies inside the polygon `ring` or on its edge (even-odd).
-fn in_ring(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
-    let mut inside = false;
-    for (k, a) in ring.iter().enumerate() {
-        let b = ring[(k + 1) % ring.len()];
-        if on_edge(p, *a, b) {
-            return true;
-        }
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
-        {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
-/// Whether `p` lies on the segment from `a` to `b`, within a billionth of its length.
-fn on_edge(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let len = dx.hypot(dy);
-    let tol = len.max(f64::MIN_POSITIVE) * 1e-9;
-    let cross = (p[0] - a[0]) * dy - (p[1] - a[1]) * dx;
-    cross.abs() <= tol * len
-        && p[0] >= a[0].min(b[0]) - tol
-        && p[0] <= a[0].max(b[0]) + tol
-        && p[1] >= a[1].min(b[1]) - tol
-        && p[1] <= a[1].max(b[1]) + tol
-}
-
-/// The sign of the turn from `a` to `b` to `c`.
-fn turn(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
-    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-}
-
-/// Whether the segments `p`–`q` and `a`–`b` cross each other, touching ends excluded.
-fn cross_properly(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
-    let (d1, d2) = (turn(a, b, p), turn(a, b, q));
-    let (d3, d4) = (turn(p, q, a), turn(p, q, b));
-    d1 * d2 < 0.0 && d3 * d4 < 0.0
-}
-
-/// Whether the segment `s` (`x0 y0 x1 y1`) lies wholly inside the polygon `ring`: both ends and
-/// its middle inside, never crossing an edge.
-fn inside_ring([x0, y0, x1, y1]: [f64; 4], ring: &[[f64; 2]]) -> bool {
-    let (p, q) = ([x0, y0], [x1, y1]);
-    in_ring(p, ring)
-        && in_ring(q, ring)
-        && in_ring([(x0 + x1) / 2.0, (y0 + y1) / 2.0], ring)
-        && !ring
-            .iter()
-            .enumerate()
-            .any(|(k, a)| cross_properly(p, q, *a, ring[(k + 1) % ring.len()]))
-}
-
-/// Whether the segment `s` touches the polygon `ring`: an end inside it, or meeting an edge.
-fn touches_ring([x0, y0, x1, y1]: [f64; 4], ring: &[[f64; 2]]) -> bool {
-    let (p, q) = ([x0, y0], [x1, y1]);
-    in_ring(p, ring)
-        || in_ring(q, ring)
-        || ring.iter().enumerate().any(|(k, a)| {
-            let b = ring[(k + 1) % ring.len()];
-            cross_properly(p, q, *a, b) || on_edge(*a, p, q) || on_edge(b, p, q)
-        })
-}
+use qiyas_geom::predicates::{inside_ring, touches_ring};
 
 /// Model space holds no entity.
 /// What `purge_for_save` took out of a drawing: block records with their entities, and groups'
@@ -2832,21 +2778,6 @@ fn restore_purged(doc: &mut CadDocument, purged: Purged) {
 
 fn model_is_empty(drawing: &Drawing) -> bool {
     drawing.entities_in("*Model_Space").next().is_none()
-}
-
-/// 64-bit FNV-1a.
-struct Fnv(u64);
-
-impl Fnv {
-    fn new() -> Self {
-        Fnv(0xcbf2_9ce4_8422_2325)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
 }
 
 /// What one entity measures. `None` when it has no path, or no closed path for `area`.

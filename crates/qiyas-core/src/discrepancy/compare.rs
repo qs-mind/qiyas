@@ -1,6 +1,8 @@
 //! The six rules that turn the BOQ, the take-off, the schedules and the block counts into
 //! conflicts.
 
+use std::hash::Hasher;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::{
@@ -166,7 +168,11 @@ impl Found {
         ]
         .join("|");
         Conflict {
-            id: format!("{:016x}", fnv1a(&hash_key)),
+            id: {
+                let mut hash = fnv::FnvHasher::default();
+                hash.write(hash_key.as_bytes());
+                format!("{:016x}", hash.finish())
+            },
             kind: self.kind,
             boq_code: self.boq_code,
             measurements,
@@ -184,13 +190,6 @@ impl Found {
             query: None,
         }
     }
-}
-
-/// 64-bit FNV-1a.
-fn fnv1a(text: &str) -> u64 {
-    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    })
 }
 
 /// Quantity mismatches, unit doubts and work not in the drawings, item by item. Only unlinked

@@ -414,13 +414,7 @@ fn polyline(points: &[[f64; 2]], bulges: &[f64], closed: bool) -> LwPolyline {
 
 /// Twice the signed area of a ring: positive counter-clockwise.
 fn twice_area(ring: &[[f64; 2]]) -> f64 {
-    let n = ring.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (ring[i], ring[(i + 1) % n]);
-            a[0] * b[1] - b[0] * a[1]
-        })
-        .sum()
+    2.0 * qiyas_geom::predicates::ring_area(ring)
 }
 
 /// A ring of 3 points or more that encloses some area.
@@ -1279,7 +1273,7 @@ fn region_from_faces(
     let (at, ring) = faces
         .iter()
         .enumerate()
-        .filter(|(_, ring)| inside(ring, p))
+        .filter(|(_, ring)| inside(p, ring))
         .min_by(|(_, a), (_, b)| twice_area(a).abs().total_cmp(&twice_area(b).abs()))?;
     let fits = ring
         .iter()
@@ -1288,7 +1282,7 @@ fn region_from_faces(
         return None;
     }
     // Regions wholly inside the ring are islands; one inside another island is not.
-    let within = |outer: &[[f64; 2]], inner: &[[f64; 2]]| inner.iter().all(|q| inside(outer, *q));
+    let within = |outer: &[[f64; 2]], inner: &[[f64; 2]]| inner.iter().all(|q| inside(*q, outer));
     let inner: Vec<usize> = (0..faces.len())
         .filter(|&i| i != at && within(ring, &faces[i]))
         .collect();
@@ -1309,20 +1303,7 @@ fn region_from_faces(
 }
 
 /// Even-odd: `p` is inside `ring`.
-fn inside(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
-    let n = ring.len();
-    let mut odd = false;
-    for i in 0..n {
-        let (a, b) = (ring[i], ring[(i + 1) % n]);
-        if (a[1] > p[1]) != (b[1] > p[1]) {
-            let x = a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]);
-            if x > p[0] {
-                odd = !odd;
-            }
-        }
-    }
-    odd
-}
+use qiyas_geom::predicates::inside;
 
 /// The cubic spline through `fit`: its fit points, and the control points and knots of the curve
 /// through them (chord-length parameters, natural ends).

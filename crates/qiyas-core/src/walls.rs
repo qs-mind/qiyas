@@ -1567,6 +1567,8 @@ impl Session {
                 &[insert],
                 &BTreeMap::from([("mark".into(), serde_json::json!(mark))]),
                 None,
+                &BTreeMap::new(),
+                crate::measurement::PropSource::default(),
             )?;
         }
         if crate::net_effect::same_value(&serde_json::json!(&spec), &serde_json::json!(&group.spec))

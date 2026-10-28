@@ -602,8 +602,19 @@ fn describe_defaults(schema: &mut Value) {
                     *description = json!(format!("{text} {convention}").trim());
                 }
             }
-            for value in object.values_mut() {
-                describe_defaults(value);
+            for (key, value) in object.iter_mut() {
+                match key.as_str() {
+                    // A map of named subschemas: a field called "default" there is a field,
+                    // not this schema's default.
+                    "properties" | "patternProperties" | "$defs" | "definitions" => {
+                        if let Value::Object(fields) = value {
+                            fields.values_mut().for_each(describe_defaults);
+                        }
+                    }
+                    // Values, not schemas.
+                    "default" | "examples" | "example" | "const" | "enum" => {}
+                    _ => describe_defaults(value),
+                }
             }
         }
         Value::Array(items) => {

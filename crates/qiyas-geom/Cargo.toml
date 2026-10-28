@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+geo.workspace = true
+robust.workspace = true
+clipper2-rust.workspace = true
 opencadcodec.workspace = true
 opencadkernel.workspace = true
 cavalier_contours = "=0.7.0"

@@ -85,6 +85,7 @@ pub fn use_bundled_pdfium<R: Runtime>(app: &AppHandle<R>) {
             .map(|r| r.join("resources/pdfium"))
     };
     if let Some(dir) = dir {
+        qiyas_ocr::set_resource_dir(dir.with_file_name("ocr"));
         qiyas_pdf::set_library_dir(dir);
     }
 }
