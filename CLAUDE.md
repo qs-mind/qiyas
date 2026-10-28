@@ -3112,7 +3112,8 @@ New untitled drawings skip placeholder names already present in chat history or 
   explicitly address a workspace; retry ids and callbacks remain local to that drawing.
   Autosave visits every workspace with try-lock; busy drawings retry on the next tick.
 - Each Mizan panel chooses provider, model and effort. Settings holds defaults for new
-  workspaces. Changing a workspace preserves its conversation through the existing resume
+  workspaces; the last choice made in a panel becomes that default (provider, model, effort only;
+  founder, 28 Oct 2026), so the next drawing and the next launch start with it. Changing a workspace preserves its conversation through the existing resume
   compatibility rules. Keys remain in the keychain under provider and service address.
   Shared autonomy and measurement rules are read again for each turn.
 - Settings `max_concurrent_turns` defaults to three (1–8). Waiting turns are cancellable and

@@ -1495,6 +1495,24 @@ pub async fn workspace_provider<R: Runtime>(
     if ai::answerer_changed(&old, &next) {
         run.rebuild_provider();
     }
+    // The last model chosen is the default for the next drawing and the next launch (founder,
+    // 28 October 2026): only the provider and that profile's model and effort; addresses and
+    // keys stay as Settings has them.
+    {
+        let mut cached = crate::state::lock(&state.settings);
+        let mut defaults = cached.clone();
+        defaults.provider = next.provider;
+        defaults.profile_mut().model = next.profile_mut().model.clone();
+        defaults.profile_mut().effort = next.profile_mut().effort.clone();
+        if *cached != defaults {
+            match settings::save(&state.config_dir, &defaults) {
+                Ok(()) => *cached = defaults,
+                Err(e) => {
+                    eprintln!("qiyas: the model choice could not be kept as the default: {e}")
+                }
+            }
+        }
+    }
     *crate::state::lock(&state.provider) = next;
     drop(run);
     let _ = app.emit("workspace:changed", state.id);
