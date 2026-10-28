@@ -3544,6 +3544,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "lopdf"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43f64cb8c0d673ff84245a6de9e0172c0cc05dc5dd9d263660b5b4a02b6c4ae"
+dependencies = [
+ "aes",
+ "bitflags 2.13.2",
+ "brotli-decompressor 5.0.3",
+ "cbc",
+ "ecb",
+ "encoding_rs",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap 2.14.2",
+ "itoa",
+ "log",
+ "md-5",
+ "nom 8.0.0",
+ "rand 0.10.3",
+ "rangemap",
+ "sha2 0.11.0",
+ "stringprep",
+ "thiserror 2.0.21",
+ "weezl 0.2.1",
+]
+
+[[package]]
 name = "macro_rules_attribute"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4571,7 +4598,7 @@ dependencies = [
  "console_log",
  "itertools 0.15.0",
  "js-sys",
- "libloading 0.7.4",
+ "libloading 0.9.0",
  "log",
  "maybe-owned",
  "once_cell",
@@ -4807,7 +4834,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "getrandom 0.4.3",
- "lopdf",
+ "lopdf 0.44.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -5157,7 +5184,7 @@ dependencies = [
  "adler2",
  "flate2",
  "libc",
- "lopdf",
+ "lopdf 0.46.0",
  "opencadcodec",
  "qiyas-core",
  "qiyas-geom",
