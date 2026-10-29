@@ -392,54 +392,340 @@
     "solid": {"title_en": "Solid poche", "title_ar": "تظليل مصمت", "section_pattern": "SOLID", "elevation_pattern": "SOLID", "color_aci": 7}
   },
   "space_planning": {
-    "project_types": ["villa"],
-    "thresholds": {
-      "circulation_share_warn": {"value": 0.15, "basis": "practice_default", "rationale": "Corridors and halls take about 10 to 15 percent of a house floor. Above 15 percent the plan is carrying too much passage."},
-      "circulation_share_error": {"value": 0.22, "basis": "practice_default", "rationale": "A fifth of the floor is passage: the plan needs to be reorganised, not adjusted."},
-      "corridor_length_max_m": {"value": 8.0, "basis": "practice_default", "rationale": "A passage longer than this is a corridor plan with rooms on both sides. Practice."},
-      "kitchen_to_living_max_ratio": {"value": 1.0, "basis": "practice_default", "rationale": "The kitchen is not larger than the biggest living space of its floor. Practice."},
-      "master_rule_min_bedrooms": {"value": 3, "basis": "practice_default", "rationale": "From three bedrooms a villa has a master bedroom with its own bathroom. Practice."},
-      "baths_per_bedroom_min": {"value": 0.75, "basis": "practice_default", "rationale": "A villa with four bedrooms and two shared bathrooms is under-served; three or more is the usual minimum. Practice."},
-      "guest_wc_distance_max_m": {"value": 10.0, "basis": "practice_default", "rationale": "Guests reach the WC without crossing the family area. Practice."},
-      "bedroom_oversize_m2": {"value": 24.0, "basis": "practice_default", "rationale": "A bedroom other than the master above this size is wasting floor. Practice."},
-      "master_oversize_m2": {"value": 36.0, "basis": "practice_default", "rationale": "A master bedroom without dressing and bath above this size is wasting floor. Practice."},
-      "service_oversize_m2": {"value": 12.0, "basis": "practice_default", "rationale": "Utility, laundry and store above this size are wasting floor. Practice."}
-    },
-    "circulation_kinds": ["corridor", "lobby"],
-    "living_kinds": ["living", "majlis", "reception"],
-    "wet_kinds": ["bathroom", "wc", "guest_wc"],
-    "kind_rules": [
-      {"kind": "stair", "any": ["stair", "سلم"]},
-      {"kind": "guest_wc", "any": ["guest wc", "guest toilet", "guest w.c", "powder", "حمام ضيوف", "حمام الضيوف", "دورة مياه ضيوف", "دورة مياه الضيوف"]},
-      {"kind": "bathroom", "any": ["bath", "shower", "ensuite", "en-suite", "حمام"]},
-      {"kind": "wc", "any": ["wc", "w.c", "toilet", "lavatory", "دورة مياه", "مرحاض", "تواليت"]},
-      {"kind": "kitchen", "any": ["kitchen", "مطبخ"]},
-      {"kind": "dining", "any": ["dining", "سفرة", "طعام"]},
-      {"kind": "majlis", "any": ["majlis", "مجلس"]},
-      {"kind": "reception", "any": ["reception", "salon", "صالون", "استقبال"]},
-      {"kind": "living", "any": ["living", "family", "lounge", "sitting", "معيشة", "جلوس", "ليفينج"]},
-      {"kind": "dressing", "any": ["dressing", "walk-in", "walk in", "wardrobe room", "غرفة ملابس", "ملابس"]},
-      {"kind": "bedroom", "any": ["bed", "غرفة نوم", "نوم"]},
-      {"kind": "corridor", "any": ["corridor", "passage", "hallway", "ممر", "طرقة"]},
-      {"kind": "lobby", "any": ["lobby", "hall", "foyer", "entrance", "vestibule", "entry", "مدخل", "ردهة", "هول", "بهو", "صالة"]},
-      {"kind": "utility", "any": ["utility", "laundry", "store", "storage", "maid", "driver", "service", "مخزن", "غسيل", "خدمات", "خادمة"]},
-      {"kind": "garage", "any": ["garage", "parking", "جراج", "كراج", "موقف"]},
-      {"kind": "balcony", "any": ["balcony", "terrace", "veranda", "شرفة", "بلكونة", "تراس"]}
+    "project_types": [
+      "villa"
     ],
-    "master_words": ["master", "رئيسية", "ماستر", "رئيسي"],
-    "wardrobe_words": ["wardrobe", "closet", "cupboard", "خزانة", "دولاب", "ملابس"]
-  },
-  "general_notes": {
-    "status": {"en": "ISSUE STATUS: FOR REVIEW", "ar": "حالة الإصدار: للمراجعة"},
-    "responsibility": {
-      "en": "Drawn by Qiyas. Loads, design calculations and approval are the responsibility of the engineer and the company. This sheet is not approved or stamped.",
-      "ar": "رسم قياس. الأحمال والحسابات التصميمية والاعتماد من مسؤولية المهندس والشركة. هذه اللوحة غير معتمدة ولا مختومة."
+    "profiles": {
+      "villa": {
+        "title_en": "Villa practice preferences",
+        "title_ar": "قيم ممارسة للفلل",
+        "applies_to": [
+          "villa"
+        ],
+        "basis": "practice_default",
+        "thresholds": {
+          "circulation_share_warn": {
+            "value": 0.15,
+            "basis": "practice_default",
+            "rationale": "Corridors and halls take about 10 to 15 percent of a house floor. Above 15 percent the plan is carrying too much passage.",
+            "rationale_ar": "تفضيل ممارسة لنسبة الحركة في أرضية الفيلا، وليس اشتراط كود."
+          },
+          "circulation_share_error": {
+            "value": 0.22,
+            "basis": "practice_default",
+            "rationale": "A fifth of the floor is passage: the plan needs to be reorganised, not adjusted.",
+            "rationale_ar": "مستوى تنبيه إضافي لنسبة الحركة في الفيلا، وليس اشتراط كود."
+          },
+          "corridor_length_max_m": {
+            "value": 8.0,
+            "basis": "practice_default",
+            "rationale": "A passage longer than this is a corridor plan with rooms on both sides. Practice.",
+            "rationale_ar": "تفضيل ممارسة لأقصى طول ممر في الفيلا."
+          },
+          "kitchen_to_living_max_ratio": {
+            "value": 1.0,
+            "basis": "practice_default",
+            "rationale": "The kitchen is not larger than the biggest living space of its floor. Practice.",
+            "rationale_ar": "تفضيل ممارسة لنسبة مساحة المطبخ إلى أكبر فراغ معيشة."
+          },
+          "master_rule_min_bedrooms": {
+            "value": 3,
+            "basis": "practice_default",
+            "rationale": "From three bedrooms a villa has a master bedroom with its own bathroom. Practice.",
+            "rationale_ar": "عدد غرف النوم الذي يبدأ عنده تطبيق تفضيل جناح رئيسي."
+          },
+          "baths_per_bedroom_min": {
+            "value": 0.75,
+            "basis": "practice_default",
+            "rationale": "A villa with four bedrooms and two shared bathrooms is under-served; three or more is the usual minimum. Practice.",
+            "rationale_ar": "تفضيل ممارسة لنسبة الحمامات إلى غرف النوم."
+          },
+          "guest_wc_distance_max_m": {
+            "value": 10.0,
+            "basis": "practice_default",
+            "rationale": "Guests reach the WC without crossing the family area. Practice.",
+            "rationale_ar": "تفضيل ممارسة لمسافة وصول الضيوف إلى دورة المياه."
+          },
+          "bedroom_oversize_m2": {
+            "value": 24.0,
+            "basis": "practice_default",
+            "rationale": "A bedroom other than the master above this size is wasting floor. Practice.",
+            "rationale_ar": "تفضيل ممارسة لمساحة غرفة النوم غير الرئيسية."
+          },
+          "master_oversize_m2": {
+            "value": 36.0,
+            "basis": "practice_default",
+            "rationale": "A master bedroom without dressing and bath above this size is wasting floor. Practice.",
+            "rationale_ar": "تفضيل ممارسة لمساحة غرفة النوم الرئيسية دون ملابس وحمام."
+          },
+          "service_oversize_m2": {
+            "value": 12.0,
+            "basis": "practice_default",
+            "rationale": "Utility, laundry and store above this size are wasting floor. Practice.",
+            "rationale_ar": "تفضيل ممارسة لمساحة فراغ الخدمة."
+          },
+          "circulation_min_spaces": {
+            "value": 3,
+            "basis": "practice_default",
+            "rationale": "Minimum classified spaces for this optional circulation review.",
+            "rationale_ar": "أقل عدد فراغات مصنفة لتطبيق مراجعة الحركة الاختيارية."
+          },
+          "bathroom_ratio_min_bedrooms": {
+            "value": 2,
+            "basis": "practice_default",
+            "rationale": "Minimum bedrooms for this optional bathroom ratio review.",
+            "rationale_ar": "أقل عدد غرف نوم لتطبيق مراجعة نسبة الحمامات الاختيارية."
+          }
+        },
+        "limits": "any"
+      }
     },
-    "codes_prefix": {"en": "Codes and limits applied:", "ar": "الأكواد والحدود المطبقة:"},
-    "assumptions_prefix": {"en": "Assumptions (to be confirmed by the engineer):", "ar": "افتراضات (يؤكدها المهندس):"},
-    "practice_line": {
-      "en": "Limits marked practice default are common practice, not code values: the engineer confirms them.",
-      "ar": "الحدود المكتوب عليها ممارسة معتادة ليست قيم كود: المهندس يؤكدها."
-    }
+    "thresholds": {
+      "circulation_share_warn": {
+        "value": 0.15,
+        "basis": "practice_default",
+        "rationale": "Corridors and halls take about 10 to 15 percent of a house floor. Above 15 percent the plan is carrying too much passage."
+      },
+      "circulation_share_error": {
+        "value": 0.22,
+        "basis": "practice_default",
+        "rationale": "A fifth of the floor is passage: the plan needs to be reorganised, not adjusted."
+      },
+      "corridor_length_max_m": {
+        "value": 8.0,
+        "basis": "practice_default",
+        "rationale": "A passage longer than this is a corridor plan with rooms on both sides. Practice."
+      },
+      "kitchen_to_living_max_ratio": {
+        "value": 1.0,
+        "basis": "practice_default",
+        "rationale": "The kitchen is not larger than the biggest living space of its floor. Practice."
+      },
+      "master_rule_min_bedrooms": {
+        "value": 3,
+        "basis": "practice_default",
+        "rationale": "From three bedrooms a villa has a master bedroom with its own bathroom. Practice."
+      },
+      "baths_per_bedroom_min": {
+        "value": 0.75,
+        "basis": "practice_default",
+        "rationale": "A villa with four bedrooms and two shared bathrooms is under-served; three or more is the usual minimum. Practice."
+      },
+      "guest_wc_distance_max_m": {
+        "value": 10.0,
+        "basis": "practice_default",
+        "rationale": "Guests reach the WC without crossing the family area. Practice."
+      },
+      "bedroom_oversize_m2": {
+        "value": 24.0,
+        "basis": "practice_default",
+        "rationale": "A bedroom other than the master above this size is wasting floor. Practice."
+      },
+      "master_oversize_m2": {
+        "value": 36.0,
+        "basis": "practice_default",
+        "rationale": "A master bedroom without dressing and bath above this size is wasting floor. Practice."
+      },
+      "service_oversize_m2": {
+        "value": 12.0,
+        "basis": "practice_default",
+        "rationale": "Utility, laundry and store above this size are wasting floor. Practice."
+      }
+    },
+    "circulation_kinds": [
+      "corridor",
+      "lobby"
+    ],
+    "living_kinds": [
+      "living",
+      "majlis",
+      "reception"
+    ],
+    "wet_kinds": [
+      "bathroom",
+      "wc",
+      "guest_wc"
+    ],
+    "kind_rules": [
+      {
+        "kind": "stair",
+        "any": [
+          "stair",
+          "سلم"
+        ]
+      },
+      {
+        "kind": "guest_wc",
+        "any": [
+          "guest wc",
+          "guest toilet",
+          "guest w.c",
+          "powder",
+          "حمام ضيوف",
+          "حمام الضيوف",
+          "دورة مياه ضيوف",
+          "دورة مياه الضيوف"
+        ]
+      },
+      {
+        "kind": "bathroom",
+        "any": [
+          "bath",
+          "shower",
+          "ensuite",
+          "en-suite",
+          "حمام"
+        ]
+      },
+      {
+        "kind": "wc",
+        "any": [
+          "wc",
+          "w.c",
+          "toilet",
+          "lavatory",
+          "دورة مياه",
+          "مرحاض",
+          "تواليت"
+        ]
+      },
+      {
+        "kind": "kitchen",
+        "any": [
+          "kitchen",
+          "مطبخ"
+        ]
+      },
+      {
+        "kind": "dining",
+        "any": [
+          "dining",
+          "سفرة",
+          "طعام"
+        ]
+      },
+      {
+        "kind": "majlis",
+        "any": [
+          "majlis",
+          "مجلس"
+        ]
+      },
+      {
+        "kind": "reception",
+        "any": [
+          "reception",
+          "salon",
+          "صالون",
+          "استقبال"
+        ]
+      },
+      {
+        "kind": "living",
+        "any": [
+          "living",
+          "family",
+          "lounge",
+          "sitting",
+          "معيشة",
+          "جلوس",
+          "ليفينج"
+        ]
+      },
+      {
+        "kind": "dressing",
+        "any": [
+          "dressing",
+          "walk-in",
+          "walk in",
+          "wardrobe room",
+          "غرفة ملابس",
+          "ملابس"
+        ]
+      },
+      {
+        "kind": "bedroom",
+        "any": [
+          "bed",
+          "غرفة نوم",
+          "نوم"
+        ]
+      },
+      {
+        "kind": "corridor",
+        "any": [
+          "corridor",
+          "passage",
+          "hallway",
+          "ممر",
+          "طرقة"
+        ]
+      },
+      {
+        "kind": "lobby",
+        "any": [
+          "lobby",
+          "foyer",
+          "entrance",
+          "vestibule",
+          "entry",
+          "مدخل",
+          "ردهة",
+          "هول",
+          "بهو",
+          "صالة"
+        ]
+      },
+      {
+        "kind": "utility",
+        "any": [
+          "utility",
+          "laundry",
+          "storage",
+          "maid",
+          "driver",
+          "service",
+          "مخزن",
+          "غسيل",
+          "خدمات",
+          "خادمة"
+        ]
+      },
+      {
+        "kind": "garage",
+        "any": [
+          "garage",
+          "parking",
+          "جراج",
+          "كراج",
+          "موقف"
+        ]
+      },
+      {
+        "kind": "balcony",
+        "any": [
+          "balcony",
+          "terrace",
+          "veranda",
+          "شرفة",
+          "بلكونة",
+          "تراس"
+        ]
+      }
+    ],
+    "master_words": [
+      "master",
+      "رئيسية",
+      "ماستر",
+      "رئيسي"
+    ],
+    "wardrobe_words": [
+      "wardrobe",
+      "closet",
+      "cupboard",
+      "خزانة",
+      "دولاب",
+      "ملابس"
+    ]
   }
 }

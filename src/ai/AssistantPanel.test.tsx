@@ -146,7 +146,7 @@ test("a transcript shows messages, Markdown and a tool card with Show and Undo",
   // Markup in the model's text stays text.
   expect(screen.getByText(/two/).closest("li")?.textContent).toBe("two <b>x</b>");
   expect(document.querySelector(".msg b")).toBeNull();
-  expect(screen.getByText("Updated measurements.")).toBeTruthy();
+  expect(screen.getByText("Measured area")).toBeTruthy();
   expect(document.querySelector(".technical-details")).toBeNull();
   fireEvent.click(screen.getByText("Show"));
   expect(onShow).toHaveBeenCalledWith(card);
@@ -689,4 +689,23 @@ test("a completed hospital dock disappears on the next user message and keeps it
   view.rerender(<AssistantPanel assistant={assistant()} {...props} />);
   expect(document.querySelector(".assistant-empty")).toBeTruthy();
   expect(document.querySelector(".plan-dock")).toBeNull();
+});
+
+
+test.each(["wheel", "ArrowUp", "PageUp", "Home", "ShiftSpace"])("%s stops following before the reader is 32 pixels away", (intent) => {
+  const box = { scrollHeight: 1000, clientHeight: 400, scrollTop: 600 };
+  const first: Transcript = { items: [{ kind: "assistant", text: "Reading", finished: false }] };
+  const view = render(<AssistantPanel assistant={assistant({ transcript: first })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  const log = document.querySelector<HTMLElement>(".assistant-log")!;
+  layout(log, box);
+  fireEvent.scroll(log);
+  if (intent === "wheel") fireEvent.wheel(log, { deltaY: -1 });
+  else fireEvent.keyDown(log, { key: intent === "ShiftSpace" ? " " : intent, shiftKey: intent === "ShiftSpace" });
+  expect(screen.getByRole("button", { name: "Jump to latest" })).toBeTruthy();
+  box.scrollTop = 599;
+  fireEvent.scroll(log);
+  box.scrollHeight = 1100;
+  view.rerender(<AssistantPanel assistant={assistant({ transcript: { items: [{ kind: "assistant", text: "Reading more", finished: false }] } })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
+  expect(box.scrollTop).toBe(599);
+  expect(log.scrollTo).not.toHaveBeenCalled();
 });

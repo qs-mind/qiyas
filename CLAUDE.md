@@ -542,10 +542,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `takeoff_workflow.txt` and its Arabic counterpart guide digest/picture for quantity jobs, batched type/rule authoring, recognition, Settings
   method (project override wins), mappings, self-check and repairs by handle. No case names,
   trade lists, standards text, thresholds or rates are supplied. A named method without rules
-  tells Mizan to write rules from its knowledge in its own words, with clause references, through
-  `measurement.set_method` at the selected scope. It must apply the method's units, deductions,
-  conventions and descriptions and disclose uncertain rules/references in its end report.
-  It must not copy standard text or invent clauses. None uses cited geometric quantities.
+  tells Mizan never to invent clause numbers: it uses rules from a document or the engineer with
+  their real citation, otherwise asks the engineer for the method text or measures net geometric
+  quantities and records each rule it applies with `decision.set` and its source (29 October 2026;
+  `MeasurementMethod::instruction`). Confirmed rules are saved through `measurement.set_method`.
+  None uses cited geometric quantities.
   Agent opening state and shared MCP state/digest/kit use drawing knowledge first. A pending
   named kit batch has an empty rule set to fill; a loaded kit omits method replacement and
   instructs reuse. No geometric example is relabelled as a standard rule.
@@ -3403,33 +3404,30 @@ New untitled drawings skip placeholder names already present in chat history or 
 Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas-W1.md`.
 
 - `qiyas_execute ask {questions: [{id?, question, options: [{label, description?, recommended?}]}]}`
-  (surface.rs `read_questions`): 1 to 6 questions in ONE call, 2 to 4 options each, at most one
-  recommended, free text always allowed (`allow_other`). The agent emits `AgentEvent::Question
+  (surface.rs `read_questions`): 1 to 20 questions in ONE call, up to 600 characters each, 0 to 6
+  optional options each, at most one recommended, free text always allowed (`allow_other`). The agent emits `AgentEvent::Question
   {questions}` and ends the turn (no `Done`; the desktop shows status "waiting"); the answer is the
   next user message. The panel shows a numbered list with lettered options (`kind: "question"` in
   `ai/messages.ts`); the new shell renders the real design. MCP clients get the echoed questions.
-- Assume, do not ask: the prompts say so; `[state]` carries `Country/practice` (Settings `country`,
-  else inferred from the selected method's name: Egypt, KSA, UAE; else "ask once").
-- Finish gate (`plan_watch.rs` `finish_gate`, `agent.rs` `end_gate`, `mcp.rs`): the `finish` op, or a
-  plain end of turn, is refused while plan phases are pending or active, unless the user said stop
-  (`judgement::wants_to_stop`), the answer ends with a question, a metered run says `[finish now]`,
-  or it was refused twice for the same plan. The refusal names the phases; the window drops the
-  early answer (`Retrying` with `ai.error.finish_gate`). `skipped` phases count as decided.
-- "Continue", "complete everything", "apply your assumptions" (`judgement::wants_to_continue`) add a
-  `[continue]` note listing the open phases and keep the job. The cost note (`[efficiency note]`)
-  and `tool_cost` advice are efficiency advice, each given once per turn.
-- Reply language: the latest message decides; an answer clearly in the other language
-  (`judgement::language_mismatch`) is sent back once (`ai.error.language_retry`).
+- Superseded 29 October 2026 (see "Mizan autonomy and trust" below): Mizan decides technical
+  design itself and asks only about the idea. `[state]` `Country/practice` says whether it came
+  from Settings, was inferred from the method name, or is not set.
+- Open phases (`plan_watch.rs` `finish_gate`, `agent.rs` `end_gate`, `mcp.rs`): one factual
+  reminder per user turn naming the open phases; nothing is refused. No reminder when Mizan asked
+  this turn, the user said stop (`judgement::wants_to_stop`) or a metered run says `[finish now]`.
+- Only an unqualified "continue" (`judgement::wants_to_continue`, exact phrases) adds a
+  `[continue]` note listing the open phases; "continue the doors" keeps its narrower scope. Cost
+  and call-count notes state facts only, once per turn.
+- Reply language: the latest message decides. Answers are never sent back for language.
 - Saving (`agent.rs` `keep_work`): after a finished phase that changed a titled drawing the agent
   saves through the host; an untitled or repaired one is never saved and Save As never opens
   (founder, 28 October 2026): the engineer saves it when they choose. Nothing is saved when Mizan changed nothing. The app, not Mizan, says at the end of the turn what was saved, or why an untitled or repaired drawing was not; the prompts forbid Mizan to state save status.
 - Drawing on assumptions the engineer allowed: Mizan puts them on the sheet as general
   notes (title block status "For review") and lists them in the answer. Qiyas draws; loads, design
   calculations and approval are the engineer's and the company's (company policy).
-- Exports (`surface.rs` `quantity_gate`): `export_takeoff` and `deliverable.export` of boq,
-  dimensions or variation by Mizan or MCP are refused (`quantity_check_failed`) while `takeoff_check`
-  reports measurement errors or unmatched schedule rows, unless the file name contains DRAFT; then
-  the answer carries `draft_export` advice and the file name marks it.
+- Exports (`surface.rs` `quantity_gate`): never refused for open checks. When `takeoff_check`
+  reports measurement errors, unmatched schedule rows, unmeasured elements or disputed second
+  readings, Qiyas itself prefixes the file name with `DRAFT ` and returns `outstanding_checks`.
 - Fewer wasted calls (`result.rs`): a long list in a shortened result comes as `rows` (plain fields,
   nested names in `+`, 40 rows, `more`), not a bare count; `artifact {id, pointer}` reads one part of
   the saved evidence; `commands` of a command with kinds lists each kind's required fields and an
@@ -3654,3 +3652,48 @@ Outputs remain for review, with design and approval assigned to the engineer.
   own binaries because `scripts/check.sh` names them.
 - Debug info is line tables for our crates and none for dependencies (`[profile.dev]`).
 - Child-process tests run the same binary again: name the test by its module path (`test_path`).
+
+## Mizan autonomy and trust (29 October 2026)
+
+Founder ruling: Mizan is fully agentic. It takes technical design decisions itself with an
+engineering basis (structure, openings by use and escape, sizes, wall types, details, sheet
+layout) and records each with its reason; it asks the engineer only about the idea (concept,
+programme and uses, client wishes, scope, key figures, governing standard or jurisdiction).
+Code gives facts and executes; it never steers or rewrites the model. Hard rules are data
+integrity only (schema, undo, stale revision, path sandbox, ownership, locked layers). The
+engineer's approval setting (per job, per phase) stays and is the engineer's choice; default is
+autonomous. Audit and plan: `docs/2026-10-29-*.md` (one note per part).
+
+- Agent loop (`agent-loop-without-steering`, `agent-approval-corrections`): no refusals for
+  workflow, only advice; one factual open-phase reminder per turn; repeated identical failed
+  edits return the earlier error, the turn goes on; app texts (saved, open phases, brief checks)
+  are `AgentEvent::Status {kind, items, language}` in the window and MCP, never appended to the
+  answer or model history.
+- Prompts (`mizan-instructions`): about 550/470 words with the expert frame (what a senior
+  expert also checks, raw data, methods, an outside check that would prove it wrong), decide
+  and ask, one source of truth, verify with `outside_check`. Tool how-to lives in tool docs.
+- Domain data is optional knowledge (`optional-domain-knowledge`): `space_check` returns
+  polygon facts and applies a practice profile only when selected; room kinds are free; no
+  villa or storey defaults; jurisdictions kept as given; physical defaults carry
+  `type_default` provenance and generated items `assumed`; no GFA keyword reclassification;
+  public names Wall/Door/Window/Room in both languages; optional `layer` on comments, grids
+  and symbols.
+- Decisions and outside check (`decisions-outside-check`): `decision.set` / `decision.list`
+  (drawing knowledge kind `decisions`, undoable, saved in the drawing; source engineer,
+  drawing, document, mizan_design, code_or_standard, assumption_allowed or default); field
+  `%<\AcVar QiyasDecision "name">%`; read command `outside_check` recounts from raw geometry
+  against the BOQ, finds elements outside the outline, dangling walls, closed spaces without
+  openings, overlapping rooms, numbers in an answer that match nothing, and lists provisional
+  and Mizan decisions. `takeoff_check` carries its totals.
+- Second reading (`blind-second-reading`): a disputed item stays in the BOQ with both values
+  and a "Second reading differs" column in both languages; evidence is paged, never clipped;
+  readings bind to drawing content, rules and mappings; typed counts are exact.
+- Rooms (`local-room-detection`): growing seed-local boxes; layer, role and bounds filters
+  run before flattening; a budget refusal names counts, limits and the heavy layers/blocks.
+- Drawing craft (`drawing-craft-annotation`, `drawing-craft-sheets`): `dimension.auto_chain`,
+  numbered opening tags, revision clouds per changed footprint with triangles, bidi text;
+  sheet orientation by fit, splits on lines or grids with match lines and key plan, sheet
+  zones, title fields and revision table with unknown fields blank, no empty default layout.
+- Window (`window-fixes`): wheel zoom over the drawing never scrolls the chat; scrolling up
+  stops chat following; plain tool card names; measured ribbon overflow; conversations
+  follow their drawings; layer names ellipsize.

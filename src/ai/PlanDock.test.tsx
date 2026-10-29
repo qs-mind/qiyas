@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { PlanDock, latestDockPlan } from "./PlanDock";
-import type { Item } from "./messages";
+import { PlanDock, StatusBlock, latestDockPlan } from "./PlanDock";
+import { EMPTY, reduce, replay, type Item } from "./messages";
 
 const STORAGE_KEY = "qiyas.planDock.expanded";
 const plan: Extract<Item, { kind: "plan" }> = {
@@ -170,4 +170,30 @@ test("the latest plan wins; completed work leaves on the next user turn", () => 
   expect(latestDockPlan([finished])?.plan).toBe(finished);
   expect(latestDockPlan([finished, { kind: "user", text: "Review the airport terminal" }])).toBeNull();
   expect(latestDockPlan([hospital, { kind: "user", text: "Continue the hospital" }])?.plan).toBe(hospital);
+});
+
+
+test("app statuses stay distinct from the answer and retain their language on replay", () => {
+  const status = { type: "status" as const, kind: "open_phases" as const, items: ["المناسيب"], language: "ar" as const };
+  let state = reduce(EMPTY, { type: "text", text: "أحتاج المناسيب قبل الإكمال." });
+  state = reduce(state, status);
+  expect(state.items[0]).toEqual({ kind: "assistant", text: "أحتاج المناسيب قبل الإكمال.", finished: true });
+  const item = state.items[1];
+  if (item.kind !== "status") throw new Error("Expected app status");
+  render(<StatusBlock item={item} />);
+  expect(screen.getByRole("status").getAttribute("lang")).toBe("ar");
+  expect(screen.getByRole("status").getAttribute("dir")).toBe("rtl");
+  expect(screen.getByRole("status").textContent).toContain("مراحل مفتوحة");
+  expect(screen.getByRole("status").textContent).not.toContain("أحتاج المناسيب قبل الإكمال.");
+  expect(replay([{ type: "event", event: status }]).items).toEqual([item]);
+  expect(replay([{ type: "event", event: { type: "text", text: "Old answer" } }]).items)
+    .toEqual([{ kind: "assistant", text: "Old answer", finished: true }]);
+});
+
+test("save statuses have English and Arabic labels", () => {
+  for (const language of ["en", "ar"] as const) {
+    render(<StatusBlock item={{ kind: "status", status: { type: "status", kind: "saved", items: ["drawing.dwg"], language } }} />);
+    expect(screen.getByRole("status").textContent).toContain(language === "en" ? "Saved" : "تم الحفظ");
+    cleanup();
+  }
 });

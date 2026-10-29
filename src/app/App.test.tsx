@@ -9,7 +9,7 @@ import { LanguageProvider } from "../i18n";
 import en from "../i18n/en.json";
 import App from "./App";
 import type { Batch } from "../viewport/batch";
-import type { ConversationSummary, Measurement, MeasurementReport } from "../api";
+import type { ConversationSummary, Measurement, MeasurementReport, TranscriptEntry } from "../api";
 import { row } from "../boq/testItems";
 
 // These integration tests mount the whole shell and drive several accessible dialogs each.
@@ -18,12 +18,12 @@ import { row } from "../boq/testItems";
 vi.setConfig({ testTimeout: 30_000 });
 const until = (condition: () => void) => waitFor(condition, { timeout: 5_000 });
 
-/** Shows a ribbon tab; the ones after Annotate are under "More". */
+/** Shows a ribbon tab, using More when it does not fit. */
 function goTab(name: string) {
   const tab = screen.queryByRole("tab", { name });
   if (tab) fireEvent.click(tab);
   else {
-    fireEvent.click(document.querySelector<HTMLElement>(".ribbon-more")!);
+    fireEvent.click(document.querySelector<HTMLElement>(".ribbon-tablist .ribbon-more")!);
     fireEvent.click(screen.getByRole("menuitemradio", { name }));
   }
 }
@@ -86,6 +86,7 @@ const core = vi.hoisted(() => ({
   /** What `redo` answers (undo's answer is `undoBatch`). */
   canRedo: false,
   savedConversations: [] as ConversationSummary[],
+  resumedTranscript: [] as TranscriptEntry[],
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -101,7 +102,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     } else core.calls.push(`${cmd} ${JSON.stringify(args ?? null)}`);
     switch (cmd) {
       case "workspace_attach":
-        return { workspace: args?.workspace ?? core.active, cursor: core.cursor, transcript: [], status: "", error: null,
+        return { workspace: args?.workspace ?? core.active, cursor: core.cursor, transcript: core.resumedTranscript, status: "", error: null,
           choice: { provider: "anthropic", model: "claude-opus-5-5", effort: null }, context: {} };
       case "aliases":
         return {};
@@ -115,6 +116,9 @@ vi.mock("@tauri-apps/api/core", () => ({
         return core.measurements;
       case "ai_conversations":
         return core.savedConversations;
+      case "ai_resume":
+        core.resumedTranscript = [{ type: "user", text: "Draw the new plan", pointed: [], images: [] }];
+        return { transcript: core.resumedTranscript, drawing: PLAN };
       case "pick_polygon":
         return [{ top: 42, entity: 42, chain: [], xref: null, kind: "Line" }];
       case "get_settings":
@@ -401,6 +405,7 @@ beforeEach(() => {
   core.savedAs = null;
   core.canRedo = false;
   core.savedConversations = [];
+  core.resumedTranscript = [];
 });
 
 afterEach(() => {
@@ -840,6 +845,9 @@ test("Run script (Manage tab, SCRIPT, SCR): a .scr runs on the drawing, its log 
     ...SHOWN.map(call => call.replace('"workspace":1', '"workspace":2')),
     'save_project {"workspace":2}',
     'ai_set_language {"lang":"en","workspace":2}',
+    // Opening the script's drawing also looks for its saved conversation.
+    'drawing_info {"workspace":2}',
+    `ai_conversations {"drawing":"${PLAN}"}`,
   ]);
   expect(screen.getByRole("dialog", { name: en["script.title"].replace("{name}", "count.scr") })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: en["script.close"] }));
@@ -1419,7 +1427,7 @@ test("Mizan selects for the user, and the window says what the user points at", 
   });
 });
 
-test("an untitled drawing keeps its own Continue offer through its placeholder path", async () => {
+test("an untitled drawing opens its saved conversation through its placeholder path", async () => {
   core.untitled = true; core.opened = true;
   core.savedConversations = [{
     id: "untitled-chat", title: "Draw the new plan", drawing: PLAN,
@@ -1430,7 +1438,8 @@ test("an untitled drawing keeps its own Continue offer through its placeholder p
   await emit("drawing:shown", null);
   await until(() => expect(core.calls).toContain("render_batch {\"workspace\":1}"));
   await until(() => {
-    expect(screen.getByRole("button", { name: "Continue: Draw the new plan" })).toBeTruthy();
+    expect(document.querySelector(".msg.user")?.textContent).toBe("Draw the new plan");
+    expect(screen.queryByRole("button", { name: "Continue: Draw the new plan" })).toBeNull();
   });
 });
 

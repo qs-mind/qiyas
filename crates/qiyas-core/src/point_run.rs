@@ -165,7 +165,9 @@ impl Command {
         match self {
             Self::Draw(spec) => spec.normalize_runs(units),
             Self::Walls(spec) => spec.normalize_runs(units),
-            Self::MeasureArea { points } | Self::Comment { points, .. } => {
+            Self::MeasureArea { points }
+            | Self::Comment { points, .. }
+            | Self::CommentWithLayer { points, .. } => {
                 points.normalize(units, true);
             }
             Self::AddMeasurement {

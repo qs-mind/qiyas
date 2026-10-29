@@ -6,15 +6,14 @@ use crate::{
 use serde_json::{json, Value};
 
 pub(crate) const STALE_AFTER: usize = 8;
-/// A finish is refused this many times for the same open plan; after that the model may end its
-/// turn, listing honestly what is not done (a plan it cannot or will not finish must not trap it).
-pub(crate) const MAX_REFUSALS: usize = 2;
+/// At most one factual reminder per user turn, even when the plan changes.
+pub(crate) const MAX_NOTES: usize = 1;
 
 #[derive(Default)]
 pub(crate) struct PlanWatch {
     plan: Option<Plan>,
     pub(crate) mutations: usize,
-    refusals: usize,
+    notes: usize,
     /// The plan is this turn's work: it was posted or updated this turn, or the user said to
     /// continue it. An old plan left open does not hold a later question ("what is the area?").
     armed: bool,
@@ -25,7 +24,6 @@ impl PlanWatch {
         self.armed = true;
         if self.plan.as_ref() != Some(&plan) {
             self.mutations = 0;
-            self.refusals = 0;
             self.plan = Some(plan);
         }
     }
@@ -41,7 +39,7 @@ impl PlanWatch {
             .as_ref()
             .into_iter()
             .flat_map(|p| &p.phases)
-            .filter(|p| p.status != PlanStatus::Done)
+            .filter(|p| matches!(p.status, PlanStatus::Pending | PlanStatus::Active))
             .collect()
     }
 
@@ -55,9 +53,9 @@ impl PlanWatch {
             .collect()
     }
 
-    /// A new user message starts again: the refusals were about the last one.
+    /// A new user message starts again: the notes were about the last one.
     pub(crate) fn new_turn(&mut self) {
-        self.refusals = 0;
+        self.notes = 0;
         self.armed = false;
     }
 
@@ -66,12 +64,10 @@ impl PlanWatch {
         self.armed = true;
     }
 
-    /// The finish gate. `Some(advice)` refuses ending the work while plan phases are open,
-    /// unless the user asked to stop or the model has already been refused `MAX_REFUSALS`
-    /// times (then it must end honestly). Real limits (budget, provider, cancel) never come here.
+    /// One factual reminder unless the user stopped; callers handle structured asks.
     pub(crate) fn finish_gate(&mut self, user_stopped: bool, lang: Lang) -> Option<Value> {
         let open = self.open_phases();
-        if !self.armed || open.is_empty() || user_stopped || self.refusals >= MAX_REFUSALS {
+        if !self.armed || open.is_empty() || user_stopped || self.notes >= MAX_NOTES {
             return None;
         }
         let list = open
@@ -81,21 +77,25 @@ impl PlanWatch {
                     "{} ({})",
                     p.title,
                     if p.status == PlanStatus::Active {
-                        "active"
+                        match lang {
+                            Lang::En => "active",
+                            Lang::Ar => "نشطة",
+                        }
                     } else {
-                        "pending"
+                        match lang {
+                            Lang::En => "pending",
+                            Lang::Ar => "معلقة",
+                        }
                     }
                 )
             })
             .collect::<Vec<_>>();
-        self.refusals += 1;
+        self.notes += 1;
         let message = match lang {
-            Lang::En => "Not finished: plan phases are still open. The user asked for the whole job, so continue with them now on your stated assumptions. Missing verified data is not a reason to stop: draw on written assumptions and mark the sheet For review. If a phase truly cannot be done, mark it skipped and say why in its title. Your final answer must list what is done and what is not, honestly.",
-            Lang::Ar => "لم ينتهِ العمل: ما زالت مراحل من الخطة مفتوحة. طلب المستخدم العمل كله، فتابعها الآن بافتراضاتك المعلنة. نقص البيانات الموثقة ليس سببًا للتوقف: ارسم على افتراضات مكتوبة وضع على اللوحة «للمراجعة». وإن استحال إنجاز مرحلة فعلًا فاجعلها skipped واذكر السبب في عنوانها. يجب أن تذكر إجابتك الأخيرة بصدق ما أُنجز وما لم يُنجز.",
+            Lang::En => "These plan phases remain open. You may finish them, mark them skipped with a reason, or ask the engineer for what blocks them.",
+            Lang::Ar => "ما زالت هذه المراحل مفتوحة. يمكنك إكمالها أو تجاوزها مع ذكر السبب أو سؤال المهندس عما يمنع إكمالها.",
         };
-        Some(
-            json!({"code":"open_phases","open_phases":list,"refusal":self.refusals,"message":message}),
-        )
+        Some(json!({"code":"open_phases","open_phases":list,"message":message}))
     }
 
     pub(crate) fn stale(&self) -> bool {
@@ -105,26 +105,12 @@ impl PlanWatch {
     pub(crate) fn advice(&self) -> Option<Value> {
         self.stale().then(|| json!({"code":"stale_plan", "mutations_since_update":self.mutations,
             "unfinished_phases":self.unfinished().iter().map(|phase| &phase.title).collect::<Vec<_>>(),
-            "message":"Review these unfinished phases against the user's brief. Mizan decides when to update the plan."}))
+            "message":"The plan has not been updated during these edits. / لم تُحدّث الخطة خلال هذه التعديلات."}))
     }
 
-    pub(crate) fn final_text(&self, lang: Lang) -> Option<String> {
-        let phases = self.unfinished();
-        if phases.is_empty() {
-            return None;
-        }
-        let title = match lang {
-            Lang::En => "Unfinished phases",
-            Lang::Ar => "مراحل لم تكتمل",
-        };
-        Some(format!(
-            "\n\n{title}:\n{}",
-            phases
-                .iter()
-                .map(|p| format!("- {}", p.title))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))
+    pub(crate) fn status(&self, lang: Lang) -> Option<crate::agent::AgentEvent> {
+        let items: Vec<_> = self.open_phases().iter().map(|p| p.title.clone()).collect();
+        (!items.is_empty()).then(|| crate::agent::status("open_phases", items, lang))
     }
 }
 
@@ -132,7 +118,7 @@ impl PlanWatch {
 mod tests {
     use super::*;
     #[test]
-    fn the_finish_gate_names_open_phases_and_lets_go_after_two_refusals_or_a_stop() {
+    fn the_finish_gate_names_open_phases_once_per_turn() {
         let plan = |a: &str, b: &str| {
             crate::surface::read_plan(&json!({"phases":[{"id":"a","title":"Plans","status":a},{"id":"b","title":"Sections","status":b}]})).unwrap()
         };
@@ -142,16 +128,21 @@ mod tests {
             "no plan, no gate"
         );
         watch.update(plan("done", "pending"));
-        let refusal = watch.finish_gate(false, Lang::En).unwrap();
-        assert_eq!(refusal["open_phases"], json!(["Sections (pending)"]));
+        let note = watch.finish_gate(false, Lang::En).unwrap();
+        assert_eq!(note["open_phases"], json!(["Sections (pending)"]));
         assert!(
             watch.finish_gate(true, Lang::En).is_none(),
             "the user said stop"
         );
-        assert!(watch.finish_gate(false, Lang::Ar).is_some());
+        assert!(watch.finish_gate(false, Lang::Ar).is_none());
+        watch.update(plan("active", "pending"));
         assert!(
             watch.finish_gate(false, Lang::En).is_none(),
-            "two refusals are enough"
+            "a changed plan cannot reset this turn's note limit"
+        );
+        assert!(
+            watch.finish_gate(false, Lang::En).is_none(),
+            "one reminder is enough"
         );
         watch.new_turn();
         assert!(
@@ -190,13 +181,16 @@ mod tests {
         watch.update(plan.clone());
         watch.changed();
         assert!(watch.stale());
-        assert!(watch.final_text(Lang::En).unwrap().contains("BOQ"));
+        assert_eq!(
+            serde_json::to_value(watch.status(Lang::En).unwrap()).unwrap()["items"],
+            json!(["Rooms"])
+        );
         let mut done = plan;
         for p in &mut done.phases {
             p.status = PlanStatus::Done;
         }
         watch.update(done);
         assert_eq!(watch.mutations, 0);
-        assert!(watch.final_text(Lang::Ar).is_none());
+        assert!(watch.status(Lang::Ar).is_none());
     }
 }

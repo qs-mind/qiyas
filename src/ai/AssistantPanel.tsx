@@ -13,7 +13,7 @@ import { answerText } from "./QuestionList";
 import type { SlashCommand } from "./slashCommands";
 import { Composer } from "./Composer";
 import { ThreadItem, planActions, type ThreadContext } from "./ThreadItem";
-import { PlanDock, latestDockPlan } from "./PlanDock";
+import { PlanDock, StatusBlock, latestDockPlan } from "./PlanDock";
 import { chatLanguage, openQuestions, recoveryGroups } from "./thread";
 import { useDrafts } from "./useDrafts";
 import { Glyph } from "../shell/glyphs";
@@ -196,7 +196,7 @@ export const AssistantPanel = memo(function AssistantPanel({
         <p className="sr-only" role="status" aria-live="polite">{announce}</p>
         {history?.error && <p className="msg notice" role="alert">{uiError(history.error, lang)}</p>}
         <div className="assistant-thread">
-          <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll}>
+          <div className="assistant-log" ref={thread.ref} onScroll={thread.onScroll} onWheel={thread.onWheel} onKeyDown={thread.onKeyDown} tabIndex={0}>
             {drawing && !drawing.hasTakeoff && !shownOutput && <PackCheckCard
               key={`${assistant.workspace ?? "drawing"}:${drawing.path}`}
               drawing={drawing.path}
@@ -220,7 +220,7 @@ export const AssistantPanel = memo(function AssistantPanel({
                 </ul>
               </div>
             ) : (
-              items.map((item, i) => <ThreadItem key={i} item={item} i={i} cx={cx} id={item.kind === "plan" ? planItemId(i) : undefined} />)
+              items.map((item, i) => item.kind === "status" ? <StatusBlock key={i} item={item} /> : <ThreadItem key={i} item={item} i={i} cx={cx} id={item.kind === "plan" ? planItemId(i) : undefined} />)
             )}
             {!blocked && (startNewOffered(transcript) || error === "crashed") && (
               <button type="button" className="primary new-conversation" onClick={assistant.clear}>

@@ -49,6 +49,8 @@ pub enum SymbolSpec {
         side_point: [f64; 2],
         #[serde(default)]
         leaves: Option<u8>,
+        #[serde(default)]
+        layer: Option<String>,
     },
     /// A straight flight, rising along local +Y. Lower: UP, cut and hidden treads above it.
     /// Upper: DN, full descending flight, adjacent void and guarding. width is the flight
@@ -67,6 +69,8 @@ pub enum SymbolSpec {
         rotation: f64,
         #[serde(default)]
         language: Option<LabelLanguage>,
+        #[serde(default)]
+        layer: Option<String>,
     },
     /// Elevation markers on one side of a view. origin is the zero datum; elevations are
     /// metres above it. Supply FFLs, roof and parapet from the design, never guessed levels.
@@ -76,11 +80,18 @@ pub enum SymbolSpec {
         levels: Vec<LevelMark>,
         #[serde(default)]
         language: Option<LabelLanguage>,
+        #[serde(default)]
+        layer: Option<String>,
     },
     /// Heavy ground line with soil ticks on the right side of directed a-to-b (below a
     /// left-to-right elevation). Tick spacing and length follow paper scale.
     #[schemars(example = json!({"kind":"ground_line","a":[0,0],"b":[8,0]}))]
-    GroundLine { a: [f64; 2], b: [f64; 2] },
+    GroundLine {
+        a: [f64; 2],
+        b: [f64; 2],
+        #[serde(default)]
+        layer: Option<String>,
+    },
     /// Dashed foundation datum at a-to-b, explicitly labelled indicative. elevation_m is
     /// the supplied level annotation; this command does not size or design foundations.
     #[schemars(example = json!({"kind":"foundation_level","a":[0,-1.2],"b":[8,-1.2],"elevation_m":-1.2}))]
@@ -90,6 +101,8 @@ pub enum SymbolSpec {
         elevation_m: f64,
         #[serde(default)]
         language: Option<LabelLanguage>,
+        #[serde(default)]
+        layer: Option<String>,
     },
     /// Hatch from the material table, heavy cut outline for section/detail and a material
     /// leader from point to at. Holes stay empty. An elevation material with no pattern
@@ -109,6 +122,8 @@ pub enum SymbolSpec {
         label: Option<String>,
         #[serde(default)]
         language: Option<LabelLanguage>,
+        #[serde(default)]
+        layer: Option<String>,
     },
 }
 
@@ -203,6 +218,7 @@ impl Session {
                 b,
                 side_point,
                 leaves,
+                layer,
             } => {
                 let (u, width) = direction(a, b)?;
                 finite(side_point)?;
@@ -211,6 +227,7 @@ impl Session {
                     return Err(invalid("side_point must be off the door opening line"));
                 }
                 let threshold = data["double_leaf_from_m"]["value"].as_f64().unwrap_or(1.2);
+                let defaulted_leaves = leaves.is_none();
                 let leaves = leaves.unwrap_or(if width * k >= threshold { 2 } else { 1 });
                 if !matches!(leaves, 1 | 2) {
                     return Err(invalid("A door has one or two leaves"));
@@ -239,7 +256,12 @@ impl Session {
                         end: if sign > 0.0 { 180.0 } else { 270.0 },
                     });
                 }
-                self.symbol_layer(data["door"]["layer"].as_str().unwrap_or("A-DOOR"), -1)?;
+                self.symbol_layer(
+                    layer
+                        .as_deref()
+                        .unwrap_or(data["door"]["layer"].as_str().unwrap_or("A-DOOR")),
+                    -1,
+                )?;
                 let base = "QIYAS_DRAFT_DOOR";
                 let block = self.legacy_symbol_block(base, specs.clone())?;
                 let handle = self.insert_block(
@@ -251,6 +273,20 @@ impl Session {
                     None,
                 )?;
                 self.stamp_legacy_symbol_recipe(handle, base, &specs)?;
+                if defaulted_leaves {
+                    let app = self.object_app("QIYAS_DEFAULTS")?;
+                    let entity = self
+                        .drawing
+                        .doc
+                        .get_entity_mut(opencadcodec::Handle::new(handle))
+                        .ok_or(CoreError::NoSuchEntity(handle))?;
+                    crate::xdata::write_json(
+                        entity.common_mut(),
+                        "QIYAS_DEFAULTS",
+                        app,
+                        &json!({"leaves":{"value":leaves,"kind":"type_default","threshold_m":threshold}}),
+                    )?;
+                }
                 out.push(handle);
             }
             SymbolSpec::Stair {
@@ -262,6 +298,7 @@ impl Session {
                 floor,
                 rotation,
                 language,
+                layer,
             } => {
                 finite(origin)?;
                 if [width, length_m, rise_m]
@@ -283,22 +320,22 @@ impl Session {
                 let cut = (stair["cut_height_m"]["value"].as_f64().unwrap_or(1.2) / rise_m)
                     .clamp(0.1, 0.9)
                     * length;
-                self.symbol_layer("A-FLOR-STRS", -1)?;
+                self.symbol_layer(layer.as_deref().unwrap_or("A-FLOR-STRS"), -1)?;
                 self.symbol_line(p(0.0, 0.0), p(0.0, length), &mut out)?;
                 self.symbol_line(p(width, 0.0), p(width, length), &mut out)?;
                 for i in 0..=steps {
                     let y = length * f64::from(i) / f64::from(steps);
                     if floor == StairFloor::Lower && y > cut {
-                        self.symbol_layer("A-FLOR-STRS-HIDD", -1)?;
+                        self.symbol_layer(layer.as_deref().unwrap_or("A-FLOR-STRS-HIDD"), -1)?;
                         self.ensure_convention_linetype("HIDDEN")?;
                         self.current.linetype = "HIDDEN".into();
                     } else {
-                        self.symbol_layer("A-FLOR-STRS", -1)?;
+                        self.symbol_layer(layer.as_deref().unwrap_or("A-FLOR-STRS"), -1)?;
                     }
                     self.symbol_line(p(0.0, y), p(width, y), &mut out)?;
                 }
                 if floor == StairFloor::Lower {
-                    self.symbol_layer("A-FLOR-STRS", 50)?;
+                    self.symbol_layer(layer.as_deref().unwrap_or("A-FLOR-STRS"), 50)?;
                     let zig = [
                         p(0.0, cut),
                         p(0.4 * width, cut),
@@ -312,7 +349,7 @@ impl Session {
                     })?);
                 } else {
                     // The upper-floor slab has an open well beside the descending flight.
-                    self.symbol_layer("A-FLOR-STRS", -1)?;
+                    self.symbol_layer(layer.as_deref().unwrap_or("A-FLOR-STRS"), -1)?;
                     for (a, b) in [
                         (p(-width, 0.0), p(-width, length)),
                         (p(-width, 0.0), p(0.0, 0.0)),
@@ -320,7 +357,7 @@ impl Session {
                     ] {
                         self.symbol_line(a, b, &mut out)?;
                     }
-                    self.symbol_layer("A-FLOR-HRAL", -1)?;
+                    self.symbol_layer(layer.as_deref().unwrap_or("A-FLOR-HRAL"), -1)?;
                     let rail = (stair["handrail_offset_m"]["value"].as_f64().unwrap_or(0.06) / k)
                         .min(width / 4.0);
                     for x in [rail, width - rail] {
@@ -340,7 +377,7 @@ impl Session {
                             closed: false,
                         })?,
                     );
-                    self.symbol_layer("A-ANNO-STRS", -1)?;
+                    self.symbol_layer(layer.as_deref().unwrap_or("A-ANNO-STRS"), -1)?;
                     out.push(self.add_text(
                         p(-width + h * 0.3, length / 2.0),
                         0.0,
@@ -349,7 +386,7 @@ impl Session {
                         None,
                     )?);
                 }
-                self.symbol_layer("A-ANNO-STRS", -1)?;
+                self.symbol_layer(layer.as_deref().unwrap_or("A-ANNO-STRS"), -1)?;
                 let (tip, tail, label) = if floor == StairFloor::Lower {
                     (
                         p(width / 2.0, cut * 0.8),
@@ -376,13 +413,14 @@ impl Session {
                 origin,
                 levels,
                 language,
+                layer,
             } => {
                 finite(origin)?;
                 if levels.is_empty() || levels.len() > 100 {
                     return Err(invalid("Give 1 to 100 named levels"));
                 }
                 let arabic = self.symbol_arabic(language);
-                self.symbol_layer("A-ANNO-LEVL", -1)?;
+                self.symbol_layer(layer.as_deref().unwrap_or("A-ANNO-LEVL"), -1)?;
                 let size = data["levels"]["marker_size_paper_mm"]
                     .as_f64()
                     .unwrap_or(3.0)
@@ -423,7 +461,7 @@ impl Session {
                     )?);
                 }
             }
-            SymbolSpec::GroundLine { a, b } => {
+            SymbolSpec::GroundLine { a, b, layer } => {
                 let (u, length) = direction(a, b)?;
                 let ground = &data["ground_line"];
                 let spacing = ground["tick_spacing_paper_mm"].as_f64().unwrap_or(4.0) * paper_mm;
@@ -434,7 +472,7 @@ impl Session {
                         "Ground line has too many ticks at this annotation scale",
                     ));
                 }
-                self.symbol_layer("A-ELEV-GRND", 70)?;
+                self.symbol_layer(layer.as_deref().unwrap_or("A-ELEV-GRND"), 70)?;
                 self.symbol_line(a, b, &mut out)?;
                 self.current.lineweight = -1;
                 for i in 0..=count as usize {
@@ -448,13 +486,14 @@ impl Session {
                 b,
                 elevation_m,
                 language,
+                layer,
             } => {
                 direction(a, b)?;
                 if !elevation_m.is_finite() {
                     return Err(invalid("Foundation elevation_m must be finite"));
                 }
                 let arabic = self.symbol_arabic(language);
-                self.symbol_layer("A-SECT-FNDN", -1)?;
+                self.symbol_layer(layer.as_deref().unwrap_or("A-SECT-FNDN"), -1)?;
                 self.ensure_convention_linetype("HIDDEN")?;
                 self.current.linetype = "HIDDEN".into();
                 self.symbol_line(a, b, &mut out)?;
@@ -484,6 +523,7 @@ impl Session {
                 at,
                 label,
                 language,
+                layer,
             } => {
                 direction(point, at)?;
                 let material = material.trim().to_lowercase();
@@ -496,12 +536,12 @@ impl Session {
                 } else {
                     "section_pattern"
                 };
-                let layer = if view == MaterialView::Detail {
+                let default_layer = if view == MaterialView::Detail {
                     "A-DETL-PATT"
                 } else {
                     "A-SECT-PATT"
                 };
-                self.symbol_layer(layer, -1)?;
+                self.symbol_layer(layer.as_deref().unwrap_or(default_layer), -1)?;
                 if let Some(name) = entry[pattern_key].as_str() {
                     let view_key = match view {
                         MaterialView::Section => "section",
@@ -532,7 +572,7 @@ impl Session {
                     })?);
                 }
                 if view != MaterialView::Elevation {
-                    self.symbol_layer("A-SECT-CUT", 50)?;
+                    self.symbol_layer(layer.as_deref().unwrap_or("A-SECT-CUT"), 50)?;
                     for ring in std::iter::once(points).chain(holes) {
                         out.extend(self.draw(DrawSpec::Polyline {
                             points: Vec::<[f64; 2]>::from(ring).into(),
@@ -550,7 +590,7 @@ impl Session {
                 if text.trim().is_empty() {
                     return Err(invalid("A material leader needs a label"));
                 }
-                self.symbol_layer("A-ANNO-NOTE", -1)?;
+                self.symbol_layer(layer.as_deref().unwrap_or("A-ANNO-NOTE"), -1)?;
                 out.extend(self.add_leader(&[point, at], &text, true)?);
             }
         }

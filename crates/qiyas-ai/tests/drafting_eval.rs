@@ -532,7 +532,29 @@ async fn villa_ground_floor_through_mizans_three_tools() {
     assert_eq!(viewport_count, 1);
     assert_eq!(
         title_values,
-        BTreeSet::from(["Villa ground floor", "A-001", "1:100"])
+        // 2026-10-29-drawing-craft-sheets: captions and review status are visible;
+        // unknown field values stay blank.
+        BTreeSet::from([
+            "Villa ground floor",
+            "A-001",
+            "1:100",
+            "Project",
+            "Title",
+            "Client",
+            "Consultant",
+            "Project no.",
+            "Drawing no.",
+            "Revision",
+            "Date",
+            "Drawn by",
+            "Checked by",
+            "Approved by",
+            "Scale",
+            "Sheet",
+            "Status",
+            "For review",
+            "Description"
+        ])
     );
     assert_eq!(eval.session.info().paper.unwrap().name, "ISO A1");
 }

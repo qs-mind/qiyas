@@ -61,6 +61,16 @@ impl Region {
     }
 }
 
+/// Union simple polygon footprints without replacing concave boundaries by bounding boxes.
+/// Holes remain explicit, including unchanged islands inside a ring of footprints.
+pub fn union_footprints(polygons: &[Vec<[f64; 2]>]) -> Result<Vec<Region>, WallError> {
+    let mut regions = Vec::new();
+    for polygon in polygons {
+        union_into(&mut regions, polygon)?;
+    }
+    Ok(regions)
+}
+
 /// True when two wall regions share positive area, rather than only an edge or point.
 /// Used to follow measured hatches through splits and merges without attaching unrelated
 /// pieces. The boolean calculations use a shared local origin and scale, including holes.

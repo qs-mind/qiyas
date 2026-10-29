@@ -370,8 +370,10 @@ impl Session {
         if let Some(paper) = self.paper() {
             // On a sheet the table goes inside the frame, clear of what is drawn on it, of
             // the title block and of every viewport; never beyond the paper.
-            let (left, bottom) = (23.0, 13.0);
-            let (right, top) = (paper.w_mm - 13.0, paper.h_mm - 13.0);
+            let [[left, bottom], [right, top]] = self.sheet_zones(&self.sheet).map_or(
+                [[23.0, 13.0], [paper.w_mm - 13.0, paper.h_mm - 13.0]],
+                |zones| zones.schedules,
+            );
             let space = self.free_space(&SpaceQuery {
                 entity: Some(handle),
                 near: Some([left, top]),

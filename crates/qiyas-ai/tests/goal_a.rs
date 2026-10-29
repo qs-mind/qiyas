@@ -506,7 +506,7 @@ fn clinic_brief_catches_missing_rooms_wrong_thickness_scale_survey_and_deliverab
 }
 
 #[tokio::test]
-async fn stale_plan_unmet_brief_and_blind_state_reach_the_final_answer_and_resume() {
+async fn stale_plan_unmet_brief_and_blind_state_reach_statuses_and_resume() {
     use std::sync::{Arc, Mutex};
     let dir = tempfile::tempdir().unwrap();
     let session = Arc::new(Mutex::new(Some(Session::new_blank(
@@ -554,6 +554,7 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_the_final_answer_and_resum
         .unwrap();
     let mut stale = false;
     let mut answer = String::new();
+    let mut statuses = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event {
             qiyas_ai::AgentEvent::PlanProgress { stale: true, .. } => stale = true,
@@ -563,14 +564,20 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_the_final_answer_and_resum
                 ..
             } => panic!("{summary}"),
             qiyas_ai::AgentEvent::Text { text } => answer.push_str(&text),
+            qiyas_ai::AgentEvent::Status { kind, items, .. } => statuses.push((kind, items)),
             _ => {}
         }
     }
     assert!(stale);
-    assert!(answer.contains("Unfinished phases"));
-    assert!(answer.contains("BOQ"));
-    assert!(answer.contains("Unmet requirements"));
-    assert!(answer.contains("Two bedrooms of the requested sizes"));
+    assert!(!answer.contains("Unfinished phases"));
+    assert!(!answer.contains("Unmet requirements"));
+    assert!(statuses
+        .iter()
+        .any(|(kind, items)| kind == "open_phases" && items.contains(&"BOQ".to_string())));
+    assert!(statuses.iter().any(|(kind, items)| kind == "requirements"
+        && items
+            .iter()
+            .any(|i| i.contains("Two bedrooms of the requested sizes"))));
     for request in requests.lock().unwrap().iter() {
         for block in request.messages.iter().flat_map(|m| &m.content) {
             assert!(!matches!(block, qiyas_ai::ContentBlock::Image { .. }));
@@ -603,11 +610,11 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_the_final_answer_and_resum
         .unwrap();
     let mut text = String::new();
     while let Ok(event) = rx.try_recv() {
-        if let qiyas_ai::AgentEvent::Text { text: t } = event {
-            text.push_str(&t);
+        if let qiyas_ai::AgentEvent::Status { items, .. } = event {
+            text.push_str(&items.join("\n"));
         }
     }
     assert!(text.contains("BOQ"));
     assert!(text.contains("Two bedrooms of the requested sizes"));
-    assert!(text.contains("Requirements needing a check"));
+    assert!(text.contains("May need a recheck"));
 }

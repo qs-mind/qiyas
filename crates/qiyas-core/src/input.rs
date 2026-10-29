@@ -293,7 +293,7 @@ impl Session {
             }
             let results =
                 session.record_document_change(source, "add_wall_openings", true, true, |s| {
-                    s.add_wall_openings_many(&commands)
+                    s.add_wall_openings_many(&commands, source)
                 })?;
             Ok(results
                 .into_iter()

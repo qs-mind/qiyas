@@ -179,26 +179,8 @@ impl Guard {
             })
             .collect();
         let advice = if !protected.is_empty() {
-            let mut commands = BTreeSet::from(["modify move", "set_records"]);
-            for (_, family) in &protected {
-                match *family {
-                    "text" => {
-                        commands.insert("auto_place");
-                        commands.insert("edit_text");
-                    }
-                    "dimension" => {
-                        commands.insert("auto_place");
-                        commands.insert("dim_edit");
-                        commands.insert("dim_space");
-                    }
-                    _ => {
-                        commands.insert("set_object_props");
-                        commands.insert("edit_wall_opening");
-                    }
-                }
-            }
             Some(
-                json!({"code":"repeated_rebuild","message":format!("This work was already rebuilt in this phase. Editing by handle may be cheaper: {}. Mizan decides whether to rebuild.", commands.into_iter().collect::<Vec<_>>().join(", ")),"handles":protected.iter().map(|(h,_)| h).collect::<Vec<_>>()}),
+                json!({"code":"repeated_rebuild","message":"This work was already rebuilt in this phase. / أُعيد إنشاء هذا العمل بالفعل في هذه المرحلة.","handles":protected.iter().map(|(h,_)| h).collect::<Vec<_>>()}),
             )
         } else {
             None

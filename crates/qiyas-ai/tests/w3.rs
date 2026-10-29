@@ -374,7 +374,12 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
     );
     // The user's language belongs to the turn that asked for it.
     assert_eq!(s.sheet_language(), None);
-    assert!(names.contains(&"Villa_BOQ.xlsx".to_string()), "{names:?}");
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "Villa_BOQ.xlsx" || name == "DRAFT Villa_BOQ.xlsx"),
+        "{names:?}"
+    );
     let hidden_files = std::fs::read_dir(&hidden).unwrap().count();
     assert_eq!(hidden_files, 0, "nothing in the hidden folder");
 
@@ -538,7 +543,7 @@ fn blind_session() -> (tempfile::TempDir, Shared) {
 }
 
 #[tokio::test]
-async fn a_seeded_disagreement_never_reaches_the_boq_and_appears_as_a_query() {
+async fn a_seeded_disagreement_stays_in_the_boq_and_appears_as_a_query() {
     let (_dir, session) = blind_session();
     let prompts = Arc::new(Mutex::new(Vec::new()));
     let tools = Arc::new(Mutex::new(Vec::new()));
@@ -565,11 +570,14 @@ async fn a_seeded_disagreement_never_reaches_the_boq_and_appears_as_a_query() {
         let prompts = prompts.lock().unwrap();
         assert_eq!(prompts.len(), 3, "{prompts:?}");
         for p in prompts.iter() {
-            assert!(!p.to_lowercase().contains("quantity"), "{p}");
+            assert!(!p.contains("\"first\"") && !p.contains("\"second\""), "{p}");
             assert!(p.starts_with("Item "), "{p}");
         }
         for t in tools.lock().unwrap().iter() {
-            assert!(!t.contains("records") && !t.contains("state"), "{t}");
+            assert!(
+                t.contains("records") && t.contains("spatial_query") && !t.contains("state"),
+                "{t}"
+            );
         }
 
         let guard = session.lock().unwrap();
@@ -584,7 +592,7 @@ async fn a_seeded_disagreement_never_reaches_the_boq_and_appears_as_a_query() {
             .filter(|i| !i.second_differs())
             .all(|i| i.second_reading.is_some()));
 
-        // It is not a BOQ row; it is a query with both readings.
+        // It remains a BOQ row and a query, both retaining the two readings.
         let boq = qiyas_core::deliverables::drawing(
             s,
             qiyas_core::deliverables::Kind::Boq,
@@ -595,8 +603,9 @@ async fn a_seeded_disagreement_never_reaches_the_boq_and_appears_as_a_query() {
         assert!(boq
             .rows
             .iter()
-            .all(|r| r["code"] != differing[0].code.as_str()));
-        assert_eq!(boq.rows.len(), 2);
+            .any(|r| r["code"] == differing[0].code.as_str()
+                && r["second_reading"]["status"] == "differs"));
+        assert_eq!(boq.rows.len(), 3);
         let query = s
             .conflicts
             .iter()
@@ -684,6 +693,10 @@ async fn a_failed_reader_counts_every_unattempted_item() {
     assert!(pass.read.is_empty());
     assert_eq!(pass.failed.len(), 1);
     assert_eq!(pass.left, 2);
+    assert!(pass.advice()["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("offline test"));
 }
 
 impl Provider for ChangedDuringReading {
@@ -755,4 +768,253 @@ async fn a_model_cannot_write_a_second_reading_through_the_tools() {
         qiyas_core::Source::Ai,
     );
     assert!(out.is_err(), "an internal command is refused: {out:?}");
+}
+
+#[tokio::test]
+async fn each_compare_including_after_batch_edits_gets_a_current_reading() {
+    let (_dir, session) = blind_session();
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let provider = Blind {
+        main: Mutex::new(
+            vec![
+                vec![exec("compare", json!({}))],
+                vec![exec(
+                    "batch",
+                    json!({"commands":[
+                        {"type":"text","at":[30,30],"height":0.2,"value":"New revision"},
+                        {"type":"discrepancy_check"}
+                    ]}),
+                )],
+            ]
+            .into(),
+        ),
+        reader_prompts: prompts.clone(),
+        reader_tools: Arc::default(),
+    };
+    let mut agent = Agent::new(
+        Box::new(provider),
+        session.clone(),
+        AgentSettings::default(),
+    )
+    .with_second_reading(true);
+    let (tx, _rx) = mpsc::channel(10_000);
+    agent
+        .run_turn(
+            "Compare, then update the revision note and compare again.".into(),
+            tx,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompts.lock().unwrap().len(), 6);
+    let guard = session.lock().unwrap();
+    let report = guard.as_ref().unwrap().measurement_report().unwrap();
+    assert!(report
+        .items
+        .iter()
+        .all(|item| item.second_reading.is_some()));
+}
+
+#[tokio::test]
+async fn a_single_operation_reads_more_than_twelve_items_in_further_passes() {
+    let (_dir, session) = blind_session();
+    {
+        let mut guard = session.lock().unwrap();
+        let session = guard.as_mut().unwrap();
+        let mut method = session
+            .measurement_selection()
+            .unwrap()
+            .effective()
+            .unwrap()
+            .clone();
+        let template = method.rules[0].clone();
+        method.rules.clear();
+        let mut mappings = Vec::new();
+        for index in 0..14 {
+            let mut rule = template.clone();
+            rule.id = format!("count-{index}");
+            mappings.push(json!({"rule":rule.id,"code":format!("C-{index}"),"description_en":"Doors {width}",
+                "description_ar":"أبواب {width}","section":"Counts","trade":"","unit":"pcs","citation":rule.citation}));
+            method.rules.push(rule);
+        }
+        for command in [
+            json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+            json!({"type":"measurement","kind":"set_method","scope":"project","method":method}),
+        ] {
+            session
+                .run_input(&command, qiyas_core::Source::User)
+                .unwrap();
+        }
+    }
+    let pass = qiyas_ai::blind_reader::run_all(
+        &Blind {
+            main: Mutex::default(),
+            reader_prompts: Arc::default(),
+            reader_tools: Arc::default(),
+        },
+        &session,
+        &AgentSettings::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(pass.read.len() > qiyas_ai::blind_reader::ITEMS_PER_PASS);
+    assert_eq!(pass.left, 0);
+    assert!(pass.failed.is_empty(), "{pass:?}");
+    assert!(session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .second_reading_brief(None)
+        .unwrap()
+        .is_empty());
+}
+
+struct FailureAtReading {
+    main: Blind,
+    results: Arc<Mutex<Vec<String>>>,
+}
+impl Provider for FailureAtReading {
+    fn stream_turn<'a>(
+        &'a self,
+        request: TurnRequest,
+        sink: Sink<'a>,
+    ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+        if request.system.contains("second reader") {
+            return Box::pin(async { Err(AiError::Network("reader offline".into())) });
+        }
+        for message in &request.messages {
+            for block in &message.content {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    for part in content {
+                        if let qiyas_ai::ResultPart::Text(text) = part {
+                            self.results.lock().unwrap().push(text.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.main.stream_turn(request, sink)
+    }
+}
+
+#[tokio::test]
+async fn a_reader_failure_is_visible_in_the_triggering_tool_result() {
+    let (_dir, session) = blind_session();
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let provider = FailureAtReading {
+        main: Blind {
+            main: Mutex::new(vec![vec![exec("compare", json!({}))]].into()),
+            reader_prompts: Arc::default(),
+            reader_tools: Arc::default(),
+        },
+        results: results.clone(),
+    };
+    let mut agent = Agent::new(
+        Box::new(provider),
+        session.clone(),
+        AgentSettings::default(),
+    )
+    .with_second_reading(true);
+    let (tx, _rx) = mpsc::channel(10_000);
+    agent
+        .run_turn(
+            "Compare the quantities.".into(),
+            tx,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(results
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|result| result.contains("second_reading") && result.contains("reader offline")));
+    assert_eq!(
+        session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .measurement_report()
+            .unwrap()
+            .items
+            .len(),
+        3
+    );
+}
+
+struct SameTotalRevision(Shared);
+impl Provider for SameTotalRevision {
+    fn stream_turn<'a>(
+        &'a self,
+        _: TurnRequest,
+        _: Sink<'a>,
+    ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+        self.0
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .run_input(
+                &json!({"type":"text","at":[30,30],"height":0.2,"value":"Revised drawing"}),
+                qiyas_core::Source::User,
+            )
+            .unwrap();
+        Box::pin(async {
+            Ok(TurnResult {
+                content: vec![ContentBlock::Text {
+                    text: "{\"quantity\":2}".into(),
+                }],
+                stop_reason: StopReason::EndTurn,
+                usage: Default::default(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_same_total_revision_during_the_reader_is_refused_as_stale() {
+    let (_dir, session) = blind_session();
+    let before: Vec<_> = session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .measurement_report()
+        .unwrap()
+        .items
+        .iter()
+        .map(|item| (item.code.clone(), item.quantity))
+        .collect();
+    let pass = qiyas_ai::blind_reader::run_pass(
+        &SameTotalRevision(session.clone()),
+        &session,
+        &AgentSettings::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(pass.read.is_empty());
+    assert_eq!(pass.failed.len(), before.len());
+    let report = session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .measurement_report()
+        .unwrap();
+    assert_eq!(
+        report
+            .items
+            .iter()
+            .map(|item| (item.code.clone(), item.quantity))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert!(report
+        .items
+        .iter()
+        .all(|item| item.second_reading.is_none()));
 }

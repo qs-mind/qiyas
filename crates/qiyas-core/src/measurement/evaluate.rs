@@ -13,6 +13,7 @@ struct Context<'a> {
     sources: BTreeMap<String, PropSource>,
     /// Display units of named values ("m", "m2"...), where known.
     units: BTreeMap<String, String>,
+    dependencies: BTreeMap<String, Vec<NamedSource>>,
 }
 impl<'a> Context<'a> {
     fn new(session: &'a Session) -> Self {
@@ -21,6 +22,7 @@ impl<'a> Context<'a> {
             values: BTreeMap::new(),
             sources: BTreeMap::new(),
             units: BTreeMap::new(),
+            dependencies: BTreeMap::new(),
         }
     }
 }
@@ -92,6 +94,48 @@ impl Context<'_> {
             .as_bool()
             .map_err(|e| invalid(e.to_string()))
     }
+    fn named_sources(&self, name: &str, seen: &mut Vec<String>) -> Vec<NamedSource> {
+        if seen.iter().any(|n| n == name) {
+            return Vec::new();
+        }
+        seen.push(name.into());
+        let mut out = self.dependencies.get(name).cloned().unwrap_or_default();
+        if let Some(source) = self.sources.get(name) {
+            out.push(NamedSource {
+                name: name.into(),
+                source: source.clone(),
+            });
+            if source.kind == SourceKind::Derived {
+                if let Ok(expression) = self.session.evaluation_expression(&source.text) {
+                    for dependency in expression.names() {
+                        let dependency = if name.starts_with("void.") {
+                            format!("void.{dependency}")
+                        } else if name.starts_with("host.") {
+                            format!("host.{dependency}")
+                        } else {
+                            dependency
+                        };
+                        out.extend(self.named_sources(&dependency, seen));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn expression_sources(&self, expression: &str) -> Vec<NamedSource> {
+        self.session
+            .evaluation_expression(expression)
+            .map(|expression| {
+                expression
+                    .names()
+                    .iter()
+                    .flat_map(|name| self.named_sources(name, &mut Vec::new()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn add_object(&mut self, object: &ObjectRecord, prefix: &str) {
         let definition = self.session.object_type(&object.instance.type_name).ok();
         for (k, v) in &object.instance.props {
@@ -101,13 +145,21 @@ impl Context<'_> {
             let bound = definition.as_ref().and_then(|d| d.property_bindings.get(k));
             let source = match (object.instance.sources.get(k), bound) {
                 (_, Some(binding)) => PropSource {
+                    decision: None,
                     kind: SourceKind::Derived,
                     handle: None,
                     text: binding.clone(),
                 },
                 (Some(source), None) => source.clone(),
-                (None, None) => PropSource::default(),
+                (None, None) => PropSource {
+                    decision: None,
+                    kind: SourceKind::Unknown,
+                    handle: Some(object.instance.id),
+                    ..Default::default()
+                },
             };
+            let mut source = source;
+            source.handle.get_or_insert(object.instance.id);
             self.sources.insert(format!("{prefix}{k}"), source);
             if let Some(crate::objects::Property::Number { unit, .. }) =
                 definition.as_ref().and_then(|d| d.properties.get(k))
@@ -135,10 +187,43 @@ impl Context<'_> {
             }
         }
         let measured = PropSource {
+            decision: None,
             kind: SourceKind::Measured,
             handle: Some(object.instance.id),
             text: basis.join(", "),
         };
+        for fact in object.facts.keys() {
+            let mut expressions = Vec::new();
+            if let Some(d) = &definition {
+                if fact.contains("volume") || fact.contains("face_area") || fact == "height" {
+                    expressions.extend(d.vertical.height.iter());
+                    expressions.extend(d.vertical.base.iter());
+                }
+                if fact.contains("area")
+                    || fact.contains("volume")
+                    || fact.contains("face")
+                    || fact == "band_width"
+                {
+                    expressions.extend(d.plan.band_faces.iter());
+                }
+            }
+            let mut dependencies = Vec::new();
+            for expression in expressions {
+                if let Ok(expr) = self.session.evaluation_expression(expression) {
+                    for name in expr.names() {
+                        dependencies.extend(
+                            self.named_sources(&format!("{prefix}{name}"), &mut Vec::new()),
+                        );
+                    }
+                }
+            }
+            for name in [
+                format!("{prefix}{fact}"),
+                format!("{prefix}geometry.{fact}"),
+            ] {
+                self.dependencies.insert(name, dependencies.clone());
+            }
+        }
         for (k, v) in &object.facts {
             self.values
                 .insert(format!("{prefix}{k}"), EValue::Number(*v));
@@ -160,6 +245,7 @@ impl Context<'_> {
             self.sources.insert(
                 format!("{prefix}{k}"),
                 PropSource {
+                    decision: None,
                     kind: SourceKind::Derived,
                     handle: Some(object.instance.id),
                     text: recipe,
@@ -170,8 +256,11 @@ impl Context<'_> {
         }
         self.values
             .insert(format!("{prefix}id"), EValue::Text(object.identity.clone()));
+        let type_en = crate::objects::public_type_name(&object.instance.type_name, false);
+        let type_ar = crate::objects::public_type_name(&object.instance.type_name, true);
         for (k, v) in [
-            ("type", object.instance.type_name.as_str()),
+            ("type", type_en.as_str()),
+            ("type_ar", type_ar.as_str()),
             ("trade", object.category.as_str()),
             ("level", object.instance.level.as_deref().unwrap_or("")),
         ] {
@@ -260,6 +349,7 @@ fn operands(context: &Context<'_>, term: &Term) -> Result<Vec<Operand>, CoreErro
                 Some(NamedSource {
                     name: name.to_string(),
                     source: PropSource {
+                        decision: None,
                         kind: SourceKind::DrawingTable,
                         handle: None,
                         text: citation,
@@ -267,7 +357,7 @@ fn operands(context: &Context<'_>, term: &Term) -> Result<Vec<Operand>, CoreErro
                 })
             })
             .collect();
-        let sources = if !tables.is_empty() {
+        let mut sources: Vec<NamedSource> = if !tables.is_empty() {
             tables
                 .into_iter()
                 .chain(names.iter().filter_map(|name| {
@@ -282,6 +372,7 @@ fn operands(context: &Context<'_>, term: &Term) -> Result<Vec<Operand>, CoreErro
             vec![NamedSource {
                 name: expression.clone(),
                 source: PropSource {
+                    decision: None,
                     kind: SourceKind::Rule,
                     handle: None,
                     text: format!("{} {}", term.citation.source, term.citation.clause)
@@ -298,6 +389,13 @@ fn operands(context: &Context<'_>, term: &Term) -> Result<Vec<Operand>, CoreErro
                 })
                 .collect()
         };
+        for name in &names {
+            for dependency in context.named_sources(name, &mut Vec::new()) {
+                if !sources.contains(&dependency) {
+                    sources.push(dependency);
+                }
+            }
+        }
         let unit = match names.as_slice() {
             [one] if expression.trim() == one => {
                 context.units.get(one).cloned().unwrap_or_default()
@@ -416,18 +514,6 @@ const SIZE_PLACEHOLDERS: [&str; 7] = [
     "{mark}", "{size}", "{width}", "{height}", "{head}", "{sill}", "{depth}",
 ];
 
-/// A gross floor area is information, not an item to buy or build. Only these words say so by
-/// themselves (a flag on the mapping, `informational`, covers any other line): a longer list
-/// would silently drop billable lines such as "Total area of tiling".
-fn reads_as_information(description_en: &str, description_ar: &str) -> bool {
-    let en = description_en.to_lowercase();
-    let abbreviation = en.match_indices("gfa").any(|(at, _)| {
-        !en[..at].ends_with(|c: char| c.is_alphanumeric())
-            && !en[at + 3..].starts_with(|c: char| c.is_alphanumeric())
-    });
-    abbreviation || en.contains("gross floor area") || description_ar.contains("إجمالي المسطح")
-}
-
 /// What tells a door or window's size apart from another's in the same BOQ line, always from
 /// its width and height (never from a mark, which depends on whether a schedule or a tag was made
 /// first): `(code part, English description part, Arabic description part)`.
@@ -511,7 +597,43 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             continue;
         }
         let mut context = Context::new(s);
+        if let Some(host) = objects
+            .iter()
+            .find(|o| Some(o.instance.id) == object.instance.host)
+        {
+            context.add_object(host, "host.");
+        }
         context.add_object(object, "");
+        let mut cut_sources = Vec::new();
+        for child in objects
+            .iter()
+            .filter(|v| v.instance.host == Some(object.instance.id))
+        {
+            let Ok(definition) = s.object_type(&child.instance.type_name) else {
+                continue;
+            };
+            let Some(cut) = definition.host_cut.as_ref().filter(|cut| cut.cuts_host) else {
+                continue;
+            };
+            let mut child_context = Context::new(s);
+            child_context.add_object(object, "host.");
+            child_context.add_object(child, "");
+            for expression in std::iter::once(&cut.width)
+                .chain(definition.vertical.height.iter())
+                .chain(definition.vertical.base.iter())
+            {
+                if let Ok(expr) = s.evaluation_expression(expression) {
+                    for name in expr.names() {
+                        cut_sources.extend(child_context.named_sources(&name, &mut Vec::new()));
+                    }
+                }
+            }
+        }
+        for (name, dependencies) in &mut context.dependencies {
+            if !name.contains("gross") && (name.contains("volume") || name.contains("area")) {
+                dependencies.extend(cut_sources.clone());
+            }
+        }
         let source = reference(s, object, &evidence);
         let mut measured = false;
         for rule in &method.rules {
@@ -527,6 +649,11 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 continue;
             }
             measured = true;
+            let mut decision_sources: Vec<_> = rule
+                .bands
+                .iter()
+                .flat_map(|band| context.expression_sources(&band.when))
+                .collect();
             let bands = rule
                 .bands
                 .iter()
@@ -584,6 +711,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                         values: context.values.clone(),
                         sources: context.sources.clone(),
                         units: context.units.clone(),
+                        dependencies: context.dependencies.clone(),
                         ..Context::new(s)
                     };
                     child_context.add_object(void, "void.");
@@ -594,6 +722,9 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                         &deduction.when
                     };
                     let included = child_context.condition(predicate)?;
+                    decision_sources
+                        .extend(child_context.expression_sources(&deduction.boundary.when));
+                    decision_sources.extend(child_context.expression_sources(predicate));
                     let mut refs = citations.clone();
                     refs.push(deduction.boundary.citation.clone());
                     let mut entry = line(
@@ -702,6 +833,19 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                             .unwrap_or(crate::trust::unscored());
                         value.min(recognition)
                     });
+            let assumed_decision = decision_sources.iter().any(|source| {
+                matches!(
+                    source.source.kind,
+                    SourceKind::TypeDefault | SourceKind::Mizan | SourceKind::Unknown
+                )
+            });
+            if let Some(operand) = lines.iter_mut().flat_map(|line| &mut line.operands).next() {
+                for source in decision_sources {
+                    if !operand.sources.contains(&source) {
+                        operand.sources.push(source);
+                    }
+                }
+            }
             report.quantities.push(MeasuredQuantity {
                 confidence,
                 object: object.instance.id,
@@ -727,11 +871,26 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 .values
                 .insert("unit".into(), EValue::Text(unit.clone()));
             let mut item = GeneratedItem {
+                assumed: assumed_decision
+                    || lines
+                        .iter()
+                        .filter(|l| l.included)
+                        .flat_map(|l| &l.operands)
+                        .flat_map(|o| &o.sources)
+                        .any(|s| {
+                            matches!(
+                                s.source.kind,
+                                SourceKind::TypeDefault | SourceKind::Mizan | SourceKind::Unknown
+                            )
+                        }),
                 confidence,
                 tolerances: rule.tolerance.clone().into_iter().collect(),
                 code: template(&mapping.code, &mapped_context)?,
                 description_en: template(&mapping.description_en, &mapped_context)?,
-                description_ar: template(&mapping.description_ar, &mapped_context)?,
+                description_ar: template(
+                    &mapping.description_ar.replace("{type}", "{type_ar}"),
+                    &mapped_context,
+                )?,
                 section: template(&mapping.section, &mapped_context)?,
                 trade: template(&mapping.trade, &mapped_context)?,
                 unit: template(&mapping.unit, &mapped_context)?,
@@ -739,19 +898,64 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 mapping_citations: vec![mapping.citation.clone()],
                 coverage: rule.coverage.clone(),
                 lines,
-                informational: mapping.informational
-                    || reads_as_information(&mapping.description_en, &mapping.description_ar),
+                informational: mapping.informational,
                 limited,
                 base_code: String::new(),
                 base_description_en: String::new(),
                 base_description_ar: String::new(),
                 second_reading: None,
             };
+            for kind in ["wall", "door", "window", "room"] {
+                let id = format!("Legacy {kind}");
+                item.description_en = item
+                    .description_en
+                    .replace(&id, &crate::objects::public_type_name(&id, false));
+                item.description_ar = item
+                    .description_ar
+                    .replace(&id, &crate::objects::public_type_name(&id, true));
+            }
             if item.unit != *unit {
                 return Err(invalid(format!(
                     "BOQ mapping {} changes measured unit {unit} to {} without a measurement rule",
                     item.code, item.unit
                 )));
+            }
+            // Mapping fields determine which physical quantities are grouped together.
+            // Preserve defaults behind explicitly supplied size/grouping placeholders too.
+            let mut grouping_sources = Vec::new();
+            for text in [
+                &mapping.code,
+                &mapping.description_en,
+                &mapping.description_ar,
+                &mapping.section,
+                &mapping.trade,
+            ] {
+                let mut rest = text.as_str();
+                while let Some((_, after)) = rest.split_once('{') {
+                    let Some((name, tail)) = after.split_once('}') else {
+                        break;
+                    };
+                    grouping_sources.extend(context.named_sources(name, &mut Vec::new()));
+                    rest = tail;
+                }
+            }
+            item.assumed |= grouping_sources.iter().any(|s| {
+                matches!(
+                    s.source.kind,
+                    SourceKind::TypeDefault | SourceKind::Mizan | SourceKind::Unknown
+                )
+            });
+            if let Some(operand) = item
+                .lines
+                .iter_mut()
+                .find(|l| l.included)
+                .and_then(|l| l.operands.first_mut())
+            {
+                for dependency in grouping_sources {
+                    if !operand.sources.contains(&dependency) {
+                        operand.sources.push(dependency);
+                    }
+                }
             }
             // A BOQ line is one description. Doors and windows of different sizes or marks are
             // different lines unless the mapping's own text already says which size.
@@ -764,6 +968,29 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             .any(|t| SIZE_PLACEHOLDERS.iter().any(|p| t.contains(p)));
             if !sized && !item.informational {
                 if let Some((code, en, ar)) = size_label(object, unit) {
+                    // Group counts by size using the same source trail as their physical operands.
+                    let dependencies: Vec<_> = ["width", "head", "sill"]
+                        .iter()
+                        .flat_map(|name| context.named_sources(name, &mut Vec::new()))
+                        .collect();
+                    item.assumed |= dependencies.iter().any(|s| {
+                        matches!(
+                            s.source.kind,
+                            SourceKind::TypeDefault | SourceKind::Mizan | SourceKind::Unknown
+                        )
+                    });
+                    if let Some(operand) = item
+                        .lines
+                        .iter_mut()
+                        .find(|l| l.included)
+                        .and_then(|l| l.operands.first_mut())
+                    {
+                        for dependency in dependencies {
+                            if !operand.sources.contains(&dependency) {
+                                operand.sources.push(dependency);
+                            }
+                        }
+                    }
                     item.base_code = item.code.clone();
                     item.base_description_en = item.description_en.clone();
                     item.base_description_ar = item.description_ar.clone();
@@ -788,6 +1015,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 }
                 existing.confidence = existing.confidence.min(item.confidence);
                 existing.limited |= item.limited;
+                existing.assumed |= item.assumed;
                 existing.lines.extend(item.lines);
                 existing.quantity = total(&context, &existing.lines)?.max(0.0);
                 for c in item.mapping_citations {

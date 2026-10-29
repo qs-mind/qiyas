@@ -62,6 +62,14 @@ pub(crate) fn format(
     if !out.is_object() {
         out = json!({"value":out});
     }
+    if tool == surface::READ && op == "brief_check" && !full {
+        if let Some(rows) = value["results"].as_array() {
+            out["results"] = json!(rows
+                .iter()
+                .map(|r| json!({"id":r["id"],"text":r["text"],"passed":r["passed"]}))
+                .collect::<Vec<_>>());
+        }
+    }
     if execute {
         let mut adjustments = Vec::new();
         label_adjustments(&value, &mut adjustments);
@@ -938,5 +946,30 @@ mod tests {
         }
         let evidence: Value = serde_json::from_str(&evidence).unwrap();
         assert_eq!(evidence["records"], value["records"]);
+    }
+    #[test]
+    fn compact_brief_reports_keep_all_requirements_and_full_reports_keep_evidence() {
+        let value = json!({"results":(0..80).map(|n| json!({"id":n.to_string(),"text":format!("Requirement {n}"),"passed":false,"evidence":{"handle":n}})).collect::<Vec<_>>()});
+        let ToolOutput::Json(summary) = format(
+            surface::READ,
+            "brief_check",
+            &json!({}),
+            ToolOutput::Json(value.clone()),
+        )
+        .unwrap() else {
+            panic!("JSON");
+        };
+        assert_eq!(summary["results"].as_array().unwrap().len(), 80);
+        assert_eq!(summary["results"][79]["text"], "Requirement 79");
+        let ToolOutput::Json(full) = format(
+            surface::READ,
+            "brief_check",
+            &json!({"detail":"full"}),
+            ToolOutput::Json(value.clone()),
+        )
+        .unwrap() else {
+            panic!("JSON");
+        };
+        assert_eq!(full["results"], value["results"]);
     }
 }

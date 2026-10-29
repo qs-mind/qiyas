@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { RibbonLayout } from "../api";
 import fixture from "./ribbon.default.json";
-import { buttonKeys, DEFAULT_RIBBON, editTree, layoutOf } from "./ribbonLayout";
+import { fittingTabs, buttonKeys, DEFAULT_RIBBON, editTree, layoutOf } from "./ribbonLayout";
 
 /** The core's default, cut down: Home (Draw with Audit, Annotation) and Manage (Run script). */
 const CORE: RibbonLayout = {
@@ -151,4 +151,15 @@ test("a group's \"main\" survives a round trip through the Customize tree; a but
   // Revision cloud is on Measure's Markup, Annotate's Markup and Draw's Draw group.
   const places = DEFAULT_RIBBON.tabs.flatMap((t) => t.groups.filter((g) => g.buttons.some((b) => b.command === "revcloud")).map((g) => `${t.id}/${g.id}`));
   expect(places).toEqual(["measure/markup", "home/draw", "annotate/markup"]);
+});
+
+
+test("tabs use measured widths, with More only when a tab does not fit", () => {
+  expect(fittingTabs([60, 80, 70, 100], 316, 64)).toBe(4);
+  expect(fittingTabs([60, 80, 70, 100], 315, 64)).toBe(3);
+  expect(fittingTabs([60, 80, 70, 100], 200, 64)).toBe(1);
+  expect(fittingTabs([60, 80], 50, 64)).toBe(0);
+  expect(fittingTabs([], 100, 64)).toBe(0);
+  // Arabic labels may be wider; the order remains the reading order in either direction.
+  expect(fittingTabs([100, 90, 120, 110], 316, 80)).toBe(2);
 });

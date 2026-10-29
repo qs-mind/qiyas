@@ -441,11 +441,27 @@ export function useDrawings({
     const now = await readTabs();
     const tab = chat.drawing && now.tabs.find((item) => item.path === chat.drawing);
     if (tab) return now.active === tab.id || drawingChange(() => activate(tab.id, true));
-    if (!chat.drawing || !chat.drawing_exists) {
+    if (!chat.drawing) {
       setNotice(t("ai.drawingMissing"));
-      return true;
+      return false;
     }
     const path = chat.drawing;
+    if (!chat.drawing_exists) {
+      // Untitled drawings have a stable path even before their first Save As.
+      // The file may be absent while its autosave is the only surviving drawing.
+      const found = await recoverableDrawings([path]);
+      const recoverable = found.find((item) => item.drawing === path && (item.autosave || item.older_copies.length > 0));
+      if (recoverable) {
+        await drawingChange(async () => {
+          const next = await recoverAutosave(recoverable.autosave ? path : recoverable.older_copies[0].path);
+          await showDrawing(next, beginShow());
+          await refreshTabs();
+        });
+        return true;
+      }
+      setNotice(t("ai.drawingMissing"));
+      return false;
+    }
     const opened = new Promise<boolean>((resolve) => conversationOpen.current.set(path, resolve));
     try {
       await openPath(path);

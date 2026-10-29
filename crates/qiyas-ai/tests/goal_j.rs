@@ -238,12 +238,22 @@ async fn draw_log_replay_applies_rebuilds_and_reports_cheaper_edits() {
             .count(),
         1
     );
-    for command in ["edit_text", "dim_edit", "edit_wall_opening"] {
-        assert!(
-            advice.iter().any(|e| e["code"] == "repeated_rebuild"
-                && e["message"].as_str().is_some_and(|s| s.contains(command))),
-            "second rebuild must advise {command}: {advice:?}"
-        );
+    // 2026-10-29-agent-loop-without-steering: report observed rebuilds, not an edit strategy.
+    let rebuilds: Vec<_> = advice
+        .iter()
+        .filter(|e| e["code"] == "repeated_rebuild")
+        .collect();
+    assert!(!rebuilds.is_empty(), "{advice:?}");
+    for advice in rebuilds {
+        assert!(!advice["handles"].as_array().unwrap().is_empty());
+        assert!(advice["churn"]["removed"].as_u64().unwrap() > 0);
+        assert!(advice["message"]
+            .as_str()
+            .unwrap()
+            .contains("already rebuilt"));
+        for command in ["edit_text", "dim_edit", "edit_wall_opening"] {
+            assert!(!advice["message"].as_str().unwrap().contains(command));
+        }
     }
 }
 #[tokio::test]

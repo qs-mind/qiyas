@@ -43,6 +43,10 @@
       "windows_layer": {
         "kind": "text",
         "default": "A-GLAZ"
+      },
+      "kind": {
+        "kind": "text",
+        "default": "wall"
       }
     },
     "geometry": "band",
@@ -68,7 +72,9 @@
       "net_plan_area": "net_area",
       "net_volume": "volume"
     },
-    "join": "union"
+    "join": "union",
+    "display_name_en": "Wall",
+    "display_name_ar": "حائط"
   },
   "room": {
     "name": "Legacy room",
@@ -85,6 +91,10 @@
       "label_ar": {
         "kind": "text",
         "default": "المساحة {area} م²"
+      },
+      "kind": {
+        "kind": "text",
+        "default": "room"
       }
     },
     "geometry": "region",
@@ -94,7 +104,9 @@
     "quantities": {
       "net_floor_area": "round(area, 6)",
       "boundary_length": "perimeter"
-    }
+    },
+    "display_name_en": "Room",
+    "display_name_ar": "فراغ"
   },
   "door": {
     "name": "Legacy door",
@@ -141,6 +153,10 @@
         "unit": "length",
         "default": 0,
         "min": 0
+      },
+      "kind": {
+        "kind": "text",
+        "default": "door"
       }
     },
     "geometry": "hosted",
@@ -215,7 +231,9 @@
     },
     "property_bindings": {
       "host_width": "host.band_width"
-    }
+    },
+    "display_name_en": "Door",
+    "display_name_ar": "باب"
   },
   "window": {
     "name": "Legacy window",
@@ -262,6 +280,10 @@
         "unit": "length",
         "default": 0,
         "min": 0
+      },
+      "kind": {
+        "kind": "text",
+        "default": "window"
       }
     },
     "geometry": "hosted",
@@ -310,6 +332,8 @@
     },
     "property_bindings": {
       "host_width": "host.band_width"
-    }
+    },
+    "display_name_en": "Window",
+    "display_name_ar": "شباك"
   }
 }

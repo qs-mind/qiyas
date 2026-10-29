@@ -112,3 +112,13 @@ function Dock({ plan, busy, language, threadItemId, awaitingApproval = plan.awai
     </div>
   </div>;
 }
+
+/** App facts are distinct from Mizan's words, in the language captured for that turn. */
+export function StatusBlock({ item }: { item: Extract<Item, { kind: "status" }> }) {
+  const { kind, items, language } = item.status;
+  return <aside className="msg notice" role="status" lang={language} dir={language === "ar" ? "rtl" : "ltr"}
+    style={{ fontSize: "0.85em", borderInlineStart: "2px solid currentColor", paddingInlineStart: "0.75em" }}>
+    <strong>{translate(language, `ai.status.${kind}`)}</strong>
+    <ul>{items.map((text, i) => <li key={i}>{text}</li>)}</ul>
+  </aside>;
+}

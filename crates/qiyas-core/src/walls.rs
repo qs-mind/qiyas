@@ -91,7 +91,7 @@ pub struct WallLayers {
 
 /// Walls from directed polylines. Plan coordinates, thickness and openings use drawing units;
 /// height, sill and head use metres. Openings must fit a straight part clear of junctions.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct WallSpec {
     pub runs: Vec<WallRun>,
     pub thickness: f64,
@@ -107,6 +107,51 @@ pub struct WallSpec {
     /// Join touching systems on the same layers. False keeps this system separate.
     #[serde(default = "default_join")]
     pub join: bool,
+    /// Transient input provenance; persisted on object properties after creation.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) defaulted: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct WallSpecInput {
+    runs: Vec<WallRun>,
+    thickness: f64,
+    #[serde(default)]
+    justification: WallJustification,
+    #[serde(default)]
+    openings: Vec<WallOpening>,
+    #[serde(default)]
+    height: Option<f64>,
+    #[serde(default)]
+    layers: WallLayers,
+    #[serde(default = "default_join")]
+    join: bool,
+    #[serde(default)]
+    defaulted: Vec<String>,
+}
+impl<'de> Deserialize<'de> for WallSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        WallSpecInput::deserialize(deserializer).map(Self::from)
+    }
+}
+impl From<WallSpecInput> for WallSpec {
+    fn from(input: WallSpecInput) -> Self {
+        let mut defaulted = input.defaulted;
+        if input.height.is_none() {
+            defaulted.push("height".into());
+        }
+        Self {
+            runs: input.runs,
+            thickness: input.thickness,
+            justification: input.justification,
+            openings: input.openings,
+            height: input.height.unwrap_or_else(default_wall_height),
+            layers: input.layers,
+            join: input.join,
+            defaulted,
+        }
+    }
 }
 
 fn default_join() -> bool {
@@ -142,6 +187,9 @@ pub struct WallResult {
     pub volume: f64,
     /// Every replaced handle and its replacements; an empty list means removed.
     pub handle_map: BTreeMap<u64, Vec<u64>>,
+    /// Physical drawing defaults used by the returned elements, in metres.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub defaults_used: Vec<crate::validation::DefaultUsed>,
 }
 
 fn invalid(why: impl Into<String>) -> CoreError {
@@ -164,6 +212,7 @@ impl Session {
         &mut self,
         mut spec: WallSpec,
         graphics: bool,
+        source: crate::Source,
     ) -> Result<WallResult, CoreError> {
         spec.normalize_runs(self.drawing.units);
         explicit_runs(&mut spec);
@@ -235,7 +284,21 @@ impl Session {
             app.handle = self.drawing.doc.allocate_handle();
             self.drawing.doc.app_ids.add(app).map_err(invalid)?;
         }
+        let resolved = serde_json::json!(&spec);
+        let defaults_used = spec
+            .defaulted
+            .iter()
+            .filter_map(|field| {
+                let pointer = format!("/{field}");
+                Some(crate::validation::DefaultUsed {
+                    field: pointer.clone(),
+                    value: resolved.pointer(&pointer)?.clone(),
+                    unit: Some("m".into()),
+                })
+            })
+            .collect();
         let mut result = WallResult {
+            defaults_used,
             group: 0,
             handles: Vec::new(),
             outlines: Vec::new(),
@@ -289,6 +352,67 @@ impl Session {
             }
         }
         self.migrate_legacy_objects()?;
+        // Migration imports resolved values. Restore whether each physical input was given.
+        for (role, handles, fields) in [
+            (
+                "runs",
+                &result.centrelines,
+                &[("height", "wall_height")][..],
+            ),
+            (
+                "openings",
+                &result.inserts,
+                &[("sill", "sill"), ("head", "head")][..],
+            ),
+        ] {
+            for (i, handle) in handles.iter().enumerate() {
+                if let Some(mut object) = self
+                    .drawing
+                    .doc
+                    .get_entity(Handle::new(*handle))
+                    .and_then(crate::objects::instance)
+                {
+                    let kind = if role == "runs" {
+                        serde_json::json!("wall")
+                    } else {
+                        serde_json::json!(spec.openings[i].kind)
+                    };
+                    object.props.insert("kind".into(), kind);
+                    for property in object.props.keys() {
+                        object.sources.entry(property.clone()).or_insert(
+                            crate::measurement::PropSource {
+                                decision: None,
+                                kind: crate::objects::given_by(source).kind,
+                                handle: None,
+                                text: "Explicit command input / قيمة صريحة في الأمر".into(),
+                            },
+                        );
+                    }
+                    for (field, property) in fields {
+                        let defaulted = spec.defaulted.contains(&format!("{role}/{i}/{field}"));
+                        object.sources.insert(
+                            (*property).into(),
+                            crate::measurement::PropSource {
+                                decision: None,
+                                kind: if defaulted {
+                                    crate::measurement::SourceKind::TypeDefault
+                                } else {
+                                    crate::objects::given_by(source).kind
+                                },
+                                text: if defaulted {
+                                    "Drawing default / قيمة رسم افتراضية"
+                                } else {
+                                    "Explicit command input / قيمة صريحة في الأمر"
+                                }
+                                .into(),
+                                handle: None,
+                            },
+                        );
+                    }
+                    self.stamp_object(*handle, &object)?;
+                }
+            }
+        }
         result.handles.extend(&result.centrelines);
         result.handles.extend(&result.inserts);
         if !graphics {
@@ -561,12 +685,27 @@ fn layer_names(layers: &WallLayers) -> [String; 5] {
 }
 
 pub(crate) fn explicit_runs(spec: &mut WallSpec) {
-    for run in &mut spec.runs {
+    for (i, run) in spec.runs.iter_mut().enumerate() {
+        if run.height.is_none() && spec.defaulted.iter().any(|p| p == "height") {
+            let field = format!("runs/{i}/height");
+            if !spec.defaulted.contains(&field) {
+                spec.defaulted.push(field);
+            }
+        }
         run.thickness = Some(run.thickness.unwrap_or(spec.thickness));
         run.height = Some(run.height.unwrap_or(spec.height));
         run.justification = Some(run.justification.unwrap_or(spec.justification));
     }
-    for opening in &mut spec.openings {
+    for (i, opening) in spec.openings.iter_mut().enumerate() {
+        for (field, missing) in [
+            ("sill", opening.sill.is_none()),
+            ("head", opening.head.is_none()),
+        ] {
+            let field = format!("openings/{i}/{field}");
+            if missing && !spec.defaulted.contains(&field) {
+                spec.defaulted.push(field);
+            }
+        }
         if let Some(run) = spec.runs.get(opening.run) {
             let kind = match opening.kind {
                 OpeningKind::Door => "door",
@@ -737,7 +876,9 @@ impl Session {
                     continue;
                 }
                 if !present.insert(index) {
-                    return Err(invalid("A copied wall system has duplicate run identities; copy the complete wall group"));
+                    return Err(invalid(
+                        "A copied wall system has duplicate run identities; copy the complete wall group",
+                    ));
                 }
                 driver_indices.insert(handle, index);
                 let Some(run) = group.spec.runs.get_mut(index) else {
@@ -792,7 +933,9 @@ impl Session {
                 }
             }
             if present.len() != group.spec.runs.len() {
-                return Err(invalid("A wall centreline was erased; undo the erase before rebuilding its wall system"));
+                return Err(invalid(
+                    "A wall centreline was erased; undo the erase before rebuilding its wall system",
+                ));
             }
             for &(handle, ref role, index) in &group.members {
                 if role != "opening" {
@@ -955,7 +1098,11 @@ impl Session {
             .collect()
     }
 
-    pub(crate) fn walls(&mut self, mut spec: WallSpec) -> Result<WallResult, CoreError> {
+    pub(crate) fn walls(
+        &mut self,
+        mut spec: WallSpec,
+        source: crate::Source,
+    ) -> Result<WallResult, CoreError> {
         spec.normalize_runs(self.drawing.units);
         explicit_runs(&mut spec);
         let mut joined = Vec::new();
@@ -971,6 +1118,23 @@ impl Session {
                 explicit_runs(&mut old);
                 // Existing runs retain their order, making handle-to-run selection predictable.
                 let offset = old.runs.len();
+                let opening_offset = old.openings.len();
+                spec.defaulted = spec
+                    .defaulted
+                    .iter()
+                    .filter_map(|path| {
+                        let mut parts = path.split('/');
+                        let role = parts.next()?;
+                        let index = parts.next()?.parse::<usize>().ok()?;
+                        let field = parts.next()?;
+                        let shift = if role == "runs" {
+                            offset
+                        } else {
+                            opening_offset
+                        };
+                        Some(format!("{role}/{}/{field}", index + shift))
+                    })
+                    .collect();
                 for opening in &mut spec.openings {
                     opening.run += offset;
                 }
@@ -981,13 +1145,14 @@ impl Session {
                 joined.push(group);
             }
         }
-        self.rebuild_walls(spec, &joined)
+        self.rebuild_walls(spec, &joined, source)
     }
 
     pub(crate) fn rebuild_walls(
         &mut self,
         spec: WallSpec,
         old: &[WallGroup],
+        source: crate::Source,
     ) -> Result<WallResult, CoreError> {
         #[cfg(any(test, feature = "fixtures"))]
         let _profile = crate::fixtures::profile::span("walls.rebuild_walls");
@@ -1004,7 +1169,7 @@ impl Session {
         }
         // Allocate only source drivers for an edit. Generated parts belong to the object
         // engine, which runs after surviving identities and hosts are in their final places.
-        let mut result = self.draw_wall_system(spec.clone(), old.is_empty())?;
+        let mut result = self.draw_wall_system(spec.clone(), old.is_empty(), source)?;
         if old.is_empty() {
             return Ok(result);
         }
@@ -1099,6 +1264,11 @@ impl Session {
                         "host_width",
                     ] {
                         if let Some(value) = new.props.get(key) {
+                            if object.props.get(key) != Some(value) {
+                                if let Some(source) = new.sources.get(key) {
+                                    object.sources.insert(key.into(), source.clone());
+                                }
+                            }
                             object.props.insert(key.into(), value.clone());
                         }
                     }
@@ -1363,7 +1533,42 @@ impl Session {
         };
         let centrelines = role("run");
         let totals = self.wall_totals(&centrelines)?;
+        let mut defaults_used = Vec::new();
+        for (handle, role, index) in &group.members {
+            let Some(object) = self
+                .drawing
+                .doc
+                .get_entity(Handle::new(*handle))
+                .and_then(crate::objects::instance)
+            else {
+                continue;
+            };
+            let fields: &[(&str, &str)] = match role.as_str() {
+                "run" => &[("wall_height", "height")],
+                "opening" => &[("sill", "sill"), ("head", "head")],
+                _ => &[],
+            };
+            for (property, field) in fields {
+                if object
+                    .sources
+                    .get(*property)
+                    .is_some_and(|s| s.kind == crate::measurement::SourceKind::TypeDefault)
+                {
+                    if let Some(value) = object.props.get(*property) {
+                        defaults_used.push(crate::validation::DefaultUsed {
+                            field: format!(
+                                "/{}/{index}/{field}",
+                                if role == "run" { "runs" } else { "openings" }
+                            ),
+                            value: value.clone(),
+                            unit: Some("m".into()),
+                        });
+                    }
+                }
+            }
+        }
         Ok(WallResult {
+            defaults_used,
             group: group.id,
             handles: group.members.iter().map(|(h, _, _)| *h).collect(),
             outlines: role("outline"),
@@ -1403,6 +1608,7 @@ impl Session {
     pub(crate) fn add_wall_openings_many(
         &mut self,
         commands: &[(u64, Vec<AddedWallOpening>)],
+        source: crate::Source,
     ) -> Result<Vec<WallResult>, CoreError> {
         let groups = self.stored_wall_groups()?;
         let mut pending = BTreeMap::<u64, (WallGroup, WallSpec, usize)>::new();
@@ -1474,7 +1680,7 @@ impl Session {
         groups.sort_by_key(|(_, (_, _, index))| *index);
         for (id, (group, spec, index)) in groups {
             let result = self
-                .rebuild_walls(spec, &[group])
+                .rebuild_walls(spec, &[group], source)
                 .map_err(|error| CoreError::Step {
                     index,
                     label: "add_wall_openings".into(),
@@ -1489,6 +1695,7 @@ impl Session {
         &mut self,
         centreline: u64,
         openings: Vec<AddedWallOpening>,
+        source: crate::Source,
     ) -> Result<WallResult, CoreError> {
         if openings.is_empty() {
             return Err(invalid("Add at least one wall opening"));
@@ -1506,12 +1713,13 @@ impl Session {
                 head: o.head,
             }));
         explicit_runs(&mut spec);
-        self.rebuild_walls(spec, &[group])
+        self.rebuild_walls(spec, &[group], source)
     }
 
     pub(crate) fn remove_wall_openings(
         &mut self,
         inserts: &[u64],
+        source: crate::Source,
     ) -> Result<WallResult, CoreError> {
         if inserts.is_empty() {
             return Err(invalid("Pick at least one opening insert"));
@@ -1533,13 +1741,14 @@ impl Session {
             .filter(|(i, _)| !indices.contains(i))
             .map(|(_, o)| o)
             .collect();
-        self.rebuild_walls(spec, &[group])
+        self.rebuild_walls(spec, &[group], source)
     }
 
     pub(crate) fn edit_wall_opening(
         &mut self,
         insert: u64,
         edit: WallOpeningEdit,
+        source: crate::Source,
     ) -> Result<WallResult, CoreError> {
         let (group, index) = self.wall_group_for(insert, "opening")?;
         let mut spec = group.spec.clone();
@@ -1562,6 +1771,35 @@ impl Session {
         if let Some(v) = edit.head {
             opening.head = Some(v);
         }
+        let supplied: Vec<_> = [("sill", edit.sill), ("head", edit.head)]
+            .into_iter()
+            .filter_map(|(key, v)| v.map(|v| (key, v)))
+            .collect();
+        for (key, _) in &supplied {
+            spec.defaulted
+                .retain(|p| p != &format!("openings/{index}/{key}"));
+        }
+        if !supplied.is_empty() {
+            if let Some(mut object) = self
+                .drawing
+                .doc
+                .get_entity(Handle::new(insert))
+                .and_then(crate::objects::instance)
+            {
+                for (key, _) in &supplied {
+                    object.sources.insert(
+                        (*key).into(),
+                        crate::measurement::PropSource {
+                            decision: None,
+                            kind: crate::objects::given_by(source).kind,
+                            handle: None,
+                            text: "Explicit command input / قيمة صريحة في الأمر".into(),
+                        },
+                    );
+                }
+                self.stamp_object(insert, &object)?;
+            }
+        }
         if let Some(mark) = edit.mark {
             self.set_object_props(
                 &[insert],
@@ -1575,7 +1813,7 @@ impl Session {
         {
             return self.wall_result(&group);
         }
-        self.rebuild_walls(spec, &[group])
+        self.rebuild_walls(spec, &[group], source)
     }
 
     pub(crate) fn refuse_wall_insert_erase(&self, handles: &[Handle]) -> Result<(), CoreError> {
@@ -1587,7 +1825,10 @@ impl Session {
                 .and_then(wall_tag)
                 .is_some_and(|tag| tag.role == "opening")
             {
-                return Err(invalid(format!("Opening insert {} belongs to a wall system; use remove_wall_openings to close the wall in the same undo step", handle.value())));
+                return Err(invalid(format!(
+                    "Opening insert {} belongs to a wall system; use remove_wall_openings to close the wall in the same undo step",
+                    handle.value()
+                )));
             }
         }
         Ok(())

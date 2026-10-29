@@ -1407,3 +1407,100 @@ fn an_autocad_suffix_after_other_overrides_is_still_theirs() {
         assert_eq!(text_of(&s, h), "10.000 ft", "show {show}");
     }
 }
+
+#[test]
+fn automatic_grid_chains_use_paper_offsets_normal_dimensions_and_one_undo() {
+    use serde_json::json;
+    for units in [1, 4, 5, 6] {
+        for side in ["bottom", "top", "left", "right"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = Session::new_blank(&dir.path().join("chain.dxf"), units);
+            let k = 1.0 / s.drawing.units.to_metres();
+            s.run(
+                serde_json::from_value(json!({"type":"annotation_scale","name":"1:50"})).unwrap(),
+            )
+            .unwrap();
+            let vertical = matches!(side, "left" | "right");
+            let mut grids = Vec::new();
+            for station in [0.0, 4.0, 9.0] {
+                let (a, b) = if vertical {
+                    ([0.0, station * k], [6.0 * k, station * k])
+                } else {
+                    ([station * k, 0.0], [station * k, 6.0 * k])
+                };
+                grids.push(one(s
+                    .run(
+                        serde_json::from_value(json!({"type":"draw","kind":"line","a":a,"b":b}))
+                            .unwrap(),
+                    )
+                    .unwrap()));
+            }
+            let before = s.history_steps().0.len();
+            let input = json!({"type":"dimension","kind":"auto_chain","grids":grids.iter().rev().map(|h|json!({"handle":h})).collect::<Vec<_>>(),"side":side});
+            let ids = match s
+                .run_input(&input, qiyas_core::Source::User)
+                .unwrap()
+                .outcome
+            {
+                Outcome::Added { handles } => handles,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(ids.len(), 3);
+            assert_eq!(s.history_steps().0.len(), before + 1);
+            for (i, expected) in [4.0, 5.0, 9.0].iter().enumerate() {
+                let d = dim(&s, ids[i]);
+                assert!((d.measurement() / k - expected).abs() < 1e-8);
+                assert!(!block_of(&s, ids[i]).is_empty());
+                let p = d.definition_point();
+                let cross = if vertical { p.x } else { p.y };
+                let offset = if i == 2 { 0.85 } else { 0.5 };
+                let expected = if matches!(side, "bottom" | "left") {
+                    -offset
+                } else {
+                    6.0 + offset
+                };
+                assert!((cross / k - expected).abs() < 1e-8);
+            }
+            assert!(s.undo());
+            assert!(ids
+                .iter()
+                .all(|h| s.drawing.doc.get_entity(Handle::new(*h)).is_none()));
+            assert!(s.redo());
+        }
+    }
+}
+
+#[test]
+fn automatic_facade_chain_measures_actual_corners_and_opening_jambs() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("facade.dxf"), 6);
+    s.run_input(&json!({"type":"walls","runs":[{"points":[[0,0],[10,0],[10,8],[0,8]],"closed":true}],
+        "thickness":0.2,"height":3,"openings":[{"run":0,"at":3,"width":1,"kind":"door","sill":0,"head":2.1}]}), qiyas_core::Source::User).unwrap();
+    let group = s.wall_groups(None).unwrap()[0].group;
+    let ids = added(s.run(serde_json::from_value(json!({"type":"dimension","kind":"auto_chain","wall_groups":[group],"side":"bottom"})).unwrap()).unwrap());
+    assert_eq!(ids.len(), 4);
+    let measurements: Vec<_> = ids.iter().map(|h| dim(&s, *h).measurement()).collect();
+    for (actual, expected) in measurements.iter().zip([2.6, 1.0, 6.6, 10.2]) {
+        assert!((actual - expected).abs() < 1e-8, "{measurements:?}");
+    }
+    let before = s.drawing.doc.clone();
+    assert!(s.run_input(&json!({"type":"dimension","kind":"auto_chain","wall_groups":[group],"side":"bottom","offset_mm":-1}), qiyas_core::Source::User).is_err());
+    assert_eq!(s.drawing.doc, before);
+}
+
+#[test]
+fn auto_chain_registry_contract_has_a_valid_example_and_edit_effect() {
+    let entry = qiyas_core::registry::registry()
+        .get("dimension.auto_chain")
+        .unwrap();
+    assert!(!entry.doc.is_empty());
+    for example in &entry.examples {
+        assert!(qiyas_core::validation::validate_command(example, None).valid);
+        let command: Command = serde_json::from_value(example.clone()).unwrap();
+        assert_eq!(
+            qiyas_core::registry::effect_of(&command),
+            qiyas_core::registry::Effect::Edit
+        );
+    }
+}

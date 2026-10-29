@@ -18,7 +18,7 @@ function go(name: string) {
     fireEvent.click(tab);
     return;
   }
-  fireEvent.click(document.querySelector<HTMLElement>(".ribbon-more")!);
+  fireEvent.click(document.querySelector<HTMLElement>(".ribbon-tablist .ribbon-more")!);
   fireEvent.click(screen.getByRole("menuitemradio", { name }));
 }
 
@@ -104,7 +104,7 @@ test("the ribbon tabs have a roving tab stop; the arrows move between them, roun
   fireEvent.click(tab("Draw"));
   expect(tab("Draw").getAttribute("aria-selected")).toBe("true");
   expect(names.map((n) => tab(n).tabIndex)).toEqual([-1, 0, -1, -1]);
-  // "More" is the last stop, and the arrows go round.
+  // Until widths are known, More is the last stop and the arrows go round.
   fireEvent.keyDown(tab("Draw"), { key: "End" });
   await settle();
   expect(document.activeElement).toBe(tab("More"));
@@ -601,7 +601,7 @@ const rule = (selector: string) => css.match(new RegExp(`\\n${selector.replace(/
 
 test("the tabs' row scrolls sideways and stops short of the preferences instead of lying under them", () => {
   // The tabs never wrap and never shrink.
-  expect(rule(".ribbon-tabs \\[role=\"tab\"\\]")).toContain("white-space: nowrap");
+  expect(rule(".ribbon-tabs .ribbon-tab")).toContain("white-space: nowrap");
   expect(rule(".ribbon-tabs > \\*")).toContain("flex-shrink: 0");
   // The row scrolls (thin bar) and its end margin is the overlay's width, from one variable the
   // overlay reads too, so they stay in step. A margin, not padding: padding is only reached at
@@ -756,4 +756,55 @@ test("a fresh ribbon is collapsed and remembers an explicit expansion across mou
   second.unmount();
   render(<Ribbon {...props} />);
   expect(panel()).toBeNull();
+});
+
+test.each(["en", "ar"])("measured tab overflow shrinks and grows with the row in %s", async (language) => {
+  localStorage.setItem("qiyas.lang", language);
+  let available = 500;
+  let labelWidth = 80;
+  let resize = () => {};
+  const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const width = this.classList.contains("ribbon-tab") ? labelWidth : 40;
+    return { x: 0, y: 0, top: 0, left: 0, bottom: 30, right: width, height: 30, width, toJSON() {} };
+  });
+  const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("ribbon-tabs") ? available : 0;
+  });
+  const Observer = globalThis.ResizeObserver;
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) { if (target.classList.contains("ribbon-tabs")) resize = () => this.callback([], this as unknown as ResizeObserver); }
+    unobserve() {}
+    disconnect() {}
+  });
+  try {
+    render(<LanguageProvider><Ribbon {...props} /></LanguageProvider>);
+    const more = language === "ar" ? "المزيد" : "More";
+    expect(screen.getAllByRole("tab").length).toBeLessThan(8);
+    fireEvent.click(screen.getByRole("tab", { name: more }));
+    const output = language === "ar" ? "الإخراج" : "Output";
+    fireEvent.click(screen.getByRole("menuitemradio", { name: output }));
+    await settle();
+    act(() => { available = 1200; resize(); });
+    expect(screen.getAllByRole("tab")).toHaveLength(8);
+    expect(screen.queryByRole("tab", { name: more })).toBeNull();
+    expect(screen.getByRole("tab", { name: output }).getAttribute("aria-selected")).toBe("true");
+    act(() => { available = 350; resize(); });
+    expect(screen.getAllByRole("tab").length).toBeLessThan(8);
+    expect(document.querySelector(".ribbon-tablist .ribbon-more")).toBeTruthy();
+    // A hidden/unmeasured row or label must return to the usable fixed layout.
+    act(() => { available = 1200; labelWidth = 0; resize(); });
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getByRole("tab", { name: output }).getAttribute("aria-haspopup")).toBe("menu");
+    act(() => { labelWidth = 80; resize(); });
+    expect(screen.getAllByRole("tab")).toHaveLength(8);
+    act(() => { available = 0; resize(); });
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+  } finally {
+    cleanup();
+    rect.mockRestore(); clientWidth.mockRestore();
+    vi.stubGlobal("ResizeObserver", Observer);
+    localStorage.removeItem("qiyas.lang");
+    document.documentElement.dir = "ltr";
+  }
 });

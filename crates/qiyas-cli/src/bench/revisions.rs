@@ -48,8 +48,11 @@ pub(super) fn predict(
         tolerance: None,
     })
     .map_err(|e| e.to_string())?;
-    b.run(Command::VariationReport { layer: None })
-        .map_err(|e| e.to_string())?;
+    b.run(Command::VariationReport {
+        layer: None,
+        revision: None,
+    })
+    .map_err(|e| e.to_string())?;
     let report = b
         .variation()
         .map_err(|e| e.to_string())?

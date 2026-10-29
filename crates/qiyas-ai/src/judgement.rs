@@ -123,11 +123,13 @@ impl Job {
 
     /// Efficiency advice, sent once in a turn. It is never a reason to end a job the user asked for.
     pub fn budget(self, lang: Lang) -> &'static str {
-        match (self, lang) {
-            (Self::Drawing, Lang::En) => "[efficiency note] This turn has used many calls. Spend the rest well: batch edits, do not re-read what you already have, read a long result by pointer instead of paging it. This is not a reason to stop: finish the work the user asked for, phase by phase.",
-            (Self::Drawing, Lang::Ar) => "[efficiency note] استُخدمت خطوات كثيرة في هذه الرسالة. وفّر في الباقي: اجمع التعديلات في دفعات، ولا تعد قراءة ما لديك، واقرأ النتيجة الطويلة بمؤشر لا بصفحات. هذا ليس سببًا للتوقف: أنهِ ما طلبه المستخدم مرحلة بعد مرحلة.",
-            (Self::Takeoff, Lang::En) => "[efficiency note] This turn has used many calls. Spend the rest well: batch the mappings, do not re-read what you already have, read a long report by pointer instead of paging it. This is not a reason to stop: finish the quantity work the user asked for, and explain what stays uncertain.",
-            (Self::Takeoff, Lang::Ar) => "[efficiency note] استُخدمت خطوات كثيرة في هذه الرسالة. وفّر في الباقي: اجمع الربط في دفعات، ولا تعد قراءة ما لديك، واقرأ التقرير الطويل بمؤشر لا بصفحات. هذا ليس سببًا للتوقف: أنهِ عمل الكميات الذي طلبه المستخدم واشرح ما بقي غير مؤكد.",
+        match lang {
+            Lang::En => {
+                "[efficiency note] This turn has reached the call-count advisory threshold."
+            }
+            Lang::Ar => {
+                "[efficiency note] بلغ عدد الاستدعاءات في هذه الرسالة حد التنبيه المعلوماتي."
+            }
         }
     }
 }
@@ -140,39 +142,33 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// A short message that tells Mizan to carry on ("continue", "complete everything", "أكمل"), or to
-/// decide for itself ("apply all your assumptions"). It resumes the pending plan; it is not a
-/// new request.
+/// Only an unqualified continuation resumes the whole open plan. Named scope is left to
+/// the model, so "continue the doors" never activates unrelated phases.
 pub fn wants_to_continue(text: &str) -> bool {
     let words = words(text);
-    if words.is_empty() || words.len() > 12 {
-        return false;
-    }
-    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
-    // "Continue", "resume", "أكمل": a short message that is only that.
-    let carry_on = has(&[
-        "continue",
-        "resume",
-        "proceed",
-        "أكمل",
-        "اكمل",
-        "كمل",
-        "تابع",
-        "استمر",
-        "واصل",
-        "أتمم",
-        "اتمم",
-    ]) && words.len() <= 6;
-    // "Complete everything", "finish the rest".
-    let everything = has(&["complete", "finish"])
-        && has(&["everything", "all", "rest", "remaining", "كل", "الباقي"]);
-    carry_on
-        || everything
-        || (has(&["assumptions", "assumption", "افتراضاتك", "افتراضات"])
-            && has(&["apply", "use", "طبق", "اعتمد", "استخدم"])
-            && !is_question(text))
-        || (has(&["go"]) && has(&["ahead", "on"]))
-        || (has(&["decide"]) && has(&["you", "yourself"]))
+    let phrase = words.join(" ");
+    matches!(
+        phrase.as_str(),
+        "continue"
+            | "resume"
+            | "proceed"
+            | "go ahead"
+            | "go on"
+            | "please continue"
+            | "continue please"
+            | "continue and complete everything"
+            | "complete everything"
+            | "finish the rest"
+            | "finish everything"
+            | "أكمل"
+            | "اكمل"
+            | "كمل"
+            | "تابع"
+            | "استمر"
+            | "واصل"
+            | "أكمل كل شيء"
+            | "تابع من فضلك"
+    )
 }
 
 /// A message that asks something ("is the wall thick enough?", "what are your assumptions?").
@@ -289,17 +285,6 @@ fn letters(text: &str) -> (usize, usize) {
     (arabic, latin)
 }
 
-/// An answer clearly written in the other language than the user's: enough prose, and one
-/// language well ahead of the other (names, units and file names in the user's language may
-/// appear inside an answer without making it the wrong language).
-pub fn language_mismatch(answer: &str, expected: Lang) -> bool {
-    let (arabic, latin) = letters(answer);
-    match expected {
-        Lang::En => arabic >= 60 && arabic > latin,
-        Lang::Ar => latin >= 60 && latin > arabic * 4,
-    }
-}
-
 pub fn language(text: &str, fallback: Lang) -> Lang {
     let (arabic, latin) = letters(text);
     // "1a, 2b" (an answer to Mizan's question list), "ok", "continue": these answer inside the
@@ -398,7 +383,6 @@ mod tests {
         for text in [
             "Continue and complete everything !",
             "continue",
-            "Apply all assumptions from your side",
             "أكمل كل شيء",
             "كمل",
             "go ahead",
@@ -443,29 +427,16 @@ mod tests {
             "Use your assumptions",
             "طبق افتراضاتك",
         ] {
-            assert!(wants_to_continue(text), "{text}");
+            assert!(!wants_to_continue(text), "{text}");
+        }
+        for text in ["continue the doors", "تابع الأبواب فقط", "resume the BOQ"] {
+            assert!(!wants_to_continue(text));
         }
         // Continue keeps the job the conversation was doing.
         assert_eq!(
             Job::request("Continue and complete everything !", Job::Takeoff),
             Job::Takeoff
         );
-    }
-
-    #[test]
-    fn an_answer_in_the_wrong_language_is_found_but_names_do_not_count() {
-        let arabic = "توقفت هنا لتجنب زيادة التكلفة. الموجود حاليا حزمة تطوير معماري مبدئية وليست حزمة تنفيذ كاملة أو معتمدة.";
-        let english = "I stopped here to avoid more cost. What exists now is a preliminary architectural package, not a complete or approved construction set.";
-        assert!(language_mismatch(arabic, Lang::En));
-        assert!(language_mismatch(english, Lang::Ar));
-        assert!(!language_mismatch(arabic, Lang::Ar));
-        assert!(!language_mismatch(english, Lang::En));
-        assert!(!language_mismatch(
-            "Cairo_Villa_P02_A501_Review.pdf",
-            Lang::Ar
-        ));
-        let mixed = "الملفات: Cairo_Villa_Plans.pdf و A-WALL و Villa_Quantities.xlsx جاهزة للمراجعة وليست معتمدة بعد من المهندس المسؤول";
-        assert!(!language_mismatch(mixed, Lang::Ar));
     }
 
     #[test]

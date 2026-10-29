@@ -660,7 +660,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
     if kind == Kind::Boq {
         return items
             .iter()
-            .filter(|i| !i.informational && !i.second_differs())
+            .filter(|i| !i.informational)
             .map(|i| {
                 let mut v = json!(i);
                 v["target"] = json!(TraceTarget {
@@ -842,26 +842,15 @@ pub fn drawing(
     })
 }
 /// The BOQ says, line by line, whether a fresh reader measured the same quantity again. The
-/// column is left out when nothing was checked. A line whose second reading differs is not a
-/// BOQ row at all (it is a query); the report says which.
+/// column is left out when nothing was checked. Disputed rows retain both readings.
 fn second_reading_column(
     layout: &mut Layout,
     rows: &mut [Value],
     items: &[crate::measurement::GeneratedItem],
     language: Language,
-    warnings: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
 ) {
     let arabic = language == Language::Ar;
-    for item in items.iter().filter(|i| i.second_differs()) {
-        let (first, second) = item
-            .second_reading
-            .as_ref()
-            .map_or((0.0, 0.0), |s| (s.first, s.second));
-        warnings.push(format!(
-            "BOQ line {} is left out: the second reading ({second:.2}) differs from the first ({first:.2}). It is a query to answer",
-            item.code
-        ));
-    }
     if layout.client.is_some() || !items.iter().any(|i| i.second_reading.is_some()) {
         return;
     }
@@ -869,7 +858,9 @@ fn second_reading_column(
         let label = items
             .iter()
             .find(|i| row["code"].as_str() == Some(i.code.as_str()))
-            .map_or("", |i| crate::second_reading::item_label(i, arabic));
+            .map_or_else(String::new, |i| {
+                crate::second_reading::item_label(i, arabic)
+            });
         row["second_reading_text"] = json!(label);
     }
     layout.columns.push(Column {

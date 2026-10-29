@@ -115,6 +115,10 @@ pub struct HostCut {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ObjectType {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name_en: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name_ar: String,
     pub category: String,
     #[serde(default)]
     pub properties: BTreeMap<String, Property>,
@@ -190,6 +194,7 @@ pub struct ObjectInstance {
 /// The source recorded for a property value given without one.
 pub(crate) fn given_by(source: crate::Source) -> crate::measurement::PropSource {
     crate::measurement::PropSource {
+        decision: None,
         kind: match source {
             crate::Source::User => crate::measurement::SourceKind::Engineer,
             crate::Source::Ai | crate::Source::Mcp => crate::measurement::SourceKind::Mizan,
@@ -341,6 +346,28 @@ impl Property {
     }
 }
 impl ObjectType {
+    fn fill_display_metadata(&mut self) {
+        if let Some(data) = bundled_type(&self.name) {
+            if self.display_name_en.is_empty() {
+                self.display_name_en = data["display_name_en"]
+                    .as_str()
+                    .unwrap_or(&self.name)
+                    .into();
+            }
+            if self.display_name_ar.is_empty() {
+                self.display_name_ar = data["display_name_ar"]
+                    .as_str()
+                    .unwrap_or(&self.name)
+                    .into();
+            }
+            if !self.properties.contains_key("kind") {
+                if let Ok(property) = serde_json::from_value(data["properties"]["kind"].clone()) {
+                    self.properties.insert("kind".into(), property);
+                }
+            }
+        }
+    }
+
     pub(crate) fn validate(&self) -> Result<(), CoreError> {
         if self.name.trim().is_empty() || self.category.trim().is_empty() {
             return Err(invalid("Object type name and category are required"));
@@ -668,8 +695,9 @@ impl Session {
                 if let Some(definition) = self.evaluation.borrow().types.get(&key) {
                     return Ok(definition.clone());
                 }
-                let definition: ObjectType = serde_json::from_value(e.data)
+                let mut definition: ObjectType = serde_json::from_value(e.data)
                     .map_err(|e| invalid(format!("Invalid object type: {e}")))?;
+                definition.fill_display_metadata();
                 self.evaluation
                     .borrow_mut()
                     .types
@@ -686,8 +714,9 @@ impl Session {
         }
         let entry = knowledge::get(&self.drawing.doc, Kind::Types, name)?
             .ok_or_else(|| invalid(format!("There is no object type {name}")))?;
-        let definition: ObjectType =
+        let mut definition: ObjectType =
             serde_json::from_value(entry.data).map_err(|e| invalid(e.to_string()))?;
+        definition.fill_display_metadata();
         self.evaluation
             .borrow_mut()
             .types
@@ -879,6 +908,7 @@ impl Session {
                     serde_json::from_value(spec).map_err(|e| invalid(e.to_string()))?;
                 self.draw(spec)?[0]
             };
+            self.validate_decision_sources(&props, &p.sources, &definition)?;
             // Every value says where it came from: as cited, a type default, or whoever set it.
             let sources = props
                 .keys()
@@ -887,6 +917,7 @@ impl Session {
                         Some(cited) => cited.clone(),
                         None if supplied.contains_key(name) => given_by(source),
                         None => crate::measurement::PropSource {
+                            decision: None,
                             kind: crate::measurement::SourceKind::TypeDefault,
                             ..Default::default()
                         },
@@ -949,19 +980,30 @@ impl Session {
                     "Property {name} is bound to an expression; edit its source"
                 )));
             }
-            // A value set again unchanged, with no new citation, keeps its source: the edit is a no-op.
+            // Explicit engineer input confirms even an unchanged default; ordinary repeats keep their source.
             for (name, value) in props {
                 match sources.get(name) {
                     Some(from) => {
                         object.sources.insert(name.clone(), from.clone());
                     }
-                    None if object.props.get(name) != Some(value) => {
+                    None if object.props.get(name) != Some(value)
+                        || (given.kind == crate::measurement::SourceKind::Engineer
+                            && object.sources.get(name).is_some_and(|s| {
+                                matches!(
+                                    s.kind,
+                                    crate::measurement::SourceKind::TypeDefault
+                                        | crate::measurement::SourceKind::Unknown
+                                        | crate::measurement::SourceKind::Mizan
+                                )
+                            })) =>
+                    {
                         object.sources.insert(name.clone(), given.clone());
                     }
                     None => {}
                 }
             }
             object.props.extend(props.clone());
+            self.validate_decision_sources(&object.props, &object.sources, &definition)?;
             object.props = self
                 .object_type(&object.type_name)?
                 .properties(&object.props)?;
@@ -1862,17 +1904,17 @@ impl Session {
             {
                 return Err(invalid(
                     "Region object requires a closed driver with positive area",
-                ))
+                ));
             }
             GeometryKind::Path | GeometryKind::Band
                 if paths.len() != 1 || paths[0].length() <= 0.0 =>
             {
-                return Err(invalid("Path object requires a nonempty path driver"))
+                return Err(invalid("Path object requires a nonempty path driver"));
             }
             GeometryKind::Point | GeometryKind::Hosted
                 if !matches!(driver, EntityType::Point(_) | EntityType::Insert(_)) =>
             {
-                return Err(invalid("Point object requires a point or insert driver"))
+                return Err(invalid("Point object requires a point or insert driver"));
             }
             _ => {}
         }
@@ -2071,7 +2113,7 @@ impl Session {
         }
         if let Some(template) = &definition.plan.label_template {
             let mut label = template
-                .replace("{type}", &definition.name)
+                .replace("{type}", &public_type_name(&definition.name, false))
                 .replace("{id}", &object.id.to_string());
             for (key, value) in &context.values {
                 let placeholder = format!("{{{key}}}");
@@ -2244,12 +2286,17 @@ impl Session {
             return Err(invalid("The opening is outside its host wall"));
         };
         if (delta[0] * dy - delta[1] * dx).abs() > self.measure_tol() {
-            return Err(invalid(format!("Object {} must stay on wall {}. Move it along the wall or change its distance with set_object_props.", object.id, host.id)));
+            return Err(invalid(format!(
+                "Object {} must stay on wall {}. Move it along the wall or change its distance with set_object_props.",
+                object.id, host.id
+            )));
         }
         if !definition.properties.contains_key(&cut.at)
             || definition.property_bindings.contains_key(&cut.at)
         {
-            return Err(invalid("The opening position is calculated. Change the source properties of its position instead."));
+            return Err(invalid(
+                "The opening position is calculated. Change the source properties of its position instead.",
+            ));
         }
         let value = (current + delta[0] * dx + delta[1] * dy) * self.drawing.units.to_metres();
         object
@@ -2553,7 +2600,18 @@ impl Session {
             }
             let read = self.evaluation_read()?;
             let definition = self.object_type(&object.type_name)?;
+            let supplied = object.props.keys().cloned().collect::<BTreeSet<_>>();
             object.props = definition.properties(&object.props)?;
+            for name in object.props.keys().filter(|name| !supplied.contains(*name)) {
+                object
+                    .sources
+                    .entry(name.clone())
+                    .or_insert(crate::measurement::PropSource {
+                        decision: None,
+                        kind: crate::measurement::SourceKind::TypeDefault,
+                        ..Default::default()
+                    });
+            }
             let context = self.object_context(&object, &definition)?;
             for name in definition.property_bindings.keys() {
                 if let Some(value) = context.values.get(name) {
@@ -2847,10 +2905,46 @@ fn evaluate_symbol(value: &mut Value, context: &Context<'_>) -> Result<(), CoreE
     Ok(())
 }
 
+pub(crate) fn bundled_type(name: &str) -> Option<&'static Value> {
+    static TYPES: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    TYPES
+        .get_or_init(|| {
+            serde_json::from_str(include_str!("../data/legacy-object-types.json"))
+                .expect("bundled types")
+        })
+        .as_object()?
+        .values()
+        .find(|v| {
+            v["name"]
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+}
+
+pub(crate) fn public_type_name(name: &str, arabic: bool) -> String {
+    bundled_type(name)
+        .and_then(|v| {
+            v[if arabic {
+                "display_name_ar"
+            } else {
+                "display_name_en"
+            }]
+            .as_str()
+        })
+        .unwrap_or(name)
+        .into()
+}
+
 pub(crate) fn record_value(record: &ObjectRecord, name: &str) -> Option<Value> {
     match name {
         "id" => Some(json!(record.instance.id)),
         "type" => Some(json!(record.instance.type_name)),
+        "type_en" => Some(json!(public_type_name(&record.instance.type_name, false))),
+        "type_ar" => Some(json!(public_type_name(&record.instance.type_name, true))),
+        "kind" => record.instance.props.get("kind").cloned().or_else(|| {
+            bundled_type(&record.instance.type_name)
+                .map(|d| d["properties"]["kind"]["default"].clone())
+        }),
         "category" => Some(json!(record.category)),
         "level" => Some(json!(record.instance.level)),
         _ => record

@@ -6,8 +6,8 @@
     "headers": ["Mark", "Kind", "Width x height (mm)", "Count"],
     "group_by": ["mark"],
     "templates": {
-      "mark": "{if(type == 'Legacy door', 'D', 'W')}-{width * 1000:6t}x{(head-sill) * 1000:6t}",
-      "kind": "{if(type == 'Legacy door', 'Door', 'Window')}",
+      "mark": "{if(kind == 'door', 'D', if(kind == 'window', 'W', kind))}-{width * 1000:6t}x{(head-sill) * 1000:6t}",
+      "kind": "{if(kind == 'door', 'Door', if(kind == 'window', 'Window', kind))}",
       "size": "{width * 1000:6t} x {(head-sill) * 1000:6t}"
     },
     "decimals": {"count": 0},
@@ -15,7 +15,7 @@
     "total_by": ["kind"],
     "ar_headers": ["العلامة", "النوع", "العرض × الارتفاع (مم)", "العدد"],
     "ar_templates": {
-      "kind": "{if(type == 'Legacy door', 'باب', 'شباك')}",
+      "kind": "{if(kind == 'door', 'باب', if(kind == 'window', 'شباك', kind))}",
       "size": "{width * 1000:6t} × {(head-sill) * 1000:6t}"
     },
     "ar_totals": {"mark": "الإجمالي", "count": ""},

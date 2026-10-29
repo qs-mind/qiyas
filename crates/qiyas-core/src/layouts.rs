@@ -85,33 +85,85 @@ pub(crate) fn default_title_layer() -> String {
     "A-ANNO-TTLB".into()
 }
 
-pub(crate) const TITLE_FIELDS: [&str; 7] = [
+pub(crate) const TITLE_FIELDS: [&str; 14] = [
     "title",
     "project",
+    "client",
+    "consultant",
+    "project_no",
     "drawing_no",
     "scale",
     "date",
     "drawn_by",
-    "sheet",
-];
-
-/// The rows of a captioned title block (`make_sheet`), top to bottom.
-pub(crate) const SHEET_FIELDS: [&str; 9] = [
-    "project",
-    "title",
-    "drawing_no",
-    "scale",
-    "date",
-    "drawn_by",
+    "checked_by",
+    "approved_by",
     "revision",
     "status",
     "sheet",
 ];
 
+/// The rows of a captioned title block (`make_sheet`), top to bottom.
+pub(crate) const SHEET_FIELDS: [&str; 14] = [
+    "project",
+    "title",
+    "client",
+    "consultant",
+    "project_no",
+    "drawing_no",
+    "scale",
+    "date",
+    "drawn_by",
+    "checked_by",
+    "approved_by",
+    "revision",
+    "status",
+    "sheet",
+];
+
+/// One supplied revision entry. Empty values remain empty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SheetRevision {
+    pub rev: String,
+    pub date: String,
+    pub description: String,
+}
+
+pub(crate) fn revision_height(revisions: &[SheetRevision]) -> f64 {
+    8.0 + revisions
+        .iter()
+        .map(|r| revision_row_height(&r.description))
+        .sum::<f64>()
+        .max(8.0)
+}
+
+fn revision_row_height(description: &str) -> f64 {
+    // The description column is 110 mm wide, with 3 mm text and 4 mm padding.
+    description
+        .lines()
+        .map(|line| (line.chars().count() as f64 / 55.0).ceil().max(1.0))
+        .sum::<f64>()
+        .max(1.0)
+        * 4.5
+        + 4.0
+}
+
 /// A title block's field captions in the sheet's language.
 pub(crate) fn caption(key: &str, language: crate::rooms::LabelLanguage) -> String {
     use crate::rooms::LabelLanguage::{Ar, En};
     match (key, language) {
+        ("client", En) => "Client",
+        ("client", Ar) => "العميل",
+        ("consultant", En) => "Consultant",
+        ("consultant", Ar) => "الاستشاري",
+        ("project_no", En) => "Project no.",
+        ("project_no", Ar) => "رقم المشروع",
+        ("checked_by", En) => "Checked by",
+        ("checked_by", Ar) => "دقق بواسطة",
+        ("approved_by", En) => "Approved by",
+        ("approved_by", Ar) => "اعتمد بواسطة",
+        ("description", En) => "Description",
+        ("description", Ar) => "الوصف",
         ("project", En) => "Project",
         ("project", Ar) => "المشروع",
         ("title", En) => "Title",
@@ -388,8 +440,20 @@ impl Session {
         margin_mm: f64,
         binding_mm: f64,
         layer: &str,
+        revisions: &[SheetRevision],
+        language: crate::rooms::LabelLanguage,
     ) -> Result<Vec<u64>, CoreError> {
-        self.title_block_with(fields, margin_mm, binding_mm, layer, None)
+        let mut handles =
+            self.title_block_with(fields, margin_mm, binding_mm, layer, Some(language))?;
+        let extra = fields
+            .keys()
+            .filter(|k| !SHEET_FIELDS.contains(&k.as_str()))
+            .count();
+        let bottom = margin_mm + (SHEET_FIELDS.len() - 1 + extra) as f64 * 8.0 + 14.0;
+        handles.extend(
+            self.sheet_revision_table(revisions, language, bottom, margin_mm, binding_mm, layer)?,
+        );
+        Ok(handles)
     }
 
     /// The same, with a caption on each row in `captions`' language (`make_sheet`): the value
@@ -471,7 +535,7 @@ impl Session {
         let style = self.text_style();
         let arabic = captions == Some(crate::rooms::LabelLanguage::Ar);
         // Caption column 40 mm wide; the value beside it. Arabic mirrors both.
-        let (caption_w, gap) = (40.0_f64.min(block_w / 3.0), 4.0);
+        let (caption_w, gap) = (60.0_f64.min(block_w / 3.0), 4.0);
         for (i, key) in rows.into_iter().enumerate() {
             let y = bottom + block_h - heights[..i].iter().sum::<f64>();
             if i > 0 {
@@ -562,6 +626,113 @@ impl Session {
         if !fields.is_empty() || captions.is_some() {
             self.register_text_app();
         }
+        self.add_on_annotation_layer(layer, entities, false)
+    }
+
+    /// Revision table above the title block, with no fabricated entry or date.
+    pub(crate) fn sheet_revision_table(
+        &mut self,
+        revisions: &[SheetRevision],
+        language: crate::rooms::LabelLanguage,
+        bottom: f64,
+        margin: f64,
+        binding: f64,
+        layer: &str,
+    ) -> Result<Vec<u64>, CoreError> {
+        if revisions
+            .iter()
+            .flat_map(|r| [&r.rev, &r.date, &r.description])
+            .any(|v| v.contains('\0') || v.len() > 64 * 1024)
+        {
+            return Err(invalid(
+                "A revision entry contains invalid text / يحتوي سجل المراجعة على نص غير صالح",
+            ));
+        }
+        let paper = self.paper().ok_or_else(|| {
+            invalid("A revision table needs paper / جدول المراجعات يحتاج إلى لوحة")
+        })?;
+        let right = paper.w_mm - margin;
+        let left = right - 180.0_f64.min(paper.w_mm - margin - margin.max(binding));
+        let top = bottom + revision_height(revisions);
+        if top > paper.h_mm - margin {
+            return Err(invalid(
+                "The revision table exceeds the sheet / جدول المراجعات يتجاوز اللوحة",
+            ));
+        }
+        let arabic = language == crate::rooms::LabelLanguage::Ar;
+        // Its bottom edge is already the title block's top edge.
+        let mut entities = Vec::new();
+        if left > margin.max(binding) {
+            entities.extend(self.draw_entities(DrawSpec::Line {
+                a: [left, bottom],
+                b: [left, top],
+            })?);
+        }
+        entities.extend(self.draw_entities(DrawSpec::Line {
+            a: [left, top],
+            b: [right, top],
+        })?);
+        let mut y = top;
+        let header = [
+            caption("revision", language),
+            caption("date", language),
+            caption("description", language),
+        ];
+        let rows = std::iter::once((header, 8.0)).chain(revisions.iter().map(|r| {
+            (
+                [r.rev.clone(), r.date.clone(), r.description.clone()],
+                revision_row_height(&r.description),
+            )
+        }));
+        let widths = [25.0, 45.0, (right - left - 70.0).max(1.0)];
+        for (cells, height) in rows {
+            if y < top {
+                entities.extend(self.draw_entities(DrawSpec::Line {
+                    a: [left, y],
+                    b: [right, y],
+                })?);
+            }
+            let mut offset = 0.0;
+            for (cell, width) in cells.iter().zip(widths) {
+                let x = if arabic {
+                    right - offset - 2.0
+                } else {
+                    left + offset + 2.0
+                };
+                if !cell.trim().is_empty() {
+                    let mut text =
+                        MText::with_value(escape_mtext(cell), Vector3::new(x, y - 2.0, 0.0))
+                            .with_height(3.0);
+                    text.rectangle_width = width - 4.0;
+                    text.style = self.text_style();
+                    if arabic {
+                        text.attachment_point = AttachmentPoint::TopRight;
+                    }
+                    mark_logical(&mut text.common);
+                    entities.push(EntityType::MText(text));
+                }
+                offset += width;
+            }
+            y -= height;
+        }
+        if revisions.is_empty() {
+            entities.extend(self.draw_entities(DrawSpec::Line {
+                a: [left, top - 8.0],
+                b: [right, top - 8.0],
+            })?);
+        }
+        for offset in [25.0, 70.0] {
+            let x = if arabic {
+                right - offset
+            } else {
+                left + offset
+            };
+            entities.extend(self.draw_entities(DrawSpec::Line {
+                a: [x, bottom],
+                b: [x, top],
+            })?);
+        }
+        self.register_text_app();
         self.add_on_annotation_layer(layer, entities, false)
     }
 

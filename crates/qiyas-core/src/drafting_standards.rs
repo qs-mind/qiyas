@@ -19,8 +19,14 @@ use crate::CoreError;
 const STANDARDS_JSON: &str = include_str!("../data/drafting-standards.json");
 const REGISTER_JSON: &str = include_str!("../data/code-register.json");
 
-/// The markets the register names, as it spells them.
-pub const MARKETS: [&str; 3] = ["egypt", "ksa", "uae"];
+/// Jurisdictions for which the packaged register has data.
+pub fn markets() -> Vec<&'static str> {
+    register()["markets"]
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.keys().map(String::as_str))
+        .collect()
+}
 
 fn invalid(message: impl Into<String>) -> CoreError {
     CoreError::InvalidCommand(message.into())
@@ -59,10 +65,15 @@ pub struct Limit {
     pub source_url: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_ar: Option<String>,
     #[serde(default)]
     pub rationale: Option<String>,
     #[serde(default)]
     pub evidence_read: bool,
+    /// Scope retained from the register, never inferred from the requested country.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Value>,
     /// An unverified reference, never evidence for a code requirement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_to_confirm: Option<UnconfirmedReference>,
@@ -89,37 +100,19 @@ pub fn limits() -> &'static [Limit] {
 /// `egypt`, `ksa` or `uae` for a market as a person writes it; `None` when it is none of them.
 pub fn normalise_market(text: &str) -> Option<&'static str> {
     let t = text.trim().to_lowercase();
-    if t.is_empty() {
-        return None;
-    }
-    let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
-    if has(&["egypt", "cairo", "مصر", "القاهرة", "ecp"]) {
-        Some("egypt")
-    } else if has(&[
-        "ksa",
-        "saudi",
-        "riyadh",
-        "jeddah",
-        "sbc",
-        "السعود",
-        "الرياض",
-        "جدة",
-    ]) {
-        Some("ksa")
-    } else if has(&[
-        "uae",
-        "emirates",
-        "dubai",
-        "abu dhabi",
-        "sharjah",
-        "الإمارات",
-        "دبي",
-        "أبوظبي",
-    ]) {
-        Some("uae")
-    } else {
-        None
-    }
+    register()["markets"]
+        .as_object()?
+        .iter()
+        .find_map(|(key, data)| {
+            (key == &t
+                || data["aliases"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .any(|alias| t == alias || t.split(',').any(|part| part.trim() == alias)))
+            .then_some(key.as_str())
+        })
 }
 
 /// A limit as used for a market, with where it came from.
@@ -141,11 +134,13 @@ impl ResolvedLimit {
     /// JSON for a result: the value with its basis, source and what to tell the engineer.
     pub fn json(&self) -> Value {
         let mut v = serde_json::to_value(&self.limit).unwrap_or_else(|_| json!({}));
+        v["asked"] = json!(self.asked);
+        v["fallback"] = json!(self.fallback);
         if self.fallback {
-            v["note_market"] = json!(format!(
-                "No value was read for {}: this is a practice default. The engineer checks the code of that market.",
-                self.asked.as_deref().unwrap_or("this market")
-            ));
+            v["note_market"] =
+                json!("No scoped code value is selected; this is an optional practice preference.");
+            v["note_market_ar"] =
+                json!("لم يتم اختيار قيمة كود محددة النطاق؛ هذه قيمة ممارسة اختيارية.");
         }
         v
     }
@@ -153,22 +148,71 @@ impl ResolvedLimit {
 
 /// The limit `id` for `market`: that market's own, else the practice default (`any`).
 pub fn limit_for(id: &str, market: Option<&str>) -> Option<ResolvedLimit> {
-    let market = market.and_then(normalise_market);
-    let find = |m: &str| limits().iter().find(|l| l.id == id && l.market == m);
-    if let Some(m) = market {
-        if let Some(limit) = find(m) {
-            return Some(ResolvedLimit {
-                limit: limit.clone(),
-                asked: Some(m.into()),
-                fallback: false,
-            });
-        }
+    // An unsupported requested jurisdiction must never borrow another country's values.
+    let normalised = match market {
+        Some(name) => Some(normalise_market(name)?),
+        None => None,
+    };
+    let candidates: Vec<_> = limits()
+        .iter()
+        .filter(|l| l.id == id && Some(l.market.as_str()) == normalised)
+        .collect();
+    // A single-number API cannot choose between building classes or sub-jurisdictions.
+    // Scoped entries are exposed together by resolved_limits instead.
+    if candidates.len() == 1 && candidates[0].scope.is_none() {
+        return Some(ResolvedLimit {
+            limit: candidates[0].clone(),
+            asked: market.map(String::from),
+            fallback: false,
+        });
     }
-    find("any").map(|limit| ResolvedLimit {
-        limit: limit.clone(),
-        asked: market.map(String::from),
-        fallback: market.is_some(),
-    })
+    limits()
+        .iter()
+        .find(|l| l.id == id && l.market == "any")
+        .map(|limit| ResolvedLimit {
+            limit: limit.clone(),
+            asked: market.map(String::from),
+            fallback: market.is_some(),
+        })
+}
+
+/// All applicable register alternatives, retaining their jurisdiction and building-class scopes.
+pub fn resolved_limits(market: Option<&str>) -> Vec<Value> {
+    let normalised = match market {
+        Some(name) => match normalise_market(name) {
+            Some(m) => Some(m),
+            None => return Vec::new(),
+        },
+        None => None,
+    };
+    limit_ids()
+        .iter()
+        .flat_map(|id| {
+            let own: Vec<_> = limits()
+                .iter()
+                .filter(|l| l.id == *id && Some(l.market.as_str()) == normalised)
+                .collect();
+            let selected = if own.is_empty() {
+                limits()
+                    .iter()
+                    .filter(|l| l.id == *id && l.market == "any")
+                    .collect()
+            } else {
+                own
+            };
+            selected
+                .into_iter()
+                .map(|limit| {
+                    ResolvedLimit {
+                        limit: limit.clone(),
+                        asked: market.map(String::from),
+                        fallback: normalised.is_some() && limit.market == "any",
+                    }
+                    .json()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// The ids of all limits, once each.
@@ -190,7 +234,7 @@ pub fn check_register() -> Vec<String> {
         if l.id.trim().is_empty() || l.unit.trim().is_empty() || !l.value.is_finite() {
             problems.push(format!("{at}: needs an id, a unit and a finite value"));
         }
-        if !MARKETS.contains(&l.market.as_str()) && l.market != "any" {
+        if !markets().contains(&l.market.as_str()) && l.market != "any" {
             problems.push(format!("{at}: unknown market"));
         }
         match l.basis.as_str() {
@@ -255,7 +299,7 @@ pub fn check_register() -> Vec<String> {
     problems
 }
 
-/// A project type's key (`villa`) for a name or alias as a person writes it ("two storey villa",
+/// A project type's key (`villa`) for a name or alias as a person writes it ("villa",
 /// "فيلا"); `None` when the data has no such type.
 pub fn project_type_key(text: &str) -> Option<String> {
     let t = text.trim().to_lowercase();
@@ -269,7 +313,7 @@ pub fn project_type_key(text: &str) -> Option<String> {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .any(|alias| t.contains(&alias.to_lowercase()))
+            .any(|alias| t == alias.to_lowercase())
             .then(|| key.clone())
     })
 }
@@ -277,12 +321,14 @@ pub fn project_type_key(text: &str) -> Option<String> {
 /// The sheet set of a project type: numbered sheets in discipline order, each with what it
 /// shows and the standard of its view type. `storeys` drops the sheets that need more floors.
 pub fn sheet_set(project_type: &str, storeys: Option<u32>) -> Result<Value, CoreError> {
-    let key = project_type_key(project_type).ok_or_else(|| {
-        invalid(format!(
-            "No drawing package is defined for {project_type:?}. Types: {}",
-            project_type_names().join(", ")
-        ))
-    })?;
+    let Some(key) = project_type_key(project_type) else {
+        return Ok(json!({
+            "project_type": project_type, "sheets": [], "sheet_count": 0,
+            "available_project_types": project_type_names(),
+            "note": format!("No packaged template for {project_type}; build the package from the brief."),
+            "note_ar": format!("لا توجد حزمة جاهزة لنوع {project_type}؛ كوّن الحزمة من متطلبات المشروع.")
+        }));
+    };
     let body = &standards()["project_types"][&key];
     let order: Vec<&str> = body["order"]
         .as_array()
@@ -320,6 +366,8 @@ pub fn sheet_set(project_type: &str, storeys: Option<u32>) -> Result<Value, Core
         "project_type": key,
         "title_en": body["title_en"],
         "title_ar": body["title_ar"],
+        "storeys": storeys,
+        "conditional_sheets": if storeys.is_none() { body["sheets"].as_array().into_iter().flatten().filter(|s| s.get("when").is_some()).cloned().collect::<Vec<_>>() } else { Vec::new() },
         "sheet_count": sheets.len(),
         "sheets": sheets,
         "numbering": "G general, A architectural, S structural, M mechanical, E electrical, P plumbing; 001 for notes and indexes, 1xx plans, 2xx elevations, 3xx sections, 4xx enlarged plans, 5xx details, 6xx schedules.",
@@ -337,14 +385,14 @@ pub fn project_type_names() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A condition of the form `storeys >= 2`. Unknown storeys are taken as two (a villa).
+/// A condition of the form `storeys >= 2`. Unknown storeys leave conditional sheets unselected.
 fn sheet_applies(when: Option<&str>, storeys: Option<u32>) -> bool {
     let Some(when) = when else { return true };
     match when
         .strip_prefix("storeys >= ")
         .and_then(|n| n.trim().parse::<u32>().ok())
     {
-        Some(n) => storeys.unwrap_or(2) >= n,
+        Some(n) => storeys.is_some_and(|storeys| storeys >= n),
         None => true,
     }
 }
@@ -369,7 +417,7 @@ pub fn view_standards(view: Option<&str>) -> Result<Value, CoreError> {
     }
 }
 
-/// The room kind for a name, from the data's keyword rules (first match), and whether the name
+/// An uncertain room-kind suggestion for a name, from the data's keyword rules (first match), and whether the name
 /// says master. Names in English and Arabic.
 pub fn room_kind(name: &str) -> (Option<&'static str>, bool) {
     let sp = &standards()["space_planning"];
@@ -392,30 +440,19 @@ pub fn room_kind(name: &str) -> (Option<&'static str>, bool) {
                 .filter_map(Value::as_str)
                 .any(|w| lower.contains(w))
         })
-        .and_then(|rule| rule["kind"].as_str())
-        .and_then(|k| KINDS.iter().copied().find(|known| *known == k));
+        .and_then(|rule| rule["kind"].as_str());
     (kind, master)
 }
 
-/// The kinds the rules may name (a closed set so code can match on them).
-pub const KINDS: [&str; 16] = [
-    "stair",
-    "guest_wc",
-    "bathroom",
-    "wc",
-    "kitchen",
-    "dining",
-    "majlis",
-    "reception",
-    "living",
-    "dressing",
-    "bedroom",
-    "corridor",
-    "lobby",
-    "utility",
-    "garage",
-    "balcony",
-];
+/// Kind names present in the optional suggestion data, without restricting caller classifications.
+pub fn suggested_kinds() -> Vec<&'static str> {
+    standards()["space_planning"]["kind_rules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["kind"].as_str())
+        .collect()
+}
 
 /// A space-planning threshold (practice default) by id.
 pub fn threshold(id: &str) -> Option<f64> {
@@ -469,8 +506,14 @@ pub fn general_notes(
         }
     };
     let mut lines = vec![pick("status"), pick("responsibility")];
-    let market = market.and_then(normalise_market);
     let codes = market.map(codes_of).unwrap_or_default();
+    if let Some(name) = market.filter(|name| normalise_market(name).is_none()) {
+        lines.push(if language == LabelLanguage::Ar {
+            format!("الاختصاص {name} غير مدعوم في السجل المرفق.")
+        } else {
+            format!("Jurisdiction {name} is unsupported by the packaged register.")
+        });
+    }
     if !codes.is_empty() {
         let title = if language == LabelLanguage::Ar {
             "title_ar"
@@ -530,46 +573,62 @@ pub fn knowledge(
             "notice": std["notice"],
             "topics": ["overview", "sheet_set", "views", "symbols", "materials", "space_planning", "codes", "limits", "general_notes"],
             "project_types": project_type_names(),
-            "markets": MARKETS,
-            "how_to_use": "Start a package with sheet_set, draw each view to its views standard, run space_check before drawing walls, write general_notes on G-002 and on every sheet.",
+            "markets": markets(),
+            "how_to_use": "Packaged entries are optional references. The brief determines the drawing package and applicable profiles.",
+            "how_to_use_ar": "المحتوى المرفق مراجع اختيارية. متطلبات المشروع تحدد حزمة الرسومات والملفات المناسبة.",
         })),
-        KnowledgeTopic::SheetSet => sheet_set(project_type.unwrap_or("villa"), storeys),
+        KnowledgeTopic::SheetSet => {
+            sheet_set(project_type.unwrap_or("unspecified / غير محدد"), storeys)
+        }
         KnowledgeTopic::Views => view_standards(view),
         KnowledgeTopic::Symbols => Ok(std["symbols"].clone()),
         KnowledgeTopic::Materials => Ok(std["materials"].clone()),
         KnowledgeTopic::SpacePlanning => Ok(json!({
+            "profiles": std["space_planning"]["profiles"],
             "thresholds": std["space_planning"]["thresholds"],
             "circulation_kinds": std["space_planning"]["circulation_kinds"],
             "living_kinds": std["space_planning"]["living_kinds"],
-            "kinds": KINDS,
-            "limits_used": space_limit_ids().iter().filter_map(|id| limit_for(id, market).map(|l| l.json())).collect::<Vec<_>>(),
-            "note": "Thresholds are practice defaults. Limits come from the market's code where the register has the value.",
+            "suggested_kinds": suggested_kinds(),
+            "market": market,
+            "supported": market.is_none_or(|m| normalise_market(m).is_some()),
+            "note_market": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("Unsupported jurisdiction: {m}.")),
+            "note_market_ar": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("اختصاص غير مدعوم: {m}.")),
+            "limits_available": resolved_limits(market),
+            "note": "Profiles are optional practice preferences, not code. Select a compatible profile explicitly.",
+            "note_ar": "الملفات قيم ممارسة اختيارية وليست كوداً. اختر ملفاً متوافقاً بشكل صريح.",
         })),
         KnowledgeTopic::Codes => {
             let markets: BTreeMap<String, Value> = match market.and_then(normalise_market) {
                 Some(m) => [(m.to_string(), register()["markets"][m].clone())].into(),
+                None if market.is_some() => BTreeMap::new(),
                 None => register()["markets"]
                     .as_object()
                     .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                     .unwrap_or_default(),
             };
-            Ok(json!({ "policy": register()["policy"], "markets": markets }))
+            Ok(
+                json!({ "market": market, "supported": market.is_none_or(|m| normalise_market(m).is_some()), "policy": register()["policy"], "markets": markets,
+                "note": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("Unsupported jurisdiction: {m}.")),
+                "note_ar": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("اختصاص غير مدعوم: {m}.")) }),
+            )
         }
         KnowledgeTopic::Limits => {
-            let resolved: Vec<Value> = limit_ids()
-                .iter()
-                .filter_map(|id| limit_for(id, market).map(|l| l.json()))
-                .collect();
+            let resolved = resolved_limits(market);
             Ok(json!({
-                "market": market.and_then(normalise_market),
+                "market": market,
+                "supported": market.is_none_or(|m| normalise_market(m).is_some()),
+                "note": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("Unsupported jurisdiction: {m}.")),
+                "note_ar": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("اختصاص غير مدعوم: {m}.")),
                 "policy": register()["policy"],
                 "limits": resolved,
             }))
         }
         KnowledgeTopic::GeneralNotes => Ok(json!({
+            "market": market,
             "language": if language == LabelLanguage::Ar { "ar" } else { "en" },
             "lines": general_notes(market, language, assumptions),
-            "use": "Pass lines as notes to make_sheet on every sheet, and list the assumptions in the answer.",
+            "use": "Optional sheet-note text; listed assumptions are supplied by the caller.",
+            "use_ar": "نص اختياري لملاحظات اللوحة؛ الافتراضات المدرجة مقدمة من المستدعي.",
         })),
     }
 }

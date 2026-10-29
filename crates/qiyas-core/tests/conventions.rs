@@ -213,6 +213,7 @@ fn labelled_grids_have_paper_sized_bubbles_and_text_in_every_unit() {
         let handles = added(
             &mut session,
             Command::Grid {
+                layer: None,
                 x: vec![
                     GridAxis {
                         label: "A".into(),
@@ -377,6 +378,7 @@ fn conventions_reuse_existing_linetypes_and_refuse_locked_layers_without_partial
     let steps = session.history_steps().0.len();
     assert!(session
         .run(Command::Grid {
+            layer: None,
             x: vec![GridAxis {
                 label: "A".into(),
                 at: 0.0
@@ -437,12 +439,14 @@ fn invalid_targets_distances_and_grids_make_no_partial_symbols_or_tables() {
             p2: [0.0, 0.0],
         },
         Command::Grid {
+            layer: None,
             x: vec![],
             y: vec![],
             extent: None,
             bubble: None,
         },
         Command::Grid {
+            layer: None,
             x: vec![GridAxis {
                 label: "Outside".into(),
                 at: 3.0,
@@ -455,6 +459,7 @@ fn invalid_targets_distances_and_grids_make_no_partial_symbols_or_tables() {
             bubble: None,
         },
         Command::Grid {
+            layer: None,
             x: vec![GridAxis {
                 label: "A".into(),
                 at: 0.0,
@@ -487,6 +492,7 @@ fn grid_defaults_use_the_sheet_and_scale_and_allow_a_custom_bubble_radius() {
         let handles = added(
             &mut session,
             Command::Grid {
+                layer: None,
                 x: vec![GridAxis {
                     label: "Reference axis".into(),
                     at: 2.0 / factor,
@@ -508,4 +514,29 @@ fn grid_defaults_use_the_sheet_and_scale_and_allow_a_custom_bubble_radius() {
             }
         }
     }
+}
+
+#[test]
+fn grid_accepts_a_caller_layer_for_axes_bubbles_and_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("grid-layer.dxf"), 6);
+    let report = s
+        .run_input(
+            &serde_json::json!({"type":"grid","x":[{"label":"A","at":0}],"layer":"Reference axes"}),
+            qiyas_core::Source::User,
+        )
+        .unwrap();
+    let qiyas_core::Outcome::Added { handles } = report.outcome else {
+        panic!("grid")
+    };
+    assert!(handles.iter().all(|h| {
+        s.drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(*h))
+            .unwrap()
+            .common()
+            .layer
+            == "Reference axes"
+    }));
+    assert_eq!(s.current.layer, "0");
 }

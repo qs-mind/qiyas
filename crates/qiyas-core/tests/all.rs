@@ -230,3 +230,8 @@ fn every_test_file_is_listed() {
         );
     }
 }
+
+#[path = "decisions.rs"]
+mod decisions;
+#[path = "outside_check.rs"]
+mod outside_check;

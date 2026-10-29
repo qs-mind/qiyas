@@ -36,6 +36,25 @@ impl Session {
             });
         };
         match &command {
+            Command::Symbol(crate::draft_symbols::SymbolSpec::Door {
+                a, b, leaves: None, ..
+            }) => {
+                let k = if self.sheet.eq_ignore_ascii_case("*Model_Space") {
+                    self.drawing.units.to_metres()
+                } else {
+                    0.001
+                };
+                let threshold = crate::drafting_standards::standards()["symbols"]
+                    ["double_leaf_from_m"]["value"]
+                    .as_f64()
+                    .expect("bundled leaf threshold");
+                let leaves = if (b[0] - a[0]).hypot(b[1] - a[1]) * k >= threshold {
+                    2
+                } else {
+                    1
+                };
+                set("leaves", json!(leaves), None);
+            }
             Command::AddWallOpenings {
                 centreline,
                 openings,

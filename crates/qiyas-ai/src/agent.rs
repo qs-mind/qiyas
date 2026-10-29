@@ -49,7 +49,7 @@ pub const KEEP_PICTURES: usize = 8;
 pub const KEEP_PICTURE_BYTES: usize = 10 * 1024 * 1024;
 /// What an old picture becomes.
 pub const PICTURE_REMOVED: &str = "[earlier picture removed; look again if you need it]";
-/// Removal count at which edit-by-handle advice begins.
+/// Removal count at which factual churn advice begins.
 pub const MAX_DESTRUCTIVE: usize = 10;
 const NO_IMAGE_BUDGET: &str =
     "Image budget for this conversation is used up; start a new conversation to look again";
@@ -126,7 +126,7 @@ impl MeasurementMethod {
         } else if self.rules_loaded {
             "Reuse the drawing's cited method rules. Preserve the project override."
         } else {
-            "Write rules from your knowledge in your own words, with <standard> clause <n> citations. Save via measurement.set_method for reuse. List uncertain rules/references in the end report."
+            "Never invent clause numbers; ask the engineer for the method text or use cited documents. Else record net geometric rules with decision.set and source. Save confirmed rules via measurement.set_method."
         }
     }
 
@@ -154,6 +154,12 @@ impl Default for AgentSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// App facts kept separately from the model's answer and history.
+    Status {
+        kind: String,
+        items: Vec<String>,
+        language: Lang,
+    },
     OpenFindings {
         findings: Vec<Value>,
         revision: Value,
@@ -183,7 +189,7 @@ pub enum AgentEvent {
     AwaitingApproval {
         plan: surface::Plan,
     },
-    /// Mizan needs answers it cannot assume: all its questions in one call, each with 2 to 4
+    /// Mizan needs missing facts or decisions: questions in one call, each with 0 to 6
     /// options (one may be recommended) and a free-text answer. The turn ends after this event;
     /// the answer is the user's next message.
     Question {
@@ -222,7 +228,7 @@ pub enum AgentEvent {
         category: Option<String>,
         text: String,
     },
-    /// The turn stopped early: "cancelled", repeated failures, "max_tokens" or another
+    /// The turn stopped early: "cancelled", "max_tokens" or another
     /// stop reason.
     Stopped {
         reason: String,
@@ -301,19 +307,13 @@ struct TurnCounts {
     plan_requested: bool,
     approved: bool,
     awaiting: Option<surface::Plan>,
-    ineffective: BTreeMap<String, usize>,
+    ineffective: BTreeMap<String, (usize, Value)>,
     /// The efficiency note (a user-role message) and the efficiency advice on a result have each
     /// been given in this turn: each is given once.
     cost_noted: bool,
     cost_advised: bool,
     /// Mizan put questions to the user: the turn ends when this batch of calls is answered.
     asking: bool,
-    /// The save-name question for an untitled drawing has been put in this turn.
-    asked_save: bool,
-    /// The answer was sent back once for being in the wrong language.
-    language_retried: bool,
-    /// A fresh reader has measured the unchecked items once in this turn (W6).
-    second_read: bool,
 }
 
 impl TurnCounts {
@@ -603,6 +603,11 @@ impl Agent {
             AgentEvent::Text { text }
             | AgentEvent::Thinking { text }
             | AgentEvent::Refused { text, .. } => *text = crate::dashes::plain_dashes(text),
+            AgentEvent::Status { items, .. } => {
+                for item in items {
+                    *item = crate::dashes::plain_dashes(item);
+                }
+            }
             AgentEvent::Question { questions } => {
                 for question in questions {
                     question.question = crate::dashes::plain_dashes(&question.question);
@@ -1109,7 +1114,7 @@ impl Agent {
             let gate = if matches!(turn.stop_reason, StopReason::EndTurn)
                 && !says_nothing(&turn.content)
             {
-                self.end_gate(&turn.content, &mut counts)
+                self.end_gate(&counts)
             } else {
                 None
             };
@@ -1139,6 +1144,15 @@ impl Agent {
                         return self.stop(&events, &why).await;
                     }
                     if counts.asking {
+                        for event in [
+                            self.plan_watch.status(self.chat_language),
+                            self.brief_watch.status(self.chat_language),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            self.emit(&events, event).await;
+                        }
                         // The questions are on the user's screen; their answer is the next message.
                         self.update_checkpoint();
                         return Ok(());
@@ -1149,7 +1163,7 @@ impl Agent {
                         return Ok(());
                     }
                 }
-                // Ending the work with plan phases open, or in the wrong language, is sent back.
+                // Once per turn, supply factual open-phase context.
                 StopReason::EndTurn if gate.is_some() => {
                     let (note, code) = gate.unwrap_or_default();
                     self.log("FINISH GATE", || note.clone());
@@ -1205,17 +1219,10 @@ impl Agent {
                     return match reason {
                         StopReason::EndTurn | StopReason::ToolUse => {
                             self.log("DONE", || tokens(&usage));
-                            if let Some(text) =
+                            if let Some(event) =
                                 self.keep_work(&mut counts, true, &cancel, epoch).await
                             {
-                                if let Some(last) = self
-                                    .history
-                                    .last_mut()
-                                    .filter(|m| m.role == Role::Assistant)
-                                {
-                                    last.content.push(ContentBlock::Text { text: text.clone() });
-                                }
-                                self.emit(&events, AgentEvent::Text { text }).await;
+                                self.emit(&events, event).await;
                             }
                             let (findings, revision) =
                                 match self.unfixed_errors(&cancel, epoch).await {
@@ -1226,25 +1233,14 @@ impl Agent {
                                 self.emit(&events, AgentEvent::OpenFindings { findings, revision })
                                     .await;
                             }
-                            if let Some(text) = self.plan_watch.final_text(self.chat_language) {
-                                if let Some(last) = self
-                                    .history
-                                    .last_mut()
-                                    .filter(|m| m.role == Role::Assistant)
-                                {
-                                    last.content.push(ContentBlock::Text { text: text.clone() });
-                                }
-                                self.emit(&events, AgentEvent::Text { text }).await;
-                            }
-                            if let Some(text) = self.brief_watch.final_text(self.chat_language) {
-                                if let Some(last) = self
-                                    .history
-                                    .last_mut()
-                                    .filter(|m| m.role == Role::Assistant)
-                                {
-                                    last.content.push(ContentBlock::Text { text: text.clone() });
-                                }
-                                self.emit(&events, AgentEvent::Text { text }).await;
+                            for event in [
+                                self.plan_watch.status(self.chat_language),
+                                self.brief_watch.status(self.chat_language),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            {
+                                self.emit(&events, event).await;
                             }
                             self.emit(&events, AgentEvent::Done { usage }).await;
                             Ok(())
@@ -1267,11 +1263,7 @@ impl Agent {
             reason
         };
         self.log("STOPPED", || reason.to_string());
-        if reason.contains("steps")
-            || reason.contains("budget")
-            || reason.contains("limit")
-            || reason == "repeated_ineffective_edit"
-        {
+        if reason.contains("steps") || reason.contains("budget") || reason.contains("limit") {
             self.report_interrupted(events, reason).await;
         }
         self.emit(
@@ -1310,13 +1302,15 @@ impl Agent {
         });
         self.emit(
             events,
-            AgentEvent::Text {
-                text: if arabic {
-                    format!("\nملخص العمل المتوقف: {report}")
+            status(
+                "interrupted",
+                vec![if arabic {
+                    format!("ملخص العمل المتوقف: {report}")
                 } else {
-                    format!("\nEnd report: {reason}. {report}")
-                },
-            },
+                    format!("End report: {reason}. {report}")
+                }],
+                self.chat_language,
+            ),
         )
         .await;
     }
@@ -1489,27 +1483,22 @@ impl Agent {
             };
             let repeated = fingerprint
                 .as_ref()
-                .is_some_and(|key| counts.ineffective.get(key).copied().unwrap_or(0) >= 5);
+                .is_some_and(|key| counts.ineffective.get(key).is_some_and(|(n, _)| *n >= 5));
             let mut edited = false;
             let (mut block, mut event) = if let Some(why) = stopped.as_deref() {
                 (error_result(id, why), error_event(id, why))
             } else if repeated {
-                let why = match self.chat_language {
-                    Lang::En => "This identical input has failed to make a change five times in this turn. I stopped a sixth attempt to avoid spending more of your subscription on the same failure.",
-                    Lang::Ar => "لم تُحدث المدخلات نفسها تغييرًا في خمس محاولات خلال هذه الرسالة. أوقفت المحاولة السادسة حتى لا تستهلك اشتراكك في الإخفاق نفسه.",
-                };
-                stopped = Some("repeated_ineffective_edit".into());
-                self.emit(events, AgentEvent::Text { text: why.into() })
-                    .await;
+                let (attempts, previous) = &counts.ineffective[fingerprint.as_ref().unwrap()];
+                let error = crate::advice::stopped(*attempts, previous.clone());
                 (
-                    error_result(id, &crate::advice::stopped().json().to_string()),
-                    error_event(id, why),
+                    error_result(id, &error.json().to_string()),
+                    error_event(id, &error.to_string()),
                 )
             } else if counts.awaiting.is_some() || counts.asking {
                 let why = if counts.asking {
-                    "Not run: waiting for the user's answer."
+                    "Not run: waiting for the engineer's answer. / لم يُنفذ: بانتظار إجابة المهندس."
                 } else {
-                    "Not run: waiting for the user's approval."
+                    "Not run: waiting for the user's approval. / لم يُنفذ: بانتظار موافقة المستخدم."
                 };
                 (error_result(id, why), error_event(id, why))
             } else if cancel.is_cancelled() {
@@ -1531,11 +1520,11 @@ impl Agent {
                     .unwrap_or_default();
                     let batch = crate::takeoff_phase::Batch::read(name, input);
                     let quantity_job = self.job == Job::Takeoff || Job::observes(name, input);
-                    let phase_refusal = if quantity_job {
-                        batch.refusal().or_else(|| {
+                    let phase_advice = if quantity_job {
+                        batch.advice().or_else(|| {
                             if batch.takeoff_edit() && !counts.plan_seen && !counts.plan_requested {
                                 counts.plan_requested = true;
-                                Some("Before take-off edits, write qiyas_execute plan with one goal and check per phase. Mark the current phase active, then retry this small batch. This plan-first reminder is given once per turn.")
+                                Some("No plan has been posted for this take-off edit. / لم تُنشر خطة لهذا التعديل في الحصر.")
                             } else {
                                 None
                             }
@@ -1543,29 +1532,29 @@ impl Agent {
                     } else {
                         None
                     };
-                    let routed = phase_refusal
-                        .map_or_else(|| surface::route(name, input), |why| Err(why.into()))
-                        .and_then(|route| {
-                            // The drawing need is checked where the session is locked, off this
-                            // thread (`run_tool`): locking here would stall the turn's
-                            // events behind a long command.
-                            surface::check_need(
-                                name,
-                                op,
-                                true,
-                                self.host
-                                    .as_deref()
-                                    .is_some_and(crate::DrawingHost::has_window),
-                                self.host.is_some(),
-                            )
-                            .map_err(|error| error.json().to_string())?;
-                            Ok(route)
-                        });
-                    // The finish gate: ending the work with plan phases open is refused.
-                    let finish_refusal = (name == surface::EXECUTE && op == "finish")
-                        .then(|| self.finish_refusal())
-                        .flatten();
-                    match routed {
+                    let routed = surface::route(name, input).and_then(|route| {
+                        // The drawing need is checked where the session is locked, off this
+                        // thread (`run_tool`): locking here would stall the turn's
+                        // events behind a long command.
+                        surface::check_need(
+                            name,
+                            op,
+                            true,
+                            self.host
+                                .as_deref()
+                                .is_some_and(crate::DrawingHost::has_window),
+                            self.host.is_some(),
+                        )
+                        .map_err(|error| error.json().to_string())?;
+                        Ok(route)
+                    });
+                    let finish_note =
+                        if name == surface::EXECUTE && op == "finish" && !counts.asking {
+                            self.finish_note()
+                        } else {
+                            None
+                        };
+                    let mut ran = match routed {
                         Err(why) => (error_result(id, &why), error_event(id, &why)),
                         Ok(Route::Session { tool, op, args })
                             if tool == surface::EXECUTE && op == "ask" =>
@@ -1590,44 +1579,24 @@ impl Agent {
                                 ),
                             }
                         }
-                        Ok(Route::Host { tool: "finish", .. }) if finish_refusal.is_some() => {
-                            let refusal = finish_refusal.clone().unwrap_or_default();
-                            (
-                                error_result(id, &refusal.to_string()),
-                                error_event(id, "Not finished: plan phases are still open."),
-                            )
-                        }
                         Ok(Route::Window { tool, input }) => {
                             self.run_window_tool(id, tool, &input, cancel, *epoch).await
                         }
                         Ok(Route::Host { tool, input }) => {
                             let before = *epoch;
                             let ran = self.run_host_tool(id, tool, &input, cancel, *epoch).await;
-                            // Mizan saved (or opened Save As) itself: the end of the turn
-                            // does not ask the user a second time.
-                            if tool == "save_drawing" && !is_error(&ran.0) {
-                                counts.asked_save = true;
-                            }
                             if changes_drawing(tool) && !is_error(&ran.0) {
                                 *epoch = self.phase_epoch;
                                 edited = before != *epoch;
                                 counts.changed_drawing |= edited;
+                                if edited {
+                                    self.brief_watch.changed(None);
+                                }
                             }
                             ran
                         }
                         Ok(Route::Session { tool, op, args }) => {
-                            // W6: before a quantity reaches the BOQ or the comparison, a fresh
-                            // reader measures the unchecked items without seeing the first figure.
-                            let second = if self.second_reading
-                                && !counts.second_read
-                                && crate::blind_reader::triggers(&tool, &op, &args)
-                            {
-                                counts.second_read = true;
-                                self.second_reading_pass(cancel).await
-                            } else {
-                                None
-                            };
-                            let (mut block, event, changed) = self
+                            let (block, event, changed) = self
                                 .run_tool(
                                     id,
                                     (&tool, &op),
@@ -1637,14 +1606,21 @@ impl Agent {
                                     surface::mutating(name, input),
                                 )
                                 .await;
-                            if let Some(advice) = second {
-                                append_advice(&mut block, advice);
-                            }
                             edited = changed;
                             counts.changed_drawing |= changed;
                             (block, event)
                         }
+                    };
+                    if let Some(note) = finish_note {
+                        append_advice(&mut ran.0, note);
                     }
+                    if let Some(message) = phase_advice {
+                        append_advice(
+                            &mut ran.0,
+                            serde_json::json!({"code":"takeoff_plan_advice","message":message}),
+                        );
+                    }
+                    ran
                 }
             };
             if is_error(&block) {
@@ -1679,11 +1655,13 @@ impl Agent {
                 }
             }
             if let Some(key) = fingerprint {
-                if ineffective(&block) && !repeated {
-                    let attempts = counts.ineffective.entry(key).or_default();
-                    *attempts += 1;
-                    if *attempts >= 2 {
-                        append_advice(&mut block, crate::advice::repeated(*attempts));
+                if is_error(&block) && !repeated {
+                    let previous = tool_result_value(&block);
+                    let entry = counts.ineffective.entry(key).or_insert((0, Value::Null));
+                    entry.0 += 1;
+                    entry.1 = previous;
+                    if entry.0 >= 2 {
+                        append_advice(&mut block, crate::advice::repeated(entry.0));
                     }
                 }
             }
@@ -1691,7 +1669,7 @@ impl Agent {
             if counts.destructive > MAX_DESTRUCTIVE {
                 append_advice(
                     &mut block,
-                    serde_json::json!({"code":"many_removals","count":counts.destructive,"message":"Several removal or replacement commands have run in this turn. Consider editing existing objects by handle. Mizan decides."}),
+                    serde_json::json!({"code":"many_removals","count":counts.destructive,"message":"Removal or replacement calls were requested in this turn. / طُلبت استدعاءات حذف أو استبدال خلال هذه الرسالة."}),
                 );
             }
             if !is_error(&block) && Job::observes(name, input) {
@@ -1701,7 +1679,7 @@ impl Agent {
                 counts.cost_advised = true;
                 append_advice(
                     &mut block,
-                    serde_json::json!({"code":"tool_cost","calls":counts.calls,"message":"Efficiency note, given once: this turn has used many calls. Batch edits, do not re-read what you have, read long results by pointer. It is not a reason to stop: finish the job the user asked for."}),
+                    serde_json::json!({"code":"tool_cost","calls":counts.calls,"message":"This turn has reached the call-count advisory threshold. / بلغ عدد الاستدعاءات حد التنبيه المعلوماتي."}),
                 );
             }
             self.log(
@@ -1737,7 +1715,7 @@ impl Agent {
                         if unchecked {
                             append_advice(
                                 &mut block,
-                                serde_json::json!({"code":"phase_check_needed","message":"Read/check the active phase after its last edit before marking it done: takeoff_check with offset, report summary, records with fields, or explain a sample. Fix and recheck; after three failed attempts mark it skipped with the reason in its title."}),
+                                serde_json::json!({"code":"phase_check_needed","message":"This phase has no successful check recorded after its latest edit. / لم يُسجل فحص ناجح لهذه المرحلة بعد آخر تعديل."}),
                             );
                         }
                     }
@@ -1757,11 +1735,8 @@ impl Agent {
                         (Vec::new(), Value::Null)
                     };
                     if completed && stopped.is_none() {
-                        if let Some(note) = self.keep_work(counts, false, cancel, *epoch).await {
-                            append_advice(
-                                &mut block,
-                                serde_json::json!({"code":"saved","message":note}),
-                            );
+                        if let Some(event) = self.keep_work(counts, false, cancel, *epoch).await {
+                            self.emit(events, event).await;
                         }
                     }
                     if !errors.is_empty() {
@@ -1802,7 +1777,6 @@ impl Agent {
             if edited && !is_error(&block) {
                 self.phase_checked = false;
                 self.plan_watch.changed();
-                self.brief_watch.changed();
             }
             if !is_error(&block) && self.plan.as_ref().and_then(active_phase).is_some() {
                 if let ContentBlock::ToolResult { content, .. } = &block {
@@ -1814,17 +1788,6 @@ impl Agent {
                                 {
                                     self.phase_checked = passed;
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-            if name == surface::READ && input["op"] == "brief_check" && !is_error(&block) {
-                if let ContentBlock::ToolResult { content, .. } = &block {
-                    for part in content {
-                        if let ResultPart::Text(text) = part {
-                            if let Ok(value) = serde_json::from_str(text) {
-                                self.brief_watch.checked(value);
                             }
                         }
                     }
@@ -1958,7 +1921,11 @@ impl Agent {
         let mut phase = self.phase_state.clone();
         let churn = self.churn.clone();
         let host = self.host.clone();
-        let ran = tokio::task::spawn_blocking(move || {
+        let (reader_tx, mut reader_rx) = tokio::sync::mpsc::unbounded_channel();
+        let second_reading = self.second_reading;
+        let mut reader_advice = Vec::new();
+        let reader_cancel = cancel.clone();
+        let mut pending = tokio::task::spawn_blocking(move || {
             if let Some(host) = host.as_deref() {
                 crate::window::sync_selection(host, &session);
             }
@@ -1980,14 +1947,21 @@ impl Agent {
             }
             check_turn(Some(s), &cancel, epoch)?;
             let before = (s.document_revision(), s.history_revision());
-            let mut output = churn.lock().unwrap_or_else(PoisonError::into_inner).run(
-                s,
-                &tool,
-                &op,
-                &args,
-                Source::Ai,
-                &method,
-            );
+            let mut run = || {
+                churn.lock().unwrap_or_else(PoisonError::into_inner).run(
+                    s,
+                    &tool,
+                    &op,
+                    &args,
+                    Source::Ai,
+                    &method,
+                )
+            };
+            let mut output = if second_reading {
+                crate::blind_reader::observe_operation(reader_tx, run)
+            } else {
+                run()
+            };
             if tool == surface::READ && op == "state" {
                 if let Ok(ToolOutput::Json(value)) = &mut output {
                     value["image_input"] = crate::models::image_state(image_input);
@@ -2008,12 +1982,26 @@ impl Agent {
                 }
             }
             Ok::<_, String>((output, changed, phase))
-        })
-        .await;
-        let (result, changed) = match ran {
+        });
+        let ran = loop {
+            tokio::select! {
+                result = &mut pending => break result,
+                Some(request) = reader_rx.recv() => {
+                    reader_advice.push(self.second_reading_pass(&request.session, &reader_cancel).await);
+                    let _ = request.finished.send(());
+                }
+            }
+        };
+        let (mut result, changed) = match ran {
             Ok(Ok((output, changed, phase))) => {
                 self.phase_state = phase;
                 self.phase_epoch = epoch;
+                if changed {
+                    self.brief_watch.changed(match &output {
+                        Ok(ToolOutput::Json(v)) => Some(v),
+                        _ => None,
+                    });
+                }
                 (
                     self.output_result(id, output.map_err(|e| e.json().to_string())),
                     changed,
@@ -2025,22 +2013,26 @@ impl Agent {
                 ((error_result(id, &why), error_event(id, &why)), false)
             }
         };
+        for advice in reader_advice {
+            append_advice(&mut result.0, advice);
+        }
         (result.0, result.1, changed)
     }
 
-    /// The blind second reading of the items nobody has read twice (W6). Its advice goes on the
-    /// result of the call that sends a quantity on; nothing is done when there is nothing to read.
-    async fn second_reading_pass(&self, cancel: &CancellationToken) -> Option<Value> {
-        let pass = crate::blind_reader::run_pass(
-            self.provider.as_ref(),
-            &self.session,
-            &self.settings,
-            cancel,
-        )
-        .await
-        .ok()?;
-        self.log("SECOND READING", || pass.advice().to_string());
-        (!pass.read.is_empty() || !pass.failed.is_empty()).then(|| pass.advice())
+    /// The advice belongs to the actual export/comparison, including each one in a batch.
+    async fn second_reading_pass(
+        &self,
+        session: &Arc<Mutex<Option<Session>>>,
+        cancel: &CancellationToken,
+    ) -> Value {
+        match crate::blind_reader::run_all(self.provider.as_ref(), session, &self.settings, cancel)
+            .await
+        {
+            Ok(pass) => pass.advice(),
+            Err(error) => serde_json::json!({"code":"second_reading_failed","error":error,
+                "message":"The second reading failed; the quantities are retained.",
+                "message_ar":"تعذرت القراءة الثانية؛ الكميات محفوظة."}),
+        }
     }
 
     /// Runs a window tool (see `crate::window`) off the async workers: the window first, then
@@ -2120,6 +2112,9 @@ impl Agent {
                 let (tool, op, args) = call.unwrap_or_else(|| {
                     (surface::READ.into(), String::new(), serde_json::json!({}))
                 });
+                if tool == surface::READ && op == "brief_check" {
+                    self.brief_watch.checked(value.clone());
+                }
                 // Use the full result before model-facing compaction shortens batch outcomes.
                 if let AgentEvent::ToolResult { activity, .. } = &mut event {
                     *activity = Some(crate::activity::refine(
@@ -2527,56 +2522,25 @@ impl Agent {
         });
     }
 
-    /// The gate on a plain end of turn: send the answer back when plan phases are still open
-    /// (unless it ends with a question for the user) or when it is clearly in the wrong language.
-    /// Returns the note for the model and the code the window shows.
-    fn end_gate(
-        &mut self,
-        content: &[ContentBlock],
-        counts: &mut TurnCounts,
-    ) -> Option<(String, &'static str)> {
-        if self.provider.owns_turn() {
+    /// One factual note may be fed back unless a structured ask already ended this turn.
+    fn end_gate(&mut self, counts: &TurnCounts) -> Option<(String, &'static str)> {
+        if counts.asking {
             return None;
         }
-        let answer: String = content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let asks = answer.trim_end().ends_with('?') || answer.trim_end().ends_with('؟');
-        if !asks {
-            if let Some(refusal) = self.finish_refusal() {
-                return Some((
-                    format!("[finish refused] {refusal}"),
-                    "ai.error.finish_gate",
-                ));
-            }
-        }
-        if !counts.language_retried && judgement::language_mismatch(&answer, self.chat_language) {
-            counts.language_retried = true;
-            let note = match self.chat_language {
-                Lang::En => "[reply language] Your last answer was in the wrong language. The user writes English: send the same final answer again in English, nothing else.",
-                Lang::Ar => "[reply language] كانت إجابتك الأخيرة بلغة غير لغة المستخدم. يكتب المستخدم بالعربية: أعد الإجابة النهائية نفسها بالعربية، ولا شيء غيرها.",
-            };
-            return Some((note.into(), "ai.error.language_retry"));
-        }
-        None
+        self.finish_note()
+            .map(|note| (format!("[open plan phases] {note}"), "ai.error.finish_gate"))
     }
 
     /// Keeps the work: after a finished phase that changed the drawing, a titled drawing is saved
-    /// through the app. An untitled one is left alone until the turn ends (`end`), when the user
-    /// is asked once, through the window's Save As, for a name: nothing stays unsaved unsaid.
-    /// Returns what to tell the model (phase) or the user (end).
+    /// through the app. An untitled one stays unsaved, with a status explaining why at turn end.
+    /// Returns a transcript-only app status, never model history.
     async fn keep_work(
         &mut self,
         counts: &mut TurnCounts,
         end: bool,
         cancel: &CancellationToken,
         epoch: Option<u64>,
-    ) -> Option<String> {
+    ) -> Option<AgentEvent> {
         if !counts.changed_drawing {
             return None;
         }
@@ -2609,13 +2573,14 @@ impl Agent {
         // app saved), so an end of turn that leaves the drawing unsaved says why.
         if untitled || repaired {
             return end.then(|| {
-                match (self.chat_language, untitled) {
+                let text = match (self.chat_language, untitled) {
                     (Lang::En, true) => "\n\nNot saved yet: the drawing has no name. Save it when you choose.",
                     (Lang::En, false) => "\n\nNot saved yet: the drawing was repaired when it opened. Save it under a new name when you choose.",
                     (Lang::Ar, true) => "\n\nلم يُحفظ بعد: الرسم بلا اسم. احفظه حين تريد.",
                     (Lang::Ar, false) => "\n\nلم يُحفظ بعد: الرسم أُصلح عند فتحه. احفظه باسم جديد حين تريد.",
                 }
-                .to_string()
+                .trim().to_string();
+                status("save_failed", vec![text], self.chat_language)
             });
         }
         let session = self.session.clone();
@@ -2638,32 +2603,45 @@ impl Agent {
             }
             Ok(Ok(_)) => {
                 self.log("SAVE", || format!("saved {file}"));
-                Some(if end {
-                    match lang {
-                        Lang::En => format!("\n\nSaved {file}."),
-                        Lang::Ar => format!("\n\nحُفظ {file}."),
-                    }
-                } else {
-                    format!("Saved {file} after the finished phase.")
-                })
+                Some(status(
+                    "saved",
+                    vec![match lang {
+                        Lang::En => format!("Saved {file}."),
+                        Lang::Ar => format!("حُفظ {file}."),
+                    }],
+                    lang,
+                ))
             }
             Ok(Err(why)) => {
                 self.log("SAVE", || format!("not saved: {why}"));
-                end.then(|| match lang {
-                    Lang::En => {
-                        "\n\nThe drawing could not be saved; the changes are not on disk yet."
-                            .to_string()
-                    }
-                    Lang::Ar => "\n\nتعذّر حفظ الرسم؛ التعديلات لم تُحفظ بعد.".to_string(),
-                })
+                Some(status(
+                    "save_failed",
+                    vec![match lang {
+                        Lang::En => {
+                            "The drawing could not be saved; the changes are not on disk yet."
+                                .into()
+                        }
+                        Lang::Ar => "تعذّر حفظ الرسم؛ التعديلات لم تُحفظ بعد.".into(),
+                    }],
+                    lang,
+                ))
             }
-            Err(_) => None,
+            Err(_) => Some(status(
+                "save_failed",
+                vec![match lang {
+                    Lang::En => {
+                        "The save operation did not complete; saving is unconfirmed.".into()
+                    }
+                    Lang::Ar => "لم تكتمل عملية الحفظ؛ لم يُؤكد حفظ الرسم.".into(),
+                }],
+                lang,
+            )),
         }
     }
 
     /// The finish gate (`PlanWatch::finish_gate`): advice naming the open plan phases, or none
     /// when the work may end. A provider that runs its own loop is not gated.
-    fn finish_refusal(&mut self) -> Option<Value> {
+    fn finish_note(&mut self) -> Option<Value> {
         // A provider that runs its own loop, or a metered run told to finish now, is a real limit.
         if self.provider.owns_turn()
             || self
@@ -2698,28 +2676,74 @@ fn country_line(country: Option<&str>, method: Option<&str>) -> String {
             None
         }
     });
-    match country.or(inferred) {
-        Some(country) => format!("Country/practice: {country} (a default from Settings; use it, do not ask).\n"),
-        None => "Country/practice: not set. Assume and state it when the work allows; if it truly decides the work, ask once, with every other needed question in the same ask.\n".into(),
+    match (country.filter(|s| !s.trim().is_empty()), inferred) {
+        (Some(country), _) => format!("Country/practice: {country} (from Settings).\n"),
+        (None, Some(country)) => format!("Country/practice: {country} (inferred from the method name; confirm with the engineer if applicable rules depend on it).\n"),
+        _ => "Country/practice: not set; if applicable rules depend on it, ask.\n".into(),
     }
 }
 
-/// What a "continue" message adds: the open plan phases, or the unfinished list of the last answer.
+/// An unqualified continuation preserves open scope and unanswered questions.
 fn continue_note(lang: Lang, open: &[String]) -> String {
-    match (lang, open.is_empty()) {
-        (Lang::En, false) => format!("[continue] The user asked you to continue and complete the work. Open plan phases: {}. Resume the active phase first, keeping its id; check it after edits, then move to pending phases one at a time. Do not stop for cost, do not ask what you can assume, and do not finish until every phase is done or skipped with a reason.", open.join("; ")),
-        (Lang::En, true) => "[continue] The user asked you to continue and complete the work. Resume what your last answer listed as not done: make a plan for it and do it on your stated assumptions. Do not stop for cost, and do not ask what you can assume.".into(),
-        (Lang::Ar, false) => format!("[continue] طلب المستخدم أن تتابع وتكمل العمل. المراحل المفتوحة: {}. استأنف المرحلة النشطة بنفس معرّفها أولًا، وافحصها بعد التعديل، ثم انتقل إلى المراحل المعلقة واحدة بعد أخرى. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه، ولا تنهِ قبل أن تكتمل كل مرحلة أو تُتجاوز بسبب مذكور.", open.join("؛ ")),
-        (Lang::Ar, true) => "[continue] طلب المستخدم أن تتابع وتكمل العمل. تابع ما ذكرت في إجابتك الأخيرة أنه لم يُنجز: ضع له خطة ونفّذه بافتراضاتك المعلنة. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه.".into(),
+    match lang {
+        Lang::En => format!("[continue] Resume the open scope from the conversation. Open phases: {}. Unanswered questions remain unanswered. Ask the engineer only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Take technical design decisions yourself with an engineering basis, including column placement for the structure, doors per space use and escape, opening sizes, wall types, detailing and sheet layout. Record each decision with its reason.", open.join("; ")),
+        Lang::Ar => format!("[continue] استأنف النطاق المفتوح في المحادثة. المراحل المفتوحة: {}. الأسئلة التي لم يُجب عنها المهندس تظل مفتوحة. اسأل المهندس فقط عن الفكرة: التصور والقصد التصميمي، والبرنامج والاستخدامات، ورغبات العميل، والنطاق، والأرقام الأساسية التي يذكرها موجز المشروع أو يناقضها، والمعيار الحاكم أو جهة الاختصاص. اتخذ القرارات التصميمية الفنية بنفسك على أساس هندسي، بما فيها توزيع الأعمدة للمنشأ، والأبواب حسب استخدام الفراغ ومسارات الهروب، ومقاسات الفتحات، وأنواع الجدران، والتفاصيل، وتنسيق اللوحات. سجّل كل قرار مع سببه.", open.join("؛ ")),
+    }
+}
+
+pub(crate) fn status(kind: &str, items: Vec<String>, language: Lang) -> AgentEvent {
+    AgentEvent::Status {
+        kind: kind.into(),
+        items,
+        language,
     }
 }
 
 pub(crate) fn edit_fingerprint(name: &str, input: &Value) -> Option<String> {
+    if !surface::mutating(name, input) {
+        return None;
+    }
     let normalized = crate::normalise::envelope(name, input)
         .map(|(v, _)| v)
         .unwrap_or_else(|_| input.clone());
     let mut args = surface::args_of(&normalized).unwrap_or_else(|_| normalized.clone());
     let op = normalized["op"].as_str().unwrap_or_default();
+    fn read_command(value: &Value) -> bool {
+        let mut value = match value {
+            Value::String(text) => serde_json::from_str(text).unwrap_or(Value::Null),
+            other => other.clone(),
+        };
+        qiyas_core::registry::canonicalize(&mut value);
+        if let Some(commands) = value["commands"].as_array() {
+            return !commands.is_empty() && commands.iter().all(read_command);
+        }
+        qiyas_core::registry::registry()
+            .get(value["type"].as_str().unwrap_or_default())
+            .is_some_and(|info| {
+                matches!(
+                    info.effect,
+                    qiyas_core::registry::Effect::Read | qiyas_core::registry::Effect::View
+                )
+            })
+    }
+    let read = match op {
+        "run" => read_command(&args["command"]),
+        "batch" => read_command(&serde_json::json!({"commands":args["commands"]})),
+        "type" => args["line"]
+            .as_str()
+            .and_then(|line| line.split_whitespace().next())
+            .and_then(|word| qiyas_core::registry::registry().by_word(word))
+            .is_some_and(|info| {
+                matches!(
+                    info.effect,
+                    qiyas_core::registry::Effect::Read | qiyas_core::registry::Effect::View
+                )
+            }),
+        _ => false,
+    };
+    if read {
+        return None;
+    }
     if op == "run" {
         if let Some(text) = args["command"].as_str() {
             args["command"] =
@@ -2748,19 +2772,15 @@ fn append_advice(block: &mut ContentBlock, advice: Value) {
     }
 }
 
-fn ineffective(block: &ContentBlock) -> bool {
-    if is_error(block) {
-        return true;
-    }
-    let ContentBlock::ToolResult { content, .. } = block else {
-        return false;
-    };
-    content.iter().any(|part| match part {
-        ResultPart::Text(text) => {
-            serde_json::from_str::<Value>(text).is_ok_and(|v| v["no_change"] == true)
+fn tool_result_value(block: &ContentBlock) -> Value {
+    if let ContentBlock::ToolResult { content, .. } = block {
+        for part in content {
+            if let ResultPart::Text(text) = part {
+                return serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
+            }
         }
-        _ => false,
-    })
+    }
+    Value::Null
 }
 
 /// A tool's JSON answer: the block for the model and the event for the window.
@@ -4004,5 +4024,111 @@ mod provider_failure_tests {
         assert!(saves.load(Ordering::SeqCst) < 10);
         let saved = checkpoint.lock().unwrap();
         assert!(saved.as_ref().unwrap().transcript.iter().any(|entry| matches!(entry, TranscriptEntry::Event { event: AgentEvent::Text { text } } if text == &"word ".repeat(1000))));
+    }
+    #[test]
+    fn country_notes_distinguish_settings_inference_and_missing_values() {
+        assert!(country_line(Some("Egypt"), Some("Saudi method")).contains("Egypt (from Settings)"));
+        assert!(country_line(None, Some("Egyptian method"))
+            .contains("inferred from the method name; confirm"));
+        assert!(country_line(None, None).contains("not set; if applicable rules depend on it, ask"));
+    }
+
+    #[test]
+    fn raw_brief_results_reach_the_watcher_before_compaction() {
+        let mut agent = Agent::new(
+            Box::new(Tokens(Arc::new(AtomicUsize::new(0)))),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        agent
+            .history
+            .push(Message::assistant(vec![ContentBlock::ToolUse {
+                id: "brief".into(),
+                name: surface::READ.into(),
+                input: serde_json::json!({"op":"brief_check","args":{}}),
+            }]));
+        let rows: Vec<_> = (0..100).map(|n| serde_json::json!({"id":n.to_string(),"text":format!("Requirement {n}"),"passed":false,"evidence":{"detail":"x".repeat(1000)}})).collect();
+        let _ = agent.output_result(
+            "brief",
+            Ok(ToolOutput::Json(serde_json::json!({"results":rows}))),
+        );
+        let state = serde_json::json!(agent.brief_watch.status(Lang::En).unwrap());
+        assert_eq!(state["items"].as_array().unwrap().len(), 100);
+        assert_eq!(state["items"][99], "Unmet: Requirement 99");
+    }
+
+    #[test]
+    fn failed_reads_have_no_edit_fingerprint() {
+        assert!(edit_fingerprint(
+            surface::READ,
+            &serde_json::json!({"op":"measure","args":{"handle":999}})
+        )
+        .is_none());
+        assert!(edit_fingerprint(
+            surface::EXECUTE,
+            &serde_json::json!({"op":"run","args":{"command":{"type":"verify"}}})
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn continuation_assigns_technical_decisions_and_preserves_idea_questions() {
+        let open = vec!["Structure".to_string(), "Sheets".to_string()];
+        let en = continue_note(Lang::En, &open);
+        for text in [
+            "Resume the open scope",
+            "Structure; Sheets",
+            "Unanswered questions remain unanswered",
+            "concept and design intent",
+            "programme and uses",
+            "client wishes",
+            "scope",
+            "key figures",
+            "governing standard or jurisdiction",
+            "engineering basis",
+            "Record each decision with its reason",
+        ] {
+            assert!(en.contains(text), "{text}: {en}");
+        }
+        assert!(!en.contains("Assume only with"));
+        let ar = continue_note(Lang::Ar, &open);
+        for text in [
+            "استأنف النطاق المفتوح",
+            "تظل مفتوحة",
+            "التصور والقصد التصميمي",
+            "البرنامج والاستخدامات",
+            "رغبات العميل",
+            "النطاق",
+            "الأرقام الأساسية",
+            "المعيار الحاكم أو جهة الاختصاص",
+            "أساس هندسي",
+            "سجّل كل قرار مع سببه",
+        ] {
+            assert!(ar.contains(text), "{text}: {ar}");
+        }
+        assert!(!ar.contains("لا تفترض إلا بإذن"));
+    }
+
+    #[test]
+    fn a_structured_ask_suppresses_the_gate_without_using_its_note() {
+        let mut agent = Agent::new(
+            Box::new(Tokens(Arc::new(AtomicUsize::new(0)))),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        agent.plan_watch.update(
+            surface::read_plan(
+                &serde_json::json!({"phases":[{"id":"design","title":"Design","status":"active"}]}),
+            )
+            .unwrap(),
+        );
+        let counts = TurnCounts {
+            asking: true,
+            ..Default::default()
+        };
+        assert!(agent.end_gate(&counts).is_none());
+        let counts = TurnCounts::default();
+        assert!(agent.end_gate(&counts).is_some());
+        assert!(agent.end_gate(&counts).is_none());
     }
 }

@@ -570,6 +570,14 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
             session,
             json!({"type":"draw","kind":"arc","centre":[0,0],"radius":1,"start":0,"end":180}),
         );
+    } else if name == "dimension.auto_chain" {
+        let k = 1.0 / session.drawing.units.to_metres();
+        for x in [0.0, 5.0] {
+            handles.extend(added_by(
+                session,
+                json!({"type":"draw","kind":"line","a":[x*k,0],"b":[x*k,5.0*k]}),
+            ));
+        }
     } else if matches!(name, "dimension.baseline" | "dimension.continue") {
         handles = added_by(
             session,

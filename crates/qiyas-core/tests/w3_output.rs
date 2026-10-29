@@ -165,7 +165,14 @@ fn doors_and_windows_without_a_tag_are_a_finding_until_object_tags_tags_them() {
         );
         assert_eq!(tags.len(), 3);
         assert_eq!(findings(&s, "opening_untagged"), 0);
-        assert!(tags.iter().all(|t| text_of(&s, *t).contains("-")));
+        let marks: std::collections::BTreeSet<_> = tags.iter().map(|t| text_of(&s, *t)).collect();
+        assert_eq!(
+            marks,
+            ["D01", "D02", "W01"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
     }
 }
 
@@ -330,7 +337,7 @@ fn a_mapping_that_already_says_the_size_is_left_as_it_is() {
 }
 
 #[test]
-fn a_gross_floor_area_is_information_not_a_boq_item() {
+fn gross_floor_area_words_do_not_reclassify_a_boq_item() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::new_blank(&dir.path().join("gfa.dwg"), 6);
     fixture::fixture(&mut s);
@@ -342,16 +349,16 @@ fn a_gross_floor_area_is_information_not_a_boq_item() {
             {"rule":"surface","code":"GFA-1","description_en":"Gross floor area (GFA)","description_ar":"إجمالي المسطح","section":"Informational","trade":"","unit":"{unit}","citation":cite}]}),
     );
     let measured = s.measurement_report().unwrap();
-    assert!(measured.items.iter().all(|i| i.informational));
-    assert!(measured
+    assert!(measured.items.iter().all(|i| !i.informational));
+    assert!(!measured
         .warnings
         .iter()
         .any(|w| w.contains("informational")));
     let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
-    assert!(boq.rows.is_empty(), "left out of the BOQ: {:?}", boq.rows);
+    assert!(!boq.rows.is_empty());
     let dims = deliverables::drawing(&s, Kind::Dimensions, Language::En, None).unwrap();
     assert!(!dims.rows.is_empty(), "the dimension sheets keep it");
-    assert!(measured.comparison_measurements(s.drawing.units).is_empty());
+    assert!(!measured.comparison_measurements(s.drawing.units).is_empty());
 }
 
 #[test]
@@ -497,12 +504,27 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
         let (paper_name, den, paper_w, paper_h) = if units == 1 {
             ("ANSI B", 75.0, 279.4, 431.8)
         } else {
-            ("ISO A3", 50.0, 297.0, 420.0)
+            ("ISO A3", 75.0, 297.0, 420.0)
         };
         assert_eq!(report.paper, paper_name, "units {units}");
         assert_eq!(report.scale, format!("1:{den}"));
         assert!(report.notes_fit);
-        assert!(report.empty_fields.is_empty(), "{:?}", report.empty_fields);
+        for field in [
+            "client",
+            "consultant",
+            "project_no",
+            "drawn_by",
+            "checked_by",
+            "approved_by",
+            "revision",
+            "revision_table",
+        ] {
+            assert!(
+                report.empty_fields.iter().any(|f| f == field),
+                "{field}: {:?}",
+                report.empty_fields
+            );
+        }
         // Text that reads on paper: 2.5 mm at least; 3.5 mm or more for titles.
         let block = s
             .drawing
@@ -524,9 +546,7 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
             "Ground floor plan",
             "Villa",
             "A-101",
-            "Qiyas",
             "For review",
-            "P01",
             &report.scale,
             "2026-10-27",
             "Scale",
@@ -619,10 +639,9 @@ fn make_sheet_speaks_the_requested_language_and_takes_the_user_language_by_defau
         "المشروع",
         "رقم اللوحة",
         "للمراجعة",
-        "قياس",
         "مقياس الرسم",
         "ملاحظات عامة",
-        "١:٥٠",
+        "١:٧٥",
         "٢٠٢٦-١٠-٢٧",
     ] {
         assert!(all.contains(must), "{must} missing in {all}");
@@ -630,15 +649,29 @@ fn make_sheet_speaks_the_requested_language_and_takes_the_user_language_by_defau
     assert!(!all.contains("For review") && !all.contains("Scale"));
     assert_eq!(report.language, qiyas_core::rooms::LabelLanguage::Ar);
     // Fields nobody gave are listed, never invented.
-    assert_eq!(report.empty_fields, ["project", "drawing_no"]);
+    assert_eq!(
+        report.empty_fields,
+        [
+            "project",
+            "client",
+            "consultant",
+            "project_no",
+            "drawing_no",
+            "drawn_by",
+            "checked_by",
+            "approved_by",
+            "revision",
+            "revision_table"
+        ]
+    );
 }
 
 #[test]
-fn make_sheet_translates_explicit_review_status_only_on_arabic_sheets() {
+fn make_sheet_keeps_review_status_in_the_sheet_language() {
     for (language, status, expected) in [
         ("ar", "For review", "للمراجعة"),
         ("ar", "  fOr ReViEw  ", "للمراجعة"),
-        ("ar", "  Approved  ", "Approved"),
+        ("ar", "  Approved  ", "للمراجعة"),
         ("en", "  For review  ", "For review"),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -784,7 +817,7 @@ fn schedules_placed_by_themselves_on_a_sheet_stay_on_the_paper_and_clear_of_the_
 }
 
 #[test]
-fn a_total_area_line_is_a_billable_item_and_only_the_flag_or_a_gross_floor_area_is_information() {
+fn only_the_explicit_mapping_flag_makes_an_item_informational() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::new_blank(&dir.path().join("tiling.dwg"), 6);
     fixture::fixture(&mut s);
@@ -792,6 +825,8 @@ fn a_total_area_line_is_a_billable_item_and_only_the_flag_or_a_gross_floor_area_
     let cite = json!({"source":"Test","clause":"1"});
     for (en, ar) in [
         ("Total area of tiling", "المساحة الإجمالية للتبليط"),
+        ("GFA", "إجمالي المسطح"),
+        ("Gross floor area", "إجمالي المسطح"),
         ("Items for information to the client", "بند معلوماتي للعميل"),
     ] {
         run(
@@ -819,7 +854,7 @@ fn a_total_area_line_is_a_billable_item_and_only_the_flag_or_a_gross_floor_area_
 }
 
 #[test]
-fn door_lines_come_from_the_size_whatever_was_made_first_and_roll_up_for_a_client_boq() {
+fn numbered_door_marks_preserve_quantities_and_roll_up_for_a_client_boq() {
     let (_dir, mut s) = doors_and_floor(6);
     let lines = |s: &Session| -> Vec<(String, String, String)> {
         let mut v: Vec<_> = s
@@ -845,7 +880,15 @@ fn door_lines_come_from_the_size_whatever_was_made_first_and_roll_up_for_a_clien
             && l.2 == "أبواب بمقاسات متنوعة - ٩٠٠ × ٢١٠٠ مم"),
         "{before:?}"
     );
-    // A schedule and the tags give every opening a mark: the lines do not change.
+    // Numbering can split the rows by mark, but must preserve the measured quantity.
+    let quantity_before: f64 = s
+        .measurement_report()
+        .unwrap()
+        .items
+        .iter()
+        .filter(|i| i.code.starts_with("A-D01"))
+        .map(|i| i.quantity)
+        .sum();
     run(&mut s, json!({"type":"set_sheet","block":"*Paper_Space"}));
     run(&mut s, json!({"type":"opening_schedule","at":[10,100]}));
     run(&mut s, json!({"type":"set_sheet","block":"*Model_Space"}));
@@ -853,7 +896,15 @@ fn door_lines_come_from_the_size_whatever_was_made_first_and_roll_up_for_a_clien
         &mut s,
         json!({"type":"object_tags","category":"opening","property":"mark"}),
     );
-    assert_eq!(lines(&s), before);
+    let quantity_after: f64 = s
+        .measurement_report()
+        .unwrap()
+        .items
+        .iter()
+        .filter(|i| i.code.starts_with("A-D01"))
+        .map(|i| i.quantity)
+        .sum();
+    assert_eq!(quantity_after, quantity_before);
     // A client's single "Doors" row is compared with all the doors (2 + 1), not with each size.
     let doors = |quantity: f64| {
         json!({"type":"set_boq","boq":{"source":"client.xlsx","imported":"","items":[
@@ -932,7 +983,9 @@ fn the_reader_is_shown_each_item_but_never_its_quantity() {
     let text = serde_json::to_string(&brief).unwrap();
     assert!(text.contains("900 × 2100 mm"));
     assert!(
-        !text.contains("quantity"),
+        !text.contains("\"quantity\"")
+            && !text.contains("\"first\"")
+            && !text.contains("\"second\""),
         "the brief holds no quantity: {text}"
     );
     for b in &brief {
@@ -942,7 +995,7 @@ fn the_reader_is_shown_each_item_but_never_its_quantity() {
 }
 
 #[test]
-fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the_boq() {
+fn a_second_reading_that_differs_stays_in_the_boq_with_both_values() {
     for units in UNITS {
         let (_dir, mut s) = doors_and_floor(units);
         let agreeing = item_code(&s, 2.0, "A-D01");
@@ -966,8 +1019,10 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
             .map(|r| r["code"].as_str().unwrap())
             .collect();
         assert!(codes.contains(&agreeing.as_str()), "{codes:?}");
-        assert!(!codes.contains(&differing.as_str()), "{codes:?}");
-        assert!(boq.warnings.iter().any(|w| w.contains(&differing)));
+        assert!(codes.contains(&differing.as_str()), "{codes:?}");
+        assert!(boq.rows.iter().any(|row| row["code"] == differing
+            && row["second_reading"]["first"] == 1.0
+            && row["second_reading"]["second"] == 2.0));
         let col = boq
             .layout
             .columns
@@ -982,6 +1037,7 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
                 .map(|r| r["second_reading_text"].as_str().unwrap().to_string())
         };
         assert_eq!(by_code(&agreeing).unwrap(), "Second reading agrees");
+        assert_eq!(by_code(&differing).unwrap(), "Second reading differs: 2");
         assert_eq!(by_code(&window).unwrap(), "Second reading not checked");
         let ar = deliverables::drawing(&s, Kind::Boq, Language::Ar, None).unwrap();
         assert!(ar
@@ -1002,7 +1058,7 @@ fn a_second_reading_that_agrees_is_marked_and_one_that_differs_never_reaches_the
         assert!(q.reason.contains("first reading") && q.reason.contains("second"));
         assert!(q.query.is_some());
 
-        // The engineer answers the query: the item goes in, with the words that say so.
+        // Answering the query changes its status while retaining the same quantity.
         let id = q.id.clone();
         s.run(qiyas_core::Command::ResolveConflict {
             id,
@@ -1043,7 +1099,7 @@ fn resolving_one_size_disagreement_does_not_accept_another_size() {
     assert_ne!(queries[0].hash_key, queries[1].hash_key);
     let id = queries
         .iter()
-        .find(|c| c.hash_key.ends_with(&format!("second_reading|{first}")))
+        .find(|c| c.hash_key.contains(&format!("second_reading|{first}|")))
         .unwrap()
         .id
         .clone();
@@ -1055,28 +1111,30 @@ fn resolving_one_size_disagreement_does_not_accept_another_size() {
     .unwrap();
     let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
     assert!(boq.rows.iter().any(|r| r["code"] == first));
-    assert!(!boq.rows.iter().any(|r| r["code"] == second));
+    assert!(boq
+        .rows
+        .iter()
+        .any(|r| r["code"] == second && r["second_reading"]["status"] == "differs"));
     record(&mut s, &first, 5.0);
     s.run(qiyas_core::Command::Check { tolerance: None })
         .unwrap();
     let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
     assert!(
-        !boq.rows.iter().any(|r| r["code"] == first),
+        boq.rows
+            .iter()
+            .any(|r| r["code"] == first && r["second_reading"]["status"] == "differs"),
         "a new disagreement needs its own answer"
     );
 }
 
 #[test]
-fn comparison_excludes_disputed_items_and_labels_partial_opening_totals() {
+fn comparison_retains_disputed_items_and_complete_opening_totals() {
     for units in UNITS {
         let (_dir, mut s) = doors_and_floor(units);
-        let agreeing = item_code(&s, 2.0, "A-D01");
         let differing = item_code(&s, 1.0, "A-D01");
-        let window = item_code(&s, 1.0, "A-W01");
-        record(&mut s, &agreeing, 2.0);
         record(&mut s, &differing, 2.0);
         let mut report = s.measurement_report().unwrap();
-        let omitted_handles: Vec<_> = report
+        let handles: Vec<_> = report
             .items
             .iter()
             .find(|i| i.code == differing)
@@ -1085,41 +1143,25 @@ fn comparison_excludes_disputed_items_and_labels_partial_opening_totals() {
             .iter()
             .flat_map(|l| l.sources.iter().map(|s| s.handle))
             .collect();
-        // Either size can be first in the report; neither ordering may leak its quantity.
         for _ in 0..2 {
             let comparison = report.comparison_measurements(s.drawing.units);
             let doors = comparison
                 .iter()
                 .find(|m| m.boq_code.as_deref() == Some("A-D01"))
                 .unwrap();
-            assert_eq!(doors.shown, 2.0);
-            assert!(doors.note.contains("Incomplete") && doors.note.contains(&differing));
-            assert!(doors.note.contains("second reading differs"));
-            assert!(omitted_handles.iter().all(|h| !doors.handles.contains(h)));
-            assert!(comparison
-                .iter()
-                .any(|m| m.boq_code.as_deref() == Some("A-W01")));
+            assert_eq!(doors.shown, 3.0);
+            assert!(
+                doors.note.contains("Second reading differs") && doors.note.contains(&differing)
+            );
+            assert!(handles.iter().all(|h| doors.handles.contains(h)));
             report.items.reverse();
         }
-        // The same disagreement on an unsplit item excludes the entire comparison row.
         report.items.retain(|i| i.code == differing);
         report.items[0].base_code.clear();
-        assert!(report.comparison_measurements(s.drawing.units).is_empty());
-
-        record(&mut s, &agreeing, 3.0);
-        let comparison = s
-            .measurement_report()
-            .unwrap()
-            .comparison_measurements(s.drawing.units);
-        assert!(comparison
-            .iter()
-            .all(|m| m.boq_code.as_deref() != Some("A-D01")));
-        record(&mut s, &window, 2.0);
-        assert!(s
-            .measurement_report()
-            .unwrap()
-            .comparison_measurements(s.drawing.units)
-            .is_empty());
+        assert_eq!(
+            report.comparison_measurements(s.drawing.units)[0].shown,
+            1.0
+        );
     }
 }
 
@@ -1201,4 +1243,241 @@ fn the_pack_card_asks_where_the_sheet_number_and_revision_are_written() {
         !line.passes && line.fix_en.contains("sheet number"),
         "{line:?}"
     );
+}
+
+#[test]
+fn equal_totals_do_not_keep_a_reading_after_drawing_rule_mapping_or_source_changes() {
+    for change in ["drawing", "rule", "mapping", "sources"] {
+        let (_dir, mut session) = doors_and_floor(6);
+        let code = item_code(&session, 2.0, "A-D01");
+        record(&mut session, &code, 2.0);
+        match change {
+            "drawing" => {
+                run(
+                    &mut session,
+                    json!({"type":"text","at":[30,30],"height":0.2,"value":"Revision note"}),
+                );
+            }
+            "rule" => {
+                let mut method = session
+                    .measurement_selection()
+                    .unwrap()
+                    .effective()
+                    .unwrap()
+                    .clone();
+                method.rules[0].citation.clause.push_str(" revised scope");
+                run(
+                    &mut session,
+                    json!({"type":"measurement","kind":"set_method","scope":"project","method":method}),
+                );
+            }
+            "mapping" => {
+                let mut mappings = qiyas_core::knowledge::get(
+                    &session.drawing.doc,
+                    qiyas_core::knowledge::Kind::Measurement,
+                    "mappings",
+                )
+                .unwrap()
+                .unwrap()
+                .data;
+                for mapping in mappings.as_array_mut().unwrap() {
+                    mapping["citation"]["clause"] = json!("Revised mapping scope");
+                }
+                run(
+                    &mut session,
+                    json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+                );
+            }
+            _ => {
+                // A revised source trail with the same quantity must invalidate the reading.
+                let mut result = qiyas_core::knowledge::get(
+                    &session.drawing.doc,
+                    qiyas_core::knowledge::Kind::Measurement,
+                    "result",
+                )
+                .unwrap()
+                .unwrap()
+                .data;
+                let replacement = result["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| {
+                        item["code"]
+                            .as_str()
+                            .is_some_and(|code| code.starts_with("A-W01"))
+                    })
+                    .unwrap()["lines"][0]["sources"][0]["handle"]
+                    .clone();
+                let item = result["items"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|item| item["code"] == code)
+                    .unwrap();
+                item["lines"][0]["sources"][0]["handle"] = replacement;
+                qiyas_core::knowledge::put(
+                    &mut session.drawing.doc,
+                    qiyas_core::knowledge::Kind::Measurement,
+                    "result",
+                    &result,
+                )
+                .unwrap();
+            }
+        }
+        let report = session.measurement_report().unwrap();
+        let item = report.items.iter().find(|item| item.code == code).unwrap();
+        assert_eq!(item.quantity, 2.0, "{change}");
+        assert!(item.second_reading.is_none(), "{change}");
+        assert!(session
+            .second_reading_brief(None)
+            .unwrap()
+            .iter()
+            .any(|brief| brief.code == code));
+    }
+}
+
+#[test]
+fn full_blind_scope_contains_formulas_selections_and_size_groups() {
+    let (_dir, session) = doors_and_floor(6);
+    let brief = session
+        .second_reading_brief(None)
+        .unwrap()
+        .into_iter()
+        .find(|brief| brief.code.contains("900x"))
+        .unwrap();
+    assert!(!brief.scope["rules"].as_array().unwrap().is_empty());
+    let rule = &brief.scope["rules"][0];
+    assert!(rule["element_type"].is_string());
+    assert!(rule["terms"][0]["factors"].is_array());
+    assert!(rule["deductions"].is_array());
+    assert!(!brief.scope["mappings"].as_array().unwrap().is_empty());
+    assert!(brief.scope["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|group| group["properties"]["width"] == 0.9 && group["properties"]["head"] == 2.1));
+    let serialized = serde_json::to_value(&brief).unwrap();
+    assert!(serialized.get("binding").is_none());
+    assert!(serialized.get("first").is_none());
+}
+
+#[test]
+fn takeoff_check_lists_each_open_reading_and_acceptance_stays_revision_bound() {
+    let (_dir, mut session) = doors_and_floor(6);
+    let code = item_code(&session, 2.0, "A-D01");
+    record(&mut session, &code, 3.0);
+    session
+        .run(qiyas_core::Command::Check { tolerance: None })
+        .unwrap();
+    let mut offset = 0;
+    let mut readings = Vec::new();
+    loop {
+        let check = session.takeoff_check(offset, &[]).unwrap();
+        readings.extend(
+            check["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["section"] == "second_readings")
+                .cloned(),
+        );
+        let Some(next) = check["next_offset"].as_u64() else {
+            break;
+        };
+        offset = next as usize;
+    }
+    assert_eq!(readings.len(), 1);
+    assert_eq!(readings[0]["reading"]["first"], 2.0);
+    assert_eq!(readings[0]["reading"]["second"], 3.0);
+    let query = session
+        .conflicts
+        .iter()
+        .find(|c| c.hash_key.contains("second_reading"))
+        .unwrap();
+    let old_key = query.hash_key.clone();
+    session
+        .run(qiyas_core::Command::ResolveConflict {
+            id: query.id.clone(),
+            status: qiyas_core::ConflictStatus::Resolved,
+            note: "Checked".into(),
+        })
+        .unwrap();
+    run(
+        &mut session,
+        json!({"type":"text","at":[30,30],"height":0.2,"value":"New revision"}),
+    );
+    record(&mut session, &code, 3.0);
+    session
+        .run(qiyas_core::Command::Check { tolerance: None })
+        .unwrap();
+    let query = session
+        .conflicts
+        .iter()
+        .find(|c| c.hash_key.contains("second_reading"))
+        .unwrap();
+    assert_ne!(query.hash_key, old_key);
+    assert_eq!(query.status, qiyas_core::ConflictStatus::Open);
+}
+
+#[test]
+fn declared_count_kind_is_exact_with_an_unfamiliar_unit_and_a_configured_percentage() {
+    let (_dir, mut session) = doors_and_floor(6);
+    let mut method = session
+        .measurement_selection()
+        .unwrap()
+        .effective()
+        .unwrap()
+        .clone();
+    for rule in &mut method.rules {
+        rule.unit = "count-per-schedule".into();
+        rule.tolerance = Some(qiyas_core::discrepancy::Tolerance {
+            percent: 10.0,
+            absolute: 1.0,
+        });
+    }
+    let mut mappings = qiyas_core::knowledge::get(
+        &session.drawing.doc,
+        qiyas_core::knowledge::Kind::Measurement,
+        "mappings",
+    )
+    .unwrap()
+    .unwrap()
+    .data;
+    for mapping in mappings.as_array_mut().unwrap() {
+        mapping["unit"] = json!("{unit}");
+    }
+    run(
+        &mut session,
+        json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+    );
+    run(
+        &mut session,
+        json!({"type":"measurement","kind":"set_method","scope":"project","method":method}),
+    );
+    let item = session
+        .measurement_report()
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| !item.informational)
+        .unwrap();
+    let result = record(&mut session, &item.code, item.quantity + 0.001);
+    assert_eq!(result["agrees"], false);
+    let read = session
+        .measurement_report()
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.code == item.code)
+        .unwrap()
+        .second_reading
+        .unwrap();
+    assert_eq!(read.tolerance_percent, 0.0);
+    assert_eq!(read.tolerance_absolute, 0.0);
+    assert!(!qiyas_core::second_reading::agrees(
+        1000.0,
+        1001.0,
+        "unknown-count"
+    ));
 }

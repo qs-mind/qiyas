@@ -278,3 +278,197 @@ fn export_defaults_use_the_export_folder_and_keep_previous_names() {
         "previous export"
     );
 }
+
+#[test]
+fn generated_sheet_zones_keep_notes_schedules_and_plan_separate_and_undo_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("zoned.dxf"), 6);
+    let Outcome::Sheet { report: made } = run(
+        &mut s,
+        json!({"type":"make_sheet","name":"Zones",
+        "paper":"A1","scale":"1:100","model_bounds":[[0,0],[30,20]],"notes":["Check dimensions."]}),
+    ) else {
+        panic!("sheet")
+    };
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| sh.name == "Zones")
+        .unwrap()
+        .block;
+    s.set_sheet(&block).unwrap();
+    let table = added(
+        &mut s,
+        json!({"type":"table","at":[300,350],"rows":2,"cols":2,
+        "row_height":5,"col_width":20,"data":[["Room","Area"],["Room 1","20"]]}),
+    );
+    let note = added(
+        &mut s,
+        json!({"type":"mtext","at":[350,300],"width":60,"height":3,"value":"Open quantity queries\nConfirm the stated area."}),
+    );
+    let original = [points(&s, table), points(&s, note)];
+    let old = s
+        .paper_views_of(&block)
+        .into_iter()
+        .find(|v| v.handle == made.viewport)
+        .unwrap();
+    let steps = s.history_steps().0.len();
+    let Outcome::Arranged { report } = run(&mut s, json!({"type":"arrange"})) else {
+        panic!("arranged")
+    };
+    assert!(
+        report.issues.is_empty(),
+        "{:?}",
+        serde_json::to_value(&report).unwrap()
+    );
+    assert_eq!(s.history_steps().0.len(), steps + 1);
+    for (handle, zone) in [(table, made.zones.schedules), (note, made.zones.notes)] {
+        let movement = report
+            .moves
+            .iter()
+            .find(|m| m.handles.contains(&handle))
+            .unwrap();
+        assert!(movement.to[0] >= zone[0][0] && movement.to[0] <= zone[1][0]);
+        assert!(movement.to[1] >= zone[0][1] && movement.to[1] <= zone[1][1]);
+    }
+    let now = s
+        .paper_views_of(&block)
+        .into_iter()
+        .find(|v| v.handle == made.viewport)
+        .unwrap();
+    assert_eq!(now.scale, old.scale);
+    assert_eq!(now.centre, old.centre);
+    assert!(check(&s, vec![], "part_overlap").findings.is_empty());
+    assert!(s.undo());
+    assert_eq!(points(&s, table), original[0]);
+    assert_eq!(points(&s, note), original[1]);
+}
+
+#[test]
+fn a_new_schedule_uses_the_reserved_edge_without_arrange_and_zones_survive_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("zoned.dxf"), 6);
+    run(
+        &mut s,
+        json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[5,4]}),
+    );
+    run(
+        &mut s,
+        json!({"type":"label_spaces","query":{"seeds":[{"name":"Room 1","point":[2,2]}]}}),
+    );
+    let Outcome::Sheet { report } = run(
+        &mut s,
+        json!({"type":"make_sheet","name":"Saved zones",
+        "paper":"A1","model_bounds":[[0,0],[30,20]]}),
+    ) else {
+        panic!("sheet")
+    };
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| sh.name == "Saved zones")
+        .unwrap()
+        .block;
+    s.set_sheet(&block).unwrap();
+    let path = dir.path().join("with-zones.dxf");
+    s.save_as_headless(&path).unwrap();
+    let mut reopened = Session::open(&path).unwrap();
+    reopened.set_sheet(&block).unwrap();
+    let table = added(&mut reopened, json!({"type":"room_schedule"}));
+    let zone = report.zones.schedules;
+    assert!(points(&reopened, table)
+        .iter()
+        .all(|p| (0..2).all(|i| p[i] >= zone[0][i] - 1e-6 && p[i] <= zone[1][i] + 1e-6)));
+}
+
+#[test]
+fn arrange_reports_a_schedule_too_large_for_its_zone_without_shrinking_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("overflow.dxf"), 6);
+    run(
+        &mut s,
+        json!({"type":"make_sheet","name":"Overflow","paper":"A1","model_bounds":[[0,0],[30,20]]}),
+    );
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| sh.name == "Overflow")
+        .unwrap()
+        .block;
+    s.set_sheet(&block).unwrap();
+    let table = added(
+        &mut s,
+        json!({"type":"table","at":[300,350],"rows":10,"cols":2,
+        "row_height":10,"col_width":30}),
+    );
+    let before = points(&s, table);
+    let Outcome::Arranged { report } = run(
+        &mut s,
+        json!({"type":"arrange","items":[{"handles":[table]}]}),
+    ) else {
+        panic!("arranged")
+    };
+    assert_eq!(points(&s, table), before);
+    assert!(report
+        .issues
+        .iter()
+        .any(|i| i.code == "sheet_zone_overflow" && i.handles.contains(&table)));
+    assert!(report.issues.iter().any(|i| i.code == "part_overlap"));
+    assert!(report
+        .issues
+        .iter()
+        .all(|i| !i.message.is_empty() && !i.message_ar.is_empty()));
+}
+
+#[test]
+fn arranging_a_split_view_keeps_its_match_lines_attached_and_key_plan_fixed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("split.dxf"), 6);
+    let Outcome::Sheet { report: made } = run(
+        &mut s,
+        json!({"type":"make_sheet","name":"Split",
+        "paper":"A1","scale":"1:250","model_bounds":[[0,0],[180,96]],"split_lines":[[[0,40],[180,40]]]}),
+    ) else {
+        panic!("sheet")
+    };
+    let block = s
+        .drawing
+        .sheets()
+        .into_iter()
+        .find(|sh| sh.name == "Split")
+        .unwrap()
+        .block;
+    s.set_sheet(&block).unwrap();
+    let matches: Vec<_> = s
+        .drawing
+        .doc
+        .entities_in_block(&block)
+        .filter(|e| e.common().layer == "A-ANNO-MATCH")
+        .map(|e| e.common().handle.value())
+        .collect();
+    let keys: Vec<_> = s
+        .drawing
+        .doc
+        .entities_in_block(&block)
+        .filter(|e| e.common().layer == "A-ANNO-KEY")
+        .map(|e| (e.common().handle.value(), e.clone()))
+        .collect();
+    let Outcome::Arranged { report } = run(
+        &mut s,
+        json!({"type":"arrange","items":[{"handles":[made.viewport]}]}),
+    ) else {
+        panic!("arranged")
+    };
+    let movement = report
+        .moves
+        .iter()
+        .find(|m| m.handles.contains(&made.viewport))
+        .unwrap();
+    assert!(matches.iter().all(|h| movement.handles.contains(h)));
+    for (h, before) in keys {
+        assert_eq!(s.drawing.doc.get_entity(Handle::new(h)), Some(&before));
+    }
+}

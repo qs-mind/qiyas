@@ -157,6 +157,8 @@ pub struct Session {
     /// A new drawing never saved yet (`Session::new_blank`): its path is a placeholder, Save goes
     /// through Save As and no project file is written beside it.
     untitled: bool,
+    /// Created in this session, including after Save As; never true for an opened drawing.
+    pub(crate) created_here: bool,
     /// A host-selected visible folder for exports until the drawing has its first saved file.
     export_directory: Option<PathBuf>,
     /// The language of the user's request, set by the host: what labels, schedules and title
@@ -615,6 +617,7 @@ impl Session {
     pub fn new_blank(placeholder: &Path, insunits: i16) -> Session {
         let mut session = Session::from_drawing(Drawing::blank(placeholder, insunits), None);
         session.untitled = true;
+        session.created_here = true;
         session.metric_template();
         session
     }
@@ -773,6 +776,7 @@ impl Session {
             recovered_from: None,
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             untitled: false,
+            created_here: false,
             export_directory: None,
             sheet_language: None,
             made_sheet: None,
@@ -938,12 +942,6 @@ impl Session {
     /// A host that knows the computer's local date (yyyy-MM-dd) gives it here.
     pub fn set_local_date(&mut self, date: Option<String>) {
         self.local_date = date;
-    }
-
-    pub(crate) fn local_date(&self) -> String {
-        self.local_date
-            .clone()
-            .unwrap_or_else(crate::field::local_today)
     }
 
     pub fn export_folder(&self) -> &Path {
@@ -1919,6 +1917,11 @@ impl Session {
         mut cmd: Command,
         source: Source,
     ) -> Result<Outcome, CoreError> {
+        if matches!(&cmd, Command::Check { .. })
+            || matches!(&cmd, Command::Deliverable(command) if matches!(command.as_ref(), crate::deliverables::DeliverableCommand::Export { report: crate::deliverables::Kind::Boq | crate::deliverables::Kind::Dimensions | crate::deliverables::Kind::Variation, .. }))
+        {
+            crate::second_reading::observe(self);
+        }
         cmd.normalize_runs(self.drawing.units);
         if let Command::Check { tolerance } = cmd {
             self.check_block_edit(&Command::Check { tolerance })?;

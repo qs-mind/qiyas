@@ -63,10 +63,11 @@ pub enum Kind {
     Revisions,
     Reports,
     Placement,
+    Decisions,
 }
 
 impl Kind {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Types,
         Self::Levels,
         Self::Tables,
@@ -81,6 +82,7 @@ impl Kind {
         Self::Revisions,
         Self::Reports,
         Self::Placement,
+        Self::Decisions,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -99,6 +101,7 @@ impl Kind {
             Self::Revisions => "revisions",
             Self::Reports => "reports",
             Self::Placement => "placement",
+            Self::Decisions => "decisions",
         }
     }
 }
@@ -354,7 +357,7 @@ fn ensure_kind_dictionary(doc: &mut CadDocument, kind: Kind) -> Result<Handle, C
     for k in Kind::ALL {
         // Optional pack storage is created on first use. Other edits must not allocate
         // new handles just because an unused pack collection is available.
-        if (k != Kind::Placement || kind == Kind::Placement)
+        if (!matches!(k, Kind::Placement | Kind::Decisions) || kind == k)
             && child(doc, knowledge, k.as_str())?.is_none()
         {
             add_dictionary(doc, knowledge, k.as_str());

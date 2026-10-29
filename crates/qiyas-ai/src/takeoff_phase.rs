@@ -1,4 +1,4 @@
-//! Small, metadata-driven quantity steps. Drawing jobs do not use this guard.
+//! Metadata about batch size and quantity families, supplied as advice only.
 use std::collections::BTreeSet;
 
 use serde_json::Value;
@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::surface;
 
 pub(crate) const MAX_STEPS: usize = 12;
-const SPLIT: &str = "Split this take-off batch into phases and update qiyas_execute plan. Use one family (types + recognition, method, mappings, or report) per batch, at most 12 commands. Placing many objects of one family is one step. Check the active phase before moving on.";
+const SPLIT: &str = "This batch spans multiple quantity families or more than 12 commands. / تشمل هذه الدفعة أكثر من مجموعة كميات أو أكثر من ١٢ أمرًا.";
 
 #[derive(Default)]
 pub(crate) struct Batch {
@@ -60,7 +60,7 @@ impl Batch {
         }
     }
 
-    pub(crate) fn refusal(&self) -> Option<&'static str> {
+    pub(crate) fn advice(&self) -> Option<&'static str> {
         // Many objects of one family (every room of a tower floor) are one step: a cap on
         // them would turn one goal into dozens of requests.
         (self.families.len() > 1 || self.steps > MAX_STEPS).then_some(SPLIT)
@@ -114,7 +114,7 @@ mod tests {
                 surface::EXECUTE,
                 &json!({"op":"batch","args":kit["phases"][phase]})
             )
-            .refusal()
+            .advice()
             .is_none());
         }
         let commands = kit["phases"]
@@ -129,15 +129,15 @@ mod tests {
             json!({"op":"batch","args":{"commands":vec![json!({"type":"new_layer","name":"Hospital"});13]}}),
         ] {
             assert!(Batch::read(surface::EXECUTE, &input)
-                .refusal()
+                .advice()
                 .unwrap()
-                .contains("Split this take-off batch into phases"));
+                .contains("This batch spans multiple quantity families"));
         }
         assert!(Batch::read(
             surface::EXECUTE,
             &json!({"op":"run","args":{"command":{"type":"place_objects","objects":vec![json!({"type":"Observed"});300]}}})
         )
-        .refusal()
+        .advice()
         .is_none());
         assert!(
             Batch::read(

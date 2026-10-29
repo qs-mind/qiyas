@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   aiCancel,
+  aiConversations,
+  drawingInfo,
   aiClear,
   aiResume,
   aiSend,
@@ -81,6 +83,17 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
   const attaching = useRef(true);
   const pending = useRef<WorkspaceEvent[]>([]);
   const mutating = useRef(new Map<string, string>());
+  // A deliberate New chat stays empty when returning to this drawing.
+  const visited = useRef(new Set<number>());
+  const resumeGeneration = useRef(0);
+  const restoring = useRef<Promise<unknown>>(Promise.resolve());
+  // History can be clicked while opening a drawing restores its latest conversation.
+  // Serialize the two resumes so the explicitly selected conversation wins.
+  const loadSaved = useCallback((id: string, target: number | null | undefined) => {
+    const next = restoring.current.catch(() => {}).then(() => aiResume(id, target));
+    restoring.current = next;
+    return next;
+  }, []);
 
   const refreshStatus = useCallback(() => {
     aiStatus(workspace)
@@ -131,13 +144,39 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
       if (gone) { unlisten(); return; }
       off = unlisten;
       try {
-        const snapshot = await workspaceAttach(workspace);
+        const attachGeneration = resumeGeneration.current;
+        let historyError: string | null = null;
+        let snapshot = await workspaceAttach(workspace);
         if (gone || !snapshot) return;
+        const firstVisit = workspace != null && !visited.current.has(snapshot.workspace);
+        if (workspace != null) visited.current.add(snapshot.workspace);
+        if (firstVisit && snapshot.transcript.length === 0 && !["working", "queued", "waiting"].includes(snapshot.status)) {
+          const generation = attachGeneration;
+          try {
+            const drawing = await drawingInfo(snapshot.workspace);
+            if (gone) return;
+            const chats = drawing?.path ? await aiConversations(drawing.path) : [];
+            const latest = chats?.filter((chat) => chat.drawing === drawing.path).sort((a, b) => b.updated - a.updated)[0];
+            if (gone) return;
+            if (latest && generation === resumeGeneration.current && pending.current.length === 0) {
+              await loadSaved(latest.id, snapshot.workspace);
+              if (gone) return;
+              snapshot = await workspaceAttach(snapshot.workspace);
+              if (gone || !snapshot) return;
+            }
+          } catch (error) {
+            // A history read failure must not leave the previous drawing's thread on screen.
+            historyError = String(error);
+          }
+        }
+        if (gone) return;
         bound = snapshot.workspace;
         cursor.current = snapshot.cursor;
-        dispatch({ type: "reattach", entries: snapshot.transcript });
-        setBusy(["working", "queued"].includes(snapshot.status));
-        setPhase(snapshot.status); setError(snapshot.error); setAway(snapshot.away);
+        if (attachGeneration === resumeGeneration.current) {
+          dispatch({ type: "reattach", entries: snapshot.transcript });
+          setBusy(["working", "queued"].includes(snapshot.status));
+          setPhase(snapshot.status); setError(snapshot.error ?? historyError); setAway(snapshot.away);
+        }
         setChoice(snapshot.choice); setMemoryLimited(snapshot.memory_limited);
         for (const entry of snapshot.transcript) {
           if (entry.type === "event" && entry.event.type === "tool_call" && entry.event.mutating)
@@ -150,7 +189,7 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
     });
     refreshStatus();
     return () => { gone = true; off?.(); };
-  }, [workspace, refreshStatus]);
+  }, [workspace, refreshStatus, loadSaved]);
 
   const choose = useCallback(async (next: WorkspaceChoice) => {
     await workspaceProvider(next, workspace);
@@ -164,11 +203,13 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
   }, [lang, workspace]);
 
   const send = useCallback(async (text: string, extras: SendExtras = {}) => {
+    resumeGeneration.current += 1;
     setError(null);
     // Before the call: the turn's first events may arrive before it returns.
     dispatch({ type: "user", text, ...extras.shown });
     setBusy(true);
     try {
+      await restoring.current.catch(() => {});
       await aiSend(text, extras.context, extras.images, extras.shown?.pointed, workspace);
       return true;
     } catch (e) {
@@ -188,18 +229,21 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
   }, [workspace]);
 
   const clear = useCallback(() => {
+    resumeGeneration.current += 1;
+    if (workspace != null) visited.current.add(workspace);
     dispatch({ type: "clear" });
     setError(null);
-    aiClear(workspace).catch((e) => { if (visible.current === workspace) setError(String(e)); });
+    void restoring.current.catch(() => {}).then(() => aiClear(workspace)).catch((e) => { if (visible.current === workspace) setError(String(e)); });
   }, [workspace]);
 
   const markUndone = useCallback((id: string) => dispatch({ type: "undone", id }), []);
   const markUndoStale = useCallback((id: string) => dispatch({ type: "undo_stale", id }), []);
 
   const resume = useCallback(async (id: string) => {
+    resumeGeneration.current += 1;
     // History opens its drawing first. Capture that destination even before React rerenders.
     const target = displayedWorkspace() ?? workspace;
-    const saved = await aiResume(id, target);
+    const saved = await loadSaved(id, target);
     if (visible.current !== target) return;
     dispatch({ type: "restore", entries: saved.transcript });
     setBusy(false);
@@ -209,7 +253,7 @@ export function useAssistant({ workspace, lang, onMutated, onUi, onNeedSettings 
     mutating.current.clear();
     void aiStatus(target).then(value => { if (visible.current === target) setStatus(value); })
       .catch(() => { if (visible.current === target) setStatus(null); });
-  }, [workspace]);
+  }, [workspace, loadSaved]);
 
   // One object per change, so memoised panels skip the app's pointer-move renders.
   return useMemo(

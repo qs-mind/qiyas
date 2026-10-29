@@ -321,7 +321,7 @@ fn opening_tags_follow_properties_position_undo_and_reopen_in_every_unit() {
             );
             let h = tags["handles"][0].as_u64().unwrap();
             let old = s.entity_info(h, &[]).unwrap();
-            assert_eq!(old.text.as_deref(), openings[0].mark.as_deref());
+            assert_eq!(old.text.as_deref(), Some("D01"));
             // The door hinges at the wall face on the swing side.
             assert!(
                 (s.entity_info(door, &[]).unwrap().position.unwrap()[1] - 0.1 * k).abs() < 1e-6 * k
@@ -331,7 +331,10 @@ fn opening_tags_follow_properties_position_undo_and_reopen_in_every_unit() {
                 json!({"type":"edit_wall_opening","insert":door,"at":3.0*k,"width":k}),
             );
             let now = s.entity_info(h, &[]).unwrap();
-            assert_ne!(old.text, now.text);
+            assert_eq!(
+                old.text, now.text,
+                "a size edit preserves the numbered mark"
+            );
             assert_ne!(old.position, now.position);
             assert!(!has(&s, "object_tag_mismatch", h));
             s.undo();
@@ -435,4 +438,141 @@ fn dashed_boundaries_remain_closed_in_blocks_and_arrays_in_every_unit() {
             assert!((qiyas_geom::walls::ring_area(&ring).abs() / k.powi(2) - 12.0).abs() < 1e-6);
         }
     }
+}
+
+#[test]
+fn opening_symbols_number_in_requested_order_and_share_schedule_marks() {
+    use opencadcodec::{EntityType, Handle};
+    for units in [1, 4, 5, 6] {
+        let mut s = blank(units);
+        let k = 1.0 / s.drawing.units.to_metres();
+        run(&mut s, json!({"type":"annotation_scale","name":"1:50"}));
+        run(
+            &mut s,
+            json!({"type":"walls","runs":[{"points":[[0,0],[12.0*k,0]]}],"thickness":0.2*k,
+            "openings":[{"run":0,"at":8.0*k,"width":k,"kind":"door"},
+                        {"run":0,"at":2.0*k,"width":k,"kind":"door"},
+                        {"run":0,"at":5.0*k,"width":k,"kind":"window"}]}),
+        );
+        let openings = s.wall_groups(None).unwrap()[0].runs[0].openings.clone();
+        let right = openings[0].insert;
+        let left = openings[1].insert;
+        let window = openings[2].insert;
+        run(
+            &mut s,
+            json!({"type":"set_object_props","targets":[right],"props":{"mark":"D07"}}),
+        );
+        let schedule = add(
+            &mut s,
+            json!({"type":"opening_schedule","at":[15.0*k,10.0*k]}),
+        );
+        let before = s.history_steps().0.len();
+        let request = json!({"type":"object_tags","category":"opening","property":"mark","order":"left_to_right"});
+        let result = run(&mut s, request.clone());
+        let handles: Vec<_> = result["handles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        assert_eq!(s.history_steps().0.len(), before + 1);
+        let marks: Vec<_> = handles
+            .iter()
+            .map(|h| s.entity_info(*h, &[]).unwrap().text.unwrap())
+            .collect();
+        assert_eq!(marks, ["D01", "W01", "D07"]);
+        for (h, mark) in [(left, "D01"), (window, "W01"), (right, "D07")] {
+            assert_eq!(
+                s.object_quantity(h).unwrap().unwrap().instance.props["mark"],
+                mark
+            );
+        }
+        let Some(EntityType::Table(table)) = s.drawing.doc.get_entity(Handle::new(schedule)) else {
+            panic!("schedule")
+        };
+        for mark in &marks {
+            assert!(
+                (0..table.rows.len()).any(|row| table.cell_text(row, 0) == Some(mark.as_str())),
+                "missing {mark}"
+            );
+        }
+        let parts: Vec<_> = s
+            .drawing
+            .doc
+            .entities_in_block("*Model_Space")
+            .filter(|e| {
+                matches!(e, EntityType::Circle(_))
+                    || matches!(e, EntityType::LwPolyline(p) if p.vertices.len() == 6)
+            })
+            .collect();
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|e| matches!(e, EntityType::Circle(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|e| matches!(e, EntityType::LwPolyline(_)))
+                .count(),
+            1
+        );
+        for h in &handles {
+            assert!(!has(&s, "text_overlaps_text", *h));
+            assert!(!has(&s, "text_over_lines", *h));
+        }
+        assert!(s.undo());
+        assert!(handles
+            .iter()
+            .all(|h| s.drawing.doc.get_entity(Handle::new(*h)).is_none()));
+        assert!(s.redo());
+        assert_eq!(run(&mut s, request)["handles"], result["handles"]);
+        run(
+            &mut s,
+            json!({"type":"object_tags","targets":[{"handle":window}],"property":"mark","shapes":{"window":"circle"}}),
+        );
+        assert_eq!(
+            s.drawing
+                .doc
+                .entities_in_block("*Model_Space")
+                .filter(|e| matches!(e, EntityType::Circle(_)))
+                .count(),
+            3
+        );
+    }
+}
+
+#[test]
+fn tag_outlines_and_revision_annotations_never_become_room_enclosures() {
+    let mut s = blank(6);
+    run(
+        &mut s,
+        json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[10,10]}),
+    );
+    run(&mut s, json!({"type":"annotation_scale","name":"1:50"}));
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{"name":"Fixture","category":"fixture","geometry":"point","properties":{"mark":{"kind":"text","default":"F01"}}}}),
+    );
+    let source = add(
+        &mut s,
+        json!({"type":"place_objects","objects":[{"type":"Fixture","points":[[5,5]]}]}),
+    );
+    let tag = add(
+        &mut s,
+        json!({"type":"object_tags","targets":[{"handle":source}],"property":"mark","shapes":{"fixture":"circle"}}),
+    );
+    let at = s.entity_info(tag, &[]).unwrap().position.unwrap();
+    run(
+        &mut s,
+        json!({"type":"modify","kind":"move","targets":[{"handle":tag}],"delta":[5.0-at[0],5.0-at[1]]}),
+    );
+    run(
+        &mut s,
+        json!({"type":"comment","points":[[4,4],[6,4],[6,6],[4,6]],"text":"Review / مراجعة"}),
+    );
+    let measured = run(&mut s, json!({"type":"measure_room","point":[5,5]}));
+    assert!((measured["measurement"]["shown"].as_f64().unwrap() - 100.0).abs() < 1e-6);
 }

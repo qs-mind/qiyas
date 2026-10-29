@@ -587,9 +587,12 @@ async fn successful_reads_continue_beyond_40_calls() {
 }
 
 #[tokio::test]
-async fn identical_malformed_input_stops_on_sixth_attempt() {
+async fn identical_malformed_input_refuses_only_the_call() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let mock = serve(|n| {
+            if n >= 6 {
+                return text_turn(&["Done."]);
+            }
             let id: &'static str = Box::leak(format!("toolu_{n}").into_boxed_str());
             tool_turn(&[(id, "qiyas_execute", &[r#"{"points": [[0, "#])])
         })
@@ -607,16 +610,14 @@ async fn identical_malformed_input_stops_on_sixth_attempt() {
             .filter(|e| matches!(e, AgentEvent::ToolResult { is_error: true, .. }))
             .count();
         assert_eq!(answered, 6);
-        assert_eq!(mock.requests().len(), 6);
-        assert_eq!(
-            events.last(),
-            Some(&AgentEvent::Stopped {
-                reason: "repeated_ineffective_edit".into()
-            })
-        );
+        assert_eq!(mock.requests().len(), 7);
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+        assert!(serde_json::to_string(agent.history())
+            .unwrap()
+            .contains("previous_error"));
     })
     .await
-    .expect("test identical_malformed_input_stops_on_sixth_attempt timed out after 60 seconds");
+    .expect("test identical_malformed_input_refuses_only_the_call timed out after 60 seconds");
 }
 
 /// Cache-control markers are transport metadata; every content byte, including old guidance,

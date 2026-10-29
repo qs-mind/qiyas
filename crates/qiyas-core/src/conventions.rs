@@ -127,7 +127,7 @@ impl Session {
                     return Err(invalid(format!(
                         "Entity {} is not a circle or arc",
                         handle.value()
-                    )))
+                    )));
                 }
             };
             if !radius.is_finite()
@@ -307,6 +307,7 @@ impl Session {
         y: &[GridAxis],
         extent: Option<GridExtent>,
         bubble: Option<f64>,
+        layer: Option<&str>,
     ) -> Result<Vec<u64>, CoreError> {
         if x.is_empty() && y.is_empty() {
             return Err(invalid("A grid needs at least one labelled axis"));
@@ -334,7 +335,9 @@ impl Session {
             || extent.min[0] >= extent.max[0]
             || extent.min[1] >= extent.max[1]
         {
-            return Err(invalid("Grid bounds need finite minimum and maximum corners with positive width and height"));
+            return Err(invalid(
+                "Grid bounds need finite minimum and maximum corners with positive width and height",
+            ));
         }
         let mut lines = Vec::with_capacity(x.len() + y.len());
         let mut bubbles = Vec::with_capacity(2 * (x.len() + y.len()));
@@ -365,12 +368,13 @@ impl Session {
                 }
             }
         }
-        let mut handles = self.add_convention_lines("GRID", lines)?;
+        let layer = layer.unwrap_or("GRID");
+        let mut handles = self.add_convention_lines(layer, lines)?;
         let layer = self
             .drawing
             .doc
             .layers
-            .get("GRID")
+            .get(layer)
             .expect("grid layer")
             .name
             .clone();

@@ -234,3 +234,139 @@ fn drawing_unit_tolerance_does_not_hide_colour_or_angle_changes() {
         ChangeKind::Changed
     );
 }
+
+#[test]
+fn moved_elements_have_local_clouds_with_revision_triangles_and_replace_together() {
+    use opencadcodec::{EntityType, Handle};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("revision-a.dxf");
+    let mut a = Session::new_blank(&path, 6);
+    run(&mut a, json!({"type":"annotation_scale","name":"1:50"}));
+    let moved = line(&mut a, [0.0, 0.0], [2.0, 0.0]);
+    let unchanged = line(&mut a, [40.0, 0.0], [42.0, 0.0]);
+    a.save_as(&path).unwrap();
+    let mut b = Session::open_standalone(&path).unwrap();
+    run(&mut b, json!({"type":"carry_knowledge","from_path":path}));
+    run(
+        &mut b,
+        json!({"type":"modify","kind":"move","targets":[{"handle":moved}],"delta":[80,0]}),
+    );
+    let before = b.history_steps().0.len();
+    run(
+        &mut b,
+        json!({"type":"variation_report","layer":"REV-C","revision":"C03"}),
+    );
+    assert_eq!(b.history_steps().0.len(), before + 1);
+    let clouds = b.list_comments();
+    assert_eq!(clouds.len(), 2);
+    for cloud in &clouds {
+        assert_eq!(cloud.text, "C03");
+        assert!(cloud.bounds[1][0] - cloud.bounds[0][0] < 2.3);
+        assert!(cloud.bounds[1][0] < 40.0 || cloud.bounds[0][0] > 42.0);
+        let EntityType::MText(label) = b
+            .drawing
+            .doc
+            .get_entity(Handle::new(cloud.label.unwrap()))
+            .unwrap()
+        else {
+            panic!("label")
+        };
+        assert!((label.height - 0.125).abs() < 1e-8);
+    }
+    let revision_parts = |s: &Session| {
+        s.drawing
+            .doc
+            .entities_in_block("*Model_Space")
+            .filter(|e| e.common().layer == "REV-C")
+            .map(|e| e.common().handle.value())
+            .collect::<Vec<_>>()
+    };
+    let old = revision_parts(&b);
+    assert_eq!(old.len(), 6);
+    assert_eq!(b.drawing.doc.entities_in_block("*Model_Space").filter(|e| {
+        matches!(e, EntityType::LwPolyline(p) if p.common.layer == "REV-C" && p.vertices.len() == 3)
+    }).count(), 2);
+    assert!(b.drawing.doc.get_entity(Handle::new(unchanged)).is_some());
+    run(&mut b, json!({"type":"variation_report"}));
+    assert_eq!(revision_parts(&b).len(), 6);
+    assert!(old
+        .iter()
+        .all(|h| b.drawing.doc.get_entity(Handle::new(*h)).is_none()));
+    assert!(b.list_comments().iter().all(|c| c.text == "C03"));
+    assert!(b.undo());
+    assert_eq!(revision_parts(&b), old);
+}
+
+#[test]
+fn overlapping_cloud_footprints_keep_concave_boundaries_and_unchanged_islands() {
+    let rectangle = |x0, y0, x1, y1| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    let shapes = vec![
+        rectangle(0.0, 0.0, 4.0, 1.0),
+        rectangle(0.0, 0.0, 1.0, 4.0),
+        rectangle(20.0, 0.0, 21.0, 1.0),
+    ];
+    let regions = qiyas_geom::walls::union_footprints(&shapes).unwrap();
+    assert_eq!(regions.len(), 2);
+    assert!((regions.iter().map(|r| r.area()).sum::<f64>() - 8.0).abs() < 1e-8);
+    let ring = vec![
+        rectangle(0.0, 0.0, 4.0, 1.0),
+        rectangle(0.0, 3.0, 4.0, 4.0),
+        rectangle(0.0, 0.0, 1.0, 4.0),
+        rectangle(3.0, 0.0, 4.0, 4.0),
+    ];
+    let regions = qiyas_geom::walls::union_footprints(&ring).unwrap();
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].holes.len(), 1);
+    assert!((regions[0].area() - 12.0).abs() < 1e-8);
+}
+
+#[test]
+fn a_ring_of_changes_excludes_its_unchanged_centre_without_an_extra_triangle() {
+    use opencadcodec::EntityType;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty-a.dxf");
+    let mut a = Session::new_blank(&path, 6);
+    run(&mut a, json!({"type":"annotation_scale","name":"1:50"}));
+    a.save_as(&path).unwrap();
+    let mut b = Session::open_standalone(&path).unwrap();
+    run(&mut b, json!({"type":"carry_knowledge","from_path":path}));
+    for (a, c) in [
+        ([0.0, 0.0], [4.0, 0.0]),
+        ([4.0, 0.0], [4.0, 4.0]),
+        ([4.0, 4.0], [0.0, 4.0]),
+        ([0.0, 4.0], [0.0, 0.0]),
+    ] {
+        line(&mut b, a, c);
+    }
+    run(
+        &mut b,
+        json!({"type":"variation_report","layer":"REV-RING","revision":"R1"}),
+    );
+    assert_eq!(b.list_comments().len(), 1);
+    let parts: Vec<_> = b
+        .drawing
+        .doc
+        .entities_in_block("*Model_Space")
+        .filter(|e| e.common().layer == "REV-RING")
+        .collect();
+    assert_eq!(parts.len(), 4);
+    assert_eq!(
+        parts
+            .iter()
+            .filter(|e| matches!(e, EntityType::LwPolyline(p) if p.vertices.len() == 3))
+            .count(),
+        1
+    );
+    assert!(parts.iter().any(
+        |e| matches!(e, EntityType::LwPolyline(p) if p.vertices.iter().all(|v| v.bulge < 0.0))
+    ));
+    run(&mut b, json!({"type":"variation_report"}));
+    assert_eq!(
+        b.drawing
+            .doc
+            .entities_in_block("*Model_Space")
+            .filter(|e| e.common().layer == "REV-RING")
+            .count(),
+        4
+    );
+}

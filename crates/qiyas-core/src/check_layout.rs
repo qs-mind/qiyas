@@ -55,6 +55,25 @@ impl Session {
                 });
             }
         }
+        if let Some(zones) = self.sheet_zones(sheet) {
+            for part in parts.iter().filter(|p| {
+                !p.frame && !p.title && p.role != Some(crate::sheet_setup::SheetRole::Furniture)
+            }) {
+                let zone = self.part_zone(part, &zones);
+                if part.handles.iter().any(|h| active(*h))
+                    && (0..2).any(|i| {
+                        part.bounds[0][i] < zone[0][i] - 1e-6
+                            || part.bounds[1][i] > zone[1][i] + 1e-6
+                    })
+                {
+                    push(Finding {
+                        rule: "part_overlap", pack: "general", severity: Severity::Warning,
+                        handles: part.handles.clone(), at: Some(part.bounds[0]),
+                        message: "Content crosses its reserved sheet zone; arrange it or revise the zones / المحتوى يتجاوز منطقته المخصصة باللوحة؛ رتبه أو عدل المناطق".into(),
+                    });
+                }
+            }
+        }
         let content: Vec<_> = parts
             .iter()
             .filter(|p| !p.frame)

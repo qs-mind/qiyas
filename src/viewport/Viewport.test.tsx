@@ -28,7 +28,7 @@ afterEach(() => {
 function mount(extra: { onSpaceTap?(): void } = {}) {
   const ref = createRef<ViewportHandle>();
   const view = render(
-    <div className="viewport" tabIndex={0}>
+    <div className="viewport" data-drawing-interaction tabIndex={0}>
       <Viewport ref={ref} batch={batch} atlas={[]} highlight={[]} tool="select" theme="light" onClick={() => {}} onMove={() => {}} {...extra} />
     </div>,
   );
@@ -115,4 +115,48 @@ test("Space is the pan key: held with a drag it pans and repeats nothing; tapped
   fireEvent.keyDown(button, { code: "Space", key: " " });
   fireEvent.keyUp(button, { code: "Space", key: " " });
   expect(onSpaceTap).toHaveBeenCalledOnce();
+});
+
+test("wheel zoom belongs to the interaction root, including its non-scrollable overlays", () => {
+  const { canvas, ref } = mount();
+  const root = canvas.parentElement!;
+  const overlay = document.createElement("div");
+  root.append(overlay);
+  const bubbled = vi.fn();
+  document.addEventListener("wheel", bubbled);
+  try {
+    const before = ref.current!.pxPerUnit();
+    const wheel = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100, clientX: 200, clientY: 200 });
+    overlay.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(ref.current!.pxPerUnit()).toBeGreaterThan(before);
+    expect(bubbled).not.toHaveBeenCalled();
+  } finally {
+    document.removeEventListener("wheel", bubbled);
+  }
+});
+
+test("scrollable overlays keep their wheel without zooming and contain it at the edge", () => {
+  const { canvas, ref, unmount } = mount();
+  const root = canvas.parentElement!;
+  const overlay = document.createElement("div");
+  overlay.style.overflowY = "auto";
+  Object.defineProperties(overlay, { scrollHeight: { value: 400 }, clientHeight: { value: 100 } });
+  overlay.scrollTop = 100;
+  root.append(overlay);
+  const before = ref.current!.pxPerUnit();
+  const wheel = () => new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -10 });
+  const inside = wheel();
+  overlay.dispatchEvent(inside);
+  expect(inside.defaultPrevented).toBe(false);
+  expect(ref.current!.pxPerUnit()).toBe(before);
+  overlay.scrollTop = 0;
+  const edge = wheel();
+  overlay.dispatchEvent(edge);
+  expect(edge.defaultPrevented).toBe(true);
+  expect(ref.current!.pxPerUnit()).toBe(before);
+  unmount();
+  const detached = wheel();
+  overlay.dispatchEvent(detached);
+  expect(detached.defaultPrevented).toBe(false);
 });

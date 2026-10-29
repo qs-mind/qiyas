@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::drafting_standards::{
-    kind_list, limit_for, room_kind, threshold, wardrobe_words, ResolvedLimit, KINDS,
+    kind_list, limit_for, room_kind, standards, wardrobe_words, ResolvedLimit,
 };
 use crate::rooms::{LabelLanguage, RoomsQuery};
 use crate::walls::OpeningKind;
@@ -46,15 +46,14 @@ pub struct PlanFloor {
     pub stairs: Vec<PlanStair>,
 }
 
-/// A room. `kind` is read from the name (English or Arabic) when left out.
+/// A room. Explicit classification wins; name matching is only an uncertain suggestion.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanRoom {
     pub name: String,
-    /// One of: stair, guest_wc, bathroom, wc, kitchen, dining, majlis, reception, living,
-    /// dressing, bedroom, corridor, lobby, utility, garage, balcony.
+    /// Any classification supplied by the caller.
     #[serde(default)]
     pub kind: Option<String>,
-    /// True for the master bedroom; the name "master" also says it.
+    /// Explicit designation; a name does not establish design intent.
     #[serde(default)]
     pub master: Option<bool>,
     pub area_m2: f64,
@@ -135,6 +134,8 @@ pub struct PlanStair {
 /// A floor to read from the drawing's rooms.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FloorQuery {
+    #[serde(default, flatten)]
+    pub boundary_layers: crate::object_regions::BoundaryLayers,
     pub name: String,
     /// `[[min_x, min_y], [max_x, max_y]]` in drawing units: the floor's part of the sheet.
     #[serde(default)]
@@ -182,6 +183,12 @@ pub struct SpaceReport {
     pub limits_used: Vec<Value>,
     pub status: &'static str,
     pub responsibility: &'static str,
+    pub profile: Option<String>,
+    pub building_type: Option<String>,
+    pub available_profiles: Vec<String>,
+    pub thresholds_applied: Vec<Value>,
+    pub status_ar: &'static str,
+    pub responsibility_ar: &'static str,
 }
 
 fn invalid(message: impl Into<String>) -> CoreError {
@@ -205,7 +212,7 @@ fn a(x: f64, dp: usize) -> String {
 /// A room with its kind worked out.
 struct R<'p> {
     room: &'p PlanRoom,
-    kind: Option<&'static str>,
+    kind: Option<&'p str>,
     master: bool,
 }
 
@@ -226,22 +233,31 @@ impl<'p> Fl<'p> {
         self.rooms.iter().find(|r| same(&r.room.name, name))
     }
 
-    fn kind_of(&self, name: &str) -> Option<&'static str> {
+    fn kind_of(&self, name: &str) -> Option<&'p str> {
         self.find(name).and_then(|r| r.kind)
     }
 }
 
-struct Ctx<'m> {
-    market: Option<&'m str>,
+struct Ctx {
+    profile: Option<&'static Value>,
     findings: Vec<SpaceFinding>,
     checked: BTreeSet<&'static str>,
     skipped: Vec<Value>,
     used: BTreeMap<String, Value>,
+    thresholds: BTreeMap<String, Value>,
 }
 
-impl Ctx<'_> {
+impl Ctx {
+    fn threshold(&mut self, id: &str) -> Option<f64> {
+        let entry = self.profile?["thresholds"].get(id)?;
+        let value = entry["value"].as_f64()?;
+        self.thresholds
+            .insert(id.into(), json!({"id":id,"threshold":entry}));
+        Some(value)
+    }
+
     fn limit(&mut self, id: &str) -> Option<ResolvedLimit> {
-        let l = limit_for(id, self.market)?;
+        let l = limit_for(id, None)?;
         self.used.insert(id.to_string(), l.json());
         Some(l)
     }
@@ -367,15 +383,6 @@ fn check_model(plan: &PlanModel) -> Result<(), CoreError> {
             {
                 return Err(invalid("Room centres must be finite metres"));
             }
-            if let Some(kind) = &room.kind {
-                if !KINDS.contains(&kind.as_str()) {
-                    return Err(invalid(format!(
-                        "Room {}: kind {kind:?} is none of {}",
-                        room.name,
-                        KINDS.join(", ")
-                    )));
-                }
-            }
         }
         for door in &floor.doors {
             if !door.width_m.is_finite() || door.width_m <= 0.0 {
@@ -420,51 +427,67 @@ fn prepare(floor: &PlanFloor) -> Fl<'_> {
     let rooms = floor
         .rooms
         .iter()
-        .map(|room| {
-            let (inferred, named_master) = room_kind(&room.name);
-            let kind = room
-                .kind
-                .as_deref()
-                .and_then(|k| KINDS.iter().copied().find(|known| *known == k))
-                .or(inferred);
-            R {
-                room,
-                kind,
-                master: room.master.unwrap_or(named_master),
-            }
+        .map(|room| R {
+            room,
+            kind: room.kind.as_deref(),
+            master: room.master.unwrap_or(false),
         })
         .collect();
     Fl { floor, rooms }
 }
 
-/// Run every check on `plan` for `market` (`egypt`, `ksa`, `uae` or none: practice defaults).
+/// Apply an explicitly selected, compatible practice profile. Otherwise report no judgements.
 ///
 /// # Errors
-/// The plan is not well formed (no floors, a negative area, an unknown kind).
-pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport, CoreError> {
+/// The plan is not well formed (for example no floors or a non-finite dimension).
+pub fn run_checks(
+    plan: &PlanModel,
+    market: Option<&str>,
+    profile: Option<&str>,
+    building_type: Option<&str>,
+) -> Result<SpaceReport, CoreError> {
     check_model(plan)?;
-    let market = market.and_then(crate::drafting_standards::normalise_market);
+    let profiles = &standards()["space_planning"]["profiles"];
+    let available_profiles: Vec<String> = profiles
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys().cloned())
+        .collect();
+    let selected = profile.filter(|name| {
+        profiles.get(*name).is_some_and(|p| {
+            building_type.is_some_and(|kind| {
+                p["applies_to"].as_array().is_some_and(|types| {
+                    types
+                        .iter()
+                        .any(|t| t.as_str().is_some_and(|t| same(t, kind)))
+                })
+            })
+        })
+    });
     let mut cx = Ctx {
-        market,
+        profile: selected.and_then(|name| profiles.get(name)),
         findings: Vec::new(),
         checked: BTreeSet::new(),
         skipped: Vec::new(),
         used: BTreeMap::new(),
+        thresholds: BTreeMap::new(),
     };
     let floors: Vec<Fl> = plan.floors.iter().map(prepare).collect();
-    for fl in &floors {
-        circulation_share(&mut cx, fl);
-        corridors(&mut cx, fl);
-        room_sizes(&mut cx, fl);
-        kitchen_and_living(&mut cx, fl);
-        oversized(&mut cx, fl);
-        stairs(&mut cx, fl);
-        doors(&mut cx, fl);
-        guest_wc(&mut cx, fl);
+    if selected.is_some() {
+        for fl in &floors {
+            circulation_share(&mut cx, fl);
+            corridors(&mut cx, fl);
+            room_sizes(&mut cx, fl);
+            kitchen_and_living(&mut cx, fl);
+            oversized(&mut cx, fl);
+            stairs(&mut cx, fl);
+            doors(&mut cx, fl);
+            guest_wc(&mut cx, fl);
+        }
+        master_ensuite(&mut cx, &floors);
+        bathroom_ratio(&mut cx, &floors);
+        wardrobes(&mut cx, &floors);
     }
-    master_ensuite(&mut cx, &floors);
-    bathroom_ratio(&mut cx, &floors);
-    wardrobes(&mut cx, &floors);
     let (errors, warnings, notes) =
         cx.findings
             .iter()
@@ -473,7 +496,12 @@ pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport,
                 "warning" => (e, w + 1, n),
                 _ => (e, w, n + 1),
             });
-    let summary = if cx.findings.is_empty() {
+    let summary = if selected.is_none() {
+        format!(
+            "Facts only. Available profiles: {}.",
+            available_profiles.join(", ")
+        )
+    } else if cx.findings.is_empty() {
         format!("{} checks ran; no finding.", cx.checked.len())
     } else {
         format!(
@@ -481,7 +509,12 @@ pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport,
             cx.checked.len()
         )
     };
-    let summary_ar = crate::numbers::arabic_numerals(&if cx.findings.is_empty() {
+    let summary_ar = crate::numbers::arabic_numerals(&if selected.is_none() {
+        format!(
+            "حقائق فقط. الملفات المتاحة: {}.",
+            available_profiles.join(", ")
+        )
+    } else if cx.findings.is_empty() {
         format!("تم تنفيذ {} فحصاً دون ملاحظات.", cx.checked.len())
     } else {
         format!(
@@ -490,6 +523,12 @@ pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport,
         )
     });
     Ok(SpaceReport {
+        profile: selected.map(String::from),
+        building_type: building_type.map(String::from),
+        available_profiles,
+        thresholds_applied: cx.thresholds.into_values().collect(),
+        status_ar: "للمراجعة",
+        responsibility_ar: "القيم المطبقة تفضيلات ممارسة وليست كوداً. يقرر المهندس مدى ملاءمتها.",
         errors,
         warnings,
         notes,
@@ -501,8 +540,7 @@ pub fn run_checks(plan: &PlanModel, market: Option<&str>) -> Result<SpaceReport,
         limits_used: cx.used.into_values().collect(),
         findings: cx.findings,
         status: "For review",
-        responsibility:
-            "Qiyas draws and checks against stated limits. The engineer and the company approve.",
+        responsibility: "Applied thresholds are practice preferences, not code. The engineer decides their suitability.",
     })
 }
 
@@ -522,10 +560,20 @@ impl SpaceReport {
 
 fn circulation_share(cx: &mut Ctx, fl: &Fl) {
     let total: f64 = fl.rooms.iter().map(|r| r.room.area_m2).sum();
-    if fl.rooms.len() < 3 || total <= 0.0 {
+    let Some(min_spaces) = cx.threshold("circulation_min_spaces") else {
+        return;
+    };
+    let known_kinds = crate::drafting_standards::suggested_kinds();
+    if (fl.rooms.len() as f64) < min_spaces
+        || total <= 0.0
+        || fl
+            .rooms
+            .iter()
+            .any(|r| r.kind.is_none_or(|k| !known_kinds.contains(&k)))
+    {
         cx.skip(
             "circulation_share",
-            format!("{}: fewer than three rooms", fl.floor.name),
+            format!("{}: insufficient classified spaces for this profile / فراغات مصنفة غير كافية لهذا الملف", fl.floor.name),
         );
         return;
     }
@@ -535,8 +583,12 @@ fn circulation_share(cx: &mut Ctx, fl: &Fl) {
     let circulation: Vec<&R> = fl.of_kind(&kinds);
     let area: f64 = circulation.iter().map(|r| r.room.area_m2).sum();
     let share = area / total;
-    let warn = threshold("circulation_share_warn").unwrap_or(0.15);
-    let error = threshold("circulation_share_error").unwrap_or(0.22);
+    let Some(warn) = cx.threshold("circulation_share_warn") else {
+        return;
+    };
+    let Some(error) = cx.threshold("circulation_share_error") else {
+        return;
+    };
     if share <= warn {
         return;
     }
@@ -586,14 +638,13 @@ fn corridors(cx: &mut Ctx, fl: &Fl) {
     if corridors.is_empty() {
         return;
     }
-    let max_len = threshold("corridor_length_max_m").unwrap_or(8.0);
+    let Some(max_len) = cx.threshold("corridor_length_max_m") else {
+        return;
+    };
     let min_width = cx.limit("corridor_width_min_m");
     for r in corridors {
         let width = r.room.width_m;
-        let length = r
-            .room
-            .length_m
-            .or_else(|| width.filter(|w| *w > 0.0).map(|w| r.room.area_m2 / w));
+        let length = r.room.length_m;
         match length {
             Some(length) => {
                 cx.checked.insert("corridor_length");
@@ -768,7 +819,9 @@ fn kitchen_and_living(cx: &mut Ctx, fl: &Fl) {
             .max_by(|x, y| x.room.area_m2.total_cmp(&y.room.area_m2)),
     ) {
         cx.checked.insert("kitchen_larger_than_living");
-        let ratio = threshold("kitchen_to_living_max_ratio").unwrap_or(1.0);
+        let Some(ratio) = cx.threshold("kitchen_to_living_max_ratio") else {
+            return;
+        };
         if kitchen.room.area_m2 > ratio * biggest.room.area_m2 {
             cx.add(
                 "kitchen_larger_than_living",
@@ -844,9 +897,15 @@ fn kitchen_and_living(cx: &mut Ctx, fl: &Fl) {
 }
 
 fn oversized(cx: &mut Ctx, fl: &Fl) {
-    let bedroom = threshold("bedroom_oversize_m2").unwrap_or(24.0);
-    let master = threshold("master_oversize_m2").unwrap_or(36.0);
-    let service = threshold("service_oversize_m2").unwrap_or(12.0);
+    let Some(bedroom) = cx.threshold("bedroom_oversize_m2") else {
+        return;
+    };
+    let Some(master) = cx.threshold("master_oversize_m2") else {
+        return;
+    };
+    let Some(service) = cx.threshold("service_oversize_m2") else {
+        return;
+    };
     for r in &fl.rooms {
         let (limit, label_en, label_ar) = match r.kind {
             Some("bedroom") if r.master => (master, "master bedroom", "غرفة النوم الرئيسية"),
@@ -1137,7 +1196,7 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
             if let Some(limit) = &entrance_min {
                 cx.checked.insert("entrance_door_narrow");
                 if d.width_m < limit.value() - 1e-9 {
-                    let leaves = d.leaves.unwrap_or(1);
+                    let leaves = d.leaves;
                     cx.add(
                         "entrance_door_narrow",
                         "warning",
@@ -1147,13 +1206,13 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                             format!(
                                 "The main entrance is {} m ({} leaf); a villa entrance is at least {} m.",
                                 e(d.width_m, 2),
-                                if leaves >= 2 { "double" } else { "single" },
+                                match leaves { Some(2) => "double", Some(1) => "single", _ => "unspecified" },
                                 e(limit.value(), 2)
                             ),
                             format!(
                                 "باب المدخل الرئيسي {} م ({}); ومدخل الفيلا لا يقل عن {} م.",
                                 a(d.width_m, 2),
-                                if leaves >= 2 { "ضلفتان" } else { "ضلفة واحدة" },
+                                match leaves { Some(2) => "ضلفتان", Some(1) => "ضلفة واحدة", _ => "غير محدد" },
                                 a(limit.value(), 2)
                             ),
                         ),
@@ -1265,7 +1324,9 @@ fn guest_wc(cx: &mut Ctx, fl: &Fl) {
         );
         return;
     }
-    let max = threshold("guest_wc_distance_max_m").unwrap_or(10.0);
+    let Some(max) = cx.threshold("guest_wc_distance_max_m") else {
+        return;
+    };
     let guest_names: Vec<&str> = fl
         .rooms
         .iter()
@@ -1350,7 +1411,9 @@ fn guest_wc(cx: &mut Ctx, fl: &Fl) {
 // ---- house checks -------------------------------------------------------------------------
 
 fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
-    let min_bedrooms = threshold("master_rule_min_bedrooms").unwrap_or(3.0);
+    let Some(min_bedrooms) = cx.threshold("master_rule_min_bedrooms") else {
+        return;
+    };
     let bedrooms: Vec<(&Fl, &R)> = floors
         .iter()
         .flat_map(|fl| fl.of_kind(&["bedroom"]).into_iter().map(move |r| (fl, r)))
@@ -1358,37 +1421,15 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
     if (bedrooms.len() as f64) < min_bedrooms {
         return;
     }
-    // The master is the one named so, else the largest bedroom.
-    let master = bedrooms.iter().find(|(_, r)| r.master).or_else(|| {
-        bedrooms
-            .iter()
-            .max_by(|x, y| x.1.room.area_m2.total_cmp(&y.1.room.area_m2))
-    });
+    let master = bedrooms.iter().find(|(_, r)| r.master);
     let Some((fl, master)) = master.copied() else {
         return;
     };
-    let circulation = kind_list("circulation_kinds");
     let is_ensuite = |bath: &R| -> Option<bool> {
-        if !bath.room.opens_to.is_empty() {
-            return Some(
-                bath.room.opens_to.len() == 1 && same(&bath.room.opens_to[0], &master.room.name),
-            );
-        }
-        if bath.room.adjacent.is_empty() {
+        if bath.room.opens_to.is_empty() {
             return None;
         }
-        let touches_master = bath
-            .room
-            .adjacent
-            .iter()
-            .any(|n| same(n, &master.room.name));
-        let public = bath.room.adjacent.iter().any(|n| {
-            fl.kind_of(n).is_some_and(|k| {
-                circulation.iter().any(|c| c == k)
-                    || matches!(k, "kitchen" | "living" | "majlis" | "reception" | "dining")
-            })
-        });
-        Some(touches_master && !public)
+        Some(bath.room.opens_to.len() == 1 && same(&bath.room.opens_to[0], &master.room.name))
     };
     let baths = fl.of_kind(&["bathroom", "wc"]);
     let mut verdicts: Vec<Option<bool>> = Vec::new();
@@ -1402,7 +1443,7 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
     if verdicts.iter().any(Option::is_none) {
         cx.skip(
             "master_without_ensuite",
-            "some bathrooms have no door or adjacency data",
+            "some bathrooms have no door-access data / بعض الحمامات بلا بيانات وصول عبر الأبواب",
         );
         return;
     }
@@ -1427,10 +1468,15 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
 }
 
 fn bathroom_ratio(cx: &mut Ctx, floors: &[Fl]) {
-    let ratio = threshold("baths_per_bedroom_min").unwrap_or(0.75);
+    let Some(ratio) = cx.threshold("baths_per_bedroom_min") else {
+        return;
+    };
     let count = |kind: &str| -> usize { floors.iter().map(|f| f.of_kind(&[kind]).len()).sum() };
     let bedrooms = count("bedroom");
-    if bedrooms < 2 {
+    let Some(min_bedrooms) = cx.threshold("bathroom_ratio_min_bedrooms") else {
+        return;
+    };
+    if (bedrooms as f64) < min_bedrooms {
         return;
     }
     cx.checked.insert("bathroom_ratio");
@@ -1526,33 +1572,134 @@ fn wardrobes(cx: &mut Ctx, floors: &[Fl]) {
 
 // ---- reading the plan from the drawing ---------------------------------------------------------
 
-/// Bounding box `[[min_x, min_y], [max_x, max_y]]` in metres.
-type BoxM = [[f64; 2]; 2];
+type Point = [f64; 2];
 
-fn gap_x(a: &BoxM, b: &BoxM) -> f64 {
-    (a[0][0] - b[1][0]).max(b[0][0] - a[1][0])
+fn edges(ring: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    ring.iter()
+        .copied()
+        .zip(ring.iter().copied().cycle().skip(1))
+        .take(ring.len())
+}
+fn cross(a: Point, b: Point) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+fn sub(a: Point, b: Point) -> Point {
+    [a[0] - b[0], a[1] - b[1]]
+}
+fn dot(a: Point, b: Point) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+fn on_edge(p: Point, a: Point, b: Point, tol: f64) -> bool {
+    let ab = sub(b, a);
+    let len = ab[0].hypot(ab[1]);
+    len > tol
+        && cross(ab, sub(p, a)).abs() <= tol * len
+        && dot(sub(p, a), ab) >= -tol * len
+        && dot(sub(p, b), ab) <= tol * len
+}
+fn inside(ring: &[Point], p: Point, tol: f64) -> bool {
+    if edges(ring).any(|(a, b)| on_edge(p, a, b, tol)) {
+        return true;
+    }
+    let mut hit = false;
+    for (a, b) in edges(ring) {
+        if (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
+        {
+            hit = !hit;
+        }
+    }
+    hit
+}
+fn shared_segments(a: &[Point], b: &[Point], tol: f64) -> Vec<[Point; 2]> {
+    let mut shared = Vec::new();
+    for (p, q) in edges(a) {
+        let d = sub(q, p);
+        let len = d[0].hypot(d[1]);
+        if len <= tol {
+            continue;
+        }
+        let u = [d[0] / len, d[1] / len];
+        for (r, s) in edges(b) {
+            if cross(u, sub(r, p)).abs() > tol || cross(u, sub(s, p)).abs() > tol {
+                continue;
+            }
+            let x = dot(sub(r, p), u);
+            let y = dot(sub(s, p), u);
+            let lo = x.min(y).max(0.0);
+            let hi = x.max(y).min(len);
+            if hi - lo > tol {
+                shared.push([
+                    [p[0] + u[0] * lo, p[1] + u[1] * lo],
+                    [p[0] + u[0] * hi, p[1] + u[1] * hi],
+                ]);
+            }
+        }
+    }
+    shared
 }
 
-fn gap_y(a: &BoxM, b: &BoxM) -> f64 {
-    (a[0][1] - b[1][1]).max(b[0][1] - a[1][1])
+/// Interior chords sampled between projected vertices in every polygon-edge direction.
+/// Unlike an enclosing box these stop at concave boundaries and island edges.
+fn clear_widths(rings: &[Vec<Point>], tol: f64) -> Vec<Value> {
+    let Some(outer) = rings.first() else {
+        return Vec::new();
+    };
+    let mut directions: Vec<Point> = Vec::new();
+    for (a, b) in edges(outer) {
+        let d = sub(b, a);
+        let len = d[0].hypot(d[1]);
+        if len <= tol {
+            continue;
+        }
+        let mut u = [d[0] / len, d[1] / len];
+        if u[0] < -tol || (u[0].abs() <= tol && u[1] < 0.0) {
+            u = [-u[0], -u[1]];
+        }
+        if !directions.iter().any(|v| cross(*v, u).abs() <= 1e-9) {
+            directions.push(u);
+        }
+    }
+    let mut result = Vec::new();
+    for u in directions {
+        let n = [-u[1], u[0]];
+        let mut offsets: Vec<_> = rings.iter().flatten().map(|p| dot(*p, n)).collect();
+        offsets.sort_by(f64::total_cmp);
+        offsets.dedup_by(|a, b| (*a - *b).abs() <= tol);
+        for interval in offsets.windows(2) {
+            let t = (interval[0] + interval[1]) / 2.0;
+            let mut hits = Vec::new();
+            for ring in rings {
+                for (a, b) in edges(ring) {
+                    let (ta, tb) = (dot(a, n), dot(b, n));
+                    if (ta > t) != (tb > t) {
+                        let f = (t - ta) / (tb - ta);
+                        hits.push(dot([a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])], u));
+                    }
+                }
+            }
+            hits.sort_by(f64::total_cmp);
+            for pair in hits.as_chunks::<2>().0 {
+                if pair[1] - pair[0] > tol {
+                    result.push(json!({"width_m":pair[1]-pair[0],"direction":u,
+                        "from_m":[u[0]*pair[0]+n[0]*t,u[1]*pair[0]+n[1]*t],
+                        "to_m":[u[0]*pair[1]+n[0]*t,u[1]*pair[1]+n[1]*t]}));
+                }
+            }
+        }
+    }
+    result
 }
 
-/// Two rooms touch when their boxes meet along one axis (within a wall) and overlap along the
-/// other for at least `OVERLAP` metres. Boxes are an approximation for rooms that are not rectangular.
-fn touching(a: &BoxM, b: &BoxM) -> bool {
-    const WALL: f64 = 0.4;
-    const OVERLAP: f64 = 0.6;
-    let (gx, gy) = (gap_x(a, b), gap_y(a, b));
-    (gx.abs() <= WALL && gy <= -OVERLAP) || (gy.abs() <= WALL && gx <= -OVERLAP)
-}
-
-fn inside_box(b: &BoxM, p: [f64; 2]) -> bool {
-    p[0] >= b[0][0] && p[0] <= b[1][0] && p[1] >= b[0][1] && p[1] <= b[1][1]
-}
-
-fn point_along(points: &[[f64; 2]], at: f64) -> Option<[f64; 2]> {
+fn point_along(points: &[[f64; 2]], closed: bool, at: f64) -> Option<[f64; 2]> {
     let mut left = at;
-    for w in points.windows(2) {
+    for (a, b) in points.iter().zip(
+        points
+            .iter()
+            .skip(1)
+            .chain(points.first().filter(|_| closed)),
+    ) {
+        let w = [a, b];
         let len = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
         if len > 0.0 && left <= len {
             let t = left / len;
@@ -1567,165 +1714,267 @@ fn point_along(points: &[[f64; 2]], at: f64) -> Option<[f64; 2]> {
 }
 
 impl Session {
-    /// The floor `query` names, read from the drawing: the rooms the sheet on screen has (name,
-    /// net area, size from the room's boundary), what touches what, the wardrobes and fixtures
-    /// named inside each room, and the walls' doors. Sizes come from each room's bounding box, so
-    /// a room that is not rectangular reports its box. Stairs and main entrances cannot be known
-    /// from the drawing alone: pass them in the plan.
-    pub(crate) fn plan_floor_from_drawing(
+    /// Read real room polygons, including holes. Curves use the drawing's geometric tolerance.
+    fn plan_floor_from_drawing(
         &self,
         query: &FloorQuery,
-    ) -> Result<PlanFloor, CoreError> {
+    ) -> Result<(PlanFloor, Vec<Value>), CoreError> {
         let k = self.drawing.units.to_metres();
+        let tol = self.measure_tol() * k;
         let report = self.rooms(&RoomsQuery {
+            boundary_layers: query.boundary_layers.clone(),
             text_layer: query.text_layer.clone(),
             within: query.within,
-            ..RoomsQuery::default()
+            ..Default::default()
         })?;
-        // Every text and block name on the sheet, with its place in metres.
+        let mut rooms = Vec::new();
+        let mut polygons = Vec::new();
+        let mut facts = Vec::new();
         let owner = self.sheet_owner();
-        let mut items: Vec<(String, [f64; 2])> = Vec::new();
-        for entity in self.drawing.doc.entities() {
-            if owner.is_some_and(|o| entity.common().owner_handle != o) {
-                continue;
-            }
-            match entity {
-                EntityType::Text(t) => items.push((
-                    t.value.clone(),
-                    [t.insertion_point.x * k, t.insertion_point.y * k],
-                )),
-                EntityType::MText(t) => items.push((
-                    crate::query::plain_text(&t.value),
-                    [t.insertion_point.x * k, t.insertion_point.y * k],
-                )),
-                EntityType::Insert(i) => items.push((
+        let items: Vec<_> = self
+            .drawing
+            .doc
+            .entities()
+            .filter(|e| owner.is_none_or(|o| e.common().owner_handle == o))
+            .filter_map(|e| match e {
+                EntityType::Insert(i) => Some((
+                    e.common().handle.value(),
                     i.block_name.clone(),
                     [i.insert_point.x * k, i.insert_point.y * k],
                 )),
-                _ => {}
-            }
-        }
-        let mut rooms: Vec<(PlanRoom, BoxM)> = Vec::new();
+                EntityType::Point(p) => Some((
+                    e.common().handle.value(),
+                    String::new(),
+                    [p.location.x * k, p.location.y * k],
+                )),
+                _ => None,
+            })
+            .collect();
         for (index, row) in report.rooms.iter().enumerate() {
             let name = row
                 .name
                 .clone()
-                .unwrap_or_else(|| format!("Room {}", index + 1));
-            let ring: Vec<[f64; 2]> = row
+                .unwrap_or_else(|| format!("Room / فراغ {}", index + 1));
+            let mut rings = Vec::new();
+            let mut perimeter = 0.0;
+            if let crate::Boundary::Ring {
+                ring,
+                holes,
+                bulges,
+            } = self.room_boundary_in(&self.sheet, row.point, &query.boundary_layers)
+            {
+                for (i, ring) in std::iter::once(ring).chain(holes).enumerate() {
+                    let entity = EntityType::LwPolyline(crate::object_regions::region_polyline(
+                        &ring,
+                        bulges.get(i).map_or(&[], Vec::as_slice),
+                    ));
+                    perimeter += qiyas_geom::exact_length(&entity, &qiyas_geom::Xform::identity())
+                        .unwrap_or(0.0)
+                        * k;
+                    let paths = qiyas_geom::flatten(
+                        &self.drawing.doc,
+                        &entity,
+                        &qiyas_geom::Xform::identity(),
+                        self.measure_tol(),
+                    )
+                    .into_paths();
+                    if let Some(path) = paths.first() {
+                        rings.push(
+                            path.points
+                                .iter()
+                                .map(|p| [p[0] * k, p[1] * k])
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+            }
+            let widths = clear_widths(&rings, tol);
+            let fixtures: Vec<_> = items
+                .iter()
+                .filter(|(_, _, p)| {
+                    rings.first().is_some_and(|r| inside(r, *p, tol))
+                        && !rings.iter().skip(1).any(|r| inside(r, *p, tol))
+                })
+                .map(|(h, n, p)| json!({"handle":h,"name":n,"position_m":p}))
+                .collect();
+            let kind = row
                 .boundary_handle
                 .and_then(|h| self.drawing.doc.get_entity(opencadcodec::Handle::new(h)))
-                .and_then(|e| match e {
-                    EntityType::LwPolyline(p) => Some(
-                        p.vertices
-                            .iter()
-                            .map(|v| [v.location.x * k, v.location.y * k])
-                            .collect(),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let point = [row.point[0] * k, row.point[1] * k];
-            let bounds: BoxM = if ring.is_empty() {
-                [point, point]
-            } else {
-                let xs = ring.iter().map(|p| p[0]);
-                let ys = ring.iter().map(|p| p[1]);
-                [
-                    [
-                        xs.clone().fold(f64::INFINITY, f64::min),
-                        ys.clone().fold(f64::INFINITY, f64::min),
-                    ],
-                    [
-                        xs.fold(f64::NEG_INFINITY, f64::max),
-                        ys.fold(f64::NEG_INFINITY, f64::max),
-                    ],
-                ]
-            };
-            let (w, h) = (bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1]);
-            rooms.push((
-                PlanRoom {
-                    name,
-                    area_m2: row.net_area_m2,
-                    width_m: (!ring.is_empty()).then_some(w.min(h)),
-                    length_m: (!ring.is_empty()).then_some(w.max(h)),
-                    centre_m: Some([
-                        (bounds[0][0] + bounds[1][0]) / 2.0,
-                        (bounds[0][1] + bounds[1][1]) / 2.0,
-                    ]),
-                    fixtures: items
-                        .iter()
-                        .filter(|(_, p)| !ring.is_empty() && inside_box(&bounds, *p))
-                        .map(|(t, _)| t.trim().to_string())
-                        .filter(|t| !t.is_empty())
-                        .collect(),
-                    ..PlanRoom::default()
-                },
-                bounds,
-            ));
+                .and_then(crate::objects::instance)
+                .and_then(|o| {
+                    o.props
+                        .get("room_kind")
+                        .or_else(|| o.props.get("space_kind"))
+                        .or_else(|| {
+                            o.props
+                                .get("kind")
+                                .filter(|kind| kind.as_str() != Some("room"))
+                        })
+                        .and_then(Value::as_str)
+                        .map(String::from)
+                });
+            rooms.push(PlanRoom {
+                name: name.clone(),
+                kind,
+                area_m2: row.net_area_m2,
+                width_m: widths
+                    .iter()
+                    .filter_map(|w| w["width_m"].as_f64())
+                    .reduce(f64::min),
+                centre_m: Some([row.point[0] * k, row.point[1] * k]),
+                fixtures: fixtures
+                    .iter()
+                    .filter_map(|f| f["name"].as_str().map(String::from))
+                    .collect(),
+                ..Default::default()
+            });
+            facts.push(json!({"name":name,"area_m2":row.net_area_m2,"perimeter_m":if rings.is_empty(){None}else{Some(perimeter)},
+                "clear_widths_m":widths,"width_method":"interior_chords_at_projected_vertex_interval_midpoints",
+                "polygon_tolerance_m":tol,"boundary_m":rings,"fixtures":fixtures,"shared_boundaries":[],"openings":[]}));
+            polygons.push(rings);
         }
-        let touches: Vec<Vec<String>> = (0..rooms.len())
-            .map(|i| {
-                (0..rooms.len())
-                    .filter(|&j| j != i && touching(&rooms[i].1, &rooms[j].1))
-                    .map(|j| rooms[j].0.name.clone())
-                    .collect()
-            })
-            .collect();
-        let mut rooms: Vec<PlanRoom> = rooms
-            .into_iter()
-            .zip(touches)
-            .map(|((mut room, _), near)| {
-                room.adjacent = near;
-                room
-            })
-            .collect();
-        // Doors of the wall systems that stand on this floor: their widths.
+        for i in 0..rooms.len() {
+            let mut shared = Vec::new();
+            for j in 0..rooms.len() {
+                if i == j {
+                    continue;
+                }
+                let segments: Vec<_> = polygons[i]
+                    .iter()
+                    .flat_map(|a| {
+                        polygons[j]
+                            .iter()
+                            .flat_map(move |b| shared_segments(a, b, tol))
+                    })
+                    .collect();
+                if !segments.is_empty() {
+                    let other_name = rooms[j].name.clone();
+                    rooms[i].adjacent.push(other_name);
+                    let length: f64 = segments
+                        .iter()
+                        .map(|[a, b]| (b[0] - a[0]).hypot(b[1] - a[1]))
+                        .sum();
+                    shared.push(
+                        json!({"space":rooms[j].name,"length_m":length,"segments_m":segments}),
+                    );
+                }
+            }
+            facts[i]["shared_boundaries"] = json!(shared);
+        }
         let mut doors = Vec::new();
+        let mut seen_openings = BTreeSet::new();
         for group in self.wall_groups(None)? {
             for run in &group.runs {
-                for o in &run.openings {
-                    if !matches!(o.opening.kind, OpeningKind::Door) {
-                        continue;
-                    }
-                    let Some(p) = point_along(&run.points, o.opening.at) else {
+                for opening in &run.openings {
+                    seen_openings.insert(opening.insert);
+                    let o = &opening.opening;
+                    let Some(p) = point_along(&run.points, run.closed, o.at) else {
                         continue;
                     };
-                    if let Some([lo, hi]) = query.within {
-                        if p[0] < lo[0] || p[0] > hi[0] || p[1] < lo[1] || p[1] > hi[1] {
-                            continue;
+                    if query.within.is_some_and(|[lo, hi]| {
+                        p[0] < lo[0] || p[0] > hi[0] || p[1] < lo[1] || p[1] > hi[1]
+                    }) {
+                        continue;
+                    }
+                    let p = [p[0] * k, p[1] * k];
+                    // The physical opening spans the host's measured thickness, not an arbitrary box tolerance.
+                    let distance = run.thickness * k / 2.0 + tol;
+                    for (i, rings) in polygons.iter().enumerate() {
+                        if rings
+                            .iter()
+                            .any(|r| edges(r).any(|(a, b)| on_edge(p, a, b, distance)))
+                        {
+                            facts[i]["openings"].as_array_mut().expect("array").push(json!({"handle":opening.insert,"kind":o.kind,"width_m":o.width*k,"position_m":p,"sill_m":o.sill,"head_m":o.head}));
                         }
                     }
-                    doors.push(PlanDoor {
-                        name: o.mark.clone(),
-                        width_m: o.opening.width * k,
-                        position_m: Some([p[0] * k, p[1] * k]),
-                        ..PlanDoor::default()
-                    });
+                    if matches!(o.kind, OpeningKind::Door) {
+                        doors.push(PlanDoor {
+                            name: opening.mark.clone(),
+                            width_m: o.width * k,
+                            position_m: Some(p),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
-        rooms.sort_by(|x, y| x.name.cmp(&y.name));
-        Ok(PlanFloor {
-            name: query.name.clone(),
-            rooms,
-            doors,
-            stairs: Vec::new(),
-        })
+        // Typed openings can come from supplied object definitions as well as wall commands.
+        for object in self.objects(&crate::objects::ObjectFilter {
+            category: Some("opening".into()),
+            sheet: Some(self.sheet.clone()),
+            ..Default::default()
+        })? {
+            let id = object.instance.id;
+            if !seen_openings.insert(id) {
+                continue;
+            }
+            let Some(entity) = self.drawing.doc.get_entity(opencadcodec::Handle::new(id)) else {
+                continue;
+            };
+            let p = match entity {
+                EntityType::Point(p) => [p.location.x * k, p.location.y * k],
+                EntityType::Insert(p) => [p.insert_point.x * k, p.insert_point.y * k],
+                _ => continue,
+            };
+            let props = &object.instance.props;
+            let kind = props.get("kind").cloned().unwrap_or(Value::Null);
+            let width = props.get("width").and_then(Value::as_f64);
+            let distance = props
+                .get("host_width")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                / 2.0
+                + tol;
+            for (i, rings) in polygons.iter().enumerate() {
+                if rings
+                    .iter()
+                    .any(|r| edges(r).any(|(a, b)| on_edge(p, a, b, distance)))
+                {
+                    facts[i]["openings"]
+                        .as_array_mut()
+                        .expect("array")
+                        .push(json!({
+                            "handle":id,"kind":kind,"width_m":width,"position_m":p,
+                            "sill_m":props.get("sill"),"head_m":props.get("head")
+                        }));
+                }
+            }
+        }
+        for fact in &mut facts {
+            fact["fixtures"].as_array_mut().expect("array").retain(|f| {
+                f["handle"]
+                    .as_u64()
+                    .is_none_or(|h| !seen_openings.contains(&h))
+            });
+        }
+        Ok((
+            PlanFloor {
+                name: query.name.clone(),
+                rooms,
+                doors,
+                stairs: Vec::new(),
+            },
+            facts,
+        ))
     }
 
-    /// `Command::SpaceCheck`: the plan model (floors read from the drawing, then the explicit
-    /// plan laid over them: its rooms replace the drawing's of the same name, its doors and
-    /// stairs are added) checked against the limits of `market`. Reads only.
+    /// Read measured floor facts and overlay explicit classifications. Practice checks run only
+    /// for a selected profile compatible with the caller's building type. Reads only.
     pub(crate) fn space_check(
         &self,
         plan: Option<PlanModel>,
         floors: &[FloorQuery],
         market: Option<&str>,
         language: Option<LabelLanguage>,
+        profile: Option<&str>,
+        building_type: Option<&str>,
     ) -> Result<Value, CoreError> {
         let mut model = PlanModel::default();
+        let mut geometry = BTreeMap::new();
         for query in floors {
-            model.floors.push(self.plan_floor_from_drawing(query)?);
+            let (floor, facts) = self.plan_floor_from_drawing(query)?;
+            geometry.insert(query.name.clone(), facts);
+            model.floors.push(floor);
         }
         if let Some(plan) = plan {
             for extra in plan.floors {
@@ -1733,7 +1982,15 @@ impl Session {
                     Some(floor) => {
                         for room in extra.rooms {
                             match floor.rooms.iter_mut().find(|r| same(&r.name, &room.name)) {
-                                Some(old) => *old = room,
+                                Some(old) => {
+                                    if room.kind.is_some() {
+                                        old.kind = room.kind;
+                                    }
+                                    if room.master.is_some() {
+                                        old.master = room.master;
+                                    }
+                                    old.opens_to = room.opens_to;
+                                }
                                 None => floor.rooms.push(room),
                             }
                         }
@@ -1749,7 +2006,7 @@ impl Session {
                 "Give a plan (floors with rooms) or the floors to read from the drawing",
             ));
         }
-        let report = run_checks(&model, market)?;
+        let report = run_checks(&model, market, profile, building_type)?;
         let mut value = report.json();
         value["language"] = json!(
             if language.or(self.sheet_language()) == Some(LabelLanguage::Ar) {
@@ -1758,9 +2015,41 @@ impl Session {
                 "en"
             }
         );
-        value["floors"] = json!(model.floors.iter().map(|f| json!({
-            "name": f.name, "rooms": f.rooms.len(), "doors": f.doors.len(), "stairs": f.stairs.len()
-        })).collect::<Vec<_>>());
+        value["profile_requested"] = json!(profile);
+        value["floors"] = json!(model.floors.iter().map(|f| {
+            let mut spaces = geometry.get(&f.name).cloned().unwrap_or_else(|| f.rooms.iter().map(|r| json!({
+                "name":r.name,"area_m2":r.area_m2,"perimeter_m":null,"clear_widths_m":[],
+                "supplied_width_m":r.width_m,"supplied_length_m":r.length_m,
+                "adjacent_supplied":r.adjacent,"fixtures_supplied":r.fixtures,
+                "shared_boundaries":[],"openings":[],"source":"caller"
+            })).collect());
+            for room in &f.rooms {
+                if !spaces.iter().any(|s|s["name"].as_str()==Some(room.name.as_str())) {
+                    spaces.push(json!({"name":room.name,"area_m2":room.area_m2,"perimeter_m":null,
+                        "clear_widths_m":[],"shared_boundaries":[],"openings":[],"source":"caller"}));
+                }
+            }
+            for space in &mut spaces {
+                if let Some(room) = f.rooms.iter().find(|r| r.name == space["name"].as_str().unwrap_or("")) {
+                    space["kind"] = json!(room.kind);
+                    if room.kind.is_none() {
+                        space["suggested_kind"] = json!(room_kind(&room.name).0);
+                        space["uncertain"] = json!(true);
+                    }
+                }
+            }
+            let kinds = kind_list("circulation_kinds");
+            let total: f64 = f.rooms.iter().map(|r|r.area_m2).sum();
+            let known: f64 = f.rooms.iter().filter(|r| r.kind.as_ref().is_some_and(|k| kinds.contains(k))).map(|r|r.area_m2).sum();
+            let known_kinds = crate::drafting_standards::suggested_kinds();
+            let classified = f.rooms.iter().all(|r|r.kind.as_deref().is_some_and(|kind|known_kinds.contains(&kind)));
+            json!({"name":f.name,"spaces":spaces,"doors":f.doors,"stairs":f.stairs,
+                "area_m2":total,"classified_circulation_area_m2":known,
+                "circulation_share":if classified && total>0.0 {Some(known/total)} else {None},
+                "circulation_classification_complete":classified,"circulation_kinds":kinds,
+                "circulation_note":if classified {None} else {Some("Circulation share is unknown until explicit space classifications establish their circulation roles.")},
+                "circulation_note_ar":if classified {None} else {Some("نسبة الحركة غير معروفة حتى تحدد تصنيفات الفراغات الصريحة أدوارها في الحركة.")}})
+        }).collect::<Vec<_>>());
         Ok(value)
     }
 }
@@ -1768,6 +2057,51 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polygon_facts_exclude_notches_and_corner_contacts() {
+        let l = vec![
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 4.0],
+            [0.0, 4.0],
+        ];
+        let notch = vec![[2.0, 2.0], [3.0, 2.0], [3.0, 3.0], [2.0, 3.0]];
+        let adjoining = vec![[-2.0, 0.0], [0.0, 0.0], [0.0, 4.0], [-2.0, 4.0]];
+        let corner = vec![[4.0, 1.0], [5.0, 1.0], [5.0, 2.0], [4.0, 2.0]];
+        assert!(!inside(&l, [2.5, 2.5], 1e-9));
+        assert!(inside(&l, [0.5, 2.5], 1e-9));
+        assert!(shared_segments(&l, &notch, 1e-9).is_empty());
+        assert!(shared_segments(&l, &corner, 1e-9).is_empty());
+        let shared = shared_segments(&l, &adjoining, 1e-9);
+        assert_eq!(shared.len(), 1);
+        assert!(
+            ((shared[0][1][0] - shared[0][0][0]).hypot(shared[0][1][1] - shared[0][0][1]) - 4.0)
+                .abs()
+                < 1e-9
+        );
+        let widths = clear_widths(&[l], 1e-9);
+        assert!(widths.iter().any(|w| w["width_m"] == 1.0));
+    }
+
+    #[test]
+    fn clear_chords_stop_at_islands_and_follow_rotated_edges() {
+        let outer = vec![[0.0, 0.0], [6.0, 0.0], [6.0, 4.0], [0.0, 4.0]];
+        let hole = vec![[2.0, 1.0], [4.0, 1.0], [4.0, 3.0], [2.0, 3.0]];
+        let widths = clear_widths(&[outer, hole], 1e-9);
+        assert!(widths.iter().any(|w| w["width_m"] == 2.0));
+        let k = std::f64::consts::FRAC_1_SQRT_2;
+        let rotated: Vec<_> = [[0.0, 0.0], [4.0, 0.0], [4.0, 1.0], [0.0, 1.0]]
+            .into_iter()
+            .map(|[x, y]| [(x - y) * k, (x + y) * k])
+            .collect();
+        let widths = clear_widths(&[rotated], 1e-9);
+        assert!(widths
+            .iter()
+            .any(|w| (w["width_m"].as_f64().unwrap() - 1.0).abs() < 1e-8));
+    }
 
     #[test]
     fn code_findings_keep_the_citation_url_and_caveat() {
@@ -1784,11 +2118,12 @@ mod tests {
             fallback: false,
         };
         let mut cx = Ctx {
-            market: Some("egypt"),
+            profile: None,
             findings: Vec::new(),
             checked: BTreeSet::new(),
             skipped: Vec::new(),
             used: BTreeMap::new(),
+            thresholds: BTreeMap::new(),
         };
         cx.add(
             "test_width",

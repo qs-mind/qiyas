@@ -575,6 +575,7 @@ impl Session {
     pub(crate) fn variation_report(
         &mut self,
         layer: Option<String>,
+        revision: Option<String>,
     ) -> Result<VariationReport, CoreError> {
         let entry = knowledge::get(&self.drawing.doc, Kind::Revisions, "baseline")?
             .ok_or_else(|| invalid("Run carry_knowledge from revision A first"))?;
@@ -598,15 +599,42 @@ impl Session {
         if layer.trim().is_empty() {
             return Err(invalid("Give a variation cloud layer name"));
         }
-        let old = self.variation()?.map(|r| r.clouds).unwrap_or_default();
-        for c in self
-            .list_comments()
-            .into_iter()
-            .filter(|c| old.contains(&c.handle))
+        if self
+            .drawing
+            .doc
+            .layers
+            .get(&layer)
+            .is_some_and(|l| l.flags.locked)
         {
-            for h in std::iter::once(c.handle).chain(c.label) {
-                self.drawing.doc.remove_entity(Handle::new(h));
-            }
+            return Err(invalid(
+                "The revision cloud layer is locked / طبقة سحب المراجعة مقفلة",
+            ));
+        }
+        let revision = revision
+            .or(
+                knowledge::get(&self.drawing.doc, Kind::Revisions, "cloud_revision")?
+                    .and_then(|e| e.data.as_str().map(str::to_owned)),
+            )
+            .unwrap_or_else(|| "Δ".into());
+        if revision.trim().is_empty() || revision.contains(['\n', '\r']) {
+            return Err(invalid(
+                "Give a single-line revision label / حدد رمز مراجعة في سطر واحد",
+            ));
+        }
+        let old = self.variation()?.map(|r| r.clouds).unwrap_or_default();
+        let old_parts: Vec<_> = self
+            .list_comments()
+            .iter()
+            .filter(|c| old.contains(&c.handle))
+            .flat_map(|c| self.revision_comment_parts(c))
+            .collect();
+        if old_parts.iter().any(|h| self.is_locked(Handle::new(*h))) {
+            return Err(invalid(
+                "Existing revision annotations are locked / تعليقات المراجعة الحالية مقفلة",
+            ));
+        }
+        for h in old_parts {
+            self.drawing.doc.remove_entity(Handle::new(h));
         }
         self.ensure_layer(&layer, opencadcodec::Color::Index(1));
         let original = self.sheet.clone();
@@ -625,40 +653,55 @@ impl Session {
                     continue;
                 };
                 self.set_sheet(&target.block)?;
-                for change in sheet
+                let margin = self.paper_distance(2.0);
+                let mut footprints: Vec<_> = sheet
                     .entities
                     .iter()
                     .filter(|c| c.kind != ChangeKind::Matched)
-                {
-                    let Some([[x0, y0], [x1, y1]]) = union(
-                        change.before.as_ref().and_then(|e| e.bounds),
-                        change.after.as_ref().and_then(|e| e.bounds),
-                    ) else {
-                        continue;
-                    };
-                    let pad = self.default_text_height().max(base.tolerance).max(1e-6);
-                    let text = format!("Variation / التغيير {} {:?}", change.identity, change.kind);
-                    let handles = self.add_comment(
+                    // A moved element needs two local clouds, never a box spanning its travel.
+                    .flat_map(|c| [c.before.as_ref(), c.after.as_ref()])
+                    .flatten()
+                    .filter_map(|e| e.bounds)
+                    .map(|[[x0, y0], [x1, y1]]| {
                         vec![
-                            [x0 - pad, y0 - pad],
-                            [x1 + pad, y0 - pad],
-                            [x1 + pad, y1 + pad],
-                            [x0 - pad, y1 + pad],
-                        ],
-                        &text,
-                        None,
-                    )?;
-                    for h in &handles {
-                        let e = self
-                            .drawing
-                            .doc
-                            .get_entity_mut(Handle::new(*h))
-                            .expect("comment added");
-                        e.common_mut().layer = layer.clone();
+                            [x0 - margin, y0 - margin],
+                            [x1 + margin, y0 - margin],
+                            [x1 + margin, y1 + margin],
+                            [x0 - margin, y1 + margin],
+                        ]
+                    })
+                    .collect();
+                while let Some(first) = footprints.pop() {
+                    let mut component = vec![first];
+                    let mut index = 0;
+                    while index < footprints.len() {
+                        let b = crate::query::bounds(&footprints[index]);
+                        let overlaps = component.iter().any(|p| {
+                            let a = crate::query::bounds(p);
+                            (0..2).all(|axis| a[0][axis] < b[1][axis] && b[0][axis] < a[1][axis])
+                        });
+                        if overlaps {
+                            component.push(footprints.swap_remove(index));
+                            index = 0;
+                        } else {
+                            index += 1;
+                        }
                     }
-                    report.clouds.push(handles[0]);
+                    let regions = qiyas_geom::walls::union_footprints(&component)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    for region in regions {
+                        let handles =
+                            self.add_revision_cloud(region.outer, region.holes, &revision, &layer)?;
+                        report.clouds.push(handles[0]);
+                    }
                 }
             }
+            knowledge::put(
+                &mut self.drawing.doc,
+                Kind::Revisions,
+                "cloud_revision",
+                &json!(revision),
+            )?;
             knowledge::put(
                 &mut self.drawing.doc,
                 Kind::Revisions,

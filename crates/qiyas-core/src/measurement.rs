@@ -259,6 +259,10 @@ pub enum SourceKind {
 /// One property's source, kept on the element with its value.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PropSource {
+    /// Name of the drawing decision supplying this property.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(default)]
     pub kind: SourceKind,
     /// The note, attribute, table or entity it was read from, when it is on the drawing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -325,6 +329,9 @@ pub struct MeasuredQuantity {
 pub struct GeneratedItem {
     #[serde(default = "crate::trust::unscored")]
     pub confidence: f64,
+    /// Quantity or dimension operands depend on an uncited default or assumption.
+    #[serde(default)]
+    pub assumed: bool,
     #[serde(default)]
     pub tolerances: Vec<crate::discrepancy::Tolerance>,
     pub code: String,
@@ -371,7 +378,7 @@ impl GeneratedItem {
     }
 
     /// The second reading differs beyond its tolerance and nobody has answered the query:
-    /// the item stays out of the BOQ.
+    /// the item remains in the BOQ with both readings.
     pub fn second_differs(&self) -> bool {
         self.second_reading
             .as_ref()
@@ -717,11 +724,7 @@ impl MeasurementReport {
     /// "Doors" row is compared with all the doors and not with each size.
     fn rolled_up(&self) -> Vec<GeneratedItem> {
         let mut out: Vec<GeneratedItem> = Vec::new();
-        for item in self
-            .items
-            .iter()
-            .filter(|item| !item.informational && !item.second_differs())
-        {
+        for item in self.items.iter().filter(|item| !item.informational) {
             if item.base_code.is_empty() {
                 out.push(item.clone());
             } else if let Some(sum) = out
@@ -801,7 +804,7 @@ impl MeasurementReport {
                     .into_iter()
                     .collect::<Vec<_>>()
                     .join("; ");
-                let excluded: Vec<&str> = self
+                let disputed: Vec<&str> = self
                     .items
                     .iter()
                     .filter(|i| {
@@ -812,13 +815,13 @@ impl MeasurementReport {
                     })
                     .map(|i| i.code.as_str())
                     .collect();
-                if !excluded.is_empty() {
+                if !disputed.is_empty() {
                     if !m.note.is_empty() {
                         m.note.push_str("; ");
                     }
                     m.note.push_str(&format!(
-                        "Incomplete: second reading differs; excluded {} pending query resolution",
-                        excluded.join(", ")
+                        "Second reading differs: {}; quantities retained / القراءة الثانية مختلفة: الكميات محفوظة",
+                        disputed.join(", ")
                     ));
                 }
                 m

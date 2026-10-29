@@ -368,3 +368,54 @@ fn a_scaled_copy_applies_physical_symbol_dimensions_once() {
         1
     );
 }
+
+#[test]
+fn public_names_are_bilingual_and_schedule_recipes_use_explicit_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _) = setup(&dir.path().join("names.dxf"), 6);
+    for (id, en, ar, kind) in [
+        ("Legacy wall", "Wall", "حائط", "wall"),
+        ("Legacy door", "Door", "باب", "door"),
+        ("Legacy window", "Window", "شباك", "window"),
+    ] {
+        let data = definition(&s, id);
+        assert_eq!(data["name"], id);
+        assert_eq!(data["display_name_en"], en);
+        assert_eq!(data["display_name_ar"], ar);
+        assert_eq!(data["properties"]["kind"]["default"], kind);
+    }
+    let recipes: Value =
+        serde_json::from_str(include_str!("../data/legacy-object-schedules.json")).unwrap();
+    assert!(!recipes.to_string().contains("Legacy door"));
+    assert!(recipes["opening"]["templates"]["kind"]
+        .as_str()
+        .unwrap()
+        .contains("kind == 'door'"));
+    for language in ["en", "ar"] {
+        let result = run(
+            &mut s,
+            json!({"type":"opening_schedule","language":language}),
+        );
+        let handle = result["handles"][0].as_u64().unwrap();
+        let EntityType::Table(table) = s.drawing.doc.get_entity(Handle::new(handle)).unwrap()
+        else {
+            panic!("schedule")
+        };
+        let cells: Vec<_> = (0..table.rows.len())
+            .flat_map(|r| {
+                (0..table.columns.len())
+                    .map(move |c| table.cell_text(r, c).unwrap_or("").to_string())
+            })
+            .collect();
+        assert!(cells.iter().all(|c| !c.contains("Legacy")));
+        assert!(cells
+            .iter()
+            .any(|c| c == if language == "ar" { "باب" } else { "Door" }));
+        assert!(cells.iter().any(|c| c
+            == if language == "ar" {
+                "شباك"
+            } else {
+                "Window"
+            }));
+    }
+}

@@ -420,7 +420,7 @@ test("folders are an explicit choice and Arabic reverses the expand and collapse
   document.documentElement.dir = "ltr";
 });
 
-test("a long layer name is shown whole (it wraps) and is its own tooltip, not cut to 'A-GF-…' (note 18)", async () => {
+test("a long layer name ends with ellipsis and remains whole in its tooltip", async () => {
   const css = (await import("./theme.css?raw")).default;
   const long = "A-GF-WALL-EXTR-FINISH-PLASTER-PAINT";
   render(<LayersPanel layers={[layer(long)]} hidden={new Set()} onToggle={() => {}} onIsolate={() => {}} onShowAll={() => {}} />);
@@ -428,9 +428,10 @@ test("a long layer name is shown whole (it wraps) and is its own tooltip, not cu
   expect(name.textContent).toBe(long);
   expect(name.getAttribute("title")).toBe(long);
   const rule = /\.layer-row \.name \{([^}]*)\}/.exec(css)![1];
-  expect(rule).toContain("white-space: normal");
-  expect(rule).toContain("overflow-wrap: anywhere");
-  expect(rule).not.toContain("ellipsis");
+  expect(rule).toContain("white-space: nowrap");
+  expect(rule).toContain("overflow: hidden");
+  expect(rule).toContain("text-overflow: ellipsis");
+  expect(rule).not.toContain("overflow-wrap: anywhere");
 });
 
 test("a drawing with 1,500 layers puts only the rows in view in the page, and Mizan still reads them all", () => {

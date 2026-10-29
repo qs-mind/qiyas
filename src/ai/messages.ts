@@ -12,6 +12,7 @@ export type ToolCardItem = {
   input: unknown;
   activity?: Activity | null;
   count?: number | null;
+  progress?: { completed: number; total: number } | null;
   status: ToolStatus;
   /** One line from the tool's result; empty while it runs. */
   summary: string;
@@ -33,6 +34,7 @@ export type ToolCardItem = {
 export type Attached = { pointed?: string[]; images?: string[] };
 
 export type Item =
+  | { kind: "status"; status: Extract<AgentEvent, { type: "status" }> }
   | { kind: "cache_usage"; cached: number; total: number }
   | { kind: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { kind: "provider_status"; code: string }
@@ -84,6 +86,8 @@ export function reduce(state: Transcript, action: Action): Transcript {
   const items = state.items;
   const last = items.at(-1);
   switch (action.type) {
+    case "status":
+      return { items: [...finishText(items), { kind: "status", status: action }] };
     case "open_findings":
       return { items: [...finishText(items), { kind: "open_findings", findings: action.findings, revision: action.revision }] };
     case "user": {
@@ -150,6 +154,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
             label: action.label,
             input: action.input,
             activity: action.activity,
+            progress: action.progress,
             status: "running",
             summary: "",
             handles: [],
@@ -160,6 +165,10 @@ export function reduce(state: Transcript, action: Action): Transcript {
           },
         ],
       };
+    case "tool_progress":
+      if (!Number.isInteger(action.completed) || !Number.isInteger(action.total) || action.total <= 0 || action.completed < 0 || action.completed > action.total) return state;
+      return { items: updateCard(items, action.id, (card) => card.status === "running"
+        ? { ...card, progress: { completed: action.completed, total: action.total } } : card) };
     case "tool_result":
       return {
         items: updateCard(finishText(items), action.id, (card) => ({

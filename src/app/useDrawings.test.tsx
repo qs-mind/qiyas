@@ -415,14 +415,14 @@ test("continuing a chat waits for autosave recovery before restoring the convers
   expect(finished).toBe(true);
 });
 
-test("a missing chat drawing continues on screen with a notice and an open tab keeps the conversation", async () => {
+test("a missing chat drawing stays closed with a notice and an open tab keeps the conversation", async () => {
   const notices: string[] = [];
   const { result } = await launch(notices);
   const chat = { id: "saved", title: "Villa", drawing: VILLA, drawing_exists: true, updated: 1, turns: 1 };
   await act(async () => { expect(await result.current.prepareConversation(chat)).toBe(true); });
   expect(core.calls.some((call) => call.startsWith("open_drawing"))).toBe(false);
-  await act(async () => { expect(await result.current.prepareConversation({ ...chat, drawing: null, drawing_exists: false })).toBe(true); });
-  expect(notices).toContain("The original drawing is unavailable. Continuing on the drawing on screen.");
+  await act(async () => { expect(await result.current.prepareConversation({ ...chat, drawing: null, drawing_exists: false })).toBe(false); });
+  expect(notices).toContain("The conversation’s drawing and autosave are unavailable. The conversation was not opened.");
 });
 
 
@@ -474,4 +474,27 @@ test("a file tool's tab switch saves the outgoing canvas view to its original wo
   await act(async () => events.handlers.get("drawing:shown")!({ payload: null }));
   const views = core.calls.filter(call => call.startsWith("workspace_view_state ")).map(call => JSON.parse(call.slice("workspace_view_state ".length)));
   expect(views).toEqual([{ workspace: 2, context: { selection: [], region: null, view: [[10, 20], [30, 40]], picture: false } }]);
+});
+
+
+test("an untitled conversation recovers its autosave even though its original file never existed", async () => {
+  const { result } = await launch();
+  recoverable.found = [item({ drawing: UNTITLED, autosave: `${UNTITLED}.sv$`, drawing_at: null })];
+  await act(async () => {
+    expect(await result.current.prepareConversation({ id: "untitled-chat", title: "Plan", drawing: UNTITLED,
+      drawing_exists: false, updated: 1, turns: 1 })).toBe(true);
+  });
+  expect(core.calls).toContain(`recover_autosave ${JSON.stringify({ path: UNTITLED })}`);
+  expect(core.calls.some((call) => call.startsWith("open_drawing"))).toBe(false);
+});
+
+test("a conversation with only an older autosave opens that copy", async () => {
+  const { result } = await launch();
+  const copy = crashCopy("1");
+  recoverable.found = [item({ drawing: UNTITLED, autosave: null, drawing_at: null, older_copies: [copy] })];
+  await act(async () => {
+    expect(await result.current.prepareConversation({ id: "older-chat", title: "Plan", drawing: UNTITLED,
+      drawing_exists: false, updated: 1, turns: 1 })).toBe(true);
+  });
+  expect(core.calls).toContain(`recover_autosave ${JSON.stringify({ path: copy.path })}`);
 });

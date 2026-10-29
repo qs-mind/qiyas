@@ -195,9 +195,12 @@ pub(crate) fn escape_mtext(text: &str) -> String {
 
 /// Marks the text `common` belongs to as written by Qiyas in reading order.
 pub(crate) fn mark_logical(common: &mut EntityCommon) {
-    let mut record = ExtendedDataRecord::new(LOGICAL_TEXT_APP);
-    record.add_value(XDataValue::Integer16(1));
-    common.extended_data.upsert_record(record);
+    // Authorship is stored in this marker too; retain it when editing logical text.
+    if common.extended_data.get_record(LOGICAL_TEXT_APP).is_none() {
+        let mut record = ExtendedDataRecord::new(LOGICAL_TEXT_APP);
+        record.add_value(XDataValue::Integer16(1));
+        common.extended_data.upsert_record(record);
+    }
     // Proxy graphics a reader kept show the old text.
     common.graphic_data = None;
 }

@@ -402,6 +402,19 @@ impl Session {
             detail.push(json!({"section":"low_confidence","handle":c.handle,"confidence":c.confidence,"state":c.state,"rule":short(&c.rule),"issues":c.issues.iter().map(|s|short(s)).take(6).collect::<Vec<_>>() }));
         }
         let report = self.measurement_report()?;
+        let second_reading_disputes = report
+            .items
+            .iter()
+            .filter(|item| item.second_differs())
+            .count();
+        for item in report.items.iter().filter(|item| item.second_differs()) {
+            detail.push(
+                json!({"section":"second_readings","code":item.code,"unit":item.unit,
+                "status":"differs","reading":item.second_reading,
+                "message":crate::second_reading::item_label(item, false),
+                "message_ar":crate::second_reading::item_label(item, true)}),
+            );
+        }
         for warning in &report.warnings {
             detail.push(json!({"section":"measurement_warnings","message":short(warning)}));
         }
@@ -468,11 +481,44 @@ impl Session {
                     unmapped.push(json!({"section":"unmapped_quantities","handle":object.instance.id,"type":object.instance.type_name,"rule":q.rule,"message":"Measured but in no BOQ item: map it (informational: true when nobody buys it)"}));
                 }
             }
+            for (property, value) in object.instance.props.iter().filter(|(property, value)| {
+                value.is_number() && !object.instance.sources.contains_key(*property)
+            }) {
+                if self
+                    .object_type(&object.instance.type_name)
+                    .ok()
+                    .is_some_and(|d| d.property_bindings.contains_key(property))
+                {
+                    continue;
+                }
+                detail.push(json!({"section":"assumed_values","handle":object.instance.id,"property":property,"value":value,"source":{"kind":"unknown"},
+                    "message":"Stored value has no recorded source.","message_ar":"القيمة المحفوظة بلا مصدر مسجل."}));
+            }
             // A value Mizan set without citing where it read it is an assumption: say so.
             for (prop, source) in &object.instance.sources {
-                if source.kind == crate::measurement::SourceKind::Mizan {
-                    detail.push(json!({"section":"assumed_values","handle":object.instance.id,"property":prop,"message":"Set without a cited source: cite the note, table or document, or report it as an assumption"}));
+                if matches!(
+                    source.kind,
+                    crate::measurement::SourceKind::Mizan
+                        | crate::measurement::SourceKind::TypeDefault
+                        | crate::measurement::SourceKind::Unknown
+                ) {
+                    detail.push(json!({"section":"assumed_values","handle":object.instance.id,"property":prop,"source":source,"value":object.instance.props.get(prop),"message":"Value has no supplied source; recorded as an assumption.","message_ar":"القيمة بلا مصدر مقدم؛ مسجلة كافتراض."}));
                 }
+            }
+        }
+        for item in report.items.iter().filter(|item| item.assumed) {
+            detail.push(
+                json!({"section":"assumed_values","code":item.code,"assumed":true,
+                "message":"Generated quantity depends on values without a supplied source.",
+                "message_ar":"الكمية المولدة تعتمد على قيم بلا مصدر مقدم."}),
+            );
+        }
+        for entity in self.drawing.doc.entities() {
+            if let Some(defaults) =
+                crate::xdata::read_json::<Value>(entity.common(), "QIYAS_DEFAULTS")
+            {
+                detail.push(json!({"section":"assumed_values","handle":entity.common().handle.value(),"defaults":defaults,
+                    "message":"Element uses drawing defaults.","message_ar":"العنصر يستخدم قيماً افتراضية للرسم."}));
             }
         }
         let error_count = errors.len();
@@ -538,7 +584,9 @@ impl Session {
             detail.push(json!({"section":"expectations","result":result}));
         }
         detail.extend(entries);
-        let overview = json!({"view_only_entities":view_only,"possible_details":possible_detail_count,"measurement_errors":error_count,"unmeasured_elements":unmeasured_count,"unmapped_quantities":unmapped_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && unmeasured_count==0 && unmapped_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
+        let overview = json!({"second_reading_disputes":second_reading_disputes,"view_only_entities":view_only,"possible_details":possible_detail_count,"measurement_errors":error_count,"unmeasured_elements":unmeasured_count,"unmapped_quantities":unmapped_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && unmeasured_count==0 && unmapped_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
+        let mut overview = overview;
+        overview["outside_check"] = self.outside_summary(end_report)?;
         Ok(page(overview, detail, offset))
     }
 }

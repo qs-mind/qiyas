@@ -395,3 +395,97 @@ fn legacy_workbook_records_do_not_infer_trace_targets() {
     assert!(preview.drawing.is_none());
     assert!(preview.sheets.iter().all(|sheet| sheet.targets.is_none()));
 }
+
+#[test]
+fn disputed_second_readings_remain_visible_in_excel_and_pdf_in_both_languages() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = test_session(&dir.path().join("dispute.dxf"));
+    let original = session.measurement_report().unwrap();
+    let item = original
+        .items
+        .iter()
+        .find(|item| !item.informational)
+        .unwrap();
+    let code = item.code.clone();
+    let first = item.quantity;
+    let second = first + 100.0;
+    session
+        .run(qiyas_core::Command::SecondReading(Box::new(
+            qiyas_core::second_reading::SecondReadingCommand::Record {
+                code: code.clone(),
+                quantity: second,
+            },
+        )))
+        .unwrap();
+    for language in [Language::En, Language::Ar] {
+        let report = deliverables::drawing(&session, Kind::Boq, language, None).unwrap();
+        let row = report.rows.iter().find(|row| row["code"] == code).unwrap();
+        assert_eq!(row["quantity"], first);
+        assert_eq!(row["second_reading"]["status"], "differs");
+        assert_eq!(row["second_reading"]["second"], second);
+        let label = row["second_reading_text"].as_str().unwrap();
+        assert!(label.starts_with(if language == Language::En {
+            "Second reading differs: "
+        } else {
+            "القراءة الثانية مختلفة: "
+        }));
+        assert!(report
+            .table()
+            .unwrap()
+            .iter()
+            .any(|row| row.cells.iter().any(|cell| cell.as_str() == Some(label))));
+        for format in [Format::Excel, Format::Pdf] {
+            let path = dir.path().join(if format == Format::Excel {
+                "dispute.xlsx"
+            } else {
+                "dispute.pdf"
+            });
+            qiyas_boq::deliverables::write(&Export {
+                path: path.clone(),
+                format,
+                report: report.clone(),
+            })
+            .unwrap();
+            let restored = if format == Format::Excel {
+                qiyas_boq::deliverables::read_excel(&path).unwrap()
+            } else {
+                qiyas_plot::report::read(&path).unwrap()
+            };
+            assert_eq!(restored, report);
+            if format == Format::Excel {
+                let files = entries(&path);
+                let strings = String::from_utf8_lossy(&files["xl/sharedStrings.xml"]);
+                assert!(strings.contains(label));
+            }
+        }
+    }
+}
+
+#[test]
+fn takeoff_workbook_keeps_disputed_generated_rows_and_their_second_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = test_session(&dir.path().join("takeoff.dxf"));
+    let item = session
+        .measurement_report()
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| !item.informational)
+        .unwrap();
+    session
+        .run(qiyas_core::Command::SecondReading(Box::new(
+            qiyas_core::second_reading::SecondReadingCommand::Record {
+                code: item.code.clone(),
+                quantity: item.quantity + 100.0,
+            },
+        )))
+        .unwrap();
+    let report = session.measurement_report().unwrap();
+    let path = dir.path().join("takeoff.xlsx");
+    qiyas_boq::export_takeoff_with_report(&path, &[], &[], "Takeoff", &report).unwrap();
+    let files = entries(&path);
+    let strings = String::from_utf8_lossy(&files["xl/sharedStrings.xml"]);
+    assert!(strings.contains(&item.code));
+    assert!(strings.contains("Second reading differs:"));
+    assert!(strings.contains("القراءة الثانية مختلفة:"));
+}

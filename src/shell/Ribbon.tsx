@@ -10,7 +10,7 @@ import { RibbonFlyout } from "./RibbonFlyout";
 import { RibbonIcon } from "./ribbonIcons";
 import { useStableCallbacks } from "./stableCallbacks";
 import { aliasesFor, isPrimaryGroup } from "./ribbonInfo";
-import { DEFAULT_RIBBON, QUICK_ACCESS } from "./ribbonLayout";
+import { DEFAULT_RIBBON, QUICK_ACCESS, fittingTabs } from "./ribbonLayout";
 import { Tip, TooltipLayer, type TipInfo } from "./Tooltip";
 import { Toolbar } from "@base-ui/react/toolbar";
 import type { BaseUIEvent } from "@base-ui/react/types";
@@ -172,9 +172,6 @@ function actions(props: Props): Record<string, (() => void) | undefined> {
 }
 
 
-/** Tabs the tabs' row shows; the others are under "More" (all of them when "More" would hold one). */
-const SHOWN_TABS = 3;
-
 /** The ribbon's collapsed state is kept on this computer. Collapsed, only the tabs' row shows; a tab
  *  clicked shows its panel over the drawing until something else is done (Esc, a click elsewhere, a
  *  tool). Double-click a tab, the arrow at the row's end or Ctrl+F1 collapse and expand it. */
@@ -209,9 +206,42 @@ function RibbonBody(props: Props) {
   const [chosen, setTab] = useState<string>(tabs[0]?.id ?? "");
   // A layout without the tab chosen (saved meanwhile) shows its first.
   const tab = tabs.find((x) => x.id === chosen) ?? tabs[0];
-  const lead = tabs.length > SHOWN_TABS + 1 ? tabs.slice(0, SHOWN_TABS) : tabs;
+  const [tabCount, setTabCount] = useState<number | null>(null);
+  const tabRow = useRef<HTMLDivElement>(null);
+  const tabSizer = useRef<HTMLDivElement>(null);
+  const fallbackCount = tabs.length > 4 ? 3 : tabs.length;
+  const lead = tabs.slice(0, tabCount ?? fallbackCount);
   const more = tabs.slice(lead.length);
   const inMore = tab !== undefined && more.includes(tab);
+  useLayoutEffect(() => {
+    const row = tabRow.current;
+    const sizer = tabSizer.current;
+    if (!row || !sizer) return;
+    const measure = () => {
+      if (!row.clientWidth) { setTabCount(null); return; }
+      const style = getComputedStyle(row);
+      const gap = parseFloat(style.columnGap) || 0;
+      const fixed = Array.from(row.children).filter((child) =>
+        !child.classList.contains("ribbon-tablist") && child !== sizer);
+      const occupied = fixed.reduce((sum, child) => {
+        const css = getComputedStyle(child);
+        return sum + child.getBoundingClientRect().width + (parseFloat(css.marginInlineStart) || 0) + (parseFloat(css.marginInlineEnd) || 0);
+      }, 0);
+      const widths = Array.from(sizer.children).map((child) => child.getBoundingClientRect().width);
+      const moreWidth = widths.pop() ?? 0;
+      if (!moreWidth || widths.some((width) => width <= 0)) { setTabCount(null); return; }
+      const available = row.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0) - occupied - fixed.length * gap;
+      setTabCount(fittingTabs(widths, available, moreWidth));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    observer.observe(sizer);
+    for (const child of row.children) if (!child.classList.contains("ribbon-tablist")) observer.observe(child);
+    let alive = true;
+    void document.fonts?.ready.then(() => { if (alive) measure(); });
+    return () => { alive = false; observer.disconnect(); };
+  }, [tabs, t, tab?.label]);
   const quick = useToolbarRoving();
   const handlers = actions(props);
   /** The flyout open: the key of a group's "⋯" list, or `MORE` for the tabs' menu. */
@@ -482,7 +512,7 @@ function RibbonBody(props: Props) {
     );
   };
 
-  // Measure first: the tabs' row (the app name, the quick-access bar, three tabs and "More"),
+  // Measure first: the tabs' row (the app name, the quick-access bar and the tabs that fit),
   // then the panel of the tab chosen, each group a box of icon buttons with its name under them.
   // The panel does not wrap: a group puts buttons behind its "⋯" as the window narrows, and only
   // when even that is not enough does it scroll sideways (`theme.css`).
@@ -499,7 +529,7 @@ function RibbonBody(props: Props) {
         }
       }}
     >
-      <div className="ribbon-tabs">
+      <div className="ribbon-tabs" ref={tabRow}>
         <span className="app-name heading">{t("appName")}</span>
         <Toolbar.Root
           {...quick.props}
@@ -565,6 +595,10 @@ function RibbonBody(props: Props) {
         >
           <Glyph name="down" size={14} />
         </button>
+        <div className="ribbon-tab-sizer" ref={tabSizer} aria-hidden="true">
+          {tabs.map((x) => <span key={x.id} className="ribbon-tab" style={x === tab ? { fontWeight: 500 } : undefined}>{t(x.label)}</span>)}
+          <span className="ribbon-tab ribbon-more" style={inMore ? { fontWeight: 500 } : undefined}>{inMore ? t(tab.label) : t("ribbon.more")}<RibbonIcon name="chevron" /></span>
+        </div>
       </div>
       {tab && showPanel && (
         <Tabs.Panel value={chosenValue} className="ribbon-panel" ref={panel} tabIndex={-1}>

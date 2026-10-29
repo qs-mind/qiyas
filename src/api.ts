@@ -1799,13 +1799,14 @@ export type Activity = {
   } | null;
 };
 
-/** One question Mizan asks (`qiyas_ai::surface::Question`): 2 to 4 options, at most one
+/** One question Mizan asks (`qiyas_ai::surface::Question`): 0 to 6 options, at most one
  *  recommended, and a free-text answer always allowed. All of a turn's questions come in one
  *  `question` event; the turn ends and the answer is the next message. */
 export type QuestionOption = { label: string; description?: string; recommended?: boolean };
 export type Question = { id: string; question: string; options: QuestionOption[]; allow_other: boolean };
 
 export type AgentEvent =
+  | { type: "status"; kind: "open_phases" | "requirements" | "saved" | "save_failed"; items: string[]; language: "en" | "ar" }
   | { type: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
   | { type: "provider_status"; code: string }
   | { type: "retrying"; seconds: number; code: string; discard_partial: boolean }
@@ -1815,7 +1816,8 @@ export type AgentEvent =
   | { type: "plan_progress"; mutations_since_update: number; stale: boolean }
   | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
   | { type: "question"; questions: Question[] }
-  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null }
+  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null; progress?: { completed: number; total: number } | null }
+  | { type: "tool_progress"; id: string; completed: number; total: number }
   | {
       type: "tool_result";
       id: string;

@@ -128,11 +128,14 @@ async fn stdio_client_uses_shared_tools_instructions_finish_and_eof() {
             .serve((child.stdout.take().unwrap(), child.stdin.take().unwrap()))
             .await
             .unwrap();
-        // Outside agents get the same take-off workflow as Mizan, then the registry index.
+        // 2026-10-29-agent-loop-without-steering and agent-approval-corrections:
+        // outside agents get scope autonomy, optional quantity guidance and the registry.
         let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
         assert!(!instructions.contains("Take-off workflow:"));
-        assert!(instructions.contains("deliverables the user requested"));
-        assert!(instructions.contains("never add an unrequested BOQ"));
+        assert!(instructions.contains("Follow the user's request"));
+        assert!(instructions
+            .contains("Workflow, digest and takeoff_kit supply optional quantity guidance"));
+        assert!(instructions.contains("Advice is information and the model decides"));
         assert!(instructions.ends_with(qiyas_ai::prompt::command_index().as_str()));
         let tools = client.list_all_tools().await.unwrap();
         assert_eq!(

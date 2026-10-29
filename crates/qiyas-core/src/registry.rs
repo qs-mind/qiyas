@@ -238,6 +238,10 @@ pub(crate) fn is_handle_field(field: &str) -> bool {
             | "a"
             | "b"
             | "dimension"
+            | "boundary"
+            | "wall_handles"
+            | "space_handles"
+            | "opening_handles"
     )
 }
 

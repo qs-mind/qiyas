@@ -45,6 +45,16 @@ impl Session {
         sheet: Option<&str>,
         within: Option<[[f64; 2]; 2]>,
     ) -> Vec<Schedule> {
+        self.read_tables_filtered(sheet, within, |_, _| true)
+    }
+
+    /// Filter with entity provenance intact, before loose texts become anonymous grid cells.
+    pub(crate) fn read_tables_filtered(
+        &self,
+        sheet: Option<&str>,
+        within: Option<[[f64; 2]; 2]>,
+        include: impl Fn(&EntityType, bool) -> bool,
+    ) -> Vec<Schedule> {
         let sheet = self.sheet_block(sheet);
         let mut schedules = Vec::new();
         let mut texts = Vec::new();
@@ -52,13 +62,16 @@ impl Session {
         let placed = self
             .drawing
             .entities_in(&sheet)
-            .map(|e| (e, Xform::identity()))
-            .chain(
-                xrefs
-                    .iter()
-                    .flat_map(|x| x.doc.entities_in_block("*Model_Space").map(|e| (e, x.xf))),
-            );
-        for (e, xf) in placed {
+            .map(|e| (e, Xform::identity(), true))
+            .chain(xrefs.iter().flat_map(|x| {
+                x.doc
+                    .entities_in_block("*Model_Space")
+                    .map(|e| (e, x.xf, false))
+            }));
+        for (e, xf, local) in placed {
+            if !include(e, local) {
+                continue;
+            }
             let at = match e {
                 EntityType::Table(t) => Some(t.insertion_point),
                 EntityType::Text(t) => Some(t.insertion_point),

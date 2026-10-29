@@ -246,7 +246,9 @@ body {
   display: flex;
   gap: 2px;
 }
-.ribbon-tabs [role="tab"] {
+.ribbon-tabs .ribbon-tab {
+  border: 1px solid transparent;
+  font-feature-settings: "swsh";
   height: var(--rb-std);
   padding: 0 12px;
   border-radius: var(--rb-radius) var(--rb-radius) 0 0;
@@ -798,13 +800,12 @@ body {
 .layer-row.dim .name {
   color: var(--muted);
 }
-/* A layer's whole name is readable (note 18, "A-GF-…" before): it wraps at any character rather
-   than being cut, and the full name is also its tooltip. */
+/* Keep layer rows compact; the full name is available on hover. */
 .layer-row .name {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding-block: 4px;
   line-height: 1.25;
 }
@@ -2827,6 +2828,7 @@ span.grid-sort {
 }
 /* The thread and the button that jumps to its end, over its bottom edge. */
 .assistant-thread {
+  overscroll-behavior: contain;
   position: relative;
   flex: 1;
   min-height: 0;
@@ -2860,6 +2862,7 @@ span.grid-sort {
   stroke-linejoin: round;
 }
 .assistant-log {
+  overscroll-behavior: contain;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -4430,3 +4433,15 @@ code, kbd, .chip { unicode-bidi: isolate; }
 .trace-show { margin-inline-start: 6px; }
 .trace-line-link { padding: 0; border: 0; background: transparent; cursor: pointer; text-align: start; }
 .trace-line-link:hover { text-decoration: underline; }
+
+/* Measure every translated tab without creating duplicate focus targets. */
+.ribbon-tab-sizer {
+  position: fixed;
+  inset-inline-start: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  display: flex;
+  width: max-content;
+}
+.ribbon-tab-sizer .ribbon-tab { display: inline-flex; align-items: center; }

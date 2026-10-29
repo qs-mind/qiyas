@@ -214,3 +214,23 @@ fn a_copied_comment_keeps_its_own_label() {
         (Some(copy_label), "The copy")
     );
 }
+
+#[test]
+fn comment_accepts_a_caller_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("layer.dxf"), 6);
+    let report = s.run_input(&serde_json::json!({"type":"comment","points":[[0,0],[4,0],[4,3],[0,3]],"text":"Review / مراجعة","layer":"Review notes"}),qiyas_core::Source::User).unwrap();
+    let Outcome::Added { handles } = report.outcome else {
+        panic!("comment")
+    };
+    assert!(handles.iter().all(|h| {
+        s.drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(*h))
+            .unwrap()
+            .common()
+            .layer
+            == "Review notes"
+    }));
+    assert_eq!(s.current.layer, "0");
+}

@@ -222,6 +222,7 @@ pub fn flatten_with(
         tol,
         &mut MAX_WORK.clone(),
         PaintMode::Geometry,
+        None,
     )
 }
 
@@ -238,7 +239,16 @@ pub fn flatten_within(
     tol: f64,
     budget: &mut usize,
 ) -> FlattenOutcome {
-    walk(doc, xrefs, entity, xf, tol, budget, PaintMode::Display)
+    walk(
+        doc,
+        xrefs,
+        entity,
+        xf,
+        tol,
+        budget,
+        PaintMode::Display,
+        None,
+    )
 }
 
 /// Visible CAD outlines for boundary tracing, with continuous linetypes. Keeps rays and
@@ -251,7 +261,154 @@ pub fn flatten_continuous_within(
     tol: f64,
     budget: &mut usize,
 ) -> FlattenOutcome {
-    walk(doc, xrefs, entity, xf, tol, budget, PaintMode::Continuous)
+    walk(
+        doc,
+        xrefs,
+        entity,
+        xf,
+        tol,
+        budget,
+        PaintMode::Continuous,
+        None,
+    )
+}
+
+/// Called before sampling or spending work, including for children of blocks and xrefs.
+/// The transform is the parent transform; the layer already includes CAD inheritance.
+type SourceFilter<'a> = dyn FnMut(&CadDocument, &EntityType, &Xform, &str) -> bool + 'a;
+
+impl FlattenOutcome {
+    /// Conservative bounds without tessellation. Codec polyline bounds contain only vertices:
+    /// expand them by the largest arc sagitta so a bulged edge cannot disappear at the box edge.
+    /// Containers and shapes without reliable analytic bounds are visited conservatively.
+    pub fn source_bounds(
+        doc: &CadDocument,
+        entity: &EntityType,
+        xf: &Xform,
+    ) -> Option<[[f64; 2]; 2]> {
+        let point_bounds = |points: Vec<[f64; 2]>| {
+            let mut bounds = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
+            for point in points {
+                let point = xf.apply(point);
+                for axis in 0..2 {
+                    bounds[0][axis] = bounds[0][axis].min(point[axis]);
+                    bounds[1][axis] = bounds[1][axis].max(point[axis]);
+                }
+            }
+            bounds
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite())
+                .then_some(bounds)
+        };
+        let padding = match entity {
+            EntityType::Insert(_) | EntityType::Ray(_) | EntityType::XLine(_) => return None,
+            EntityType::MLine(m) => {
+                return point_bounds(mline_paths(doc, m).0.into_iter().flatten().collect())
+            }
+            EntityType::Spline(s) => {
+                // Include the fit-point fallback too: a malformed control curve can use it.
+                // Positive rational weights keep the curve in its control hull; the sampler
+                // replaces nonpositive weights with ones. Unknown knot ordering is not culled.
+                if s.knots.iter().any(|k| !k.is_finite()) || s.knots.windows(2).any(|k| k[0] > k[1])
+                {
+                    return None;
+                }
+                let mut points: Vec<_> = s.control_points.iter().map(xy).collect();
+                let fit: Vec<_> = s.fit_points.iter().map(xy).collect();
+                if let Some(curve) = NurbsCurve::interpolate(
+                    &fit,
+                    None,
+                    None,
+                    opencadkernel::geom2d::Parameterization::Chord,
+                ) {
+                    points.extend_from_slice(curve.control_points());
+                }
+                points.extend(fit);
+                return point_bounds(points);
+            }
+            EntityType::LwPolyline(p) => {
+                let n = p.vertices.len();
+                (0..if p.is_closed { n } else { n.saturating_sub(1) })
+                    .map(|i| {
+                        let (a, b) = (&p.vertices[i], &p.vertices[(i + 1) % n]);
+                        (a.location.x - b.location.x).hypot(a.location.y - b.location.y)
+                            * a.bulge.abs()
+                            / 2.0
+                    })
+                    .fold(0.0, f64::max)
+            }
+            EntityType::Polyline2D(p) => {
+                let n = p.vertices.len();
+                (0..if p.is_closed() {
+                    n
+                } else {
+                    n.saturating_sub(1)
+                })
+                    .map(|i| {
+                        let (a, b) = (&p.vertices[i], &p.vertices[(i + 1) % n]);
+                        (a.location.x - b.location.x).hypot(a.location.y - b.location.y)
+                            * a.bulge.abs()
+                            / 2.0
+                    })
+                    .fold(0.0, f64::max)
+            }
+            _ => 0.0,
+        };
+        let bounds = entity.as_entity().bounding_box();
+        let mut min = [bounds.min.x - padding, bounds.min.y - padding];
+        let mut max = [bounds.max.x + padding, bounds.max.y + padding];
+        // Equal angles denote a full arc in the flattener, while the codec may bound its ends.
+        if let EntityType::Arc(a) = entity {
+            let ocs = object_to_world(&a.normal, a.center.z);
+            let c = ocs.apply([a.center.x, a.center.y]);
+            min = [c[0] - a.radius.abs(), c[1] - a.radius.abs()];
+            max = [c[0] + a.radius.abs(), c[1] + a.radius.abs()];
+        }
+        let corners = [
+            [min[0], min[1]],
+            [min[0], max[1]],
+            [max[0], min[1]],
+            [max[0], max[1]],
+        ]
+        .map(|p| xf.apply(p));
+        let mut result = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
+        for p in corners {
+            for axis in 0..2 {
+                result[0][axis] = result[0][axis].min(p[axis]);
+                result[1][axis] = result[1][axis].max(p[axis]);
+            }
+        }
+        result
+            .iter()
+            .flatten()
+            .all(|v| v.is_finite())
+            .then_some(result)
+    }
+
+    /// Continuous outlines selected before flattening. Returning false for an INSERT
+    /// prunes its entire subtree; callers should allow containers with eligible children.
+    #[allow(clippy::too_many_arguments)]
+    pub fn continuous_filtered_within(
+        doc: &CadDocument,
+        xrefs: &XrefDocs,
+        entity: &EntityType,
+        xf: &Xform,
+        tol: f64,
+        budget: &mut usize,
+        accept: &mut dyn FnMut(&CadDocument, &EntityType, &Xform, &str) -> bool,
+    ) -> Self {
+        walk(
+            doc,
+            xrefs,
+            entity,
+            xf,
+            tol,
+            budget,
+            PaintMode::Continuous,
+            Some(accept),
+        )
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -261,6 +418,7 @@ enum PaintMode {
     Display,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &CadDocument,
     xrefs: &XrefDocs,
@@ -269,6 +427,7 @@ fn walk(
     tol: f64,
     budget: &mut usize,
     mode: PaintMode,
+    accept: Option<&mut SourceFilter<'_>>,
 ) -> FlattenOutcome {
     let mut walk = Walk {
         host: doc,
@@ -286,6 +445,7 @@ fn walk(
         xref_entity: None,
         xref_insert_layers: Vec::new(),
         owner: None,
+        accept,
     };
     let style = walk.style(entity.common(), None);
     walk.entity(entity, xf, &style, 0);
@@ -323,6 +483,7 @@ pub fn drawn_style(
         xref_entity: None,
         xref_insert_layers: Vec::new(),
         owner: None,
+        accept: None,
     };
     let mut parent: Option<Style> = None;
     for common in chain {
@@ -342,7 +503,7 @@ struct Style {
     pattern: Vec<f64>,
 }
 
-struct Walk<'a> {
+struct Walk<'a, 'f, 'c> {
     /// The drawing `flatten` was called on: layers are looked up here (and in `xrefs`).
     host: &'a CadDocument,
     xrefs: &'a XrefDocs<'a>,
@@ -370,9 +531,10 @@ struct Walk<'a> {
     /// Inside what a dimension, leader or tolerance draws: that entity, which every path is
     /// reported as (its block's block references are never part of a chain).
     owner: Option<u64>,
+    accept: Option<&'f mut SourceFilter<'c>>,
 }
 
-impl Walk<'_> {
+impl Walk<'_, '_, '_> {
     /// The style of an entity with `common`, inside a block reference drawn with `parent`
     /// (`None` at the top level).
     fn style(&mut self, common: &EntityCommon, parent: Option<&Style>) -> Style {
@@ -427,8 +589,20 @@ impl Walk<'_> {
         }
     }
 
+    fn accepts(&mut self, entity: &EntityType, xf: &Xform, style: &Style) -> bool {
+        self.accept
+            .as_mut()
+            .is_none_or(|accept| accept(self.doc, entity, xf, &style.layer))
+    }
+
     fn entity(&mut self, entity: &EntityType, xf: &Xform, style: &Style, depth: usize) {
-        if self.budget == 0 {
+        if self.accepts(entity, xf, style) {
+            self.accepted_entity(entity, xf, style, depth);
+        }
+    }
+
+    fn accepted_entity(&mut self, entity: &EntityType, xf: &Xform, style: &Style, depth: usize) {
+        if self.budget == 0 && (self.accept.is_none() || !matches!(entity, EntityType::Insert(_))) {
             self.truncated = true;
             return;
         }
@@ -682,6 +856,16 @@ impl Walk<'_> {
             }
             let at = ocs(&a.normal, a.insertion_point.z).map_or(*xf, |o| o.then(xf));
             let attribute_style = self.style(&a.common, Some(style));
+            if self.accept.as_mut().is_some_and(|accept| {
+                !accept(
+                    self.doc,
+                    &EntityType::AttributeEntity(a.clone()),
+                    xf,
+                    &attribute_style.layer,
+                )
+            }) {
+                continue;
+            }
             let text = attribute_text(a, &at);
             let points = text_box(&text);
             self.push_text(points, &at, &attribute_style, handle, text);
@@ -708,13 +892,32 @@ impl Walk<'_> {
             .map(|child| (child, self.style(child.common(), Some(style))))
             .collect();
         for instance in insert_instances(doc, e, xf) {
+            let selected = self.accept.as_ref().map(|_| ());
+            let selected = selected.map(|()| {
+                children
+                    .iter()
+                    .filter(|(child, style)| self.accepts(child, &instance, style))
+                    .collect::<Vec<_>>()
+            });
+            if selected
+                .as_ref()
+                .is_some_and(|children| children.is_empty())
+            {
+                continue;
+            }
             if self.budget == 0 {
                 self.truncated = true;
                 break;
             }
             self.budget -= 1;
-            for (child, child_style) in &children {
-                self.entity(child, &instance, child_style, depth + 1);
+            if let Some(selected) = selected {
+                for (child, child_style) in selected {
+                    self.accepted_entity(child, &instance, child_style, depth + 1);
+                }
+            } else {
+                for (child, child_style) in &children {
+                    self.entity(child, &instance, child_style, depth + 1);
+                }
             }
         }
         if tracked {
@@ -839,16 +1042,38 @@ impl Walk<'_> {
             .map(|child| (child, self.style(child.common(), Some(style))))
             .collect();
         for instance in insert_instances(host_side, e, xf) {
+            let selected = self.accept.as_ref().map(|_| ());
+            let selected = selected.map(|()| {
+                children
+                    .iter()
+                    .filter(|(child, style)| self.accepts(child, &instance, style))
+                    .collect::<Vec<_>>()
+            });
+            if selected
+                .as_ref()
+                .is_some_and(|children| children.is_empty())
+            {
+                continue;
+            }
             if self.budget == 0 {
                 self.truncated = true;
                 break;
             }
             self.budget -= 1;
-            for (child, child_style) in &children {
-                if outermost {
-                    self.xref_entity = Some(child.common().handle.value());
+            if let Some(selected) = selected {
+                for (child, child_style) in selected {
+                    if outermost {
+                        self.xref_entity = Some(child.common().handle.value());
+                    }
+                    self.accepted_entity(child, &instance, child_style, depth + 1);
                 }
-                self.entity(child, &instance, child_style, depth + 1);
+            } else {
+                for (child, child_style) in &children {
+                    if outermost {
+                        self.xref_entity = Some(child.common().handle.value());
+                    }
+                    self.entity(child, &instance, child_style, depth + 1);
+                }
             }
         }
         self.doc = host_side;

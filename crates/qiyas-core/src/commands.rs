@@ -54,12 +54,17 @@ pub enum Command {
         tolerance: Option<f64>,
     },
     /// Compute quantity deltas against the carried baseline, trace each delta to elements,
-    /// and replace variation Comment clouds in one undo step. The layer name is stored as data.
+    /// and replace local variation clouds with revision triangles in one undo step.
+    /// Clouds and triangles share the layer. Revision labels persist; omitted on the first
+    /// report uses the neutral delta symbol. رمز المراجعة محفوظ مع سحب التغيير.
     #[schemars(extend("x-category" = "takeoff", "x-words" = ["VARIATIONREPORT"], "x-takeoff-step" = "revision / produce variation and clouds, export take-off"))]
     #[schemars(example = json!({"type":"variation_report"}))]
+    #[schemars(example = json!({"type":"variation_report","layer":"REVISION","revision":"R01"}))]
     VariationReport {
         #[serde(default)]
         layer: Option<String>,
+        #[serde(default)]
+        revision: Option<String>,
     },
     /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
@@ -141,7 +146,9 @@ pub enum Command {
         /// Where each value was read: `{"thickness": {"kind": "drawing_note", "handle": 1234,
         /// "text": "200 mm block"}}`. Kinds: drawing_note, drawing_attribute, drawing_table,
         /// document, engineer (the engineer said so), mizan (an assumption). A value without
-        /// one is recorded as set by whoever ran the command.
+        /// one is recorded as set by whoever ran the command. `decision` names a decision
+        /// register entry; the property must equal that value in its declared units.
+        /// يشير decision إلى قرار مسجل؛ يجب أن تساوي الخاصية قيمته بوحداتها المعلنة.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         sources: BTreeMap<String, crate::measurement::PropSource>,
     },
@@ -151,6 +158,16 @@ pub enum Command {
     #[schemars(extend("x-category" = "objects", "x-words" = ["OBJECTSCHEDULE"]))]
     #[schemars(example = json!({"type":"object_schedule","at":[0,10],"columns":["type","length"],"group_by":["type"]}))]
     ObjectSchedule(Box<crate::objects::ObjectSchedule>),
+    /// Store and read the drawing's decisions, with reasons and explicit provenance.
+    /// حفظ وقراءة قرارات الرسم مع أسبابها ومصادرها.
+    #[schemars(extend("x-category" = "takeoff"))]
+    #[schemars(example = json!({"type":"decision","kind":"list"}))]
+    Decision(Box<crate::decisions::DecisionCommand>),
+    /// Independently recount raw geometry and report geometric facts and quantity discrepancies.
+    /// إعادة حصر عناصر الرسم بشكل مستقل وعرض الحقائق الهندسية وفروق الكميات.
+    #[schemars(extend("x-category" = "takeoff", "x-effect" = "read"))]
+    #[schemars(example = json!({"type":"outside_check","offset":0,"limit":20}))]
+    OutsideCheck(crate::outside_check::OutsideQuery),
     /// Writes versioned drawing knowledge (levels, lookup tables, rules and future engine data).
     /// Types use define_object_type/redefine_object_type so their schema can be validated.
     #[schemars(extend("x-category" = "objects", "x-words" = ["SETKNOWLEDGE"]))]
@@ -195,9 +212,14 @@ pub enum Command {
         extent: Option<crate::conventions::GridExtent>,
         #[serde(default)]
         bubble: Option<f64>,
+        #[serde(default)]
+        layer: Option<String>,
     },
     /// Built-in sheet sets, view checklists, symbols, material hatches and sourced code limits.
-    /// Unsourced values are labelled practice_default. Read this before designing a package.
+    /// Unsourced values are labelled practice_default. Read only the topics relevant to the
+    /// current part; select applicable knowledge, not a mandatory design recipe or code approval.
+    /// اقرأ موضوعات الجزء الحالي فقط واختر المعرفة المنطبقة؛ القيم المعتادة ليست اشتراطات كود
+    /// ولا وصفة تصميم ملزمة أو اعتمادًا هندسيًا.
     #[schemars(extend("x-category" = "inquiry"))]
     #[schemars(example = json!({"type":"drafting_knowledge","topic":"sheet_set","project_type":"villa","storeys":2,"market":"egypt"}))]
     DraftingKnowledge {
@@ -215,11 +237,14 @@ pub enum Command {
         #[serde(default)]
         assumptions: Vec<String>,
     },
-    /// Checks villa circulation, room proportions, en-suite, wardrobes, stairs and doors.
-    /// Explicit plan sizes are metres/m²; floors can also read rooms from drawing-unit windows.
-    /// Missing evidence is reported in not_checked; this is design review, not approval.
+    /// Reads space geometry and explicit classifications. Optional practice profiles apply only
+    /// to a caller-supplied compatible building_type; omitted or mismatched profiles return facts.
+    /// Explicit plan sizes are metres/m²; floors read real polygons from drawing-unit windows.
+    /// Read geometry after enclosure edits; choose a profile only when its stated scope applies.
+    /// اقرأ الهندسة بعد تعديل حدود المساحات، واختر ملف ممارسة فقط إذا انطبق نطاقه على العمل.
     #[schemars(extend("x-category" = "inquiry"))]
     #[schemars(example = json!({"type":"space_check","plan":{"floors":[{"name":"Ground floor","rooms":[{"name":"Living","area_m2":24,"width_m":4}]}]}}))]
+    #[schemars(example = json!({"type":"space_check","profile":"villa","building_type":"villa","plan":{"floors":[{"name":"Floor","rooms":[{"name":"Living","kind":"living","area_m2":24,"width_m":4}]}]}}))]
     SpaceCheck {
         #[serde(default)]
         plan: Option<crate::space_planning::PlanModel>,
@@ -229,10 +254,16 @@ pub enum Command {
         market: Option<String>,
         #[serde(default)]
         language: Option<crate::rooms::LabelLanguage>,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        building_type: Option<String>,
     },
     /// Draws conventional doors, floor-specific stairs, level markers, ground lines and
     /// labelled material hatches. Coordinates use drawing units; _m fields remain metres.
     /// Geometry and any layers, blocks and linetypes form one undo step.
+    /// Use these symbols for door leaves, each floor's stairs, levels, ground lines and cut hatches.
+    /// استخدم هذه الرموز لضلف الأبواب وسلالم كل طابق والمناسيب وخطوط الأرض وهاتش القطاعات.
     #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type":"symbol","kind":"door","a":[0,0],"b":[1.5,0],"side_point":[0,1],"leaves":2}))]
     Symbol(crate::draft_symbols::SymbolSpec),
@@ -283,6 +314,10 @@ pub enum Command {
     /// Builds a door/window schedule from wall systems, grouped by kind and actual width and
     /// head minus sill. Assigns persistent size marks to opening inserts. Counts are live fields;
     /// grouping follows wall edits. source_sheet defaults to Model; at is on the current sheet.
+    /// Pass the user's language. After scheduling, object_tags with category opening and property
+    /// mark labels doors and windows with the same marks; read back counts and sizes.
+    /// مرّر لغة المستخدم؛ بعد الجدولة استخدم object_tags بالفئة opening والخاصية mark لوسم
+    /// الأبواب والنوافذ بالرموز نفسها، ثم أعد قراءة الأعداد والمقاسات.
     #[schemars(extend("x-category" = "tables", "x-words" = ["OPENINGSCHEDULE"]))]
     #[schemars(example = json!({"type":"opening_schedule", "at":[10,100], "source_sheet":"*Model_Space"}))]
     OpeningSchedule {
@@ -634,6 +669,10 @@ pub enum Command {
     /// reading order (see `crate::text`). An omitted or zero height is 2.5 mm on paper at the
     /// annotation scale. Negative heights are refused. A line break, including a literal `\n`,
     /// makes an MText with no wrapping, top left at `[at.x, at.y + height]`.
+    /// Set annotation_scale before labels; height 0 gives the 2.5 mm paper default. Choose
+    /// readable plotted text for the sheet scale. Use decision fields for recorded values in notes.
+    /// اضبط annotation_scale قبل التسميات؛ الارتفاع صفر يعطي القيمة الافتراضية 2.5 مم على
+    /// الورق. اختر نصًا مقروءًا بمقياس اللوحة، واستخدم حقول القرارات للقيم المسجلة في الملاحظات.
     #[schemars(extend("x-category" = "text"))]
     #[schemars(example = json!({"type": "text", "at": [2, 3], "height": 0.25, "rotation": 0, "value": "LIVING ROOM"}))]
     #[schemars(extend("x-words" = ["TEXT", "DT"]))]
@@ -652,6 +691,8 @@ pub enum Command {
     /// Multiline text: `value` is plain text, lines split by `\n`, in a box `width` drawing units
     /// wide (0: no wrapping) whose top left corner is `at`. A literal `\n` is a line break too.
     /// An omitted or zero height is 2.5 mm on paper at the annotation scale. As `Text` otherwise.
+    /// Set annotation_scale before notes and use decision fields for their recorded values.
+    /// اضبط annotation_scale قبل الملاحظات واستخدم حقول القرارات لقيمها المسجلة.
     #[serde(rename = "mtext")]
     #[schemars(extend("x-category" = "text"))]
     #[schemars(example = json!({"type": "mtext", "at": [2, 6], "width": 4, "height": 0.25, "value": "Floor: porcelain tiles\nSkirting: 100 mm"}))]
@@ -710,18 +751,30 @@ pub enum Command {
         #[serde(default)]
         whole_word: bool,
     },
+    /// Compatibility constructor for native clients. JSON uses CommentWithLayer, also named comment.
+    #[serde(skip_deserializing)]
+    #[schemars(skip)]
+    Comment {
+        points: crate::PointRun<true>,
+        text: String,
+        #[serde(default)]
+        arc_len: Option<f64>,
+    },
     /// A revision cloud around the polygon `points` with the comment `text` beside it, both on
     /// the layer COMMENTS (see `crate::comment`); `arc_len` None works the arcs out from the
     /// outline. One undo step, `Outcome::Added` (the cloud, then its label).
     #[schemars(extend("x-category" = "markup"))]
     #[schemars(example = json!({"type": "comment", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "text": "Check this wall thickness"}))]
     #[schemars(extend("x-words" = ["COMMENT"]))]
-    Comment {
+    #[serde(rename = "comment")]
+    CommentWithLayer {
         points: crate::PointRun<true>,
         text: String,
         /// Default: one thirty-second of the closed outline's length, in drawing units.
         #[serde(default)]
         arc_len: Option<f64>,
+        #[serde(default)]
+        layer: Option<String>,
     },
     /// The comment clouds of every sheet: `Outcome::Comments`. Not an undo step.
     #[schemars(extend("x-category" = "markup"))]
@@ -729,6 +782,10 @@ pub enum Command {
     ListComments,
     /// Adds the dimensions `DimSpec` describes on the current layer in the current dimension
     /// style, each with its `*D` block: one undo step, `Outcome::Added` (see `crate::dimension`).
+    /// Create dimensions with this command, not loose lines and text. Keep dimensions clear of
+    /// labels; dim_space adjusts spacing, dim_edit changes text/arrows, auto_place finds clearance.
+    /// أنشئ الأبعاد بهذا الأمر لا بخطوط ونصوص منفصلة. أبعدها عن التسميات؛ dim_space للتباعد،
+    /// وdim_edit للنص والأسهم، وauto_place لإيجاد موضع خالٍ من التداخل.
     #[schemars(extend("x-category" = "dimensions"))]
     #[schemars(example = json!({"type": "dimension", "kind": "linear", "p1": [0, 0], "p2": [5, 0], "line_point": [2.5, -1]}))]
     Dimension(DimSpec),
@@ -789,6 +846,8 @@ pub enum Command {
     Tolerance { at: [f64; 2], frame: String },
     /// The annotation scale (CANNOSCALE), "paper:drawing" such as "1:50": new dimensions,
     /// leaders and tolerances are drawn that many times their style's size.
+    /// Set before adding labels and dimensions; read plotted text sizes at the intended sheet scale.
+    /// اضبطه قبل إضافة التسميات والأبعاد، وراجع مقاسات النص المطبوعة بمقياس اللوحة المقصود.
     #[schemars(extend("x-category" = "dimensions"))]
     #[schemars(example = json!({"type": "annotation_scale", "name": "1:100"}))]
     AnnotationScale { name: String },
@@ -863,6 +922,10 @@ pub enum Command {
         last: [usize; 2],
     },
     /// A one-line text at `at`, `height` tall, holding the field `field` (see `crate::field`).
+    /// For a recorded decision use field {kind: decision, name: <decision name>}; it prints the
+    /// current value and unit, not its internal name. decision.set refreshes linked fields.
+    /// للقرار المسجل استخدم حقلًا بنوع decision واسمه؛ يطبع القيمة الحالية ووحدتها لا الاسم
+    /// الداخلي، ويحدّث decision.set الحقول المرتبطة.
     /// An omitted or zero height is 2.5 mm on paper at the annotation scale.
     #[schemars(extend("x-category" = "tables"))]
     #[schemars(example = json!({"type": "field", "at": [2, 2], "height": 0.25, "field": {"kind": "area", "target": {"handle": 1234}}}))]
@@ -1162,17 +1225,38 @@ pub enum Command {
     /// Makes a printable sheet from Model in one step: a sized layout (the smallest paper from A3
     /// on that holds the model at 1:100 or larger, unless paper is given), a viewport at the
     /// largest standard scale that fits with margins, a captioned title block (project, title,
-    /// drawing number, scale, date, drawn by Qiyas, revision, status For review) in the user's
+    /// client, consultant, drawing/project numbers, supplied authorship and revision, For review) in the user's
     /// language, a scale bar and general notes at a readable height. Fields it is not given stay
     /// empty and are listed. Pass `language` ("ar" or "en") from the user's request. One undo
     /// step; the sheet on screen is unchanged. `Outcome::Sheet` says paper, scale and the least
     /// model text height that reads at that scale. plot then prints it as it is.
+    /// A floor and its schedules can share a dedicated sheet; choose organisation for the job.
+    /// Orientation follows fit and plan aspect. At a requested scale, split on supplied axis-aligned
+    /// split_lines or tagged grid axes, avoiding supplied core_regions. Each continuation includes
+    /// reciprocal match lines and a key plan. Supply core polygons from the designer's interpretation.
+    /// zones optionally supplies paper-mm plans, notes, schedules and key_plan rectangles.
+    /// يختار الاتجاه بحسب الملاءمة ونسب المسقط. يجري الفصل على خطوط محددة أو محاور شبكة
+    /// مع تجنب مضلعات النوى المحددة وإضافة خطوط مطابقة متبادلة ومخطط مفتاحي لكل لوحة.
+    /// Use arrange to keep plans, notes and schedules in their zones and report overlaps.
+    /// Show recorded values through decision fields and keep the title block For review.
+    /// يمكن جمع الطابق وجداوله في لوحة مخصصة؛ اختر التنظيم المناسب للعمل. استخدم arrange
+    /// للفصل بين المساقط والجداول والملاحظات والمفاتيح، ثم افحص التداخل واطبع. اعرض القيم
+    /// المسجلة بحقول القرارات وأبقِ حالة اللوحة «للمراجعة».
     #[schemars(extend("x-category" = "layouts", "x-words" = ["MAKESHEET"]))]
     #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Villa", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
+    #[schemars(example = json!({"type":"make_sheet","name":"S-01","paper":"ISO A1","scale":"1:250","model_bounds":[[0,0],[180,96]],"split_lines":[[[80,0],[80,96]]],"core_regions":[[[85,40],[95,40],[95,55],[85,55]]],"client":"Client","consultant":"Consultant","project_no":"P-01","checked_by":"","approved_by":"","revision_table":[]}))]
     MakeSheet(Box<crate::sheet_setup::SheetSpec>),
     /// Arrange plans, tables, notes and legends in rows with paper-sized gaps. Each item moves
     /// whole in one undo step; omitted items are grouped automatically. Paper layouts keep
-    /// their margins, sheet frame and title block clear.
+    /// their margins, sheet frame and title block clear. Generated sheets retain zones:
+    /// notes beside the title block, schedules along the opposite edge, plans in the main field.
+    /// Reports remaining overlaps and zone overflow without shrinking content.
+    /// تحفظ اللوحات مناطق الملاحظات بجوار بيانات اللوحة والجداول على الحافة المقابلة
+    /// والمساقط في الحقل الرئيسي؛ تُذكر التداخلات والمحتويات التي لا تتسع دون تصغيرها.
+    /// Read back the layout and check overlap after arranging; use auto_place for individual
+    /// annotations and dim_space for dimension spacing. Do not hide layers to conceal collisions.
+    /// أعد قراءة توزيع اللوحة وافحص التداخل؛ استخدم auto_place للتعليقات المفردة وdim_space
+    /// لتباعد الأبعاد، ولا تخفِ الطبقات لإخفاء التداخلات.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type":"arrange"}))]
     Arrange(Box<crate::arrange::Arrange>),
@@ -1183,11 +1267,20 @@ pub enum Command {
     RenameLayout { from: String, to: String },
     /// Draws Qiyas's frame and title block on the layout on screen, in paper millimetres.
     /// Writes only supplied values and returns empty_fields. Creates its own layer when missing.
-    /// Default layer A-ANNO-TTLB; all other cells remain empty. One undo step.
+    /// Fields: title, project, client, consultant, project_no, drawing_no, scale, date,
+    /// drawn_by, checked_by, approved_by, revision, sheet. Status stays For review.
+    /// Empty values remain empty and are listed; revision_table has rev, date, description.
+    /// الحقول تشمل العميل والاستشاري ورقم المشروع واللوحة والرسم والتدقيق والاعتماد؛
+    /// تبقى القيم الناقصة فارغة وتُذكر، والحالة للمراجعة. جدول المراجعات: المراجعة والتاريخ والوصف.
+    /// Default layer A-ANNO-TTLB. One undo step.
     #[schemars(extend("x-category" = "layouts", "x-words" = ["TITLEBLOCK"]))]
-    #[schemars(example = json!({"type": "title_block", "fields": {"title": "Ground floor", "drawing_no": "A-101"}, "margin_mm": 10, "binding_mm": 20}))]
+    #[schemars(example = json!({"type": "title_block", "fields": {"title": "Ground floor", "drawing_no": "A-101"}, "margin_mm": 10, "binding_mm": 20, "language":"en", "revision_table":[{"rev":"R1","date":"2026-10-29","description":"Coordination"}]}))]
     TitleBlock {
         fields: BTreeMap<String, String>,
+        #[serde(default)]
+        revision_table: Vec<crate::layouts::SheetRevision>,
+        #[serde(default)]
+        language: Option<crate::rooms::LabelLanguage>,
         #[serde(default = "crate::layouts::default_margin")]
         margin_mm: f64,
         #[serde(default = "crate::layouts::default_binding")]
@@ -1252,6 +1345,8 @@ pub enum Command {
     /// Omitted targets mean all model-space entities. An empty list only sets the UCS/base point.
     /// Establishes the UCS and exported drawing base point in the same undo step.
     /// JSON command points remain world/site coordinates; typed points use this UCS.
+    /// Read back and verify the survey coordinates after placement.
+    /// أعد قراءة الإحداثيات المساحية وتحقّق منها بعد النقل.
     #[schemars(extend("x-category" = "modify", "x-words" = ["SETSITEORIGIN"]))]
     #[schemars(example = json!({"type":"set_site_origin","base_point":[0,0],"site_point":[674250000,2734180000u64],"x_axis":[1,0]}))]
     SetSiteOrigin {
@@ -1427,6 +1522,12 @@ pub enum Command {
     /// each label's handle and placement. Labels first shrink to 2.5 mm on paper, then
     /// move beside the room with a linked leader if needed. Refuses only when no nearby
     /// free space can hold the label.
+    /// Pass the user's language. Choose boundary_layers/exclude_layers from enclosure evidence,
+    /// excluding annotations, grids and opening symbols. Keep labels clear of geometry; use
+    /// auto_place for collisions. Candidate areas are not engineering approval.
+    /// مرّر لغة المستخدم واختر طبقات الحدود والاستبعاد من أدلة الإحاطة دون التعليقات والمحاور
+    /// ورموز الفتحات. أبعد التسميات عن الهندسة وعالج التداخل عبر auto_place؛ المساحات مرشحة
+    /// وليست اعتمادًا هندسيًا.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
     LabelSpaces {
@@ -1472,13 +1573,16 @@ pub enum Command {
         point: Option<[f64; 2]>,
     },
     /// Adds live labels for a text or number property of selected objects, including door/window
-    /// marks. Labels follow the object and its property through edits and saves. Height uses
+    /// marks. Missing opening marks are numbered in the stated order; doors use circles and
+    /// windows hexagons unless shapes overrides their kind. Labels follow the object and its property through edits and saves. Height uses
     /// drawing units; default 2.5 mm on paper. Existing labels are reused. One undo step.
     /// Instead of targets, `category` tags every object of that category on the sheet on screen:
     /// {"category":"opening","property":"mark"} tags all doors and windows with their schedule marks.
+    /// يوسم هذا الاختيار جميع الأبواب والنوافذ في اللوحة برموز جدولها؛ تتبع التسميات قيم العناصر.
     #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type":"object_tags","targets":[{"handle":1234}],"property":"mark"}))]
     #[schemars(example = json!({"type":"object_tags","category":"opening","property":"mark"}))]
+    #[schemars(example = json!({"type":"object_tags","category":"opening","property":"mark","order":"left_to_right","shapes":{"door":"circle","window":"hexagon"}}))]
     ObjectTags {
         #[serde(default)]
         targets: Vec<Target>,
@@ -1487,6 +1591,8 @@ pub enum Command {
         height: Option<f64>,
         #[serde(default)]
         category: Option<String>,
+        #[serde(flatten)]
+        options: crate::object_tags::TagOptions,
     },
     /// Finds clear positions for a rectangle or existing annotation using plotted geometry and
     /// rendered text. Coordinates and sizes are drawing units; clearance is paper millimetres.
@@ -1619,6 +1725,7 @@ impl Command {
                         | "dimension"
                         | "recognition"
                         | "measurement"
+                        | "decision"
                         | "second_reading"
                         | "project"
                         | "deliverable"
@@ -1634,6 +1741,11 @@ impl Command {
     /// it is not an undo step.
     pub(crate) fn changes(&self) -> Option<Part> {
         match self {
+            Command::Decision(command) => match command.as_ref() {
+                crate::decisions::DecisionCommand::List { .. } => None,
+                crate::decisions::DecisionCommand::Set { .. } => Some(Part::Document { tables: true, takeoff: true }),
+            },
+            Command::OutsideCheck(_) => None,
             Command::Arrange(_) => Some(Part::Document { tables: true, takeoff: true }),
             Command::Project(command) => if command.is_read() {None} else {Some(Part::ProjectFile)},
             Command::Deliverable(_) | Command::CompareRevisions { .. } => None,
@@ -1694,6 +1806,7 @@ impl Command {
             Command::FindReplace { .. }
             // The comment layer and the comment and text marks' applications.
             | Command::Comment { .. }
+            | Command::CommentWithLayer { .. }
             | Command::Dimension(_)
             | Command::ObjectTags { .. }
             | Command::AutoPlace { .. }
@@ -2110,9 +2223,10 @@ impl Session {
                 y,
                 extent,
                 bubble,
+                layer,
             } => {
                 return Ok(Outcome::Added {
-                    handles: self.reference_grid(&x, &y, extent, bubble)?,
+                    handles: self.reference_grid(&x, &y, extent, bubble, layer.as_deref())?,
                 });
             }
             Command::DraftingKnowledge {
@@ -2143,9 +2257,18 @@ impl Session {
                 floors,
                 market,
                 language,
+                profile,
+                building_type,
             } => {
                 return Ok(Outcome::Measurement {
-                    result: self.space_check(plan, &floors, market.as_deref(), language)?,
+                    result: self.space_check(
+                        plan,
+                        &floors,
+                        market.as_deref(),
+                        language,
+                        profile.as_deref(),
+                        building_type.as_deref(),
+                    )?,
                 });
             }
             Command::Symbol(spec) => {
@@ -2169,9 +2292,9 @@ impl Session {
                     result: self.carry_knowledge(&from_path, tolerance)?,
                 });
             }
-            Command::VariationReport { layer } => {
+            Command::VariationReport { layer, revision } => {
                 return Ok(Outcome::Measurement {
-                    result: json!(self.variation_report(layer)?),
+                    result: json!(self.variation_report(layer, revision)?),
                 });
             }
             Command::Check { .. } => unreachable!("check is a transaction"),
@@ -2237,7 +2360,22 @@ impl Session {
                     handles: vec![self.add_object_schedule(*spec)?],
                 });
             }
+            Command::Decision(command) => {
+                return Ok(Outcome::Measurement {
+                    result: self.run_decision(*command)?,
+                });
+            }
+            Command::OutsideCheck(query) => {
+                return Ok(Outcome::Measurement {
+                    result: self.outside_check(&query)?,
+                });
+            }
             Command::SetKnowledge { kind, name, data } => {
+                if kind == crate::knowledge::Kind::Decisions {
+                    return Err(CoreError::InvalidCommand(
+                        "Use decision.set / استخدم decision.set".into(),
+                    ));
+                }
                 // Computed results: typed numbers here would read as measured quantities.
                 let computed = match kind {
                     crate::knowledge::Kind::Revisions => ["result", "baseline", "identities"]
@@ -2283,7 +2421,7 @@ impl Session {
             }
             Command::Walls(spec) => {
                 return Ok(Outcome::Walls {
-                    result: self.walls(spec)?,
+                    result: self.walls(spec, source)?,
                 });
             }
             Command::OpeningSchedule {
@@ -2309,17 +2447,17 @@ impl Session {
                 openings,
             } => {
                 return Ok(Outcome::Walls {
-                    result: self.add_wall_openings(centreline, openings)?,
+                    result: self.add_wall_openings(centreline, openings, source)?,
                 });
             }
             Command::RemoveWallOpenings { inserts } => {
                 return Ok(Outcome::Walls {
-                    result: self.remove_wall_openings(&inserts)?,
+                    result: self.remove_wall_openings(&inserts, source)?,
                 });
             }
             Command::EditWallOpening { insert, edit } => {
                 return Ok(Outcome::Walls {
-                    result: self.edit_wall_opening(insert, edit)?,
+                    result: self.edit_wall_opening(insert, edit, source)?,
                 });
             }
             Command::DefineBlock {
@@ -2357,11 +2495,22 @@ impl Session {
                 });
             }
             Command::TitleBlock {
-                fields,
+                mut fields,
+                revision_table,
+                language,
                 margin_mm,
                 binding_mm,
                 layer,
             } => {
+                let language = language
+                    .or(self.sheet_language())
+                    .unwrap_or(crate::rooms::LabelLanguage::En);
+                let status = if language == crate::rooms::LabelLanguage::Ar {
+                    "للمراجعة"
+                } else {
+                    "For review"
+                };
+                fields.insert("status".into(), status.into());
                 let mut empty_fields: Vec<String> = crate::layouts::TITLE_FIELDS
                     .iter()
                     .filter(|key| {
@@ -2380,8 +2529,29 @@ impl Session {
                         })
                         .map(|(key, _)| key.clone()),
                 );
+                if revision_table.is_empty() {
+                    empty_fields.push("revision_table".into());
+                }
+                for (row, rev) in revision_table.iter().enumerate() {
+                    for (key, value) in [
+                        ("rev", &rev.rev),
+                        ("date", &rev.date),
+                        ("description", &rev.description),
+                    ] {
+                        if value.trim().is_empty() {
+                            empty_fields.push(format!("revision_table[{row}].{key}"));
+                        }
+                    }
+                }
                 return Ok(Outcome::TitleBlock {
-                    handles: self.title_block(&fields, margin_mm, binding_mm, &layer)?,
+                    handles: self.title_block(
+                        &fields,
+                        margin_mm,
+                        binding_mm,
+                        &layer,
+                        &revision_table,
+                        language,
+                    )?,
                     empty_fields,
                 });
             }
@@ -2739,6 +2909,7 @@ impl Session {
             } => {
                 self.check_sheet_text(&value, source);
                 let h = self.add_text(at, height, rotation, value, style.as_deref())?;
+                self.record_text_origin(h, source)?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::MText {
@@ -2750,6 +2921,7 @@ impl Session {
             } => {
                 self.check_sheet_text(&value, source);
                 let h = self.add_mtext(at, width, height, &value, style.as_deref())?;
+                self.record_text_origin(h, source)?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::EditText { target, value, tag } => {
@@ -2761,6 +2933,7 @@ impl Session {
                     self.check_quantity_note(&value, source)?;
                 }
                 self.edit_text(&target, &value, tag.as_deref())?;
+                self.record_text_origin(target.handle, source)?;
                 return Ok(Outcome::Changed);
             }
             Command::FindReplace {
@@ -2794,7 +2967,18 @@ impl Session {
                 arc_len,
             } => {
                 self.check_quantity_note(&text, source)?;
-                let handles = self.add_comment(points.into(), &text, arc_len)?;
+                return Ok(Outcome::Added {
+                    handles: self.add_comment(points.into(), &text, arc_len, None)?,
+                });
+            }
+            Command::CommentWithLayer {
+                points,
+                text,
+                arc_len,
+                layer,
+            } => {
+                self.check_quantity_note(&text, source)?;
+                let handles = self.add_comment(points.into(), &text, arc_len, layer.as_deref())?;
                 return Ok(Outcome::Added { handles });
             }
             Command::ListComments => {
@@ -2859,6 +3043,7 @@ impl Session {
                 data,
             } => {
                 let h = self.add_table(at, rows, cols, col_width, row_height, &data)?;
+                self.record_text_origin(h, source)?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::EditCell {
@@ -3217,9 +3402,16 @@ impl Session {
                 property,
                 height,
                 category,
+                options,
             } => {
                 return Ok(Outcome::Added {
-                    handles: self.object_tags(&targets, &property, height, category.as_deref())?,
+                    handles: self.object_tags(
+                        &targets,
+                        &property,
+                        height,
+                        category.as_deref(),
+                        &options,
+                    )?,
                 });
             }
             Command::FreeSpace { query } => {

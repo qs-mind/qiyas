@@ -11,7 +11,8 @@
 //!
 //! Area and length fields follow the entity they read: after every modify, edit and erase they
 //! are worked out again in the same undo step (`Session::follow_fields`). Dates, file names and
-//! counts change on `UpdateFields`. Areas and lengths are in square metres and metres (as the
+//! counts change on `UpdateFields`. Decisions use `%<\AcVar QiyasDecision "name">%` and
+//! follow `decision.set` in the same undo step. Areas and lengths are in square metres and metres (as the
 //! take-off shows them), 2 decimals and, in a text that does not give the unit itself, with it
 //! (`17.81 m²`; the take-off keeps full precision); an entity gone, or a code Qiyas does not know, shows `####`.
 
@@ -49,11 +50,14 @@ pub enum FieldKind {
     Length { target: Target },
     /// How many references of the block `block` the sheet holds.
     Count { block: String },
+    /// The current decision value and unit. / قيمة القرار الحالية ووحدته.
+    Decision { name: String },
 }
 
 /// The field code of `kind`, as it goes into a text.
 pub fn field_code(kind: &FieldKind) -> String {
     match kind {
+        FieldKind::Decision { name } => format!(r#"%<\AcVar QiyasDecision "{name}">%"#),
         FieldKind::Date => r#"%<\AcVar Date \f "yyyy-MM-dd">%"#.to_string(),
         FieldKind::FileName => r#"%<\AcVar Filename>%"#.to_string(),
         FieldKind::Area { target } => object_code(target.handle, "Area"),
@@ -98,6 +102,7 @@ enum Code {
         decimals: usize,
     },
     Count(String),
+    Decision(String),
     OpeningCount(u64, String),
     /// Object ids, quantity name, decimals, and whether the sheet is in Arabic (digits too).
     ObjectValue(Vec<u64>, String, usize, bool),
@@ -160,6 +165,10 @@ fn parse_code(code: &str) -> Code {
                     decimals,
                 })
             }
+            "qiyasdecision" => rest
+                .split('"')
+                .nth(1)
+                .map_or(Code::Unknown, |name| Code::Decision(name.into())),
             "date" => Code::Date,
             "filename" => Code::FileName,
             "qiyasarea" | "qiyaslength" => rest
@@ -248,11 +257,6 @@ fn parse_code(code: &str) -> Code {
 pub(crate) fn today() -> String {
     let d = time::OffsetDateTime::now_utc().date();
     format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
-}
-
-/// Today's date in the computer's local timezone.
-pub(crate) fn local_today() -> String {
-    chrono::Local::now().date_naive().to_string()
 }
 
 /// The field code a text keeps, if any.
@@ -373,6 +377,30 @@ impl Session {
             out.push_str(&template[at..a]);
             let code = &template[a..b];
             let value = self.field_value(code, sheet);
+            if let Code::Decision(name) = parse_code(code) {
+                if arabic_text && value.parse::<f64>().is_ok() {
+                    out.push_str(&crate::numbers::arabic_digits(&value));
+                } else {
+                    out.push_str(&value);
+                }
+                if units && value != UNKNOWN {
+                    if let Some(decision) = self.decision(&name).ok().flatten() {
+                        let tail = template[b..].trim_start();
+                        let following_unit = tail
+                            .split(|c: char| {
+                                c.is_whitespace() || matches!(c, ',' | ';' | '،' | '؛')
+                            })
+                            .next()
+                            .unwrap_or("");
+                        if !decision.unit.is_empty() && following_unit != decision.unit {
+                            out.push(' ');
+                            out.push_str(&decision.unit);
+                        }
+                    }
+                }
+                at = b;
+                continue;
+            }
             let (dim, flagged) = match parse_code(code) {
                 Code::Area(_) | Code::Sum { area: true, .. } | Code::RoomArea { .. } => {
                     (Some(crate::numbers::Dim::Area), false)
@@ -440,6 +468,17 @@ impl Session {
         };
         let value = match parse_code(code) {
             Code::RoomArea { handles, decimals } => self.room_field_value(&handles, decimals),
+            Code::Decision(name) => self.decision(&name).ok().flatten().and_then(|d| {
+                if d.value.is_null() {
+                    return None;
+                }
+                Some(
+                    d.value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| d.value.to_string()),
+                )
+            }),
             Code::Date => Some(today()),
             Code::FileName => self
                 .drawing
@@ -771,6 +810,17 @@ impl Session {
     ) -> Result<u64, CoreError> {
         if let FieldKind::Area { target } | FieldKind::Length { target } = kind {
             self.sheet_targets_any(std::slice::from_ref(target))?;
+        }
+        if let FieldKind::Decision { name } = kind {
+            if name.contains('"')
+                || name.contains("%<")
+                || name.contains(">%")
+                || name.chars().any(char::is_control)
+            {
+                return Err(CoreError::InvalidCommand(
+                    "Invalid decision name / اسم القرار غير صالح".into(),
+                ));
+            }
         }
         if let FieldKind::Count { block } = kind {
             if block.trim().is_empty() {

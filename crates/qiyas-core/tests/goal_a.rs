@@ -606,3 +606,249 @@ mod mizan_tools {
         }
     }
 }
+
+fn room_test_block(doc: &mut opencadcodec::CadDocument, name: &str) -> opencadcodec::Handle {
+    let mut record = opencadcodec::BlockRecord::new(name);
+    record.handle = doc.allocate_handle();
+    record.block_entity_handle = doc.allocate_handle();
+    record.block_end_handle = doc.allocate_handle();
+    let owner = record.handle;
+    doc.block_records.add(record).unwrap();
+    owner
+}
+
+fn room_test_rectangle(x: f64, y: f64, width: f64, height: f64) -> opencadcodec::EntityType {
+    let mut polyline = opencadcodec::LwPolyline::new();
+    for [x, y] in [
+        [x, y],
+        [x + width, y],
+        [x + width, y + height],
+        [x, y + height],
+    ] {
+        polyline.add_point(opencadcodec::Vector2::new(x, y));
+    }
+    polyline.is_closed = true;
+    opencadcodec::EntityType::LwPolyline(polyline)
+}
+
+#[test]
+fn every_room_in_a_large_plan_ignores_distant_dense_line_and_column_arrays() {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{EntityType, Line, Vector3};
+    for units in [4, 5, 6, 1] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new_blank(&dir.path().join("podium.dxf"), units);
+        let k = 1.0 / session.drawing.units.to_metres();
+        let mut seeds = Vec::new();
+        // 32 rooms on a 180 x 96 m podium. Each candidate is exactly 18 x 16 m.
+        for row in 0..4 {
+            for column in 0..8 {
+                let x = column as f64 * 22.0 * k;
+                let y = row as f64 * 24.0 * k;
+                session
+                    .drawing
+                    .doc
+                    .add_entity(room_test_rectangle(x, y, 18.0 * k, 16.0 * k))
+                    .unwrap();
+                seeds.push(json!({"name":format!("R{}", row*8+column),"point":[x+9.0*k,y+8.0*k]}));
+            }
+        }
+        let doc = &mut session.drawing.doc;
+        let owner = room_test_block(doc, "Dense cell");
+        for mut entity in [
+            room_test_rectangle(0.0, 0.0, 0.4 * k, 0.4 * k),
+            EntityType::Line(Line::from_coords(-k, 0.0, 0.0, k, 0.0, 0.0)),
+            EntityType::Line(Line::from_coords(0.0, -k, 0.0, 0.0, k, 0.0)),
+        ] {
+            entity.common_mut().owner_handle = owner;
+            doc.add_entity(entity).unwrap();
+        }
+        let mut array = Insert::new("Dense cell", Vector3::new(1000.0 * k, 1000.0 * k, 0.0));
+        array.column_count = 1024;
+        array.row_count = 1024;
+        array.column_spacing = 2.0 * k;
+        array.row_spacing = 2.0 * k;
+        // More than both former whole-sheet budgets, represented compactly as a real CAD array.
+        doc.add_entity(EntityType::Insert(array)).unwrap();
+        let Outcome::Rooms { report } = run(
+            &mut session,
+            json!({"type":"rooms","query":{"seeds":seeds}}),
+        ) else {
+            panic!("rooms");
+        };
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(report.rooms.len(), 32);
+        for room in report.rooms {
+            assert_eq!(room.enclosed_area_m2, 288.0);
+            assert_eq!(room.net_area_m2, 288.0);
+            assert!(room.islands.is_empty());
+        }
+    }
+}
+
+#[test]
+fn nested_room_sources_filter_layers_and_grid_roles_before_flattening() {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{EntityType, Layer, Line, Vector3};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("nested.dxf"), 6);
+    let doc = &mut session.drawing.doc;
+    for name in ["Walls", "Reference", "Container"] {
+        let mut layer = Layer::new(name);
+        layer.handle = doc.allocate_handle();
+        doc.layers.add(layer).unwrap();
+    }
+    let outer = room_test_block(doc, "Plan");
+    let wall = room_test_block(doc, "Enclosure");
+    let mut rectangle = room_test_rectangle(0.0, 0.0, 10.0, 8.0);
+    rectangle.common_mut().owner_handle = wall;
+    doc.add_entity(rectangle).unwrap();
+    let mut enclosure = Insert::new("Enclosure", Vector3::ZERO);
+    enclosure.common.layer = "Walls".into();
+    enclosure.common.owner_handle = outer;
+    doc.add_entity(EntityType::Insert(enclosure)).unwrap();
+    for grid in [false, true] {
+        let name = if grid {
+            "Grid array"
+        } else {
+            "Reference array"
+        };
+        let noise = room_test_block(doc, name);
+        let mut line = Line::from_coords(5.0, 0.0, 0.0, 5.0, 8.0, 0.0);
+        line.common.owner_handle = noise;
+        line.common.layer = if grid { "Walls" } else { "Reference" }.into();
+        doc.add_entity(EntityType::Line(line)).unwrap();
+        let mut array = Insert::new(name, Vector3::ZERO);
+        array.common.owner_handle = outer;
+        array.common.layer = "Container".into();
+        array.column_count = 1024;
+        array.row_count = 1024;
+        if grid {
+            array
+                .common
+                .extended_data
+                .upsert_record(opencadcodec::xdata::ExtendedDataRecord::new("QIYAS_GRID"));
+        }
+        doc.add_entity(EntityType::Insert(array)).unwrap();
+    }
+    let notes = room_test_block(doc, "Notes");
+    let mut text = opencadcodec::Text::new();
+    text.common.owner_handle = notes;
+    text.value = "Note".into();
+    text.height = 1.0;
+    doc.add_entity(EntityType::Text(text)).unwrap();
+    let mut notes = Insert::new("Notes", Vector3::ZERO);
+    notes.common.owner_handle = outer;
+    notes.common.layer = "Walls".into();
+    notes.column_count = 1024;
+    notes.row_count = 1024;
+    doc.add_entity(EntityType::Insert(notes)).unwrap();
+    let mut plan = Insert::new("Plan", Vector3::new(30.0, 50.0, 0.0));
+    plan.common.layer = "Container".into();
+    doc.add_entity(EntityType::Insert(plan)).unwrap();
+    for policy in [
+        json!({"exclude_layers":["Reference"]}),
+        json!({"boundary_layers":["Walls"]}),
+        json!({"boundary_layers":["Walls","Reference"],"exclude_layers":["Reference"]}),
+    ] {
+        let mut query = policy;
+        query["seeds"] = json!([{"point":[32.0,52.0]}]);
+        let Outcome::Rooms { report } = run(&mut session, json!({"type":"rooms","query":query}))
+        else {
+            panic!("rooms");
+        };
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(report.rooms[0].net_area_m2, 80.0);
+    }
+}
+
+#[test]
+fn space_check_uses_the_same_layer_policy_for_area_and_polygon_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("space-policy.dxf"), 6);
+    run(
+        &mut session,
+        json!({"type":"batch","layer":"Walls","commands":[{"type":"draw","kind":"rectangle","a":[0,0],"b":[10,8]}]}),
+    );
+    run(
+        &mut session,
+        json!({"type":"batch","layer":"Reference","commands":[{"type":"draw","kind":"line","a":[5,0],"b":[5,8]}]}),
+    );
+    run(
+        &mut session,
+        json!({"type":"text","at":[2,2],"height":0.1,"value":"Space"}),
+    );
+    for policy in [
+        json!({"exclude_layers":["Reference"]}),
+        json!({"boundary_layers":["Walls"]}),
+    ] {
+        let mut floor = policy;
+        floor["name"] = json!("Floor");
+        let Outcome::Measurement { result } =
+            run(&mut session, json!({"type":"space_check","floors":[floor]}))
+        else {
+            panic!("space facts");
+        };
+        let space = &result["floors"][0]["spaces"][0];
+        assert_eq!(space["area_m2"], 80.0);
+        assert_eq!(space["perimeter_m"], 36.0);
+    }
+}
+
+#[test]
+fn room_refusal_keeps_budget_details_in_the_public_english_and_arabic_report() {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{EntityType, Vector3};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("recursive-room.dxf"), 6);
+    let doc = &mut session.drawing.doc;
+    let owner = room_test_block(doc, "Recursive block");
+    let mut nested = Insert::new("Recursive block", Vector3::ZERO);
+    nested.common.owner_handle = owner;
+    doc.add_entity(EntityType::Insert(nested)).unwrap();
+    doc.add_entity(EntityType::Insert(Insert::new(
+        "Recursive block",
+        Vector3::ZERO,
+    )))
+    .unwrap();
+    let Outcome::Rooms { report } = run(
+        &mut session,
+        json!({"type":"rooms","query":{"seeds":[{"point":[0,0]}]}}),
+    ) else {
+        panic!("rooms");
+    };
+    assert!(report.rooms.is_empty());
+    assert_eq!(report.skipped.len(), 1);
+    let skipped = &report.skipped[0];
+    assert!(skipped.reason.contains("block nesting depth"));
+    assert!(skipped.reason.contains("33, limit 32"));
+    assert!(skipped.reason.contains("Recursive block"));
+    assert!(skipped.reason_ar.contains("عمق تداخل الكتل"));
+    assert!(skipped.reason_ar.contains("Recursive block"));
+}
+
+#[test]
+fn a_local_room_in_a_later_block_array_cell_keeps_exact_circular_area() {
+    use opencadcodec::entities::Insert;
+    use opencadcodec::{Circle, EntityType, Vector3};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("round-array.dxf"), 6);
+    let doc = &mut session.drawing.doc;
+    let owner = room_test_block(doc, "Round enclosure");
+    let mut circle = Circle::from_center_radius(Vector3::ZERO, 2.0);
+    circle.common.owner_handle = owner;
+    doc.add_entity(EntityType::Circle(circle)).unwrap();
+    let mut array = Insert::new("Round enclosure", Vector3::new(25.0, 50.0, 0.0));
+    array.column_count = 2;
+    array.column_spacing = 10.0;
+    doc.add_entity(EntityType::Insert(array)).unwrap();
+    let Outcome::Rooms { report } = run(
+        &mut session,
+        json!({"type":"rooms","query":{"seeds":[{"point":[35,50]}]}}),
+    ) else {
+        panic!("rooms");
+    };
+    assert!(report.skipped.is_empty());
+    assert_eq!(report.rooms.len(), 1);
+    assert_eq!(report.rooms[0].net_area_m2, 12.566371);
+}

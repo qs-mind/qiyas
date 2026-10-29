@@ -25,6 +25,9 @@ pub const COMMENT_LAYER: &str = "COMMENTS";
 
 const CLOUD: i16 = 1;
 const LABEL: i16 = 2;
+const TRIANGLE: i16 = 3;
+const INNER_CONTOUR: i16 = 4;
+const REVISION_PARTS_APP: &str = "QIYAS_REVISION_PARTS";
 
 /// A comment cloud on a sheet (`Outcome::Comments`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -88,7 +91,9 @@ impl Session {
         points: Vec<[f64; 2]>,
         text: &str,
         arc_len: Option<f64>,
+        layer: Option<&str>,
     ) -> Result<Vec<u64>, CoreError> {
+        let layer = layer.unwrap_or(COMMENT_LAYER);
         let text = text.trim();
         if text.is_empty() {
             return Err(invalid("Type the comment"));
@@ -121,11 +126,11 @@ impl Session {
         let current = std::mem::replace(
             &mut self.current,
             Current {
-                layer: COMMENT_LAYER.to_string(),
+                layer: layer.to_string(),
                 ..Current::default()
             },
         );
-        self.ensure_layer(COMMENT_LAYER, Color::Index(1));
+        self.ensure_layer(layer, Color::Index(1));
         let added = self
             .mtext_entity(
                 opencadcodec::Vector3::new(at[0], at[1], 0.0),
@@ -140,6 +145,156 @@ impl Session {
             });
         self.current = current;
         added
+    }
+
+    /// Revision annotations use paper sizes only. The triangle shares comment provenance,
+    /// so comparisons ignore it and replacing a report can remove all three parts together.
+    pub(crate) fn add_revision_cloud(
+        &mut self,
+        points: Vec<[f64; 2]>,
+        holes: Vec<Vec<[f64; 2]>>,
+        revision: &str,
+        layer: &str,
+    ) -> Result<Vec<u64>, CoreError> {
+        let height = self.paper_distance(2.5);
+        let radius = height * (revision.chars().count() as f64 + 2.0).max(4.0) / 2.0;
+        let arc_len = self.paper_distance(3.0);
+        let [_, corner] = crate::query::bounds(&points);
+        let centre = [corner[0] + arc_len + radius, corner[1]];
+        let mut cloud = self
+            .draw_entities(DrawSpec::RevCloud {
+                points: points.into(),
+                arc_len: Some(arc_len),
+            })?
+            .remove(0);
+        let mut triangle = self
+            .draw_entities(DrawSpec::Polygon {
+                centre,
+                sides: 3,
+                radius,
+                inscribed: true,
+            })?
+            .remove(0);
+        let mut label = self.mtext_entity(
+            opencadcodec::Vector3::new(centre[0], centre[1], 0.0),
+            0.0,
+            height,
+            revision,
+            None,
+        )?;
+        if let EntityType::MText(t) = &mut label {
+            t.attachment_point = opencadcodec::entities::AttachmentPoint::MiddleCenter;
+        }
+        self.register_comment_app();
+        let id = format!("C{:X}", self.drawing.doc.next_handle());
+        mark(cloud.common_mut(), CLOUD, &id, Some(revision));
+        mark(label.common_mut(), LABEL, &id, None);
+        mark(triangle.common_mut(), TRIANGLE, &id, None);
+        let mut entities = vec![cloud, label, triangle];
+        for hole in holes {
+            let mut contour = self
+                .draw_entities(DrawSpec::RevCloud {
+                    points: hole.into(),
+                    arc_len: Some(arc_len),
+                })?
+                .remove(0);
+            if let EntityType::LwPolyline(p) = &mut contour {
+                for vertex in &mut p.vertices {
+                    vertex.bulge = -vertex.bulge;
+                }
+            }
+            // A hole excludes unchanged geometry. It is a contour of the outer cloud,
+            // not another changed element with a revision triangle of its own.
+            mark(contour.common_mut(), INNER_CONTOUR, &id, None);
+            entities.push(contour);
+        }
+        let current = std::mem::replace(
+            &mut self.current,
+            Current {
+                layer: layer.into(),
+                ..Current::default()
+            },
+        );
+        let added = self.add_styled(entities);
+        self.current = current;
+        let added = added?;
+        let app = crate::xdata::register(&mut self.drawing.doc, REVISION_PARTS_APP);
+        crate::xdata::write_json(
+            self.drawing
+                .doc
+                .get_entity_mut(opencadcodec::Handle::new(added[0]))
+                .expect("revision cloud")
+                .common_mut(),
+            REVISION_PARTS_APP,
+            app,
+            &(added[0], added.clone()),
+        )?;
+        Ok(added)
+    }
+
+    pub(crate) fn revision_comment_parts(&self, comment: &CommentInfo) -> Vec<u64> {
+        if let Some((owner, parts)) = self
+            .drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(comment.handle))
+            .and_then(|e| {
+                crate::xdata::read_json::<(u64, Vec<u64>)>(e.common(), REVISION_PARTS_APP)
+            })
+        {
+            if owner == comment.handle {
+                return parts
+                    .into_iter()
+                    .filter(|h| {
+                        self.drawing
+                            .doc
+                            .get_entity(opencadcodec::Handle::new(*h))
+                            .and_then(|e| comment_part(e.common()))
+                            .is_some_and(|(_, id, _)| id == comment.id)
+                    })
+                    .collect();
+            }
+        }
+        let mut parts: Vec<_> = std::iter::once(comment.handle)
+            .chain(comment.label)
+            .collect();
+        let centre = comment
+            .label
+            .and_then(|h| self.drawing.doc.get_entity(opencadcodec::Handle::new(h)))
+            .and_then(|e| match e {
+                EntityType::MText(t) => Some([t.insertion_point.x, t.insertion_point.y]),
+                _ => None,
+            })
+            .unwrap_or(comment.bounds[1]);
+        // Copies share comment IDs. Remove only the nearest triangle belonging to this
+        // cloud/label pair, not every comment a user copied from the same revision marker.
+        let triangle = self
+            .drawing
+            .doc
+            .entities_in_block(&comment.sheet)
+            .filter_map(|e| {
+                let (kind, id, _) = comment_part(e.common())?;
+                if kind != TRIANGLE || id != comment.id {
+                    return None;
+                }
+                let EntityType::LwPolyline(p) = e else {
+                    return None;
+                };
+                if p.vertices.is_empty() {
+                    return None;
+                }
+                let n = p.vertices.len() as f64;
+                let x = p.vertices.iter().map(|v| v.location.x).sum::<f64>() / n;
+                let y = p.vertices.iter().map(|v| v.location.y).sum::<f64>() / n;
+                Some((
+                    e.common().handle.value(),
+                    (x - centre[0]).hypot(y - centre[1]),
+                ))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((h, _)) = triangle {
+            parts.push(h);
+        }
+        parts
     }
 
     fn register_comment_app(&mut self) {

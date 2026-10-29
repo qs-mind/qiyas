@@ -43,8 +43,8 @@ export const QUICK_ACCESS: RibbonButton[] = [action("new"), action("open"), acti
 
 /** The ribbon Qiyas ships: the same as the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`);
  *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`).
- *  Measure first, then Draw (the tab with id "home"), then Annotate; `Ribbon.tsx` shows those
- *  three and puts the rest of the tabs under "More". New, Open, Save, Save as, Undo and Redo are not
+ *  Measure first, then Draw (the tab with id "home"), then Annotate; `Ribbon.tsx` shows the
+ *  tabs that fit and puts the remainder under "More". New, Open, Save, Save as, Undo and Redo are not
  *  in it: `Ribbon.tsx` keeps them in the quick-access bar beside the tabs. */
 export const DEFAULT_RIBBON: RibbonLayout = {
   tabs: [
@@ -267,4 +267,13 @@ export function layoutOf(tree: EditTab[]): RibbonLayout | null {
     }))
     .filter((t) => t.groups.length > 0);
   return tabs.length > 0 ? { tabs } : null;
+}
+
+/** Number of tabs that fit, reserving More only when at least one tab overflows. */
+export function fittingTabs(widths: readonly number[], available: number, moreWidth: number, gap = 2): number {
+  const width = (count: number) => widths.slice(0, count).reduce((sum, value) => sum + value, 0) + Math.max(0, count - 1) * gap;
+  if (width(widths.length) <= available) return widths.length;
+  let count = widths.length - 1;
+  while (count > 0 && width(count) + gap + moreWidth > available) count--;
+  return Math.max(0, count);
 }

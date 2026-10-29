@@ -111,6 +111,7 @@ impl Session {
                         .map(|h| crate::measurement::NamedSource {
                             name: format!("{h}"),
                             source: crate::measurement::PropSource {
+                                decision: None,
                                 kind: crate::measurement::SourceKind::Measured,
                                 handle: Some(*h),
                                 text: String::new(),

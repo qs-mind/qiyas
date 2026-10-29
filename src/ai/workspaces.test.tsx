@@ -7,12 +7,22 @@ import { useAssistant } from "./useAssistant";
 const core = vi.hoisted(() => ({
   snapshots: new Map<number, unknown>(),
   listeners: new Set<(event: { payload: unknown }) => void>(),
+  chats: [] as { id: string; drawing: string; updated: number }[],
+  paths: new Map<number, string>(),
   calls: [] as { command: string; args?: Record<string, unknown> }[],
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string, args?: Record<string, unknown>) => {
   core.calls.push({ command, args });
   if (command === "workspace_attach") return core.snapshots.get(Number(args?.workspace ?? 0));
-  if (command === "ai_resume") return { transcript: [], drawing: "second.dxf" };
+  if (command === "drawing_info") return { path: core.paths.get(Number(args?.workspace)) };
+  if (command === "ai_conversations") return core.chats;
+  if (command === "ai_resume") {
+    const transcript = [{ type: "user", text: String(args?.id), pointed: [], images: [] }];
+    const workspace = Number(args?.workspace);
+    const previous = core.snapshots.get(workspace) as WorkspaceSnapshot;
+    if (previous) core.snapshots.set(workspace, { ...previous, transcript, status: "done" });
+    return { transcript, drawing: core.paths.get(workspace) ?? "second.dxf" };
+  }
   if (command === "ai_status") return { busy: true, provider: "mock", model: "mock", has_key: true, message_count: 1 };
   return null;
 }) }));
@@ -31,7 +41,7 @@ function snapshot(workspace: number, text: string, status = "working"): Workspac
 }
 function emit(event: WorkspaceEvent) { core.listeners.forEach(callback => callback({ payload: event })); }
 beforeEach(() => {
-  core.snapshots.clear(); core.calls = []; core.listeners.clear(); setWorkspace(null); vi.clearAllMocks();
+  core.chats = []; core.paths.clear(); core.snapshots.clear(); core.calls = []; core.listeners.clear(); setWorkspace(null); vi.clearAllMocks();
   core.snapshots.set(1, snapshot(1, "First drawing"));
   core.snapshots.set(2, snapshot(2, "Second drawing", "queued"));
 });
@@ -83,4 +93,31 @@ test("history resumes in the drawing it opened before React receives the new tab
     { command: "ai_resume", args: { id: "second-chat", workspace: 2 } },
   ]);
   expect(JSON.stringify(result.current.transcript)).toContain("First drawing");
+});
+
+
+test.each(["/jobs/named.dwg", "/autosaves/Untitled-1.dwg"])("opening %s restores its latest saved chat without another click", async (path) => {
+  core.paths.set(1, path);
+  core.chats = [{ id: "older", drawing: path, updated: 1 }, { id: "latest", drawing: path, updated: 3 },
+    { id: "unrelated", drawing: "/jobs/other.dwg", updated: 9 }];
+  core.snapshots.set(1, { ...snapshot(1, "", "idle"), transcript: [] });
+  const { result } = renderHook(() => useAssistant({ workspace: 1, lang: "en", ...callbacks }));
+  await waitFor(() => expect(result.current.transcript.items).toEqual([{ kind: "user", text: "latest", pointed: [], images: [] }]));
+  expect(core.calls.filter(call => call.command === "ai_resume")).toEqual([
+    { command: "ai_resume", args: { id: "latest", workspace: 1 } },
+  ]);
+});
+
+test("returning to an intentionally empty chat does not restore its saved predecessor", async () => {
+  core.paths.set(1, "/jobs/first.dwg");
+  const hook = renderHook(({ workspace }) => useAssistant({ workspace, lang: "en", ...callbacks }), { initialProps: { workspace: 1 } });
+  await waitFor(() => expect(hook.result.current.choice?.model).toBe("model-1"));
+  act(() => hook.result.current.clear());
+  core.snapshots.set(1, { ...snapshot(1, "", "idle"), transcript: [] });
+  core.chats = [{ id: "previous", drawing: "/jobs/first.dwg", updated: 1 }];
+  hook.rerender({ workspace: 2 });
+  await waitFor(() => expect(hook.result.current.choice?.model).toBe("model-2"));
+  hook.rerender({ workspace: 1 });
+  await waitFor(() => expect(hook.result.current.transcript.items).toEqual([]));
+  expect(core.calls.some(call => call.command === "ai_resume")).toBe(false);
 });

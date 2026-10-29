@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use ab_glyph::{Font as _, GlyphId, Point};
 use opencadcodec::entities::mtext_format::parse_mtext;
@@ -210,6 +211,19 @@ impl TextEngine {
     }
 
     fn shape_uncached(&mut self, chain: &[u16], text: &str, arabic_reversed: bool) -> ShapedLine {
+        self.shape_range(chain, text, 0..text.len(), arabic_reversed)
+    }
+
+    /// Resolve directional levels for the whole paragraph before applying line reordering.
+    /// Clusters remain offsets in the visible line, including when number isolates are used.
+    fn shape_range(
+        &mut self,
+        chain: &[u16],
+        paragraph: &str,
+        range: Range<usize>,
+        arabic_reversed: bool,
+    ) -> ShapedLine {
+        let text = &paragraph[range.clone()];
         let mut line = ShapedLine::default();
         if text.is_empty() {
             return line;
@@ -229,25 +243,21 @@ impl TextEngine {
                     pen = self.shape_piece(font, part, at, piece.rtl, pen, &mut line.glyphs);
                 }
             }
-        } else if !text.chars().any(is_rtl_char) {
+        } else if !paragraph.chars().any(is_rtl_char) {
             for (font, range) in self.itemize(chain, text, None) {
                 let at = range.start;
                 pen = self.shape_piece(font, &text[range], at, false, pen, &mut line.glyphs);
             }
         } else {
-            let bidi = unicode_bidi::ParagraphBidiInfo::new(text, None);
-            let (levels, runs) = bidi.visual_runs(0..text.len());
-            for run in runs {
-                let rtl = levels[run.start].is_rtl();
-                let part = &text[run.clone()];
+            for (run, rtl) in logical_runs(paragraph, range.clone()) {
+                let part = &paragraph[run.clone()];
                 let mut pieces = self.itemize(chain, part, None);
-                // Right to left, the piece read last is drawn first.
                 if rtl {
                     pieces.reverse();
                 }
-                for (font, range) in pieces {
-                    let at = run.start + range.start;
-                    pen = self.shape_piece(font, &part[range], at, rtl, pen, &mut line.glyphs);
+                for (font, piece) in pieces {
+                    let at = run.start - range.start + piece.start;
+                    pen = self.shape_piece(font, &part[piece], at, rtl, pen, &mut line.glyphs);
                 }
             }
         }
@@ -460,9 +470,14 @@ impl TextEngine {
                 let wrap = (width > 0.0).then_some(width / height);
                 let mut lines = Vec::new();
                 for paragraph in plain.split('\n') {
-                    for line in self.wrap(&style.chain, paragraph, wrap, arabic_reversed) {
-                        let shaped = self.shape_line(&style.chain, &line, arabic_reversed);
-                        lines.push((line, shaped));
+                    for range in self.wrap(&style.chain, paragraph, wrap, arabic_reversed) {
+                        let shaped = self.shape_range(
+                            &style.chain,
+                            paragraph,
+                            range.clone(),
+                            arabic_reversed,
+                        );
+                        lines.push((paragraph[range].to_string(), shaped));
                     }
                 }
                 let factor = if line_spacing > 0.0 {
@@ -526,58 +541,52 @@ impl TextEngine {
         paragraph: &str,
         width: Option<f64>,
         arabic_reversed: bool,
-    ) -> Vec<String> {
+    ) -> Vec<Range<usize>> {
         let Some(width) = width else {
-            return vec![paragraph.to_string()];
+            #[allow(clippy::single_range_in_vec_init)]
+            return vec![0..paragraph.len()];
         };
-        let space = f64::from(self.shape_line(chain, " ", false).width);
-        let mut lines: Vec<String> = Vec::new();
-        let mut current = String::new();
+        let mut lines = Vec::new();
+        // Keep source byte offsets for bidi clusters while ignoring leading ASCII spaces.
+        let start = paragraph.len() - paragraph.trim_start_matches(' ').len();
+        let mut first = start;
+        let mut previous = start;
         let mut used = 0.0;
-        let mut start = 0;
-        let mut separator = "";
-        for (end, opportunity) in unicode_linebreak::linebreaks(paragraph) {
-            let span = &paragraph[start..end];
-            start = end;
+        let space = f64::from(self.shape_line(chain, " ", false).width);
+        for (offset, opportunity) in unicode_linebreak::linebreaks(&paragraph[start..]) {
+            let end = start + offset;
+            let span = &paragraph[previous..end];
             let hard = span.ends_with([
                 '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
             ]);
-            let span = span.trim_end_matches([
-                '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
-            ]);
-            let word = span.trim_end_matches(' ');
-            let spaces = span.len() - word.len();
-            let w = f64::from(self.shape_line(chain, word, arabic_reversed).width);
-            let gap = if separator.is_empty() { 0.0 } else { space };
-            if !current.is_empty() && used + gap + w > width {
-                lines.push(std::mem::take(&mut current));
+            let visible_end = previous
+                + span
+                    .trim_end_matches([
+                        '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
+                    ])
+                    .len();
+            let word_end = previous + paragraph[previous..visible_end].trim_end_matches(' ').len();
+            let w = f64::from(
+                self.shape_line(chain, &paragraph[previous..word_end], arabic_reversed)
+                    .width,
+            );
+            if previous > first && used + w > width {
+                let trimmed_end = first + paragraph[first..previous].trim_end_matches(' ').len();
+                lines.push(first..trimmed_end);
+                first = previous;
                 used = 0.0;
             }
-            if !current.is_empty() {
-                current.push_str(separator);
-                used += gap;
-            }
-            current.push_str(word);
-            used += w;
-            // Retain CAD's ASCII-space advances, including repeated and trailing spaces.
-            for _ in 0..spaces.saturating_sub(usize::from(end < paragraph.len() && !hard)) {
-                if !current.is_empty() && used + space > width {
-                    lines.push(std::mem::take(&mut current));
-                    used = 0.0;
-                }
-                if !current.is_empty() {
-                    current.push(' ');
-                    used += space;
-                }
-            }
-            separator = if spaces > 0 { " " } else { "" };
+            used += w + (visible_end - word_end) as f64 * space;
             if hard && opportunity == unicode_linebreak::BreakOpportunity::Mandatory {
-                lines.push(std::mem::take(&mut current));
+                lines.push(first..visible_end);
+                first = end;
                 used = 0.0;
-                separator = "";
             }
+            previous = end;
         }
-        lines.push(current);
+        if first < paragraph.len() || lines.is_empty() {
+            lines.push(first..paragraph.len());
+        }
         lines
     }
 
@@ -757,6 +766,72 @@ pub fn decode_codes(value: &str) -> Cow<'_, str> {
         }
     }
     Cow::Owned(out)
+}
+
+/// Visual runs in original UTF-8 coordinates. Treat a leading numbered-note marker as
+/// an LTR isolate, so "5." stays one marker at the paragraph's reading start. The paragraph
+/// base direction still comes from the first strong character of the authored text.
+fn logical_runs(text: &str, line: Range<usize>) -> Vec<(Range<usize>, bool)> {
+    if line.is_empty() {
+        return Vec::new();
+    }
+    let plain = unicode_bidi::ParagraphBidiInfo::new(text, None);
+    let base = plain.paragraph_level;
+    let digits = text
+        .chars()
+        .take_while(|c| is_digit(*c))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let prefix = if digits > 0
+        && text[digits..].starts_with('.')
+        && text[digits + 1..].starts_with(char::is_whitespace)
+    {
+        digits + 1
+    } else {
+        0
+    };
+    if prefix == 0 {
+        let (levels, runs) = plain.visual_runs(line);
+        return runs
+            .into_iter()
+            .map(|r| {
+                let rtl = levels[r.start].is_rtl();
+                (r, rtl)
+            })
+            .collect();
+    }
+    let isolated = format!("\u{2066}{}\u{2069}{}", &text[..prefix], &text[prefix..]);
+    let bidi = unicode_bidi::ParagraphBidiInfo::new(&isolated, Some(base));
+    let start = if line.start == 0 {
+        0
+    } else if line.start < prefix {
+        line.start + 3
+    } else {
+        line.start + 6
+    };
+    let end = if line.end < prefix {
+        line.end + 3
+    } else {
+        line.end + 6
+    };
+    let (levels, runs) = bidi.visual_runs(start..end);
+    let mut result = Vec::new();
+    for run in runs {
+        let rtl = levels[run.start].is_rtl();
+        let mut pieces = Vec::new();
+        for (source, shift) in [(3..prefix + 3, 3), (prefix + 6..isolated.len(), 6)] {
+            let from = run.start.max(source.start);
+            let to = run.end.min(source.end);
+            if from < to {
+                pieces.push((from - shift..to - shift, rtl));
+            }
+        }
+        if rtl {
+            pieces.reverse();
+        }
+        result.extend(pieces);
+    }
+    result
 }
 
 /// Arabic script and its explicitly shared marks and signs.
@@ -1145,5 +1220,122 @@ mod tests {
         assert_eq!(size_bucket(9.0), 1);
         assert_eq!(size_bucket(100.0), 8);
         assert_eq!(size_bucket(1000.0), 8);
+    }
+}
+
+#[cfg(test)]
+mod annotation_bidi_tests {
+    use super::*;
+    use crate::fonts::DEFAULT_CHAIN;
+
+    fn x(line: &ShapedLine, cluster: usize) -> f32 {
+        line.glyphs
+            .iter()
+            .find(|g| g.cluster as usize == cluster)
+            .expect("glyph cluster")
+            .x
+    }
+
+    #[test]
+    fn shop_label_keeps_latin_digits_and_arabic_in_logical_order() {
+        let mut engine = TextEngine::bundled_only();
+        let text = "Shop 04 / متجر";
+        let line = engine.shape_line(&DEFAULT_CHAIN, text, false);
+        assert!(x(&line, 0) < x(&line, 5));
+        assert!(x(&line, 5) < x(&line, 6), "04 must not become 40");
+        assert!(x(&line, 6) < x(&line, text.find('م').unwrap()));
+        assert!(x(&line, text.find('ر').unwrap()) < x(&line, text.find('م').unwrap()));
+    }
+
+    #[test]
+    fn wrapped_label_uses_the_first_strong_character_of_the_whole_paragraph() {
+        let mut engine = TextEngine::bundled_only();
+        let text = "Shop 04 / متجر / A12";
+        let start = text.find('م').unwrap();
+        let line = engine.shape_range(&DEFAULT_CHAIN, text, start..text.len(), false);
+        let latin = text.find('A').unwrap() - start;
+        assert!(
+            x(&line, 0) < x(&line, latin),
+            "Arabic continuation retains the Latin paragraph direction"
+        );
+        assert!(x(&line, latin + 1) < x(&line, latin + 2));
+        let width = f64::from(engine.shape_line(&DEFAULT_CHAIN, "Shop 04 /", false).width) + 0.01;
+        let ranges = engine.wrap(&DEFAULT_CHAIN, text, Some(width), false);
+        assert!(ranges.len() > 1);
+        for range in ranges {
+            let line = engine.shape_range(&DEFAULT_CHAIN, text, range.clone(), false);
+            assert!(line
+                .glyphs
+                .iter()
+                .all(|g| (g.cluster as usize) < range.len()));
+        }
+    }
+
+    #[test]
+    fn rtl_numbered_note_keeps_its_ltr_marker_at_the_reading_start() {
+        let mut engine = TextEngine::bundled_only();
+        for text in ["5. ملاحظة", "15. ملاحظة:", "٥. ملاحظة"] {
+            let line = engine.shape_line(&DEFAULT_CHAIN, text, false);
+            let dot = text.find('.').unwrap();
+            let arabic = text.find('م').unwrap();
+            assert!(
+                x(&line, 0) < x(&line, dot),
+                "number and dot stay in authored order: {text}"
+            );
+            assert!(
+                x(&line, 0) > x(&line, arabic),
+                "marker is at the RTL reading start: {text}"
+            );
+        }
+        // Already-authored punctuation is not silently rewritten. The audit's literal
+        // malformed string still goes through bidi with all source clusters retained.
+        let text = ".5 ملاحظة:";
+        let line = engine.shape_line(&DEFAULT_CHAIN, text, false);
+        assert!(line.glyphs.iter().any(|g| g.cluster == 0));
+        assert!(line.glyphs.iter().any(|g| g.cluster == 1));
+        assert!(x(&line, 1) > x(&line, text.find('م').unwrap()));
+    }
+
+    #[test]
+    fn mixed_mtext_layout_preserves_source_clusters_when_wrapped_and_reversal_is_on() {
+        let mut engine = TextEngine::bundled_only();
+        for value in ["Shop 04 / متجر", "5. ملاحظة:", ".5 ملاحظة:"] {
+            let flat = FlatText {
+                value: value.into(),
+                style: "Standard".into(),
+                height: 1.0,
+                layout: TextLayout::Block {
+                    insertion: [0.0, 0.0],
+                    rotation: 0.0,
+                    width: 7.0,
+                    attachment: 1,
+                    line_spacing: 1.0,
+                },
+                xf: Xform::identity(),
+                logical: true,
+            };
+            let normal = engine
+                .lay_out_text(&CadDocument::new(), &XrefDocs::new(), &flat, false)
+                .unwrap();
+            let reversed = engine
+                .lay_out_text(&CadDocument::new(), &XrefDocs::new(), &flat, true)
+                .unwrap();
+            assert_eq!(normal.text, reversed.text);
+            let signatures = |laid: &Laid| {
+                laid.glyphs
+                    .iter()
+                    .map(|g| (g.cluster, g.glyph, g.x, g.y))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(signatures(&normal), signatures(&reversed));
+            assert!(normal
+                .glyphs
+                .iter()
+                .all(|g| normal.text.is_char_boundary(g.cluster as usize)));
+            assert_eq!(
+                normal.text.split_whitespace().collect::<Vec<_>>(),
+                value.split_whitespace().collect::<Vec<_>>()
+            );
+        }
     }
 }

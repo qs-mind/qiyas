@@ -1124,5 +1124,10 @@ fn extraction_source(
             (SourceKind::Measured, String::new())
         }
     };
-    PropSource { kind, handle, text }
+    PropSource {
+        kind,
+        handle,
+        text,
+        decision: None,
+    }
 }

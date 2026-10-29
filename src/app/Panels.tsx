@@ -221,7 +221,7 @@ export function WorkArea({
       />
       <div className="views">
         <CanvasMenu
-          box={<div className="viewport" ref={viewportBox} tabIndex={0} />}
+          box={<div className="viewport" data-drawing-interaction ref={viewportBox} tabIndex={0} />}
           hasDrawing={info !== null}
           onTool={chooseTool}
           onProperties={onProperties}

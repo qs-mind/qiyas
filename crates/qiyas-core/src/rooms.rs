@@ -103,7 +103,8 @@ pub struct RoomRow {
 pub struct SkippedRoom {
     pub text: String,
     pub point: [f64; 2],
-    pub reason: &'static str,
+    pub reason: String,
+    pub reason_ar: String,
 }
 
 /// What `rooms` found.
@@ -476,7 +477,8 @@ impl Session {
                 skipped.push(SkippedRoom {
                     text,
                     point: row.at,
-                    reason: "looks like an area or a number, not a room name",
+                    reason: "looks like an area or a number, not a room name".into(),
+                    reason_ar: "يبدو مساحة أو رقما وليس اسم فراغ".into(),
                 });
                 continue;
             }
@@ -555,19 +557,19 @@ impl Session {
         let mut rooms: Vec<Room> = Vec::new();
         for seed in seeds {
             let mut found = None;
-            let mut dense = false;
+            let mut dense = None;
             for &p in &seed.tries {
-                match self.room_boundary_in(&self.sheet, p, &q.boundary_layers) {
-                    Boundary::Ring {
+                match self.room_boundary_detailed_in(&self.sheet, p, &q.boundary_layers) {
+                    Ok(Boundary::Ring {
                         ring,
                         holes,
                         bulges,
-                    } => {
+                    }) => {
                         found = Some((p, ring, holes, bulges));
                         break;
                     }
-                    Boundary::TooDense => dense = true,
-                    Boundary::None => {}
+                    Err(budget) => dense = Some(budget),
+                    Ok(_) => {}
                 }
             }
             let label = seed.name.clone().unwrap_or_default();
@@ -575,11 +577,12 @@ impl Session {
                 skipped.push(SkippedRoom {
                     text: label,
                     point: seed.tries[0],
-                    reason: if dense {
-                        "too much line work round it to look through"
-                    } else {
-                        "it sits in no closed space"
-                    },
+                    reason: dense.as_ref().map_or_else(
+                        || "it sits in no closed space".into(),
+                        |budget| budget.reason.clone(),
+                    ),
+                    reason_ar: dense
+                        .map_or_else(|| "لا يقع داخل فراغ مغلق".into(), |budget| budget.reason_ar),
                 });
                 continue;
             };

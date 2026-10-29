@@ -604,11 +604,7 @@ fn takeoff_export_reports_manual_generated_and_dimension_rows() {
     let kit = call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
     run_kit(&mut s, &kit);
     let report = s.measurement_report().unwrap();
-    let generated = report
-        .items
-        .iter()
-        .filter(|item| !item.second_differs())
-        .count();
+    let generated = report.items.len();
     let lines: usize = report
         .items
         .iter()
@@ -626,14 +622,16 @@ fn takeoff_export_reports_manual_generated_and_dimension_rows() {
     assert_eq!(written["manual_rows"], 0);
     assert_eq!(written["generated_items"], generated);
     assert_eq!(written["dimension_lines"], lines);
+    let expected = if written["draft"] == true {
+        "DRAFT generated DRAFT.xlsx"
+    } else {
+        "generated DRAFT.xlsx"
+    };
     assert_eq!(
         written["written"],
-        dir.path()
-            .join("generated DRAFT.xlsx")
-            .to_string_lossy()
-            .as_ref()
+        dir.path().join(expected).to_string_lossy().as_ref()
     );
-    assert!(dir.path().join("generated DRAFT.xlsx").is_file());
+    assert!(dir.path().join(expected).is_file());
 }
 
 #[test]
@@ -987,7 +985,6 @@ fn plan_is_discoverable_validated_and_never_changes_the_drawing_or_undo() {
     for bad in [
         json!({"phases":[]}),
         json!({"phases":[{"id":"a","title":"A","status":"invalid"}]}),
-        json!({"phases":[{"id":"a","title":"A","status":"active"},{"id":"b","title":"B","status":"active"}]}),
         json!({"phases":[{"id":"a","title":"A","status":"done"},{"id":"a","title":"B","status":"pending"}]}),
     ] {
         assert!(surface::run_without_drawing(EXECUTE, "plan", &bad, None)
@@ -1076,8 +1073,8 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
             assert!(!events
                 .iter()
                 .any(|event| matches!(event, AgentEvent::AwaitingApproval { .. })));
-            // The finish gate sends the early ending back twice (phase two is still active).
-            assert_eq!(requests.lock().unwrap().len(), 5);
+            // The finish gate sends the early ending back once (phase two is still active).
+            assert_eq!(requests.lock().unwrap().len(), 4);
         } else {
             assert!(
                 matches!(events.last(), Some(AgentEvent::AwaitingApproval { plan }) if plan.phases.len() == 2)
@@ -1097,8 +1094,8 @@ async fn approval_modes_pause_at_the_job_and_phase_boundaries() {
                 assert_eq!(requests.lock().unwrap().len(), 2);
             } else {
                 assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
-                // The finish gate sends the early ending back twice (phase two is still active).
-                assert_eq!(requests.lock().unwrap().len(), 5);
+                // The finish gate sends the early ending back once (phase two is still active).
+                assert_eq!(requests.lock().unwrap().len(), 4);
             }
         }
     }
@@ -2391,11 +2388,11 @@ fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_the
             assert!(method["instruction"]
                 .as_str()
                 .unwrap()
-                .contains("Write rules from your knowledge"));
+                .contains("Never invent clause numbers"));
             assert!(method["instruction"]
                 .as_str()
                 .unwrap()
-                .contains("<standard> clause <n>"));
+                .contains("ask the engineer for the method text"));
         }
         if op == "takeoff_kit" {
             let bytes = serde_json::to_vec(&value).unwrap().len();
@@ -2449,7 +2446,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
         assert!(kit["measurement_method"]["instruction"]
             .as_str()
             .unwrap()
-            .contains("Write rules from your knowledge"));
+            .contains("Never invent clause numbers"));
         let index = request.messages.iter().flat_map(|m| &m.content).filter(|b| matches!(b, ContentBlock::ToolUse { name, input, .. } if name == EXECUTE && input["op"] == "batch")).count();
         let mut batch = kit["phases"][["recognition", "method", "mappings"][index]].clone();
         // This exercises transport with invented geometry and a visibly fictitious reference.
@@ -2522,7 +2519,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
     let requests = requests.lock().unwrap();
     assert!(format!("{:?}", requests[0].messages)
         .contains("Measurement method: POMI; rules loaded: false"));
-    assert!(format!("{:?}", requests[0].messages).contains("Write rules from your knowledge"));
+    assert!(format!("{:?}", requests[0].messages).contains("Never invent clause numbers"));
     let mut guard = session.lock().unwrap();
     let session = guard.as_mut().unwrap();
     let report = serde_json::to_value(session.measurement_report().unwrap()).unwrap();
@@ -2652,11 +2649,10 @@ async fn all_modes_allow_completion_and_attach_open_findings() {
 }
 
 #[tokio::test]
-async fn identical_ineffective_edits_advise_then_stop_only_the_sixth_attempt() {
+async fn identical_failed_edits_refuse_only_the_call_and_continue_the_turn() {
     for attempts in [3, 6] {
-        let (_dir, mut session) = sample();
-        let input = json!({"op":"run","args":{"command":{"type":"new_layer","name":"Repeated"}}});
-        call(&mut session, EXECUTE, input.clone()).unwrap();
+        let (_dir, session) = sample();
+        let input = json!({"op":"run","args":{"command":{"type":"not_a_command"}}});
         let requests = Arc::new(Mutex::new(Vec::new()));
         let mut calls = vec![(EXECUTE, input.clone())];
         calls.push((READ, json!({"op":"state"})));
@@ -2676,16 +2672,14 @@ async fn identical_ineffective_edits_advise_then_stop_only_the_sixth_attempt() {
                 "{results:?}"
             );
         }
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
         if attempts == 6 {
-            assert!(
-                matches!(events.last(),Some(AgentEvent::Stopped{reason}) if reason=="repeated_ineffective_edit")
-            );
-            assert!(events
+            assert!(results
                 .iter()
-                .any(|e| matches!(e,AgentEvent::Text{text} if text.contains("five times"))));
-            assert_eq!(requests.lock().unwrap().len(), 7);
-        } else {
-            assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+                .any(|(_, v)| v["code"] == "repeated_failing_call"
+                    && v["failed_attempts"] == 5
+                    && !v["previous_error"].is_null()));
+            assert_eq!(requests.lock().unwrap().len(), 8);
         }
     }
 }
@@ -2769,12 +2763,8 @@ async fn goal_d_budget_and_workflow_follow_the_job_and_chat_language() {
                 .collect();
             assert_eq!(notices.len(), 1);
             let notice = notices[0];
-            assert_eq!(
-                notice.contains("quantity work") || notice.contains("عمل الكميات"),
-                takeoff
-            );
-            assert_eq!(notice.contains("استُخدمت"), arabic);
-            assert!(notice.contains("not a reason to stop") || notice.contains("ليس سببًا للتوقف"));
+            assert_eq!(notice.contains("بلغ"), arabic);
+            assert!(!notice.contains("do not re-read"));
             // The original contract remains, after far more than three results.
             let contract = last.messages.iter().flat_map(|m| &m.content).find(|b| matches!(b,qiyas_ai::ContentBlock::ToolResult{tool_use_id,..} if tool_use_id == "call_0")).unwrap();
             assert!(serde_json::to_string(contract)
@@ -2945,20 +2935,45 @@ async fn goal_d_switching_jobs_preserves_requests_and_evidence() {
 #[tokio::test]
 async fn goal_d_interrupted_quantity_work_reports_in_the_chat_language() {
     let (_dir, session) = sample();
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let reads = (0..6)
-        .map(|_| (EXECUTE, json!({"op":"run","args":{"command":{"type":"set_property","target":{"handle":999999},"prop":"color","value":"red"}}})))
-        .collect();
+    // 2026-10-29-agent-loop-without-steering: failed calls no longer stop a turn.
+    // A provider limit is a real interruption; its app report belongs in Status.
+    struct Limited;
+    impl qiyas_ai::Provider for Limited {
+        fn stream_turn<'a>(
+            &'a self,
+            _: TurnRequest,
+            _: qiyas_ai::provider::Sink<'a>,
+        ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, qiyas_ai::AiError>>
+        {
+            Box::pin(async {
+                Ok(qiyas_ai::TurnResult {
+                    content: vec![],
+                    stop_reason: qiyas_ai::StopReason::Other("provider_budget_limit".into()),
+                    usage: Default::default(),
+                })
+            })
+        }
+    }
     let mut agent = Agent::new(
-        Box::new(Script::new(reads, requests)),
+        Box::new(Limited),
         Arc::new(Mutex::new(Some(session))),
         AgentSettings::default(),
     );
     let events = events_for(&mut agent, "احصر كميات المخطط").await;
+    assert!(
+        events.iter().any(|e| matches!(e,
+        AgentEvent::Status { kind, items, language: Lang::Ar }
+        if kind == "interrupted" && items.iter().any(|text| text.contains("ملخص العمل المتوقف:"))))
+    );
     assert!(events
         .iter()
-        .any(|e| matches!(e, AgentEvent::Text { text } if text.contains("ملخص العمل المتوقف:"))));
-    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Text { text } if text.contains("End report:") || text.contains("generated BOQ items"))));
+        .any(|e| matches!(e, AgentEvent::Stopped { reason } if reason == "provider_budget_limit")));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Status { items, .. }
+        if items.iter().any(|text| text.contains("End report:") || text.contains("generated BOQ items")))));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Text { text } if text.contains("ملخص العمل المتوقف:") || text.contains("End report:") || text.contains("generated BOQ items"))));
+    assert!(!serde_json::to_string(agent.history())
+        .unwrap()
+        .contains("ملخص العمل المتوقف:"));
 }
 
 #[test]
@@ -3161,7 +3176,10 @@ fn evidence_export_is_available_through_the_agent_surface_beside_the_boq() {
     let boq = call(&mut session, EXECUTE, json!({"op":"run","args":{"command":{
         "type":"deliverable.export","kind":"boq","format":"excel","path":"BOQ_DRAFT.xlsx","language":"ar"
     }}})).unwrap();
-    assert!(dir.path().join("BOQ_DRAFT.xlsx").is_file(), "{boq}");
+    assert!(
+        std::path::Path::new(boq["written"].as_str().unwrap()).is_file(),
+        "{boq}"
+    );
     let output = call(
         &mut session,
         EXECUTE,
@@ -3196,7 +3214,7 @@ fn quantity_plan(active: usize) -> Value {
 }
 
 #[tokio::test]
-async fn quantity_guard_refuses_mixed_batches_and_planless_edits_once() {
+async fn quantity_batches_and_planless_edits_run_with_advice() {
     let dir = tempfile::tempdir().unwrap();
     let session = Arc::new(Mutex::new(Some(Session::new_blank(
         &dir.path().join("Airport.dxf"),
@@ -3228,11 +3246,11 @@ async fn quantity_guard_refuses_mixed_batches_and_planless_edits_once() {
     );
     assert_eq!(
         messages
-            .matches("Split this take-off batch into phases")
+            .matches("This batch spans multiple quantity families")
             .count(),
         1
     );
-    assert_eq!(messages.matches("Before take-off edits").count(), 1);
+    assert_eq!(messages.matches("No plan has been posted").count(), 1);
     assert_eq!(
         session
             .lock()
@@ -3300,9 +3318,9 @@ async fn quantity_three_phases_generate_boq_and_continue_resumes_active_phase() 
         resumed.contains("phase-1: Method: inspect rules (Active)"),
         "{resumed}"
     );
-    assert!(resumed.contains("Resume the active phase first"));
+    assert!(resumed.contains("Resume the open scope from the conversation"));
     let messages = format!("{:?}", scripted::observed_messages(&requests));
-    assert!(!messages.contains("Before take-off edits"));
+    assert!(!messages.contains("No plan has been posted"));
     assert!(!messages.contains("phase_check_needed"));
     assert!(
         scripted::observed_messages(&requests)

@@ -78,7 +78,7 @@ pub(super) fn finding(
 
 impl Session {
     /// One query per generated item whose blind second reading differs from the first. The
-    /// item stays out of the BOQ until the engineer answers it (`resolve_conflict`).
+    /// item stays in the BOQ; the engineer can answer it with `resolve_conflict`.
     pub(crate) fn second_reading_conflicts(
         &self,
         report: &crate::measurement::MeasurementReport,
@@ -99,16 +99,16 @@ impl Session {
                 let read = item.second_reading.as_ref().expect("filtered");
                 let unit = crate::deliverables::display_unit(&item.unit);
                 let reason = format!(
-                    "{}: the first reading is {:.2} {unit} and the second, made without it, is {:.2} {unit} (allowed difference {}%)",
-                    item.description_en, read.first, read.second, read.tolerance_percent
+                    "{}: the first reading is {:.2} {unit} and the second, made without it, is {:.2} {unit} (allowed difference {}% + {} {unit})",
+                    item.description_en, read.first, read.second, read.tolerance_percent, read.tolerance_absolute
                 );
                 let reason_ar = format!(
-                    "{}: القراءة الأولى {:.2} {unit} والقراءة الثانية، دون الاطلاع عليها، {:.2} {unit} (الفرق المسموح {}%)",
-                    item.description_ar, read.first, read.second, read.tolerance_percent
+                    "{}: القراءة الأولى {:.2} {unit} والقراءة الثانية، دون الاطلاع عليها، {:.2} {unit} (الفرق المسموح {}% + {} {unit})",
+                    item.description_ar, read.first, read.second, read.tolerance_percent, read.tolerance_absolute
                 );
                 let mut c = finding(
                     ConflictKind::QuantityMismatch,
-                    &crate::second_reading::conflict_key(&item.code),
+                    &crate::second_reading::conflict_key(&item.code, &read.evidence_key),
                     reason,
                     reason_ar,
                 );
@@ -375,6 +375,7 @@ impl Session {
                                     [x0 - pad, y1 + pad],
                                 ],
                                 &text,
+                                None,
                                 None,
                             )
                         })?;

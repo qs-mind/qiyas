@@ -36,11 +36,11 @@ pub(crate) fn result(
 
 pub(crate) fn repeated(attempts: usize) -> Value {
     json!({"code":"repeated_ineffective_edit","attempts":attempts,
-        "message":format!("This identical input has failed or made no change {attempts} times. Read its result and consider a different input. Mizan decides how to proceed.")})
+        "message":format!("This identical edit failed {attempts} times. / أخفق هذا التعديل نفسه {attempts} مرات.")})
 }
 
-pub(crate) fn stopped() -> ToolError {
+pub(crate) fn stopped(attempts: usize, previous: Value) -> ToolError {
     ToolError::Structured { code:"repeated_failing_call".into(),
-        message:"This identical input has failed five times in this turn. A sixth attempt was stopped to avoid spending more of your subscription on the same failure.".into(),
-        details:json!({"failed_attempts":5}) }
+        message:"Only this identical failed call was not run again. / لم يُنفذ مجددًا هذا الاستدعاء المخفق المطابق فقط.".into(),
+        details:json!({"failed_attempts":attempts,"previous_error":previous}) }
 }

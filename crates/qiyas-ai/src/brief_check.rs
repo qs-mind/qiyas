@@ -83,6 +83,16 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
                 "Each brief item needs a unique id and the user's requirement in text".into(),
             ));
         }
+        let evidence_handles = item
+            .verify
+            .as_ref()
+            .and_then(|v| {
+                if v.kind == qiyas_core::VerifyKind::Count {
+                    return None;
+                }
+                explicit_handles(&json!({"targets":v.targets}))
+            })
+            .or_else(|| item.read.as_ref().and_then(|r| explicit_handles(&r.args)));
         let checked = match (item.verify, item.read) {
             (Some(expectation), None) => {
                 let r = session.verify(&[expectation])?.remove(0);
@@ -151,6 +161,7 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
             }
         };
         let mut result = checked;
+        result["evidence_handles"] = json!(evidence_handles);
         result["id"] = json!(item.id);
         result["text"] = json!(item.text);
         results.push(result);
@@ -210,9 +221,30 @@ fn artifact(session: &Session, args: &Value) -> Result<Value, ToolError> {
     }
 }
 
+/// Explicit target reads can be invalidated precisely; aggregate queries remain uncertain.
+fn explicit_handles(args: &Value) -> Option<Vec<u64>> {
+    let targets = args.get("targets").or_else(|| args.get("handles"));
+    if let Some(values) = targets.and_then(Value::as_array) {
+        if values.is_empty() {
+            return None;
+        }
+        return values
+            .iter()
+            .map(|v| {
+                qiyas_core::registry::handle_number(v)
+                    .or_else(|| qiyas_core::registry::handle_number(&v["handle"]))
+            })
+            .collect();
+    }
+    args.get("handle")
+        .and_then(qiyas_core::registry::handle_number)
+        .map(|h| vec![h])
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Watch {
     report: Option<Value>,
+    #[serde(default)]
     dirty: bool,
 }
 impl Watch {
@@ -223,40 +255,75 @@ impl Watch {
         let mut watch: Self = value
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
-        watch.changed(); // A resumed drawing may have been edited outside this conversation.
+        watch.changed(None);
         watch
     }
     pub(crate) fn checked(&mut self, report: Value) {
         self.report = Some(report);
         self.dirty = false;
     }
-    pub(crate) fn changed(&mut self) {
-        self.dirty = self.report.is_some();
+    /// Consume the raw edit result before result formatting samples its handle arrays.
+    pub(crate) fn changed(&mut self, output: Option<&Value>) {
+        let touched = output.and_then(|v| {
+            let mut handles = std::collections::BTreeSet::new();
+            for key in ["added", "changed", "removed"] {
+                let values = v.get(key)?.as_array()?;
+                for value in values {
+                    handles.insert(value.as_u64()?);
+                }
+            }
+            (!handles.is_empty()).then_some(handles)
+        });
+        if let Some(rows) = self
+            .report
+            .as_mut()
+            .and_then(|r| r["results"].as_array_mut())
+        {
+            for row in rows {
+                let evidence = row["evidence_handles"].as_array();
+                let recheck = match (&touched, evidence) {
+                    (Some(touched), Some(evidence)) if !evidence.is_empty() => {
+                        if evidence
+                            .iter()
+                            .filter_map(Value::as_u64)
+                            .any(|h| touched.contains(&h))
+                        {
+                            Some("needed")
+                        } else {
+                            None
+                        }
+                    }
+                    _ => Some("maybe"),
+                };
+                if let Some(recheck) = recheck {
+                    if row["recheck"] != "needed" {
+                        row["recheck"] = json!(recheck);
+                    }
+                }
+            }
+        }
     }
-    pub(crate) fn final_text(&self, lang: crate::prompt::Lang) -> Option<String> {
-        let unmet: Vec<_> = self.report.as_ref()?["results"]
+    pub(crate) fn status(&self, lang: crate::prompt::Lang) -> Option<crate::agent::AgentEvent> {
+        use crate::prompt::Lang;
+        let items: Vec<_> = self.report.as_ref()?["results"]
             .as_array()?
             .iter()
-            .filter(|r| self.dirty || r["passed"] != true)
-            .filter_map(|r| r["text"].as_str())
+            .filter_map(|r| {
+                let text = r["text"].as_str()?;
+                let state = r["recheck"].as_str().or(self.dirty.then_some("maybe"));
+                let label = match (lang, state, r["passed"] == true) {
+                    (Lang::En, Some("needed"), _) => "Needs a recheck",
+                    (Lang::Ar, Some("needed"), _) => "يحتاج إعادة فحص",
+                    (Lang::En, Some(_), _) => "May need a recheck",
+                    (Lang::Ar, Some(_), _) => "قد يحتاج إعادة فحص",
+                    (Lang::En, None, false) => "Unmet",
+                    (Lang::Ar, None, false) => "لم يتحقق",
+                    (_, None, true) => return None,
+                };
+                Some(format!("{label}: {text}"))
+            })
             .collect();
-        if unmet.is_empty() {
-            return None;
-        }
-        let label = match (lang, self.dirty) {
-            (crate::prompt::Lang::En, true) => "Requirements needing a check after the latest edit",
-            (crate::prompt::Lang::En, false) => "Unmet requirements",
-            (crate::prompt::Lang::Ar, true) => "متطلبات تحتاج فحصًا بعد آخر تعديل",
-            (crate::prompt::Lang::Ar, false) => "متطلبات لم تتحقق",
-        };
-        Some(format!(
-            "\n\n{label}:\n{}",
-            unmet
-                .iter()
-                .map(|text| format!("- {text}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))
+        (!items.is_empty()).then(|| crate::agent::status("requirements", items, lang))
     }
 }
 
@@ -275,4 +342,50 @@ pub(crate) fn contract() -> (Value, Value) {
             }}}}}}}),
         json!({"expectations":[{"id":"count","text":"The brief asks for four circles","verify":{"kind":"count","entity_type":"Circle","value":4}}]}),
     )
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+    use crate::prompt::Lang;
+
+    #[test]
+    fn only_touched_evidence_needs_recheck_and_unknown_scope_is_uncertain() {
+        let mut watch = Watch::default();
+        watch.checked(json!({"results":[
+            {"id":"a","text":"Length A","passed":true,"evidence_handles":[10]},
+            {"id":"b","text":"Length B","passed":true,"evidence_handles":[20]},
+            {"id":"count","text":"Object count","passed":true,"evidence_handles":null}
+        ]}));
+        watch.changed(Some(&json!({"added":[],"changed":[10],"removed":[]})));
+        let value = json!(watch.status(Lang::En).unwrap());
+        assert_eq!(
+            value["items"],
+            json!([
+                "Needs a recheck: Length A",
+                "May need a recheck: Object count"
+            ])
+        );
+        watch.changed(Some(&json!({"added":[],"changed":[99],"removed":[]})));
+        assert_eq!(
+            json!(watch.status(Lang::En).unwrap())["items"],
+            value["items"]
+        );
+        watch.changed(None);
+        let value = json!(watch.status(Lang::En).unwrap());
+        assert_eq!(value["items"][1], "May need a recheck: Length B");
+        assert!(json!(watch.status(Lang::Ar).unwrap())["items"][1]
+            .as_str()
+            .unwrap()
+            .starts_with("قد يحتاج"));
+        watch.checked(
+            json!({"results":[{"id":"a","text":"Length A","passed":true,"evidence_handles":[10]}]}),
+        );
+        assert!(watch.status(Lang::En).is_none());
+        let resumed = Watch::restore(watch.saved());
+        assert_eq!(
+            json!(resumed.status(Lang::En).unwrap())["items"],
+            json!(["May need a recheck: Length A"])
+        );
+    }
 }

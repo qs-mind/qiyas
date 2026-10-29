@@ -14,14 +14,14 @@ fn bad_plan() -> PlanModel {
     serde_json::from_value(json!({"floors":[{
         "name":"Ground floor",
         "rooms":[
-            {"name":"Lobby","area_m2":35,"width_m":5},
-            {"name":"Corridor","area_m2":18,"width_m":1.2,"length_m":15},
-            {"name":"Kitchen","area_m2":30,"width_m":5},
-            {"name":"Living","area_m2":20,"width_m":4},
-            {"name":"Master bedroom","area_m2":20,"width_m":4},
-            {"name":"Bedroom 2","area_m2":16,"width_m":4},
-            {"name":"Bedroom 3","area_m2":16,"width_m":4},
-            {"name":"Bathroom","area_m2":4,"width_m":2,"opens_to":["Corridor"]}
+            {"name":"Lobby","kind":"lobby","area_m2":35,"width_m":5},
+            {"name":"Corridor","kind":"corridor","area_m2":18,"width_m":1.2,"length_m":15},
+            {"name":"Kitchen","kind":"kitchen","area_m2":30,"width_m":5},
+            {"name":"Living","kind":"living","area_m2":20,"width_m":4},
+            {"name":"Master bedroom","kind":"bedroom","master":true,"area_m2":20,"width_m":4},
+            {"name":"Bedroom 2","kind":"bedroom","area_m2":16,"width_m":4},
+            {"name":"Bedroom 3","kind":"bedroom","area_m2":16,"width_m":4},
+            {"name":"Bathroom","kind":"bathroom","area_m2":4,"width_m":2,"opens_to":["Corridor"]}
         ],
         "doors":[{"name":"Entrance","width_m":0.9,"leaves":1,"main_entrance":true}],
         "stairs":[{"name":"Stair","located_in":"Corridor","enclosed":false,
@@ -35,11 +35,11 @@ fn good_plan() -> PlanModel {
     serde_json::from_value(json!({"floors":[{
         "name":"Ground floor",
         "rooms":[
-            {"name":"Lobby","area_m2":8,"width_m":2},
-            {"name":"Living","area_m2":30,"width_m":5,"adjacent":["Dining"]},
-            {"name":"Dining","area_m2":16,"width_m":4,"adjacent":["Living","Kitchen"]},
-            {"name":"Kitchen","area_m2":16,"width_m":4,"adjacent":["Dining"]},
-            {"name":"Stair room","area_m2":8,"width_m":2.5}
+            {"name":"Lobby","kind":"lobby","area_m2":8,"width_m":2},
+            {"name":"Living","kind":"living","area_m2":30,"width_m":5,"adjacent":["Dining"]},
+            {"name":"Dining","kind":"dining","area_m2":16,"width_m":4,"adjacent":["Living","Kitchen"]},
+            {"name":"Kitchen","kind":"kitchen","area_m2":16,"width_m":4,"adjacent":["Dining"]},
+            {"name":"Stair room","kind":"stair","area_m2":8,"width_m":2.5}
         ],
         "doors":[{"width_m":1.5,"leaves":2,"main_entrance":true}],
         "stairs":[{"located_in":"Stair room","enclosed":true,"width_m":1.2,
@@ -47,13 +47,13 @@ fn good_plan() -> PlanModel {
     },{
         "name":"First floor",
         "rooms":[
-            {"name":"Lobby","area_m2":5,"width_m":2},
-            {"name":"Master bedroom","area_m2":20,"width_m":4,"fixtures":["wardrobe"]},
-            {"name":"Bedroom 2","area_m2":16,"width_m":4,"fixtures":["wardrobe"]},
-            {"name":"Bedroom 3","area_m2":16,"width_m":4,"fixtures":["wardrobe"]},
-            {"name":"Master bathroom","area_m2":5,"width_m":2,"opens_to":["Master bedroom"]},
-            {"name":"Bathroom 2","area_m2":4,"width_m":2,"opens_to":["Lobby"]},
-            {"name":"Bathroom 3","area_m2":4,"width_m":2,"opens_to":["Lobby"]}
+            {"name":"Lobby","kind":"lobby","area_m2":5,"width_m":2},
+            {"name":"Master bedroom","kind":"bedroom","master":true,"area_m2":20,"width_m":4,"fixtures":["wardrobe"]},
+            {"name":"Bedroom 2","kind":"bedroom","area_m2":16,"width_m":4,"fixtures":["wardrobe"]},
+            {"name":"Bedroom 3","kind":"bedroom","area_m2":16,"width_m":4,"fixtures":["wardrobe"]},
+            {"name":"Master bathroom","kind":"bathroom","area_m2":5,"width_m":2,"opens_to":["Master bedroom"]},
+            {"name":"Bathroom 2","kind":"bathroom","area_m2":4,"width_m":2,"opens_to":["Lobby"]},
+            {"name":"Bathroom 3","kind":"bathroom","area_m2":4,"width_m":2,"opens_to":["Lobby"]}
         ]
     }]})).unwrap()
 }
@@ -91,7 +91,7 @@ fn near(actual: f64, expected: f64) {
 
 #[test]
 fn corridor_villa_reports_the_founders_complaints() {
-    let report = run_checks(&bad_plan(), Some("egypt")).unwrap();
+    let report = run_checks(&bad_plan(), Some("egypt"), Some("villa"), Some("villa")).unwrap();
     for rule in [
         "circulation_share",
         "corridor_length",
@@ -114,7 +114,7 @@ fn corridor_villa_reports_the_founders_complaints() {
 #[test]
 fn a_coherent_villa_has_no_findings_in_each_market() {
     for market in [None, Some("egypt"), Some("ksa"), Some("uae")] {
-        let report = run_checks(&good_plan(), market).unwrap();
+        let report = run_checks(&good_plan(), market, Some("villa"), Some("villa")).unwrap();
         assert!(report.findings.is_empty(), "{market:?}: {report:#?}");
         for rule in [
             "circulation_share",
@@ -139,14 +139,14 @@ fn unknown_bathroom_access_is_not_a_failed_ensuite_check() {
     unknown.name = "Bathroom with unknown door".into();
     unknown.opens_to.clear();
     plan.floors[0].rooms.push(unknown);
-    let report = run_checks(&plan, None).unwrap();
+    let report = run_checks(&plan, None, Some("villa"), Some("villa")).unwrap();
     assert!(!report.has("master_without_ensuite"));
     assert!(report
         .not_checked
         .iter()
         .any(|v| v["rule"] == "master_without_ensuite"));
     plan.floors[0].stairs[0].riser_m = Some(f64::NAN);
-    assert!(run_checks(&plan, None).is_err());
+    assert!(run_checks(&plan, None, Some("villa"), Some("villa")).is_err());
 }
 
 #[test]
@@ -467,7 +467,7 @@ fn practice_defaults_are_labelled_and_never_report_code_errors() {
     // Egypt, KSA and UAE carry code values since 27 October 2026 (see the tests below).
     {
         let market: Option<&str> = None;
-        let report = run_checks(&bad_plan(), market).unwrap();
+        let report = run_checks(&bad_plan(), market, Some("villa"), Some("villa")).unwrap();
         assert!(!report.findings.is_empty());
         assert_eq!(report.errors, 0);
         for finding in &report.findings {
@@ -487,74 +487,250 @@ fn practice_defaults_are_labelled_and_never_report_code_errors() {
 }
 
 #[test]
-fn egypt_code_findings_cite_the_article_its_source_and_the_edition_caveat() {
-    let report = run_checks(&bad_plan(), Some("egypt")).unwrap();
-    let code: Vec<_> = report
-        .findings
-        .iter()
-        .filter(|f| f.basis == "code")
-        .collect();
-    assert!(!code.is_empty(), "{report:#?}");
-    for finding in &code {
-        assert!(finding
-            .source_url
-            .as_deref()
-            .is_some_and(|u| u.starts_with("https://")));
-        assert!(finding
-            .caveat
-            .as_deref()
-            .is_some_and(|c| c.contains("67/2014")));
-    }
-    for finding in report.findings.iter().filter(|f| f.basis != "code") {
-        assert_eq!(finding.basis, "practice_default");
-        assert_ne!(finding.severity, "error");
+fn selected_profiles_are_practice_preferences_in_every_jurisdiction() {
+    for market in ["Egypt", "Dubai", "Abu Dhabi", "UK"] {
+        let report = run_checks(&bad_plan(), Some(market), Some("villa"), Some("villa")).unwrap();
+        assert_eq!(report.market.as_deref(), Some(market));
+        assert_eq!(report.profile.as_deref(), Some("villa"));
+        assert!(!report.thresholds_applied.is_empty());
+        assert!(report
+            .findings
+            .iter()
+            .all(|f| f.basis == "practice_default" && f.source.is_none()));
+        assert_eq!(report.errors, 0);
     }
 }
 
 #[test]
-fn gulf_code_findings_cite_their_document_and_the_rest_stay_practice_defaults() {
-    let mut plan = serde_json::to_value(bad_plan()).unwrap();
-    plan["floors"][0]["rooms"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"name":"Bedroom 4","area_m2":5,"width_m":1.9}));
-    let plan: PlanModel = serde_json::from_value(plan).unwrap();
-    for (market, document) in [
-        ("ksa", "Residential Buildings Construction Requirements"),
-        ("uae", "Dubai Building Code 2021"),
-    ] {
-        let report = run_checks(&plan, Some(market)).unwrap();
-        let code: Vec<_> = report
-            .findings
+fn jurisdiction_results_keep_the_request_and_every_scoped_alternative() {
+    use qiyas_core::drafting_standards::{knowledge, KnowledgeTopic};
+    use qiyas_core::rooms::LabelLanguage;
+    for market in ["Dubai", "Abu Dhabi", "UAE"] {
+        let result = knowledge(
+            KnowledgeTopic::Limits,
+            None,
+            Some(market),
+            None,
+            None,
+            LabelLanguage::En,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(result["market"], market);
+        let widths: Vec<_> = result["limits"]
+            .as_array()
+            .unwrap()
             .iter()
-            .filter(|f| f.basis == "code")
+            .filter(|l| l["id"] == "stair_width_min_m")
             .collect();
-        assert!(!code.is_empty(), "{market}: {report:#?}");
-        for finding in &code {
-            assert!(
-                finding
-                    .source
-                    .as_deref()
-                    .is_some_and(|s| s.contains(document)),
-                "{market}: {finding:?}"
-            );
-            assert!(finding
-                .source_url
-                .as_deref()
-                .is_some_and(|u| u.starts_with("https://")));
-            assert!(finding.caveat.as_deref().is_some_and(|c| !c.is_empty()));
-        }
-        for finding in report.findings.iter().filter(|f| f.basis != "code") {
-            assert_eq!(finding.basis, "practice_default");
-            assert_ne!(finding.severity, "error");
-            assert!(finding.source.is_none() && finding.source_url.is_none());
+        assert_eq!(widths.len(), 3);
+        assert!(widths
+            .iter()
+            .any(|l| l["value"] == 1.0 && l["scope"]["jurisdiction"] == "Dubai"));
+        assert!(widths
+            .iter()
+            .any(|l| l["value"] == 1.2 && l["scope"]["jurisdiction"] == "Abu Dhabi"));
+        assert!(widths.iter().any(
+            |l| l["value"] == 1.2 && l["scope"]["building_classes"][0] == "apartment_building"
+        ));
+        assert!(widths.iter().all(|l| l["asked"] == market));
+    }
+    for topic in [KnowledgeTopic::Limits, KnowledgeTopic::Codes] {
+        let result =
+            knowledge(topic, None, Some("UK"), None, None, LabelLanguage::En, &[]).unwrap();
+        assert_eq!(result["market"], "UK");
+        assert_eq!(result["supported"], false);
+        assert!(result["note"].as_str().unwrap().contains("UK"));
+        assert!(result["note_ar"].as_str().unwrap().contains("UK"));
+        assert!(result
+            .get("limits")
+            .is_none_or(|l| l.as_array().unwrap().is_empty()));
+        assert!(result
+            .get("markets")
+            .is_none_or(|l| l.as_object().unwrap().is_empty()));
+    }
+    assert!(limit_for("stair_width_min_m", Some("UK")).is_none());
+}
+
+#[test]
+fn missing_and_incompatible_profiles_return_no_judgements() {
+    for (profile, kind) in [
+        (None, None),
+        (Some("villa"), None),
+        (Some("villa"), Some("mall")),
+        (Some("missing"), Some("villa")),
+    ] {
+        let report = run_checks(&bad_plan(), Some("Dubai"), profile, kind).unwrap();
+        assert!(report.findings.is_empty());
+        assert!(report.checked.is_empty());
+        assert!(report.limits_used.is_empty());
+        assert!(report.thresholds_applied.is_empty());
+        assert_eq!(report.profile, None);
+        assert!(report.available_profiles.contains(&"villa".into()));
+    }
+}
+
+#[test]
+fn packages_do_not_invent_a_project_type_or_storeys() {
+    use qiyas_core::drafting_standards::{knowledge, sheet_set, KnowledgeTopic};
+    use qiyas_core::rooms::LabelLanguage;
+    let omitted = knowledge(
+        KnowledgeTopic::SheetSet,
+        None,
+        None,
+        None,
+        None,
+        LabelLanguage::En,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(omitted["sheet_count"], 0);
+    let mall = sheet_set("Mall", None).unwrap();
+    assert_eq!(mall["project_type"], "Mall");
+    assert_eq!(mall["sheet_count"], 0);
+    assert!(mall["note"]
+        .as_str()
+        .unwrap()
+        .contains("build the package from the brief"));
+    let villa = sheet_set("villa", None).unwrap();
+    assert!(villa["storeys"].is_null());
+    assert!(!villa["conditional_sheets"].as_array().unwrap().is_empty());
+    assert!(villa["sheets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s.get("when").is_none()));
+    assert!(
+        sheet_set("residential_unit", None).unwrap()["sheet_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+}
+
+#[test]
+fn explicit_space_kinds_win_and_names_are_only_uncertain_suggestions() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("kinds.dxf"), 6);
+    let plan = json!({"floors":[{"name":"Mall","rooms":[
+        {"name":"Bedroom shop","kind":"retail unit","area_m2":30},
+        {"name":"Store","area_m2":20},{"name":"Hall","area_m2":40},
+        {"name":"Bedroom","area_m2":15}]}]});
+    let Outcome::Measurement { result } = s
+        .run_input(&json!({"type":"space_check","plan":plan}), Source::Ai)
+        .unwrap()
+        .outcome
+    else {
+        panic!("measurement")
+    };
+    let spaces = result["floors"][0]["spaces"].as_array().unwrap();
+    assert_eq!(spaces[0]["kind"], "retail unit");
+    assert!(spaces[0].get("suggested_kind").is_none());
+    for space in &spaces[1..3] {
+        assert!(space["kind"].is_null());
+        assert!(space["suggested_kind"].is_null());
+    }
+    assert_eq!(spaces[3]["suggested_kind"], "bedroom");
+    assert_eq!(spaces[3]["uncertain"], true);
+    assert!(result["floors"][0]["circulation_share"].is_null());
+    assert!(result["findings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn concave_space_facts_use_polygons_without_retaining_or_mutating_rooms() {
+    let dir = tempfile::tempdir().unwrap();
+    for (units, k) in UNITS {
+        let mut s = Session::new_blank(&dir.path().join("facts.dxf"), units);
+        let points: Vec<_> = [
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 4.0],
+            [0.0, 4.0],
+        ]
+        .map(|p| [p[0] / k, p[1] / k])
+        .into();
+        added(
+            &mut s,
+            json!({"type":"draw","kind":"polyline","closed":true,"points":points}),
+        );
+        added(
+            &mut s,
+            json!({"type":"text","at":[0.5/k,2.0/k],"height":0.1/k,"value":"Space A"}),
+        );
+        let inside = added(
+            &mut s,
+            json!({"type":"draw","kind":"point","p":[0.5/k,3.0/k]}),
+        )[0];
+        let outside = added(
+            &mut s,
+            json!({"type":"draw","kind":"point","p":[2.0/k,2.0/k]}),
+        )[0];
+        let before = snapshot(&s);
+        let Outcome::Measurement { result } = s
+            .run_input(
+                &json!({"type":"space_check","floors":[{"name":"Floor"}]}),
+                Source::Ai,
+            )
+            .unwrap()
+            .outcome
+        else {
+            panic!("measurement")
+        };
+        assert_eq!(snapshot(&s), before);
+        let space = &result["floors"][0]["spaces"][0];
+        near(space["area_m2"].as_f64().unwrap(), 7.0);
+        near(space["perimeter_m"].as_f64().unwrap(), 16.0);
+        assert!(space["clear_widths_m"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| (w["width_m"].as_f64().unwrap() - 1.0).abs() < 1e-8));
+        let fixtures = space["fixtures"].as_array().unwrap();
+        assert!(fixtures.iter().any(|f| f["handle"] == inside));
+        assert!(!fixtures.iter().any(|f| f["handle"] == outside));
+        assert!(result["findings"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn each_symbol_can_use_a_caller_layer_and_default_leaves_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    for mut input in [
+        json!({"type":"symbol","kind":"door","a":[0,0],"b":[1.5,0],"side_point":[0,1]}),
+        json!({"type":"symbol","kind":"stair","origin":[0,0],"width":1.2,"length_m":3,"rise_m":1.7,"steps":10,"floor":"upper"}),
+        json!({"type":"symbol","kind":"levels","origin":[0,0],"levels":[{"label":"FFL","elevation_m":0}]}),
+        json!({"type":"symbol","kind":"ground_line","a":[0,0],"b":[8,0]}),
+        json!({"type":"symbol","kind":"foundation_level","a":[0,0],"b":[8,0],"elevation_m":-1.2}),
+        json!({"type":"symbol","kind":"material_hatch","points":[[0,0],[1,0],[1,2],[0,2]],"material":"concrete","point":[0.5,1],"at":[3,2]}),
+    ] {
+        input["layer"] = json!("Chosen layer");
+        let mut s = Session::new_blank(&dir.path().join("layer.dxf"), 6);
+        let report = s.run_input(&input, Source::User).unwrap();
+        let Outcome::Added { handles } = report.outcome else {
+            panic!("added")
+        };
+        assert!(handles.iter().all(|h| {
+            s.drawing
+                .doc
+                .get_entity(Handle::new(*h))
+                .unwrap()
+                .common()
+                .layer
+                == "Chosen layer"
+        }));
+        assert_eq!(s.current.layer, "0");
+        if input["kind"] == "door" {
+            assert!(report
+                .defaults_used
+                .iter()
+                .any(|d| d.field == "/leaves" && d.value == 2));
+            assert!(s
+                .takeoff_check(0, &[])
+                .unwrap()
+                .to_string()
+                .contains("type_default"));
         }
     }
-    // A KSA value the ministry text leaves to the unpublished SBC numbers stays a default.
-    let riser = limit_for("stair_riser_max_m", Some("ksa")).unwrap();
-    assert_eq!(riser.limit.basis, "practice_default");
-    assert!(riser.fallback);
-    let riser = limit_for("stair_riser_max_m", Some("uae")).unwrap();
-    assert_eq!(riser.limit.basis, "code");
-    assert!((riser.value() - 0.18).abs() < 1e-12);
 }

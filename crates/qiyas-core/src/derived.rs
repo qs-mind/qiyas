@@ -287,6 +287,11 @@ pub(crate) fn enclosure_source(e: &EntityType) -> bool {
             | EntityType::XLine(_)
             | EntityType::Tolerance(_)
     ) && crate::object_regions::retained_region(e).is_none()
+        && !crate::object_tags::is_tag(e)
+        && e.common()
+            .extended_data
+            .get_record(crate::comment::COMMENT_APP)
+            .is_none()
         && e.common()
             .extended_data
             .get_record(crate::conventions::GRID_APP)

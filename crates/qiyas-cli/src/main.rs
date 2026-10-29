@@ -366,7 +366,10 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
                 })
                 .map_err(|e| e.to_string())?;
             session
-                .run(Command::VariationReport { layer: None })
+                .run(Command::VariationReport {
+                    layer: None,
+                    revision: None,
+                })
                 .map_err(|e| e.to_string())?;
             Excel {
                 allow_repaired_save: false,

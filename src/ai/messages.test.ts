@@ -400,3 +400,17 @@ test("only identical detail lines merge, regardless of parameter insertion order
   expect([...readRuns(items).counts]).toEqual([[0, 2]]);
   expect([...readRuns(items).hidden]).toEqual([1]);
 });
+
+test("batch progress updates only its running card and survives reattachment", () => {
+  const started = call("batch", "batch");
+  const progress: AgentEvent = { type: "tool_progress", id: "batch", completed: 3, total: 10 };
+  const live = run([started, call("other"), progress]);
+  expect(live.items[0]).toMatchObject({ status: "running", progress: { completed: 3, total: 10 } });
+  expect(live.items[1]).not.toHaveProperty("progress", { completed: 3, total: 10 });
+  const entries: TranscriptEntry[] = [started, progress].map((event) => ({ type: "event", event }));
+  expect(run([{ type: "reattach", entries }]).items[0]).toMatchObject({ progress: { completed: 3, total: 10 } });
+  const done = run([result("batch"), { ...progress, completed: 4 }], live);
+  expect(done.items[0]).toMatchObject({ status: "done", progress: { completed: 3, total: 10 } });
+  expect(run([{ ...progress, completed: 11 }], live)).toEqual(live);
+  expect(run([{ ...progress, total: 0 }], live)).toEqual(live);
+});

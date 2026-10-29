@@ -223,7 +223,7 @@ pub struct Qiyas {
     on_ui: OnUi,
     tools: Arc<Vec<Tool>>,
     retries: Arc<Mutex<VecDeque<Retry>>>,
-    ineffective: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
+    ineffective: Arc<Mutex<std::collections::BTreeMap<String, (usize, Value)>>>,
     churn: Arc<Mutex<crate::churn::Guard>>,
     resolver: Option<WorkspaceResolver>,
     addressed: Arc<Mutex<std::collections::BTreeMap<u32, Qiyas>>>,
@@ -433,9 +433,9 @@ impl Qiyas {
             .ineffective
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if attempts.get(&key).copied().unwrap_or(0) >= 5 {
+        if let Some((count, previous)) = attempts.get(&key).filter(|(n, _)| *n >= 5) {
             return crate::revision::stamp(
-                Err(crate::advice::stopped()),
+                Err(crate::advice::stopped(*count, previous.clone())),
                 serde_json::json!(revision),
             );
         }
@@ -451,11 +451,12 @@ impl Qiyas {
                 serde_json::json!(guard.as_ref().map(qiyas_core::Session::revision)),
             );
         }
-        if output.is_err() || matches!(&output, Ok(ToolOutput::Json(v)) if v["no_change"] == true) {
-            let count = attempts.entry(key).or_default();
-            *count += 1;
-            if *count >= 2 {
-                output = crate::advice::result(output, crate::advice::repeated(*count));
+        if let Err(error) = &output {
+            let entry = attempts.entry(key).or_insert((0, Value::Null));
+            entry.0 += 1;
+            entry.1 = error.json();
+            if entry.0 >= 2 {
+                output = crate::advice::result(output, crate::advice::repeated(entry.0));
             }
         }
         if input["op"] == "finish" && output.is_ok() {
@@ -470,46 +471,31 @@ impl Qiyas {
 
     fn run_checked(&self, name: &str, input: &Value) -> Result<ToolOutput, ToolError> {
         let (normalized, warnings) = crate::normalise::envelope(name, input)?;
-        let mut normalized = normalized;
+        let mut statuses = Vec::new();
+        let mut finish_note = None;
         if name == surface::EXECUTE && normalized["op"] == "finish" {
-            let mut args = surface::args_of(&normalized).map_err(ToolError::BadInput)?;
-            let answer = args["answer"].as_str().unwrap_or_default().to_string();
+            let args = surface::args_of(&normalized).map_err(ToolError::BadInput)?;
+            let answer = args["answer"].as_str().unwrap_or_default();
             let language = crate::judgement::language(
-                self.user_text.as_deref().unwrap_or(&answer),
+                self.user_text.as_deref().unwrap_or(answer),
                 crate::prompt::Lang::En,
             );
-            // The finish gate: ending with plan phases open is refused (twice at most for the
-            // same plan) unless the user said stop.
             let stopped = self
                 .user_text
                 .as_deref()
                 .is_some_and(crate::judgement::wants_to_stop);
-            if let Some(advice) = self
+            let mut watch = self
                 .plan_watch
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .finish_gate(stopped, language)
-            {
-                return Err(ToolError::Structured {
-                    code: "open_phases".into(),
-                    message: advice["message"].as_str().unwrap_or_default().into(),
-                    details: advice,
-                });
-            }
-            let notes = [
-                self.plan_watch
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .final_text(language),
+                .unwrap_or_else(PoisonError::into_inner);
+            finish_note = watch.finish_gate(stopped, language);
+            statuses.extend(watch.status(language));
+            statuses.extend(
                 self.brief_watch
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .final_text(language),
-            ];
-            if let Some(text) = notes.into_iter().flatten().reduce(|a, b| a + &b) {
-                args["answer"] = serde_json::json!(format!("{answer}{text}"));
-                normalized["args"] = args;
-            }
+                    .status(language),
+            );
         }
         let input = &normalized;
         let before = self
@@ -542,7 +528,10 @@ impl Qiyas {
                 self.brief_watch
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .changed();
+                    .changed(match &output {
+                        Ok(ToolOutput::Json(value)) => Some(value),
+                        _ => None,
+                    });
             }
             if name == surface::READ && input["op"] == "brief_check" {
                 if let Ok(ToolOutput::Json(value)) = &output {
@@ -582,6 +571,14 @@ impl Qiyas {
                 *last = Some(hash);
             }
             _ => {}
+        }
+        if let ToolOutput::Json(value) = &mut output {
+            if !statuses.is_empty() {
+                value["statuses"] = serde_json::json!(statuses);
+            }
+            if let Some(note) = finish_note {
+                crate::advice::append(value, note);
+            }
         }
         Ok(output)
     }
@@ -711,7 +708,7 @@ impl ServerHandler for Qiyas {
             .with_server_info(Implementation::new("qiyas", env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
                 "{}\n\nCommands by category:\n{}",
-                "Follow the user's request and latest message language. Arabic is simple Modern Standard Arabic unless that message uses a dialect. For a new design on a populated drawing, consider the destination and ask when unclear. Use phases from the brief, one batch per phase, exact spatial/room/clearance checks before pictures, and edit by handle; rebuilding returns cost advice. For quantity take-off only, read workflow with language en or ar, then digest and takeoff_kit. Drawing work needs the deliverables the user requested; never add an unrequested BOQ. Read panel_state for questions about the window. Read back changes; after repeated ineffective edits, weigh the advice; an identical input that fails five times is stopped on its sixth attempt. Report open findings when finishing; Qiyas attaches them to the turn record. Advice is information and Mizan decides. Quote revision from the latest result, including your own edits, as expected_revision. On stale_read, read the changed handles again; never retry blindly. Use brief_check to measure every requirement and deliverable before finishing; list every unmet item and unfinished phase. State reports image capability; without confirmed vision, never claim to have inspected a picture. Save only when asked; finish does not save.",
+                "Follow the user's request and latest message language. Ask the engineer only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Gather these questions at the plan step and ask again only for a new gap. Never ask what a tool can tell you. Take technical design decisions yourself with an engineering basis and record each decision with its reason. Plans record the model's scope and decisions. Workflow, digest and takeoff_kit supply optional quantity guidance; panel_state reports the window. Results carry factual cost, churn and open-finding information. After five failures, only the identical edit call is refused, with its previous error and failure count; the turn continues. Reads and successful no-change calls are not failed edits. Quote revision from the latest result as expected_revision; stale_read refuses an edit against old data. brief_check records requirement evidence. finish returns app statuses separately from the answer and does not save. Quantity exports with outstanding checks receive a DRAFT prefix from Qiyas and return those checks. State reports image capability; without confirmed vision, never claim to have inspected a picture. Save only when asked. Advice is information and the model decides.",
                 crate::prompt::command_index()
             ))
     }
@@ -1183,5 +1180,67 @@ mod tests {
             restored.state(),
             serde_json::json!({"contracts":{},"picture":null})
         );
+    }
+    #[test]
+    fn repeated_failures_refuse_only_that_edit_and_preserve_the_previous_error() {
+        let server = test_server();
+        let bad = serde_json::json!({"op":"run","args":{"command":{"type":"not_a_command"}}});
+        let mut previous = Value::Null;
+        for _ in 0..5 {
+            previous = server.run(surface::EXECUTE, &bad).unwrap_err().json();
+        }
+        let error = server.run(surface::EXECUTE, &bad).unwrap_err().json();
+        assert_eq!(error["code"], "repeated_failing_call");
+        assert_eq!(error["failed_attempts"], 5);
+        assert_eq!(error["previous_error"]["code"], previous["code"]);
+        let reads = serde_json::json!({"op":"measure","args":{"handle":999}});
+        for _ in 0..7 {
+            assert_ne!(
+                server.run(surface::READ, &reads).unwrap_err().json()["code"],
+                "repeated_failing_call"
+            );
+        }
+        server.run(surface::EXECUTE, &serde_json::json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}}})).unwrap();
+    }
+
+    #[test]
+    fn finish_returns_separate_status_and_a_note_regardless_of_answer_wording() {
+        let mut server = test_server();
+        server.host = Some(Arc::new(TurnHost::default()));
+        server.user_text = Some("أكمل المخطط".into());
+        server.run(surface::EXECUTE, &serde_json::json!({"op":"plan","args":{"phases":[{"id":"levels","title":"المناسيب","status":"pending"}]}})).unwrap();
+        let ToolOutput::Json(value) = server
+            .run(
+                surface::EXECUTE,
+                &serde_json::json!({"op":"finish","args":{"answer":"أحتاج المناسيب من المهندس."}}),
+            )
+            .unwrap()
+        else {
+            panic!("JSON");
+        };
+        assert_eq!(value["completed"], true);
+        assert_eq!(value["statuses"][0]["kind"], "open_phases");
+        assert_eq!(value["statuses"][0]["language"], "ar");
+        assert!(value.get("answer").is_none());
+        assert!(value["advice"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["code"] == "open_phases"));
+
+        server.user_text = Some("Stop here".into());
+        server.run(surface::EXECUTE, &serde_json::json!({"op":"plan","args":{"phases":[{"id":"levels","title":"Levels","status":"pending"}]}})).unwrap();
+        let ToolOutput::Json(value) = server
+            .run(
+                surface::EXECUTE,
+                &serde_json::json!({"op":"finish","args":{"answer":"Finished."}}),
+            )
+            .unwrap()
+        else {
+            panic!("JSON");
+        };
+        assert!(!value["advice"]
+            .as_array()
+            .is_some_and(|notes| notes.iter().any(|note| note["code"] == "open_phases")));
     }
 }

@@ -418,3 +418,17 @@ fn search_finds_commands_by_what_they_do() {
     assert!(names("viewport").iter().any(|n| n == "mview"));
     assert!(names("set_conflicts").is_empty(), "internal");
 }
+
+#[test]
+fn domain_options_are_optional_and_registered_with_open_room_classification() {
+    for value in [
+        serde_json::json!({"type":"space_check","profile":"villa","building_type":"mall","plan":{"floors":[{"name":"Mall","rooms":[{"name":"Shop","kind":"retail unit","area_m2":30}]}]}}),
+        serde_json::json!({"type":"comment","points":[[0,0],[4,0],[4,3],[0,3]],"text":"Review","layer":"Notes"}),
+        serde_json::json!({"type":"grid","x":[{"label":"A","at":0}],"layer":"Axes"}),
+        serde_json::json!({"type":"symbol","kind":"door","a":[0,0],"b":[1,0],"side_point":[0,1],"layer":"Doors"}),
+    ] {
+        let report = qiyas_core::validation::validate_command(&value, None);
+        assert!(report.valid, "{}", report.message());
+        let _: Command = serde_json::from_value(value).unwrap();
+    }
+}

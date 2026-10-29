@@ -364,13 +364,28 @@ export function Viewport({
       const r = canvas.getBoundingClientRect();
       return [e.clientX - r.left, e.clientY - r.top];
     };
+    const interactionRoot = canvas.closest<HTMLElement>("[data-drawing-interaction]") ?? canvas.parentElement ?? canvas;
     const onWheel = (e: WheelEvent) => {
+      e.stopPropagation();
+      // Scrollable overlay controls own their wheel, including at their edges.
+      for (let node = e.target instanceof Element ? e.target : null; node && node !== interactionRoot; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        const vertical = /auto|scroll/.test(style.overflowY) && node.scrollHeight > node.clientHeight;
+        const horizontal = /auto|scroll/.test(style.overflowX) && node.scrollWidth > node.clientWidth;
+        if (vertical || horizontal) {
+          const canScroll = (e.deltaY < 0 && node.scrollTop > 0) ||
+            (e.deltaY > 0 && node.scrollTop + node.clientHeight < node.scrollHeight) ||
+            (e.deltaX !== 0 && horizontal);
+          if (!canScroll) e.preventDefault();
+          return;
+        }
+      }
       e.preventDefault();
       if (e.deltaY === 0) return;
       setCamera(zoomAt(camera.current, local(e), wheelFactor(e.deltaY, e.deltaMode)));
     };
     // React's wheel listener is passive, so it can't stop the page from scrolling.
-    canvas.addEventListener("wheel", onWheel, { passive: false });
+    interactionRoot.addEventListener("wheel", onWheel, { passive: false });
 
     const typing = (e: KeyboardEvent) =>
       e.target instanceof HTMLElement &&
@@ -399,7 +414,7 @@ export function Viewport({
     return () => {
       observer.disconnect();
       ratio?.removeEventListener("change", onRatio);
-      canvas.removeEventListener("wheel", onWheel);
+      interactionRoot.removeEventListener("wheel", onWheel);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

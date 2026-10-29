@@ -31,11 +31,38 @@ use serde_json::json;
 use crate::text::{escape_mtext, mark_logical};
 use crate::{CoreError, Session, Target, Units};
 
+/// Exterior side for an orthogonal automatic dimension chain.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainSide {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 /// A dimension to add (`Command::Dimension`). Points are in drawing coordinates, angles in
 /// degrees. Circles and arcs are picked as `Target`s at the top of the sheet.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DimSpec {
+    /// Chain selected orthogonal grid lines and/or the exterior wall runs of given groups,
+    /// including opening jambs and corners, with an overall dimension outside each chain.
+    /// Grid targets must be straight lines perpendicular to the dimension axis. Distances
+    /// are paper mm at the annotation scale: defaults 10 mm offset and 7 mm row spacing.
+    /// Uses the current dimension style and one undo step. الجداول والجدران بأبعاد متسلسلة.
+    #[schemars(example = json!({"kind":"auto_chain","grids":[{"handle":1234},{"handle":1235}],"side":"bottom"}))]
+    AutoChain {
+        #[serde(default)]
+        grids: Vec<Target>,
+        #[serde(default)]
+        wall_groups: Vec<u64>,
+        side: ChainSide,
+        #[serde(default)]
+        offset_mm: Option<f64>,
+        #[serde(default)]
+        spacing_mm: Option<f64>,
+    },
     /// The distance from `p1` to `p2` along `rotation` (degrees), its line through `line_point`.
     /// No rotation: horizontal, or vertical when `line_point` lies beside the points rather than
     /// above or below them (AutoCAD's DIMLINEAR).
@@ -649,6 +676,15 @@ impl Session {
     /// The dimensions `spec` describes, not yet in the drawing.
     pub(crate) fn dimensions_of(&self, spec: DimSpec) -> Result<Vec<Dimension>, CoreError> {
         let out = match spec {
+            DimSpec::AutoChain {
+                grids,
+                wall_groups,
+                side,
+                offset_mm,
+                spacing_mm,
+            } => {
+                return self.auto_chain(&grids, &wall_groups, side, offset_mm, spacing_mm);
+            }
             DimSpec::Linear {
                 p1,
                 p2,
@@ -771,6 +807,190 @@ impl Session {
                 out
             }
         };
+        Ok(out)
+    }
+
+    fn auto_chain(
+        &self,
+        grids: &[Target],
+        groups: &[u64],
+        side: ChainSide,
+        offset_mm: Option<f64>,
+        spacing_mm: Option<f64>,
+    ) -> Result<Vec<Dimension>, CoreError> {
+        if self
+            .drawing
+            .doc
+            .layers
+            .get(&self.current.layer)
+            .is_some_and(|l| l.flags.locked)
+        {
+            return Err(invalid(
+                "The annotation layer is locked / طبقة التعليقات مقفلة",
+            ));
+        }
+        let offset = offset_mm.unwrap_or(10.0);
+        let spacing = spacing_mm.unwrap_or(7.0);
+        if ![offset, spacing].iter().all(|v| v.is_finite() && *v > 0.0) {
+            return Err(invalid(
+                "Offsets must be positive paper millimetres / الإزاحات موجبة بملليمتر الورق",
+            ));
+        }
+        let axis = usize::from(matches!(side, ChainSide::Left | ChainSide::Right));
+        let cross = 1 - axis;
+        let sign = if matches!(side, ChainSide::Bottom | ChainSide::Left) {
+            -1.0
+        } else {
+            1.0
+        };
+        let mut extent = f64::NEG_INFINITY;
+        let mut grid_points = Vec::new();
+        if !grids.is_empty() {
+            for h in self.sheet_targets_any(grids)? {
+                let Some(EntityType::Line(line)) = self.drawing.doc.get_entity(h) else {
+                    return Err(invalid(
+                        "Select straight grid lines / اختر خطوط المحاور المستقيمة",
+                    ));
+                };
+                let a = [line.start.x, line.start.y];
+                let b = [line.end.x, line.end.y];
+                finite(&[a, b])?;
+                if (a[axis] - b[axis]).abs() > 1e-8 || (a[cross] - b[cross]).abs() < 1e-12 {
+                    return Err(invalid("Grid lines must be perpendicular to the chain / خطوط المحاور عمودية على سلسلة الأبعاد"));
+                }
+                let p = if sign * a[cross] > sign * b[cross] {
+                    a
+                } else {
+                    b
+                };
+                extent = extent.max(sign * p[cross]);
+                grid_points.push(p);
+            }
+        }
+        // Each segment keeps its jamb stations and corner points. Only outward-facing
+        // segments contribute: an intervening parallel segment hides an interior run.
+        type Segment = ([f64; 2], [f64; 2], Vec<[f64; 2]>);
+        let mut segments: Vec<Segment> = Vec::new();
+        let wall_groups = self.stored_wall_groups()?;
+        for id in groups {
+            let group = wall_groups
+                .iter()
+                .find(|g| g.id == *id)
+                .ok_or_else(|| invalid("Wall group not found / مجموعة الجدران غير موجودة"))?;
+            self.sheet_targets_any(
+                &group
+                    .members
+                    .iter()
+                    .map(|(h, _, _)| Target {
+                        handle: *h,
+                        chain: vec![],
+                    })
+                    .collect::<Vec<_>>(),
+            )?;
+            let spec = &group.spec;
+            let runs = crate::walls::geom_runs(spec);
+            let justification = crate::walls::geom_justification(spec.justification);
+            let gross = qiyas_geom::walls::build_walls_justified(
+                &runs,
+                spec.thickness,
+                &[],
+                self.measure_tol(),
+                justification,
+            )
+            .map_err(|e| invalid(e.to_string()))?;
+            let cut = qiyas_geom::walls::build_walls_justified(
+                &runs,
+                spec.thickness,
+                &crate::walls::geom_openings(spec),
+                self.measure_tol(),
+                justification,
+            )
+            .map_err(|e| invalid(e.to_string()))?;
+            for region in gross.regions {
+                for (&a, &b) in region
+                    .outer
+                    .iter()
+                    .zip(region.outer.iter().cycle().skip(1))
+                    .take(region.outer.len())
+                {
+                    extent = extent.max(sign * a[cross]);
+                    let outward = if axis == 0 {
+                        a[axis] - b[axis]
+                    } else {
+                        b[axis] - a[axis]
+                    };
+                    if (b[cross] - a[cross]).abs() > 1e-8 || sign * outward <= 0.0 {
+                        continue;
+                    }
+                    let mut stations = vec![a, b];
+                    for opening in &cut.openings {
+                        if opening.dir[cross].abs() > 1e-8
+                            || (opening.centre[cross] - a[cross]).abs()
+                                > opening.thickness / 2.0 + self.measure_tol()
+                        {
+                            continue;
+                        }
+                        for d in [-opening.width / 2.0, opening.width / 2.0] {
+                            let mut p = opening.centre;
+                            p[axis] += d * opening.dir[axis];
+                            p[cross] = a[cross];
+                            if p[axis] >= a[axis].min(b[axis]) && p[axis] <= a[axis].max(b[axis]) {
+                                stations.push(p);
+                            }
+                        }
+                    }
+                    segments.push((a, b, stations));
+                }
+            }
+        }
+        let mut wall_points = Vec::new();
+        for (_, _, stations) in &segments {
+            for &p in stations {
+                let hidden = segments.iter().any(|(c, d, _)| {
+                    c[axis].min(d[axis]) < p[axis]
+                        && p[axis] < c[axis].max(d[axis])
+                        && sign * c[cross] > sign * p[cross] + 1e-8
+                });
+                if !hidden {
+                    wall_points.push(p);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        let mut row = 0;
+        for mut points in [wall_points, grid_points] {
+            points.sort_by(|a, b| {
+                a[axis]
+                    .total_cmp(&b[axis])
+                    .then_with(|| (sign * b[cross]).total_cmp(&(sign * a[cross])))
+            });
+            points.dedup_by(|a, b| (a[axis] - b[axis]).abs() <= 1e-8);
+            if points.len() < 2 {
+                continue;
+            }
+            let angle = if axis == 0 {
+                0.0
+            } else {
+                std::f64::consts::FRAC_PI_2
+            };
+            let mut line = points[0];
+            line[cross] = sign * (extent + self.paper_distance(offset + spacing * f64::from(row)));
+            for pair in points.windows(2) {
+                out.push(linear_dimension(pair[0], pair[1], line, angle));
+            }
+            row += 1;
+            line[cross] = sign * (extent + self.paper_distance(offset + spacing * f64::from(row)));
+            out.push(linear_dimension(
+                points[0],
+                *points.last().expect("two points"),
+                line,
+                angle,
+            ));
+            row += 1;
+        }
+        if out.is_empty() {
+            return Err(invalid("Select at least two grid stations or a facade wall group / اختر محورين أو مجموعة جدران واجهة"));
+        }
         Ok(out)
     }
 

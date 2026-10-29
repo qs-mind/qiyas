@@ -427,3 +427,201 @@ fn opening_commands_report_resolved_or_retained_defaults_in_every_unit() {
         assert!(removed.defaults_used.is_empty());
     }
 }
+
+#[test]
+fn physical_defaults_reach_elements_boq_and_takeoff_check_and_explicit_values_clear_them() {
+    use qiyas_core::measurement::SourceKind;
+    use qiyas_core::objects::ObjectFilter;
+    use qiyas_core::Source;
+    let dir = tempfile::tempdir().unwrap();
+    for (units, k) in [(4, 0.001), (5, 0.01), (6, 1.0), (1, 0.0254)] {
+        let path = dir.path().join(format!("defaults-{units}.dxf"));
+        let mut s = Session::new_blank(&path, units);
+        let input = json!({"type":"walls","runs":[{"points":[[0,0],[8.0/k,0]]}],"thickness":0.2/k,
+            "openings":[{"run":0,"kind":"window","at":3.0/k,"width":1.2/k}]});
+        let report = s.run_input(&input, Source::User).unwrap();
+        for (field, value) in [
+            ("/height", 3.0),
+            ("/openings/0/sill", 0.9),
+            ("/openings/0/head", 2.1),
+        ] {
+            assert!(report
+                .defaults_used
+                .iter()
+                .any(|d| d.field == field && d.value.as_f64() == Some(value)));
+        }
+        let Outcome::Walls { result } = report.outcome else {
+            panic!("walls")
+        };
+        let wall = result.centrelines[0];
+        let window = result.inserts[0];
+        let records = s.objects(&ObjectFilter::default()).unwrap();
+        for (handle, property) in [(wall, "wall_height"), (window, "sill"), (window, "head")] {
+            let object = records.iter().find(|o| o.instance.id == handle).unwrap();
+            assert_eq!(
+                object.instance.sources[property].kind,
+                SourceKind::TypeDefault
+            );
+        }
+        let cite = json!({"source":"Test method","clause":"1"});
+        for value in [
+            json!({"type":"measurement","kind":"set_mappings","mappings":[
+                {"rule":"volume","code":"W-1","description_en":"{type}","description_ar":"{type}","section":"","trade":"","unit":"m3","citation":cite}]}),
+            json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
+                "version":1,"name":"Test method","title":"Test","based_on":"test","source_note":"test","rules":[
+                    {"id":"volume","kind":"volume","basis":"geometric","element_type":"Legacy wall","unit":"m3","citation":cite,
+                    "terms":[{"label":"Volume","operation":"add","factors":["geometry.volume"],"citation":cite}]}]}}),
+        ] {
+            s.run_input(&value, Source::User).unwrap();
+        }
+        let measurement = s.measurement_report().unwrap();
+        assert!(measurement.items[0].assumed);
+        assert_eq!(measurement.items[0].description_en, "Wall");
+        assert_eq!(measurement.items[0].description_ar, "حائط");
+        let check = s.takeoff_check(0, &[]).unwrap().to_string();
+        assert!(check.contains("assumed_values") && check.contains("W-1"));
+        s.save_as(&path).unwrap();
+        let mut s = Session::open(&path).unwrap();
+        assert!(s.measurement_report().unwrap().items[0].assumed);
+        for (handle, props) in [
+            (wall, json!({"wall_height":3})),
+            (window, json!({"sill":0.9,"head":2.1})),
+        ] {
+            s.run_input(
+                &json!({"type":"set_object_props","targets":[handle],"props":props}),
+                Source::User,
+            )
+            .unwrap();
+        }
+        assert!(!s.measurement_report().unwrap().items[0].assumed);
+        assert!(s.undo());
+        assert!(s.measurement_report().unwrap().items[0].assumed);
+    }
+}
+
+#[test]
+fn default_sources_survive_opening_rebuilds_and_same_value_confirmation() {
+    use qiyas_core::measurement::SourceKind;
+    use qiyas_core::objects::ObjectFilter;
+    use qiyas_core::Source;
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("provenance.dxf"), 6);
+    let report = s
+        .run_input(
+            &json!({"type":"walls","runs":[{"points":[[0,0],[10,0]]}],"thickness":0.2}),
+            Source::User,
+        )
+        .unwrap();
+    let Outcome::Walls { result } = report.outcome else {
+        panic!("walls")
+    };
+    let wall = result.centrelines[0];
+    let report = s.run_input(&json!({"type":"add_wall_openings","centreline":wall,"openings":[{"kind":"window","at":3,"width":1}]}),Source::User).unwrap();
+    assert!(report
+        .defaults_used
+        .iter()
+        .any(|d| d.field == "/openings/0/head"));
+    let Outcome::Walls { result } = report.outcome else {
+        panic!("walls")
+    };
+    let window = result.inserts[0];
+    let objects = s.objects(&ObjectFilter::default()).unwrap();
+    assert_eq!(
+        objects
+            .iter()
+            .find(|o| o.instance.id == wall)
+            .unwrap()
+            .instance
+            .sources["wall_height"]
+            .kind,
+        SourceKind::TypeDefault
+    );
+    assert_eq!(
+        objects
+            .iter()
+            .find(|o| o.instance.id == window)
+            .unwrap()
+            .instance
+            .sources["head"]
+            .kind,
+        SourceKind::TypeDefault
+    );
+    s.run_input(
+        &json!({"type":"edit_wall_opening","insert":window,"head":2.1}),
+        Source::User,
+    )
+    .unwrap();
+    let objects = s.objects(&ObjectFilter::default()).unwrap();
+    assert_eq!(
+        objects
+            .iter()
+            .find(|o| o.instance.id == window)
+            .unwrap()
+            .instance
+            .sources["head"]
+            .kind,
+        SourceKind::Engineer
+    );
+    assert_eq!(
+        objects
+            .iter()
+            .find(|o| o.instance.id == window)
+            .unwrap()
+            .instance
+            .sources["sill"]
+            .kind,
+        SourceKind::TypeDefault
+    );
+}
+
+#[test]
+fn explicit_ai_inputs_keep_their_actor_and_size_groups_keep_default_sources() {
+    use qiyas_core::measurement::SourceKind;
+    use qiyas_core::objects::ObjectFilter;
+    use qiyas_core::Source;
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("group-sources.dxf"), 6);
+    let result = s
+        .run_input(
+            &json!({"type":"walls","runs":[{"points":[[0,0],[8,0]]}],
+        "thickness":0.2,"height":3,"openings":[{"run":0,"at":2,"width":1,"kind":"window"}]}),
+            Source::Ai,
+        )
+        .unwrap();
+    let Outcome::Walls { result } = result.outcome else {
+        panic!("walls")
+    };
+    let objects = s.objects(&ObjectFilter::default()).unwrap();
+    let wall = objects
+        .iter()
+        .find(|o| o.instance.id == result.centrelines[0])
+        .unwrap();
+    assert_eq!(wall.instance.sources["wall_height"].kind, SourceKind::Mizan);
+    let window = objects
+        .iter()
+        .find(|o| o.instance.id == result.inserts[0])
+        .unwrap();
+    assert_eq!(
+        window.instance.sources["head"].kind,
+        SourceKind::TypeDefault
+    );
+    let cite = json!({"source":"Test method","clause":"1"});
+    s.run_input(&json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
+        "version":1,"name":"Test method","title":"Test","based_on":"test","source_note":"test","rules":[
+            {"id":"count","kind":"count","basis":"geometric","element_type":"Legacy window","unit":"nr","citation":cite,
+             "terms":[{"label":"Count","operation":"add","factors":["1"],"citation":cite}]}]}}), Source::User).unwrap();
+    for description in ["Window", "Window {head}"] {
+        s.run_input(&json!({"type":"measurement","kind":"set_mappings","mappings":[
+            {"rule":"count","code":"WIN","description_en":description,"description_ar":if description.contains("{head}") {"شباك {head}"} else {"شباك"},
+             "section":"","trade":"","unit":"nr","citation":cite}]}),Source::User).unwrap();
+        let report = s.measurement_report().unwrap();
+        assert_eq!(report.items.len(), 1);
+        assert!(report.items[0].assumed);
+        assert!(report.items[0]
+            .lines
+            .iter()
+            .flat_map(|l| &l.operands)
+            .flat_map(|o| &o.sources)
+            .any(|s| s.source.kind == SourceKind::TypeDefault && s.name == "head"));
+    }
+}
