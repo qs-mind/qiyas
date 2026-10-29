@@ -102,7 +102,7 @@ test("no dock for missing or single-phase plans", () => {
   expect(view.container.childElementCount).toBe(0);
 });
 
-test("Show in chat scrolls the original thread item", () => {
+test("Show in chat folds the dock and scrolls the original thread item", () => {
   const original = document.createElement("section");
   original.id = props.threadItemId;
   original.scrollIntoView = vi.fn();
@@ -112,6 +112,7 @@ test("Show in chat scrolls the original thread item", () => {
     fireEvent.click(toggle());
     fireEvent.click(screen.getByRole("button", { name: "Show in chat" }));
     expect(original.scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: "nearest", behavior: "instant" });
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
   } finally { original.remove(); }
 });
 

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { translate, type Lang } from "../i18n";
 import { DotLoader } from "../shell/DotLoader";
 import { PlanChecklist, planPhaseTitle } from "./PlanChecklist";
@@ -102,6 +103,8 @@ function Dock({ plan, busy, language, threadItemId, awaitingApproval = plan.awai
         <PlanChecklist phases={plan.phases} stale={plan.stale} announceStale={false} busy={busy}
           language={language} showTechnicalDetails={showTechnicalDetails} onApprove={onApprove} onChange={onChange} />
         <button type="button" className="link plan-dock-chat" onClick={() => {
+          // Fold first, so the thread has its full height when the plan is scrolled to.
+          flushSync(() => toggle(false));
           document.getElementById(threadItemId)?.scrollIntoView({ block: "nearest", behavior: "instant" });
           onShowInChat?.();
         }}>{t("ai.planDock.showInChat")}</button>
