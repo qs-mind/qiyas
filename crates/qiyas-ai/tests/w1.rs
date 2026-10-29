@@ -631,7 +631,7 @@ fn failing_check(session: &mut Session) {
         _ => panic!("json"),
     })
     .unwrap();
-    let commands = kit["batch"]["commands"].as_array_mut().unwrap();
+    let commands = kit["phases"]["method"]["commands"].as_array_mut().unwrap();
     let method = commands
         .iter_mut()
         .find(|c| c["kind"] == "set_method")
@@ -643,14 +643,16 @@ fn failing_check(session: &mut Session) {
     rule["terms"] = json!([{"label":"Count","operation":"add","factors":["geometry.count","1.1"],
         "citation":{"source":"drawing","clause":"provisional allowance 10%"}}]);
     rules[0] = rule;
-    surface::run_session(
-        session,
-        EXECUTE,
-        "batch",
-        &kit["batch"],
-        qiyas_core::Source::Ai,
-    )
-    .unwrap();
+    for phase in ["recognition", "method", "mappings", "report"] {
+        surface::run_session(
+            session,
+            EXECUTE,
+            "batch",
+            &kit["phases"][phase],
+            qiyas_core::Source::Ai,
+        )
+        .unwrap();
+    }
 }
 
 fn export(session: &mut Session, op: &str, args: Value) -> Result<Value, qiyas_ai::ToolError> {

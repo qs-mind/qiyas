@@ -106,13 +106,13 @@ pub enum Command {
     #[schemars(extend("x-category" = "objects", "x-words" = ["DEFINEOBJECTTYPE"], "x-takeoff-step" = "2 define types"))]
     #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]
     #[schemars(example = json!({"type":"define_object_type","definition":{"name":"Observed","category":"drawing","geometry":"point","quantities":{"measured":"geometry.count"}}}))]
-    #[schemars(extend("x-takeoff-kit" = {"order":10,"example":1,"batch":10}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":10,"example":1,"batch":10,"phase":"recognition"}))]
     DefineObjectType {
         definition: Box<crate::objects::ObjectType>,
     },
     /// Replaces an existing type and re-derives every instance, graphics and schedule in
     /// one undo step. Invalid properties or expressions roll back the entire change.
-    #[schemars(extend("x-category" = "objects", "x-words" = ["REDEFINEOBJECTTYPE"]))]
+    #[schemars(extend("x-category" = "objects", "x-words" = ["REDEFINEOBJECTTYPE"], "x-takeoff-step" = "3 recognise"))]
     #[schemars(example = json!({"type":"redefine_object_type","definition":{"name":"Run","category":"example","geometry":"path","quantities":{"measured":"length"}}}))]
     RedefineObjectType {
         definition: Box<crate::objects::ObjectType>,
@@ -124,14 +124,14 @@ pub enum Command {
     /// Places instances of drawing-defined types on existing drivers or new point/path/region
     /// geometry. Coordinates are drawing units; property numbers use their declared physical
     /// unit kind. Generated parts follow driver edits. One undo step for all instances.
-    #[schemars(extend("x-category" = "objects", "x-words" = ["PLACEOBJECTS"]))]
+    #[schemars(extend("x-category" = "objects", "x-words" = ["PLACEOBJECTS"], "x-takeoff-step" = "3 recognise"))]
     #[schemars(example = json!({"type":"place_objects","objects":[{"type":"Run","points":[[0,0],[5,0]]}]}))]
     PlaceObjects {
         objects: Vec<crate::objects::ObjectPlacement>,
     },
     /// Changes declared instance properties or level, validates limits and re-derives graphics
     /// and live tables in one undo step. Targets are driver handles on the current sheet.
-    #[schemars(extend("x-category" = "objects", "x-words" = ["SETOBJECTPROPS"]))]
+    #[schemars(extend("x-category" = "objects", "x-words" = ["SETOBJECTPROPS"], "x-takeoff-step" = "3 recognise"))]
     #[schemars(example = json!({"type":"set_object_props","targets":[1234],"props":{"width":0.2}}))]
     SetObjectProps {
         targets: Vec<u64>,

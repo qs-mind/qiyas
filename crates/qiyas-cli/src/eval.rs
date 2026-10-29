@@ -1221,12 +1221,29 @@ mod tests {
             Box::pin(async move {
                 assert!(req.max_tokens <= 4096);
                 let call = self.calls.fetch_add(1, Ordering::SeqCst);
-                let (content, stop_reason) = if self.command.is_some() && call == 0 {
+                let input = self.command.as_ref().and_then(|command| match call {
+                    0 | 3 | 6 | 9 => Some(json!({"op":"plan","args":super::workflow_tests::phase_plan((call / 3) as usize)})),
+                    1 | 4 | 7 => {
+                        let phase = ["recognition", "method", "mappings"][(call / 3) as usize];
+                        let commands: Vec<_> = command["commands"].as_array().unwrap().iter()
+                            .filter(|c|qiyas_core::takeoff_kit::phase(c) == Some(phase)).cloned().collect();
+                        Some(json!({"op":"batch","args":{"commands":commands}}))
+                    },
+                    2 => Some(json!({"op":"records","args":{"collection":"objects","fields":["type"]}})),
+                    5 | 8 => Some(json!({"op":"run","args":{"command":{"type":"measurement","kind":"report"},"detail":"summary"}})),
+                    _ => None,
+                });
+                let (content, stop_reason) = if let Some(input) = input {
                     (
                         vec![ContentBlock::ToolUse {
-                            id: "measure-1".into(),
-                            name: "qiyas_execute".into(),
-                            input: json!({"op":"run", "args":{"command":self.command}}),
+                            id: format!("measure-{call}"),
+                            name: if matches!(call, 2 | 5 | 8) {
+                                "qiyas_read"
+                            } else {
+                                "qiyas_execute"
+                            }
+                            .into(),
+                            input,
                         }],
                         StopReason::ToolUse,
                     )
@@ -1373,7 +1390,7 @@ mod tests {
             daily: 5.0,
             max_cost: 5.0,
             max_tokens: 4096,
-            max_requests: 2,
+            max_requests: 11,
             totals: totals.clone(),
             steps: Some(output.join("steps.jsonl")),
         };
@@ -1392,7 +1409,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, "done");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 11);
         let mut session = session.lock().unwrap();
         let measurement = session.as_ref().unwrap().measurement_report().unwrap();
         assert_eq!(measurement.items[0].quantity, 6.0);
@@ -1406,8 +1423,8 @@ mod tests {
         assert!(output.join("takeoff.xlsx").exists());
         assert!(output.join("conflicts.json").exists());
         let totals = totals.lock().unwrap();
-        assert_eq!(totals.usage.output_tokens, 40);
-        assert!((totals.estimated_usd - 0.00028).abs() < 1e-9);
+        assert_eq!(totals.usage.output_tokens, 220);
+        assert!((totals.estimated_usd - 0.00154).abs() < 1e-9);
         assert_eq!(
             ledger(dir.path()).unwrap()[0].status,
             "estimated_from_usage"

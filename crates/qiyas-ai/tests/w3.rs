@@ -126,7 +126,14 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
             "terms":[{"label":"Count","operation":"add","factors":["pieces"],"citation":cite}],
             "citation":cite})
     };
+    let plan = |active: usize| {
+        exec(
+            "plan",
+            json!({"phases":(["الرسم: فحص العناصر", "الربط: فحص البنود", "الطريقة: فحص القواعد", "التسليم: فحص المخرجات"].iter().enumerate().map(|(i,title)|json!({"id":format!("p{i}"),"title":title,"status":if i<active {"done"} else if i==active {"active"} else {"pending"}})).collect::<Vec<_>>())}),
+        )
+    };
     let replies = vec![
+        Reply::Calls(vec![plan(0)]),
         // The plan: an outer ring, one partition, doors and windows of three sizes.
         Reply::Calls(vec![run(
             json!({"type":"walls","thickness":0.2,"height":3.0,
@@ -144,19 +151,32 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         Reply::Calls(vec![run(
             json!({"type":"object_tags","category":"opening","property":"mark"}),
         )]),
+        Reply::Calls(vec![read(
+            "records",
+            json!({"collection":"objects","fields":["type"]}),
+        )]),
+        Reply::Calls(vec![plan(1)]),
         // The BOQ: a static "various sizes" description, as the founder's run wrote it.
-        Reply::Calls(vec![
-            run(
-                json!({"type":"measurement","kind":"set_mappings","mappings":[
+        Reply::Calls(vec![run(
+            json!({"type":"measurement","kind":"set_mappings","mappings":[
                 {"rule":"doors","code":"A-D01","description_en":"Doors, various sizes","description_ar":"أبواب بمقاسات متنوعة","section":"Openings","trade":"Doors","unit":"pcs","citation":cite},
                 {"rule":"windows","code":"A-W01","description_en":"Windows, various sizes","description_ar":"شبابيك بمقاسات متنوعة","section":"Openings","trade":"Windows","unit":"pcs","citation":cite}]}),
-            ),
-            run(
-                json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
+        )]),
+        Reply::Calls(vec![read(
+            "run",
+            json!({"command":{"type":"measurement","kind":"report"},"detail":"summary"}),
+        )]),
+        Reply::Calls(vec![plan(2)]),
+        Reply::Calls(vec![run(
+            json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
                 "version":1,"name":"Villa geometric quantities","title":"Villa","based_on":"drawing","source_note":"Villa assumptions",
                 "rules":[count("doors","Legacy door"),count("windows","Legacy window")]}}),
-            ),
-        ]),
+        )]),
+        Reply::Calls(vec![read(
+            "run",
+            json!({"command":{"type":"measurement","kind":"report"},"detail":"summary"}),
+        )]),
+        Reply::Calls(vec![plan(3)]),
         // The sheet, in one step.
         Reply::Calls(vec![run(json!({"type":"make_sheet","name":"A-101",
             "project":"فيلا القاهرة","title":"المسقط الأفقي","drawing_no":"A-101",
@@ -188,6 +208,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
             json!({"type":"deliverable","kind":"export","report":"boq","format":"excel","path":"Villa_BOQ.xlsx"}),
         )]),
         Reply::Calls(vec![read("check", json!({}))]),
+        Reply::Calls(vec![plan(4)]),
     ];
     let provider = Queue {
         replies: Mutex::new(replies.into()),

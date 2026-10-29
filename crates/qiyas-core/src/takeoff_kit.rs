@@ -99,15 +99,32 @@ pub fn kit() -> Value {
         .iter()
         .map(|c| (c.name.clone(), example_contract(c)))
         .collect();
-    let mut batch: Vec<_> = entries
+    let mut steps: Vec<_> = entries
         .iter()
         .filter_map(|c| {
             c.takeoff_kit.as_ref().unwrap()["batch"]
                 .as_u64()
-                .map(|order| (order, example(c)))
+                .map(|order| {
+                    (
+                        order,
+                        c.takeoff_kit.as_ref().unwrap()["phase"]
+                            .as_str()
+                            .expect("kit phase"),
+                        example(c),
+                    )
+                })
         })
         .collect();
-    batch.sort_by_key(|(order, _)| *order);
+    steps.sort_by_key(|(order, _, _)| *order);
+    let mut phases = serde_json::Map::new();
+    for (_, phase, command) in steps {
+        phases
+            .entry(phase)
+            .or_insert_with(|| json!({"commands":[]}))["commands"]
+            .as_array_mut()
+            .unwrap()
+            .push(command);
+    }
     let revision: Vec<_> = ["compare_revisions", "carry_knowledge", "variation_report"]
         .iter()
         .map(|name| example(registry().get(name).expect("revision command")))
@@ -132,7 +149,7 @@ pub fn kit() -> Value {
         )
     })
     .collect();
-    json!({"measurement_rules":"kind: count/length/area/volume; basis: geometric or rule:<cited note name>. Use note factors for named_handles. In takeoff_check.end_report and final answer: Exclude <handle>: <reason> (note <handle>). Counts are whole numbers. Fix takeoff_check errors.","complete":true,"project":project,"revision_commands":revision,"commands":commands,"batch":{"commands":batch.into_iter().map(|(_,v)|v).collect::<Vec<_>>()}})
+    json!({"measurement_rules":"basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).","complete":true,"project":project,"revision_commands":revision,"commands":commands,"phases":phases})
 }
 
 /// Return exactly the kit entry for covered commands, including the auxiliary paths.
@@ -159,4 +176,28 @@ pub fn short_entry(info: &CommandInfo) -> Option<Value> {
         }
     }
     None
+}
+
+/// The workflow family is schema data, shared with the kit and the agent's batch guard.
+/// Type definition and recognition belong together; method, mappings and report are separate.
+pub fn phase(command: &Value) -> Option<&'static str> {
+    let name = command["type"].as_str()?;
+    let kind = command["kind"].as_str().unwrap_or_default();
+    let info = registry()
+        .get(&format!("{name}.{kind}"))
+        .or_else(|| registry().get(name))?;
+    if let Some(phase) = info
+        .takeoff_kit
+        .as_ref()
+        .and_then(|meta| meta["phase"].as_str())
+    {
+        return Some(phase);
+    }
+    match info.takeoff_step.as_deref()?.split_whitespace().next()? {
+        "2" | "3" | "7" => Some("recognition"),
+        "4" => Some("method"),
+        "5" => Some("mappings"),
+        "6" => Some("report"),
+        _ => None,
+    }
 }

@@ -229,7 +229,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: READ,
-            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. takeoff_kit uses offset for pages. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: all take-off contracts and a complete batch from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; installed text reading returns scans as marked OCR); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} compact inline contracts with one example (up to 8 names), {name, full:true} for the full schema, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any read command, including drafting_knowledge for sheet sets, view standards and sourced limits, and space_check for villa planning findings); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
+            description: "Read anything, change nothing. Reads accept detail: summary (default) or full, and fields. Full evidence: artifact {id, offset?, pointer?}, paged UTF-8 JSON with next_offset and its original revision; pointer (a JSON pointer such as /items/3) reads one part. A long list comes as count, rows (plain fields; nested ones named in +) and more. takeoff_kit uses offset for pages. ops: workflow ({language?: en|ar}: quantity take-off guidance, only for quantity jobs); explain ({item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project path and item code for project quantities; returns dimensions, elements, rules, citations and confidence); digest ({offset?}: compact drawing evidence, method, suggested picture and takeoff_kit link; start take-off here); takeoff_kit ({}: take-off contracts and per-phase batches from registry examples); takeoff_check ({offset?, expectations?, end_report?}: explanation coverage, unmatched schedule rules, uncertainties and verify); document ({path, pages?}: PDF page text, one-based pages; installed text reading returns scans as marked OCR); state (units, sheet, scale, current layer, take-off and BOQ); capabilities; validate ({command} or {commands}: check all inputs without running); commands ({} the index by category, {name} or {names:[...]} compact inline contracts with one example (up to 8 names), {name, full:true} for the full schema, {search}); records ({collection, type, layer, handles, names, where, fields, detail}); record_schema ({name}: an entity type, layer, text_style, header); query ({kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, …}); measure ({handle} or {points}: numbers only, no take-off row); run ({command}: any read command, including drafting_knowledge for sheet sets, view standards and sourced limits, and space_check for villa planning findings); check ({handles, rules}: the drawing check); history; events ({after?, session?}: completed commits, changed handles and a resync flag); drawings; selection; panel_state ({}: visible panels, layer folders, selected rows and open controls; no changes); rooms ({text_layer|seeds}); brief_check ({expectations:[{id,text,verify:{…}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: check the user’s own brief against measured values, never domain rules).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1085,7 +1085,7 @@ fn run_working_session(
                     _ => {}
                 }
             }
-            bind(&mut kit["batch"], &digest["example_names"]);
+            bind(&mut kit["phases"], &digest["example_names"]);
             let selected = crate::MeasurementMethod::for_session(session, method)?;
             if selected.name.is_some() {
                 kit["measurement_method"] = selected.state();
@@ -1098,7 +1098,9 @@ fn run_working_session(
             };
             if let Some(name) = &selected.name {
                 kit["measurement_method"]["scope"] = json!(scope);
-                let commands = kit["batch"]["commands"].as_array_mut().expect("kit batch");
+                let commands = kit["phases"]["method"]["commands"]
+                    .as_array_mut()
+                    .expect("method phase");
                 if selected.rules_loaded {
                     // Existing rules may be large. Reuse them without resending or replacing them.
                     commands.retain(|command| {
@@ -1436,7 +1438,8 @@ fn finish_kit(kit: &mut Value) {
     // Reserve room for the read revision by avoiding duplicate prose in this compact kit.
     kit["end_report"] =
         json!({"BOQ":"measurement.report.items","method":"measurement.report.selection"});
-    kit["measurement_rules"] = json!("basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).");
+    kit["measurement_rules"] =
+        json!("Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).");
 }
 
 fn operation_contract(mut info: Value, full: bool) -> Value {

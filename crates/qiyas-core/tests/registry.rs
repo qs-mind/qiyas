@@ -40,11 +40,17 @@ fn takeoff_kit_is_stable_bounded_and_generated_from_registry_metadata() {
         let report = qiyas_core::validation::validate_command(example, None);
         assert!(report.valid, "{}: {}", info.name, report.message());
     }
-    assert_eq!(kit["batch"]["commands"].as_array().unwrap().len(), 6);
+    assert!(kit.get("batch").is_none());
+    assert_eq!(kit["phases"].as_object().unwrap().len(), 4);
     let mut session = sample();
-    let mut batch = kit["batch"].clone();
-    batch["type"] = serde_json::json!("batch");
-    session.run_input(&batch, qiyas_core::Source::Ai).unwrap();
+    for phase in ["recognition", "method", "mappings", "report"] {
+        let mut batch = kit["phases"][phase].clone();
+        for command in batch["commands"].as_array().unwrap() {
+            assert_eq!(qiyas_core::takeoff_kit::phase(command), Some(phase));
+        }
+        batch["type"] = serde_json::json!("batch");
+        session.run_input(&batch, qiyas_core::Source::Ai).unwrap();
+    }
 }
 
 #[test]

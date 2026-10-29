@@ -262,6 +262,7 @@ pub struct Agent {
     checkpoint: Option<Arc<Mutex<Option<Conversation>>>>,
     resumed: bool,
     plan: Option<surface::Plan>,
+    phase_checked: bool,
     plan_watch: crate::plan_watch::PlanWatch,
     brief_watch: crate::brief_check::Watch,
     phase_state: PhaseState,
@@ -297,6 +298,7 @@ struct TurnCounts {
     destructive: usize,
     changed_drawing: bool,
     plan_seen: bool,
+    plan_requested: bool,
     approved: bool,
     awaiting: Option<surface::Plan>,
     ineffective: BTreeMap<String, usize>,
@@ -358,6 +360,7 @@ impl Agent {
             checkpoint: None,
             resumed: false,
             plan: None,
+            phase_checked: false,
             plan_watch: Default::default(),
             brief_watch: Default::default(),
             phase_state: PhaseState::default(),
@@ -686,6 +689,7 @@ impl Agent {
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
         self.plan = None;
+        self.phase_checked = false;
         self.plan_watch = Default::default();
         self.brief_watch = Default::default();
         self.resumed = false;
@@ -826,7 +830,7 @@ impl Agent {
         }
         let pointed_destination = !pointed.selection.is_empty() || pointed.region.is_some();
         self.compact();
-        if crate::history::tokens(&self.history) >= MAX_INPUT_TOKENS {
+        if crate::history::tokens(&self.history) >= MAX_INPUT_TOKENS && !self.fit_history() {
             return self.stop(&events, TOO_LONG).await;
         }
         if let Some(why) = images.iter().find_map(context::UserImage::refused) {
@@ -949,6 +953,15 @@ impl Agent {
             content.push(ContentBlock::Text {
                 text: continue_note(self.chat_language, &open),
             });
+            if let Some(phase) = self.plan.as_ref().and_then(|plan| {
+                plan.phases
+                    .iter()
+                    .find(|phase| phase.status == surface::PlanStatus::Active)
+            }) {
+                content.push(ContentBlock::Text {
+                    text: format!("[active phase] {}: {} (Active)", phase.id, phase.title),
+                });
+            }
         }
         if destination_advice {
             content.push(ContentBlock::Text { text: "[advice] This drawing already contains work. Consider whether a new drawing or a destination question is appropriate. Mizan decides.".into() });
@@ -963,6 +976,8 @@ impl Agent {
         self.provider.begin_turn(&self.turn_text);
         let tools = catalogue();
         let mut counts = TurnCounts {
+            plan_seen: judgement::wants_to_continue(&self.turn_text)
+                && !self.plan_watch.open_phases().is_empty(),
             approved: matches!(
                 self.turn_text.trim(),
                 "Approved, continue." | "موافق، تابع." | "موافق، أكمل."
@@ -990,7 +1005,7 @@ impl Agent {
                 self.trim_pictures();
                 self.last_picture = None;
             }
-            if crate::history::tokens(&self.history) > MAX_INPUT_TOKENS {
+            if crate::history::tokens(&self.history) > MAX_INPUT_TOKENS && !self.fit_history() {
                 return self.stop(&events, TOO_LONG).await;
             }
             let provider_notice = self.provider.budget_notice();
@@ -1514,22 +1529,38 @@ impl Agent {
                     }]
                     .as_str()
                     .unwrap_or_default();
-                    let routed = surface::route(name, input).and_then(|route| {
-                        // The drawing need is checked where the session is locked, off this
-                        // thread (`run_tool`): locking here would stall the turn's
-                        // events behind a long command.
-                        surface::check_need(
-                            name,
-                            op,
-                            true,
-                            self.host
-                                .as_deref()
-                                .is_some_and(crate::DrawingHost::has_window),
-                            self.host.is_some(),
-                        )
-                        .map_err(|error| error.json().to_string())?;
-                        Ok(route)
-                    });
+                    let batch = crate::takeoff_phase::Batch::read(name, input);
+                    let quantity_job = self.job == Job::Takeoff || Job::observes(name, input);
+                    let phase_refusal = if quantity_job {
+                        batch.refusal().or_else(|| {
+                            if batch.takeoff_edit() && !counts.plan_seen && !counts.plan_requested {
+                                counts.plan_requested = true;
+                                Some("Before take-off edits, write qiyas_execute plan with one goal and check per phase. Mark the current phase active, then retry this small batch. This plan-first reminder is given once per turn.")
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    let routed = phase_refusal
+                        .map_or_else(|| surface::route(name, input), |why| Err(why.into()))
+                        .and_then(|route| {
+                            // The drawing need is checked where the session is locked, off this
+                            // thread (`run_tool`): locking here would stall the turn's
+                            // events behind a long command.
+                            surface::check_need(
+                                name,
+                                op,
+                                true,
+                                self.host
+                                    .as_deref()
+                                    .is_some_and(crate::DrawingHost::has_window),
+                                self.host.is_some(),
+                            )
+                            .map_err(|error| error.json().to_string())?;
+                            Ok(route)
+                        });
                     // The finish gate: ending the work with plan phases open is refused.
                     let finish_refusal = (name == surface::EXECUTE && op == "finish")
                         .then(|| self.finish_refusal())
@@ -1691,6 +1722,28 @@ impl Agent {
                             })
                     });
                     let switched = self.plan.as_ref().and_then(active_phase) != active_phase(&plan);
+                    if self.job == Job::Takeoff && completed {
+                        let unchecked = plan.phases.iter().any(|phase| {
+                            phase.status == surface::PlanStatus::Done
+                                && !self.plan.as_ref().is_some_and(|old| {
+                                    old.phases.iter().any(|p| {
+                                        p.id == phase.id
+                                            && (p.status == surface::PlanStatus::Done
+                                                || (p.status == surface::PlanStatus::Active
+                                                    && self.phase_checked))
+                                    })
+                                })
+                        });
+                        if unchecked {
+                            append_advice(
+                                &mut block,
+                                serde_json::json!({"code":"phase_check_needed","message":"Read/check the active phase after its last edit before marking it done: takeoff_check with offset, report summary, records with fields, or explain a sample. Fix and recheck; after three failed attempts mark it skipped with the reason in its title."}),
+                            );
+                        }
+                    }
+                    if switched {
+                        self.phase_checked = false;
+                    }
                     let (errors, revision) = if completed || switched {
                         match self.unfixed_errors(cancel, *epoch).await {
                             Ok(errors) => errors,
@@ -1747,8 +1800,24 @@ impl Agent {
                 }
             }
             if edited && !is_error(&block) {
+                self.phase_checked = false;
                 self.plan_watch.changed();
                 self.brief_watch.changed();
+            }
+            if !is_error(&block) && self.plan.as_ref().and_then(active_phase).is_some() {
+                if let ContentBlock::ToolResult { content, .. } = &block {
+                    for part in content {
+                        if let ResultPart::Text(text) = part {
+                            if let Ok(value) = serde_json::from_str(text) {
+                                if let Some(passed) =
+                                    crate::takeoff_phase::checked(name, input, &value)
+                                {
+                                    self.phase_checked = passed;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if name == surface::READ && input["op"] == "brief_check" && !is_error(&block) {
                 if let ContentBlock::ToolResult { content, .. } = &block {
@@ -2314,6 +2383,13 @@ impl Agent {
         true
     }
 
+    /// Over the limit after compaction (a few huge results kept whole): retire even recent
+    /// results into their artifacts before refusing to go on. True when it now fits.
+    fn fit_history(&mut self) -> bool {
+        self.make_context_room();
+        crate::history::tokens(&self.history) < MAX_INPUT_TOKENS
+    }
+
     /// Keep a token-sized recent window and complete call/result pairs. Older requests survive
     /// word for word in a memory note, alongside outcomes and discovered command contracts.
     fn compact(&mut self) {
@@ -2631,9 +2707,9 @@ fn country_line(country: Option<&str>, method: Option<&str>) -> String {
 /// What a "continue" message adds: the open plan phases, or the unfinished list of the last answer.
 fn continue_note(lang: Lang, open: &[String]) -> String {
     match (lang, open.is_empty()) {
-        (Lang::En, false) => format!("[continue] The user asked you to continue and complete the work. Open plan phases: {}. Do them now, one at a time, on your stated assumptions. Do not stop for cost, do not ask what you can assume, and do not finish until every phase is done or skipped with a reason.", open.join("; ")),
+        (Lang::En, false) => format!("[continue] The user asked you to continue and complete the work. Open plan phases: {}. Resume the active phase first, keeping its id; check it after edits, then move to pending phases one at a time. Do not stop for cost, do not ask what you can assume, and do not finish until every phase is done or skipped with a reason.", open.join("; ")),
         (Lang::En, true) => "[continue] The user asked you to continue and complete the work. Resume what your last answer listed as not done: make a plan for it and do it on your stated assumptions. Do not stop for cost, and do not ask what you can assume.".into(),
-        (Lang::Ar, false) => format!("[continue] طلب المستخدم أن تتابع وتكمل العمل. المراحل المفتوحة: {}. نفّذها الآن واحدة بعد أخرى بافتراضاتك المعلنة. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه، ولا تنهِ قبل أن تكتمل كل مرحلة أو تُتجاوز بسبب مذكور.", open.join("؛ ")),
+        (Lang::Ar, false) => format!("[continue] طلب المستخدم أن تتابع وتكمل العمل. المراحل المفتوحة: {}. استأنف المرحلة النشطة بنفس معرّفها أولًا، وافحصها بعد التعديل، ثم انتقل إلى المراحل المعلقة واحدة بعد أخرى. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه، ولا تنهِ قبل أن تكتمل كل مرحلة أو تُتجاوز بسبب مذكور.", open.join("؛ ")),
         (Lang::Ar, true) => "[continue] طلب المستخدم أن تتابع وتكمل العمل. تابع ما ذكرت في إجابتك الأخيرة أنه لم يُنجز: ضع له خطة ونفّذه بافتراضاتك المعلنة. لا تتوقف بسبب التكلفة، ولا تسأل عمّا تستطيع افتراضه.".into(),
     }
 }

@@ -49,7 +49,12 @@ async fn call(
 }
 
 fn adapt(kit: &Value) -> Value {
-    let mut batch = kit["batch"].clone();
+    // The kit gives one example batch per phase; this fake agent sends them in order as one.
+    let commands: Vec<Value> = ["recognition", "method", "mappings", "report"]
+        .iter()
+        .flat_map(|phase| kit["phases"][phase]["commands"].as_array().unwrap().clone())
+        .collect();
+    let mut batch = json!({ "commands": commands });
     for command in batch["commands"].as_array_mut().unwrap() {
         match (command["type"].as_str(), command["kind"].as_str()) {
             (Some("define_object_type"), _) => {

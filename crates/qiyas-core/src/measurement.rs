@@ -189,7 +189,7 @@ pub enum MeasurementCommand {
     #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"geometry","title":"Geometric quantities","based_on":"drawing","source_note":"No standard selected; visible source geometry only","rules":[{"id":"length","kind":"length","basis":"geometric","element_type":"Run","unit":"m","terms":[{"label":"Measured length","operation":"add","factors":["geometry.length"],"factor_labels":["Length"],"citation":{"source":"drawing","clause":"source path"}}],"citation":{"source":"drawing","clause":"source path"}}]}}))]
     #[schemars(extend("x-takeoff-step" = "4 apply selected method"))]
     #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"observed","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"count","kind":"count","basis":"geometric","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"insert"}}],"citation":{"source":"drawing","clause":"insert"}}]}}))]
-    #[schemars(extend("x-takeoff-kit" = {"order":50,"example":1,"batch":40}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":50,"example":1,"batch":40,"phase":"method"}))]
     SetMethod {
         scope: MethodScope,
         method: Option<Box<RuleSet>>,
@@ -198,12 +198,12 @@ pub enum MeasurementCommand {
     #[schemars(example = json!({"kind":"set_mappings","mappings":[{"rule":"length","code":"L-{id}","description_en":"Measured {type}","description_ar":"Measured {type}","section":"Drawing quantities","trade":"","unit":"m","citation":{"source":"drawing","clause":"source path"}}]}))]
     #[schemars(extend("x-takeoff-step" = "5 map recognised elements to BOQ"))]
     #[schemars(example = json!({"kind":"set_mappings","mappings":[{"rule":"count","code":"C","description_en":"Observed inserts","description_ar":"Observed inserts","section":"Drawing","trade":"","unit":"pcs","citation":{"source":"drawing","clause":"insert"}}]}))]
-    #[schemars(extend("x-takeoff-kit" = {"order":60,"example":1,"batch":50}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":60,"example":1,"batch":50,"phase":"mappings"}))]
     SetMappings { mappings: Vec<Mapping> },
     /// Read the applied methods, quantities, generated BOQ and dimension sheets.
     #[schemars(example = json!({"kind":"report"}))]
     #[schemars(extend("x-takeoff-step" = "6 check generated BOQ"))]
-    #[schemars(extend("x-takeoff-kit" = {"order":90,"example":0,"batch":60}))]
+    #[schemars(extend("x-takeoff-kit" = {"order":90,"example":0,"batch":60,"phase":"report"}))]
     Report,
     /// The drawing-pack check card, before take-off: units known, annotation scale set, each PDF
     /// page vector or scanned (a scan calibrated), page orientation, and the sheet number and

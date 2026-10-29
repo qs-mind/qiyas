@@ -56,7 +56,8 @@ if method:
     bare = re.sub(r"\s*[(\[]\s*RICS\s*[)\]]|\bRICS\b\s*", "", method, flags=re.I).strip() or method
     assert kit["measurement_method"]["name"] == bare, kit["measurement_method"]["name"]
     assert "Write rules from your knowledge" in kit["measurement_method"]["instruction"]
-batch = kit["batch"]
+# One example batch per phase; this fake agent sends them in order as one.
+batch = {"commands": [c for p in ("recognition", "method", "mappings", "report") for c in kit["phases"][p]["commands"]]}
 for command in batch["commands"]:
     kind = command.get("kind")
     if command["type"] == "define_object_type":

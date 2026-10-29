@@ -630,10 +630,15 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 - Start take-off with `digest`, then `takeoff_kit`. The registry index names this first.
   Command/kind `x-takeoff-kit` metadata selects complete registry examples and orders a
-  connected type → recognition → apply → method → mappings → report batch. Complete examples
+  set of phase examples: types and recognition for one family, method, mappings, report. Complete examples
   carry their required fields; enum choices remain explicit, with full contracts in error repairs. The drawing
   digest supplies paired source layer/block names without classifying their meaning.
-- The kit has a 6,144-byte guard and deterministic contracts. Copy and adapt its batch;
+- Mizan starts quantity work with a goal checklist and works one family and level/sheet at a time.
+  Small batches stay within the active phase; read/check after edits, fix, then mark done.
+  After three failed attempts skip with a reason. Continue resumes the active phase.
+  The agent refuses mixed-phase or oversized quantity batches and reminds once to plan first.
+  Reads use summaries, fields and pointers; completion without a fresh check gets advice.
+- The kit has a 6,144-byte guard and deterministic contracts. Copy and adapt only the active phase;
   never validate empty command stubs or discover these commands one schema at a time.
   Missing-field validation and run errors include required fields and a filled registry
   example, including nested batch steps. Self-check and the final uncertainty report remain

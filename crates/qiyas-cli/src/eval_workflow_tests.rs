@@ -16,6 +16,9 @@ pub(super) fn mapping_commands() -> Vec<Value> {
         json!({"type":"measurement","kind":"set_mappings","mappings":[{"rule":"surface","code":"surface-{id}","description_en":"Measured surface","description_ar":"Measured surface","section":"Observed","trade":"","unit":"m2","citation":citation}]}),
     ]
 }
+pub(super) fn phase_plan(active: usize) -> Value {
+    json!({"phases":(["Tower recognition: inspect objects", "Method: inspect rules", "BOQ: inspect quantities"].iter().enumerate().map(|(i,title)|json!({"id":format!("p{i}"),"title":title,"status":if i<active {"done"} else if i==active {"active"} else {"pending"}})).collect::<Vec<_>>())})
+}
 fn results(req: &TurnRequest) -> Vec<Value> {
     req.messages
         .iter()
@@ -145,11 +148,8 @@ async fn provider_busy_retries_back_off_honor_retry_after_and_charge_only_succes
     }
 }
 fn has_boq(value: &Value) -> bool {
-    if value["items"].as_array().is_some_and(|items| {
-        items
-            .iter()
-            .any(|v| v["code"].is_string() && v["quantity"].is_number())
-    }) {
+    // Summary replies can put item rows in compact tables instead of an items array.
+    if value["code"].is_string() && value["quantity"].is_number() {
         return true;
     }
     match value {
@@ -179,20 +179,26 @@ impl Provider for Workflow {
                 .iter()
                 .flat_map(|m| &m.content)
                 .all(|b| !format!("{b:?}").contains("truth.json")));
-            let kit_step = if self.kit {
-                Some(match index {
-                0 => ("qiyas_read", "digest", json!({})),
-                1 => {
-                    assert_eq!(seen.last().unwrap()["takeoff_kit"]["op"],"takeoff_kit");
+            let (tool, op, args) = match index {
+                0 => ("qiyas_execute", "plan", phase_plan(0)),
+                1 => ("qiyas_read", "digest", json!({})),
+                2 => if self.kit {
                     ("qiyas_read", "takeoff_kit", json!({}))
+                } else {
+                    ("qiyas_read", "commands", json!({"names":["define_object_type","recognition.define","recognition.apply","measurement.set_method","measurement.set_mappings"]}))
                 },
-                2 => ("qiyas_capture", "picture", json!({"width":640})),
-                3 => {
-                    let kit = seen.iter().find(|v|v["batch"]["commands"].is_array()).expect("kit response");
-                    let digest = seen.iter().find(|v|v["counts"].is_object()).unwrap();
-                    assert!(digest["closed_regions"]["count"].as_u64().unwrap()>0);
-                    let mut batch = kit["batch"].clone();
-                    let commands = batch["commands"].as_array_mut().unwrap();
+                3 => ("qiyas_capture", "picture", json!({"width":640})),
+                4 | 7 | 10 => {
+                    let phase = match index { 4 => "recognition", 7 => "method", _ => "mappings" };
+                    let mut commands = if self.kit {
+                        seen.iter().find(|v| v["phases"].is_object()).expect("kit response")["phases"][phase]["commands"].as_array().unwrap().clone()
+                    } else if index == 4 {
+                        let mut commands = definition_commands();
+                        commands.push(json!({"type":"recognition","kind":"apply"}));
+                        commands
+                    } else {
+                        vec![mapping_commands()[usize::from(index == 10)].clone()]
+                    };
                     for command in commands.iter_mut() {
                         match (command["type"].as_str(),command["kind"].as_str()) {
                             (Some("define_object_type"),_) => {
@@ -221,50 +227,22 @@ impl Provider for Workflow {
                             _ => {}
                         }
                     }
-                    commands.push(kit["commands"]["discrepancy_check"]["example"].clone());
-                    ("qiyas_execute", "batch", batch)
+
+                    for command in &mut commands {
+                        if command["kind"] == "define" { command["rule"]["confidence"] = json!(1.0); }
+                    }
+                    ("qiyas_execute", "batch", json!({"commands":commands}))
                 },
-                4 => ("qiyas_read", "takeoff_check", json!({})),
-                _ => return Ok(TurnResult{content:vec![ContentBlock::Text{text:"Geometric BOQ generated. Remaining symbols and paths are unresolved; evidence coverage is incomplete.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
-            })
-            } else {
-                None
+                5 => ("qiyas_read", "records", json!({"collection":"objects","fields":["type"]})),
+                6 => ("qiyas_execute", "plan", phase_plan(1)),
+                8 | 11 => ("qiyas_read", "run", json!({"command":{"type":"measurement","kind":"report"},"detail":"summary"})),
+                9 => ("qiyas_execute", "plan", phase_plan(2)),
+                12 => ("qiyas_read", "takeoff_check", json!({"offset":0})),
+                13 => ("qiyas_execute", "run", json!({"command":{"type":"discrepancy_check"}})),
+                14 => ("qiyas_read", "run", json!({"command":{"type":"measurement","kind":"report"},"detail":"summary"})),
+                15 => ("qiyas_execute", "plan", phase_plan(3)),
+                _ => return Ok(TurnResult{content:vec![ContentBlock::Text{text:"Geometric BOQ generated for the tower. Remaining evidence and unmeasured scope require review.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
             };
-            let (tool, op, mut args) = if let Some(step) = kit_step {
-                step
-            } else {
-                match index {
-                0=>("qiyas_read","digest",json!({})),
-                1=>{assert_eq!(seen.last().unwrap()["counts"]["element_types"],0);("qiyas_read","commands",json!({"names":["define_object_type","recognition.define","recognition.apply","measurement.set_method","measurement.set_mappings"]}))},
-                2=>{
-                    let digest=seen.iter().find(|v|v["counts"].is_object()).unwrap();
-                    assert!(digest["closed_regions"]["count"].as_u64().unwrap()>0);
-                    ("qiyas_execute","batch",json!({"commands":definition_commands()}))
-                },
-                3=>("qiyas_execute","run",json!({"command":{"type":"recognition","kind":"apply"}})),
-                4=>("qiyas_read","run",json!({"command":{"type":"recognition","kind":"queue","state":"pending"}})),
-                5=>{
-                    let queue=seen.last().unwrap();
-                    let candidates=queue["outcome"]["result"]["candidates"].as_array().expect("candidate result");
-                    assert!(!candidates.is_empty());
-                    let commands:Vec<_>=candidates.iter().map(|c|json!({"type":"recognition","kind":"review","handle":c["handle"],"decision":"accepted"})).collect();
-                    ("qiyas_execute","batch",json!({"commands":commands}))
-                },
-                6=>("qiyas_execute","batch",json!({"commands":mapping_commands()})),
-                7=>("qiyas_read","run",json!({"command":{"type":"measurement","kind":"report"}})),
-                8=>{
-                    let digest=seen.iter().find(|v|v["counts"].is_object()).unwrap();
-                    let count:u64=digest["entries"].as_array().unwrap().iter().filter(|v|v["section"]=="layers").filter_map(|v|v["kinds"]["LwPolyline"].as_u64()).sum();
-                    ("qiyas_read","takeoff_check",json!({"expectations":[{"kind":"count","entity_type":"LwPolyline","value":count}]}))
-                },
-                9=>("qiyas_execute","run",json!({"command":{"type":"check"}})),
-                _=>return Ok(TurnResult{content:vec![ContentBlock::Text{text:"BOQ generated from recognised boundaries using the geometric method. Unmeasured symbols, paths, annotations and low-confidence interpretations are listed in the end report; review is optional.".into()}],stop_reason:StopReason::EndTurn,usage:Usage{input_tokens:100,output_tokens:20,..Default::default()}}),
-            }
-            };
-            // This scripted author inspects complete kits, reports and candidate queues.
-            if tool != "qiyas_capture" {
-                args["detail"] = json!("full");
-            }
             Ok(TurnResult {
                 content: vec![ContentBlock::ToolUse {
                     id: format!("workflow-{index}"),
@@ -319,7 +297,7 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
                 daily: 5.0,
                 max_cost: 1.0,
                 max_tokens: 4096,
-                max_requests: if kit { 8 } else { 11 },
+                max_requests: 17,
                 totals: totals.clone(),
                 steps: Some(dir.path().join("steps.jsonl")),
             };
@@ -332,8 +310,8 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
             )
             .await;
             assert_eq!(status, "done");
-            assert_eq!(calls.load(Ordering::SeqCst), if kit { 6 } else { 11 });
-            assert_eq!(first_boq.load(Ordering::SeqCst), if kit { 4 } else { 8 });
+            assert_eq!(calls.load(Ordering::SeqCst), 17);
+            assert!((11..=15).contains(&first_boq.load(Ordering::SeqCst)));
             let guard = session.lock().unwrap();
             let session = guard.as_ref().unwrap();
             assert!(qiyas_core::knowledge::get(
@@ -367,7 +345,7 @@ async fn mizan_alone_authors_recognises_maps_checks_and_reports_two_generated_ca
                 assert!(log.contains(operation), "{operation}");
             }
             let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
-            assert_eq!(steps.lines().count(), if kit { 13 } else { 23 });
+            assert_eq!(steps.lines().count(), 35);
             assert!(steps.contains("end_report"));
             assert!(steps.contains("reserved_usd") && steps.contains("estimated_usd"));
             assert!(totals.lock().unwrap().estimated_usd > 0.0);
@@ -501,16 +479,12 @@ impl Provider for LivePattern {
                 output_tokens: 200,
                 ..Default::default()
             };
-            if self.finish && finish && index > 7 {
+            if self.finish && finish && index > 15 {
                 return Ok(TurnResult{content:vec![ContentBlock::Text{text:"Partial geometric BOQ submitted. Remaining scope and raster uncertainty are unresolved; budget reserved for this end report.".into()}],stop_reason:StopReason::EndTurn,usage});
             }
             let (tool, op, args) = match index {
                 0 => ("qiyas_read", "digest", json!({})),
-                1 => (
-                    "qiyas_execute",
-                    "plan",
-                    json!({"phases":[{"id":"evidence","title":"Read evidence","status":"active"},{"id":"takeoff","title":"Recognise and map quantities","status":"pending"}]}),
-                ),
+                1 => ("qiyas_execute", "plan", phase_plan(0)),
                 2 => (
                     "qiyas_read",
                     "commands",
@@ -526,15 +500,42 @@ impl Provider for LivePattern {
                     let mut commands = definition_commands();
                     commands[1]["rule"]["confidence"] = json!(1.0);
                     commands.push(json!({"type":"recognition","kind":"apply"}));
-                    commands.extend(mapping_commands());
                     ("qiyas_execute", "batch", json!({"commands":commands}))
                 }
                 6 => (
                     "qiyas_read",
+                    "records",
+                    json!({"collection":"objects","fields":["type"]}),
+                ),
+                7 => ("qiyas_execute", "plan", phase_plan(1)),
+                8 => (
+                    "qiyas_execute",
+                    "run",
+                    json!({"command":mapping_commands()[0]}),
+                ),
+                9 => (
+                    "qiyas_read",
                     "run",
                     json!({"command":{"type":"measurement","kind":"report"}}),
                 ),
-                7 => ("qiyas_read", "takeoff_check", json!({})),
+                10 => ("qiyas_execute", "plan", phase_plan(2)),
+                11 => (
+                    "qiyas_execute",
+                    "run",
+                    json!({"command":mapping_commands()[1]}),
+                ),
+                12 => (
+                    "qiyas_read",
+                    "run",
+                    json!({"command":{"type":"measurement","kind":"report"}}),
+                ),
+                13 => ("qiyas_read", "takeoff_check", json!({"offset":0})),
+                14 => (
+                    "qiyas_read",
+                    "run",
+                    json!({"command":{"type":"measurement","kind":"report"}}),
+                ),
+                15 => ("qiyas_execute", "plan", phase_plan(3)),
                 _ => {
                     assert!(
                         seen.iter().any(|v| v["counts"].is_object()),
@@ -543,7 +544,7 @@ impl Provider for LivePattern {
                     (
                         "qiyas_read",
                         "records",
-                        json!({"collection":"entities","detail":"full"}),
+                        json!({"collection":"entities","detail":"summary","fields":["handle","type","layer"]}),
                     )
                 }
             };

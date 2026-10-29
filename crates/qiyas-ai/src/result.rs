@@ -18,7 +18,7 @@ pub(crate) fn format(
         return Ok(output);
     };
     if op == "artifact" {
-        return Ok(ToolOutput::Json(value));
+        return Ok(ToolOutput::Json(fit(value, None)));
     }
     // Named compact contracts are already complete. Never save, page, shorten or
     // replace them by an artifact reference, including on repeated lookups.
@@ -191,7 +191,33 @@ pub(crate) fn format(
             object.remove("defaults_used");
         }
     }
-    Ok(ToolOutput::Json(artifact::canonical(&out)))
+    Ok(ToolOutput::Json(artifact::canonical(&fit(out, Some(&id)))))
+}
+
+/// No single reply may fill the conversation, even one asked for in full (a measurement
+/// result with every dimension line was 1.3 MB). Past this size the reply keeps its plain
+/// fields and the first rows of each list; the artifact keeps everything.
+const REPLY_LIMIT: usize = 48_000;
+
+fn fit(value: Value, id: Option<&str>) -> Value {
+    if value.to_string().len() <= REPLY_LIMIT {
+        return value;
+    }
+    let mut out = shorten(&value);
+    if out.to_string().len() > REPLY_LIMIT {
+        out = summary(&value, 0);
+    }
+    if out.to_string().len() > REPLY_LIMIT {
+        out = row(&value);
+    }
+    if !out.is_object() {
+        out = json!({"value":out});
+    }
+    out["shortened"] = json!("This reply was too long for the conversation and is shortened. Read one part with fields: [\"/pointer\"] or artifact {id, pointer}.");
+    if let Some(id) = id {
+        out["artifact"] = json!(id);
+    }
+    out
 }
 
 /// A page of records is already budgeted by the core, which lets one oversized record through
@@ -594,6 +620,41 @@ mod tests {
             panic!("JSON result")
         };
         value
+    }
+
+    #[test]
+    fn a_full_record_read_never_fills_the_conversation() {
+        // A tower's measurement result read with detail full: every dimension line with its
+        // operands and sources, one record of well over a megabyte.
+        let lines: Vec<_> = (0..6_000)
+            .map(|i| json!({"id":format!("e{i}/wv/t1"),"value":3.2,"operands":[{"name":"Length","value":12.5,
+                "sources":[{"kind":"measured","handle":i,"text":"centreline length of the core wall on level 42"}]}]}))
+            .collect();
+        let value = json!({"collection":"knowledge_measurement","next_offset":2,"offset":1,
+            "records":[{"key":"result","data":{"data":{"items":[{"code":"02.W01","lines":lines}]}}}]});
+        assert!(value.to_string().len() > 1_000_000);
+        let out = reply(surface::READ, "records", json!({"detail":"full"}), value);
+        assert!(
+            out.to_string().len() <= REPLY_LIMIT + 1_000,
+            "{}",
+            out.to_string().len()
+        );
+        assert!(out["shortened"].is_string());
+        assert_eq!(out["next_offset"], 2);
+        let id = out["artifact"].as_str().unwrap();
+        let part = artifact::read(
+            &json!({"id":id,"pointer":"/records/0/data/data/items/0/lines/5999/id"}),
+        )
+        .unwrap();
+        assert!(part["data"].as_str().unwrap().contains("e5999"));
+        // Reading the whole artifact back is bounded the same way.
+        let whole = artifact::read(&json!({"id":id})).unwrap();
+        let back = reply(surface::READ, "artifact", json!({"id":id}), whole);
+        assert!(
+            back.to_string().len() <= REPLY_LIMIT + 1_000,
+            "{}",
+            back.to_string().len()
+        );
     }
 
     #[test]

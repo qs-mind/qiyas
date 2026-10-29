@@ -23,6 +23,15 @@ fn sample() -> (tempfile::TempDir, Session) {
     (dir, session)
 }
 
+fn run_kit(session: &mut Session, kit: &Value) {
+    for phase in ["recognition", "method", "mappings", "report"] {
+        let batch = &kit["phases"][phase];
+        if !batch["commands"].as_array().unwrap().is_empty() {
+            call(session, EXECUTE, json!({"op":"batch","args":batch})).unwrap();
+        }
+    }
+}
+
 #[test]
 fn takeoff_kit_binds_drawing_names_runs_and_fits_one_read() {
     let (_dir, mut s) = sample();
@@ -54,14 +63,14 @@ fn takeoff_kit_binds_drawing_names_runs_and_fits_one_read() {
     }
     assert!(bytes <= qiyas_core::takeoff_kit::MAX_BYTES, "{bytes}");
     assert_eq!(
-        kit["batch"]["commands"][1]["rule"]["match"]["block"],
+        kit["phases"]["recognition"]["commands"][1]["rule"]["match"]["block"],
         digest["example_names"]["block"]
     );
     assert_eq!(
-        kit["batch"]["commands"][1]["rule"]["match"]["layer"],
+        kit["phases"]["recognition"]["commands"][1]["rule"]["match"]["layer"],
         digest["example_names"]["layer"]
     );
-    call(&mut s, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    run_kit(&mut s, &kit);
     assert!(!s.measurement_report().unwrap().items.is_empty());
 }
 
@@ -593,7 +602,7 @@ fn takeoff_export_reports_manual_generated_and_dimension_rows() {
         assert_eq!(empty[key], 0, "{key}: {empty}");
     }
     let kit = call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
-    call(&mut s, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    run_kit(&mut s, &kit);
     let report = s.measurement_report().unwrap();
     let generated = report
         .items
@@ -845,12 +854,7 @@ async fn destructive_commands_in_run_and_batch_report_counts_and_apply() {
 fn operation_needs_cover_every_public_op_and_registry_reads_need_nothing() {
     let (_drawing, mut session) = sample();
     let kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
-    call(
-        &mut session,
-        EXECUTE,
-        json!({"op":"batch","args":kit["batch"]}),
-    )
-    .unwrap();
+    run_kit(&mut session, &kit);
     let item = session.measurement_report().unwrap().items[0].clone();
     let project = tempfile::Builder::new()
         .suffix(".qss")
@@ -1919,7 +1923,7 @@ fn digest_is_bounded_paged_and_read_only_and_workflow_schemas_are_batched() {
 fn revision_kit_runs_through_generic_tools_and_typed_commands() {
     let (dir, mut a) = sample();
     let kit = call(&mut a, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
-    call(&mut a, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    run_kit(&mut a, &kit);
     let path = dir.path().join("A.dxf");
     a.save_as(&path).unwrap();
     let mut b = Session::open_standalone(&path).unwrap();
@@ -2053,9 +2057,9 @@ fn takeoff_self_check_preserves_unicode_note_unit_dimensions() {
 fn explain_is_one_read_with_recognition_rules_and_no_mutation() {
     let (_dir, mut s) = sample();
     let mut kit = call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
-    kit["batch"]["commands"][1]["rule"]["confidence"] = json!(0.3);
-    kit["batch"]["commands"][1]["rule"]["review_below"] = json!(0.0);
-    call(&mut s, EXECUTE, json!({"op":"batch","args":kit["batch"]})).unwrap();
+    kit["phases"]["recognition"]["commands"][1]["rule"]["confidence"] = json!(0.3);
+    kit["phases"]["recognition"]["commands"][1]["rule"]["review_below"] = json!(0.0);
+    run_kit(&mut s, &kit);
     let item = s.measurement_report().unwrap().items[0].code.clone();
     let before = (
         s.document_revision(),
@@ -2090,7 +2094,7 @@ fn takeoff_check_reports_count_and_global_allowance_errors_until_repaired() {
         .as_str()
         .unwrap()
         .contains("Counts are whole numbers"));
-    let commands = kit["batch"]["commands"].as_array_mut().unwrap();
+    let commands = kit["phases"]["method"]["commands"].as_array_mut().unwrap();
     let method = commands
         .iter_mut()
         .find(|c| c["kind"] == "set_method")
@@ -2104,12 +2108,7 @@ fn takeoff_check_reports_count_and_global_allowance_errors_until_repaired() {
     rules[0] = rule.clone();
     rule["id"] = json!("second");
     rules.push(rule);
-    call(
-        &mut session,
-        EXECUTE,
-        json!({"op":"batch","args":kit["batch"]}),
-    )
-    .unwrap();
+    run_kit(&mut session, &kit);
     let checked = call(&mut session, READ, json!({"op":"takeoff_check","args":{}})).unwrap();
     assert!(checked["measurement_errors"].as_u64().unwrap() >= 3);
     assert_eq!(checked["passed"], false);
@@ -2401,7 +2400,7 @@ fn named_method_state_digest_and_kit_request_authored_rules_without_bundling_the
         if op == "takeoff_kit" {
             let bytes = serde_json::to_vec(&value).unwrap().len();
             assert!(bytes <= qiyas_core::takeoff_kit::MAX_BYTES, "{bytes}");
-            let command = value["batch"]["commands"]
+            let command = value["phases"]["method"]["commands"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2438,7 +2437,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
                     content.iter().find_map(|part| match part {
                         ResultPart::Text(text) => serde_json::from_str::<Value>(text)
                             .ok()
-                            .filter(|v| v["batch"]["commands"].is_array()),
+                            .filter(|v| v["phases"].is_object()),
                         _ => None,
                     })
                 } else {
@@ -2451,7 +2450,8 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
             .as_str()
             .unwrap()
             .contains("Write rules from your knowledge"));
-        let mut batch = kit["batch"].clone();
+        let index = request.messages.iter().flat_map(|m| &m.content).filter(|b| matches!(b, ContentBlock::ToolUse { name, input, .. } if name == EXECUTE && input["op"] == "batch")).count();
+        let mut batch = kit["phases"][["recognition", "method", "mappings"][index]].clone();
         // This exercises transport with invented geometry and a visibly fictitious reference.
         // It neither asserts nor supplies any rule of the named standard.
         let name = kit["measurement_method"]["name"].as_str().unwrap();
@@ -2480,7 +2480,22 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
         Box::new(Script::steps(
             vec![
                 (READ, json!({"op":"state","args":{}})).into(),
-                (READ, json!({"op":"takeoff_kit","args":{"detail":"full"}})).into(),
+                (READ, json!({"op":"takeoff_kit","args":{"offset":4}})).into(),
+                (EXECUTE, quantity_plan(0)).into(),
+                scripted::ScriptCall::FromHistory(author_from_kit),
+                (
+                    READ,
+                    json!({"op":"records","args":{"collection":"objects","fields":["type"]}}),
+                )
+                    .into(),
+                (EXECUTE, quantity_plan(1)).into(),
+                scripted::ScriptCall::FromHistory(author_from_kit),
+                (
+                    READ,
+                    json!({"op":"run","args":{"command":{"type":"measurement","kind":"report"}}}),
+                )
+                    .into(),
+                (EXECUTE, quantity_plan(2)).into(),
                 scripted::ScriptCall::FromHistory(author_from_kit),
                 (
                     READ,
@@ -2488,6 +2503,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
                 )
                     .into(),
                 (READ, json!({"op":"takeoff_check","args":{}})).into(),
+                (EXECUTE, quantity_plan(3)).into(),
             ],
             requests.clone(),
         )),
@@ -2526,7 +2542,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
     let before = session.measurement_selection().unwrap();
     let kit = call(session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
     assert_eq!(kit["measurement_method"]["rules_loaded"], true);
-    assert!(!kit["batch"]["commands"]
+    assert!(!kit["phases"]["method"]["commands"]
         .as_array()
         .unwrap()
         .iter()
@@ -2568,7 +2584,7 @@ fn project_method_overrides_the_settings_name_in_state_and_kit() {
         assert_eq!(value["measurement_method"]["name"], "Client override");
         if op == "takeoff_kit" {
             assert_eq!(value["measurement_method"]["scope"], "project");
-            let command = value["batch"]["commands"]
+            let command = value["phases"]["method"]["commands"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2885,7 +2901,7 @@ fn goal_d_workflow_is_optional_localised_and_separate_from_the_bounded_kit() {
         else {
             panic!()
         };
-        assert!(kit["batch"]["commands"].is_array());
+        assert!(kit["phases"].is_object());
         assert!(kit.get("workflow").is_none());
         assert!(serde_json::to_vec(&kit).unwrap().len() <= qiyas_core::takeoff_kit::MAX_BYTES);
     }
@@ -3140,12 +3156,7 @@ fn plot_writes_the_sheet_as_a_pdf_beside_the_drawing() {
 fn evidence_export_is_available_through_the_agent_surface_beside_the_boq() {
     let (dir, mut session) = sample();
     let kit = call(&mut session, READ, json!({"op":"takeoff_kit","args":{}})).unwrap();
-    call(
-        &mut session,
-        EXECUTE,
-        json!({"op":"batch","args":kit["batch"]}),
-    )
-    .unwrap();
+    run_kit(&mut session, &kit);
     assert!(!session.measurement_report().unwrap().items.is_empty());
     let boq = call(&mut session, EXECUTE, json!({"op":"run","args":{"command":{
         "type":"deliverable.export","kind":"boq","format":"excel","path":"BOQ_DRAFT.xlsx","language":"ar"
@@ -3178,4 +3189,158 @@ fn evidence_export_is_available_through_the_agent_surface_beside_the_boq() {
         }})
     )
     .is_err());
+}
+
+fn quantity_plan(active: usize) -> Value {
+    json!({"op":"plan","args":{"phases":(["Recognise tower level 1: inspect objects", "Method: inspect rules", "BOQ mapping: inspect report"].iter().enumerate().map(|(i,title)| json!({"id":format!("phase-{i}"),"title":title,"status":if i<active {"done"} else if i==active {"active"} else {"pending"}})).collect::<Vec<_>>())}})
+}
+
+#[tokio::test]
+async fn quantity_guard_refuses_mixed_batches_and_planless_edits_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(Some(Session::new_blank(
+        &dir.path().join("Airport.dxf"),
+        6,
+    ))));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let kit = qiyas_core::takeoff_kit::kit();
+    let mixed: Vec<_> = ["recognition", "method", "mappings", "report"]
+        .iter()
+        .flat_map(|phase| kit["phases"][phase]["commands"].as_array().unwrap().clone())
+        .collect();
+    let edit = json!({"op":"run","args":{"command":kit["phases"]["recognition"]["commands"][0]}});
+    let mut agent = Agent::new(
+        Box::new(Script::new(
+            vec![
+                (EXECUTE, json!({"op":"batch","args":{"commands":mixed}})),
+                (EXECUTE, edit.clone()),
+                (EXECUTE, edit),
+            ],
+            requests.clone(),
+        )),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    events_for(&mut agent, "Take off the airport quantities").await;
+    let messages = format!(
+        "{:?}",
+        scripted::observed_messages(&requests.lock().unwrap())
+    );
+    assert_eq!(
+        messages
+            .matches("Split this take-off batch into phases")
+            .count(),
+        1
+    );
+    assert_eq!(messages.matches("Before take-off edits").count(), 1);
+    assert_eq!(
+        session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .object_types()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn quantity_three_phases_generate_boq_and_continue_resumes_active_phase() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(Some(Session::new_blank(
+        &dir.path().join("Tower.dxf"),
+        6,
+    ))));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let kit = qiyas_core::takeoff_kit::kit();
+    let mut recognition = kit["phases"]["recognition"].clone();
+    recognition["commands"] = json!([recognition["commands"][0], {"type":"place_objects","objects":[{"type":"Observed","points":[[0,0]]}]}]);
+    let report = json!({"op":"run","args":{"command":{"type":"measurement","kind":"report"},"detail":"summary"}});
+    let mut agent = Agent::new(
+        Box::new(Script::new(
+            vec![
+                (EXECUTE, quantity_plan(0)),
+                (EXECUTE, json!({"op":"batch","args":recognition})),
+                (
+                    READ,
+                    json!({"op":"records","args":{"collection":"objects","fields":["type"]}}),
+                ),
+                (EXECUTE, quantity_plan(1)),
+                // End the turn through a question, retaining the active phase for Continue.
+                (
+                    EXECUTE,
+                    json!({"op":"ask","args":{"questions":[{"question":"Continue tower measurement?","options":[{"label":"Continue"},{"label":"Stop"}]}]}}),
+                ),
+                (
+                    EXECUTE,
+                    json!({"op":"batch","args":kit["phases"]["method"]}),
+                ),
+                (READ, report.clone()),
+                (EXECUTE, quantity_plan(2)),
+                (
+                    EXECUTE,
+                    json!({"op":"batch","args":kit["phases"]["mappings"]}),
+                ),
+                (READ, report),
+                (EXECUTE, quantity_plan(3)),
+            ],
+            requests.clone(),
+        )),
+        session.clone(),
+        AgentSettings::default(),
+    );
+    events_for(&mut agent, "Take off tower level 1 quantities").await;
+    let paused = requests.lock().unwrap().len();
+    events_for(&mut agent, "Continue").await;
+    let requests = requests.lock().unwrap();
+    let resumed = format!("{:?}", requests[paused].messages);
+    assert!(
+        resumed.contains("phase-1: Method: inspect rules (Active)"),
+        "{resumed}"
+    );
+    assert!(resumed.contains("Resume the active phase first"));
+    let messages = format!("{:?}", scripted::observed_messages(&requests));
+    assert!(!messages.contains("Before take-off edits"));
+    assert!(!messages.contains("phase_check_needed"));
+    assert!(
+        scripted::observed_messages(&requests)
+            .iter()
+            .flat_map(|m| &m.content)
+            .all(|b| !matches!(b, ContentBlock::ToolResult { is_error: true, .. })),
+        "{messages}"
+    );
+    let guard = session.lock().unwrap();
+    let report = guard.as_ref().unwrap().measurement_report().unwrap();
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.items[0].quantity, 1.0);
+}
+
+#[tokio::test]
+async fn quantity_completion_without_a_fresh_phase_check_gets_advice() {
+    let (_dir, session) = sample();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = Agent::new(
+        Box::new(Script::new(
+            vec![
+                (EXECUTE, quantity_plan(0)),
+                (READ, json!({"op":"state","args":{}})),
+                (
+                    EXECUTE,
+                    json!({"op":"run","args":{"command":{"type":"new_layer","name":"Tower"}}}),
+                ),
+                (EXECUTE, quantity_plan(3)),
+            ],
+            requests.clone(),
+        )),
+        Arc::new(Mutex::new(Some(session))),
+        AgentSettings::default(),
+    );
+    events_for(&mut agent, "Take off tower quantities").await;
+    let messages = format!(
+        "{:?}",
+        scripted::observed_messages(&requests.lock().unwrap())
+    );
+    assert!(messages.contains("phase_check_needed"));
 }

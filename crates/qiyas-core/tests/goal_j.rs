@@ -211,7 +211,7 @@ fn version_error_and_kit_name_the_supported_version() {
     let error=s.run_input(&json!({"type":"measurement","kind":"set_method","scope":"project","method":{"version":2,"name":"geometry","title":"Geometry","based_on":"drawing","source_note":"Observed geometry","rules":[]}}),Source::Ai).unwrap_err().to_string();
     assert!(error.contains("supported versions: 1"), "{error}");
     let kit = qiyas_core::takeoff_kit::kit();
-    let method = kit["batch"]["commands"]
+    let method = kit["phases"]["method"]["commands"]
         .as_array()
         .unwrap()
         .iter()
