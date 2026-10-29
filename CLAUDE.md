@@ -59,7 +59,7 @@ three late refs are `measureRef` (`useSheets` cancels the tool when the sheet ch
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
 with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
 
-Mizan's waiting (the "Working…" line and a running tool card) is the Qiyas mark
+Mizan's waiting (the panel head's mark and a running tool card; there is no "Working…" line) is the Qiyas mark
 itself, `src/ai/MizanMark.tsx`: the brand drawing, its mesh drawn line by line round the centre, then
 wiped and drawn again (CSS, still and drawn under reduced motion). Waiting is shown by `src/shell/DotLoader.tsx` (clean-room, our own design: do not copy code from any
 dot-matrix loader library, whose licence forbids it): `<DotLoader pattern="scan|spiral|pulse|chase"

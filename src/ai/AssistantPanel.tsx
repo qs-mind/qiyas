@@ -3,7 +3,7 @@ import { errorText, connectionLost } from "./chatErrors";
 import { uiError } from "../i18n/errors";
 import { memo, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Pointing } from "../app/useAssistantWiring";
-import { translate, useLanguage, useT } from "../i18n";
+import { useLanguage, useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { PackCheckCard } from "./PackCheckCard";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
@@ -221,12 +221,6 @@ export const AssistantPanel = memo(function AssistantPanel({
               </div>
             ) : (
               items.map((item, i) => <ThreadItem key={i} item={item} i={i} cx={cx} id={item.kind === "plan" ? planItemId(i) : undefined} />)
-            )}
-            {busy && (
-              <p className="working" lang={chatLang} dir={chatLang === "ar" ? "rtl" : "ltr"}>
-                <MizanMark size="md" />
-                {translate(chatLang, "ai.working")}
-              </p>
             )}
             {!blocked && (startNewOffered(transcript) || error === "crashed") && (
               <button type="button" className="primary new-conversation" onClick={assistant.clear}>

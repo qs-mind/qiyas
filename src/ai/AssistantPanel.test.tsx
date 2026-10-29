@@ -176,12 +176,9 @@ test("Undo is only offered on the newest change, and not while busy", () => {
   setup({ items: [card] }, true);
   expect(screen.queryByText("Undo")).toBeNull();
   expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-  expect(screen.getByText("Working…")).toBeTruthy();
-  // The Qiyas mark, alive, beside the text (not dots, not a ring), hidden from assistive technology.
-  const mark = screen.getByText("Working…").querySelector(".mizan-mark.mizan-mark-md");
-  expect(mark?.getAttribute("aria-hidden")).toBe("true");
-  expect(mark?.querySelector(".mm-pen line")).toBeTruthy();
-  expect(screen.getByText("Working…").querySelector(".dot-loader")).toBeNull();
+  // No "Working…" line in the thread (founder, 29 Oct): the head's mark, the step cards and Stop say it.
+  expect(screen.queryByText("Working…")).toBeNull();
+  expect(document.querySelector(".assistant-head .mizan-mark .mm-pen line")).toBeTruthy();
   expect(document.querySelector(".spinner")).toBeNull();
 });
 
@@ -636,7 +633,7 @@ test("an Arabic conversation shows Mizan's steps and its waiting line in Arabic 
   expect(line.textContent).toContain("بحث عن طريقة استخدام");
   // Never the commands' own names.
   expect(line.textContent).not.toMatch(/drafting_knowledge|space_check/);
-  expect(document.querySelector(".working")?.textContent).toBe(ar["ai.working"]);
+  expect(document.querySelector(".working")).toBeNull();
   // The window's own words stay in its language.
   expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Ask Mizan, or type / for commands");
 });

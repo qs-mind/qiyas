@@ -2782,7 +2782,6 @@ span.grid-sort {
 .dot-loader {
   margin-inline-end: 6px;
 }
-.working .dot-loader,
 .tool-state .dot-loader,
 .script-running .dot-loader,
 .status > .dot-loader {
@@ -2993,13 +2992,6 @@ span.grid-sort {
 }
 .msg .category {
   font-size: 11px;
-  color: var(--muted);
-}
-.working {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
   color: var(--muted);
 }
 .new-conversation {
@@ -3961,8 +3953,7 @@ span.grid-sort {
 
 /* Mizan's working sign: the Qiyas mark (src/ai/MizanMark.tsx). Its mesh draws itself line by
    line round the centre over a faint copy, the face fills in, the lines wipe away in the same
-   order, and it starts again: a pen at work, never a blink. sm sits in a line of text, md beside
-   "Working…". */
+   order, and it starts again: a pen at work, never a blink. sm sits in a line of text. */
 .mizan-mark {
   --mm-cycle: 2.8s;
   display: inline-block;
