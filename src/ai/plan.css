@@ -48,3 +48,81 @@
   color: var(--muted);
 }
 /* Status changes are immediate, including when reduced motion is requested. */
+
+/* A sibling of the thread, so the latest plan stays beside the composer. */
+.plan-dock {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  min-block-size: 32px;
+  max-block-size: 40%;
+  background: var(--bg);
+  color: var(--fg);
+}
+.plan-dock-toggle {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  inline-size: 100%;
+  block-size: 32px;
+  min-inline-size: 0;
+  padding-block: 3px 5px;
+  padding-inline: 12px;
+  border: 0;
+  border-block-start: 1px solid var(--rule);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: start;
+}
+.plan-dock-count {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.plan-dock-toggle > .plan-mark { color: var(--accent); }
+.plan-dock-title {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.plan-dock-progress {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  block-size: 2px;
+  background: var(--rule);
+}
+.plan-dock-progress > span {
+  display: block;
+  block-size: 100%;
+  background: var(--accent);
+}
+.plan-dock-body {
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-block: 8px;
+  padding-inline: 12px;
+  opacity: 1;
+  transition: opacity 120ms ease-out;
+}
+.plan-dock-body[hidden] { display: none; }
+.plan-dock .mizan-plan { min-inline-size: 0; }
+.plan-dock .plan-title { min-inline-size: 0; }
+.plan-dock .plan-status { flex-shrink: 0; }
+.plan-dock-chat { margin-block-start: 8px; font-size: 11px; }
+@starting-style {
+  .plan-dock-body { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan-dock-body { transition: none; }
+}

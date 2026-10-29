@@ -1,7 +1,7 @@
 import { chatText } from "./content";
 import { errorText, connectionLost } from "./chatErrors";
 import { uiError } from "../i18n/errors";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Pointing } from "../app/useAssistantWiring";
 import { translate, useLanguage, useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
@@ -12,7 +12,8 @@ import { readPicture, type Picture } from "./pictures";
 import { answerText } from "./QuestionList";
 import type { SlashCommand } from "./slashCommands";
 import { Composer } from "./Composer";
-import { ThreadItem, type ThreadContext } from "./ThreadItem";
+import { ThreadItem, planActions, type ThreadContext } from "./ThreadItem";
+import { PlanDock, latestDockPlan } from "./PlanDock";
 import { chatLanguage, openQuestions, recoveryGroups } from "./thread";
 import { useDrafts } from "./useDrafts";
 import { Glyph } from "../shell/glyphs";
@@ -102,6 +103,9 @@ export const AssistantPanel = memo(function AssistantPanel({
   // The newest message stays in view while the reader is at the bottom; scrolled up, they are left
   // where they are and a button offers the way back.
   const thread = useStickToBottom([transcript, busy]);
+  const planId = useId();
+  const dock = artifact?.shown ? null : latestDockPlan(items);
+  const planItemId = (index: number) => `${planId}-plan-${index}`;
 
   const open = openQuestions(items);
   const picks = open ? draft.picks : {};
@@ -161,6 +165,7 @@ export const AssistantPanel = memo(function AssistantPanel({
 
   const cx: ThreadContext = {
     items, busy, unavailable: blocked, chatLang, showTechnicalDetails,
+    dockedPlanIndex: dock?.index,
     openIndex: open?.index ?? null, picks, onPick: pick,
     runs: readRuns(items), recovery: recoveryGroups(items, busy), undoable: undoableCard(transcript),
     onShow, onUndo, onSettings, send: (text) => { void assistant.send(text); }, focusBox,
@@ -215,7 +220,7 @@ export const AssistantPanel = memo(function AssistantPanel({
                 </ul>
               </div>
             ) : (
-              items.map((item, i) => <ThreadItem key={i} item={item} i={i} cx={cx} />)
+              items.map((item, i) => <ThreadItem key={i} item={item} i={i} cx={cx} id={item.kind === "plan" ? planItemId(i) : undefined} />)
             )}
             {busy && (
               <p className="working" lang={chatLang} dir={chatLang === "ar" ? "rtl" : "ltr"}>
@@ -248,6 +253,9 @@ export const AssistantPanel = memo(function AssistantPanel({
           <Glyph name="next" mirror size={14} />
         </button>
       )}
+      {dock && <PlanDock key={`${assistant.workspace ?? "chat"}:${dock.index}`} plan={dock.plan} busy={busy} language={chatLang}
+        threadItemId={planItemId(dock.index)} awaitingApproval={dock.awaitingApproval} showTechnicalDetails={showTechnicalDetails}
+        {...planActions(dock.plan, dock.index, cx)} onShowInChat={thread.onScroll} />}
       {error && (
         <div className="error" role="alert">
           {errorText(error, lang)}

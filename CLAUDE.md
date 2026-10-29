@@ -120,6 +120,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Mizan's thread (`ai/useStickToBottom.ts`): follows the newest message while the reader is at the
   bottom; scrolled up it leaves them and offers "Jump to latest". There is no propose-and-approve flow
   for BOQ changes (the tools apply and each card can be undone), so there are no suggestion cards.
+  The latest plan stays docked above the input (`ai/PlanDock.tsx`), with a compact count and an expandable checklist whose fold is kept on this computer.
+  Approval opens the dock and its actions live there; completed plans leave on the next user turn, while the inline card stays in the thread as history.
 - The side panels' widths and folds are our own handle (`app/panelRails.tsx`: drag, double click, arrows;
   kept on this computer), not `react-resizable-panels`. Mizan's column starts at 440 px (672 px while an
   output is open, its own remembered width), 360 and 560 px in a window under 1300 px; the layers

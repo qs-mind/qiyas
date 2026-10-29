@@ -11,7 +11,10 @@ const aiAttachPdf = vi.fn();
 vi.mock("../api", async (original) => ({ ...(await original<object>()), aiLog: () => aiLog(), aiAttachPdf: (...args: unknown[]) => aiAttachPdf(...args) }));
 import { EMPTY, type ToolCardItem, type Transcript } from "./messages";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.removeItem("qiyas.planDock.expanded");
+});
 
 const card: ToolCardItem = {
   kind: "tool",
@@ -105,7 +108,7 @@ test("the checklist translates all states into Arabic and follows the page direc
     expect(screen.getByRole("region", { name: ar["ai.plan"] })).toBeTruthy();
     for (const key of ["ai.plan.pending", "ai.plan.active", "ai.plan.done", "ai.plan.skipped"] as const) expect(screen.getByText(ar[key])).toBeTruthy();
     expect(document.documentElement.dir).toBe("rtl");
-    expect(screen.getAllByText(ar["ai.reviewDrawingErrors"])).toHaveLength(2);
+    expect(within(screen.getByRole("region", { name: ar["ai.plan"] })).getAllByText(ar["ai.reviewDrawingErrors"])).toHaveLength(2);
     expect(document.querySelector(".mizan-plan details")?.hasAttribute("open")).toBe(false);
     expect(document.querySelector(".mizan-plan pre")?.textContent).toBe("Review drawing errors: rule:[7]");
   } finally {
@@ -644,4 +647,49 @@ test("answers chosen on a question with tanween send the word as written", async
   const { assistant } = setup({ items: [{ kind: "user", text: "ارسم" }, asked] });
   fireEvent.click(screen.getByRole("button", { name: /افترض/ }));
   await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("افترض مسطحاً مستطيلاً"));
+});
+
+test("the latest airport plan docks outside the thread with the only live approval actions", () => {
+  const oldPlan = { kind: "plan" as const, phases: [
+    { id: "tower", title: "Tower structure", status: "done" as const },
+    { id: "boq", title: "Tower BOQ", status: "done" as const },
+  ] };
+  const airport = { kind: "plan" as const, awaitingApproval: true, phases: [
+    { id: "terminal", title: "Airport terminal quantities", status: "pending" as const },
+    { id: "airside", title: "Airport airside infrastructure", status: "pending" as const },
+  ] };
+  const { assistant } = setup({ items: [oldPlan, { kind: "user", text: "Plan the airport take-off" }, airport] });
+  const dock = document.querySelector<HTMLElement>(".plan-dock")!;
+  const log = document.querySelector<HTMLElement>(".assistant-log")!;
+  expect(log.contains(dock)).toBe(false);
+  expect(dock.compareDocumentPosition(screen.getByRole("textbox")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(dock).getByRole("button", { name: "Plan 0/2" }).getAttribute("aria-expanded")).toBe("true");
+  expect(within(dock).getByText("Airport terminal quantities")).toBeTruthy();
+  expect(within(dock).queryByText("Tower structure")).toBeNull();
+  expect(log.querySelectorAll(".mizan-plan")).toHaveLength(2);
+  expect(within(log).queryByRole("button", { name: "Approve" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Change" }));
+  expect(document.activeElement).toBe(screen.getByRole("textbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  expect(assistant.send).toHaveBeenCalledExactlyOnceWith("Approved, continue.");
+  const original = within(log).getByText("Airport terminal quantities").closest("section")!;
+  const scroll = vi.spyOn(original, "scrollIntoView");
+  fireEvent.click(screen.getByRole("button", { name: "Show in chat" }));
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ block: "nearest", behavior: "instant" });
+});
+
+test("a completed hospital dock disappears on the next user message and keeps its history card", () => {
+  const hospital = { kind: "plan" as const, phases: [
+    { id: "structure", title: "Hospital structure", status: "done" as const },
+    { id: "mep", title: "Hospital MEP alternatives", status: "skipped" as const },
+  ] };
+  const props = { onShow() {}, onUndo() {}, onSettings() {} };
+  const view = render(<AssistantPanel assistant={assistant({ transcript: { items: [hospital] } })} {...props} />);
+  expect(screen.getByRole("button", { name: "Plan done 2/2" })).toBeTruthy();
+  view.rerender(<AssistantPanel assistant={assistant({ transcript: { items: [hospital, { kind: "user", text: "Review the airport" }] } })} {...props} />);
+  expect(document.querySelector(".plan-dock")).toBeNull();
+  expect(screen.getByRole("region", { name: "Plan" })).toBeTruthy();
+  view.rerender(<AssistantPanel assistant={assistant()} {...props} />);
+  expect(document.querySelector(".assistant-empty")).toBeTruthy();
+  expect(document.querySelector(".plan-dock")).toBeNull();
 });

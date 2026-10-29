@@ -19,6 +19,8 @@ export type ThreadContext = {
   unavailable: boolean;
   chatLang: Lang;
   showTechnicalDetails: boolean;
+  /** This plan's live approval actions belong to the dock. */
+  dockedPlanIndex?: number;
   /** The open questions' item and what is chosen on them. */
   openIndex: number | null;
   picks: Record<string, string>;
@@ -34,7 +36,17 @@ export type ThreadContext = {
   focusBox(): void;
 };
 
-export function ThreadItem({ item, i, cx }: { item: Item; i: number; cx: ThreadContext }): ReactNode {
+/** The dock and the history card share the same approval rules and callbacks. */
+export function planActions(item: Extract<Item, { kind: "plan" }>, i: number, cx: ThreadContext) {
+  const answered = cx.items.slice(i + 1).some((next) => next.kind === "user");
+  return {
+    onApprove: item.awaitingApproval && !cx.unavailable && !answered
+      ? () => cx.send(translate(cx.chatLang, "ai.approvedMessage")) : undefined,
+    onChange: cx.focusBox,
+  };
+}
+
+export function ThreadItem({ item, i, cx, id }: { item: Item; i: number; cx: ThreadContext; id?: string }): ReactNode {
   const t = useT();
   const { lang } = useLanguage();
   const said = (key: string, vars?: Record<string, string | number>) => translate(cx.chatLang, key, vars);
@@ -51,10 +63,8 @@ export function ThreadItem({ item, i, cx }: { item: Item; i: number; cx: ThreadC
         <p>{t("ai.cacheUsage", { percent: (100 * item.cached / item.total).toFixed(1), cached: item.cached, total: item.total })}</p>
       </details> : null;
     case "plan": {
-      const answered = cx.items.slice(i + 1).some((next) => next.kind === "user");
-      return <PlanChecklist phases={item.phases} stale={item.stale} language={cx.chatLang} showTechnicalDetails={cx.showTechnicalDetails}
-        onApprove={item.awaitingApproval && !cx.unavailable && !answered ? () => cx.send(said("ai.approvedMessage")) : undefined}
-        onChange={cx.focusBox} />;
+      return <PlanChecklist id={id} phases={item.phases} stale={item.stale} language={cx.chatLang} showTechnicalDetails={cx.showTechnicalDetails}
+        {...(cx.dockedPlanIndex === i ? {} : planActions(item, i, cx))} />;
     }
     case "question": {
       // Plain numbered list in Mizan's message (design B): options are chosen on it, the box answers
