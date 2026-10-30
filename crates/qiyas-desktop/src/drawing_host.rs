@@ -100,7 +100,7 @@ impl<R: Runtime> AppHost<R> {
         let shown = path.display();
         let (text, open, cancel, title) = if arabic {
             (
-                format!("ميزان يريد فتح هذا المخطط:\n\u{2068}{shown}\u{2069}"),
+                format!("ميزان يريد فتح هذا الرسم:\n\u{2068}{shown}\u{2069}"),
                 "فتح",
                 "إلغاء",
                 "قياس",

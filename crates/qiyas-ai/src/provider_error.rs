@@ -33,7 +33,7 @@ pub fn public_error(code: &str) -> PublicError {
             .as_str()
             .unwrap_or("The AI service could not complete the request.")
             .into(),
-        message_ar: ar[&key].as_str().unwrap_or("تعذّر إكمال الطلب.").into(),
+        message_ar: ar[&key].as_str().unwrap_or("تعذر إكمال الطلب.").into(),
     }
 }
 

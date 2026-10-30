@@ -149,7 +149,7 @@ pub fn kit() -> Value {
         )
     })
     .collect();
-    json!({"measurement_rules":"basis: geometric or rule:<cited note name>; factors on named_handles. Counts are whole numbers. Exclude <handle>: <reason> (note <handle>).","complete":true,"project":project,"revision_commands":revision,"commands":commands,"phases":phases})
+    json!({"regions":{"example":{"type":"place_objects","objects":[{"type":"Floor","seed":[2,2]}]}},"exclusions":"decision.set: reason + takeoff_exclusion:{handles:[1]}|{object_type:T}","measurement_rules":"basis=geometric|rule:<cited note name>; named_handles factors; integer counts.","complete":true,"project":project,"revision_commands":revision,"commands":commands,"phases":phases})
 }
 
 /// Return exactly the kit entry for covered commands, including the auxiliary paths.

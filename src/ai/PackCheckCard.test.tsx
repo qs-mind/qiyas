@@ -51,6 +51,16 @@ const needsFix: PackCheck = {
 };
 const reply = (result: PackCheck) => ({ type: "measurement", result });
 
+test("a busy background pack read stays silent and retries after a revision change", async () => {
+  invoke.mockRejectedValueOnce("workspace_busy").mockResolvedValue(reply(ready));
+  const view = render(<PackCheckCard drawing="plan.dwg" revision={1} />);
+  await act(async () => {});
+  expect(screen.queryByRole("alert")).toBeNull();
+  view.rerender(<PackCheckCard drawing="plan.dwg" revision={2} />);
+  await screen.findByText(en["ai.packCheck.ready"]);
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
+
 test("reads the current workspace through the command bus and names units and scan fixes before take-off", async () => {
   setWorkspace(7);
   invoke.mockResolvedValue(reply(needsFix));

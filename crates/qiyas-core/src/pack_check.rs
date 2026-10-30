@@ -179,7 +179,7 @@ impl Session {
         } else {
             both(
                 "The drawing has no known units (INSUNITS 0), so lengths would be read as millimetres.",
-                "وحدات الرسم غير معروفة (INSUNITS 0)، فستُقرأ الأطوال بالمليمتر.",
+                "وحدات الرسم غير معروفة (INSUNITS 0)، فستقرأ الأطوال بالمليمتر.",
             )
         };
         line(
@@ -188,7 +188,7 @@ impl Session {
             found,
             both(
                 "Ask who made the drawing which unit it uses, and set it in the drawing before measuring.",
-                "اسأل من أعدّ الرسم عن الوحدة المستخدمة، واضبطها في الرسم قبل القياس.",
+                "اسأل من أعد الرسم عن الوحدة المستخدمة، واضبطها في الرسم قبل القياس.",
             ),
         )
     }
@@ -210,10 +210,13 @@ impl Session {
         let found = if set {
             both(
                 format!("The annotation scale is {name}."),
-                format!("مقياس الكتابة {name}."),
+                format!("مقياس الكتابات والأبعاد {name}."),
             )
         } else {
-            both("No annotation scale is set.", "لم يُضبط مقياس الكتابة.")
+            both(
+                "No annotation scale is set.",
+                "لم يتم ضبط مقياس الكتابات والأبعاد.",
+            )
         };
         line(
             "annotation_scale",
@@ -221,7 +224,7 @@ impl Session {
             found,
             both(
                 "Set the annotation scale (for example 1:100) so text and dimensions are sized right.",
-                "اضبط مقياس الكتابة (مثل 1:100) ليكون حجم النصوص والأبعاد صحيحًا.",
+                "اضبط مقياس الكتابات والأبعاد (مثل 1:100) ليكون حجم النصوص والأبعاد صحيحا.",
             ),
         )
     }
@@ -273,7 +276,7 @@ impl Session {
         } else {
             both(
                 format!("Could not read: {}.", unknown.join(", ")),
-                format!("تعذّرت قراءة: {}.", unknown.join("، ")),
+                format!("تعذرت قراءة: {}.", unknown.join("، ")),
             )
         };
         let fix = if pdfium {
@@ -284,7 +287,7 @@ impl Session {
         } else {
             both(
                 "Install PDF support (scripts/pdfium.sh) so pages can be told apart.",
-                "ثبّت دعم PDF (scripts/pdfium.sh) ليمكن التمييز بين الصفحات.",
+                "ثبت دعم PDF (scripts/pdfium.sh) ليمكن التمييز بين الصفحات.",
             )
         };
         if pictures.iter().any(|p| p.pdf.is_some()) {
@@ -313,7 +316,7 @@ impl Session {
                 found,
                 both(
                     "Calibrate each scan: pick two points on a dimension you know and type its real length.",
-                    "اضبط مقياس كل صورة ممسوحة: اختر نقطتين على بُعد معلوم واكتب طوله الحقيقي.",
+                    "اضبط مقياس كل صورة ممسوحة: اختر نقطتين على بعد معلوم واكتب طوله الحقيقي.",
                 ),
             ));
         }
@@ -321,12 +324,12 @@ impl Session {
             let found = if rotated.is_empty() {
                 both(
                     "Every page is stored upright.",
-                    "كل الصفحات مخزّنة بالاتجاه المعتاد.",
+                    "كل الصفحات مخزنة بالاتجاه المعتاد.",
                 )
             } else {
                 both(
                     format!("Stored turned: {}.", rotated.join(", ")),
-                    format!("مخزّنة بعد تدوير: {}.", rotated.join("، ")),
+                    format!("مخزنة بعد تدوير: {}.", rotated.join("، ")),
                 )
             };
             out.push(line(
@@ -335,7 +338,7 @@ impl Session {
                 found,
                 both(
                     "Look at each turned page once and confirm it reads upright before calibrating.",
-                    "راجع كل صفحة مُدوَّرة مرة وتأكد أنها تُقرأ باتجاه صحيح قبل ضبط المقياس.",
+                    "راجع كل صفحة مدورة مرة وتأكد أنها تقرأ باتجاه صحيح قبل ضبط المقياس.",
                 ),
             ));
         }
@@ -353,7 +356,7 @@ impl Session {
         let fix = || {
             both(
                 "Say where the sheet number and revision are written (an attribute tag or a text pattern), or write them in the title block.",
-                "حدّد أين يُكتب رقم اللوحة والمراجعة (وسم خاصية أو نمط نص)، أو اكتبهما في إطار العنوان.",
+                "حدد أين يكتب رقم اللوحة والمراجعة (وسم خاصية أو نمط نص)، أو اكتبهما في جدول بيانات اللوحة.",
             )
         };
         if rules.is_empty() {
@@ -397,7 +400,10 @@ impl Session {
                     "Sheet number and revision are read for {} sheet(s).",
                     rows.len()
                 ),
-                format!("قُرئ رقم اللوحة والمراجعة لعدد {} من اللوحات.", rows.len()),
+                format!(
+                    "تمت قراءة رقم اللوحة والمراجعة لعدد {} من اللوحات.",
+                    rows.len()
+                ),
             )
         } else if rows.is_empty() {
             both(
@@ -407,7 +413,7 @@ impl Session {
         } else {
             both(
                 format!("Not read: {}.", bad.join(", ")),
-                format!("لم تُقرأ: {}.", bad.join("، ")),
+                format!("تعذرت قراءة: {}.", bad.join("، ")),
             )
         };
         Ok(line("register", passes, found, fix()))

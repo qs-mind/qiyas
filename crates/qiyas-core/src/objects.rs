@@ -145,13 +145,18 @@ pub struct ObjectType {
 pub struct ObjectPlacement {
     #[serde(rename = "type")]
     pub type_name: String,
-    /// Existing driver, or points for a new driver. Exactly one is required.
+    /// Existing driver, points, or a region seed. Exactly one is required.
     #[serde(default)]
     pub driver: Option<u64>,
     #[serde(default)]
     pub points: Vec<[f64; 2]>,
     #[serde(default)]
     pub region: Option<crate::object_regions::RegionSource>,
+    /// Enclosed boundary to retain and follow when walls change (region types only).
+    #[serde(default)]
+    pub seed: Option<[f64; 2]>,
+    #[serde(default)]
+    pub boundary_layers: Vec<String>,
     #[serde(default)]
     pub props: BTreeMap<String, Value>,
     #[serde(default)]
@@ -874,6 +879,38 @@ impl Session {
             if p.region.is_some() && definition.geometry != GeometryKind::Region {
                 return Err(invalid("A retained region requires region geometry"));
             }
+            if let Some(seed) = p.seed {
+                if definition.geometry != GeometryKind::Region
+                    || p.driver.is_some()
+                    || !p.points.is_empty()
+                    || p.region.is_some()
+                {
+                    return Err(invalid(
+                        "Give only a seed for a region type / استخدم نقطة داخلية فقط مع نوع مساحي",
+                    ));
+                }
+                let policy = crate::object_regions::BoundaryLayers {
+                    boundary_layers: p.boundary_layers.clone(),
+                    ..Default::default()
+                };
+                let crate::Boundary::Ring { ring, .. } =
+                    self.room_boundary_in(&self.sheet, seed, &policy)
+                else {
+                    return Err(invalid(
+                        "The seed needs a closed enclosure / يجب أن تكون النقطة داخل حدود مغلقة",
+                    ));
+                };
+                p.points = ring;
+                p.region = Some(crate::object_regions::RegionSource {
+                    seed,
+                    boundary_layers: policy,
+                    subtract_islands: true,
+                });
+            } else if !p.boundary_layers.is_empty() {
+                return Err(invalid(
+                    "Boundary layers require a seed / تحديد طبقات الحدود يحتاج إلى نقطة داخلية",
+                ));
+            }
             if p.driver.is_some() == !p.points.is_empty() {
                 return Err(invalid("Give driver or points, not both"));
             }
@@ -906,7 +943,18 @@ impl Session {
                 };
                 let spec: DrawSpec =
                     serde_json::from_value(spec).map_err(|e| invalid(e.to_string()))?;
-                self.draw(spec)?[0]
+                let handle = self.draw(spec)?[0];
+                let layer = default_object_layer(&definition.name);
+                if !self.drawing.doc.layers.contains(&layer) {
+                    self.new_layer(&layer)?;
+                }
+                self.drawing
+                    .doc
+                    .get_entity_mut(Handle::new(handle))
+                    .expect("new driver")
+                    .common_mut()
+                    .layer = layer;
+                handle
             };
             self.validate_decision_sources(&props, &p.sources, &definition)?;
             // Every value says where it came from: as cited, a type default, or whoever set it.
@@ -1096,6 +1144,16 @@ impl Session {
                         })
                 })
         };
+        let driver_layer = driver_layer
+            .or_else(|| object.layers.get("driver").cloned())
+            .or_else(|| definition.plan.role_layers.get("driver").cloned())
+            .or_else(|| {
+                self.drawing
+                    .doc
+                    .get_entity(Handle::new(object.id))
+                    .filter(|e| e.common().layer == "0")
+                    .map(|_| default_object_layer(&definition.name))
+            });
         if let Some(layer) = driver_layer {
             if layer.trim().is_empty() || layer.contains('|') {
                 return Err(invalid("Choose a local drawing layer"));
@@ -2155,6 +2213,10 @@ impl Session {
             text.insertion_point = opencadcodec::Vector3::new(pos[0], pos[1], 0.0);
             text.height = height;
             text.value = label;
+            if definition.geometry == GeometryKind::Region {
+                text.common.owner_handle = driver.common().owner_handle;
+                self.place_region_label(&mut text, object.id, &paths[0].points)?;
+            }
             result.push(("label".into(), EntityType::Text(text)));
         }
         for (role, e) in &mut result {
@@ -2165,7 +2227,7 @@ impl Session {
                 .get(role)
                 .or_else(|| definition.plan.role_layers.get(role))
                 .cloned()
-                .unwrap_or_else(|| source.layer.clone());
+                .unwrap_or_else(|| default_object_layer(&definition.name));
             common.owner_handle = source.owner_handle;
             common.color = source.color;
             common.color_name = source.color_name.clone();
@@ -2621,6 +2683,10 @@ impl Session {
             drop(read);
             self.apply_object_layers(&mut object, &definition)?;
             self.stamp_object(handle, &object)?;
+            let fallback_layer = default_object_layer(&definition.name);
+            if !self.drawing.doc.layers.contains(&fallback_layer) {
+                self.new_layer(&fallback_layer)?;
+            }
             for layer in definition
                 .plan
                 .role_layers
@@ -2965,4 +3031,19 @@ pub(crate) fn display(value: &Value) -> String {
 
 fn cuts_host_by_default() -> bool {
     true
+}
+
+/// CAD layer names derived from the drawing's type, preserving Unicode names.
+fn default_object_layer(name: &str) -> String {
+    format!(
+        "Q-{}",
+        name.chars()
+            .map(|c| if c.is_whitespace() || "<>/\\\":;?*|,=".contains(c) {
+                '-'
+            } else {
+                c
+            })
+            .collect::<String>()
+            .to_uppercase()
+    )
 }

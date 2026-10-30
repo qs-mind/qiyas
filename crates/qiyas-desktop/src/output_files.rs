@@ -39,13 +39,13 @@ fn output_kind(path: &Path) -> Result<FileViewKind, String> {
 fn output_path(path: &str) -> Result<PathBuf, String> {
     let path = Path::new(path);
     if !path.is_absolute() {
-        return Err("Use an absolute file path. استخدم مسار ملف مطلقًا.".into());
+        return Err("Use an absolute file path. استخدم مسار ملف مطلقا.".into());
     }
     let path = path.canonicalize().map_err(|_| {
         "The file could not be found or accessed. تعذر العثور على الملف أو الوصول إليه.".to_string()
     })?;
     if !path.is_file() {
-        return Err("Choose a regular file. اختر ملفًا عاديًا.".into());
+        return Err("Choose a regular file. اختر ملفا عاديا.".into());
     }
     output_kind(&path)?;
     Ok(path)

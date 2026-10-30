@@ -945,8 +945,8 @@ fn title_metadata_is_literal_bilingual_and_missing_fields_are_reported() {
             [
                 "العميل",
                 "الاستشاري",
-                "دقق بواسطة",
-                "اعتمد بواسطة",
+                "مراجعة",
+                "اعتماد",
                 "الوصف",
                 "للمراجعة",
             ]

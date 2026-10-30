@@ -25,6 +25,7 @@ export type ThreadContext = {
   openIndex: number | null;
   picks: Record<string, string>;
   onPick(questionId: string, label: string): void;
+  onAnswer(text: string): Promise<boolean>;
   /** Steps folded into a run's first line (`readRuns`), and failures Mizan put right (`recoveryGroups`). */
   runs: { counts: Map<number, number>; hidden: Set<number> };
   recovery: { hidden: Set<number>; heads: Map<number, { indices: number[]; pending: boolean }> };
@@ -63,15 +64,16 @@ export function ThreadItem({ item, i, cx, id }: { item: Item; i: number; cx: Thr
         <p>{t("ai.cacheUsage", { percent: (100 * item.cached / item.total).toFixed(1), cached: item.cached, total: item.total })}</p>
       </details> : null;
     case "plan": {
-      return <PlanChecklist id={id} phases={item.phases} stale={item.stale} language={cx.chatLang} showTechnicalDetails={cx.showTechnicalDetails}
+      return <PlanChecklist frame={item.frame} id={id} phases={item.phases} stale={item.stale} language={cx.chatLang} showTechnicalDetails={cx.showTechnicalDetails}
         {...(cx.dockedPlanIndex === i ? {} : planActions(item, i, cx))} />;
     }
     case "question": {
-      // Plain numbered list in Mizan's message (design B): options are chosen on it, the box answers
-      // the rest. Once the user has replied it is only a record.
+      // Once the user has replied, the questions remain as a read-only record.
       const open = i === cx.openIndex;
-      return <QuestionList questions={item.questions} picked={open ? cx.picks : undefined}
-        onPick={open && !cx.unavailable ? cx.onPick : undefined} />;
+      const reply = cx.items.slice(i + 1).find(next => next.kind === "user");
+      return <QuestionList key={JSON.stringify(item.questions)} answeredText={reply?.kind === "user" ? reply.text : undefined} questions={item.questions} picked={open ? cx.picks : undefined}
+        active={open} disabled={cx.unavailable} onPick={open ? cx.onPick : undefined}
+        onAnswer={cx.onAnswer} />;
     }
     case "user": {
       const own = contentLanguage(item.text, lang);

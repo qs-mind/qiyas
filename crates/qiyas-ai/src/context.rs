@@ -134,7 +134,7 @@ pub fn describe(session: &Session, ctx: &TurnContext, lang: Lang) -> String {
             s,
             "{}",
             if ar {
-                format!("حدّده المستخدم ({n} عنصر؛ «هذا» و«هذه» و«هنا» تعنيها):")
+                format!("حدده المستخدم ({n} عنصر؛ «هذا» و«هذه» و«هنا» تعنيها):")
             } else {
                 format!("Selected by the user ({n}; \"this\", \"these\" and \"here\" mean them):")
             }
@@ -168,7 +168,7 @@ pub fn describe(session: &Session, ctx: &TurnContext, lang: Lang) -> String {
             "{}",
             if ar {
                 format!(
-                    "منطقة حدّدها المستخدم ({kind}؛ الأركان {} بوحدات الرسم؛ {area:.3} م²)، فيها أو تقطعها {} عنصر («هنا» تعنيها):",
+                    "منطقة حددها المستخدم ({kind}؛ الأركان {} بوحدات الرسم؛ {area:.3} م²)، فيها أو تقطعها {} عنصر («هنا» تعنيها):",
                     corners.join(" "),
                     inside.len()
                 )
@@ -221,7 +221,7 @@ fn list(s: &mut String, session: &Session, targets: &[Target], ar: bool) {
                 row,
                 ", {} {:?} ({})",
                 if ar {
-                    "داخل مراجع الكتل"
+                    "داخل مراجع البلوكات"
                 } else {
                     "inside block references"
                 },
@@ -269,7 +269,7 @@ fn list(s: &mut String, session: &Session, targets: &[Target], ar: bool) {
             s,
             "- {gone} {}",
             if ar {
-                "لم تعد في المخطط"
+                "لم تعد في الرسم"
             } else {
                 "no longer in the drawing"
             }
@@ -280,7 +280,7 @@ fn list(s: &mut String, session: &Session, targets: &[Target], ar: bool) {
             s,
             "{}",
             if ar {
-                format!("المجموع: الطول {length:.3} م، المساحة {area:.3} م² (بدون الأبعاد ومراجع الكتل).")
+                format!("المجموع: الطول {length:.3} م، المساحة {area:.3} م² (بدون الأبعاد ومراجع البلوكات).")
             } else {
                 format!("Totals: length {length:.3} m, area {area:.3} m² (dimensions and block references left out).")
             }

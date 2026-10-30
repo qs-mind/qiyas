@@ -1,5 +1,5 @@
 /** The assistant's transcript, built from the agent's events by a pure reducer. */
-import type { Activity, AgentEvent, AiUi, PlanPhase, Question, TranscriptEntry } from "../api";
+import type { Activity, AgentEvent, AiUi, ExpertFrame, PlanPhase, Question, TranscriptEntry } from "../api";
 
 export type ToolStatus = "running" | "done" | "error";
 
@@ -12,7 +12,7 @@ export type ToolCardItem = {
   input: unknown;
   activity?: Activity | null;
   count?: number | null;
-  progress?: { completed: number; total: number } | null;
+  progress?: { done: number; total: number; label: string } | null;
   status: ToolStatus;
   /** One line from the tool's result; empty while it runs. */
   summary: string;
@@ -42,7 +42,7 @@ export type Item =
   /** Streamed: `finished` once anything else follows it or the turn ends. */
   | { kind: "assistant"; text: string; finished: boolean }
   | { kind: "thinking"; text: string }
-  | { kind: "plan"; phases: PlanPhase[]; awaitingApproval?: boolean; stale?: boolean }
+  | { kind: "plan"; phases: PlanPhase[]; frame?: ExpertFrame; awaitingApproval?: boolean; stale?: boolean }
   | { kind: "retrying"; seconds: number; code: string }
   /** Mizan's questions, all in one list; the answer is typed as the next message. */
   | { kind: "question"; questions: Question[] }
@@ -101,7 +101,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
       let start = items.length;
       while (start > 0 && items[start - 1].kind !== "user") start--;
       const previous = items.findIndex((item, i) => i >= start && item.kind === "plan");
-      const plan: Item = { kind: "plan", phases: action.phases };
+      const plan: Item = { kind: "plan", phases: action.phases, frame: action.frame };
       if (previous >= 0) {
         return { items: items.map((item, i) => i === previous ? plan : item) };
       }
@@ -112,7 +112,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
       return { items: items.map((item, index) => index === last && item.kind === "plan" ? { ...item, stale: action.stale } : item) };
     }
     case "awaiting_approval": {
-      const next = reduce(state, { type: "plan", phases: action.plan.phases });
+      const next = reduce(state, { type: "plan", phases: action.plan.phases, frame: action.plan.frame });
       const plan = next.items.map((item) => item.kind).lastIndexOf("plan");
       return { items: finishText(next.items).map((item, i) =>
         i === plan && item.kind === "plan" ? { ...item, awaitingApproval: true } : item,
@@ -154,7 +154,6 @@ export function reduce(state: Transcript, action: Action): Transcript {
             label: action.label,
             input: action.input,
             activity: action.activity,
-            progress: action.progress,
             status: "running",
             summary: "",
             handles: [],
@@ -166,9 +165,9 @@ export function reduce(state: Transcript, action: Action): Transcript {
         ],
       };
     case "tool_progress":
-      if (!Number.isInteger(action.completed) || !Number.isInteger(action.total) || action.total <= 0 || action.completed < 0 || action.completed > action.total) return state;
+      if (!Number.isInteger(action.done) || !Number.isInteger(action.total) || action.total <= 0 || action.done < 0 || action.done > action.total) return state;
       return { items: updateCard(items, action.id, (card) => card.status === "running"
-        ? { ...card, progress: { completed: action.completed, total: action.total } } : card) };
+        ? { ...card, progress: { done: action.done, total: action.total, label: action.label } } : card) };
     case "tool_result":
       return {
         items: updateCard(finishText(items), action.id, (card) => ({

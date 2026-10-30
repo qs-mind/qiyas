@@ -10,8 +10,8 @@ use qiyas_ai::conversation::{Conversation, TranscriptEntry};
 use qiyas_ai::prompt::Lang;
 use qiyas_ai::{Agent, AgentEvent, AgentLog};
 use qiyas_core::{
-    Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, NamedView,
-    Outcome, Picked, Reported, Session, Snap, Source,
+    Boq, Command, Conflict, CoreError, Drafting, DrawingInfo, EntityInfo, Measurement, Outcome,
+    Picked, Reported, Session, Snap, Source,
 };
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -202,9 +202,9 @@ pub async fn clear_recents(state: State<'_, AppState>) -> Result<(), String> {
 pub async fn views(
     workspace: Option<u32>,
     state: State<'_, AppState>,
-) -> Result<Vec<NamedView>, String> {
+) -> Result<serde_json::Value, String> {
     let state = state.scoped(workspace)?;
-    with_session(&state, |s| Ok(s.views()))
+    cached_read(&state, "views", |s| Ok(serde_json::json!(s.views())))
 }
 
 #[tauri::command]
@@ -779,7 +779,7 @@ pub async fn measurement_report(
     state: State<'_, AppState>,
 ) -> Result<qiyas_core::measurement::MeasurementReport, String> {
     let state = state.scoped(workspace)?;
-    with_session(&state, |s| s.measurement_report())
+    cached_read(&state, "measurement_report", |s| s.measurement_report())
 }
 
 /// Compares the BOQ and the take-off with the schedules and block counts of every sheet and keeps
@@ -2002,6 +2002,8 @@ mod tests {
                     crate::tabs::activate_tab,
                     crate::tabs::close_tab,
                     takeoff,
+                    totals,
+                    measurement_report,
                     run_command,
                     undo,
                     redo,
@@ -3524,6 +3526,38 @@ mod tests {
             std::fs::write(path, serde_json::to_vec_pretty(&measured).unwrap()).unwrap();
         }
         eprintln!("{measured}");
+    }
+
+    #[test]
+    fn workspace_busy_background_reads_use_committed_snapshots() {
+        let ipc = Ipc::open();
+        let state = ipc._app.state::<AppState>().scoped(None).unwrap();
+        let mut committed = Vec::new();
+        for command in [
+            "drawing_info",
+            "views",
+            "get_drafting",
+            "paper_views",
+            "takeoff",
+            "totals",
+            "boq",
+            "conflicts",
+            "measurement_report",
+            "tabs",
+        ] {
+            committed.push((command, ipc.call(command, json!({})).unwrap()));
+        }
+        // A real tool holds this same mutex. No background read may block on it or emit busy.
+        let held = state.session.lock().unwrap();
+        for (command, value) in committed {
+            assert_eq!(ipc.call(command, json!({})).unwrap(), value, "{command}");
+        }
+        // Recovery writes skip the locked drawing; they can try again on their next tick.
+        assert!(ipc.call("autosave_drawings", json!({})).unwrap()["failed"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        drop(held);
     }
 
     #[test]

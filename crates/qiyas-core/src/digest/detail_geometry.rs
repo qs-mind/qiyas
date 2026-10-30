@@ -116,7 +116,7 @@ pub(super) fn findings(session: &Session) -> Result<Vec<Value>, CoreError> {
             }
             let (small, large) = if scale_x > 1.0 { (a, b) } else { (b, a) };
             if reported.insert(large.handle) {
-                result.push(json!({"section":"possible_detail", "handles":[small.handle,large.handle],"sheets":[small.sheet,large.sheet],"scale":scale_x.max(1.0/scale_x),"message":"Repeated geometry at a larger scale may be a detail. Mark its region or group as view only if it should not be measured.","message_ar":"قد تكون الأشكال المتكررة بمقياس أكبر تفصيلاً. اجعل منطقتها أو مجموعتها للعرض فقط إذا لم تكن ضمن الحصر.","command":{"type":"set_measurement_scope","region":{"handle":large.handle},"measured":false}}));
+                result.push(json!({"section":"possible_detail", "handles":[small.handle,large.handle],"sheets":[small.sheet,large.sheet],"scale":scale_x.max(1.0/scale_x),"message":"Repeated geometry at a larger scale may be a detail. Mark its region or group as view only if it should not be measured.","message_ar":"قد تكون الأشكال المتكررة بمقياس أكبر تفصيلا. اجعل منطقتها أو مجموعتها للعرض فقط إذا لم تكن ضمن الحصر.","command":{"type":"set_measurement_scope","region":{"handle":large.handle},"measured":false}}));
             }
         }
     }

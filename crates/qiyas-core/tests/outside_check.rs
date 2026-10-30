@@ -352,3 +352,207 @@ fn a_concave_outline_checks_whole_segments_not_just_their_endpoints() {
         .iter()
         .any(|v| v["kind"] == "outside_outline" && v["handles"] == json!([crossing])));
 }
+
+#[test]
+fn reasoned_exclusions_close_coverage_by_handle_type_and_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("exclusions.dxf"), 6);
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Fixture","category":"illustration","geometry":"point"}}),
+    );
+    let h = add(
+        &mut s,
+        json!({"type":"place_objects","objects":[{"type":"Fixture","points":[[1,1]]}]}),
+    );
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Observed","category":"measured","geometry":"point"}}),
+    );
+    add(
+        &mut s,
+        json!({"type":"place_objects","objects":[{"type":"Observed","points":[[3,3]]}]}),
+    );
+    let expectations =
+        [
+            serde_json::from_value(json!({"kind":"count","entity_type":"Point","value":2}))
+                .unwrap(),
+        ];
+    let kit = qiyas_core::takeoff_kit::kit();
+    for phase in ["method", "mappings"] {
+        let mut batch = kit["phases"][phase].clone();
+        batch["type"] = json!("batch");
+        run(&mut s, batch);
+    }
+    assert_eq!(
+        s.takeoff_check(0, &expectations).unwrap()["unmeasured_elements"],
+        1
+    );
+    for target in [json!({"handles":[h]}), json!({"object_type":"Fixture"})] {
+        let mut command = json!({"type":"decision","kind":"set","entries":{
+            "name":"Illustration scope","value":"excluded","unit":"","reason":"Illustration only",
+            "source":"mizan_design","citation":"Drawing scope","set_by":"mizan","status":"answered",
+            "takeoff_exclusion":target}});
+        command["entries"]["reason"] = json!(" ");
+        assert!(!qiyas_core::validation::validate_command(&command, None).valid);
+        assert!(s.run_input(&command, Source::Ai).is_err());
+        command["entries"]["reason"] = json!("Illustration only");
+        run(&mut s, command);
+        let check = s.takeoff_check(0, &expectations).unwrap();
+        assert_eq!(check["unmeasured_elements"], 0);
+        assert_eq!(check["excluded"], 1);
+        assert_eq!(check["passed"], true, "{check}");
+        assert!(check["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["section"] == "excluded"
+                && r["handle"] == h
+                && r["reason"] == "Illustration only"));
+        assert!(s.undo());
+    }
+    let check = s
+        .takeoff_check_with_report(0, &expectations, &format!("Exclude {h}: Illustration only"))
+        .unwrap();
+    assert_eq!(check["unmeasured_elements"], 0);
+    assert_eq!(check["excluded"], 1);
+    assert_eq!(check["passed"], true, "{check}");
+    assert_eq!(
+        s.takeoff_check_with_report(0, &expectations, &format!("Exclude {h}: "))
+            .unwrap()["unmeasured_elements"],
+        1
+    );
+}
+
+fn shop_plan(s: &mut Session, missing_door: bool, gap: bool) {
+    run(
+        s,
+        json!({"type":"walls","join":false,"thickness":0.2,"height":3,
+        "layers":{"outline":"A-EXT","centreline":"A-EXT-C"},
+        "runs":[{"points":[[0,0],[12,0],[12,8],[0,8]],"closed":true}],
+        "openings":[{"run":0,"at":2,"width":1,"kind":"door"},
+                    {"run":0,"at":29,"width":1,"kind":"window"}]}),
+    );
+    let doors = if missing_door {
+        vec![json!({"run":0,"at":2,"width":1,"kind":"door"})]
+    } else {
+        vec![
+            json!({"run":0,"at":2,"width":1,"kind":"door"}),
+            json!({"run":0,"at":8,"width":1,"kind":"door"}),
+        ]
+    };
+    run(
+        s,
+        json!({"type":"walls","join":false,"thickness":0.2,"height":3,
+        "layers":{"outline":"A-SHOP","centreline":"A-SHOP-C","doors":"SHOP-DOORS"},
+        "runs":[{"points":[[0,3],[12,3]]}],"openings":doors}),
+    );
+    run(
+        s,
+        json!({"type":"walls","join":false,"thickness":0.15,"height":3,
+        "layers":{"outline":"A-PART","centreline":"A-PART-C"},
+        "runs":[{"points":[[6,if gap {3.5} else {3.0}],[6,8]]}]}),
+    );
+    // An L in the corridor, meeting the exterior and shop wall at T junctions.
+    run(
+        s,
+        json!({"type":"walls","join":false,"thickness":0.15,"height":3,
+        "layers":{"outline":"A-CORE","centreline":"A-CORE-C"},
+        "runs":[{"points":[[10,0],[10,1.5],[12,1.5]]}],
+        "openings":[{"run":0,"at":0.7,"width":0.6,"kind":"door"}]}),
+    );
+}
+
+#[test]
+fn qiyas_shop_plan_has_no_false_geometric_findings() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("shops.dxf"), 6);
+    shop_plan(&mut s, false, false);
+    let found = rows(&s, Default::default());
+    let faults: Vec<_> = found
+        .iter()
+        .filter(|r| {
+            [
+                "dangling_wall",
+                "space_without_opening",
+                "space_overlap",
+                "outside_outline",
+            ]
+            .contains(&r["kind"].as_str().unwrap())
+        })
+        .collect();
+    assert!(faults.is_empty(), "{faults:#?}");
+}
+
+#[test]
+fn qiyas_shop_plan_still_reports_missing_door_gap_and_outside_element() {
+    let dir = tempfile::tempdir().unwrap();
+    for (missing, gap) in [(true, false), (false, true)] {
+        let mut s = Session::new_blank(&dir.path().join("faults.dxf"), 6);
+        shop_plan(&mut s, missing, gap);
+        let site = rectangle(&mut s, [-1., -1.], [13., 9.]);
+        let outside = rectangle(&mut s, [15., 1.], [16., 2.]);
+        let found = rows(
+            &s,
+            OutsideQuery {
+                boundary: Some(site),
+                ..Default::default()
+            },
+        );
+        assert!(found
+            .iter()
+            .any(|r| r["kind"] == "outside_outline" && r["handles"] == json!([outside])));
+        assert!(
+            found.iter().any(|r| r["kind"]
+                == if missing {
+                    "space_without_opening"
+                } else {
+                    "dangling_wall"
+                }),
+            "{found:#?}"
+        );
+    }
+}
+
+#[test]
+fn wall_graphics_are_not_extra_quantities_and_different_dimensions_are_not_mismatches() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("wall-recount.dxf"), 6);
+    run(
+        &mut s,
+        json!({"type":"walls","thickness":0.2,"height":3,
+        "runs":[{"points":[[0,0],[8,0],[8,6],[0,6]],"closed":true}],
+        "openings":[{"run":0,"at":2,"width":1,"kind":"door"}]}),
+    );
+    let mut items = Vec::new();
+    for e in s.drawing.doc.entities() {
+        let Some(tag) = qiyas_core::xdata::read_json::<Value>(e.common(), "QIYAS_WALL") else {
+            continue;
+        };
+        let h = e.common().handle.value();
+        if tag["role"] == "run" {
+            items.push(item("wall-area", &[h], 80., "m2"));
+        }
+        if tag["role"] == "opening" {
+            items.push(item("door", &[h], 1., "nr"));
+        }
+    }
+    report(&mut s, items);
+    let found = rows(&s, Default::default());
+    assert!(
+        !found
+            .iter()
+            .any(|r| r["kind"] == "quantity_mismatch" || r["kind"] == "unallocated_boq"),
+        "{found:#?}"
+    );
+    let raw: Vec<_> = found
+        .iter()
+        .filter(|r| r["kind"] == "raw_recount")
+        .collect();
+    assert_eq!(raw.len(), 2); // source path length and door insert, not enclosed GFA or graphics
+    let length = raw.iter().find(|r| r["unit"] == "m").unwrap();
+    assert_eq!(length["comparison_applicable"], false);
+    assert_eq!(length["raw_quantity"], 28.);
+}

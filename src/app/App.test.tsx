@@ -938,7 +938,7 @@ test("PURGE (PU) and AUDIT: a dry run first, then one change that the window cat
     expect(core.calls.at(-1)).toBe("save_project {\"workspace\":1}");
     expect(screen.getByText(en["purge.done"].replace("{n}", "1"))).toBeTruthy();
   });
-  fireEvent.click(screen.getByRole("button", { name: en["purge.close"] }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: en["purge.title"] })).getByRole("button", { name: en["purge.close"] }));
   await until(() => expect(screen.queryByRole("heading", { name: en["purge.title"] })).toBeNull());
 
   core.calls.length = 0;

@@ -230,25 +230,25 @@ pub fn tools() -> Vec<ToolSpec> {
         ToolSpec {
             name: READ,
             description: r#"Read evidence without changing the drawing. args is a JSON object written as a string.
-Prefer detail: summary, selected fields and artifact pointers; fetch more raw evidence whenever needed. These are read-efficiency choices, not investigation limits. / اقرأ الأدلة دون تغيير الرسم. args كائن JSON مكتوب كنص. فضّل الملخص والحقول المحددة ومؤشرات الأدلة ثم اقرأ كل ما يلزم؛ هذه وسائل للكفاءة وليست حدودًا للاستقصاء.
+Prefer detail: summary, selected fields and artifact pointers; fetch more raw evidence whenever needed. These are read-efficiency choices, not investigation limits. / اقرأ الأدلة دون تغيير الرسم. args كائن JSON مكتوب كنص. فضل الملخص والحقول المحددة ومؤشرات الأدلة ثم اقرأ كل ما يلزم؛ هذه وسائل للكفاءة وليست حدودا للاستقصاء.
 ops:
-- artifact {id, offset?, pointer?}: paged UTF-8 JSON, next_offset and original revision; pointer selects a part. / دليل مقسّم إلى صفحات مع إصداره الأصلي؛ المؤشر يحدد جزءًا منه.
+- artifact {id, offset?, pointer?}: paged UTF-8 JSON, next_offset and original revision; pointer selects a part. / دليل مقسم إلى صفحات مع إصداره الأصلي؛ المؤشر يحدد جزءا منه.
 - explain {item, project?}: generated:<code>, boq:<code>, takeoff:<id>, dimension:<decimal handle>:<rule>; project quantities use project path and item code. Returns dimensions, elements, rules and citations. / يقرأ أبعاد البند وعناصره وقواعده ومراجعه؛ كميات المشروع تحتاج مساره ورمز البند.
 - digest {offset?}: drawing evidence, method, suggested picture and takeoff_kit link. Read omitted pages for relevant scope. / أدلة الرسم والطريقة والصورة المقترحة ورابط حزمة الحصر؛ اقرأ الصفحات المتبقية بحسب النطاق.
-- takeoff_kit {}: registry contracts and example batches, not a definition of project scope. / عقود الأوامر ودفعات أمثلة، وليست تحديدًا لنطاق المشروع.
+- takeoff_kit {}: registry contracts and example batches, not a definition of project scope. / عقود الأوامر ودفعات أمثلة، وليست تحديدا لنطاق المشروع.
 - workflow {language?: en|ar}: take-off principles for quantity jobs. / مبادئ الحصر لطلبات الكميات.
-- takeoff_check {offset?, expectations?, end_report?}: coverage, unmatched schedule rules, uncertainties and verify. Page through all findings. Record exclusions as decision.set entries with value, reason, source and citation. The legacy note-scope parser accepts Exclude <handle>: <reason> (note <handle>) in the internal end_report argument only; never copy those lines into answers or finish.answer. / يفحص التغطية والقواعد غير المطابقة والشكوك والتوقعات؛ اقرأ كل صفحات النتائج. سجّل الاستبعادات كقرارات بقيمة وسبب ومصدر ومرجع. صيغة الاستبعاد القديمة مقبولة في وسيط end_report الداخلي فقط؛ لا تنقل تلك الأسطر إلى الإجابات.
-- document {path, pages?}: one-based PDF page text; installed OCR marks scan text. Empty text does not prove empty scope; inspect the page and calibrate from dimensions. / نص صفحات PDF المرقمة من واحد، مع تمييز النص المقروء آليًا؛ غياب النص لا يعني غياب النطاق، فافحص الصفحة وعايرها بالأبعاد.
-- state: current units, sheet, annotation scale, layer, take-off and BOQ. / الوحدات واللوحة ومقياس التعليقات والطبقة والحصر وجدول الكميات الحالية.
-- capabilities: available contracts. validate {command} or {commands}: dry-run schema checks when needed; examples teach syntax without trial geometry. / العقود المتاحة؛ validate يفحص المدخلات دون تنفيذ عند الحاجة، والأمثلة توضّح الصيغة دون رسم تجريبي.
+- takeoff_check {offset?, expectations?, end_report?}: coverage, unmatched schedule rules, uncertainties and verify. Page through all findings. Record exclusions as answered decision.set entries with takeoff_exclusion:{handles:[123]} or {object_type:"Fixture"}, value, reason, source and citation. They close coverage and remain listed under excluded. The report parser also accepts Exclude <handle>: <reason> (optional note <handle>) in the internal end_report argument only; never copy those lines into answers or finish.answer. / يفحص التغطية والقواعد غير المطابقة والشكوك والتوقعات؛ اقرأ كل صفحات النتائج. سجل الاستبعاد كقرار محسوم مع takeoff_exclusion للمقابض أو نوع العنصر، وقيمة وسبب ومصدر ومرجع؛ يغلق بند التغطية ويظل ظاهرا مع سببه. صيغة الاستبعاد القديمة مقبولة في وسيط end_report الداخلي فقط؛ لا تنقل تلك الأسطر إلى الإجابات.
+- document {path, pages?}: one-based PDF page text; installed OCR marks scan text. Empty text does not prove empty scope; inspect the page and calibrate from dimensions. / نص صفحات PDF المرقمة من واحد، مع تمييز النص المقروء آليا؛ غياب النص لا يعني غياب النطاق، فافحص الصفحة وعايرها بالأبعاد.
+- state: current units, sheet, annotation scale, layer, take-off and BOQ. / الوحدات واللوحة ومقياس الكتابات والأبعاد والطبقة والحصر والمقايسة الحالية.
+- capabilities: available contracts. validate {command} or {commands}: dry-run schema checks when needed; examples teach syntax without trial geometry. / العقود المتاحة؛ validate يفحص المدخلات دون تنفيذ عند الحاجة، والأمثلة توضح الصيغة دون رسم تجريبي.
 - commands {}, {name}, {names:[...]}, {name, full:true} or {search}: index, compact contracts (up to 8 names), full schema or search. Request full:true for command documentation and recipes before using an unfamiliar command. / فهرس أو عقود مختصرة حتى ثمانية أسماء أو مخطط كامل أو بحث. اطلب full:true لقراءة توثيق الأمر وطريقة استخدامه قبل استعمال أمر غير مألوف.
 - records {collection, type, layer, handles, names, where, fields, detail}; record_schema {name}: raw entity, layer, text_style or header data. Read edited elements back. / بيانات العناصر والطبقات وأنماط النص والرأس الأصلية؛ أعد قراءة العناصر بعد تعديلها.
 - query {kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, ...}. / بحث مكاني أو حسب نوع البيانات.
-- measure {handle} or {points}: numbers without a take-off row. Find drawn entities with records/query and measure by handle for exact lines, arcs and polylines; do not approximate curves with invented points. / قياس دون صف حصر؛ حدّد العناصر من السجلات وقِس بمعرّفها بدقة، ولا تقرّب المنحنيات بنقاط مختلقة.
-- run {command}: any read command, including decision.list, outside_check, spatial_query, wall_groups, drafting_knowledge and space_check. Optional practice data requires applicability to this job; defaults are not code requirements. / أي أمر قراءة؛ المعرفة الاختيارية تحتاج تحققًا من انطباقها على العمل، والقيم المعتادة ليست اشتراطات كود.
+- measure {handle} or {points}: numbers without a take-off row. Find drawn entities with records/query and measure by handle for exact lines, arcs and polylines; do not approximate curves with invented points. / قياس دون صف حصر؛ حدد العناصر من السجلات وقم بقياس بمعرفها بدقة، ولا تقرب المنحنيات بنقاط مختلقة.
+- run {command}: any read command, including decision.list, outside_check, spatial_query, wall_groups, drafting_knowledge and space_check. Optional practice data requires applicability to this job; defaults are not code requirements. / أي أمر قراءة؛ المعرفة الاختيارية تحتاج تحققا من انطباقها على العمل، والقيم المعتادة ليست اشتراطات كود.
 - check {handles, rules}: drawing findings. history; events {after?, session?}: commits, changed handles and resync flag. / ملاحظات الرسم، وسجل التعديلات والعناصر المتغيرة والحاجة لإعادة المزامنة.
 - drawings; selection; panel_state {}: tabs, selection, panels, folders, rows and controls. / المخططات والتحديد واللوحات الجانبية والمجلدات والصفوف وأدوات التحكم.
-- rooms {text_layer|seeds}: candidate boundaries and areas, not engineering approval. / حدود ومساحات مرشحة وليست اعتمادًا هندسيًا.
+- rooms {text_layer|seeds}: candidate boundaries and areas, not engineering approval. / حدود ومساحات مرشحة وليست اعتمادا هندسيا.
 - brief_check {expectations:[{id,text,verify:{...}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: compare the engineer's brief with measured results, including requested outputs. / قارن موجز المهندس بالنتائج المقاسة والمخرجات المطلوبة."#,
             input_schema: json!({
                 "type": "object",
@@ -263,23 +263,23 @@ ops:
         },
         ToolSpec {
             name: EXECUTE,
-            description: r#"Plan work or change the drawing, quantities or view. args is a JSON object written as a string. / خطّط العمل أو غيّر الرسم أو الكميات أو العرض؛ args كائن JSON مكتوب كنص.
+            description: r#"Plan work or change the drawing, quantities or view. args is a JSON object written as a string. / خطط العمل أو غير الرسم أو الكميات أو العرض؛ args كائن JSON مكتوب كنص.
 ops:
-- plan {phases:[{id,title,status:pending|active|done|skipped}]}: full checklist, stable ids, no drawing change or undo step. Put the four expert-frame lines in the plan before execution. Work in manageable goal-based batches, read back and check each phase, explain skipped or unfinished work, and resume the same plan on Continue. / قائمة كاملة بمعرّفات ثابتة دون تعديل الرسم؛ اكتب أسطر إطار الخبير الأربعة قبل التنفيذ، واعمل بدفعات حسب الهدف وافحص كل مرحلة وبيّن المتروك وغير المكتمل واستأنف الخطة نفسها عند طلب المتابعة.
-- ask {questions:[{question,options?:[{label,description?,recommended?}]}]}: ask only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Gather unresolved questions in one call at the plan step; ask again only for a new question of that kind. Never silently invent an idea value or ask what a tool can tell. Mizan takes technical design decisions itself with an engineering basis (structure, door/window placement and sizes, wall types, details, sheet layout), records each with decision.set, source mizan_design and its reason, and does not pause for approval. 1 to 20 questions, up to 600 characters each; 0 to 6 optional choices with a recommendation and reason only when supported; free text always allowed. Waiting for an answer is a normal end of turn. / اسأل فقط عما يخص الفكرة: المفهوم والقصد التصميمي والبرنامج والاستخدامات ورغبات العميل والنطاق والأرقام الأساسية في الموجز أو المتناقضة معه والمعيار أو الجهة التنظيمية المختصة. اجمع الأسئلة غير المحسومة مرة واحدة عند التخطيط ولا تعد إلا لسؤال جديد من النوع نفسه. لا تختلق قيمة تخص الفكرة ولا تسأل عما تخبرك به أداة. يتخذ ميزان القرارات التقنية على أساس هندسي، بما فيها الإنشاء والفتحات ومقاساتها والجدران والتفاصيل وتوزيع اللوحات، ويسجل كل قرار وسببه بالمصدر mizan_design دون توقف للموافقة. من سؤال إلى عشرين، حتى 600 محرف لكل سؤال، ومن صفر إلى ستة خيارات اختيارية بتوصية مبررة عند وجود أساس؛ النص الحر متاح دائمًا. انتظار الإجابة نهاية طبيعية للدور.
+- plan {phases:[{id,title,status:pending|active|done|skipped}]}: full checklist, stable ids, no drawing change or undo step. Put the four expert-frame strings in frame {expert_checks,raw_data,methods,outside_check}; phases are work steps only, with at most one active. Titles are a few words; detail belongs in optional note (up to 600 characters). Keep spaces between Arabic words and numbers or Latin text. Work in manageable goal-based batches, read back and check each phase, explain skipped or unfinished work, and resume the same plan on Continue. / قائمة كاملة بمعرفات ثابتة دون تعديل الرسم؛ ضع إطار الخبير في frame بحقوله الأربعة، والمراحل خطوات عمل فقط بمرحلة نشطة واحدة كحد أقصى؛ العنوان كلمات قليلة والتفاصيل في note حتى 600 حرف، واترك مسافة بين الكلمات العربية والأرقام أو النص اللاتيني، واعمل بدفعات حسب الهدف وافحص كل مرحلة وبين المتروك وغير المكتمل واستأنف الخطة نفسها عند طلب المتابعة.
+- ask {questions:[{question,options?:[{label,description?,recommended?}]}]}: ask only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Gather unresolved questions in one call at the plan step; ask again only for a new question of that kind. Never silently invent an idea value or ask what a tool can tell. Mizan takes technical design decisions itself with an engineering basis (structure, door/window placement and sizes, wall types, details, sheet layout), records each with decision.set, source mizan_design and its reason, and does not pause for approval. 1 to 20 questions, up to 600 characters each; 0 to 6 optional choices with a recommendation and reason only when supported; free text always allowed. Waiting for an answer is a normal end of turn. / اسأل فقط عما يخص الفكرة: المفهوم والقصد التصميمي والبرنامج والاستخدامات ورغبات العميل والنطاق والأرقام الأساسية في الموجز أو المتناقضة معه والمعيار أو الجهة التنظيمية المختصة. اجمع الأسئلة غير المحسومة مرة واحدة عند التخطيط ولا تعد إلا لسؤال جديد من النوع نفسه. لا تختلق قيمة تخص الفكرة ولا تسأل عما تخبرك به أداة. يتخذ ميزان القرارات التقنية على أساس هندسي، بما فيها الإنشاء والفتحات ومقاساتها والجدران والتفاصيل وتوزيع اللوحات، ويسجل كل قرار وسببه بالمصدر mizan_design دون توقف للموافقة. من سؤال إلى عشرين، حتى 600 محرف لكل سؤال، ومن صفر إلى ستة خيارات اختيارية بتوصية مبررة عند وجود أساس؛ النص الحر متاح دائما. انتظار الإجابة نهاية طبيعية للدور.
 - run {command,layer?,color?}: any core command; read its contract for geometry, annotation and sheet recipes. / أي أمر أساسي؛ اقرأ عقده لتفاصيل الرسم والتعليقات واللوحات.
-- type {line}: complete command line; discover words/aliases through commands. If incomplete, resend the completed line. / سطر أمر كامل؛ اقرأ الكلمات والاختصارات من العقود وأعد السطر كاملًا إذا كان ناقصًا.
+- type {line}: complete command line; discover words/aliases through commands. If incomplete, resend the completed line. / سطر أمر كامل؛ اقرأ الكلمات والاختصارات من العقود وأعد السطر كاملا إذا كان ناقصا.
 - batch {commands:[1 to 200 commands],layer?,color?}: atomic undo step; {"$step":i,"pointer":"/added/0"} refers to an earlier result. / خطوة تراجع ذرية؛ المرجع يشير إلى نتيجة خطوة سابقة.
-- set_records {collection,updates:[{key,path,value}]}: edit known properties by key. create_entities {entities:[{type,data}]}: create schema-backed entities. / عدّل خصائص معروفة بمفتاحها أو أنشئ عناصر وفق مخططها.
-- undo_own and redo_own {}: your newest step only. Correct existing elements by handle: edit_wall_opening for openings, modify.move for position, set_records for properties, auto_place for collisions, dim_space/dim_edit for dimensions, edit_text for wording. Rebuild advice and churn counts inform your choice. Never hide layers to conceal an error. / تراجع عن أحدث خطواتك أو أعدها؛ صحّح الفتحات والمواضع والخصائص والتداخلات والأبعاد والنصوص بأوامرها ومعرّفاتها. نصائح إعادة البناء وأعداد التغييرات معلومات لقرارك؛ لا تخفِ طبقات لإخفاء خطأ.
-- select {handles,zoom?}: hand elements to the user. view {handles} or {bounds}, sheet?: frame the relevant area. / سلّم العناصر للمستخدم بالتحديد واضبط العرض على المنطقة المطلوبة.
+- set_records {collection,updates:[{key,path,value}]}: edit known properties by key. create_entities {entities:[{type,data}]}: create schema-backed entities. / عدل خصائص معروفة بمفتاحها أو أنشئ عناصر وفق مخططها.
+- undo_own and redo_own {}: your newest step only. Correct existing elements by handle: edit_wall_opening for openings, modify.move for position, set_records for properties, auto_place for collisions, dim_space/dim_edit for dimensions, edit_text for wording. Rebuild advice and churn counts inform your choice. Never hide layers to conceal an error. / تراجع عن أحدث خطواتك أو أعدها؛ صحح الفتحات والمواضع والخصائص والتداخلات والأبعاد والنصوص بأوامرها ومعرفاتها. نصائح إعادة البناء وأعداد التغييرات معلومات لقرارك؛ لا تحجب طبقات لإخفاء خطأ.
+- select {handles,zoom?}: hand elements to the user. view {handles} or {bounds}, sheet?: frame the relevant area. / سلم العناصر للمستخدم بالتحديد واضبط العرض على المنطقة المطلوبة.
 - new_drawing {name,units:m|cm|mm}: named unsaved drawing; name it after the job. open_drawing {path}; switch_drawing {id}; close_drawing {id?}. Use file operations as required by the request. / رسم جديد غير محفوظ باسم العمل، أو فتح رسم أو تبديله أو إغلاقه حسب الطلب.
-- save_drawing {}: explicit save. The app automatically saves eligible changed, named drawings and reports status; untitled or repaired drawings wait for the engineer to save. Leave save status to the app; do not open Save As on the engineer's behalf. finish {answer?}: records completion, never saves. / حفظ صريح؛ يحفظ التطبيق تلقائيًا الرسومات المعدّلة المؤهلة ذات المسار ويعلن الحالة، وتنتظر الرسومات الجديدة أو المصلحة حفظ المهندس. اترك حالة الحفظ للتطبيق ولا تفتح «حفظ باسم» نيابة عنه. finish يسجل الإنهاء ولا يحفظ.
-- import_boq {path}; compare {}: link measurements to BOQ items using link_boq or matching names first. Reconcile second-reading disputes from evidence; never delete an item merely because readings differ. / استورد جدول الكميات واربط القياسات ببنوده قبل المقارنة؛ وازن خلافات القراءة الثانية بالأدلة ولا تحذف بندًا لمجرد الاختلاف.
-- export_takeoff and export_conflicts {path?}: workbook beside the drawing, default name if omitted. Outstanding checks may produce a DRAFT export; disclose findings and do not call it complete. / ملف جدول بجوار الرسم باسم افتراضي عند إغفاله؛ الفحوص العالقة قد تنتج مسودة، فأفصح عنها ولا تدّعِ الاكتمال.
-- export_evidence {path?,language?:en|ar}: marked source sheets in a review PDF beside the BOQ; use the answer's language after BOQ export. Name delivered files without paths in prose; the window links them. / صفحات المصدر مؤشرة في ملف مراجعة بجوار جدول الكميات وبلغة الإجابة؛ اذكر أسماء الملفات دون مسارات وتربطها النافذة.
-- plot {sheet?,paper?,orientation?,scale?,path?}: print the prepared sheet to PDF beside the drawing; make_sheet prepares it, arrange separates content. A layout prints at 1:1 on its paper; Model defaults to fit on ISO A1; scale accepts fit or 1:50. Inspect the plotted result for legibility and overlap. / اطبع اللوحة المعدّة إلى PDF بجوار الرسم؛ make_sheet يعدها وarrange يباعد محتوياتها. تطبع اللوحة بنسبة 1:1 على ورقها، وModel يملأ A1 افتراضيًا؛ افحص وضوح الناتج وتداخلاته.
-Use expected_revision from the latest relevant result, including your own edits. After stale_read reread changed handles before retrying. Results report added, changed, removed, handle_map and checks. Advice is information; Mizan decides. / استخدم الإصدار الأحدث ذي الصلة بما فيه تعديلاتك؛ بعد stale_read أعد قراءة العناصر المتغيرة قبل المحاولة. النتائج تعرض الإضافات والتعديلات والحذف وربط المعرّفات والفحوص. النصيحة معلومة؛ ميزان يقرر."#,
+- save_drawing {}: explicit save. The app automatically saves eligible changed, named drawings and reports status; untitled or repaired drawings wait for the engineer to save. Leave save status to the app; do not open Save As on the engineer's behalf. finish {answer?}: records completion, never saves. / حفظ صريح؛ يحفظ التطبيق تلقائيا الرسومات المعدلة المؤهلة ذات المسار ويعلن الحالة، وتنتظر الرسومات الجديدة أو المصلحة حفظ المهندس. اترك حالة الحفظ للتطبيق ولا تفتح «حفظ باسم» نيابة عنه. finish يسجل الإنهاء ولا يحفظ.
+- import_boq {path}; compare {}: link measurements to BOQ items using link_boq or matching names first. Reconcile second-reading disputes from evidence; never delete an item merely because readings differ. / استورد المقايسة واربط القياسات ببنودها قبل المقارنة؛ وازن خلافات القراءة الثانية بالأدلة ولا تحذف بندا لمجرد الاختلاف.
+- export_takeoff and export_conflicts {path?}: workbook beside the drawing, default name if omitted. Outstanding checks may produce a DRAFT export; disclose findings and do not call it complete. / ملف جدول بجوار الرسم باسم افتراضي عند إغفاله؛ الفحوص العالقة قد تنتج مسودة، فأفصح عنها ولا تقل إن العمل اكتمل.
+- export_evidence {path?,language?:en|ar}: marked source sheets in a review PDF beside the BOQ; use the answer's language after BOQ export. Name delivered files without paths in prose; the window links them. / صفحات المصدر مؤشرة في ملف مراجعة بجوار المقايسة وبلغة الإجابة؛ اذكر أسماء الملفات دون مسارات وتربطها النافذة.
+- plot {sheet?,paper?,orientation?,scale?,path?}: print the prepared sheet to PDF beside the drawing; make_sheet prepares it, arrange separates content. A layout prints at 1:1 on its paper; Model defaults to fit on ISO A1; scale accepts fit or 1:50. Inspect the plotted result for legibility and overlap. / اطبع اللوحة المعدة إلى PDF بجوار الرسم؛ make_sheet يعدها و arrange يباعد محتوياتها. تطبع اللوحة بنسبة 1:1 على ورقها، و Model يملأ A1 افتراضيا؛ افحص وضوح الناتج وتداخلاته.
+Use expected_revision from the latest relevant result, including your own edits. After stale_read reread changed handles before retrying. Results report added, changed, removed, handle_map and checks. Advice is information; Mizan decides. / استخدم الإصدار الأحدث ذي الصلة بما فيه تعديلاتك؛ بعد stale_read أعد قراءة العناصر المتغيرة قبل المحاولة. النتائج تعرض الإضافات والتعديلات والحذف وربط المعرفات والفحوص. النصيحة معلومة؛ ميزان يقرر."#,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -294,8 +294,8 @@ Use expected_revision from the latest relevant result, including your own edits.
         },
         ToolSpec {
             name: CAPTURE,
-            description: r#"Look after exact checks and outside_check. Source document renders a PDF page {path,page,width?}; caption coordinates are page points for recognition.vision. For scans use verbatim labels, calibration_spans and visible dimensions with endpoints and metres_per_unit; prefer the longest legible reference and disclose calibration uncertainty. / انظر بعد الفحوص الدقيقة والفحص المستقل. document يعرض صفحة PDF بإحداثيات الصفحة؛ للمسح استخدم النصوص كما هي ومراجع المعايرة والأبعاد الظاهرة بنهاياتها وتحويل وحداتها، وفضّل أطول مرجع مقروء واذكر عدم يقين المعايرة.
-Source screen shows the drawing canvas only; use panel_state for panels, folders and selection. Source picture draws a whole sheet or part {sheet,bounds,width,highlight,marks}. Look at the whole sheet, then zoom with bounds until text reads. Marks map numbered labels to handles in the caption; never guess handles from a picture. Without image access rely on exact evidence and disclose that no visual inspection occurred. / screen يعرض مساحة الرسم فقط؛ اقرأ panel_state للوحات الجانبية والمجلدات والتحديد. picture يعرض لوحة كاملة أو جزءًا منها؛ انظر إلى الكل ثم كبّر حتى تقرأ النص. العلامات تربط الأرقام بالمعرّفات في الوصف؛ لا تخمّن المعرّفات من الصور. عند غياب الصور اعتمد على الأدلة الدقيقة واذكر أن المراجعة البصرية لم تحدث."#,
+            description: r#"Look after exact checks and outside_check. Source document renders a PDF page {path,page,width?}; caption coordinates are page points for recognition.vision. For scans use verbatim labels, calibration_spans and visible dimensions with endpoints and metres_per_unit; prefer the longest legible reference and disclose calibration uncertainty. / انظر بعد الفحوص الدقيقة والفحص المستقل. document يعرض صفحة PDF بإحداثيات الصفحة؛ للمسح استخدم النصوص كما هي ومراجع المعايرة والأبعاد الظاهرة بنهاياتها وتحويل وحداتها، وفضل أطول مرجع مقروء واذكر عدم يقين المعايرة.
+Source screen shows the drawing canvas only; use panel_state for panels, folders and selection. Source picture draws a whole sheet or part {sheet,bounds,width,highlight,marks}. Look at the whole sheet, then zoom with bounds until text reads. Marks map numbered labels to handles in the caption; never guess handles from a picture. Without image access rely on exact evidence and disclose that no visual inspection occurred. / screen يعرض مساحة الرسم فقط؛ اقرأ panel_state للوحات الجانبية والمجلدات والتحديد. picture يعرض لوحة كاملة أو جزءا منها؛ انظر إلى الكل ثم كبر حتى تقرأ النص. العلامات تربط الأرقام بالمعرفات في الوصف؛ لا تخمن المعرفات من الصور. عند غياب الصور اعتمد على الأدلة الدقيقة واذكر أن المراجعة البصرية لم تحدث."#,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -373,7 +373,18 @@ pub fn mutating(name: &str, input: &Value) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<ExpertFrame>,
     pub phases: Vec<PlanPhase>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertFrame {
+    pub expert_checks: String,
+    pub raw_data: String,
+    pub methods: String,
+    pub outside_check: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -381,6 +392,8 @@ pub struct Plan {
 pub struct PlanPhase {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub status: PlanStatus,
 }
 
@@ -403,11 +416,41 @@ pub fn read_plan(args: &Value) -> Result<Plan, ToolError> {
     if plan.phases.is_empty() || plan.phases.len() > 24 {
         return Err(bad("A plan needs 1 to 24 phases."));
     }
+    if let Some(frame) = &plan.frame {
+        for (name, text) in [
+            ("expert_checks", &frame.expert_checks),
+            ("raw_data", &frame.raw_data),
+            ("methods", &frame.methods),
+            ("outside_check", &frame.outside_check),
+        ] {
+            if text.trim().is_empty() || text.chars().count() > 600 {
+                return Err(bad(format!("plan frame.{name} must have 1 to 600 characters / كل حقل في إطار الخبير يحتاج من 1 إلى 600 حرف")));
+            }
+        }
+    }
+    let active: Vec<_> = plan
+        .phases
+        .iter()
+        .filter(|p| p.status == PlanStatus::Active)
+        .map(|p| p.id.as_str())
+        .collect();
+    if active.len() > 1 {
+        return Err(bad(format!("A plan allows at most one active phase; active ids: {}. Example: set {} to active and the others to pending, done or skipped. / الخطة تسمح بمرحلة نشطة واحدة فقط؛ اجعل باقي المراحل بانتظار التنفيذ أو مكتملة أو متروكة.", active.join(", "), active[0])));
+    }
     let mut ids = std::collections::BTreeSet::new();
     for phase in &plan.phases {
         if phase.id.trim().is_empty() || phase.id.chars().count() > 64 || !ids.insert(&phase.id) {
             return Err(bad(
                 "plan phase ids must be unique, nonempty and at most 64 characters",
+            ));
+        }
+        if phase
+            .note
+            .as_ref()
+            .is_some_and(|note| note.chars().count() > 600)
+        {
+            return Err(bad(
+                "plan phase note must have at most 600 characters / ملاحظة المرحلة لا تتجاوز 600 حرف",
             ));
         }
         if phase.title.trim().is_empty() || phase.title.chars().count() > 160 {
@@ -468,7 +511,7 @@ pub fn read_questions(args: &Value) -> Result<Vec<Question>, ToolError> {
     let input: AskInput = read_args(&args, "ask")?;
     if input.questions.is_empty() || input.questions.len() > 20 {
         return Err(bad(
-            "ask takes 1 to 20 questions in one call / يقبل السؤال من ١ إلى ٢٠ سؤالًا في استدعاء واحد",
+            "ask takes 1 to 20 questions in one call / يقبل السؤال من ١ إلى ٢٠ سؤالا في استدعاء واحد",
         ));
     }
     let mut ids = std::collections::BTreeSet::new();
@@ -488,7 +531,7 @@ pub fn read_questions(args: &Value) -> Result<Vec<Question>, ToolError> {
         }
         if q.options.len() > 6 {
             return Err(bad(format!(
-                "question {id} allows 0 to 6 options; free text is always allowed / يسمح السؤال بما يصل إلى ٦ خيارات والإجابة الحرة متاحة دائمًا"
+                "question {id} allows 0 to 6 options; free text is always allowed / يسمح السؤال بما يصل إلى ٦ خيارات والإجابة الحرة متاحة دائما"
             )));
         }
         let mut labels = std::collections::BTreeSet::new();
@@ -528,7 +571,7 @@ pub(super) fn ask_info() -> Value {
         "name": "ask",
         "tool": EXECUTE,
         "op": "ask",
-        "doc": "Ask only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Gather unresolved questions in one call at the plan step; ask again only for a new question of that kind. Never silently invent a value belonging to the idea. Never ask what a tool can tell you. Mizan autonomously takes technical design decisions with an engineering basis: structure, door and window placement and sizes, wall types, details and sheet layout. Record each with decision.set, source mizan_design and its reason; do not pause for approval. Options are optional, with a recommendation and reason only when supported; free text is always allowed. Limits: 1 to 20 questions, 0 to 6 options each, up to 600 characters per question. Waiting for an answer is a normal end of turn. / اسأل فقط عما يخص الفكرة: المفهوم والقصد التصميمي والبرنامج والاستخدامات ورغبات العميل والنطاق والأرقام الأساسية التي يذكرها الموجز أو يناقضها والمعيار أو الجهة التنظيمية المختصة. اجمع الأسئلة غير المحسومة في استدعاء واحد عند التخطيط، ولا تعد إلا لسؤال جديد من النوع نفسه. لا تختلق قيمة تخص الفكرة ولا تسأل عما تخبرك به أداة. يتخذ ميزان قرارات التصميم التقنية باستقلالية وعلى أساس هندسي، بما فيها الإنشاء والفتحات ومقاساتها وأنواع الجدران والتفاصيل وتوزيع اللوحات، ويسجل كل قرار وسببه عبر decision.set بالمصدر mizan_design دون توقف للموافقة. الخيارات اختيارية والتوصية تحتاج سببًا مدعومًا، والنص الحر متاح دائمًا. الحدود: من سؤال إلى عشرين، ومن صفر إلى ستة خيارات، وحتى 600 محرف لكل سؤال. انتظار الإجابة نهاية طبيعية للدور.",
+        "doc": "Ask only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Gather unresolved questions in one call at the plan step; ask again only for a new question of that kind. Never silently invent a value belonging to the idea. Never ask what a tool can tell you. Mizan autonomously takes technical design decisions with an engineering basis: structure, door and window placement and sizes, wall types, details and sheet layout. Record each with decision.set, source mizan_design and its reason; do not pause for approval. Options are optional, with a recommendation and reason only when supported; free text is always allowed. Limits: 1 to 20 questions, 0 to 6 options each, up to 600 characters per question. Waiting for an answer is a normal end of turn. / اسأل فقط عما يخص الفكرة: المفهوم والقصد التصميمي والبرنامج والاستخدامات ورغبات العميل والنطاق والأرقام الأساسية التي يذكرها الموجز أو يناقضها والمعيار أو الجهة التنظيمية المختصة. اجمع الأسئلة غير المحسومة في استدعاء واحد عند التخطيط، ولا تعد إلا لسؤال جديد من النوع نفسه. لا تختلق قيمة تخص الفكرة ولا تسأل عما تخبرك به أداة. يتخذ ميزان قرارات التصميم التقنية باستقلالية وعلى أساس هندسي، بما فيها الإنشاء والفتحات ومقاساتها وأنواع الجدران والتفاصيل وتوزيع اللوحات، ويسجل كل قرار وسببه عبر decision.set بالمصدر mizan_design دون توقف للموافقة. الخيارات اختيارية والتوصية تحتاج سببا مدعوما، والنص الحر متاح دائما. الحدود: من سؤال إلى عشرين، ومن صفر إلى ستة خيارات، وحتى 600 محرف لكل سؤال. انتظار الإجابة نهاية طبيعية للدور.",
         "changes": false,
         "undo": false,
         "schema": ask_schema(),
@@ -567,18 +610,28 @@ pub(super) fn plan_info() -> Value {
         "name": "plan",
         "tool": EXECUTE,
         "op": "plan",
-        "doc": "Record the plan in the user's language. Before a job larger than one small edit, include four short expert-frame lines: extra senior checks, raw drawing data to read, methods and tools, and an outside check with a numerical failure criterion. Each title is at most 160 characters; use separate entries for the four lines. Send the full list with stable ids on updates. Phases and status are Mizan's decisions; explain unfinished work and resume on Continue. No drawing change or undo step. / سجّل الخطة بلغة المستخدم. قبل عمل يتجاوز تعديلًا صغيرًا واحدًا، أدرج أربعة أسطر: فحوص الخبير الإضافية، وبيانات الرسم الأصلية، والطرق والأدوات، والفحص المستقل ونتيجته العددية الدالة على الخطأ. لكل عنوان 160 محرفًا كحد أقصى؛ اجعل الأسطر الأربعة مدخلات منفصلة. أرسل القائمة كاملة بمعرّفات ثابتة عند التحديث. يقرر ميزان المراحل وحالتها ويشرح غير المكتمل ويستأنف عند طلب المتابعة. لا تعديل للرسم ولا خطوة تراجع.",
+        "doc": "Record the plan in the user's language. Before a job larger than one small edit, use frame: {expert_checks, raw_data, methods, outside_check}, each a string of 1 to 600 characters: extra senior checks, raw drawing data, methods and tools, and an outside check with a numerical failure criterion. Phases are work steps only, never expert-frame entries. At most one phase may be active; others are pending, done or skipped. Titles are a few words, at most 160 characters; put detail in optional note (up to 600 characters). Keep a space between Arabic words and numbers or Latin text. Send the full plan with stable ids on updates. Mizan decides phases and status, explains unfinished work and resumes on Continue. No drawing change or undo step. / سجل الخطة بلغة المستخدم. قبل عمل يتجاوز تعديلا صغيرا، ضع إطار الخبير في frame: فحوص الخبير في expert_checks، وبيانات الرسم الأصلية في raw_data، والطرق والأدوات في methods، والفحص المستقل ومعيار الخطأ العددي في outside_check؛ كل حقل نص من 1 إلى 600 حرف. المراحل خطوات عمل فقط، وليست أسطر إطار الخبير، وبها مرحلة نشطة واحدة كحد أقصى. العناوين كلمات قليلة حتى 160 حرف، والتفاصيل في note اختياري حتى 600 حرف. اترك مسافة بين الكلمات العربية والأرقام أو النص اللاتيني. أرسل الخطة كاملة بمعرفات ثابتة عند التحديث. يقرر ميزان المراحل وحالتها ويشرح غير المكتمل ويستأنف عند طلب المتابعة. لا تعديل للرسم ولا خطوة تراجع.",
         "changes": false,
         "undo": false,
         "schema": {
             "type": "object", "additionalProperties": false, "required": ["phases"],
-            "properties": {"phases": {
+            "properties": {"frame": {
+                "type": "object", "additionalProperties": false,
+                "required": ["expert_checks", "raw_data", "methods", "outside_check"],
+                "properties": {
+                    "expert_checks": {"type":"string", "minLength":1, "maxLength":600},
+                    "raw_data": {"type":"string", "minLength":1, "maxLength":600},
+                    "methods": {"type":"string", "minLength":1, "maxLength":600},
+                    "outside_check": {"type":"string", "minLength":1, "maxLength":600}
+                }
+            }, "phases": {
                 "type": "array", "minItems": 1, "maxItems": 24,
                 "items": {"type": "object", "additionalProperties": false,
                     "required": ["id", "title", "status"],
                     "properties": {
                         "id": {"type": "string", "minLength": 1, "maxLength": 64},
                         "title": {"type": "string", "minLength": 1, "maxLength": 160},
+                        "note": {"type": "string", "maxLength": 600},
                         "status": {"type": "string", "enum": ["pending", "active", "done", "skipped"]}
                     }
                 }
@@ -1463,12 +1516,9 @@ fn capabilities() -> Value {
 fn finish_kit(kit: &mut Value) {
     // The complete example already supplies every required argument.
     let (_, args) = crate::surface_args::contract(READ, "takeoff_check");
-    kit["self_check"] = json!({"example":{"tool":READ,"op":"takeoff_check","args":args}});
-    // Reserve room for the read revision by avoiding duplicate prose in this compact kit.
-    kit["end_report"] =
-        json!({"BOQ":"measurement.report.items","method":"measurement.report.selection"});
-    kit["measurement_rules"] =
-        json!("Counts are whole numbers. Exclude: decision.set / أعداد صحيحة؛ الاستبعاد قرار.");
+    // This is a read operation, like the kit itself. Report paths are in the read docs.
+    kit["self_check"] = json!({"op":"takeoff_check","args":args});
+    kit["measurement_rules"] = json!("Counts are whole numbers / أعداد صحيحة");
 }
 
 fn operation_contract(mut info: Value, full: bool) -> Value {
@@ -2200,7 +2250,7 @@ fn draft_path(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn draft_note(found: Value) -> Value {
-    json!({"code":"draft_export","check":found,"message":"Qiyas named this file DRAFT because checks are outstanding. / سمّى قياس هذا الملف DRAFT لوجود فحوص معلقة."})
+    json!({"code":"draft_export","check":found,"message":"Qiyas named this file DRAFT because checks are outstanding. / أضاف قياس DRAFT إلى اسم الملف لأن بعض الفحوص لم تكتمل."})
 }
 
 /// Whether a deliverable command writes quantities, and the file it names.
@@ -2440,6 +2490,7 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
     let history = session.history_revision();
     let view = ViewState::of(session);
     let mut answers: Vec<Value> = Vec::new();
+    let progress = qiyas_core::batch_progress::Batch::new(commands.len());
     let ran = session.batch_with(source, "batch", layer, color, |s| {
         if let Some(grouped) = args
             .get("sheet")
@@ -2450,7 +2501,8 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
         {
             let grouped = grouped?;
             let change = s.last_change().clone();
-            for outcome in grouped {
+            for (index, outcome) in grouped.into_iter().enumerate() {
+                progress.completed(index + 1, &commands[index]);
                 answers.push(json!({
                     "command":"add_wall_openings", "outcome":outcome,
                     "shared_wall_result":true,
@@ -2492,6 +2544,7 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
                     label: label.clone(),
                     error: Box::new(error),
                 })?;
+            progress.completed(i + 1, &input);
             answers.push(json!({
                 "command": label,
                 "outcome": outcome,

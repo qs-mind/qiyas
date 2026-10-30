@@ -1,5 +1,6 @@
 //! Compact drawing evidence and take-off checks. Interpretation remains drawing-owned data.
 mod detail_geometry;
+mod exclusions;
 mod measurement_checks;
 mod note_scope;
 use std::collections::{BTreeMap, BTreeSet};
@@ -280,7 +281,9 @@ impl Session {
             .filter(|o| o.valid)
             .map(|o| o.instance.id)
             .collect();
+        let excluded = exclusions::recorded(self, &objects, end_report)?;
         let mut explained = valid.clone();
+        explained.extend(excluded.keys().copied());
         for c in &evidence {
             if c.state == ReviewState::Accepted && c.object.is_some_and(|h| valid.contains(&h)) {
                 explained.insert(c.handle);
@@ -371,6 +374,12 @@ impl Session {
         let counts =
             |c: (usize, usize)| json!({"total":c.0,"explained":c.1,"share":fraction(c.1,c.0)});
         let mut detail = possible_details;
+        let region_advisories = self.region_boundary_advisories(&objects);
+        let region_advisory_count = region_advisories.len();
+        detail.extend(region_advisories);
+        for (handle, reason) in &excluded {
+            detail.push(json!({"section":"excluded","handle":handle,"reason":reason}));
+        }
         for (name, c) in &layer_counts {
             detail.push(json!({"section":"layers","name":short(name),"coverage":counts(*c)}));
         }
@@ -434,10 +443,9 @@ impl Session {
             .map(|e| e.common().handle.value())
             .collect();
         errors.extend(note_scope::findings(
-            &report, &notes, &handles, &evidence, end_report,
+            &report, &notes, &handles, &evidence, end_report, &excluded,
         ));
-        // Founder's rule: no element is out of scope. Every valid element is measured by a rule
-        // and every measured quantity reaches a BOQ item (or is marked informational there).
+        // Every in-scope element needs measurement and mapping; explicit exclusions close coverage.
         let mapped: BTreeSet<&str> = report
             .items
             .iter()
@@ -458,6 +466,9 @@ impl Session {
         let mut unmeasured = Vec::new();
         let mut unmapped = Vec::new();
         for object in objects.iter().filter(|o| o.valid) {
+            if excluded.contains_key(&object.instance.id) {
+                continue;
+            }
             let manual = in_takeoff.contains(&object.instance.id)
                 || parts
                     .get(&object.instance.id)
@@ -518,7 +529,7 @@ impl Session {
                 crate::xdata::read_json::<Value>(entity.common(), "QIYAS_DEFAULTS")
             {
                 detail.push(json!({"section":"assumed_values","handle":entity.common().handle.value(),"defaults":defaults,
-                    "message":"Element uses drawing defaults.","message_ar":"العنصر يستخدم قيماً افتراضية للرسم."}));
+                    "message":"Element uses drawing defaults.","message_ar":"العنصر يستخدم قيما افتراضية للرسم."}));
             }
         }
         let error_count = errors.len();
@@ -586,6 +597,8 @@ impl Session {
         detail.extend(entries);
         let overview = json!({"second_reading_disputes":second_reading_disputes,"view_only_entities":view_only,"possible_details":possible_detail_count,"measurement_errors":error_count,"unmeasured_elements":unmeasured_count,"unmapped_quantities":unmapped_count,"quantity_basis_warnings":basis_warning_count,"passed":error_count==0 && unmeasured_count==0 && unmapped_count==0 && basis_warning_count==0 && unexplained==0 && unmatched==0 && low.is_empty() && !report.items.is_empty() && verification_ok,"layers":counts((layer_counts.len(),layer_counts.values().filter(|c|c.1>0).count())),"blocks":counts((block_counts.len(),block_counts.values().filter(|c|c.1>0).count())),"closed_regions":counts(closed),"unexplained_entities":unexplained,"unmatched_schedule_rows":unmatched,"low_confidence":low.len(),"block_inserts":counts(block_counts.values().fold((0,0),|(a,b),(c,d)|(a+c,b+d))),"generated_boq":report.items.len(),"expectation_count":verification.len(),"expectations_checked":verification_ok,"note":"Explanation shares are evidence coverage, not completeness. Unmapped tables/text grids require interpretation via recognition.schedule. Fix by handle and repeat, or report unresolved evidence at the budget limit; human review is optional."});
         let mut overview = overview;
+        overview["excluded"] = json!(excluded.len());
+        overview["region_not_from_boundary"] = json!(region_advisory_count);
         overview["outside_check"] = self.outside_summary(end_report)?;
         Ok(page(overview, detail, offset))
     }

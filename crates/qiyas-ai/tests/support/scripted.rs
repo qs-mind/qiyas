@@ -10,6 +10,8 @@ pub enum ScriptCall {
     Fixed(&'static str, Value),
     /// Build a deterministic call from the conversation's tool results, with no session access.
     FromHistory(fn(&TurnRequest) -> (&'static str, Value)),
+    /// Rebind a recorded fixture's handles from actual tool readbacks before replaying it.
+    WithReadback(&'static str, Value, fn(&TurnRequest, &mut Value)),
 }
 
 impl From<(&'static str, Value)> for ScriptCall {
@@ -71,6 +73,10 @@ impl Provider for Script {
             .map(|call| match call {
                 ScriptCall::Fixed(name, input) => (name, input),
                 ScriptCall::FromHistory(build) => build(&request),
+                ScriptCall::WithReadback(name, mut input, bind) => {
+                    bind(&request, &mut input);
+                    (name, input)
+                }
             });
         let id = {
             let mut requests = self.requests.lock().unwrap();

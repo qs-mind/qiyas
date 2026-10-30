@@ -54,8 +54,9 @@ export function useShell() {
   }, []);
   /** An error: a toast that stays until it is closed or `null` (the next success) takes it away. */
   const setError = useCallback((message: string | null) => {
-    if (errorToast.current !== null) dismissNotice(errorToast.current);
-    errorToast.current = message === null ? null : notifyError(message);
+    const next = message === null ? null : notifyError(message);
+    if (errorToast.current !== null && errorToast.current !== next) dismissNotice(errorToast.current);
+    errorToast.current = next;
   }, []);
 
   /** Reads the user's command line aliases (at start and after the settings close). */

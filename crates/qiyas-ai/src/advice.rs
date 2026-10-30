@@ -36,11 +36,11 @@ pub(crate) fn result(
 
 pub(crate) fn repeated(attempts: usize) -> Value {
     json!({"code":"repeated_ineffective_edit","attempts":attempts,
-        "message":format!("This identical edit failed {attempts} times. / أخفق هذا التعديل نفسه {attempts} مرات.")})
+        "message":format!("This identical edit failed {attempts} times. / فشل التعديل نفسه. عدد المحاولات: {attempts}.")})
 }
 
 pub(crate) fn stopped(attempts: usize, previous: Value) -> ToolError {
     ToolError::Structured { code:"repeated_failing_call".into(),
-        message:"Only this identical failed call was not run again. / لم يُنفذ مجددًا هذا الاستدعاء المخفق المطابق فقط.".into(),
+        message:"Only this identical failed call was not run again. / لم تتم إعادة تنفيذ هذا الاستدعاء وحده لأنه مطابق لاستدعاء سابق فشل.".into(),
         details:json!({"failed_attempts":attempts,"previous_error":previous}) }
 }

@@ -1,3 +1,4 @@
+import { refreshInBackground } from "./background";
 /** The window's three columns: the layers panel and the properties palette on the left, the
  *  drawing in the middle (file tabs, the canvas with what floats over it, the split view, sheet
  *  tabs), and Mizan's column (the conversation, and the outputs in its place) on the right. */
@@ -182,7 +183,7 @@ export function WorkArea({
   onSpaceTap,
   trace,
 }: WorkProps) {
-  const { theme, setError, run, focusDrawing, viewport, viewportBox } = shell;
+  const { theme, setError, focusDrawing, viewport, viewportBox } = shell;
   const {
     batch,
     batchHeld,
@@ -238,7 +239,7 @@ export function WorkArea({
             atlas={atlas}
             onZoomHint={redrawGlyphs}
             pictures={pictures}
-            onPictureHint={(px, visible) => run(() => syncPictures(batchHeld.current, px, visible))}
+            onPictureHint={(px, visible) => refreshInBackground(() => syncPictures(batchHeld.current, px, visible))}
             highlight={highlight}
             overlay={overlay}
             tool={tool}

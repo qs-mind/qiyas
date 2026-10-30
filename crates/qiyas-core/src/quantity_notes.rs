@@ -191,7 +191,7 @@ impl Session {
                 .iter()
                 .any(|a| a["code"] == "internal_id_in_text");
             if !already {
-                self.last_advice.push(serde_json::json!({"code":"internal_id_in_text","message":format!("This text shows {what}. A client sheet shows values, never internal ids, handles or row references: write the quantity itself (and its source in words), then edit the text."),"message_ar":"يحتوي النص على معرّف داخلي. اللوحة تعرض القيم فقط، لا المعرّفات ولا أرقام الصفوف: اكتب الكمية نفسها ومصدرها بالكلمات."}));
+                self.last_advice.push(serde_json::json!({"code":"internal_id_in_text","message":format!("This text shows {what}. A client sheet shows values, never internal ids, handles or row references: write the quantity itself (and its source in words), then edit the text."),"message_ar":"يحتوي النص على معرف داخلي. اللوحة تعرض القيم فقط، لا المعرفات ولا أرقام الصفوف: اكتب الكمية نفسها ومصدرها بالكلمات."}));
             }
         }
     }

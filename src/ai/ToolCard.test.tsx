@@ -2,9 +2,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { ToolCardItem } from "./messages";
+import { LanguageProvider } from "../i18n";
 import { ToolCard } from "./ToolCard";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.removeItem("qiyas.lang"); });
 const card = (input: unknown, more: Partial<ToolCardItem> = {}): ToolCardItem => ({
   kind: "tool", id: "batch", name: "qiyas_execute", input, status: "running", summary: "", handles: [],
   ui: null, mutating: true, undone: false, stale: false, ...more,
@@ -20,7 +21,7 @@ test.each(["en", "ar"] as const)("measurement setup and export batches use engin
     { type: "deliverable", kind: "export", report: "boq" },
     { type: "deliverable.export", kind: "dimensions" },
   ] }) }, { activity: { category: "takeoff", effect: "read" } })} />);
-  expect(text()).toContain(language === "en" ? "Exporting the bill of quantities" : "يصدّر");
+  expect(text()).toContain(language === "en" ? "Exporting the bill of quantities" : "يصدر");
   expect(text()).toContain(language === "en" ? "the dimension sheets" : "أوراق القياس");
   expect(text()).not.toMatch(/Checking|measurement\.|deliverable\.|activity\./);
 });
@@ -42,11 +43,21 @@ test.each(["en", "ar"] as const)("every surface operation has a localized line a
 });
 
 test.each(["en", "ar"] as const)("a running card shows reported progress in %s, with no invented count", (language) => {
+  localStorage.setItem("qiyas.lang", language);
   const input = { op: "batch", args: { commands: [] } };
-  const view = render(<ToolCard language={language} card={card(input, { progress: { completed: 3, total: 10 } })} />);
-  expect(screen.getByRole("status").textContent!.replace(/[\u2068\u2069]/g, "")).toBe(language === "en" ? "3 of 10" : "3 من 10");
-  view.rerender(<ToolCard language={language} card={card(input)} />);
+  const view = render(<LanguageProvider><ToolCard language={language === "en" ? "ar" : "en"} card={card(input, { progress: { done: 3, total: 10, label: "draw.line" } })} /></LanguageProvider>);
+  expect(screen.getByRole("status").textContent!.replace(/[\u2068\u2069]/g, "")).toBe(language === "en" ? "Step 3 of 10: Drew lines" : "الخطوة 3 من 10: رسم خطوط");
+  view.rerender(<LanguageProvider><ToolCard language={language} card={card(input)} /></LanguageProvider>);
   expect(screen.queryByRole("status")).toBeNull();
-  view.rerender(<ToolCard language={language} card={card(input, { status: "done", progress: { completed: 3, total: 10 } })} />);
+  view.rerender(<LanguageProvider><ToolCard language={language} card={card(input, { status: "done", progress: { done: 3, total: 10, label: "draw.line" } })} /></LanguageProvider>);
   expect(screen.queryByRole("status")).toBeNull();
+});
+
+test("unknown backend step labels stay localized and a batch input alone supplies no counter", () => {
+  const input = { op: "batch", args: { commands: Array.from({ length: 10 }, () => ({ type: "draw", kind: "line", a: [0, 0], b: [1, 1] })) } };
+  const view = render(<ToolCard card={card(input)} />);
+  expect(screen.queryByRole("status")).toBeNull();
+  view.rerender(<ToolCard card={card(input, { progress: { done: 3, total: 10, label: "unmapped.private_operation" } })} />);
+  expect(screen.getByRole("status").textContent).toContain("Step 3 of 10:");
+  expect(screen.getByRole("status").textContent).not.toMatch(/unmapped|private_operation|activity\./);
 });

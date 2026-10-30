@@ -4,6 +4,32 @@ include!("../examples/clinic_performance.rs");
 mod performance;
 
 #[test]
+fn recorded_handles_skip_new_layer_records_without_changing_geometry_or_references() {
+    let mut input = json!({"commands":[
+        {"type":"edit_wall_opening","insert":220,"at":220,"width":200},
+        {"type":"modify","targets":[{"handle":200}],"delta":[200,220]},
+        {"type":"delete_entities","handles":[199,200,201]},
+        {"type":"remove_wall_openings","inserts":[220]},
+        {"type":"add_wall_openings","centreline":200},
+        {"type":"edit_wall_opening","insert":{"$step":200,"pointer":"/inserts/220"}}
+    ],"expected_revision":{"document_revision":220}});
+    rebase_layer_allocations(&mut input, &[200, 201, 202]);
+    assert_eq!(input["commands"][0]["insert"], 223);
+    assert_eq!(input["commands"][0]["at"], 220);
+    assert_eq!(input["commands"][0]["width"], 200);
+    assert_eq!(input["commands"][1]["targets"][0]["handle"], 203);
+    assert_eq!(input["commands"][1]["delta"], json!([200, 220]));
+    assert_eq!(input["commands"][2]["handles"], json!([199, 203, 204]));
+    assert_eq!(input["commands"][3]["inserts"], json!([223]));
+    assert_eq!(input["commands"][4]["centreline"], 203);
+    assert_eq!(
+        input["commands"][5]["insert"],
+        json!({"$step":200,"pointer":"/inserts/220"})
+    );
+    assert_eq!(input["expected_revision"]["document_revision"], 220);
+}
+
+#[test]
 #[ignore = "full clinic replay; run explicitly while changing the engine"]
 fn clinic_replay() {
     let dir = tempfile::tempdir().unwrap();

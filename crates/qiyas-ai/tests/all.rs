@@ -6,6 +6,8 @@
 
 #[path = "agent.rs"]
 mod agent;
+#[path = "arabic_style.rs"]
+mod arabic_style;
 #[path = "authoring.rs"]
 mod authoring;
 #[path = "dashes.rs"]
@@ -26,6 +28,8 @@ mod goal_u_connection;
 mod key_safety;
 #[path = "mcp.rs"]
 mod mcp;
+#[path = "plan_progress.rs"]
+mod plan_progress;
 #[path = "support/scripted.rs"]
 mod scripted;
 #[path = "surface.rs"]

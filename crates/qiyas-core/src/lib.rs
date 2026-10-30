@@ -9,6 +9,7 @@
 pub mod arrange;
 pub mod audit;
 mod autosave;
+pub mod batch_progress;
 mod blocks;
 mod boq;
 pub mod check;

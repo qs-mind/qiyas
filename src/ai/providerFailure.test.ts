@@ -9,7 +9,7 @@ test.each([
     for (const error of [code, `ai.error.${code}`, JSON.stringify({ code: `ai.error.${code}` })]) {
       const failure = providerFailure(error, lang);
       expect(failure?.canContinue).toBe(true);
-      expect(failure?.text).toContain(lang === "en" ? "drawing work so far is kept" : "ما أُنجز في الرسم محفوظ");
+      expect(failure?.text).toContain(lang === "en" ? "drawing work so far is kept" : "العمل المنجز في الرسم محفوظ");
       expect(failure?.text).not.toContain(code);
     }
   }

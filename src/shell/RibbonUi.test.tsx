@@ -136,7 +136,7 @@ test("in Arabic the tooltip is Arabic, the alias stays what is typed", async () 
     fireEvent.click(screen.getByRole("tab", { name: "رسم" }));
     hover(screen.getByRole("button", { name: "قص" }));
     const tip = screen.getByRole("tooltip");
-    expect(tip.textContent).toContain("قص الأجزاء الزائدة عند حافة كائن آخر.");
+    expect(tip.textContent).toContain("قص الأجزاء الزائدة عند حافة عنصر آخر.");
     expect(tip.querySelector("kbd")!.textContent).toBe("الاختصار · TR");
   } finally {
     localStorage.clear();

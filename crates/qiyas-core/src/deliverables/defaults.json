@@ -131,7 +131,7 @@
   "boq": {
     "heading": {
       "en": "Bill of quantities",
-      "ar": "جدول الكميات"
+      "ar": "المقايسة"
     },
     "columns": [
       {
@@ -283,7 +283,7 @@
   "variation": {
     "heading": {
       "en": "Variation statement",
-      "ar": "بيان التغييرات"
+      "ar": "تقرير فروق الكميات"
     },
     "columns": [
       {

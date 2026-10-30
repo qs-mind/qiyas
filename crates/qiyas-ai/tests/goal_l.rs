@@ -8,6 +8,33 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[path = "support/villa.rs"]
+mod villa;
+
+fn bind_villa_readback(request: &qiyas_ai::TurnRequest, input: &mut Value) {
+    let groups = request
+        .messages
+        .iter()
+        .rev()
+        .flat_map(|m| m.content.iter().rev())
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult {
+                content,
+                is_error: false,
+                ..
+            } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            ResultPart::Text(text) => serde_json::from_str::<Value>(text).ok(),
+            _ => None,
+        })
+        .find_map(|value| value["outcome"].get("groups").cloned())
+        .unwrap_or(json!([]));
+    villa::bind_openings(input, &groups, 1.0);
+}
+
 #[tokio::test]
 async fn villa_replay_finishes_with_all_openings_and_visible_findings() {
     let dir = tempfile::tempdir().unwrap();
@@ -19,24 +46,33 @@ async fn villa_replay_finishes_with_all_openings_and_visible_findings() {
         .unwrap();
     let session = Arc::new(Mutex::new(Some(drawing)));
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let fixture: Vec<Value> =
-        serde_json::from_str(include_str!("fixtures/villa-openings.json")).unwrap();
+    let fixture = villa::calls();
     let mut calls = Vec::new();
     for input in fixture {
-        calls.push((EXECUTE, input["input"].clone()));
-        calls.push((
-            READ,
-            json!({"op":"records","args":{"collection":"entities","limit":200}}),
+        calls.push(scripted::ScriptCall::WithReadback(
+            EXECUTE,
+            input["input"].clone(),
+            bind_villa_readback,
         ));
-        calls.push((
-            READ,
-            json!({"op":"run","args":{"command":{"type":"wall_groups"}}}),
-        ));
+        calls.push(
+            (
+                READ,
+                json!({"op":"records","args":{"collection":"entities","limit":200}}),
+            )
+                .into(),
+        );
+        calls.push(
+            (
+                READ,
+                json!({"op":"run","args":{"command":{"type":"wall_groups"},"detail":"full"}}),
+            )
+                .into(),
+        );
     }
-    calls.push((READ, json!({"op":"check"})));
-    calls.push((CAPTURE, json!({"source":"picture","args":{"width":1200}})));
+    calls.push((READ, json!({"op":"check"})).into());
+    calls.push((CAPTURE, json!({"source":"picture","args":{"width":1200}})).into());
     let mut agent = Agent::new(
-        Box::new(scripted::Script::new(calls, requests.clone())),
+        Box::new(scripted::Script::steps(calls, requests.clone())),
         session.clone(),
         AgentSettings::default(),
     );

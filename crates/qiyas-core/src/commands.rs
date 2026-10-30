@@ -128,7 +128,8 @@ pub enum Command {
     DeleteObjectType { name: String },
     /// Places instances of drawing-defined types on existing drivers or new point/path/region
     /// geometry. Coordinates are drawing units; property numbers use their declared physical
-    /// unit kind. Generated parts follow driver edits. One undo step for all instances.
+    /// unit kind. For regions, seed and optional boundary_layers retain the enclosure and follow
+    /// wall edits. Explicit points remain supported. One undo step for all instances.
     #[schemars(extend("x-category" = "objects", "x-words" = ["PLACEOBJECTS"], "x-takeoff-step" = "3 recognise"))]
     #[schemars(example = json!({"type":"place_objects","objects":[{"type":"Run","points":[[0,0],[5,0]]}]}))]
     PlaceObjects {
@@ -219,7 +220,7 @@ pub enum Command {
     /// Unsourced values are labelled practice_default. Read only the topics relevant to the
     /// current part; select applicable knowledge, not a mandatory design recipe or code approval.
     /// اقرأ موضوعات الجزء الحالي فقط واختر المعرفة المنطبقة؛ القيم المعتادة ليست اشتراطات كود
-    /// ولا وصفة تصميم ملزمة أو اعتمادًا هندسيًا.
+    /// ولا وصفة تصميم ملزمة أو اعتمادا هندسيا.
     #[schemars(extend("x-category" = "inquiry"))]
     #[schemars(example = json!({"type":"drafting_knowledge","topic":"sheet_set","project_type":"villa","storeys":2,"market":"egypt"}))]
     DraftingKnowledge {
@@ -263,7 +264,7 @@ pub enum Command {
     /// labelled material hatches. Coordinates use drawing units; _m fields remain metres.
     /// Geometry and any layers, blocks and linetypes form one undo step.
     /// Use these symbols for door leaves, each floor's stairs, levels, ground lines and cut hatches.
-    /// استخدم هذه الرموز لضلف الأبواب وسلالم كل طابق والمناسيب وخطوط الأرض وهاتش القطاعات.
+    /// استخدم هذه الرموز لضلف الأبواب وسلالم كل طابق والمناسيب وخطوط الأرض وتهشير القطاعات.
     #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type":"symbol","kind":"door","a":[0,0],"b":[1.5,0],"side_point":[0,1],"leaves":2}))]
     Symbol(crate::draft_symbols::SymbolSpec),
@@ -316,7 +317,7 @@ pub enum Command {
     /// grouping follows wall edits. source_sheet defaults to Model; at is on the current sheet.
     /// Pass the user's language. After scheduling, object_tags with category opening and property
     /// mark labels doors and windows with the same marks; read back counts and sizes.
-    /// مرّر لغة المستخدم؛ بعد الجدولة استخدم object_tags بالفئة opening والخاصية mark لوسم
+    /// مرر لغة المستخدم؛ بعد الجدولة استخدم object_tags بالفئة opening والخاصية mark لوسم
     /// الأبواب والنوافذ بالرموز نفسها، ثم أعد قراءة الأعداد والمقاسات.
     #[schemars(extend("x-category" = "tables", "x-words" = ["OPENINGSCHEDULE"]))]
     #[schemars(example = json!({"type":"opening_schedule", "at":[10,100], "source_sheet":"*Model_Space"}))]
@@ -672,7 +673,7 @@ pub enum Command {
     /// Set annotation_scale before labels; height 0 gives the 2.5 mm paper default. Choose
     /// readable plotted text for the sheet scale. Use decision fields for recorded values in notes.
     /// اضبط annotation_scale قبل التسميات؛ الارتفاع صفر يعطي القيمة الافتراضية 2.5 مم على
-    /// الورق. اختر نصًا مقروءًا بمقياس اللوحة، واستخدم حقول القرارات للقيم المسجلة في الملاحظات.
+    /// الورق. اختر نصا مقروءا بمقياس اللوحة، واستخدم حقول القرارات للقيم المسجلة في الملاحظات.
     #[schemars(extend("x-category" = "text"))]
     #[schemars(example = json!({"type": "text", "at": [2, 3], "height": 0.25, "rotation": 0, "value": "LIVING ROOM"}))]
     #[schemars(extend("x-words" = ["TEXT", "DT"]))]
@@ -785,7 +786,7 @@ pub enum Command {
     /// Create dimensions with this command, not loose lines and text. Keep dimensions clear of
     /// labels; dim_space adjusts spacing, dim_edit changes text/arrows, auto_place finds clearance.
     /// أنشئ الأبعاد بهذا الأمر لا بخطوط ونصوص منفصلة. أبعدها عن التسميات؛ dim_space للتباعد،
-    /// وdim_edit للنص والأسهم، وauto_place لإيجاد موضع خالٍ من التداخل.
+    /// و dim_edit للنص والأسهم، و auto_place لإيجاد موضع دون تداخل.
     #[schemars(extend("x-category" = "dimensions"))]
     #[schemars(example = json!({"type": "dimension", "kind": "linear", "p1": [0, 0], "p2": [5, 0], "line_point": [2.5, -1]}))]
     Dimension(DimSpec),
@@ -924,8 +925,8 @@ pub enum Command {
     /// A one-line text at `at`, `height` tall, holding the field `field` (see `crate::field`).
     /// For a recorded decision use field {kind: decision, name: <decision name>}; it prints the
     /// current value and unit, not its internal name. decision.set refreshes linked fields.
-    /// للقرار المسجل استخدم حقلًا بنوع decision واسمه؛ يطبع القيمة الحالية ووحدتها لا الاسم
-    /// الداخلي، ويحدّث decision.set الحقول المرتبطة.
+    /// للقرار المسجل استخدم حقلا بنوع decision واسمه؛ يطبع القيمة الحالية ووحدتها لا الاسم
+    /// الداخلي، ويحدث decision.set الحقول المرتبطة.
     /// An omitted or zero height is 2.5 mm on paper at the annotation scale.
     #[schemars(extend("x-category" = "tables"))]
     #[schemars(example = json!({"type": "field", "at": [2, 2], "height": 0.25, "field": {"kind": "area", "target": {"handle": 1234}}}))]
@@ -1241,7 +1242,7 @@ pub enum Command {
     /// Show recorded values through decision fields and keep the title block For review.
     /// يمكن جمع الطابق وجداوله في لوحة مخصصة؛ اختر التنظيم المناسب للعمل. استخدم arrange
     /// للفصل بين المساقط والجداول والملاحظات والمفاتيح، ثم افحص التداخل واطبع. اعرض القيم
-    /// المسجلة بحقول القرارات وأبقِ حالة اللوحة «للمراجعة».
+    /// المسجلة بحقول القرارات واحتفظ بحالة اللوحة «للمراجعة».
     #[schemars(extend("x-category" = "layouts", "x-words" = ["MAKESHEET"]))]
     #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Villa", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
     #[schemars(example = json!({"type":"make_sheet","name":"S-01","paper":"ISO A1","scale":"1:250","model_bounds":[[0,0],[180,96]],"split_lines":[[[80,0],[80,96]]],"core_regions":[[[85,40],[95,40],[95,55],[85,55]]],"client":"Client","consultant":"Consultant","project_no":"P-01","checked_by":"","approved_by":"","revision_table":[]}))]
@@ -1252,11 +1253,11 @@ pub enum Command {
     /// notes beside the title block, schedules along the opposite edge, plans in the main field.
     /// Reports remaining overlaps and zone overflow without shrinking content.
     /// تحفظ اللوحات مناطق الملاحظات بجوار بيانات اللوحة والجداول على الحافة المقابلة
-    /// والمساقط في الحقل الرئيسي؛ تُذكر التداخلات والمحتويات التي لا تتسع دون تصغيرها.
+    /// والمساقط في الحقل الرئيسي؛ تذكر التداخلات والمحتويات التي لا تتسع دون تصغيرها.
     /// Read back the layout and check overlap after arranging; use auto_place for individual
     /// annotations and dim_space for dimension spacing. Do not hide layers to conceal collisions.
-    /// أعد قراءة توزيع اللوحة وافحص التداخل؛ استخدم auto_place للتعليقات المفردة وdim_space
-    /// لتباعد الأبعاد، ولا تخفِ الطبقات لإخفاء التداخلات.
+    /// أعد قراءة توزيع اللوحة وافحص التداخل؛ استخدم auto_place للتعليقات المفردة و dim_space
+    /// لتباعد الأبعاد، ولا تحجب الطبقات لإخفاء التداخلات.
     #[schemars(extend("x-category" = "layouts"))]
     #[schemars(example = json!({"type":"arrange"}))]
     Arrange(Box<crate::arrange::Arrange>),
@@ -1271,7 +1272,7 @@ pub enum Command {
     /// drawn_by, checked_by, approved_by, revision, sheet. Status stays For review.
     /// Empty values remain empty and are listed; revision_table has rev, date, description.
     /// الحقول تشمل العميل والاستشاري ورقم المشروع واللوحة والرسم والتدقيق والاعتماد؛
-    /// تبقى القيم الناقصة فارغة وتُذكر، والحالة للمراجعة. جدول المراجعات: المراجعة والتاريخ والوصف.
+    /// تبقى القيم الناقصة فارغة وتذكر، والحالة للمراجعة. جدول المراجعات: المراجعة والتاريخ والوصف.
     /// Default layer A-ANNO-TTLB. One undo step.
     #[schemars(extend("x-category" = "layouts", "x-words" = ["TITLEBLOCK"]))]
     #[schemars(example = json!({"type": "title_block", "fields": {"title": "Ground floor", "drawing_no": "A-101"}, "margin_mm": 10, "binding_mm": 20, "language":"en", "revision_table":[{"rev":"R1","date":"2026-10-29","description":"Coordination"}]}))]
@@ -1346,7 +1347,7 @@ pub enum Command {
     /// Establishes the UCS and exported drawing base point in the same undo step.
     /// JSON command points remain world/site coordinates; typed points use this UCS.
     /// Read back and verify the survey coordinates after placement.
-    /// أعد قراءة الإحداثيات المساحية وتحقّق منها بعد النقل.
+    /// أعد قراءة الإحداثيات المساحية وتحقق منها بعد النقل.
     #[schemars(extend("x-category" = "modify", "x-words" = ["SETSITEORIGIN"]))]
     #[schemars(example = json!({"type":"set_site_origin","base_point":[0,0],"site_point":[674250000,2734180000u64],"x_axis":[1,0]}))]
     SetSiteOrigin {
@@ -1525,9 +1526,9 @@ pub enum Command {
     /// Pass the user's language. Choose boundary_layers/exclude_layers from enclosure evidence,
     /// excluding annotations, grids and opening symbols. Keep labels clear of geometry; use
     /// auto_place for collisions. Candidate areas are not engineering approval.
-    /// مرّر لغة المستخدم واختر طبقات الحدود والاستبعاد من أدلة الإحاطة دون التعليقات والمحاور
+    /// مرر لغة المستخدم واختر طبقات الحدود والاستبعاد من أدلة الإحاطة دون التعليقات والمحاور
     /// ورموز الفتحات. أبعد التسميات عن الهندسة وعالج التداخل عبر auto_place؛ المساحات مرشحة
-    /// وليست اعتمادًا هندسيًا.
+    /// وليست اعتمادا هندسيا.
     #[schemars(extend("x-category" = "takeoff"))]
     #[schemars(example = json!({"type": "label_spaces", "query": {"text_layer": "A-ROOM-NAME"}, "layer": "A-AREA", "language": "en"}))]
     LabelSpaces {

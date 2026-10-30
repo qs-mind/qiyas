@@ -39,3 +39,13 @@ test("busy picks queue on their original drawing and committed reads remain avai
   expect(await pick).toEqual({ handle: 42 });
   expect(core.invoke.mock.calls.at(-1)?.[1].workspace).toBe(1);
 });
+
+test("a busy hover snap returns to its silent caller without a retry loop; the next move reads again", async () => {
+  vi.useFakeTimers();
+  setWorkspace(1);
+  core.invoke.mockRejectedValueOnce("workspace_busy").mockResolvedValueOnce({ point: [1, 2] });
+  await expect(invoke("snap", { x: 1, y: 2, tol: 0.1 })).rejects.toBe("workspace_busy");
+  await vi.advanceTimersByTimeAsync(500);
+  expect(core.invoke).toHaveBeenCalledOnce();
+  expect(await invoke("snap", { x: 1, y: 2, tol: 0.1 })).toEqual({ point: [1, 2] });
+});

@@ -343,7 +343,7 @@ fn partition_inner(
             decisions.push(SplitDecision {
                 line,
                 basis: if c.given { "Supplied split line; requested scale retained and supplied core interiors avoided" } else { "Tagged grid axis; requested scale retained and supplied core interiors avoided" }.into(),
-                basis_ar: if c.given { "خط فصل محدد؛ حُفظ المقياس المطلوب وتُجنبت المناطق الداخلية للنوى المحددة" } else { "محور شبكة معلّم؛ حُفظ المقياس المطلوب وتُجنبت المناطق الداخلية للنوى المحددة" }.into(),
+                basis_ar: if c.given { "خط فصل محدد؛ حفظ المقياس المطلوب وتجنبت المناطق الداخلية للنوى المحددة" } else { "محور شبكة معلم؛ حفظ المقياس المطلوب وتجنبت المناطق الداخلية للنوى المحددة" }.into(),
             });
             return Some((left, decisions));
         }
@@ -532,7 +532,7 @@ impl Session {
             }
         }
         let (paper, orientation, den, zones, parts, splits) = chosen.ok_or_else(|| invalid(
-            "The requested scale needs fitting split lines outside the supplied cores; give split_lines, another paper or scale / المقياس المطلوب يحتاج خطوط فصل مناسبة خارج النوى المحددة؛ حدد خطوط الفصل أو ورقًا أو مقياسًا آخر"
+            "The requested scale needs fitting split lines outside the supplied cores; give split_lines, another paper or scale / المقياس المطلوب يحتاج خطوط فصل مناسبة خارج النوى المحددة؛ حدد خطوط الفصل أو ورقا أو مقياس آخر"
         ))?;
         let scale_text = format!("1:{den}");
         let names: Vec<_> = (0..parts.len())
@@ -668,9 +668,9 @@ impl Session {
                     }
                     .into(),
                     orientation_basis_ar: if spec.orientation.is_some() {
-                        "حُفظ الاتجاه المحدد"
+                        "حفظ الاتجاه المحدد"
                     } else {
-                        "قورنت أعداد اللوحات الملائمة والمقاييس؛ وعند التعادل تُتبع نسب المسقط"
+                        "قورنت أعداد اللوحات الملائمة والمقاييس؛ وعند التعادل تتبع نسب المسقط"
                     }
                     .into(),
                 });

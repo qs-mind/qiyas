@@ -570,7 +570,7 @@ test("in Arabic the ribbon reads right to left: the same order from the start ed
     const names = ["أدوات القياس", "استعلام", "الحصر", "الأبعاد", "ملاحظات"];
     expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(names);
     expect(screen.getAllByRole("group").map((g) => g.lastElementChild!.textContent)).toEqual(names);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["القياسات", "رسم", "التعليقات", "المزيد"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["القياسات", "رسم", "الكتابات والأبعاد", "المزيد"]);
     for (const button of document.querySelectorAll(".rb.primary")) {
       expect(button.querySelector(".rb-label")?.textContent).toBe(button.getAttribute("aria-label"));
     }

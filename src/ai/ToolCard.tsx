@@ -1,6 +1,6 @@
-import { translate, useT, type Lang } from "../i18n";
+import { translate, useLanguage, useT, type Lang } from "../i18n";
 import type { Activity } from "../api";
-import { operationDetail } from "./operationActivity";
+import { operationDetail, progressDetail } from "./operationActivity";
 import { MizanMark } from "./MizanMark";
 import type { ToolCardItem } from "./messages";
 
@@ -127,6 +127,7 @@ export function activityLine(detail: Detail, status: "running" | "done", t: Tran
 /** A translated activity sentence; raw tool input and output stay in support details. */
 export function ToolCard({ card, onShow, onUndo, recovering = false, repeat, showTechnicalDetails = false, language }: Props) {
   const uiT = useT();
+  const { lang: uiLanguage } = useLanguage();
   const t: Translate = language ? (key, vars) => translate(language, key, vars) : uiT;
   const subjectKey = `activity.subject.${card.activity?.category ?? "drawing"}`;
   const subject = t(subjectKey) === subjectKey ? t("activity.subject.drawing") : t(subjectKey);
@@ -149,9 +150,9 @@ export function ToolCard({ card, onShow, onUndo, recovering = false, repeat, sho
         </span>
         <span className="tool-name heading">{label}{repeat && repeat > 1 && <span className="tool-repeat"> {t("activity.line.repeat", { n: repeat })}</span>}</span>
       </div>
-      {card.status === "running" && card.progress && Number.isInteger(card.progress.completed) &&
-        Number.isInteger(card.progress.total) && card.progress.total > 0 && card.progress.completed >= 0 && card.progress.completed <= card.progress.total && (
-        <p className="tool-summary" role="status">{t("activity.progress", { n: card.progress.completed, total: card.progress.total })}</p>
+      {card.status === "running" && card.progress && Number.isInteger(card.progress.done) &&
+        Number.isInteger(card.progress.total) && card.progress.total > 0 && card.progress.done >= 0 && card.progress.done <= card.progress.total && (
+        <p className="tool-summary" role="status" lang={uiLanguage} dir={uiLanguage === "ar" ? "rtl" : "ltr"}>{uiT("activity.progress", { n: card.progress.done, total: card.progress.total, label: detailText(progressDetail(card.progress.label), "done", uiT) })}</p>
       )}
       {!card.activity?.detail && card.count != null && card.status === "done" && <p className="tool-summary">{t("activity.count", { n: card.count })}</p>}
       {showTechnicalDetails && <details className="technical-details">

@@ -677,7 +677,7 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
                         i.description_en
                     ));
                     v["description_ar"] = json!(format!(
-                        "{} [الكمية مقيّدة: الخصومات تتجاوز الإجمالي]",
+                        "{} [الكمية مقيدة: الخصومات تتجاوز الإجمالي]",
                         i.description_ar
                     ));
                 }

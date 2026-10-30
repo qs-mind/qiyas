@@ -180,6 +180,8 @@ pub enum AgentEvent {
     },
     /// The current task's checklist, also kept in the tool result in history.
     Plan {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<surface::ExpertFrame>,
         phases: Vec<surface::PlanPhase>,
     },
     PlanProgress {
@@ -206,6 +208,12 @@ pub enum AgentEvent {
         activity: Option<crate::activity::Activity>,
         /// An execute operation other than planning, selecting or viewing.
         mutating: bool,
+    },
+    ToolProgress {
+        id: String,
+        done: usize,
+        total: usize,
+        label: String,
     },
     ToolResult {
         id: String,
@@ -491,9 +499,10 @@ impl Agent {
         }
         let plan = conv.transcript.iter().rev().find_map(|entry| match entry {
             TranscriptEntry::Event {
-                event: AgentEvent::Plan { phases },
+                event: AgentEvent::Plan { phases, frame },
             } => Some(surface::Plan {
                 phases: phases.clone(),
+                frame: frame.clone(),
             }),
             _ => None,
         });
@@ -619,11 +628,24 @@ impl Agent {
                     }
                 }
             }
-            AgentEvent::Plan { phases }
+            AgentEvent::Plan { phases, frame }
             | AgentEvent::AwaitingApproval {
-                plan: surface::Plan { phases },
+                plan: surface::Plan { phases, frame },
             } => {
+                if let Some(frame) = frame {
+                    for text in [
+                        &mut frame.expert_checks,
+                        &mut frame.raw_data,
+                        &mut frame.methods,
+                        &mut frame.outside_check,
+                    ] {
+                        *text = crate::dashes::plain_dashes(text);
+                    }
+                }
                 for phase in phases {
+                    if let Some(note) = &mut phase.note {
+                        *note = crate::dashes::plain_dashes(note);
+                    }
                     phase.title = crate::dashes::plain_dashes(&phase.title);
                 }
             }
@@ -872,7 +894,7 @@ impl Agent {
             has_content && !pointed_destination && judgement::new_design(&user_text);
         let reply_language = match self.chat_language {
             Lang::En => "[reply language] Answer this turn in English. Follow the latest user message, even if an earlier greeting or the interface was Arabic.",
-            Lang::Ar => "[reply language] أجب بلغة آخر رسالة للمستخدم. استخدم العربية الفصحى البسيطة، ولا تحاكِ لهجة إلا إذا كتب المستخدم بها في رسالته الحالية.",
+            Lang::Ar => "[reply language] أجب بلغة آخر رسالة للمستخدم. استخدم العربية الفصحى البسيطة، ولا تقلد لهجة إلا إذا كتب المستخدم بها في رسالته الحالية.",
         };
         let mut content = vec![ContentBlock::Text {
             text: format!("{state}\n\n{reply_language}"),
@@ -1291,12 +1313,12 @@ impl Agent {
             let recognised = s.recognition_evidence().ok()?.iter()
                 .filter(|c| c.state == qiyas_core::recognition::ReviewState::Accepted).count();
             Some(if arabic {
-                format!("احتُفظ بـ {} بند كميات من {recognised} عنصر مقبول. توجد {} ملاحظة للمراجعة. النطاق غير المرتبط أو غير المؤكد لم يكتمل؛ لم تُختلق كميات.", report.items.len(), report.warnings.len())
+                format!("احتفظ بـ {} بند كميات من {recognised} عنصر مقبول. توجد {} ملاحظة للمراجعة. النطاق غير المرتبط أو غير المؤكد لم يكتمل؛ لم تختلق كميات.", report.items.len(), report.warnings.len())
             } else {
                 format!("{} generated BOQ items retained from {recognised} accepted recognised elements. {} Unmapped or uncertain scope remains incomplete; no quantities were invented.", report.items.len(), report.warnings.join("; "))
             })
         }).await.ok().flatten().unwrap_or_else(|| if arabic {
-            "الحصر غير مكتمل؛ لم يُرسل طلب آخر إلى خدمة المساعد.".into()
+            "الحصر غير مكتمل؛ لم يرسل طلب آخر إلى خدمة المساعد.".into()
         } else {
             "The take-off is incomplete; no further provider request was made.".into()
         });
@@ -1365,7 +1387,7 @@ impl Agent {
                             AgentEvent::ProviderStatus { code } => {
                                 self.log("PROVIDER STATUS", || code.clone())
                             }
-                            AgentEvent::Plan { phases } => self.log("PLAN", || {
+                            AgentEvent::Plan { phases, .. } => self.log("PLAN", || {
                                 clip(&serde_json::to_string(phases).unwrap_or_default())
                             }),
                             _ => {}
@@ -1496,9 +1518,9 @@ impl Agent {
                 )
             } else if counts.awaiting.is_some() || counts.asking {
                 let why = if counts.asking {
-                    "Not run: waiting for the engineer's answer. / لم يُنفذ: بانتظار إجابة المهندس."
+                    "Not run: waiting for the engineer's answer. / لم يتم التنفيذ: بانتظار إجابة المهندس."
                 } else {
-                    "Not run: waiting for the user's approval. / لم يُنفذ: بانتظار موافقة المستخدم."
+                    "Not run: waiting for the user's approval. / لم يتم التنفيذ: بانتظار موافقة المستخدم."
                 };
                 (error_result(id, why), error_event(id, why))
             } else if cancel.is_cancelled() {
@@ -1524,7 +1546,7 @@ impl Agent {
                         batch.advice().or_else(|| {
                             if batch.takeoff_edit() && !counts.plan_seen && !counts.plan_requested {
                                 counts.plan_requested = true;
-                                Some("No plan has been posted for this take-off edit. / لم تُنشر خطة لهذا التعديل في الحصر.")
+                                Some("No plan has been posted for this take-off edit. / لم تنشر خطة لهذا التعديل في الحصر.")
                             } else {
                                 None
                             }
@@ -1599,11 +1621,11 @@ impl Agent {
                             let (block, event, changed) = self
                                 .run_tool(
                                     id,
-                                    (&tool, &op),
-                                    &args,
+                                    (&tool, &op, &args),
                                     cancel,
                                     *epoch,
                                     surface::mutating(name, input),
+                                    events,
                                 )
                                 .await;
                             edited = changed;
@@ -1669,7 +1691,7 @@ impl Agent {
             if counts.destructive > MAX_DESTRUCTIVE {
                 append_advice(
                     &mut block,
-                    serde_json::json!({"code":"many_removals","count":counts.destructive,"message":"Removal or replacement calls were requested in this turn. / طُلبت استدعاءات حذف أو استبدال خلال هذه الرسالة."}),
+                    serde_json::json!({"code":"many_removals","count":counts.destructive,"message":"Removal or replacement calls were requested in this turn. / طلبت استدعاءات حذف أو استبدال خلال هذه الرسالة."}),
                 );
             }
             if !is_error(&block) && Job::observes(name, input) {
@@ -1715,7 +1737,7 @@ impl Agent {
                         if unchecked {
                             append_advice(
                                 &mut block,
-                                serde_json::json!({"code":"phase_check_needed","message":"This phase has no successful check recorded after its latest edit. / لم يُسجل فحص ناجح لهذه المرحلة بعد آخر تعديل."}),
+                                serde_json::json!({"code":"phase_check_needed","message":"This phase has no successful check recorded after its latest edit. / لم يسجل فحص ناجح لهذه المرحلة بعد آخر تعديل."}),
                             );
                         }
                     }
@@ -1768,6 +1790,7 @@ impl Agent {
                     self.emit(
                         events,
                         AgentEvent::Plan {
+                            frame: plan.frame,
                             phases: plan.phases,
                         },
                     )
@@ -1906,13 +1929,13 @@ impl Agent {
     async fn run_tool(
         &mut self,
         id: &str,
-        operation: (&str, &str),
-        input: &Value,
+        operation: (&str, &str, &Value),
         cancel: &CancellationToken,
         epoch: Option<u64>,
         mutating: bool,
+        events: &mpsc::Sender<AgentEvent>,
     ) -> (ContentBlock, AgentEvent, bool) {
-        let (name, op) = operation;
+        let (name, op, input) = operation;
         let session = self.session.clone();
         let (tool, op, args) = (name.to_string(), op.to_string(), input.clone());
         let method = self.settings.measurement_method.clone();
@@ -1921,6 +1944,7 @@ impl Agent {
         let mut phase = self.phase_state.clone();
         let churn = self.churn.clone();
         let host = self.host.clone();
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let (reader_tx, mut reader_rx) = tokio::sync::mpsc::unbounded_channel();
         let second_reading = self.second_reading;
         let mut reader_advice = Vec::new();
@@ -1957,11 +1981,18 @@ impl Agent {
                     &method,
                 )
             };
-            let mut output = if second_reading {
-                crate::blind_reader::observe_operation(reader_tx, run)
-            } else {
-                run()
-            };
+            let mut output = crate::progress::observe(
+                move |step| {
+                    let _ = progress_tx.send(step);
+                },
+                || {
+                    if second_reading {
+                        crate::blind_reader::observe_operation(reader_tx, run)
+                    } else {
+                        run()
+                    }
+                },
+            );
             if tool == surface::READ && op == "state" {
                 if let Ok(ToolOutput::Json(value)) = &mut output {
                     value["image_input"] = crate::models::image_state(image_input);
@@ -1985,6 +2016,9 @@ impl Agent {
         });
         let ran = loop {
             tokio::select! {
+                Some(step) = progress_rx.recv() => {
+                    self.emit(events, AgentEvent::ToolProgress { id: id.into(), done: step.done, total: step.total, label: step.label }).await;
+                }
                 result = &mut pending => break result,
                 Some(request) = reader_rx.recv() => {
                     reader_advice.push(self.second_reading_pass(&request.session, &reader_cancel).await);
@@ -1992,6 +2026,18 @@ impl Agent {
                 }
             }
         };
+        while let Ok(step) = progress_rx.try_recv() {
+            self.emit(
+                events,
+                AgentEvent::ToolProgress {
+                    id: id.into(),
+                    done: step.done,
+                    total: step.total,
+                    label: step.label,
+                },
+            )
+            .await;
+        }
         let (mut result, changed) = match ran {
             Ok(Ok((output, changed, phase))) => {
                 self.phase_state = phase;
@@ -2576,8 +2622,8 @@ impl Agent {
                 let text = match (self.chat_language, untitled) {
                     (Lang::En, true) => "\n\nNot saved yet: the drawing has no name. Save it when you choose.",
                     (Lang::En, false) => "\n\nNot saved yet: the drawing was repaired when it opened. Save it under a new name when you choose.",
-                    (Lang::Ar, true) => "\n\nلم يُحفظ بعد: الرسم بلا اسم. احفظه حين تريد.",
-                    (Lang::Ar, false) => "\n\nلم يُحفظ بعد: الرسم أُصلح عند فتحه. احفظه باسم جديد حين تريد.",
+                    (Lang::Ar, true) => "\n\nلم يتم الحفظ بعد: الرسم بلا اسم. احفظه حين تريد.",
+                    (Lang::Ar, false) => "\n\nلم يتم الحفظ بعد: الرسم أصلح عند فتحه. احفظه باسم جديد حين تريد.",
                 }
                 .trim().to_string();
                 status("save_failed", vec![text], self.chat_language)
@@ -2607,7 +2653,7 @@ impl Agent {
                     "saved",
                     vec![match lang {
                         Lang::En => format!("Saved {file}."),
-                        Lang::Ar => format!("حُفظ {file}."),
+                        Lang::Ar => format!("تم حفظ {file}."),
                     }],
                     lang,
                 ))
@@ -2621,7 +2667,7 @@ impl Agent {
                             "The drawing could not be saved; the changes are not on disk yet."
                                 .into()
                         }
-                        Lang::Ar => "تعذّر حفظ الرسم؛ التعديلات لم تُحفظ بعد.".into(),
+                        Lang::Ar => "تعذر حفظ الرسم؛ التعديلات لم يتم حفظها بعد.".into(),
                     }],
                     lang,
                 ))
@@ -2632,7 +2678,7 @@ impl Agent {
                     Lang::En => {
                         "The save operation did not complete; saving is unconfirmed.".into()
                     }
-                    Lang::Ar => "لم تكتمل عملية الحفظ؛ لم يُؤكد حفظ الرسم.".into(),
+                    Lang::Ar => "لم تكتمل عملية الحفظ؛ لم يتم تأكيد حفظ الرسم.".into(),
                 }],
                 lang,
             )),
@@ -2686,8 +2732,8 @@ fn country_line(country: Option<&str>, method: Option<&str>) -> String {
 /// An unqualified continuation preserves open scope and unanswered questions.
 fn continue_note(lang: Lang, open: &[String]) -> String {
     match lang {
-        Lang::En => format!("[continue] Resume the open scope from the conversation. Open phases: {}. Unanswered questions remain unanswered. Ask the engineer only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Take technical design decisions yourself with an engineering basis, including column placement for the structure, doors per space use and escape, opening sizes, wall types, detailing and sheet layout. Record each decision with its reason.", open.join("; ")),
-        Lang::Ar => format!("[continue] استأنف النطاق المفتوح في المحادثة. المراحل المفتوحة: {}. الأسئلة التي لم يُجب عنها المهندس تظل مفتوحة. اسأل المهندس فقط عن الفكرة: التصور والقصد التصميمي، والبرنامج والاستخدامات، ورغبات العميل، والنطاق، والأرقام الأساسية التي يذكرها موجز المشروع أو يناقضها، والمعيار الحاكم أو جهة الاختصاص. اتخذ القرارات التصميمية الفنية بنفسك على أساس هندسي، بما فيها توزيع الأعمدة للمنشأ، والأبواب حسب استخدام الفراغ ومسارات الهروب، ومقاسات الفتحات، وأنواع الجدران، والتفاصيل، وتنسيق اللوحات. سجّل كل قرار مع سببه.", open.join("؛ ")),
+        Lang::En => format!("[continue] Resume the open scope from the conversation. Open phases: {}. Unanswered questions remain unanswered. Ask the engineer only about the idea: concept and design intent, programme and uses, client wishes, scope, key figures the brief gives or contradicts, and governing standard or jurisdiction. Take technical design decisions yourself with an engineering basis, including column placement for the structure, doors per space use and escape, opening sizes, wall types, detailing and sheet layout. Record each decision with its reason. A fault you find in your own drawing or quantities is yours to fix and re-check before finishing; report only what needs the engineer's idea-level decision or what you truly cannot fix, and say why.", open.join("; ")),
+        Lang::Ar => format!("[continue] استأنف النطاق المفتوح في المحادثة. المراحل المفتوحة: {}. الأسئلة التي لم يجب عنها المهندس تظل مفتوحة. اسأل المهندس فقط عن الفكرة: التصور والقصد التصميمي، والبرنامج والاستخدامات، ورغبات العميل، والنطاق، والأرقام الأساسية التي يذكرها موجز المشروع أو يناقضها، والمعيار الحاكم أو جهة الاختصاص. اتخذ القرارات التصميمية الفنية بنفسك على أساس هندسي، بما فيها توزيع الأعمدة للمنشأ، والأبواب حسب استخدام الفراغ ومسارات الهروب، ومقاسات الفتحات، وأنواع الجدران، والتفاصيل، وتنسيق اللوحات. سجل كل قرار مع سببه. أي عيب تكتشفه في رسمك أو كمياتك مسؤوليتك أن تصلحه وتعيد فحصه قبل الانتهاء؛ لا ترفع للمهندس إلا ما يحتاج قرارا يخص الفكرة أو ما تعجز فعلا عن إصلاحه، مع توضيح السبب.", open.join("؛ ")),
     }
 }
 
@@ -4102,7 +4148,7 @@ mod provider_failure_tests {
             "الأرقام الأساسية",
             "المعيار الحاكم أو جهة الاختصاص",
             "أساس هندسي",
-            "سجّل كل قرار مع سببه",
+            "سجل كل قرار مع سببه",
         ] {
             assert!(ar.contains(text), "{text}: {ar}");
         }

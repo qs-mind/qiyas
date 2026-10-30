@@ -213,7 +213,7 @@ impl Session {
                 .get_entity(Handle::new(*h))
                 .ok_or(CoreError::NoSuchEntity(*h))?;
             if !selected.contains(&e.common().owner_handle) {
-                return Err(CoreError::InvalidCommand("Check handles must belong to a selected sheet / يجب أن تتبع المقابض لوحة مختارة".into()));
+                return Err(CoreError::InvalidCommand("Check handles must belong to a selected sheet / يجب أن تتبع العناصر المحددة لوحة مختارة".into()));
             }
         }
         for sheet in &sheets {
@@ -233,6 +233,17 @@ impl Session {
             let mut wall_members = BTreeSet::new();
             for e in entities {
                 let h = e.common().handle.value();
+                let tag = crate::walls::wall_tag(e);
+                let wall_graphics = tag
+                    .as_ref()
+                    .is_some_and(|t| !matches!(t.role.as_str(), "run" | "opening"))
+                    || crate::xdata::read_json::<crate::objects::ObjectPart>(
+                        e.common(),
+                        crate::objects::PART_APP,
+                    )
+                    .and_then(|p| doc.get_entity(Handle::new(p.owner)))
+                    .and_then(crate::walls::wall_tag)
+                    .is_some();
                 let flattened = qiyas_geom::flatten(doc, e, &Xform::identity(), tol);
                 if flattened.truncated {
                     rows.push(not_checked(
@@ -270,7 +281,7 @@ impl Session {
                     add("blocks", &insert.block_name, count as f64, count);
                     measured.push((count as f64, "nr".into()));
                 }
-                if polyline || matches!(e, EntityType::Line(_)) {
+                if !wall_graphics && (polyline || matches!(e, EntityType::Line(_))) {
                     let value = qiyas_geom::exact_length(e, &Xform::identity())
                         .unwrap_or_else(|| paths.iter().map(Path::length).sum())
                         * factor;
@@ -286,7 +297,10 @@ impl Session {
                     let area = analytic_area(e, &rings).unwrap_or_else(|| ring_set_area(&rings))
                         * factor
                         * factor;
-                    add("area", "", area, 1);
+                    // Outlines and hatch are multiple renderings of one wall, not extra quantities.
+                    if !wall_graphics && !tag.as_ref().is_some_and(|t| t.role == "run") {
+                        add("area", "", area, 1);
+                    }
                     measured.push((area, "m2".into()));
                     if !rings.is_empty() {
                         closed.push(Space {
@@ -295,8 +309,7 @@ impl Session {
                         });
                     }
                 }
-                let tag = crate::walls::wall_tag(e);
-                if tag.is_some() {
+                if tag.is_some() || wall_graphics {
                     wall_members.insert(h);
                 }
                 if tag.as_ref().is_some_and(|t| t.role == "run") || query.wall_handles.contains(&h)
@@ -323,7 +336,12 @@ impl Session {
                         ));
                     }
                 }
+                // Opening identity comes from Qiyas membership, never a layer-name guess.
+                // Older exports may retain their generated insert but not its xdata.
+                let opening_insert = matches!(e, EntityType::Insert(insert)
+                    if insert.block_name.starts_with("QIYAS_DOOR_") || insert.block_name.starts_with("QIYAS_WIN_"));
                 if tag.as_ref().is_some_and(|t| t.role == "opening")
+                    || opening_insert
                     || query.opening_handles.contains(&h)
                 {
                     if paths.is_empty() {
@@ -335,9 +353,13 @@ impl Session {
                             "لا توجد هندسة قابلة للقياس للفتحة",
                         ));
                     }
+                    let mut opening_paths = paths.clone();
+                    if let Some(footprint) = tag.as_ref().and_then(opening_footprint) {
+                        opening_paths.push(footprint);
+                    }
                     openings.push(Shape {
                         handle: h,
-                        paths: paths.clone(),
+                        paths: opening_paths,
                     });
                 }
                 if query.space_handles.contains(&h)
@@ -415,7 +437,21 @@ impl Session {
                 row["boq_items"] = json!(codes);
                 row["unallocated_items"] = json!(ambiguous);
                 row["comparison_complete"] = json!(ambiguous.is_empty());
+                // A source measured in area or volume is not a length discrepancy.
+                // Retain its raw geometry, and state that the BOQ uses a different dimension.
+                let other_dimension = codes.is_empty()
+                    && raw.handles.iter().all(|h| {
+                        report.items.iter().any(|item| {
+                            !item.informational
+                                && unit_scale(&item.unit).0 != unit
+                                && item_handles(item).contains(h)
+                        })
+                    });
+                row["comparison_applicable"] = json!(!other_dimension);
                 rows.push(row.clone());
+                if other_dimension {
+                    continue;
+                }
                 if !ambiguous.is_empty() {
                     row["kind"] = json!("unallocated_boq");
                     row["message"] =
@@ -450,7 +486,7 @@ impl Session {
             let explicit = query.boundary.filter(|h| sheet_handles.contains(h));
             let (outlines, outline_handles, basis) = if let Some(h) = explicit {
                 let boundary = closed.iter().find(|s| s.handles.contains(&h))
-                    .ok_or_else(|| CoreError::InvalidCommand("Outline must be a closed polyline or hatch / يجب أن يكون المحيط متعدد خطوط مغلقاً أو تهشيراً".into()))?;
+                    .ok_or_else(|| CoreError::InvalidCommand("Outline must be a closed polyline or hatch / يجب أن تكون الحدود خطا متعددا مغلقا أو تهشيرا".into()))?;
                 (boundary.rings.clone(), vec![h], "caller_boundary")
             } else if !union.is_empty() {
                 (
@@ -646,13 +682,19 @@ impl Session {
                         })
                     });
                 if !has_opening {
-                    rows.push(finding(
+                    let mut row = finding(
                         "space_without_opening",
                         name,
                         &space.handles,
                         "No identified opening intersects this enclosed boundary",
                         "لا توجد فتحة محددة تتقاطع مع حدود هذا الفراغ المغلق",
-                    ));
+                    );
+                    row["centroid"] = json!(space
+                        .rings
+                        .first()
+                        .and_then(|ring| geom::ring_centroid(ring)));
+                    row["area_m2"] = json!(ring_set_area(&space.rings) * factor * factor);
+                    rows.push(row);
                 }
             }
             for (i, a) in spaces.iter().enumerate() {
@@ -1052,4 +1094,42 @@ fn answer_numbers(answer: &str) -> Vec<(String, f64, String, usize, usize, i32)>
             Some((answer[start..end].into(), value, unit, start, end, decimals))
         })
         .collect()
+}
+
+/// The cut crosses both wall faces even when a symbolic leaf or glazing line does not.
+/// Read only the wall command's geometric source; no object recipe or measurement rule.
+fn opening_footprint(tag: &crate::walls::WallTag) -> Option<Path> {
+    if tag.role != "opening" {
+        return None;
+    }
+    let opening = tag.spec.openings.get(tag.index)?;
+    let runs = crate::walls::geom_runs(&tag.spec);
+    let run = runs.get(opening.run)?;
+    let built = qiyas_geom::walls::build_walls_justified(
+        std::slice::from_ref(run),
+        tag.spec.thickness,
+        &[qiyas_geom::walls::Opening {
+            run: 0,
+            at: opening.at,
+            width: opening.width,
+        }],
+        qiyas_geom::SAME_POINT,
+        crate::walls::geom_justification(tag.spec.justification),
+    )
+    .ok()?;
+    let placed = built.openings.first()?;
+    let [dx, dy] = placed.dir;
+    let half_width = placed.width / 2.;
+    let half_depth = placed.thickness / 2.;
+    Some(Path {
+        closed: true,
+        points: [(-1., -1.), (1., -1.), (1., 1.), (-1., 1.)]
+            .map(|(along, across)| {
+                [
+                    placed.centre[0] + along * half_width * dx - across * half_depth * dy,
+                    placed.centre[1] + along * half_width * dy + across * half_depth * dx,
+                ]
+            })
+            .to_vec(),
+    })
 }

@@ -71,7 +71,7 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
         })
     }) {
         return Err(ToolError::BadInput(
-            "Literal arithmetic cannot verify the drawing: use the drawing handles as `targets`, or a `read` item (op, args, pointer, expected) that measures the drawing. لا تتحقق العمليات الحسابية المجردة من الرسم: استخدم معرّفات عناصر الرسم في `targets`، أو بند `read` (op, args, pointer, expected) يقيس الرسم.".into(),
+            "Literal arithmetic cannot verify the drawing: use the drawing handles as `targets`, or a `read` item (op, args, pointer, expected) that measures the drawing. لا تتحقق العمليات الحسابية المجردة من الرسم: استخدم معرفات عناصر الرسم في `targets`، أو بند `read` (op, args, pointer, expected) يقيس الرسم.".into(),
         ));
     }
     let mut ids = std::collections::BTreeSet::new();

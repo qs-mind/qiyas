@@ -1,6 +1,6 @@
 import { TechnicalDetails, ReviewNotes } from "./TechnicalDetails";
 import { entityKind } from "../i18n/entityKind";
-import { uiError } from "../i18n/errors";
+import { isWorkspaceBusy, uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { runCommand, type Command, type RecognitionCandidate } from "../api";
 import { useT } from "../i18n";
@@ -23,7 +23,7 @@ export function RecognitionPanel({ active, drawing, revision, run, refresh = 0 }
       if (current !== generation.current) return;
       if (result.type === "recognition") setRows((result.result.candidates ?? []).filter((row) => row.state === "pending" || row.confidence < 0.9 || row.issues.length > 0));
       setError(null);
-    }).catch((error) => { if (current === generation.current) setError(uiError(error)); });
+    }).catch((error) => { if (current === generation.current && !isWorkspaceBusy(error)) setError(uiError(error)); });
     return () => { generation.current++; };
   }, [active, drawing, revision, reload, refresh]);
 

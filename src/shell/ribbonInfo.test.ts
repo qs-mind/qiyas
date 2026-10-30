@@ -52,7 +52,7 @@ test("every command has a description in English and Arabic, and the new ribbon 
   }
   // The revision cloud with a comment (its button comes with the other branch).
   expect(en["tip.commentCloud"]).toBe("Click round what you want to mark, Enter, then type the comment. Drawn on the COMMENTS layer.");
-  expect(ar["tip.commentCloud"]).toBe("انقر حول ما تريد تعليمه، ثم Enter واكتب التعليق. تُرسم على طبقة COMMENTS.");
+  expect(ar["tip.commentCloud"]).toBe("انقر حول موضع الملاحظة، ثم اضغط Enter واكتب التعليق. ينشئ قياس السحابة على طبقة COMMENTS.");
   // The same keys in both languages, and the same placeholders.
   expect(Object.keys(ar).sort()).toEqual(Object.keys(en).sort());
   expect(ar["ribbon.groupMore"]).toContain("{name}");

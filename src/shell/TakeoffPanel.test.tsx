@@ -209,7 +209,7 @@ test.each(["en", "ar"])("full names and quantity limits remain separate in %s", 
   const limit = name.parentElement!.querySelector("small")!;
   expect(limit.textContent).toBe(lang === "en"
     ? "Count may miss nested blocks"
-    : "قد لا يشمل العدّ البلوكات المتداخلة");
+    : "قد لا يشمل العد البلوكات المتداخلة");
   expect(screen.queryByText(lang === "en"
     ? "Area source unspecified · Basis unspecified"
     : "مصدر المساحة غير محدد · أساس غير محدد")).toBeNull();

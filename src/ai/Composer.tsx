@@ -19,8 +19,6 @@ type Props = {
   busy: boolean;
   /** Busy, or a history read is on its way: nothing is sent. */
   blocked: boolean;
-  /** Options are chosen on open questions, so send works with an empty box. */
-  answering: boolean;
   pointing?: Pointing;
   /** The output on screen in place of the chat: the box asks about it. */
   shownOutput: ShownOutput | null;
@@ -31,7 +29,7 @@ type Props = {
   onCancel(): void;
 };
 
-export function Composer({ drafts, box, busy, blocked, answering, pointing, shownOutput, model, read, onSubmit, onSlash, onCancel }: Props) {
+export function Composer({ drafts, box, busy, blocked, pointing, shownOutput, model, read, onSubmit, onSlash, onCancel }: Props) {
   const t = useT();
   const { lang } = useLanguage();
   const { draft } = drafts;
@@ -44,7 +42,7 @@ export function Composer({ drafts, box, busy, blocked, answering, pointing, show
   const unavailable = blocked || attaching;
   const slashList = slashOff || unavailable ? [] : slashMatches(draft.text, lang);
   const slashRow = Math.min(slashAt, Math.max(0, slashList.length - 1));
-  const empty = !draft.text.trim() && !answering && draft.pictures.length === 0 && draft.documents.length === 0;
+  const empty = !draft.text.trim() && draft.pictures.length === 0 && draft.documents.length === 0;
 
   function runSlash(command: SlashCommand) {
     setSlashAt(0);

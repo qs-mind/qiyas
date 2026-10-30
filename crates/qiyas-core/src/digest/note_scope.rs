@@ -105,6 +105,7 @@ pub(super) fn findings(
     handles: &BTreeSet<u64>,
     evidence: &[Candidate],
     end_report: &str,
+    recorded: &std::collections::BTreeMap<u64, String>,
 ) -> Vec<Value> {
     let exclusions = exclusions(end_report);
     let sources = |rule: Option<&str>| -> BTreeSet<u64> {
@@ -150,7 +151,9 @@ pub(super) fn findings(
         let mut named = named_handles(text, handles);
         named.remove(note);
         for h in &named {
-            if (rejected.contains(h) || !measured.contains(h)) && !exclusions.contains(&(*h, *note))
+            if (rejected.contains(h) || !measured.contains(h))
+                && !exclusions.contains(&(*h, *note))
+                && !recorded.contains_key(h)
             {
                 errors.push(json!({"section":"measurement_errors","severity":"error",
                     "code":"named_handle_omitted","handle":h,"note":note,
@@ -236,7 +239,7 @@ mod tests {
         let mut report = report();
         let notes = vec![(93, "Element 61; factor 2.4".into())];
         let handles = BTreeSet::from([52, 61, 93]);
-        let errors = findings(&report, &notes, &handles, &[], "");
+        let errors = findings(&report, &notes, &handles, &[], "", &Default::default());
         assert_eq!(errors.len(), 2);
         assert_eq!(errors[0]["code"], "named_handle_omitted");
         assert_eq!(errors[0]["handle"], 61);
@@ -253,7 +256,8 @@ mod tests {
                 &notes,
                 &handles,
                 &[],
-                "Exclude 61: duplicate (note 93)"
+                "Exclude 61: duplicate (note 93)",
+                &Default::default(),
             )
             .len(),
             1
@@ -264,7 +268,8 @@ mod tests {
                 &notes,
                 &handles,
                 &[],
-                "Exclude 61: duplicate (note 94)"
+                "Exclude 61: duplicate (note 94)",
+                &Default::default(),
             )
             .len(),
             2
@@ -275,13 +280,32 @@ mod tests {
                 &notes,
                 &handles,
                 &[],
-                "Exclude 52: duplicate (note 93)"
+                "Exclude 52: duplicate (note 93)",
+                &Default::default(),
             )
             .len(),
             2
         );
         report.quantities[0].object = 61;
-        assert!(findings(&report, &notes, &handles, &[], "").is_empty());
+        assert!(findings(&report, &notes, &handles, &[], "", &Default::default()).is_empty());
+    }
+
+    #[test]
+    fn recorded_exclusion_excuses_omission_but_not_a_disjoint_factor() {
+        let report = report();
+        let notes = vec![(93, "Element 61; factor 2.4".into())];
+        let handles = BTreeSet::from([52, 61, 93]);
+        let recorded = [(61, "Outside the agreed scope".into())].into();
+        let errors = findings(&report, &notes, &handles, &[], "", &recorded);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0]["code"], "note_factor_scope");
+        assert_eq!(errors[0]["severity"], "error");
+
+        let unrelated = [(52, "Outside the agreed scope".into())].into();
+        assert_eq!(
+            findings(&report, &notes, &handles, &[], "", &unrelated).len(),
+            2
+        );
     }
 
     #[test]
@@ -292,12 +316,26 @@ mod tests {
         let rule = &mut report.selection.project.as_mut().unwrap().rules[0];
         rule.citation.clause = "note 94".into();
         rule.terms[0].citation.clause = "note 94".into();
-        assert_eq!(findings(&report, &notes, &handles, &[], "").len(), 1);
+        assert_eq!(
+            findings(&report, &notes, &handles, &[], "", &Default::default()).len(),
+            1
+        );
         let rule = &mut report.selection.project.as_mut().unwrap().rules[0];
         rule.citation.clause = "note 93".into();
         rule.terms[0].factors = vec!["geometry.length".into()];
-        assert_eq!(findings(&report, &notes, &handles, &[], "").len(), 1);
-        assert!(findings(&report, &[(93, "Factor 2.4".into())], &handles, &[], "").is_empty());
+        assert_eq!(
+            findings(&report, &notes, &handles, &[], "", &Default::default()).len(),
+            1
+        );
+        assert!(findings(
+            &report,
+            &[(93, "Factor 2.4".into())],
+            &handles,
+            &[],
+            "",
+            &Default::default()
+        )
+        .is_empty());
     }
 
     #[test]
@@ -312,7 +350,14 @@ mod tests {
             "evidence":[],"issues":["unlabelled"],"object":61}))
             .unwrap();
         let evidence = [candidate];
-        let errors = findings(&report, &notes, &handles, &evidence, "");
+        let errors = findings(
+            &report,
+            &notes,
+            &handles,
+            &evidence,
+            "",
+            &Default::default(),
+        );
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0]["code"], "named_handle_omitted");
         assert!(findings(
@@ -320,7 +365,8 @@ mod tests {
             &notes,
             &handles,
             &evidence,
-            "Exclude 61: duplicate of 52 (note 93)"
+            "Exclude 61: duplicate of 52 (note 93)",
+            &Default::default(),
         )
         .is_empty());
     }
@@ -338,6 +384,14 @@ mod tests {
             "evidence":[{"handle":78}],"issues":[],"object":101}))
                 .unwrap(),
             ];
-        assert!(findings(&report, &notes, &handles, &evidence, "").is_empty());
+        assert!(findings(
+            &report,
+            &notes,
+            &handles,
+            &evidence,
+            "",
+            &Default::default()
+        )
+        .is_empty());
     }
 }

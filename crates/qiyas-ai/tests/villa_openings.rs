@@ -11,6 +11,9 @@ use std::{
 #[path = "../../../tests/support/performance.rs"]
 mod performance;
 
+#[path = "support/villa.rs"]
+mod villa;
+
 fn snapshot(s: &mut Session) -> Value {
     let entities: BTreeMap<_, _> = s
         .drawing
@@ -95,12 +98,16 @@ fn replay(units: i16, factor: f64) -> Duration {
         "POMI (RICS)",
     )))
     .unwrap();
-    let calls: Vec<Value> =
-        serde_json::from_str(include_str!("fixtures/villa-openings.json")).unwrap();
+    let calls = villa::calls();
     let mut maximum = Duration::ZERO;
     let mut refused = 0;
     for (i, mut call) in calls.into_iter().enumerate() {
         scale(&mut call["input"]["args"], factor);
+        villa::bind_openings(
+            &mut call["input"],
+            &json!(s.wall_groups(None).unwrap()),
+            factor,
+        );
         let surface::Route::Session { tool, op, args } =
             surface::route(call["tool"].as_str().unwrap(), &call["input"]).unwrap()
         else {

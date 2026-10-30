@@ -31,6 +31,11 @@ export function useStickToBottom(changed: readonly unknown[]) {
     el.scrollTo?.({ top: el.scrollHeight, behavior: smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
   };
 
+  const measureAway = () => {
+    const el = box.current;
+    setAway(!!el && el.scrollHeight > el.clientHeight && el.scrollHeight - el.scrollTop - el.clientHeight > NEAR);
+  };
+
   const onScroll = () => {
     const el = box.current;
     if (!el) return;
@@ -40,13 +45,13 @@ export function useStickToBottom(changed: readonly unknown[]) {
     if (movedDown) intentUp.current = false;
     previousTop.current = el.scrollTop;
     pinned.current = !intentUp.current && el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR;
-    setAway(!pinned.current);
+    measureAway();
   };
 
   const leaveBottom = () => {
     intentUp.current = true;
     pinned.current = false;
-    setAway(true);
+    measureAway();
   };
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (event.deltaY < 0) {
@@ -66,14 +71,28 @@ export function useStickToBottom(changed: readonly unknown[]) {
   // After the content changed, before it is painted: follow it if the reader is at the bottom.
   useLayoutEffect(() => {
     if (pinned.current) toBottom(false);
+    measureAway();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, changed);
+
+  // Both the viewport and its contents can resize without a transcript update (e.g. an image).
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) toBottom(false);
+      measureAway();
+    });
+    observer.observe(el);
+    for (const child of el.children) observer.observe(child);
+    return () => observer.disconnect();
+  });
 
   const jump = (smooth = true) => {
     pinned.current = true;
     intentUp.current = false;
-    setAway(false);
     toBottom(smooth);
+    measureAway();
   };
 
   return { ref, onScroll, onWheel, onKeyDown, away, jump };

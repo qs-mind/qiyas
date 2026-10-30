@@ -823,7 +823,7 @@ fn room_refusal_keeps_budget_details_in_the_public_english_and_arabic_report() {
     assert!(skipped.reason.contains("block nesting depth"));
     assert!(skipped.reason.contains("33, limit 32"));
     assert!(skipped.reason.contains("Recursive block"));
-    assert!(skipped.reason_ar.contains("عمق تداخل الكتل"));
+    assert!(skipped.reason_ar.contains("عمق تداخل البلوكات"));
     assert!(skipped.reason_ar.contains("Recursive block"));
 }
 

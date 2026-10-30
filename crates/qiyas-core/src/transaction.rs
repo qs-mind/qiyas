@@ -238,6 +238,7 @@ impl Session {
         color: Option<String>,
         source: Source,
     ) -> Result<Outcome, CoreError> {
+        let progress = crate::batch_progress::Batch::new(commands.len());
         self.batch_with(source, "batch", layer, color, |s| {
             if commands.len() > 1
                 && commands
@@ -249,8 +250,12 @@ impl Session {
                     .map(|command| serde_json::json!(command))
                     .collect();
                 if let Some(grouped) = s.run_opening_batch(&inputs, source) {
+                    let grouped = grouped?;
+                    for (index, input) in inputs.iter().enumerate() {
+                        progress.completed(index + 1, input);
+                    }
                     return Ok(Outcome::Batch {
-                        outcomes: grouped?.into_iter().map(|step| step.outcome).collect(),
+                        outcomes: grouped.into_iter().map(|step| step.outcome).collect(),
                         added: s.last_change.added.clone(),
                     });
                 }
@@ -258,8 +263,12 @@ impl Session {
             let mut outcomes = Vec::with_capacity(commands.len());
             for (index, command) in commands.into_iter().enumerate() {
                 let label = command.label();
+                let input = serde_json::json!(command);
                 match s.run_as(command, source) {
-                    Ok(outcome) => outcomes.push(outcome),
+                    Ok(outcome) => {
+                        progress.completed(index + 1, &input);
+                        outcomes.push(outcome);
+                    }
                     Err(error) => {
                         return Err(CoreError::Step {
                             index,

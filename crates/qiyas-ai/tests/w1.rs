@@ -799,13 +799,16 @@ async fn repeated_reads_and_successful_no_change_calls_never_trip_edit_failure_t
 }
 
 #[test]
-fn the_model_can_record_multiple_active_phases() {
+fn plan_structure_rejects_multiple_active_phases_with_ids_and_example() {
     let plan = surface::read_plan(&json!({"phases":[
         {"id":"a","title":"One scope","status":"active"},
         {"id":"b","title":"Another scope","status":"active"}
     ]}))
-    .unwrap();
-    assert_eq!(plan.phases.len(), 2);
+    .unwrap_err()
+    .to_string();
+    assert!(plan.contains("a, b"));
+    assert!(plan.contains("Example:"));
+    assert!(plan.contains("pending, done or skipped"));
 }
 
 #[tokio::test]

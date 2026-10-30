@@ -24,7 +24,7 @@ test("Arabic project explanation shows drawings and highlights only when asked",
   vi.mocked(explainItem).mockResolvedValue({ ...result, contributions: [{explanation:result}] });
   const shown = vi.fn(); window.addEventListener(EXPLAIN_EVIDENCE, shown);
   render(<LanguageProvider><Explain item="project:0" project="Test.qss" /></LanguageProvider>);
-  fireEvent.click(screen.getByRole("button", { name: /كيف قِيست/ }));
+  fireEvent.click(screen.getByRole("button", { name: /كيف تم قياس هذه الكمية/ }));
   await screen.findByText("Test source / Q1");
   expect(shown).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: /إظهار على الرسم/ }));

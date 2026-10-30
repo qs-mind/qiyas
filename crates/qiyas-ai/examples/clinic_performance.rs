@@ -56,6 +56,47 @@ fn rewrite_paths(v: &mut Value, dir: &std::path::Path) {
         _ => {}
     }
 }
+
+/// The recording predates automatic object layers. Their table records consume handles,
+/// but are not recorded entities. Rebase handle fields only, never geometry or revisions.
+fn rebase_layer_allocations(value: &mut Value, layers: &[u64]) {
+    fn handle(value: &mut Value, layers: &[u64]) {
+        if let Some(mut id) = value.as_u64() {
+            for &layer in layers {
+                if layer <= id {
+                    id += 1;
+                }
+            }
+            *value = json!(id);
+        } else if let Some(values) = value.as_array_mut() {
+            for value in values {
+                handle(value, layers);
+            }
+        } else {
+            rebase_layer_allocations(value, layers);
+        }
+    }
+    match value {
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                if matches!(
+                    key.as_str(),
+                    "handle" | "handles" | "insert" | "inserts" | "centreline"
+                ) {
+                    handle(value, layers);
+                } else {
+                    rebase_layer_allocations(value, layers);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                rebase_layer_allocations(value, layers);
+            }
+        }
+        _ => {}
+    }
+}
 /// The one recorded call whose literal handle no longer names what the recording meant: the
 /// opening schedule totals each kind (one more table row), which moves every handle made after it.
 const HANDLE_SHIFT_CALL: u64 = 83;
@@ -135,6 +176,22 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
             input.as_object_mut().unwrap().remove("expected_revision");
         }
         rewrite_paths(&mut args, &fs::canonicalize(&dir).unwrap());
+        // These object layers are new since this recording; it contains no authored Q-* layers.
+        let mut layer_handles: Vec<_> = s
+            .drawing
+            .doc
+            .layers
+            .iter()
+            .filter(|layer| {
+                matches!(
+                    layer.name.as_str(),
+                    "Q-LEGACY-WALL" | "Q-LEGACY-DOOR" | "Q-LEGACY-WINDOW" | "Q-LEGACY-ROOM"
+                )
+            })
+            .map(|layer| layer.handle.value())
+            .collect();
+        layer_handles.sort_unstable();
+        rebase_layer_allocations(&mut args, &layer_handles);
         input["args"] = args.clone();
         eprintln!(
             "START {label} call={i} {tool}.{op} live_ms={}",

@@ -515,10 +515,10 @@ pub fn run_checks(
             available_profiles.join(", ")
         )
     } else if cx.findings.is_empty() {
-        format!("تم تنفيذ {} فحصاً دون ملاحظات.", cx.checked.len())
+        format!("عدد الفحوص المنفذة دون ملاحظات: {}.", cx.checked.len())
     } else {
         format!(
-            "{errors} أخطاء و{warnings} تحذيرات و{notes} ملاحظات من {} فحصاً.",
+            "نتائج الفحوص: {errors} خطأ و {warnings} تحذير و {notes} ملاحظة. إجمالي الفحوص: {}.",
             cx.checked.len()
         )
     });
@@ -528,7 +528,7 @@ pub fn run_checks(
         available_profiles,
         thresholds_applied: cx.thresholds.into_values().collect(),
         status_ar: "للمراجعة",
-        responsibility_ar: "القيم المطبقة تفضيلات ممارسة وليست كوداً. يقرر المهندس مدى ملاءمتها.",
+        responsibility_ar: "القيم المطبقة تفضيلات ممارسة وليست كودا. يقرر المهندس مدى ملاءمتها.",
         errors,
         warnings,
         notes,
@@ -623,7 +623,7 @@ fn circulation_share(cx: &mut Ctx, fl: &Fl) {
                 e(excess, 0)
             ),
             format!(
-                "قلّل حوالي {} م² من الممرات: افتح الغرف على صالة واحدة مضغوطة، واحذف الممر الطويل، وأعطِ السلم حيزاً محاطاً بحوائط.",
+                "قلل حوالي {} م² من الممرات: افتح الغرف على صالة واحدة مضغوطة، واحذف الممر الطويل، وأعط السلم حيزا محاطا بجدران.",
                 a(excess, 0)
             ),
         ),
@@ -660,7 +660,7 @@ fn corridors(cx: &mut Ctx, fl: &Fl) {
                         ),
                         (
                             "Group the rooms round a central hall so no passage is longer than a few metres.".into(),
-                            "جمّع الغرف حول صالة مركزية بحيث لا يزيد أي ممر عن أمتار قليلة.".into(),
+                            "جمع الغرف حول صالة مركزية بحيث لا يزيد أي ممر عن أمتار قليلة.".into(),
                         ),
                         Some(length),
                         None,
@@ -698,7 +698,7 @@ fn corridors(cx: &mut Ctx, fl: &Fl) {
                         ),
                         (
                             format!("Widen it to {} m or more.", e(limit.value(), 2)),
-                            format!("وسّعه إلى {} م أو أكثر.", a(limit.value(), 2)),
+                            format!("وسعه إلى {} م أو أكثر.", a(limit.value(), 2)),
                         ),
                         Some(w),
                         Some(limit),
@@ -759,7 +759,7 @@ fn room_sizes(cx: &mut Ctx, fl: &Fl) {
                         e(area_limit.value(), 1)
                     ),
                     format!(
-                        "كبّرها إلى {} م² على الأقل، أو ادمجها مع المجاور.",
+                        "كبرها إلى {} م² على الأقل، أو ادمجها مع المجاور.",
                         a(area_limit.value(), 1)
                     ),
                 ),
@@ -834,7 +834,7 @@ fn kitchen_and_living(cx: &mut Ctx, fl: &Fl) {
                 ),
                 (
                     format!("Trim the kitchen to under {} m² and give the difference to the living space.", e(biggest.room.area_m2 * ratio, 0)),
-                    format!("قلّص المطبخ إلى أقل من {} م² وأعطِ الفرق لمساحة المعيشة.", a(biggest.room.area_m2 * ratio, 0)),
+                    format!("قلص المطبخ إلى أقل من {} م² وأعط الفرق لمساحة المعيشة.", a(biggest.room.area_m2 * ratio, 0)),
                 ),
                 Some(kitchen.room.area_m2),
                 None,
@@ -882,11 +882,11 @@ fn kitchen_and_living(cx: &mut Ctx, fl: &Fl) {
                 vec![x.room.name.clone(), y.room.name.clone()],
                 (
                     format!("The {en_first} and the {en_second} do not touch or open to each other."),
-                    format!("{ar_first} و{ar_second} غير متجاورتين ولا تفتحان على بعضهما."),
+                    format!("{ar_first} و {ar_second} غير متجاورتين ولا تفتحان على بعضهما."),
                 ),
                 (
                     format!("Put the {en_first} and the {en_second} side by side with a door or an opening between them."),
-                    format!("ضع {ar_first} و{ar_second} متجاورتين مع باب أو فتحة بينهما."),
+                    format!("ضع {ar_first} و {ar_second} متجاورتين مع باب أو فتحة بينهما."),
                 ),
                 None,
                 None,
@@ -922,11 +922,11 @@ fn oversized(cx: &mut Ctx, fl: &Fl) {
                 vec![r.room.name.clone()],
                 (
                     format!("{} ({} m²) is large for a {label_en} (practice limit {} m²).", r.room.name, e(r.room.area_m2, 1), e(limit, 0)),
-                    format!("{} ({} م²) كبيرة بالنسبة لـ{label_ar} (الحد المعتاد {} م²).", r.room.name, a(r.room.area_m2, 1), a(limit, 0)),
+                    format!("{} ({} م²) كبيرة بالنسبة لـ {label_ar} (الحد المعتاد {} م²).", r.room.name, a(r.room.area_m2, 1), a(limit, 0)),
                 ),
                 (
                     "Give the extra area to the rooms that are short of it, or add a bathroom or dressing room.".into(),
-                    "أعطِ المساحة الزائدة للغرف الناقصة، أو أضف حماماً أو غرفة ملابس.".into(),
+                    "أعط المساحة الزائدة للغرف الناقصة، أو أضف حماما أو غرفة ملابس.".into(),
                 ),
                 Some(r.room.area_m2),
                 None,
@@ -970,7 +970,7 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                             ),
                             (
                                 "Move the stair into its own enclosure off the hall, or widen the passage beside it.".into(),
-                                "انقل السلم إلى حيز محاط بحوائط على الصالة، أو وسّع الممر بجانبه.".into(),
+                                "انقل السلم إلى حيز محاط بجدران على الصالة، أو وسع الممر بجانبه.".into(),
                             ),
                             Some(left),
                             Some(limit),
@@ -994,11 +994,11 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     rooms.clone(),
                     (
                         format!("{label} is not enclosed by walls."),
-                        format!("{label} غير محاط بحوائط."),
+                        format!("{label} غير محاط بجدران."),
                     ),
                     (
                         "Enclose the stair in walls on its long sides and give it a door or opening at the foot, so it does not cut the hall or corridor.".into(),
-                        "أحِط السلم بحوائط على جانبيه الطويلين وأعطه باب أو فتحة عند أوله، حتى لا يقطع الصالة أو الممر.".into(),
+                        "أحط السلم بجدران على جانبيه الطويلين وأعطه باب أو فتحة عند أوله، حتى لا يقطع الصالة أو الممر.".into(),
                     ),
                     None,
                     None,
@@ -1030,7 +1030,7 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     ),
                     (
                         format!("Widen the flight to {} m or more.", e(limit.value(), 2)),
-                        format!("وسّع الدرج إلى {} م أو أكثر.", a(limit.value(), 2)),
+                        format!("وسع الدرج إلى {} م أو أكثر.", a(limit.value(), 2)),
                     ),
                     Some(w),
                     Some(limit),
@@ -1060,7 +1060,7 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     ),
                     (
                         "Add a riser to the flight so each one is lower.".into(),
-                        "أضف قائمة للسلم لتصبح كل قائمة أقل ارتفاعاً.".into(),
+                        "أضف قائمة للسلم لتصبح كل قائمة أقل ارتفاعا.".into(),
                     ),
                     Some(r),
                     Some(limit),
@@ -1090,7 +1090,7 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                     ),
                     (
                         "Lengthen the flight or turn part of it into a landing.".into(),
-                        "أطِل الدرج أو حوّل جزءاً منه إلى بسطة.".into(),
+                        "أطل الدرج أو حول جزءا منه إلى بسطة.".into(),
                     ),
                     Some(g),
                     Some(limit),
@@ -1218,7 +1218,7 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                         ),
                         (
                             "Make the entrance a double-leaf door about 1.50 m wide, or a single leaf of 1.20 m.".into(),
-                            "اجعل المدخل بابًا بضلفتين عرضه حوالي 1.50 م، أو ضلفة واحدة 1.20 م.".into(),
+                            "اجعل المدخل بابا بضلفتين عرضه حوالي 1.50 م، أو ضلفة واحدة 1.20 م.".into(),
                         ),
                         Some(d.width_m),
                         Some(limit),
@@ -1254,7 +1254,7 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                         ),
                         (
                             format!("Widen the door to {} m or more.", e(limit.value(), 2)),
-                            format!("وسّع الباب إلى {} م أو أكثر.", a(limit.value(), 2)),
+                            format!("وسع الباب إلى {} م أو أكثر.", a(limit.value(), 2)),
                         ),
                         Some(d.width_m),
                         Some(limit),
@@ -1277,7 +1277,7 @@ fn doors(cx: &mut Ctx, fl: &Fl) {
                 (
                     "Hang the door the other way, make it sliding, or move it clear of the swing."
                         .into(),
-                    "اعكس اتجاه فتح الباب، أو اجعله منزلقاً، أو انقله بعيداً عن مجال الفتح.".into(),
+                    "اعكس اتجاه فتح الباب، أو اجعله منزلقا، أو انقله بعيدا عن مجال الفتح.".into(),
                 ),
                 None,
                 None,
@@ -1316,7 +1316,7 @@ fn guest_wc(cx: &mut Ctx, fl: &Fl) {
             ),
             (
                 "Add a guest WC next to the entrance hall, reached without crossing the family area.".into(),
-                "أضف دورة مياه للضيوف بجوار مدخل الصالة، يُوصل إليها دون المرور بمنطقة العائلة.".into(),
+                "أضف دورة مياه للضيوف بجوار مدخل الصالة، يوصل إليها دون المرور بمنطقة العائلة.".into(),
             ),
             None,
             None,
@@ -1459,7 +1459,7 @@ fn master_ensuite(cx: &mut Ctx, floors: &[Fl]) {
         ),
         (
             "Add a bathroom that opens only to the master bedroom, with a dressing area if the room is large.".into(),
-            "أضف حماماً يفتح على غرفة النوم الرئيسية فقط، مع منطقة ملابس إن كانت الغرفة كبيرة.".into(),
+            "أضف حماما يفتح على غرفة النوم الرئيسية فقط، مع منطقة ملابس إن كانت الغرفة كبيرة.".into(),
         ),
         None,
         None,
@@ -1558,7 +1558,7 @@ fn wardrobes(cx: &mut Ctx, floors: &[Fl]) {
                     (
                         "Draw a wardrobe along a wall (about 0.60 m deep), or add a dressing room."
                             .into(),
-                        "ارسم خزانة ملابس على أحد الحوائط (عمقها حوالي 0.60 م)، أو أضف غرفة ملابس."
+                        "ارسم خزانة ملابس على أحد الجدران (عمقها حوالي 0.60 م)، أو أضف غرفة ملابس."
                             .into(),
                     ),
                     None,
@@ -2130,8 +2130,8 @@ mod tests {
             "error",
             "Ground floor",
             vec!["Test room".into()],
-            ("Too narrow.".into(), "العرض غير كافٍ.".into()),
-            ("Widen the room.".into(), "زِد عرض الغرفة.".into()),
+            ("Too narrow.".into(), "العرض لا يكفي.".into()),
+            ("Widen the room.".into(), "زد عرض الغرفة.".into()),
             Some(0.8),
             Some(&limit),
             None,

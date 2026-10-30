@@ -50,7 +50,7 @@ test("Arabic keeps the same account controls and explains missing plan permissio
   api.chatgptAccount.mockResolvedValue({ signed_in: true, display_name: "Test Surveyor", plan_granted: false });
   render(<LanguageProvider><SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} /></LanguageProvider>);
   await screen.findByRole("button", { name: "تسجيل الخروج" });
-  expect(screen.getByRole("alert").textContent).toContain("غير مفعّل");
+  expect(screen.getByRole("alert").textContent).toContain("غير مفعل");
   expect(screen.getByText("Test Surveyor").tagName).toBe("BDI");
 });
 

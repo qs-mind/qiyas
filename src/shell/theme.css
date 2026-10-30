@@ -1855,6 +1855,7 @@ span.grid-sort {
   align-items: center;
   gap: 12px;
   width: min(360px, calc(100vw - 28px));
+  min-height: 44px;
   padding: 8px 12px;
   overflow: hidden;
   color: var(--fg);
@@ -1862,6 +1863,7 @@ span.grid-sort {
   border: 1px solid var(--rule);
   border-radius: 8px;
   box-shadow: 0 6px 20px rgb(14 15 18 / 0.14);
+  font-family: "Thmanyah Sans", "Instrument Sans", system-ui, sans-serif;
   font-size: 12.5px;
   line-height: 1.4;
 }
@@ -1881,44 +1883,12 @@ span.grid-sort {
   width: 3px;
   background: var(--warn);
 }
-.toast-close {
-  position: absolute;
-  inset-block-start: 4px;
-  inset-inline-end: 4px;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
+.toast .toast-close {
+  flex: none;
+  position: static;
   color: var(--muted);
-  background: none;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
 }
-.toast-close:hover {
-  color: var(--fg);
-  background: var(--hover);
-}
-.toast-close svg {
-  width: 10px;
-  height: 10px;
-}
-.toast-error {
-  padding-inline-end: 28px;
-}
-.toast-wait {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.toast-undo {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
+.toast-close svg { stroke-width: 1.5; }
 .toast-action {
   flex: none;
   padding: 2px 8px;
@@ -2826,7 +2796,7 @@ span.grid-sort {
   font-weight: 500;
   font-size: 13px;
 }
-/* The thread and the button that jumps to its end, over its bottom edge. */
+/* The jump button occupies its own row, clear of the thread text. */
 .assistant-thread {
   overscroll-behavior: contain;
   position: relative;
@@ -2836,10 +2806,9 @@ span.grid-sort {
   flex-direction: column;
 }
 .jump-latest {
-  position: absolute;
-  inset-inline: 0;
-  inset-block-end: 8px;
-  margin-inline: auto;
+  flex: none;
+  align-self: center;
+  margin: 6px auto;
   width: max-content;
   display: inline-flex;
   align-items: center;
@@ -4210,8 +4179,7 @@ code, kbd, .chip { unicode-bidi: isolate; }
   opacity: 1;
   cursor: default;
 }
-.qopt .k,
-.qother .k {
+.qopt .k {
   width: 14px;
   flex: none;
   text-align: center;
@@ -4263,14 +4231,10 @@ code, kbd, .chip { unicode-bidi: isolate; }
   text-underline-offset: 3px;
   text-decoration-color: var(--rule);
 }
-.qother {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 6px 0;
-  color: var(--muted);
-  font-size: 13px;
-}
+.qsummary { white-space: pre-wrap; }
+.qanswer { width: 100%; box-sizing: border-box; margin-block-start: 8px; }
+.qprogress { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.qactions { display: flex; justify-content: flex-end; gap: 8px; margin-block-start: 8px; }
 .tool-repeat {
   color: var(--muted);
   font-weight: 400;

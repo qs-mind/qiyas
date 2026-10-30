@@ -1,3 +1,4 @@
+use calamine::{open_workbook_auto, Reader};
 use qiyas_core::{
     measurement::MeasurementReport,
     revisions::{VariationItem, VariationReport},
@@ -25,6 +26,17 @@ fn bilingual_quantities_and_large_evidence_round_trip() {
         ..Default::default()
     };
     qiyas_boq::export_takeoff_with_report(&path, &[], &[], "Variation", &report).unwrap();
+    // Deliverable labels use the same engineering terms as the window.
+    let mut workbook = open_workbook_auto(&path).unwrap();
+    let sheet = workbook.worksheet_range("Variation").unwrap();
+    assert_eq!(
+        sheet.get_value((0, 0)).unwrap().to_string(),
+        "Code / كود البند"
+    );
+    assert_eq!(
+        sheet.get_value((0, 7)).unwrap().to_string(),
+        "Evidence / الأدلة"
+    );
     assert_eq!(
         qiyas_boq::variation::import_variation(&path).unwrap(),
         variation

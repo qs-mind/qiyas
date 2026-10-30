@@ -642,6 +642,8 @@ impl Provider for ClaudeCode {
             let shutdown = ServerLifetime(CancellationToken::new());
             let token = uuid::Uuid::new_v4().simple().to_string();
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut progress = crate::progress::Bridge::default();
             let user_text = self
                 .user_text
                 .lock()
@@ -654,9 +656,14 @@ impl Provider for ClaudeCode {
                 (self.evidence.clone(), self.image_input(&req.model)),
                 token.clone(),
                 shutdown.0.clone(),
-                Arc::new(move |ui| {
-                    let _ = tx.send(ui);
-                }),
+                (
+                    Arc::new(move |ui| {
+                        let _ = tx.send(ui);
+                    }),
+                    Arc::new(move |key, step| {
+                        let _ = progress_tx.send((key, step));
+                    }),
+                ),
             )
             .await?;
             let config = json!({"mcpServers":{"qiyas":{
@@ -672,15 +679,41 @@ impl Provider for ClaudeCode {
             loop {
                 tokio::select! {
                     result = &mut execute => {
-                        while let Ok(event) = events_rx.try_recv() { sink(event); }
-                        while let Ok(ui) = rx.try_recv() { sink(ui_event(ui)); }
+                        while let Ok(event) = events_rx.try_recv() { forward_progress_event(event, &mut progress, &mut progress_rx, sink); }
+                        while let Ok(ui) = rx.try_recv() { forward_progress_event(ui_event(ui), &mut progress, &mut progress_rx, sink); }
                         return result;
                     }
-                    Some(event) = events_rx.recv() => sink(event),
-                    Some(ui) = rx.recv() => sink(ui_event(ui)),
+                    Some(event) = events_rx.recv() => forward_progress_event(event, &mut progress, &mut progress_rx, sink),
+                    Some(ui) = rx.recv() => forward_progress_event(ui_event(ui), &mut progress, &mut progress_rx, sink),
+                    Some((key, step)) = progress_rx.recv() => {
+                        if let Some(event) = progress.step(key, step) { sink(StreamEvent::Activity(Box::new(event))); }
+                    }
                 }
             }
         })
+    }
+}
+
+/// MCP callbacks precede the CLI result; drain them before closing its card.
+fn forward_progress_event(
+    event: StreamEvent,
+    progress: &mut crate::progress::Bridge,
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<(String, qiyas_core::batch_progress::Step)>,
+    sink: Sink<'_>,
+) {
+    while let Ok((key, step)) = receiver.try_recv() {
+        if let Some(event) = progress.step(key, step) {
+            sink(StreamEvent::Activity(Box::new(event)));
+        }
+    }
+    let extra = if let StreamEvent::Activity(ref event) = event {
+        progress.event(event)
+    } else {
+        Vec::new()
+    };
+    sink(event);
+    for event in extra {
+        sink(StreamEvent::Activity(Box::new(event)));
     }
 }
 
@@ -908,9 +941,14 @@ impl Events {
                                 .join("\n")
                         });
                     let data: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                    if let Some(phases) = data.pointer("/plan/phases") {
-                        if let Ok(phases) = serde_json::from_value(phases.clone()) {
-                            sink(StreamEvent::Activity(Box::new(AgentEvent::Plan { phases })));
+                    if let Some(plan) = data.get("plan") {
+                        if let Ok(plan) =
+                            serde_json::from_value::<crate::surface::Plan>(plan.clone())
+                        {
+                            sink(StreamEvent::Activity(Box::new(AgentEvent::Plan {
+                                phases: plan.phases,
+                                frame: plan.frame,
+                            })));
                         }
                     }
                     sink(StreamEvent::Activity(Box::new(AgentEvent::ToolResult {

@@ -4,17 +4,24 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { AiUi } from "../api";
 import * as api from "../api";
 import { useAssistantWiring } from "./useAssistantWiring";
+import { notifyError, notifyUndoGone } from "../ui/notices";
 
-const callbacks = vi.hoisted(() => ({ onUi: null as null | ((ui: AiUi) => void) }));
+vi.mock("../ui/notices", () => ({ notifyError: vi.fn(), notifyUndoGone: vi.fn() }));
+
+const callbacks = vi.hoisted(() => ({
+  onUi: null as null | ((ui: AiUi) => void),
+  onMutated: null as null | ((label: string) => Promise<void>),
+}));
 vi.mock("../ai/useAssistant", () => ({
-  useAssistant: (options: { onUi(ui: AiUi): void }) => {
+  useAssistant: (options: { onUi(ui: AiUi): void; onMutated(label: string): Promise<void> }) => {
     callbacks.onUi = options.onUi;
+    callbacks.onMutated = options.onMutated;
     return { markUndone() {}, markUndoStale() {}, send: async () => true };
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 function setup() {
   const order: string[] = [];
@@ -42,6 +49,9 @@ function setup() {
     setSheetBlock,
     setHidden,
     redraw,
+    refreshTakeoffAndBoq: async () => {},
+    syncInfo: async () => {},
+    autosave: async () => {},
     setAiHighlight,
     measure: { cancel, picks: [], highlighted: null, kinds: new Map() },
     tool: "select",
@@ -93,4 +103,30 @@ test("an explicit Show action selects the evidence sheet before fitting it", asy
   expect(view.chooseSheet).toHaveBeenCalledWith("*Paper_Space");
   expect(view.setAiHighlight).toHaveBeenCalledWith([7]);
   expect(view.order).toEqual(["choose", "zoom"]);
+});
+
+test("automatic drawing refresh skips a busy session and retries on the next event", async () => {
+  const view = setup();
+  view.redraw.mockRejectedValueOnce("workspace_busy");
+  await act(async () => callbacks.onUi!({ action: "redraw" }));
+  expect(notifyError).not.toHaveBeenCalled();
+  await act(async () => callbacks.onUi!({ action: "redraw" }));
+  expect(view.redraw).toHaveBeenCalledTimes(2);
+  expect(view.order).toEqual(["redraw"]);
+  expect(notifyUndoGone).not.toHaveBeenCalled();
+});
+
+test("automatic refresh still reports real failures", async () => {
+  const view = setup();
+  view.redraw.mockRejectedValueOnce("broken drawing data");
+  await act(async () => callbacks.onUi!({ action: "redraw" }));
+  expect(notifyError).toHaveBeenCalledOnce();
+});
+
+test("a real Mizan mutation still invalidates the previous Undo offer even if refresh is busy", async () => {
+  const view = setup();
+  view.redraw.mockRejectedValueOnce("workspace_busy");
+  await act(async () => callbacks.onMutated!("draw"));
+  expect(notifyUndoGone).toHaveBeenCalledOnce();
+  expect(notifyError).not.toHaveBeenCalled();
 });

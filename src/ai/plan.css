@@ -126,3 +126,22 @@
 @media (prefers-reduced-motion: reduce) {
   .plan-dock-body { transition: none; }
 }
+
+.plan-note {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-weight: normal;
+  white-space: pre-wrap;
+}
+.plan-frame {
+  padding: 6px 12px;
+  font-size: 12px;
+  min-block-size: 1.5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.plan-frame summary { cursor: pointer; }
+.plan-frame dl { margin: 8px 0; }
+.plan-frame dl > div + div { margin-block-start: 8px; }
+.plan-frame dt { font-weight: 600; }
+.plan-frame dd { margin: 2px 0 0; color: var(--muted); white-space: pre-wrap; }

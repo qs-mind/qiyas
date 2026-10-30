@@ -308,7 +308,7 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
     let mut approvals = 0;
     for event in events {
         match event {
-            AgentEvent::Plan { phases } => plans.push(serde_json::to_value(phases).unwrap()),
+            AgentEvent::Plan { phases, .. } => plans.push(serde_json::to_value(phases).unwrap()),
             AgentEvent::ToolCall { name, .. } => {
                 assert!([READ, EXECUTE, CAPTURE].contains(&name.as_str()));
                 calls += 1;

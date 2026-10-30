@@ -96,3 +96,9 @@ export function operationDetail(card: ToolCardItem): Detail | null {
   }
   return described;
 }
+
+/** Backend labels identify the completed operation; wording uses the same UI mapping as cards. */
+export function progressDetail(label: string): Detail {
+  const [type, ...kind] = label.split(".");
+  return commandDetail({ type, ...(kind.length ? { kind: kind.join(".") } : {}) });
+}

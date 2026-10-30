@@ -5,9 +5,13 @@
  *  the text ends on, so in Arabic they are at the bottom left. The status bar keeps to status: what
  *  is happening, the snap, the switches, the cursor. Sonner's own CSS lays the stack out; the look
  *  is ours (`theme.css`, "Notices") from the brand tokens, light or dark. */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast, Toaster } from "sonner";
-import { useLanguage, useT } from "../i18n";
+import { useLanguage, useT, translate } from "../i18n";
+import { uiError } from "../i18n/errors";
+import { Glyph } from "../shell/glyphs";
+import { aiCancel } from "../api";
+import { displayedWorkspace } from "../workspaceIpc";
 import { DotLoader } from "../shell/DotLoader";
 
 /** How long a notice stays, in milliseconds. */
@@ -38,28 +42,58 @@ export function Notices({ theme }: { theme: "light" | "dark" }) {
       containerAriaLabel={t("notices.label")}
       toastOptions={{
         unstyled: true,
-        classNames: { toast: "toast", title: "toast-title", closeButton: "toast-close" },
+        classNames: { toast: "notice-slot" },
       }}
     />
   );
 }
 
-/** Says `text` once. With `waiting` it is about something still going on: the dots beside it, and it
- *  stays until another notice takes its place. */
-export const notify = (text: string, opts: { waiting?: boolean } = {}): Id =>
-  opts.waiting
-    ? toast(
-        <span className="toast-wait">
-          <DotLoader pattern="pulse" />
-          {text}
-        </span>,
-        { duration: Infinity },
-      )
-    : toast(text);
+type CardProps = {
+  id: Id;
+  message: string;
+  kind?: "plain" | "waiting" | "error" | "undo";
+  children?: ReactNode;
+};
 
-/** Says an error: it stays until it is closed, or until `dismissNotice` takes it away. */
-export const notifyError = (text: string): Id =>
-  toast.error(text, { duration: Infinity, closeButton: true, className: "toast-error" });
+/** All notice kinds share our card and the same centred, logical-end close button. */
+function NoticeCard({ id, message, kind = "plain", children }: CardProps) {
+  const t = useT();
+  return <div className={`toast toast-${kind}`} data-notice-kind={kind}>
+    {kind === "waiting" && <DotLoader pattern="pulse" />}
+    <span className="toast-title">{message}</span>
+    {children}
+    <button type="button" className="ib toast-close" aria-label={t("about.close")} onClick={() => toast.dismiss(id)}>
+      <Glyph name="close" />
+    </button>
+  </div>;
+}
+
+export const notify = (text: string, opts: { waiting?: boolean } = {}): Id =>
+  toast.custom(id => <NoticeCard id={id} message={text} kind={opts.waiting ? "waiting" : "plain"} />,
+    { duration: opts.waiting ? Infinity : NOTICE_MS });
+
+function BusyNotice({ id, workspace }: { id: Id; workspace: number | null }) {
+  const t = useT();
+  const [stopping, setStopping] = useState(false);
+  return <NoticeCard id={id} message={t("workspace.busy")}>
+    <button type="button" className="toast-action" disabled={stopping} onClick={() => {
+      setStopping(true);
+      void aiCancel(workspace ?? undefined).then(() => toast.dismiss(id)).catch(error => {
+        notifyError(uiError(error));
+        setStopping(false);
+      });
+    }}>{t("ai.stop")}</button>
+  </NoticeCard>;
+}
+
+/** Errors stay until closed; an edit refused while Mizan works replaces the same notice by id. */
+export const notifyError = (text: string): Id => {
+  if ([translate("en", "workspace.busy"), translate("ar", "workspace.busy")].some(message => text.includes(message))) {
+    const workspace = displayedWorkspace();
+    return toast.custom(id => <BusyNotice id={id} workspace={workspace} />, { id: "workspace-busy", duration: Infinity });
+  }
+  return toast.custom(id => <NoticeCard id={id} message={text} kind="error" />, { duration: Infinity });
+};
 
 export const dismissNotice = (id?: Id) => void toast.dismiss(id);
 
@@ -83,8 +117,7 @@ function UndoToast({ id, message, name, label, seconds, onUndo }: Undo & { id: I
     return () => clearInterval(tick);
   }, []);
   return (
-    <div className="toast-undo" role="group" aria-label={message}>
-      <span className="toast-title">{message}</span>
+    <NoticeCard id={id} message={message} kind="undo">
       <button
         type="button"
         className="toast-action"
@@ -97,7 +130,7 @@ function UndoToast({ id, message, name, label, seconds, onUndo }: Undo & { id: I
         <span aria-hidden="true">{label(left)}</span>
       </button>
       <span className="toast-timer" style={{ animationDuration: `${seconds}s` }} aria-hidden="true" />
-    </div>
+    </NoticeCard>
   );
 }
 

@@ -328,6 +328,7 @@ impl Session {
             .retain(|warning| !warning.pointer.starts_with("/commands/"));
         self.batch_with(source, "batch", layer, color, |session| {
             let inputs = commands.as_array().expect("validated batch commands");
+            let progress = crate::batch_progress::Batch::new(inputs.len());
             let mut grouped = session
                 .run_opening_batch(inputs, source)
                 .transpose()?
@@ -351,6 +352,7 @@ impl Session {
                             error: Box::new(error),
                         })?
                 };
+                progress.completed(index + 1, input);
                 outcomes.push(step.outcome);
                 report
                     .defaults_used

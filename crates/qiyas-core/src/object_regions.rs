@@ -375,3 +375,41 @@ impl Session {
         Ok(())
     }
 }
+
+impl Session {
+    /// Compare typed regions with enclosure geometry without changing the author's outline.
+    pub(crate) fn region_boundary_advisories(
+        &self,
+        objects: &[crate::objects::ObjectRecord],
+    ) -> Vec<serde_json::Value> {
+        use qiyas_geom::{predicates as geom, Xform};
+        let tolerance = 0.0005 / self.drawing.units.to_metres();
+        objects.iter().filter_map(|object| {
+            let definition = self.object_type(&object.instance.type_name).ok()?;
+            if definition.geometry != crate::objects::GeometryKind::Region { return None; }
+            let entity = self.drawing.doc.get_entity(Handle::new(object.instance.id))?;
+            // Retained sources already carry validity and are regenerated from their seed.
+            if retained_region(entity).is_some() { return None; }
+            let paths = qiyas_geom::flatten(&self.drawing.doc, entity, &Xform::identity(), tolerance / 4.).into_paths();
+            let outline = &paths.iter().find(|p| p.closed)?.points;
+            let centre = geom::ring_centroid(outline)?;
+            let matches = match self.room_boundary_in(&object.sheet, centre, &Default::default()) {
+                Boundary::Ring { ring, bulges, .. } => {
+                    let boundary = self.layout_ring(&ring, bulges.first().map_or(&[], Vec::as_slice));
+                    let near = |points: &[[f64; 2]], other: &[[f64; 2]]| points.iter().all(|p| geom::edges(other).any(|(a,b)| {
+                        geom::point_segment(*p, a, b) <= tolerance
+                    }));
+                    near(outline, &boundary) && near(&boundary, outline)
+                        && (geom::ring_area(outline).abs()-geom::ring_area(&boundary).abs()).abs()
+                            <= tolerance * paths.iter().map(qiyas_geom::Path::length).sum::<f64>()
+                }
+                Boundary::None => false,
+                Boundary::TooDense => return None,
+            };
+            (!matches).then(|| serde_json::json!({"section":"advisories","code":"region_not_from_boundary","severity":"advisory",
+                "handle":object.instance.id,"centroid":centre,"tolerance":tolerance,
+                "message":"Region outline differs from the enclosure around its centroid; review or use a seed to follow wall edits",
+                "message_ar":"حدود المساحة لا تطابق الفراغ المحيط بمركزها؛ راجعها أو استخدم نقطة داخلية لتتبع تعديلات الجدران"}))
+        }).collect()
+    }
+}

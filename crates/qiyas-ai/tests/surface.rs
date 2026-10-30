@@ -42,6 +42,15 @@ fn takeoff_kit_binds_drawing_names_runs_and_fits_one_read() {
         kit,
         call(&mut s, READ, json!({"op":"takeoff_kit","args":{}})).unwrap()
     );
+    assert_eq!(kit["self_check"]["op"], "takeoff_check");
+    assert_eq!(
+        kit["regions"]["example"]["objects"][0]["seed"],
+        json!([2, 2])
+    );
+    assert!(kit["exclusions"]
+        .as_str()
+        .unwrap()
+        .contains("takeoff_exclusion"));
     let bytes = serde_json::to_vec(&kit).unwrap().len();
     let artifacts =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/mizan-discovery");
@@ -1011,7 +1020,7 @@ async fn plan_events_follow_valid_snapshots_and_the_provider_observes_them_witho
     let plans: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            AgentEvent::Plan { phases } => Some(json!({"phases":phases})),
+            AgentEvent::Plan { phases, .. } => Some(json!({"phases":phases})),
             _ => None,
         })
         .collect();

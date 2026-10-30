@@ -139,7 +139,7 @@ pub fn guard(op: &str, args: &Value) -> Result<(), String> {
         ));
     }
     if op == "run" && args["command"]["type"] != "spatial_query" {
-        return Err("Only spatial_query is allowed here. / يُسمح بالاستعلام المكاني فقط هنا.".into());
+        return Err("Only spatial_query is allowed here. / يسمح بالاستعلام المكاني فقط هنا.".into());
     }
     if op == "records" {
         let collection = args["collection"].as_str().unwrap_or("entities");
@@ -281,7 +281,7 @@ fn evidence_page(value: &Value, id: usize, offset: usize, pointer: &str) -> Resu
     } else {
         value
             .pointer(pointer)
-            .ok_or("Evidence pointer not found. / لم يُعثر على مسار الدليل.")?
+            .ok_or("Evidence pointer not found. / مسار الدليل غير موجود.")?
     };
     let serialized = selected.to_string();
     if offset > serialized.len() || !serialized.is_char_boundary(offset) {
@@ -464,7 +464,7 @@ pub async fn read_quantity(
                 let id = args["id"].as_u64().unwrap_or(usize::MAX as u64) as usize;
                 evidence
                     .get(id)
-                    .ok_or_else(|| "Evidence not found. / لم يُعثر على الدليل.".to_string())
+                    .ok_or_else(|| "Evidence not found. / الدليل غير موجود.".to_string())
                     .and_then(|value| {
                         evidence_page(
                             value,

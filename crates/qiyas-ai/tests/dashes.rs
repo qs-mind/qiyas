@@ -120,7 +120,7 @@ async fn plans_and_approval_titles_use_plain_dashes() {
     );
     let events = events_for(&mut agent).await;
     assert!(events.iter().any(|event| matches!(event,
-        AgentEvent::Plan { phases } if phases[0].title == "Check - sizes - first-now"
+        AgentEvent::Plan { phases, .. } if phases[0].title == "Check - sizes - first-now"
     )));
     assert!(events.iter().any(|event| matches!(event,
         AgentEvent::AwaitingApproval { plan } if plan.phases[0].title == "Check - sizes - first-now"

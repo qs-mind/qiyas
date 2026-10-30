@@ -79,6 +79,7 @@ impl DrawingWorkspace {
             .store(session.is_dirty(), std::sync::atomic::Ordering::Relaxed);
         *lock(&self.published) = Some(session.info());
         let mut reads = lock(&self.reads);
+        reads.insert("views", serde_json::json!(session.views()));
         reads.insert("paper_views", serde_json::json!(session.paper_views()));
         reads.insert("drafting", serde_json::json!(session.drafting));
         reads.insert("takeoff", serde_json::json!(session.takeoff.items));

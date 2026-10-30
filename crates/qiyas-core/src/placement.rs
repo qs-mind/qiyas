@@ -62,6 +62,14 @@ impl Session {
         mm * 0.001 * scale / to_m
     }
     pub fn free_space(&self, q: &SpaceQuery) -> Result<SpaceReport, CoreError> {
+        self.free_space_excluding(q, &[], &[])
+    }
+    fn free_space_excluding(
+        &self,
+        q: &SpaceQuery,
+        extra: &[u64],
+        holes: &[Vec<[f64; 2]>],
+    ) -> Result<SpaceReport, CoreError> {
         #[cfg(any(test, feature = "fixtures"))]
         let _profile = crate::fixtures::profile::span("placement.free_space");
         let sheet = self.sheet_block(q.sheet.as_deref());
@@ -104,7 +112,7 @@ impl Session {
         }
         let (to_m, scale) = self.check_space(&sheet);
         let clearance = mm * 0.001 * scale / to_m;
-        let exclude: Vec<_> = q.entity.into_iter().collect();
+        let exclude: Vec<_> = q.entity.into_iter().chain(extra.iter().copied()).collect();
         let occupied = ink::union(
             ink.pieces
                 .iter()
@@ -173,7 +181,7 @@ impl Session {
                 let bounds = rect(at);
                 let padded = ink::expand(bounds, clearance * 0.999);
                 if q.within.as_ref().is_some_and(|r| {
-                    !crate::check_layout::polygon_inside(&ink::corners(padded), r, &[])
+                    !crate::check_layout::polygon_inside(&ink::corners(padded), r, holes)
                 }) || !ink.collisions(padded, &exclude).is_empty()
                     || viewports.iter().any(|v| overlaps(padded, *v))
                 {
@@ -197,6 +205,85 @@ impl Session {
             positions,
             collisions,
         })
+    }
+    /// Fit the actual shaped label inside the region and away from plotted linework.
+    pub(crate) fn place_region_label(
+        &self,
+        text: &mut opencadcodec::Text,
+        owner: u64,
+        ring: &[[f64; 2]],
+    ) -> Result<(), CoreError> {
+        let entity = EntityType::Text(text.clone());
+        let flat = qiyas_geom::flatten(
+            &self.drawing.doc,
+            &entity,
+            &qiyas_geom::Xform::identity(),
+            self.measure_tol(),
+        );
+        let xrefs = self.xref_docs();
+        let bounds = {
+            let mut engine = self.text.borrow_mut();
+            flat.paths
+                .iter()
+                .filter_map(|p| p.text.as_ref())
+                .find_map(|t| {
+                    engine
+                        .lay_out_text(&self.drawing.doc, &xrefs, t, self.arabic_reversed)
+                        .map(|laid| ink::bounds(&laid.corners))
+                })
+        };
+        let Some(bounds) = bounds else {
+            return Ok(());
+        };
+        let sheet = self
+            .drawing
+            .doc
+            .block_records
+            .iter()
+            .find(|b| b.handle == text.common.owner_handle)
+            .map(|b| b.name.clone());
+        let mut exclude = vec![owner];
+        exclude.extend(
+            self.parts_by_owner()
+                .get(&owner)
+                .into_iter()
+                .flatten()
+                .copied(),
+        );
+        let holes = self
+            .drawing
+            .doc
+            .get_entity(opencadcodec::Handle::new(owner))
+            .and_then(crate::object_regions::retained_region)
+            .map(|r| {
+                r.holes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        self.layout_ring(h, r.hole_bulges.get(i).map_or(&[], Vec::as_slice))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let size = [bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1]];
+        let centre = qiyas_geom::predicates::ring_centroid(ring).unwrap_or(ring[0]);
+        let query = SpaceQuery {
+            size: Some(size),
+            sheet,
+            within: Some(ring.to_vec()),
+            near: Some([centre[0] - size[0] / 2., centre[1] + size[1] / 2.]),
+            clearance_mm: Some(1.),
+            ..Default::default()
+        };
+        if let Some(best) = self
+            .free_space_excluding(&query, &exclude, &holes)?
+            .positions
+            .first()
+        {
+            text.insertion_point.x += best.bounds[0][0] - bounds[0][0];
+            text.insertion_point.y += best.bounds[0][1] - bounds[0][1];
+        }
+        Ok(())
     }
     pub(crate) fn auto_place(
         &mut self,

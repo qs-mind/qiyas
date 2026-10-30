@@ -98,7 +98,7 @@ impl SecondRead {
 /// The label of an item nobody has read twice.
 pub fn not_checked_label(arabic: bool) -> &'static str {
     if arabic {
-        "لم تُراجع بقراءة ثانية"
+        "لم تراجع بقراءة ثانية"
     } else {
         "Second reading not checked"
     }

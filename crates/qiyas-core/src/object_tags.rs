@@ -313,7 +313,7 @@ impl Session {
                 let position = space
                     .positions
                     .first()
-                    .ok_or_else(|| invalid("No clear tag position / لا يوجد موضع خال للرمز"))?;
+                    .ok_or_else(|| invalid("No clear tag position / لا يوجد موضع متاح للرمز"))?;
                 let centre = [position.at[0] + radius, position.at[1] - radius];
                 if let Some(EntityType::Text(t)) = self.drawing.doc.get_entity_mut(Handle::new(h)) {
                     t.value = text.clone();

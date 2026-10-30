@@ -1,3 +1,4 @@
+import { refreshInBackground } from "./background";
 /** What the canvas shows of the drawing on screen: the sheet and its hidden layers, the batch and
  *  its glyph atlas, underlay pictures, the layout's model-space inset, the split view, and the
  *  fits that follow a sheet or drawing change. */
@@ -197,7 +198,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     stopFrame.current?.();
     stopFrame.current = null;
     setRevealOverlay(null);
-    if (showFinal) void run(() => redraw());
+    if (showFinal) void refreshInBackground(() => redraw());
   }
 
   /** Reserves before returning, so onMutated cannot show the new drawing early. Fetch now:
@@ -214,7 +215,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     const fetched = fetchBatch();
     // A queued fetch can fail before the earlier animation finishes.
     void fetched.catch(() => {});
-    revealTail.current = run(async () => {
+    revealTail.current = refreshInBackground(async () => {
       try {
         await previous;
         const next = await fetched;
@@ -377,7 +378,7 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
     const gen = switchGen.current;
     const epoch = revealEpoch.current;
     const request = ++drawRequest.current;
-    await run(async () => {
+    await refreshInBackground(async () => {
       const version = await batchVersion();
       const bytes = await renderBatch(undefined, pxPerUnit);
       if (!bytes || isStale(gen, switchGen.current)) return;

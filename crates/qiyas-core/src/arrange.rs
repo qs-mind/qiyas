@@ -735,7 +735,7 @@ impl Session {
                     code: "sheet_zone_overflow".into(),
                     message: "Content does not fit its sheet zone; its position was retained"
                         .into(),
-                    message_ar: "المحتوى لا يتسع في منطقته باللوحة؛ احتُفظ بموضعه".into(),
+                    message_ar: "المحتوى لا يتسع في منطقته باللوحة؛ تم الاحتفاظ بموضعه".into(),
                 });
             }
             occupied.push(b);

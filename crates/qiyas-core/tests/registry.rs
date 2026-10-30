@@ -21,6 +21,13 @@ fn takeoff_kit_is_stable_bounded_and_generated_from_registry_metadata() {
         .as_str()
         .unwrap()
         .contains("rule:<cited note name>"));
+    let region = &kit["regions"]["example"];
+    assert_eq!(region["objects"][0]["seed"], serde_json::json!([2, 2]));
+    assert!(qiyas_core::validation::validate_command(region, None).valid);
+    assert!(kit["exclusions"]
+        .as_str()
+        .unwrap()
+        .contains("takeoff_exclusion"));
     let bytes = serde_json::to_vec(&kit).unwrap().len();
     assert!(
         bytes < qiyas_core::takeoff_kit::MAX_BYTES - 256,

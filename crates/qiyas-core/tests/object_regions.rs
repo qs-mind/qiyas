@@ -421,3 +421,133 @@ fn curved_island_metadata_is_exact_and_accepts_two_bulged_vertices() {
         .iter()
         .any(|(handle, _)| *handle == app));
 }
+
+#[test]
+fn seeded_placement_follows_wall_edits_and_places_clear_labels_on_named_layers() {
+    for units in [6, 4] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("seeded.dxf"), units);
+        let k = 1. / s.drawing.units.to_metres();
+        let outcome = run(
+            &mut s,
+            json!({"type":"walls","thickness":0.2*k,"height":3,
+            "runs":[{"points":[[0,0],[8.*k,0],[8.*k,6.*k],[0,6.*k]],"closed":true}]}),
+        );
+        let wall = serde_json::to_value(outcome).unwrap()["centrelines"][0]
+            .as_u64()
+            .unwrap();
+        run(
+            &mut s,
+            json!({"type":"define_object_type","definition":{
+            "name":"Floor finish","category":"finish","geometry":"region",
+            "plan":{"outline":true,"label_template":"Finish","label_height":"0.15"},
+            "quantities":{"surface":"area"}}}),
+        );
+        // An obstacle through the geometric centre must move the label off the line.
+        add(
+            &mut s,
+            json!({"type":"draw","kind":"line","a":[3.*k,3.*k],"b":[5.*k,3.*k]}),
+        );
+        let region = add(
+            &mut s,
+            json!({"type":"place_objects","objects":[{
+            "type":"Floor finish","seed":[2.*k,2.*k],"boundary_layers":["A-WALL"]}]}),
+        );
+        near(quantity(&s, region), 7.8 * 5.8);
+        let e = s.drawing.doc.get_entity(Handle::new(region)).unwrap();
+        assert_eq!(e.common().layer, "Q-FLOOR-FINISH");
+        let retained: Value =
+            qiyas_core::xdata::read_json(e.common(), "QIYAS_OBJECT_REGION").unwrap();
+        assert_eq!(retained["seed"], json!([2. * k, 2. * k]));
+        let labels: Vec<_> = s
+            .drawing
+            .doc
+            .entities()
+            .filter(|e| matches!(e, EntityType::Text(_)))
+            .map(|e| e.common().handle.value())
+            .collect();
+        assert_eq!(labels.len(), 1);
+        let EntityType::Text(label) = s.drawing.doc.get_entity(Handle::new(labels[0])).unwrap()
+        else {
+            panic!("label");
+        };
+        assert!(label.insertion_point.x > 0.1 * k && label.insertion_point.x < 7.9 * k);
+        assert!(label.insertion_point.y > 0.1 * k && label.insertion_point.y < 5.9 * k);
+        assert_eq!(label.common.layer, "Q-FLOOR-FINISH");
+        let check = s.check_drawing(&qiyas_core::check::CheckScope {
+            handles: labels,
+            rules: vec!["text_over_lines".into(), "layer_zero".into()],
+            ..Default::default()
+        });
+        assert!(check.findings.is_empty(), "{:?}", check.findings);
+        run(
+            &mut s,
+            json!({"type":"modify","kind":"scale","targets":[wall],"base":[0,0],"factor":2}),
+        );
+        assert!(quantity(&s, region) > 170.);
+        assert!(s.undo());
+        near(quantity(&s, region), 7.8 * 5.8);
+        assert!(s.redo());
+        let path = dir.path().join("saved.dxf");
+        s.save_as_headless(&path).unwrap();
+        let reopened = Session::open(&path).unwrap();
+        near(quantity(&reopened, region), quantity(&s, region));
+    }
+}
+
+#[test]
+fn typed_region_mismatch_is_advisory_and_seed_inputs_are_unambiguous() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("typed.dxf"), 6);
+    add(
+        &mut s,
+        json!({"type":"draw","kind":"rectangle","a":[0,0],"b":[8,6]}),
+    );
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Finish","category":"finish","geometry":"region","quantities":{"surface":"area"}}}),
+    );
+    let region = add(
+        &mut s,
+        json!({"type":"place_objects","objects":[{
+        "type":"Finish","points":[[1,1],[7,1],[7,5],[1,5]]}]}),
+    );
+    let check = s.takeoff_check(0, &[]).unwrap();
+    assert_eq!(check["region_not_from_boundary"], 1);
+    assert!(check["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["code"] == "region_not_from_boundary"
+            && r["severity"] == "advisory"
+            && r["handle"] == region));
+    assert_eq!(check["measurement_errors"], 0);
+    for extra in [
+        json!({"points":[[1,1],[2,1],[2,2]]}),
+        json!({"driver":region}),
+        json!({"region":{"seed":[2,2]}}),
+    ] {
+        let mut placement = json!({"type":"Finish","seed":[2,2]});
+        placement
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert!(s
+            .run_input(
+                &json!({"type":"place_objects","objects":[placement]}),
+                Source::User
+            )
+            .is_err());
+    }
+    let same = add(
+        &mut s,
+        json!({"type":"place_objects","objects":[{
+        "type":"Finish","points":[[0,0],[8,0],[8,6],[0,6]]}]}),
+    );
+    assert_ne!(region, same);
+    assert_eq!(
+        s.takeoff_check(0, &[]).unwrap()["region_not_from_boundary"],
+        1
+    );
+}

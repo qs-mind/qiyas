@@ -84,7 +84,7 @@ impl PlanWatch {
                     } else {
                         match lang {
                             Lang::En => "pending",
-                            Lang::Ar => "معلقة",
+                            Lang::Ar => "قيد الانتظار",
                         }
                     }
                 )
@@ -105,7 +105,7 @@ impl PlanWatch {
     pub(crate) fn advice(&self) -> Option<Value> {
         self.stale().then(|| json!({"code":"stale_plan", "mutations_since_update":self.mutations,
             "unfinished_phases":self.unfinished().iter().map(|phase| &phase.title).collect::<Vec<_>>(),
-            "message":"The plan has not been updated during these edits. / لم تُحدّث الخطة خلال هذه التعديلات."}))
+            "message":"The plan has not been updated during these edits. / لم يتم تحديث الخطة خلال هذه التعديلات."}))
     }
 
     pub(crate) fn status(&self, lang: Lang) -> Option<crate::agent::AgentEvent> {

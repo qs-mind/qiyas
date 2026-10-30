@@ -145,7 +145,7 @@ fn quantity_mismatch_uses_the_sum_of_links() {
     );
     assert_eq!(
         c.reason_ar,
-        "جدول الكميات يذكر 120.000 م²، والمقاس من الرسومات 99.000 م² (−17.5 %)"
+        "المقايسة تذكر 120.000 م²، والمقاس من الرسومات 99.000 م² (−17.5 %)"
     );
     assert_eq!(c.status, ConflictStatus::Open);
     assert_eq!(c.id.len(), 16);
@@ -524,7 +524,7 @@ fn arabic_reasons_say_qita_for_pieces() {
     );
     assert_eq!(
         conflicts[0].reason_ar,
-        "جدول الكميات يذكر 4 قطعة، والمقاس من الرسومات 5 قطعة (+25.0 %)"
+        "المقايسة تذكر 4 قطعة، والمقاس من الرسومات 5 قطعة (+25.0 %)"
     );
 }
 

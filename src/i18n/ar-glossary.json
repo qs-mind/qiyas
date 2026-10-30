@@ -1,0 +1,607 @@
+{
+  "version": 1,
+  "concepts": {
+    "drawing": {
+      "preferred": "رسم",
+      "plural_or_context": "رسومات",
+      "avoid": [
+        "رسمة"
+      ]
+    },
+    "sheet": {
+      "preferred": "لوحة",
+      "plural_or_context": "لوحات",
+      "avoid": []
+    },
+    "worksheet": {
+      "preferred": "ورقة عمل",
+      "plural_or_context": "أوراق عمل",
+      "avoid": []
+    },
+    "layer": {
+      "preferred": "طبقة",
+      "plural_or_context": "طبقات",
+      "avoid": [
+        "لاير",
+        "لايرات"
+      ]
+    },
+    "takeoff": {
+      "preferred": "حصر",
+      "plural_or_context": "حصر الكميات",
+      "avoid": []
+    },
+    "boq": {
+      "preferred": "مقايسة",
+      "plural_or_context": "مقايسات",
+      "avoid": [
+        "جدول الكميات",
+        "جدول كميات",
+        "قائمة الكميات"
+      ]
+    },
+    "item": {
+      "preferred": "بند",
+      "plural_or_context": "بنود",
+      "avoid": []
+    },
+    "entity": {
+      "preferred": "عنصر",
+      "plural_or_context": "عناصر",
+      "avoid": [
+        "كائن رسومي"
+      ]
+    },
+    "quantity": {
+      "preferred": "كمية",
+      "plural_or_context": "كميات",
+      "avoid": []
+    },
+    "measurement": {
+      "preferred": "قياس",
+      "plural_or_context": "قياسات",
+      "avoid": []
+    },
+    "measurement_method": {
+      "preferred": "طريقة القياس",
+      "plural_or_context": "طرق القياس",
+      "avoid": []
+    },
+    "opening": {
+      "preferred": "فتحة",
+      "plural_or_context": "فتحات",
+      "avoid": []
+    },
+    "door": {
+      "preferred": "باب",
+      "plural_or_context": "أبواب",
+      "avoid": []
+    },
+    "window": {
+      "preferred": "نافذة",
+      "plural_or_context": "نوافذ",
+      "avoid": [
+        "شباك",
+        "شبابيك"
+      ]
+    },
+    "wall": {
+      "preferred": "جدار",
+      "plural_or_context": "جدران",
+      "avoid": [
+        "حائط",
+        "حوائط"
+      ]
+    },
+    "room": {
+      "preferred": "غرفة",
+      "plural_or_context": "غرف",
+      "avoid": []
+    },
+    "space": {
+      "preferred": "فراغ",
+      "plural_or_context": "فراغات",
+      "avoid": []
+    },
+    "region": {
+      "preferred": "مساحة مغلقة",
+      "plural_or_context": "مساحات مغلقة",
+      "avoid": []
+    },
+    "area": {
+      "preferred": "مساحة",
+      "plural_or_context": "مساحات",
+      "avoid": []
+    },
+    "plan": {
+      "preferred": "خطة",
+      "plural_or_context": "خطط",
+      "avoid": []
+    },
+    "floor_plan": {
+      "preferred": "مسقط",
+      "plural_or_context": "مساقط",
+      "avoid": []
+    },
+    "phase": {
+      "preferred": "مرحلة",
+      "plural_or_context": "مراحل",
+      "avoid": []
+    },
+    "step": {
+      "preferred": "خطوة",
+      "plural_or_context": "خطوات",
+      "avoid": []
+    },
+    "check": {
+      "preferred": "فحص",
+      "plural_or_context": "فحوص",
+      "avoid": []
+    },
+    "query": {
+      "preferred": "استفسار",
+      "plural_or_context": "استفسارات",
+      "avoid": []
+    },
+    "data_query": {
+      "preferred": "استعلام",
+      "plural_or_context": "استعلامات",
+      "avoid": []
+    },
+    "variation": {
+      "preferred": "فروق الكميات",
+      "plural_or_context": "تقرير فروق الكميات",
+      "avoid": []
+    },
+    "revision": {
+      "preferred": "مراجعة",
+      "plural_or_context": "مراجعات",
+      "avoid": []
+    },
+    "review": {
+      "preferred": "مراجعة",
+      "plural_or_context": "للمراجعة",
+      "avoid": []
+    },
+    "export": {
+      "preferred": "تصدير",
+      "plural_or_context": "صدر",
+      "avoid": []
+    },
+    "import": {
+      "preferred": "استيراد",
+      "plural_or_context": "استورد",
+      "avoid": []
+    },
+    "undo": {
+      "preferred": "تراجع",
+      "plural_or_context": "تراجع عن آخر تعديل",
+      "avoid": []
+    },
+    "redo": {
+      "preferred": "إعادة",
+      "plural_or_context": "أعد التعديل",
+      "avoid": []
+    },
+    "settings": {
+      "preferred": "إعدادات",
+      "plural_or_context": "الإعدادات",
+      "avoid": []
+    },
+    "working": {
+      "preferred": "قيد التنفيذ",
+      "plural_or_context": "ميزان يعمل الآن",
+      "avoid": [
+        "جار",
+        "جاري"
+      ]
+    },
+    "done": {
+      "preferred": "اكتمل",
+      "plural_or_context": "مكتمل",
+      "avoid": []
+    },
+    "failed": {
+      "preferred": "تعذر التنفيذ",
+      "plural_or_context": "فشل",
+      "avoid": []
+    },
+    "pending": {
+      "preferred": "قيد الانتظار",
+      "plural_or_context": "لم يبدأ بعد",
+      "avoid": []
+    },
+    "waiting": {
+      "preferred": "بانتظار الإجابة",
+      "plural_or_context": "بانتظارك",
+      "avoid": []
+    },
+    "recommended": {
+      "preferred": "موصى به",
+      "plural_or_context": "موصى بها",
+      "avoid": []
+    },
+    "block": {
+      "preferred": "بلوك",
+      "plural_or_context": "بلوكات",
+      "avoid": [
+        "كتلة رسومية"
+      ]
+    },
+    "viewport": {
+      "preferred": "نافذة عرض",
+      "plural_or_context": "نوافذ عرض",
+      "avoid": []
+    },
+    "dimension": {
+      "preferred": "بعد",
+      "plural_or_context": "أبعاد",
+      "avoid": []
+    },
+    "dimension_sheet": {
+      "preferred": "ورقة قياس",
+      "plural_or_context": "أوراق القياس",
+      "avoid": []
+    },
+    "annotation": {
+      "preferred": "الكتابات والأبعاد",
+      "plural_or_context": "مقياس الكتابات والأبعاد",
+      "avoid": []
+    },
+    "note": {
+      "preferred": "ملاحظة",
+      "plural_or_context": "ملاحظات",
+      "avoid": []
+    },
+    "tag": {
+      "preferred": "رمز العنصر",
+      "plural_or_context": "رموز العناصر",
+      "avoid": []
+    },
+    "handle": {
+      "preferred": "معرف العنصر",
+      "plural_or_context": "معرفات العناصر",
+      "avoid": []
+    },
+    "attribute": {
+      "preferred": "سمة",
+      "plural_or_context": "سمات",
+      "avoid": []
+    },
+    "property": {
+      "preferred": "خاصية",
+      "plural_or_context": "خصائص",
+      "avoid": []
+    },
+    "parameter": {
+      "preferred": "معامل",
+      "plural_or_context": "معاملات",
+      "avoid": []
+    },
+    "constraint": {
+      "preferred": "قيد",
+      "plural_or_context": "قيود",
+      "avoid": []
+    },
+    "hatch": {
+      "preferred": "تهشير",
+      "plural_or_context": "نمط التهشير",
+      "avoid": []
+    },
+    "polyline": {
+      "preferred": "خط متعدد",
+      "plural_or_context": "خطوط متعددة",
+      "avoid": []
+    },
+    "multiline": {
+      "preferred": "خط مركب",
+      "plural_or_context": "خطوط مركبة",
+      "avoid": []
+    },
+    "ellipse": {
+      "preferred": "قطع ناقص",
+      "plural_or_context": "قطوع ناقصة",
+      "avoid": []
+    },
+    "xref": {
+      "preferred": "مرجع خارجي",
+      "plural_or_context": "مراجع خارجية",
+      "avoid": []
+    },
+    "view": {
+      "preferred": "منظر",
+      "plural_or_context": "مناظر",
+      "avoid": []
+    },
+    "title_block": {
+      "preferred": "جدول بيانات اللوحة",
+      "plural_or_context": "بيانات اللوحة",
+      "avoid": []
+    },
+    "drawing_set": {
+      "preferred": "مجموعة الرسومات",
+      "plural_or_context": "مجموعات الرسومات",
+      "avoid": []
+    },
+    "evidence": {
+      "preferred": "أدلة القياس",
+      "plural_or_context": "دليل القياس",
+      "avoid": []
+    },
+    "conflict": {
+      "preferred": "تعارض",
+      "plural_or_context": "تعارضات",
+      "avoid": []
+    },
+    "deduction": {
+      "preferred": "خصم",
+      "plural_or_context": "خصومات",
+      "avoid": []
+    },
+    "gross": {
+      "preferred": "إجمالي",
+      "plural_or_context": "الكمية الإجمالية",
+      "avoid": []
+    },
+    "net": {
+      "preferred": "صافي",
+      "plural_or_context": "الكمية الصافية",
+      "avoid": []
+    },
+    "scale": {
+      "preferred": "مقياس الرسم",
+      "plural_or_context": "المقياس",
+      "avoid": []
+    },
+    "excel": {
+      "preferred": "Excel",
+      "plural_or_context": "Excel",
+      "avoid": [
+        "إكسل",
+        "اكسل"
+      ]
+    },
+    "aligned": {
+      "preferred": "محاذي للخط",
+      "plural_or_context": "بمحاذاة الخط",
+      "avoid": [
+        "محاذ"
+      ]
+    },
+    "parallel": {
+      "preferred": "توازي",
+      "plural_or_context": "متوازي",
+      "avoid": [
+        "تواز"
+      ]
+    },
+    "equal": {
+      "preferred": "تساوي",
+      "plural_or_context": "متساوي",
+      "avoid": [
+        "تساو"
+      ]
+    }
+  },
+  "bannedPatterns": [
+    {
+      "kind": "word",
+      "value": "جار"
+    },
+    {
+      "kind": "word",
+      "value": "جاري"
+    },
+    {
+      "kind": "word",
+      "value": "محاذ"
+    },
+    {
+      "kind": "word",
+      "value": "تواز"
+    },
+    {
+      "kind": "word",
+      "value": "تساو"
+    },
+    {
+      "kind": "word",
+      "value": "لا تخف طبقات"
+    }
+  ],
+  "arabicLetterRanges": [
+    [
+      1568,
+      1599
+    ],
+    [
+      1601,
+      1610
+    ],
+    [
+      1646,
+      1647
+    ],
+    [
+      1649,
+      1747
+    ],
+    [
+      1749,
+      1749
+    ],
+    [
+      1765,
+      1766
+    ],
+    [
+      1774,
+      1775
+    ],
+    [
+      1786,
+      1788
+    ],
+    [
+      1791,
+      1791
+    ],
+    [
+      1872,
+      1919
+    ],
+    [
+      2160,
+      2183
+    ],
+    [
+      2185,
+      2190
+    ],
+    [
+      2208,
+      2249
+    ]
+  ],
+  "diacriticRanges": [
+    [
+      1552,
+      1562
+    ],
+    [
+      1611,
+      1631
+    ],
+    [
+      1648,
+      1648
+    ],
+    [
+      1750,
+      1764
+    ],
+    [
+      1767,
+      1768
+    ],
+    [
+      1770,
+      1773
+    ],
+    [
+      2250,
+      2303
+    ]
+  ],
+  "digitRanges": [
+    [
+      48,
+      57
+    ],
+    [
+      1632,
+      1641
+    ],
+    [
+      1776,
+      1785
+    ]
+  ],
+  "allowedDiacritics": [],
+  "allowedLatinValues": {
+    "English": "Language picker uses the native language name.",
+    "Claude Code": "Product name.",
+    "Claude Desktop (claude_desktop_config.json)": "Product name and its exact configuration filename.",
+    "X": "Coordinate axis.",
+    "Y": "Coordinate axis.",
+    "DWG": "Established file format or application name; do not transliterate.",
+    "DXF": "Established file format or application name; do not transliterate.",
+    "PDF": "Established file format or application name; do not transliterate.",
+    "Excel": "Established file format or application name; do not transliterate.",
+    "CTB": "Established file format or application name; do not transliterate.",
+    "STB": "Established file format or application name; do not transliterate.",
+    "CSV": "Established file format or application name; do not transliterate.",
+    "JSON": "Established file format or application name; do not transliterate.",
+    "PNG": "Established file format or application name; do not transliterate.",
+    "JPEG": "Established file format or application name; do not transliterate.",
+    "SVG": "Established file format or application name; do not transliterate.",
+    "AutoCAD": "Established product or provider name.",
+    "OpenAI": "Established product or provider name.",
+    "ChatGPT": "Established product or provider name.",
+    "Claude": "Established product or provider name.",
+    "Anthropic": "Established product or provider name."
+  },
+  "allowedTemplateValues": {
+    "{kind}": "Field label supplied by the selected field kind.",
+    "{line}…": "Translated activity with progress punctuation.",
+    "{what} «{name}»": "Translated object and its user name.",
+    "{object} ({size})": "Translated object and its size.",
+    "، ": "Arabic list separator."
+  },
+  "rustLiteralExceptions": [
+    {
+      "path": "src/agent.rs",
+      "text": "تُرفض إعادة البناء المتكررة",
+      "reason": "Exact historical steering text recognized in old conversation history; never emitted."
+    },
+    {
+      "path": "src/judgement.rs",
+      "text": "جدول كميات",
+      "reason": "Legacy user input synonym for BOQ; accepting user wording must remain compatible."
+    },
+    {
+      "path": "src/judgement.rs",
+      "text": "جدول الكميات",
+      "reason": "Legacy user input synonym for BOQ; never an authored UI label."
+    },
+    {
+      "path": "src/judgement.rs",
+      "text": "صمّم ",
+      "reason": "Input recognizer accepts vocalized user requests as well as unvocalized ones."
+    },
+    {
+      "path": "src/judgement.rs",
+      "text": "ارسم فيلا دورين وطلّع مقايستها",
+      "reason": "Dialectal user-input fixture exercises intent detection, not authored output."
+    },
+    {
+      "path": "src/judgement.rs",
+      "text": "ارسم حائط",
+      "reason": "User-input language-detection fixture retains regional synonyms."
+    },
+    {
+      "path": "src/openai.rs",
+      "text": "first second\\nأفكار",
+      "reason": "Streaming test preserves literal backslash-n bytes across provider deltas; this is payload data, not authored prose."
+    }
+  ],
+  "examples": {
+    "valid": [
+      "قيد التنفيذ",
+      "19 بند",
+      "لوحتان A1",
+      "1.50 م",
+      "عدد البنود: {n}",
+      "طبقة A-WALL",
+      "مساحة ١٩ م²",
+      "هل اكتمل الحصر؟"
+    ],
+    "invalid": [
+      "جار العمل",
+      "جارٍ العمل",
+      "19بندًا",
+      "لوحتاA1",
+      "1.50م",
+      "م١٩",
+      "Layerطبقة",
+      "طبقةLayer",
+      "١٩بند",
+      "۱۹بند",
+      "{n}بند",
+      "و{n} عناصر",
+      "جدول الكميات",
+      "إكسل",
+      "لا تخف طبقات لإخفاء خطأ"
+    ]
+  }
+}

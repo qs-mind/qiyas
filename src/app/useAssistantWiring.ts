@@ -1,3 +1,5 @@
+import { refreshInBackground } from "./background";
+import { notifyUndoGone } from "../ui/notices";
 /** Mizan (the in-app assistant) and outside AI apps over MCP: what their tools ask of the window
  *  (another sheet, other layers, a zoom, a picture of the screen, a selection), the take-off and
  *  drawing they changed, the tool cards' Show and Undo, and what the user points Mizan at (the
@@ -122,7 +124,7 @@ export function useAssistantWiring({
         queueReveal(ui.handles ?? []);
       } else {
         cancelReveal(false);
-        void run(() => redraw());
+        void refreshInBackground(() => redraw());
       }
       return;
     }
@@ -131,7 +133,7 @@ export function useAssistantWiring({
       setHidden(new Set(info?.layers.map(layer => layer.name).filter(name => names.has(name.toUpperCase()))));
     }
     if (ui.action === "redraw" || ui.action === "show_sheet" || ui.action === "zoom") {
-      void run(() => redraw());
+      void refreshInBackground(() => redraw());
     }
   }
 
@@ -139,8 +141,9 @@ export function useAssistantWiring({
     workspace,
     lang,
     onMutated: async (label) => {
+      notifyUndoGone();
       if (label === "compare") setCompared(true);
-      await run(async () => {
+      await refreshInBackground(async () => {
         await refreshTakeoffAndBoq();
         await syncInfo();
         await redraw();
@@ -155,7 +158,8 @@ export function useAssistantWiring({
   // the assistant's changes. The listener is set up once and calls the latest code through this.
   const onMcpChange = useRef<() => Promise<void>>(async () => {});
   onMcpChange.current = async () => {
-    await run(async () => {
+    notifyUndoGone();
+    await refreshInBackground(async () => {
       await refreshTakeoffAndBoq();
       await syncInfo();
       await redraw();
@@ -165,7 +169,7 @@ export function useAssistantWiring({
   // External tools refresh shared drawing data; the session retains the user's visible sheet.
   const onMcpUi = useRef<(ui: AiUi) => void>(() => {});
   onMcpUi.current = (ui) => {
-    run(async () => {
+    refreshInBackground(async () => {
       const gen = switchGen.current;
       const next = await drawingInfo();
       if (isStale(gen, switchGen.current)) return;

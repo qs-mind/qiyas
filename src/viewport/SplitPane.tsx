@@ -1,3 +1,4 @@
+import { isWorkspaceBusy } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { paperViews, sheetBatch, sheetBatchVersion, type PaperView, type Sheet, type Ucs } from "../api";
 import { useT } from "../i18n";
@@ -100,7 +101,7 @@ export function SplitPane({
       held.current = { sheet, own, model };
       if (unchanged) return;
       setOwn({ batch: own.batch, inset: model && views.length > 0 ? { batch: model.batch, views } : null });
-    })().catch(onError);
+    })().catch(error => { if (!gone && !isWorkspaceBusy(error)) onError(error); });
     return () => {
       gone = true;
     };

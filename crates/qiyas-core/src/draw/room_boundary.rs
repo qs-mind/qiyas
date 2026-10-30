@@ -148,16 +148,16 @@ impl RoomCounts {
         let blocks = top(&self.blocks);
         let (en, ar, count) = match budget {
             "segments" => ("boundary segments", "مقاطع الحدود", self.segments),
-            "block_depth" => ("block nesting depth", "عمق تداخل الكتل", limit + 1),
+            "block_depth" => ("block nesting depth", "عمق تداخل البلوكات", limit + 1),
             _ => (
                 "flatten work (block instances and paths)",
-                "عمل التفكيك (نسخ الكتل والمسارات)",
+                "عمل التفكيك (نسخ البلوكات والمسارات)",
                 work,
             ),
         };
         RoomBudget {
             reason: format!("Room search reached the {en} budget: {count}, limit {limit}; local segments: {}, flatten work consumed: {work}. Top layers: [{}]; top blocks: [{}]. Counts stop at refusal; flatten work is attributed to root layers and blocks.", self.segments, layers, blocks),
-            reason_ar: format!("بلغ البحث عن الفراغ حد {ar}: {count}، الحد {limit}؛ المقاطع المحلية: {}، عمل التفكيك المستهلك: {work}. أكثر الطبقات مساهمة: [{}]؛ أكثر الكتل مساهمة: [{}]. تتوقف الأعداد عند الرفض؛ ينسب عمل التفكيك إلى طبقات وكتل المراجع الرئيسية.", self.segments, layers, blocks),
+            reason_ar: format!("بلغ البحث عن الفراغ حد {ar}: {count}، الحد {limit}؛ المقاطع المحلية: {}، عمل التفكيك المستهلك: {work}. أكثر الطبقات مساهمة: [{}]؛ أكثر البلوكات مساهمة: [{}]. تتوقف الأعداد عند الرفض؛ ينسب عمل التفكيك إلى طبقات وبلوكات المراجع الرئيسية.", self.segments, layers, blocks),
         }
     }
 }
@@ -223,7 +223,8 @@ impl Session {
             .and_then(|instance| self.object_type(&instance.type_name).ok())
             .is_some_and(|definition| {
                 !definition.room_void
-                    && (definition.category == "opening"
+                    && (definition.geometry == crate::objects::GeometryKind::Region
+                        || definition.category == "opening"
                         || (definition.geometry == crate::objects::GeometryKind::Hosted
                             && definition.host_cut.is_some()))
             })

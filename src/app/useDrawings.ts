@@ -1,6 +1,7 @@
+import { refreshInBackground } from "./background";
 import { displayedWorkspace } from "../workspaceIpc";
 import { extractAll } from "./extractRows";
-import { uiError, userError } from "../i18n/errors";
+import { isWorkspaceBusy, uiError, userError } from "../i18n/errors";
 /** Drawings as files: the open drawings' tabs, the project autosave switch, and opening, showing,
  *  switching, closing, saving, recovering and exporting them (`useDrawings`). */
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -117,7 +118,7 @@ export function useAutosave(t: T, setError: (error: string | null) => void) {
       await saveProject();
     } catch (e) {
       // With no drawing open there is nothing to save: not a failure (it once showed as one).
-      if (NO_DRAWING.test(String(e))) return;
+      if (NO_DRAWING.test(String(e)) || isWorkspaceBusy(e)) return;
       autosaveOff.current = true;
       setError(t("project.autosaveOff", { error: uiError(e) }));
     }
@@ -323,7 +324,7 @@ export function useDrawings({
             .then((done) => {
               if (done.failed.length > 0) setError(t("autosave.failed", { error: done.failed.join("; ") }));
             })
-            .catch((e) => setError(t("autosave.failed", { error: uiError(e) })));
+            .catch((e) => { if (!isWorkspaceBusy(e)) setError(t("autosave.failed", { error: uiError(e) })); });
         }, minutes * 60_000);
       })
       .catch(() => {});
@@ -488,7 +489,7 @@ export function useDrawings({
   fromMizan.current = {
     shown: () =>
       drawingChange(() =>
-        run(async () => {
+        refreshInBackground(async () => {
           const now = await readTabs();
           setFileTabs(now.tabs);
           setActiveTab(now.active);

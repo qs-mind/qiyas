@@ -1782,10 +1782,18 @@ export type AiUi = {
   id?: string;
 };
 
+export type ExpertFrame = {
+  expert_checks: string;
+  raw_data: string;
+  methods: string;
+  outside_check: string;
+};
+
 export type PlanPhase = {
   id: string;
   title: string;
   status: "pending" | "active" | "done" | "skipped";
+  note?: string;
 };
 
 /** One event of the assistant's turn (`qiyas_ai::AgentEvent`), sent as `ai:event`. */
@@ -1812,12 +1820,12 @@ export type AgentEvent =
   | { type: "retrying"; seconds: number; code: string; discard_partial: boolean }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "plan"; phases: PlanPhase[] }
+  | { type: "plan"; phases: PlanPhase[]; frame?: ExpertFrame }
   | { type: "plan_progress"; mutations_since_update: number; stale: boolean }
-  | { type: "awaiting_approval"; plan: { phases: PlanPhase[] } }
+  | { type: "awaiting_approval"; plan: { phases: PlanPhase[]; frame?: ExpertFrame } }
   | { type: "question"; questions: Question[] }
-  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null; progress?: { completed: number; total: number } | null }
-  | { type: "tool_progress"; id: string; completed: number; total: number }
+  | { type: "tool_call"; id: string; name: string; label?: string | null; input: unknown; mutating: boolean; activity?: Activity | null }
+  | { type: "tool_progress"; id: string; done: number; total: number; label: string }
   | {
       type: "tool_result";
       id: string;

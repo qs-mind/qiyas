@@ -274,7 +274,7 @@ fn mismatch(item: &BoqItem, sum: f64, tol: f64, units_label: &str) -> Option<Fou
             unit_en(u)
         ),
         format!(
-            "جدول الكميات يذكر {} {}، والمقاس من الرسومات {} {}{pct}",
+            "المقايسة تذكر {} {}، والمقاس من الرسومات {} {}{pct}",
             qty(q, u),
             unit_ar(u),
             qty(sum, u),
@@ -283,7 +283,7 @@ fn mismatch(item: &BoqItem, sum: f64, tol: f64, units_label: &str) -> Option<Fou
     );
     if units_label == "unknown" {
         reason.push_str("; the drawing's units are unknown and were read as millimetres");
-        reason_ar.push_str("؛ وحدات الرسم غير معروفة فقُرئت بالمليمتر");
+        reason_ar.push_str("؛ وحدات الرسم غير معروفة لذلك اعتمد القياس على المليمتر");
     }
     let mut f = Found::new(ConflictKind::QuantityMismatch, reason, reason_ar);
     f.boq_code = Some(item.code.trim().to_string());
@@ -327,10 +327,10 @@ fn other_unit(item: &BoqItem, other: &[&Measurement]) -> Found {
             count_ar(
                 n,
                 [
-                    "قياسًا مرتبطًا",
+                    "قياس مرتبط",
                     "قياسين مرتبطين",
                     "قياسات مرتبطة",
-                    "قياسًا مرتبطًا"
+                    "قياس مرتبط"
                 ]
             ),
             list(true)
@@ -448,8 +448,8 @@ fn missing_from_boq(boq: &Boq, quantities: &[&Measurement], out: &mut Vec<Found>
                 if n == 1 { "matches" } else { "match" }
             ),
             format!(
-                "«{desc}»: {} ({}) بلا بند يقابله في جدول الكميات",
-                count_ar(n, ["قياس واحد", "قياسان", "قياسات", "قياسًا"]),
+                "«{desc}»: {} ({}) بلا بند يقابله في المقايسة",
+                count_ar(n, ["قياس واحد", "قياسان", "قياسات", "قياس"]),
                 total(true)
             ),
         )
@@ -520,7 +520,7 @@ fn schedule_vs_plan(
         let mut f = Found::new(
             ConflictKind::ScheduleVsPlan,
             format!("Schedule \"{name}\" lists {listed_text} of {mark}; the plans show {shown} ({where_})"),
-            format!("الجدول «{name}» يذكر {listed_text} من {mark}، والمخططات تُظهر {shown} ({where_})"),
+            format!("الجدول «{name}» يذكر {listed_text} من {mark}، والرسومات تظهر {shown} ({where_})"),
         );
         f.schedule = Some(schedule.name.clone());
         f.sheets = std::iter::once(schedule.sheet.clone())
@@ -574,7 +574,7 @@ fn drawing_vs_drawing(blocks: &[(String, Vec<BlockCount>)], out: &mut Vec<Found>
                 let mut f = Found::new(
                     ConflictKind::DrawingVsDrawing,
                     format!("{block} is counted {ca} on {a} and {cb} on {b}"),
-                    format!("{block} عدده {ca} في {a} و{cb} في {b}"),
+                    format!("{block} عدده {ca} في {a} و {cb} في {b}"),
                 );
                 f.sheets = vec![a.to_string(), b.to_string()];
                 f.expected = Some(ca as f64);

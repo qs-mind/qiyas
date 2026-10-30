@@ -43,12 +43,23 @@ fn carries_reapplies_matches_renumbered_exports_and_round_trips_one_undo_step() 
         let ap = dir.path().join(format!("a.{ext}"));
         let bp = dir.path().join(format!("b.{ext}"));
         let mut a = Session::new_blank(&ap, 6);
+        // Both exports use the same authored layer; recognition preserves named layers.
+        run(&mut a, json!({"type":"new_layer","name":"Survey"}));
+        run(
+            &mut a,
+            json!({"type":"set_current","current":{"layer":"Survey"}}),
+        );
         let changed = line(&mut a, [0., 0.], [5., 0.]);
         let removed = line(&mut a, [20., 0.], [23., 0.]);
         let matched = line(&mut a, [30., 0.], [32., 0.]);
         knowledge(&mut a);
         a.save_as(&ap).unwrap();
         let mut b = Session::new_blank(&bp, 6);
+        run(&mut b, json!({"type":"new_layer","name":"Survey"}));
+        run(
+            &mut b,
+            json!({"type":"set_current","current":{"layer":"Survey"}}),
+        );
         for _ in 0..100 {
             b.drawing.doc.allocate_handle();
         }

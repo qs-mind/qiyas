@@ -9,7 +9,6 @@ import { PackCheckCard } from "./PackCheckCard";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
 import { readRuns, startNewOffered, undoableCard, type ToolCardItem } from "./messages";
 import { readPicture, type Picture } from "./pictures";
-import { answerText } from "./QuestionList";
 import type { SlashCommand } from "./slashCommands";
 import { Composer } from "./Composer";
 import { ThreadItem, planActions, type ThreadContext } from "./ThreadItem";
@@ -109,14 +108,13 @@ export const AssistantPanel = memo(function AssistantPanel({
 
   const open = openQuestions(items);
   const picks = open ? draft.picks : {};
-  const answering = !!open && Object.keys(picks).length > 0;
 
   /** Sends `text` (the box's words by default) with the box's pictures and PDFs. */
   async function submit(prompt?: string) {
-    const typed = prompt ?? (open && answering ? answerText(open.questions, picks, draft.text) : draft.text);
+    const typed = prompt ?? draft.text;
     const files = draft.documents.map((document) => `[PDF attachment: ${JSON.stringify(document.name)}; ${document.pages} pages; path: ${JSON.stringify(document.path)}]`);
     const text = [typed.trim(), ...files].filter(Boolean).join("\n\n");
-    if ((!text && draft.pictures.length === 0) || blocked) return;
+    if ((!text && draft.pictures.length === 0) || blocked) return false;
     // What the reader sends is what they want to see next to.
     thread.jump(false);
     const pictures = draft.pictures;
@@ -129,17 +127,16 @@ export const AssistantPanel = memo(function AssistantPanel({
           })
         : await assistant.send(text);
     if (sent) drafts.clear();
+    return sent;
   }
 
-  /** Chooses an option on the open questions (the same again takes it off); when every question has
-   *  one, the answers go at once with whatever is in the box. */
+  /** Choices stay on their question until the wizard sends the complete answer. */
   function pick(questionId: string, label: string) {
     if (!open) return;
     const next = { ...picks };
     if (next[questionId] === label) delete next[questionId];
     else next[questionId] = label;
     drafts.setPicks(next);
-    if (open.questions.every((q) => next[q.id])) void submit(answerText(open.questions, next, draft.text));
   }
 
   /** A prompt command goes to Mizan as the user's message; an action is the window's. */
@@ -166,7 +163,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   const cx: ThreadContext = {
     items, busy, unavailable: blocked, chatLang, showTechnicalDetails,
     dockedPlanIndex: dock?.index,
-    openIndex: open?.index ?? null, picks, onPick: pick,
+    openIndex: open?.index ?? null, picks, onPick: pick, onAnswer: submit,
     runs: readRuns(items), recovery: recoveryGroups(items, busy), undoable: undoableCard(transcript),
     onShow, onUndo, onSettings, send: (text) => { void assistant.send(text); }, focusBox,
   };
@@ -220,7 +217,7 @@ export const AssistantPanel = memo(function AssistantPanel({
                 </ul>
               </div>
             ) : (
-              items.map((item, i) => item.kind === "status" ? <StatusBlock key={i} item={item} /> : <ThreadItem key={i} item={item} i={i} cx={cx} id={item.kind === "plan" ? planItemId(i) : undefined} />)
+              items.map((item, i) => item.kind === "status" ? <StatusBlock key={i} item={item} /> : <ThreadItem key={`${assistant.workspace ?? "chat"}:${i}`} item={item} i={i} cx={cx} id={item.kind === "plan" ? planItemId(i) : undefined} />)
             )}
             {!blocked && (startNewOffered(transcript) || error === "crashed") && (
               <button type="button" className="primary new-conversation" onClick={assistant.clear}>
@@ -229,7 +226,7 @@ export const AssistantPanel = memo(function AssistantPanel({
             )}
           </div>
           {thread.away && (
-            <button type="button" className="jump-latest" onClick={() => thread.jump()}>
+            <button type="button" className="jump-latest" lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} onClick={() => thread.jump()}>
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M8 3v9M4.5 8.5L8 12l3.5-3.5" />
               </svg>
@@ -263,7 +260,6 @@ export const AssistantPanel = memo(function AssistantPanel({
         box={box}
         busy={busy}
         blocked={blocked}
-        answering={answering}
         pointing={pointing}
         shownOutput={shownOutput}
         model={assistant}

@@ -192,13 +192,13 @@ pub fn system_prompt(lang: Lang, facts: &DrawingFacts) -> String {
 
     s.push_str(t(
         "\n\n## The drawing (when this conversation started)\n",
-        "\n\n## المخطط (عند بدء هذه المحادثة)\n",
+        "\n\n## الرسم (عند بدء هذه المحادثة)\n",
     ));
     if !facts.open {
         s.push_str(t(
             "No drawing was open. If the [state] block still says so, offer a recent drawing \
              (qiyas_read drawings) or a new one (qiyas_execute new_drawing). New, Open and Save are on Qiyas's top bar.\n",
-            "لم يكن هناك مخطط مفتوح. إن كانت كتلة [state] ما زالت تقول ذلك فاعرض مخططًا من الأخيرة (qiyas_read drawings) أو مخططًا جديدًا (qiyas_execute new_drawing).\n",
+            "لم يكن هناك رسم مفتوح. إن كانت بيانات [state] ما زالت تقول ذلك فاعرض رسما من الرسومات الأخيرة (qiyas_read drawings) أو رسما جديدا (qiyas_execute new_drawing).\n",
         ));
         return s;
     }
@@ -223,7 +223,7 @@ pub fn system_prompt(lang: Lang, facts: &DrawingFacts) -> String {
     list(&mut s, &facts.layers, MAX_LAYERS, ar);
     s.push_str(t(
         "Blocks on that sheet (references):\n",
-        "الكتل في تلك اللوحة (عدد المراجع):\n",
+        "البلوكات في تلك اللوحة (عدد المراجع):\n",
     ));
     list(&mut s, &facts.blocks, MAX_BLOCKS, ar);
     s
@@ -238,9 +238,9 @@ pub fn state_block(lang: Lang, state: &LiveState) -> String {
         "[state] يكتبها قياس، لا المستخدم.\n",
     ));
     if !state.open {
-        s.push_str(t("No drawing is open.\n", "لا يوجد مخطط مفتوح.\n"));
+        s.push_str(t("No drawing is open.\n", "لا يوجد رسم مفتوح.\n"));
     } else {
-        let _ = writeln!(s, "{}{}", t("Drawing: ", "المخطط: "), state.file);
+        let _ = writeln!(s, "{}{}", t("Drawing: ", "الرسم: "), state.file);
         let _ = writeln!(s, "{}{}", t("Folder: ", "المجلد: "), state.folder);
         let _ = writeln!(
             s,
@@ -271,9 +271,9 @@ pub fn state_block(lang: Lang, state: &LiveState) -> String {
     let boq = match (&state.boq, ar) {
         (Some(name), _) => name.as_str(),
         (None, false) => "no BOQ loaded",
-        (None, true) => "لم يُحمّل جدول كميات",
+        (None, true) => "لم يتم تحميل مقايسة",
     };
-    let _ = writeln!(s, "{}{boq}", t("BOQ: ", "جدول الكميات: "));
+    let _ = writeln!(s, "{}{boq}", t("BOQ: ", "المقايسة: "));
     let _ = writeln!(
         s,
         "{}{}",
@@ -320,7 +320,7 @@ fn list(s: &mut String, rows: &[(String, usize)], max: usize, ar: bool) {
     if rows.len() > max {
         let more = rows.len() - max;
         let _ = if ar {
-            writeln!(s, "- و{more} أخرى")
+            writeln!(s, "- و {more} أخرى")
         } else {
             writeln!(s, "- and {more} more")
         };
@@ -422,7 +422,8 @@ mod tests {
         for rule in [
             "exact checks first, then outside_check, then pictures",
             "not authority to delete correct work",
-            "Fix or disclose every finding and affected item",
+            "yours to fix and re-check before finishing",
+            "report only what needs the engineer's idea-level decision or what you truly cannot fix, and say why",
             "Report the outside check's result with numbers in the final answer",
             "Never claim checks or visual inspection you did not perform",
             "Qiyas reports facts. Advice is information; Mizan decides",
@@ -511,7 +512,9 @@ mod tests {
             "Prefer detail: summary, selected fields and artifact pointers",
             "fetch more raw evidence whenever needed",
             "measure by handle",
-            "legacy note-scope parser",
+            "Record exclusions as answered decision.set entries with takeoff_exclusion",
+            "They close coverage and remain listed under excluded",
+            "The report parser also accepts Exclude <handle>: <reason> (optional note <handle>) in the internal end_report argument only",
             "never copy those lines into answers or finish.answer",
         ] {
             assert!(read.description.contains(rule), "{rule}");
@@ -595,7 +598,7 @@ mod tests {
             "untitled or repaired drawings wait for the engineer to save",
             "Leave save status to the app",
             "records completion, never saves",
-            "يحفظ التطبيق تلقائيًا",
+            "يحفظ التطبيق تلقائيا",
             "finish يسجل الإنهاء ولا يحفظ",
         ] {
             assert!(execute.description.contains(rule), "{rule}");
@@ -625,10 +628,10 @@ mod tests {
         assert!(ar.contains("قياس"));
         assert!(ar.contains("كيو إس مايند"));
         assert!(ar.starts_with(AR));
-        assert!(ar.contains("لم يكن هناك مخطط مفتوح"));
+        assert!(ar.contains("لم يكن هناك رسم مفتوح"));
         let state = state_block(Lang::Ar, &LiveState::none());
-        assert!(state.contains("لا يوجد مخطط مفتوح"));
-        assert!(state.contains("لم يُحمّل جدول كميات"));
+        assert!(state.contains("لا يوجد رسم مفتوح"));
+        assert!(state.contains("لم يتم تحميل مقايسة"));
     }
 
     fn sample_with_count() -> (tempfile::TempDir, Session) {
@@ -713,7 +716,7 @@ mod plain_answer_tests {
             "لا تعرض مسارات الملفات",
             "اكتب بالعربية الفصحى الواضحة",
             "أجب بلغة آخر رسالة للمستخدم",
-            "احتفظ بالاستبعادات ومراجعها في أدلة منظّمة",
+            "احتفظ بالاستبعادات ومراجعها في أدلة منظمة",
         ] {
             assert!(ar.contains(phrase), "{phrase}");
         }

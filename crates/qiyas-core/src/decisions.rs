@@ -36,6 +36,20 @@ pub enum Status {
     Provisional,
 }
 
+/// Explicit scope for a reasoned take-off exclusion. No interpretation of decision prose.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TakeoffExclusion {
+    Handles {
+        #[schemars(length(min = 1))]
+        handles: Vec<u64>,
+    },
+    ObjectType {
+        #[schemars(regex(pattern = r"\S"))]
+        object_type: String,
+    },
+}
+
 /// One explicit value or unanswered question. Text and citations are retained verbatim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +59,7 @@ pub struct Decision {
     pub value: Value,
     /// Physical unit, or empty for a nonnumeric value or dimensionless number.
     pub unit: String,
+    #[schemars(regex(pattern = r"\S"))]
     pub reason: String,
     pub source: DecisionSource,
     pub citation: String,
@@ -52,6 +67,9 @@ pub struct Decision {
     pub status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<String>,
+    /// Closes coverage for these elements, retaining this decision's reason for review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takeoff_exclusion: Option<TakeoffExclusion>,
 }
 
 /// A single entry or an atomic set of entries.
@@ -89,6 +107,19 @@ fn invalid(en: &str, ar: &str) -> CoreError {
 }
 impl Decision {
     pub(crate) fn validate(&self) -> Result<(), CoreError> {
+        if self
+            .takeoff_exclusion
+            .as_ref()
+            .is_some_and(|scope| match scope {
+                TakeoffExclusion::Handles { handles } => handles.is_empty(),
+                TakeoffExclusion::ObjectType { object_type } => object_type.trim().is_empty(),
+            })
+        {
+            return Err(invalid(
+                "An exclusion needs explicit handles or an object type",
+                "الاستبعاد يحتاج إلى معرفات العناصر أو نوع العنصر",
+            ));
+        }
         if self.name.is_empty()
             || self.name.trim() != self.name
             || self.name.len() > 255
@@ -108,7 +139,7 @@ impl Decision {
         {
             return Err(invalid(
                 "Give a reason and a scalar value, or an unanswered question with null value",
-                "أدخل سبباً وقيمة مفردة أو سؤالاً بلا إجابة وقيمته فارغة",
+                "أدخل سببا وقيمة مفردة أو سؤالا بلا إجابة وقيمته فارغة",
             ));
         }
         Ok(())
@@ -165,7 +196,7 @@ impl Session {
                 if entries.is_empty() {
                     return Err(invalid(
                         "Give at least one decision",
-                        "أدخل قراراً واحداً على الأقل",
+                        "أدخل قرارا واحدا على الأقل",
                     ));
                 }
                 let mut names = BTreeSet::new();
@@ -273,7 +304,7 @@ impl Session {
         let property = property.ok_or_else(|| {
             invalid(
                 "Decision reference names an undeclared property",
-                "مرجع القرار يشير إلى خاصية غير معرّفة",
+                "مرجع القرار يشير إلى خاصية غير معرفة",
             )
         })?;
         if let Property::Number { unit, .. } = property {

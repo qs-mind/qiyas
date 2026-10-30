@@ -50,3 +50,12 @@ test("a late response cannot fill the queue of a different drawing", async () =>
   await waitFor(() => expect(screen.getByText("No unresolved recognition items. Review is optional.")).toBeTruthy());
   expect(screen.queryByText("Run")).toBeNull();
 });
+
+test("background recognition skips a busy read and retries on the next revision", async () => {
+  read.mockRejectedValueOnce("workspace_busy").mockResolvedValue({ type: "recognition", result: { candidates: [row] } });
+  const view = render(<RecognitionPanel active drawing="drawing.dxf" revision={1} run={vi.fn()} />);
+  await waitFor(() => expect(read).toHaveBeenCalled());
+  expect(screen.queryByRole("alert")).toBeNull();
+  view.rerender(<RecognitionPanel active drawing="drawing.dxf" revision={2} run={vi.fn()} />);
+  expect(await screen.findByText("Accept")).toBeTruthy();
+});

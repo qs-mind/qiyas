@@ -180,7 +180,7 @@ impl Guard {
             .collect();
         let advice = if !protected.is_empty() {
             Some(
-                json!({"code":"repeated_rebuild","message":"This work was already rebuilt in this phase. / أُعيد إنشاء هذا العمل بالفعل في هذه المرحلة.","handles":protected.iter().map(|(h,_)| h).collect::<Vec<_>>()}),
+                json!({"code":"repeated_rebuild","message":"This work was already rebuilt in this phase. / تمت إعادة إنشاء هذا العمل في هذه المرحلة بالفعل.","handles":protected.iter().map(|(h,_)| h).collect::<Vec<_>>()}),
             )
         } else {
             None

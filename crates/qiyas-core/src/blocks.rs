@@ -671,7 +671,7 @@ impl Session {
             }
             if same {
                 let handles = existing.iter().map(|e| e.common().handle.value()).collect();
-                self.last_advice.push(serde_json::json!({"code":"already_exists", "message":format!("Block {} already exists with this geometry.", old.name), "message_ar":format!("الكتلة {} موجودة بهذه الأشكال والخصائص.", old.name)}));
+                self.last_advice.push(serde_json::json!({"code":"already_exists", "message":format!("Block {} already exists with this geometry.", old.name), "message_ar":format!("البلوك {} موجود بهذه الأشكال والخصائص.", old.name)}));
                 return Ok(handles);
             }
             return Err(invalid(format!("Block {} already exists with different geometry or properties. Choose another name or edit its definition.", old.name)));

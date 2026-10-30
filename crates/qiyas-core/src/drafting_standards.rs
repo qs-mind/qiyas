@@ -326,7 +326,7 @@ pub fn sheet_set(project_type: &str, storeys: Option<u32>) -> Result<Value, Core
             "project_type": project_type, "sheets": [], "sheet_count": 0,
             "available_project_types": project_type_names(),
             "note": format!("No packaged template for {project_type}; build the package from the brief."),
-            "note_ar": format!("لا توجد حزمة جاهزة لنوع {project_type}؛ كوّن الحزمة من متطلبات المشروع.")
+            "note_ar": format!("لا توجد حزمة جاهزة لنوع {project_type}؛ كون الحزمة من متطلبات المشروع.")
         }));
     };
     let body = &standards()["project_types"][&key];
@@ -595,7 +595,7 @@ pub fn knowledge(
             "note_market_ar": market.filter(|m| normalise_market(m).is_none()).map(|m| format!("اختصاص غير مدعوم: {m}.")),
             "limits_available": resolved_limits(market),
             "note": "Profiles are optional practice preferences, not code. Select a compatible profile explicitly.",
-            "note_ar": "الملفات قيم ممارسة اختيارية وليست كوداً. اختر ملفاً متوافقاً بشكل صريح.",
+            "note_ar": "الملفات قيم ممارسة اختيارية وليست كودا. اختر ملفا متوافقا بشكل صريح.",
         })),
         KnowledgeTopic::Codes => {
             let markets: BTreeMap<String, Value> = match market.and_then(normalise_market) {

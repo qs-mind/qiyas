@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { measurementPackCheck, type PackCheck } from "../api";
 import { useLanguage, useT } from "../i18n";
-import { uiError } from "../i18n/errors";
+import { isWorkspaceBusy, uiError } from "../i18n/errors";
 import { DotLoader } from "../shell/DotLoader";
 import { isolateRuns } from "./content";
 import "./packCheck.css";
@@ -28,7 +28,7 @@ export function PackCheckCard({ drawing, workspace, revision, busy = false }: {
     measurementPackCheck(workspace).then((result) => {
       if (!gone) setCard(result);
     }).catch((cause: unknown) => {
-      if (!gone) setError({ cause });
+      if (!gone && !isWorkspaceBusy(cause)) setError({ cause });
     });
     return () => { gone = true; };
   }, [drawing, workspace, revision, busy, reload]);

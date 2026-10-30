@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LanguageProvider } from "../i18n";
+import { LanguageProvider, translate } from "../i18n";
+import { uiError } from "../i18n/errors";
+import { setWorkspace } from "../workspaceIpc";
+import * as api from "../api";
 import { useShell } from "../app/useShell";
 import { dismissNotice, NOTICE_MS, notify, notifyError, notifyUndo, notifyUndoGone, Notices, useUndoLabel } from "./notices";
 
@@ -12,11 +15,13 @@ afterEach(() => {
   localStorage.clear();
   document.documentElement.dir = "ltr";
   document.documentElement.lang = "en";
+  setWorkspace(null);
+  vi.restoreAllMocks();
 });
 
 const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
 /** The toasts on screen: their text (the title), not those on their way out. */
-const shown = () => [...document.querySelectorAll('[data-sonner-toast]:not([data-removed="true"]) [data-title]')].map((e) => e.textContent);
+const shown = () => [...document.querySelectorAll('[data-sonner-toast]:not([data-removed="true"]) .toast-title')].map((e) => e.textContent);
 
 function mount() {
   return render(
@@ -160,4 +165,39 @@ test("an undo toast goes when the time is up, and when something else is done fi
   act(() => notifyUndoGone());
   await advance(3000);
   expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+});
+
+test("every kind uses our card and close button without Sonner icons or close glyphs", async () => {
+  mount();
+  await advance(50);
+  act(() => {
+    notify("Plain");
+    notify("Waiting", { waiting: true });
+    notifyError("Error");
+    notifyUndo({ message: "Undoable", name: "Undo", label: String, seconds: 5, onUndo: vi.fn() });
+  });
+  await advance(300);
+  expect([...document.querySelectorAll("[data-notice-kind]")].map(e => e.getAttribute("data-notice-kind")).sort()).toEqual(["error", "plain", "undo", "waiting"]);
+  expect(document.querySelectorAll("[data-icon], [data-close-button]")).toHaveLength(0);
+  expect(document.querySelectorAll(".toast .ib.toast-close")).toHaveLength(4);
+});
+
+test.each(["en", "ar"] as const)("busy edits show one %s notice and Stop keeps the original drawing", async lang => {
+  localStorage.setItem("qiyas.lang", lang);
+  mount();
+  const stop = vi.spyOn(api, "aiCancel").mockResolvedValue();
+  const { result } = renderHook(useShell);
+  await advance(50);
+  setWorkspace(7);
+  for (const code of ["workspace_busy", "mizan_working", "workspace_busy"]) {
+    act(() => result.current.setError(uiError(code, lang)));
+    await advance(100);
+  }
+  expect(shown()).toEqual([translate(lang, "workspace.busy")]);
+  expect(document.querySelectorAll("[data-icon], [data-close-button]")).toHaveLength(0);
+  setWorkspace(8);
+  fireEvent.click(screen.getByRole("button", { name: translate(lang, "ai.stop") }));
+  await advance(800);
+  expect(stop).toHaveBeenCalledExactlyOnceWith(7);
+  expect(shown()).toEqual([]);
 });

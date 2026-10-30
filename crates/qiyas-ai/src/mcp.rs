@@ -15,8 +15,8 @@ use axum::Router;
 use qiyas_core::{Session, Source};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    InitializeResult, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerConfig, Tool,
+    InitializeResult, JsonObject, ListToolsResult, PaginatedRequestParams,
+    ProgressNotificationParam, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -35,6 +35,7 @@ pub type OnMutated = Arc<dyn Fn() + Send + Sync>;
 /// Called with a tool result's `ui` (another sheet, other hidden layers, a zoom), so the window
 /// shows what the session now shows.
 pub type OnUi = Arc<dyn Fn(Value) + Send + Sync>;
+pub(crate) type OnProgress = Arc<dyn Fn(String, qiyas_core::batch_progress::Step) + Send + Sync>;
 
 /// What a tool call answers when no drawing is open.
 pub const NO_DRAWING: &str = "No drawing is open";
@@ -69,9 +70,10 @@ pub(crate) async fn serve_agent(
     evidence: (EvidenceCache, Option<bool>),
     token: String,
     shutdown: CancellationToken,
-    on_ui: OnUi,
+    callbacks: (OnUi, OnProgress),
 ) -> Result<SocketAddr, AiError> {
-    let mut handler = Qiyas::new(session, host, Arc::new(|| {}), on_ui);
+    let mut handler = Qiyas::new(session, host, Arc::new(|| {}), callbacks.0);
+    handler.on_progress = Some(callbacks.1);
     handler.source = Source::Ai;
     handler.user_text = Some(user_text);
     handler.known_contracts = evidence.0.contracts;
@@ -221,6 +223,7 @@ pub struct Qiyas {
     host: Option<Arc<dyn DrawingHost>>,
     on_mutated: OnMutated,
     on_ui: OnUi,
+    on_progress: Option<OnProgress>,
     tools: Arc<Vec<Tool>>,
     retries: Arc<Mutex<VecDeque<Retry>>>,
     ineffective: Arc<Mutex<std::collections::BTreeMap<String, (usize, Value)>>>,
@@ -287,6 +290,7 @@ impl Qiyas {
             host,
             on_mutated,
             on_ui,
+            on_progress: None,
             tools: Arc::new(tools),
             retries: Arc::new(Mutex::new(VecDeque::new())),
             ineffective: Arc::default(),
@@ -728,7 +732,7 @@ impl ServerHandler for Qiyas {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.to_string();
         let mut input = request.arguments.map_or(Value::Null, Value::Object);
@@ -745,16 +749,53 @@ impl ServerHandler for Qiyas {
         // Tools are synchronous and a picture takes a while to draw: off the async workers.
         let this = target.clone();
         let tool = name.clone();
-        let (output, replayed) =
-            match tokio::task::spawn_blocking(move || this.run_cached(&tool, &input)).await {
-                Ok(output) => output,
-                Err(error) => (
-                    Err(ToolError::Failed(format!(
-                        "The tool {name} crashed: {error}"
-                    ))),
-                    false,
-                ),
-            };
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let progress_key = crate::progress::key(&tool, &input);
+        let on_progress = target.on_progress.clone();
+        let mut pending = tokio::task::spawn_blocking(move || {
+            crate::progress::observe(
+                move |step| {
+                    if let Some(callback) = &on_progress {
+                        callback(progress_key.clone(), step.clone());
+                    }
+                    let _ = progress_tx.send(step);
+                },
+                || this.run_cached(&tool, &input),
+            )
+        });
+        let notify = |step: qiyas_core::batch_progress::Step| {
+            let token = context.meta.get_progress_token();
+            let peer = context.peer.clone();
+            async move {
+                if let Some(token) = token {
+                    let _ = peer
+                        .notify_progress(
+                            ProgressNotificationParam::new(token, step.done as f64)
+                                .with_total(step.total as f64)
+                                .with_message(step.label),
+                        )
+                        .await;
+                }
+            }
+        };
+        let ran = loop {
+            tokio::select! {
+                Some(step) = progress_rx.recv() => notify(step).await,
+                result = &mut pending => break result,
+            }
+        };
+        while let Ok(step) = progress_rx.try_recv() {
+            notify(step).await;
+        }
+        let (output, replayed) = match ran {
+            Ok(output) => output,
+            Err(error) => (
+                Err(ToolError::Failed(format!(
+                    "The tool {name} crashed: {error}"
+                ))),
+                false,
+            ),
+        };
         let mut ui = None;
         let result = match output {
             Ok(ToolOutput::Json(mut value)) => {

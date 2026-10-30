@@ -6,7 +6,7 @@ import { usePointer } from "./pointer";
 import { useTool, type ToolApi } from "./useTool";
 import type { Tool } from "../viewport/Viewport";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const api: ToolApi = {
   pick: async () => null,
@@ -58,4 +58,15 @@ test("a tool in progress still follows the cursor with its preview, as before", 
   expect(m.counts.root).toBeGreaterThan(before);
   expect(m.tool().cursor).toEqual([2, 2]);
   expect(m.cursor()).toEqual([2, 2]);
+});
+
+test("a busy hover snap is silent and the next pointer movement tries again", async () => {
+  const snap = vi.spyOn(api, "snap").mockRejectedValueOnce("workspace_busy").mockResolvedValue(null);
+  const error = vi.spyOn(api, "onError");
+  const m = mount("distance", true);
+  await act(async () => m.tool().onMove([1, 1], 0.01));
+  expect(error).not.toHaveBeenCalled();
+  await act(async () => m.tool().onMove([2, 2], 0.01));
+  expect(snap).toHaveBeenCalledTimes(2);
+  expect(error).not.toHaveBeenCalled();
 });

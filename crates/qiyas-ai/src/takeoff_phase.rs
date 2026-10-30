@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::surface;
 
 pub(crate) const MAX_STEPS: usize = 12;
-const SPLIT: &str = "This batch spans multiple quantity families or more than 12 commands. / تشمل هذه الدفعة أكثر من مجموعة كميات أو أكثر من ١٢ أمرًا.";
+const SPLIT: &str = "This batch spans multiple quantity families or more than 12 commands. / تشمل هذه الدفعة أكثر من مجموعة كميات أو أكثر من ١٢ أمر.";
 
 #[derive(Default)]
 pub(crate) struct Batch {

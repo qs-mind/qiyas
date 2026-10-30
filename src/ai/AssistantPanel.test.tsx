@@ -577,11 +577,13 @@ test("running activities use the present and plan updates name the completed ste
   expect(screen.getByText("Updated the plan: 3 of 7 steps done")).toBeTruthy();
 });
 
-test("an option is chosen on the question itself, not in the box, and one question's choice sends at once", async () => {
+test("an option is chosen on the question itself, not in the box, and one question sends with its Send button", async () => {
   const question = { kind: "question" as const, questions: [{ id: "q", question: "Which country?", allow_other: true, options: [{ label: "Egypt", recommended: true }, { label: "UAE" }] }] };
   const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, question] });
   fireEvent.click(screen.getByRole("button", { name: /UAE/ }));
-  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+  expect(assistant.send).not.toHaveBeenCalled();
+  fireEvent.click(document.querySelector(".qactions button")!);
   await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("UAE"));
 });
 
@@ -589,29 +591,21 @@ const three = { kind: "question" as const, questions: ["q1", "q2", "q3"].map((id
   id, question: `Question ${n + 1}?`, allow_other: true, options: [{ label: `Yes ${n + 1}` }, { label: `No ${n + 1}` }],
 })) };
 
-test("several questions: choices are marked and go by themselves once every question has one", async () => {
+test("several questions: Next advances and Send combines choices and the inline free answer", async () => {
   const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, three] });
   fireEvent.click(screen.getByRole("button", { name: /Yes 1/ }));
-  fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
   expect(screen.getByRole("button", { name: /Yes 1/ }).getAttribute("aria-pressed")).toBe("true");
-  expect(document.querySelectorAll(".qopt.picked")).toHaveLength(2);
-  expect(assistant.send).not.toHaveBeenCalled();
-  // The same option again takes it off; another one replaces it.
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
   fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
-  expect(document.querySelectorAll(".qopt.picked")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
+  expect(document.querySelectorAll(".qopt.picked")).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: /Yes 2/ }));
-  fireEvent.click(screen.getByRole("button", { name: /Yes 3/ }));
-  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("1. Yes 1\n2. Yes 2\n3. Yes 3"));
-});
-
-test("several questions: what is typed in the box answers the one left open, sent with Enter", async () => {
-  const { assistant } = setup({ items: [{ kind: "user", text: "Build it" }, three] });
-  fireEvent.click(screen.getByRole("button", { name: /Yes 1/ }));
-  fireEvent.click(screen.getByRole("button", { name: /No 2/ }));
-  const box = screen.getByRole("textbox");
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  expect(assistant.send).not.toHaveBeenCalled();
+  const box = screen.getByRole("textbox", { name: "Write your answer" });
   fireEvent.change(box, { target: { value: "The street is on the north" } });
   fireEvent.keyDown(box, { key: "Enter" });
-  await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("1. Yes 1\n2. No 2\n3. The street is on the north"));
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledExactlyOnceWith("1. Yes 1\n2. Yes 2\n3. The street is on the north"));
 });
 
 
@@ -643,6 +637,7 @@ test("answers chosen on a question with tanween send the word as written", async
     options: [{ label: "افترض مسطحاً مستطيلاً" }, { label: "لا توجد بيانات" }], allow_other: true }] };
   const { assistant } = setup({ items: [{ kind: "user", text: "ارسم" }, asked] });
   fireEvent.click(screen.getByRole("button", { name: /افترض/ }));
+  fireEvent.click(document.querySelector(".qactions button")!);
   await waitFor(() => expect(assistant.send).toHaveBeenCalledWith("افترض مسطحاً مستطيلاً"));
 });
 
@@ -701,11 +696,37 @@ test.each(["wheel", "ArrowUp", "PageUp", "Home", "ShiftSpace"])("%s stops follow
   fireEvent.scroll(log);
   if (intent === "wheel") fireEvent.wheel(log, { deltaY: -1 });
   else fireEvent.keyDown(log, { key: intent === "ShiftSpace" ? " " : intent, shiftKey: intent === "ShiftSpace" });
-  expect(screen.getByRole("button", { name: "Jump to latest" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
   box.scrollTop = 599;
   fireEvent.scroll(log);
   box.scrollHeight = 1100;
   view.rerender(<AssistantPanel assistant={assistant({ transcript: { items: [{ kind: "assistant", text: "Reading more", finished: false }] } })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} />);
   expect(box.scrollTop).toBe(599);
   expect(log.scrollTo).not.toHaveBeenCalled();
+});
+
+test.each([400, 1000])("wheel-up without movement keeps Jump hidden, including short threads (%s)", height => {
+  const box = { scrollHeight: height, clientHeight: 400, scrollTop: height - 400 };
+  setup({ items: [{ kind: "assistant", text: "Hello", finished: true }] });
+  const log = document.querySelector<HTMLElement>(".assistant-log")!;
+  layout(log, box);
+  fireEvent.scroll(log);
+  fireEvent.wheel(log, { deltaY: -40 });
+  expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+});
+
+test("Jump follows window Arabic despite English content and is outside the scrolling text", () => {
+  localStorage.setItem("qiyas.lang", "ar");
+  render(<LanguageProvider><AssistantPanel assistant={assistant({ transcript: { items: [{ kind: "assistant", text: "English text", finished: true }] } })} onShow={() => {}} onUndo={() => {}} onSettings={() => {}} /></LanguageProvider>);
+  const log = document.querySelector<HTMLElement>(".assistant-log")!;
+  const box = { scrollHeight: 1000, clientHeight: 400, scrollTop: 400 };
+  layout(log, box);
+  fireEvent.scroll(log);
+  const button = screen.getByRole("button", { name: "الانتقال إلى الأحدث" });
+  expect(log.contains(button)).toBe(false);
+  expect(button.getAttribute("lang")).toBe("ar");
+  box.scrollTop = 600;
+  fireEvent.scroll(log);
+  expect(screen.queryByRole("button", { name: "الانتقال إلى الأحدث" })).toBeNull();
+  localStorage.removeItem("qiyas.lang");
 });
