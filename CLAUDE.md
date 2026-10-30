@@ -7,6 +7,19 @@ conventions must work on any drawing. Trade rules belong in optional packs: cons
 interiors and fit-out next, MEP and structure later. No plane-specific or mechanical-specific
 features, and no general CAD marketing. See `docs/2026-10-20-qiyas-scope-decision.md`.
 
+## Founder's rules for Mizan and the window (29 October 2026)
+
+Moved here from the team's memory so they live with the code; later sections give the detail.
+
+- Step by step, never all at once: one floor, one part, small tool results. A single huge read or action is a bug (a 1.3 MB result once filled Mizan's context and it stopped early).
+- Mizan starts drawing at once, floor by floor, and checks each part after it is drawn.
+- Each step line says in plain words what Mizan drew, read or changed, with its numbers; never a bare "Read the drawing" or "Updated the drawing".
+- No assumptions of its own: ask at the step that needs the fact; assume only when the engineer says so, and write each assumption down (sheet notes and the answer).
+- Sheets are tidy: no overlaps, a title block on every sheet, every sheet named (never Untitled), marked for review. Qiyas draws and takes off; loads, design and approval are the engineer's.
+- The ribbon starts collapsed.
+- Examples, demos and tests use mega projects and extreme cases, never a villa or a small building.
+- Coding work is written as tasks for Codex on the founder's computer; keep the dev app running so it can be tried directly.
+
 ## Layout
 
 ```
