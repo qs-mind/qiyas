@@ -3,7 +3,7 @@
 import type { Trace } from "../app/useTrace";
 import { useLanguage, useT } from "../i18n";
 import { HowCalculated } from "./HowCalculated";
-import { itemTitle, num, unitText } from "./howCalculated";
+import { itemTitle, num, unitText } from "./calculated";
 
 export function TraceCard({ trace }: { trace: Trace }) {
   const t = useT();

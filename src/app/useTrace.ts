@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { drawingInfo, explainItem, type DrawingInfo, type Explanation } from "../api";
 import { TRACE_EVENT, type TraceTarget } from "../boq/trace";
-import { num, unitText } from "../boq/howCalculated";
+import { num, unitText } from "../boq/calculated";
 import { uiError } from "../i18n/errors";
 import { handlesBounds } from "../tools/overlay";
 import type { Batch } from "../viewport/batch";
