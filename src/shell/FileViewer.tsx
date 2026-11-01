@@ -1,6 +1,6 @@
 import { Tabs } from "@base-ui/react/tabs";
 import Papa from "papaparse";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState, type RefObject, type KeyboardEvent } from "react";
 import { fileViewBytes, fileViewInfo, fileViewPdfPage, fileViewWorkbook, type FileViewInfo, type FileViewWorkbook, type FileViewPdfTrace, type FileViewPdfTracePage } from "../api";
 import { trace, type TraceTarget } from "../boq/trace";
@@ -166,6 +166,14 @@ function WorkbookViewer({ book }: { book: FileViewWorkbook }) {
   </Tabs.Root>;
 }
 
+/** A vertical list with no laid-out height (jsdom, a hidden panel) must keep its initial
+ *  height. `@tanstack/virtual-core` 3.19 reads `clientWidth`/`clientHeight`, so a width-only
+ *  measurement is not a viewport. */
+const observeRect: typeof observeElementRect = (instance, cb) =>
+  observeElementRect(instance, (rect) => {
+    if (rect.height > 0) cb(rect);
+  });
+
 function FileTable({ rows, name, targets, drawing }: {
   rows: string[][]; name: string; targets?: Record<number, TraceTarget> | null; drawing?: string | null;
 }) {
@@ -184,6 +192,7 @@ function FileTable({ rows, name, targets, drawing }: {
     count: Math.max(0, rows.length - 1), getScrollElement: () => scroller.current,
     estimateSize: () => 36, overscan: 8, enabled: many, scrollMargin: headerHeight,
     initialRect: { width: 600, height: 600 },
+    observeElementRect: observeRect,
   });
   const columns = rows.reduce((max, row) => Math.max(max, row.length), 0);
   const items = virtual.getVirtualItems();
