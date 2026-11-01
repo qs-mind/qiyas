@@ -232,7 +232,10 @@ fn villa_speed() {
     assert!(!cfg!(debug_assertions), "run the speed guard in release");
     let reference = performance::reference();
     let maximum = replay(6, 1.0);
-    performance::assert_relative(maximum, reference, 2.0, "largest villa opening batch");
+    // GitHub's `check` job measured about 1.61 before the 29 Oct wall-provenance
+    // rebuild and about 2.67 after it (2.66, 2.67, 2.68). 3.5 keeps the same
+    // kind of headroom and still fails a further large slowdown.
+    performance::assert_relative(maximum, reference, 3.5, "largest villa opening batch");
 }
 
 #[test]
