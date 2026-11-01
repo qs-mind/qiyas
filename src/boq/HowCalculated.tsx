@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DimensionLine, Explanation, Operand } from "../api";
 import { useLanguage, useT } from "../i18n";
 import { TechnicalDetails } from "../shell/TechnicalDetails";
-import { elementName, itemTitle, lineOperands, linesOf, num, operandText, unitText } from "./howCalculated";
+import { elementName, itemTitle, lineOperands, linesOf, num, operandText, unitText } from "./calculated";
 
 export type HowCalculatedProps = {
   explanation: Explanation;

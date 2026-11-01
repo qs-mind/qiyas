@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { elementItems, type ElementItems as Items } from "../api";
 import { useLanguage, useT } from "../i18n";
-import { num, unitText } from "./howCalculated";
+import { num, unitText } from "./calculated";
 import { trace } from "./trace";
 
 export function ElementItems({ handle }: { handle: number }) {
