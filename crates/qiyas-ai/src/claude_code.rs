@@ -1404,6 +1404,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_fake_cli_turn_keeps_received_activity_in_agent_log() {
+        let _guard = TEST_PROCESS.lock().await;
         let (dir, provider) = fixture(Vec::new());
         let session = provider.session.clone();
         let before_wait = vec![
