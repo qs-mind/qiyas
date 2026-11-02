@@ -40,8 +40,9 @@ Founder's rulings, 2 November 2026:
   gets a right-to-left base direction even when it starts with a Latin code or name.
 - Fully AI-driven, no static content (founder, 3 November 2026): Qiyas ships no ready-made
   drawing libraries, symbol sets or fixed design data. Mizan draws each component it needs
-  itself, at real size and in full detail, keeps it in its own library on this computer
-  (it starts empty and grows as Mizan works) and reuses or improves it next time.
+  itself, at real size and in full detail, as a block in the drawing, and reuses or improves
+  it there. Nothing is kept on the computer to make Mizan work better: a fresh install
+  anywhere works as well as the founder's (3 November 2026, "this app will be shipped").
 - No code-signing certificates and no spending: every tool the work needs is free. The download
   pages explain the operating system's warning instead.
 
