@@ -21,6 +21,8 @@ const CTB_HEADER: &[u8; 48] = b"PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcod
 const STB_HEADER: &[u8; 48] = b"PIAFILEVERSION_2.0,STBVER1,compress\r\npmzlibcodec";
 /// The most text a plot style file may unpack to.
 const MAX_TEXT: u64 = 16 << 20;
+/// The deepest a plot style's blocks may nest (real files nest two).
+const MAX_BLOCK_DEPTH: usize = 8;
 /// The most lineweights a table may hold.
 const MAX_LINEWEIGHTS: usize = 4096;
 /// `color` of a pen that plots with the object's colour.
@@ -374,6 +376,7 @@ enum Node {
 fn parse_block<'a>(
     lines: &mut impl Iterator<Item = &'a str>,
     nested: bool,
+    depth: usize,
 ) -> Result<Vec<(String, Node)>, PlotError> {
     let mut out = Vec::new();
     while let Some(raw) = lines.next() {
@@ -393,9 +396,12 @@ fn parse_block<'a>(
             };
         }
         if let Some(name) = line.strip_suffix('{').filter(|n| !n.contains('=')) {
+            if depth >= MAX_BLOCK_DEPTH {
+                return Err(bad("The plot style is nested too deeply"));
+            }
             out.push((
                 name.trim().to_string(),
-                Node::Block(parse_block(lines, true)?),
+                Node::Block(parse_block(lines, true, depth + 1)?),
             ));
         } else if let Some((k, v)) = line.split_once('=') {
             out.push((k.trim().to_string(), Node::Value(v.to_string())));
@@ -475,7 +481,7 @@ fn entry(nodes: Vec<(String, Node)>) -> Result<StyleEntry, PlotError> {
 
 fn from_text(kind: Option<StyleKind>, text: &str) -> Result<PlotStyle, PlotError> {
     let text = text.trim_start_matches('\u{feff}');
-    let nodes = parse_block(&mut text.split('\n'), false)?;
+    let nodes = parse_block(&mut text.split('\n'), false, 0)?;
     let mut style = PlotStyle::default_ctb();
     style.styles.clear();
     style.lineweights.clear();

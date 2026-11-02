@@ -126,6 +126,39 @@ const CTB_HEADER: &str = "PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec";
 const STB_HEADER: &str = "PIAFILEVERSION_2.0,STBVER1,compress\r\npmzlibcodec";
 
 #[test]
+fn deep_nesting_is_refused_not_a_crash() {
+    let text = format!("description=\"x\"\n{}", "a{\n".repeat(200_000));
+    let result = PlotStyle::parse(text.as_bytes());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("nested too deeply"));
+}
+
+#[test]
+fn compressed_deep_nesting_is_refused_not_a_crash() {
+    let text = format!("description=\"x\"\n{}", "a{\n".repeat(200_000));
+    let result = PlotStyle::parse(&binary(CTB_HEADER, &text));
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("nested too deeply"));
+}
+
+#[test]
+fn nesting_at_the_limit_still_parses() {
+    let text = format!("{}{}{}", ctb_text(), "a{\n".repeat(8), "}\n".repeat(8));
+    let expected = PlotStyle::parse(ctb_text().as_bytes()).unwrap();
+    assert_eq!(PlotStyle::parse(text.as_bytes()).unwrap(), expected);
+    assert_eq!(
+        PlotStyle::parse(&binary(CTB_HEADER, &text)).unwrap(),
+        expected
+    );
+}
+
+#[test]
 fn a_ctb_file_reads_its_pens() {
     let style = PlotStyle::parse(&binary(CTB_HEADER, &ctb_text())).unwrap();
     assert_eq!(style.kind, StyleKind::Ctb);
