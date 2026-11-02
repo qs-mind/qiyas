@@ -878,9 +878,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   add nothing (`1 × 0 = 0`, a rule evaluated on an object it does not apply to; the clinic
   working-out was 18,000 lines, 707 of them zero); an item whose lines all give nothing keeps
   its first line. The measurement report itself keeps every line.
-- Registry `deliverable.export {kind, format, layout?, path, language?, project?}` supports
+- Registry `deliverable.export {kind, format, layout?, path, language?, digits?, project?}` supports
   dimensions, boq, queries, variation and register, in Excel/PDF, English/Arabic. It is in the
-  bounded take-off kit. Core prepares the report; shared `qiyas-boq::deliverables` completes it
+  bounded take-off kit. `digits` is `western` (default) or `arabic_indic`, effective only for
+  Arabic reports. Core prepares the report; shared `qiyas-boq::deliverables` completes it
   in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
 - PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
   and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
@@ -890,8 +891,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   in the lossless report records. Excel/PDF include lossless report records. Client-template exports preserve the original
   workbook's package and change only mapped quantity cells, leaving rates and amounts untouched.
 - `qiyas-cli export <drawing|project.qss> --kind boq --format excel --path boq.xlsx`
-  accepts `--language en|ar` and `--layout name`. `project run` adds `--deliverables all`
-  (or comma-separated kinds), `--formats excel,pdf`, `--language` and `--layout`.
+  accepts `--language en|ar`, `--digits western|arabic-indic` (default western) and `--layout name`.
+  `project run` adds `--deliverables all` (or comma-separated kinds), `--formats excel,pdf`,
+  `--language`, `--digits` and `--layout`.
 - Details, mapping example and validation: `docs/2026-10-22-qiyas-phase22.md`.
 
 ## Trust (Phase 23)

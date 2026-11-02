@@ -1,6 +1,6 @@
 //! Shared host writer: a prepared report contains only quantities and presentation data.
 use qiyas_core::{
-    deliverables::{Export, Format, Language, Report},
+    deliverables::{Digits, Export, Format, Language, Report},
     Outcome,
 };
 use rust_xlsxwriter::{Format as CellFormat, Workbook};
@@ -110,7 +110,10 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
                         r as u32,
                         c as u16,
                         n,
-                        &format.clone().set_num_format("0.############"),
+                        &format.clone().set_num_format(number_format(
+                            report,
+                            row.decimals.get(c).copied().flatten(),
+                        )),
                     )?;
                 } else {
                     sheet.write_string_with_format(
@@ -168,6 +171,23 @@ fn excel(path: &Path, report: &Report) -> Result<(), String> {
         Ok(())
     };
     save().map_err(|e| e.to_string())
+}
+fn number_format(report: &Report, decimals: Option<usize>) -> String {
+    // Excel's native Arabic-Indic digits; the cell itself remains numeric.
+    let prefix = if report.language == Language::Ar
+        && report.digits == Digits::ArabicIndic
+        && decimals.is_some()
+    {
+        "[$-2000401]"
+    } else {
+        ""
+    };
+    let decimals = decimals.unwrap_or(0);
+    if decimals == 0 {
+        format!("{prefix}0")
+    } else {
+        format!("{prefix}0.{}", "0".repeat(decimals))
+    }
 }
 pub fn read_excel(path: &Path) -> Result<Report, String> {
     use calamine::Reader;

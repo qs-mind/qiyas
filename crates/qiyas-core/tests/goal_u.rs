@@ -455,6 +455,7 @@ fn u3_u4_client_references_are_plain_and_citations_are_unique() {
         drawing: None,
         kind: Kind::Variation,
         language: Language::En,
+        digits: Default::default(),
         layout: deliverables::default_layout(Kind::Variation),
         warnings: vec![],
         rows: vec![

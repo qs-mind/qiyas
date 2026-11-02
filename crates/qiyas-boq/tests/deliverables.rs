@@ -238,6 +238,7 @@ fn visible_variation_is_readable_and_records_remain_lossless() {
             drawing: None,
             kind: Kind::Variation,
             language,
+            digits: Default::default(),
             layout: deliverables::default_layout(Kind::Variation),
             warnings: vec![],
             rows: vec![
@@ -424,6 +425,7 @@ fn disputed_second_readings_remain_visible_in_excel_and_pdf_in_both_languages() 
         assert_eq!(row["second_reading"]["status"], "differs");
         assert_eq!(row["second_reading"]["second"], second);
         let label = row["second_reading_text"].as_str().unwrap();
+        assert!(!label.chars().any(|c| ('٠'..='٩').contains(&c)), "{label}");
         assert!(label.starts_with(if language == Language::En {
             "Second reading differs: "
         } else {
@@ -488,4 +490,171 @@ fn takeoff_workbook_keeps_disputed_generated_rows_and_their_second_values() {
     assert!(strings.contains(&item.code));
     assert!(strings.contains("Second reading differs:"));
     assert!(strings.contains("القراءة الثانية مختلفة:"));
+}
+
+#[test]
+fn export_digits_default_to_western_and_registry_examples_validate() {
+    use qiyas_core::deliverables::Digits;
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = test_session(&dir.path().join("tower-podium.dxf"));
+    for language in ["en", "ar"] {
+        for digits in [None, Some("western"), Some("arabic_indic")] {
+            let mut input = json!({"type":"deliverable.export","kind":"dimensions","format":"pdf","path":"tower.pdf","language":language});
+            if let Some(digits) = digits {
+                input["digits"] = json!(digits);
+            }
+            let result = session.run_input(&input, qiyas_core::Source::User).unwrap();
+            let qiyas_core::Outcome::Deliverable { export } = result.outcome else {
+                panic!("expected a prepared export");
+            };
+            assert_eq!(
+                export.report.digits,
+                if digits == Some("arabic_indic") {
+                    Digits::ArabicIndic
+                } else {
+                    Digits::Western
+                }
+            );
+        }
+    }
+    let registry = qiyas_core::registry::registry();
+    let entry = registry.get("deliverable.export").unwrap();
+    for example in &entry.examples {
+        let validation = qiyas_core::validation::validate_command(example, None);
+        assert!(validation.valid, "{}", validation.message());
+    }
+    let mut legacy = serde_json::to_value(
+        deliverables::drawing(&session, Kind::Dimensions, Language::Ar, None).unwrap(),
+    )
+    .unwrap();
+    legacy.as_object_mut().unwrap().remove("digits");
+    assert_eq!(
+        serde_json::from_value::<deliverables::Report>(legacy)
+            .unwrap()
+            .digits,
+        Digits::Western
+    );
+}
+
+#[test]
+fn excel_digits_keep_numeric_cells_and_fixed_method_decimals() {
+    use calamine::{Data, Reader};
+    use qiyas_core::deliverables::Digits;
+    let dir = tempfile::tempdir().unwrap();
+    let session = test_session(&dir.path().join("tower-podium.dxf"));
+    for language in [Language::Ar, Language::En] {
+        for digits in [Digits::Western, Digits::ArabicIndic] {
+            let mut report = deliverables::drawing(&session, Kind::Boq, language, None).unwrap();
+            report.digits = digits;
+            report.layout.group_by.clear();
+            report
+                .layout
+                .columns
+                .retain(|c| matches!(c.field.as_str(), "code" | "quantity"));
+            report.rows = vec![
+                json!({"code":"T12","unit":"m2","quantity":12.5}),
+                json!({"code":"P24","unit":"m","quantity":12.5}),
+                json!({"code":"P25","unit":"m3","quantity":12.5}),
+                json!({"code":"P26","unit":"m2","quantity":12.50001,"presentation_decimals":4}),
+                json!({"code":"P27","unit":"nr","quantity":12.0}),
+            ];
+            let path = dir.path().join("digits.xlsx");
+            qiyas_boq::deliverables::write(&Export {
+                path: path.clone(),
+                format: Format::Excel,
+                report: report.clone(),
+            })
+            .unwrap();
+            let mut book = calamine::open_workbook_auto(&path).unwrap();
+            let cells = book.worksheet_range("Report").unwrap();
+            let files = entries(&path);
+            let styles = String::from_utf8_lossy(&files["xl/styles.xml"]);
+            let sheet = String::from_utf8_lossy(&files["xl/worksheets/sheet1.xml"]);
+            let mut formats = BTreeMap::new();
+            let mut xfs = Vec::new();
+            let mut reader = quick_xml::Reader::from_str(&styles);
+            let mut in_xfs = false;
+            loop {
+                use quick_xml::events::Event;
+                match reader.read_event().unwrap() {
+                    Event::Start(e) if e.name().as_ref() == b"cellXfs" => in_xfs = true,
+                    Event::End(e) if e.name().as_ref() == b"cellXfs" => in_xfs = false,
+                    Event::Empty(e) | Event::Start(e) => {
+                        let attrs: BTreeMap<_, _> = e
+                            .attributes()
+                            .map(|a| {
+                                let a = a.unwrap();
+                                (
+                                    String::from_utf8(a.key.as_ref().to_vec()).unwrap(),
+                                    a.decoded_and_normalized_value(
+                                        quick_xml::XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .unwrap()
+                                    .into_owned(),
+                                )
+                            })
+                            .collect();
+                        if e.name().as_ref() == b"numFmt" {
+                            formats.insert(attrs["numFmtId"].clone(), attrs["formatCode"].clone());
+                        } else if in_xfs && e.name().as_ref() == b"xf" {
+                            xfs.push(attrs["numFmtId"].clone());
+                        }
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            let mut cell_styles = BTreeMap::new();
+            let mut reader = quick_xml::Reader::from_str(&sheet);
+            loop {
+                use quick_xml::events::Event;
+                match reader.read_event().unwrap() {
+                    Event::Start(e) if e.name().as_ref() == b"c" => {
+                        let attrs: BTreeMap<_, _> = e
+                            .attributes()
+                            .map(|a| {
+                                let a = a.unwrap();
+                                (
+                                    String::from_utf8(a.key.as_ref().to_vec()).unwrap(),
+                                    a.decoded_and_normalized_value(
+                                        quick_xml::XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .unwrap()
+                                    .into_owned(),
+                                )
+                            })
+                            .collect();
+                        cell_styles.insert(
+                            attrs["r"].clone(),
+                            attrs.get("s").cloned().unwrap_or_else(|| "0".into()),
+                        );
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            for (i, plain) in ["0.00", "0.00", "0.000", "0.0000", "0"].iter().enumerate() {
+                assert!(
+                    matches!(cells.get_value(((i + 2) as u32, 1)), Some(Data::Float(n)) if *n == if i == 4 {12.0} else {12.5})
+                );
+                let address = format!("B{}", i + 3);
+                let style: usize = cell_styles[&address].parse().unwrap();
+                let id = xfs[style].as_str();
+                let actual = formats.get(id).map(String::as_str).unwrap_or(match id {
+                    "1" => "0",
+                    "2" => "0.00",
+                    _ => "unknown",
+                });
+                let expected = if language == Language::Ar && digits == Digits::ArabicIndic {
+                    format!("[$-2000401]{plain}")
+                } else {
+                    plain.to_string()
+                };
+                assert_eq!(actual, expected);
+            }
+            assert_eq!(qiyas_boq::deliverables::read_excel(&path).unwrap(), report);
+        }
+    }
 }

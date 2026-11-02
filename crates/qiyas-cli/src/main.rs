@@ -63,6 +63,9 @@ enum Cmd {
         layout: Option<String>,
         #[arg(long, default_value = "en")]
         language: String,
+        /// Digit system for Arabic deliverables.
+        #[arg(long, default_value = "western", value_parser = parse_digits)]
+        digits: qiyas_core::deliverables::Digits,
     },
     /// Run a project take-off and write its workbook and morning report.
     Project {
@@ -133,6 +136,15 @@ enum Cmd {
     },
 }
 
+fn parse_digits(text: &str) -> Result<qiyas_core::deliverables::Digits, String> {
+    use qiyas_core::deliverables::Digits;
+    match text {
+        "western" => Ok(Digits::Western),
+        "arabic-indic" => Ok(Digits::ArabicIndic),
+        _ => Err("give western or arabic-indic".into()),
+    }
+}
+
 fn parse_version(text: &str) -> Result<DxfVersion, String> {
     Ok(match text {
         "2000" => DxfVersion::AC1015,
@@ -158,6 +170,9 @@ enum ProjectCli {
         formats: String,
         #[arg(long, default_value = "en")]
         language: String,
+        /// Digit system for Arabic deliverables.
+        #[arg(long, default_value = "western", value_parser = parse_digits)]
+        digits: qiyas_core::deliverables::Digits,
         #[arg(long)]
         layout: Option<String>,
         project: PathBuf,
@@ -285,8 +300,17 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
             path,
             layout,
             language,
+            digits,
         } => {
-            export_deliverable(source, kind, format, path, layout.as_deref(), language)?;
+            export_deliverable(
+                source,
+                kind,
+                format,
+                path,
+                layout.as_deref(),
+                language,
+                *digits,
+            )?;
             out.json(&serde_json::json!({"written":path}));
             Ok(None)
         }
@@ -298,6 +322,7 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
                     deliverables,
                     formats,
                     language,
+                    digits,
                     layout,
                 },
         } => {
@@ -331,6 +356,7 @@ fn dispatch(cmd: &Cmd, out: &Out) -> Done {
                             &name.to_string_lossy(),
                             layout.as_deref(),
                             language,
+                            *digits,
                         )?;
                     }
                 }
@@ -920,6 +946,7 @@ fn export_deliverable(
     path: &str,
     layout: Option<&str>,
     language: &str,
+    digits: qiyas_core::deliverables::Digits,
 ) -> Result<(), String> {
     let project = source.extension().is_some_and(|e| e == "qss");
     let source = source.canonicalize().map_err(|e| e.to_string())?;
@@ -928,9 +955,73 @@ fn export_deliverable(
     } else {
         Session::open(&source).map_err(|e| e.to_string())?
     };
-    let input = serde_json::json!({"type":"deliverable.export","kind":kind,"format":format,"path":path,"layout":layout,"language":language,"project":if project {Some(source.to_string_lossy())} else {None}});
+    let input = serde_json::json!({"type":"deliverable.export","kind":kind,"format":format,"path":path,"layout":layout,"language":language,"digits":digits,"project":if project {Some(source.to_string_lossy())} else {None}});
     let outcome = session
         .run_input(&input, Source::User)
         .map_err(|e| e.to_string())?;
     qiyas_boq::deliverables::complete(&outcome.outcome)
+}
+
+#[cfg(test)]
+mod export_digits_tests {
+    use super::*;
+
+    #[test]
+    fn export_and_project_parse_digits_and_default_to_western() {
+        for prefix in [
+            vec![
+                "qiyas-cli",
+                "export",
+                "tower.dxf",
+                "--kind",
+                "dimensions",
+                "--format",
+                "pdf",
+                "--path",
+                "tower.pdf",
+            ],
+            vec![
+                "qiyas-cli",
+                "project",
+                "run",
+                "tower-podium.qss",
+                "--deliverables",
+                "all",
+            ],
+        ] {
+            for choice in [None, Some("western"), Some("arabic-indic")] {
+                let mut args = prefix.clone();
+                if let Some(choice) = choice {
+                    args.extend(["--digits", choice]);
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let digits = match cli.command {
+                    Cmd::Export { digits, .. }
+                    | Cmd::Project {
+                        command: ProjectCli::Run { digits, .. },
+                    } => digits,
+                    _ => panic!("expected export"),
+                };
+                assert_eq!(
+                    digits,
+                    if choice == Some("arabic-indic") {
+                        qiyas_core::deliverables::Digits::ArabicIndic
+                    } else {
+                        qiyas_core::deliverables::Digits::Western
+                    }
+                );
+                assert_eq!(
+                    serde_json::to_value(digits).unwrap(),
+                    if choice == Some("arabic-indic") {
+                        "arabic_indic"
+                    } else {
+                        "western"
+                    }
+                );
+            }
+            let mut invalid = prefix;
+            invalid.extend(["--digits", "unsupported"]);
+            assert!(Cli::try_parse_from(invalid).is_err());
+        }
+    }
 }

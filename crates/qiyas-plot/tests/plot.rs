@@ -1285,6 +1285,7 @@ fn report_trace_regions_follow_wrapping_and_pagination_and_reject_pdf_edits() {
             drawing: Some("/drawings/source.dxf".into()),
             kind: Kind::Dimensions,
             language,
+            digits: Default::default(),
             layout,
             warnings: vec![],
             rows: vec![
@@ -1368,5 +1369,77 @@ fn report_trace_regions_follow_wrapping_and_pagination_and_reject_pdf_edits() {
         stream.set_content(serde_json::to_vec(&report).unwrap());
         pdf.save(&path).unwrap();
         assert!(read_trace(&path).is_none());
+    }
+}
+
+#[test]
+fn arabic_dimension_report_digits_and_decimals_preserve_identifiers() {
+    use qiyas_core::deliverables::{default_layout, Digits, Kind, Language, Report};
+    let dir = tempfile::tempdir().unwrap();
+    let fields = [
+        "quantity",
+        "timesing",
+        "factors",
+        "expression",
+        "label",
+        "code",
+        "handle",
+        "sheet",
+        "drawing",
+        "layer",
+        "reference",
+    ];
+    for language in [Language::Ar, Language::En] {
+        for digits in [Digits::Western, Digits::ArabicIndic] {
+            let mut layout = default_layout(Kind::Dimensions);
+            layout.columns = fields.iter().map(|field| serde_json::from_value(json!({
+                "field":field,"heading":{"en":field,"ar":field},"width":1,"total":*field == "quantity"
+            })).unwrap()).collect();
+            // Wide cells keep each calculation on one extracted line.
+            layout.page.width_mm = 1800.0;
+            let row = json!({"quantity":12.5,"timesing":2,"factors":[2,3.5],"expression":"2 * 3.5 = 7","label":"12.5% / 1,250.5 m","code":"T12","handle":12345,"sheet":"Podium24","drawing":"tower12.dxf","layer":"Level24","reference":"T12 / Podium24 / 12345","unit":"m2"});
+            let report = Report {
+                drawing: None,
+                kind: Kind::Dimensions,
+                language,
+                digits,
+                layout,
+                rows: vec![row.clone(), row],
+                warnings: vec![],
+            };
+            let path = dir.path().join("tower-podium.pdf");
+            qiyas_plot::report::write(&path, &report).unwrap();
+            assert_eq!(qiyas_plot::report::read(&path).unwrap(), report);
+            let doc = lopdf::Document::load(&path).unwrap();
+            let text = doc
+                .get_pages()
+                .values()
+                .map(|page| evidence_text(&doc, *page))
+                .collect::<String>();
+            for identifier in ["T12", "12345", "Podium24", "tower12.dxf", "Level24"] {
+                assert!(text.contains(identifier), "{identifier}: {text}");
+            }
+            if language == Language::Ar && digits == Digits::ArabicIndic {
+                for number in ["١٢٫٥٠", "٢٫٠٠", "٣٫٥٠", "٧٫٠٠", "١٬٢٥٠٫٥", "٢٥٫٠٠"]
+                {
+                    assert!(text.contains(number), "{number}: {text}");
+                }
+                // This helper reads visual glyph order, not the logical source string.
+                assert!(text.contains("٪١٢٫٥") || text.contains("١٢٫٥٪"), "{text}");
+                assert!(!text.contains('%'), "{text}");
+                let calculations = text
+                    .replace("T12", "")
+                    .replace("12345", "")
+                    .replace("Podium24", "")
+                    .replace("tower12.dxf", "")
+                    .replace("Level24", "");
+                assert!(!calculations.chars().any(|c| c.is_ascii_digit()), "{text}");
+            } else {
+                assert!(!text.chars().any(|c| ('٠'..='٩').contains(&c)), "{text}");
+                for number in ["12.50", "2.00", "3.50", "7.00", "12.5%", "1,250.5", "25.00"] {
+                    assert!(text.contains(number), "{number}: {text}");
+                }
+            }
+        }
     }
 }

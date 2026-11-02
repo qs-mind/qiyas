@@ -2184,6 +2184,7 @@ impl Session {
                     layout,
                     path,
                     language,
+                    digits,
                     project,
                 } = *command;
                 return Ok(Outcome::Deliverable {
@@ -2199,6 +2200,7 @@ impl Session {
                                 crate::deliverables::Language::En
                             },
                         ),
+                        digits.unwrap_or_default(),
                         project.as_deref(),
                     )?),
                 });

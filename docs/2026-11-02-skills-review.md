@@ -123,6 +123,9 @@ them as facts Mizan asks for.
 - `src/shell/BlockPalette.test.tsx` "the tool palette runs its buttons and keeps what is added or
   removed": failed once in a full `pnpm test` while Task 8 landed (which it doesn't import);
   5 of 5 alone with and without the change, 1226 of 1226 on the rerun.
+- `qiyas-ai` `log::tests::entries_are_timed_and_indented_and_a_full_log_moves_aside`: failed
+  once at its oversized write (`log.rs:109`) while `/tmp` (a RAM disk shared with other sessions)
+  was nearly full; 3 of 3 alone. Environmental, not a code fault.
 
 ## Not run
 

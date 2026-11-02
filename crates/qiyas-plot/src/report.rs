@@ -1,7 +1,7 @@
 //! Paginated report text uses the plot font subsets, bidi shaping and per-glyph ActualText.
 use crate::font::{em_to_text, FontSet};
 use lopdf::{dictionary, Document, Object, Stream};
-use qiyas_core::deliverables::{display, Language, Report, TraceTarget};
+use qiyas_core::deliverables::{Digits, Kind, Language, Report, TableRow, TraceTarget};
 use qiyas_geom::Xform;
 use qiyas_render::{LaidText, TextEngine, CAP_EM};
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,48 @@ pub(crate) fn arabic_number(text: &str, language: Language) -> String {
         })
         .collect()
 }
+fn cell_text(report: &Report, row: &TableRow, column: usize) -> String {
+    let text = row.display(column);
+    if report.language != Language::Ar || report.digits != Digits::ArabicIndic {
+        return text;
+    }
+    let numeric = row.decimals.get(column).is_some_and(Option::is_some);
+    let calculation = !row.heading
+        && report.layout.columns.get(column).is_some_and(|c| {
+            matches!(
+                c.field.as_str(),
+                "factors" | "expression" | "second_reading_text"
+            ) || (report.kind == Kind::Dimensions && c.field == "label")
+        });
+    if numeric || calculation {
+        arabic_digits(&text)
+    } else {
+        text
+    }
+}
+fn arabic_digits(text: &str) -> String {
+    let chars: Vec<_> = text.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| match c {
+            '0'..='9' => char::from_u32('٠' as u32 + c as u32 - '0' as u32).unwrap(),
+            '%' => '٪',
+            '.' | ','
+                if i > 0
+                    && chars[i - 1].is_ascii_digit()
+                    && chars.get(i + 1).is_some_and(char::is_ascii_digit) =>
+            {
+                if c == '.' {
+                    '٫'
+                } else {
+                    '٬'
+                }
+            }
+            _ => c,
+        })
+        .collect()
+}
 pub fn write(path: &Path, report: &Report) -> Result<(), String> {
     let mut rows = report.table().map_err(|e| e.to_string())?;
     rows.push(report.status_row());
@@ -162,11 +204,11 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
             .cells
             .iter()
             .enumerate()
-            .map(|(i, v)| {
+            .map(|(i, _)| {
                 wrap(
                     &mut engine,
                     &chain,
-                    &arabic_number(&display(v), report.language),
+                    &cell_text(report, &row, i),
                     if wide { available - 6. } else { widths[i] - 6. },
                     size,
                 )
@@ -435,4 +477,40 @@ pub fn read(path: &Path) -> Result<Report, String> {
         .and_then(Object::as_stream)
         .map_err(|e| e.to_string())?;
     serde_json::from_slice(&stream.content).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qiyas_core::deliverables::default_layout;
+
+    #[test]
+    fn percentage_sign_follows_the_number_in_logical_report_text() {
+        for language in [Language::Ar, Language::En] {
+            for digits in [Digits::Western, Digits::ArabicIndic] {
+                let mut layout = default_layout(Kind::Dimensions);
+                layout.columns.retain(|c| c.field == "label");
+                let report = Report {
+                    drawing: None,
+                    kind: Kind::Dimensions,
+                    language,
+                    digits,
+                    layout,
+                    rows: vec![json!({"label":"12.5% / 1,250.5 m"})],
+                    warnings: vec![],
+                };
+                let table = report.table().unwrap();
+                let row = table.iter().find(|row| !row.heading).unwrap();
+                assert_eq!(
+                    cell_text(&report, row, 0),
+                    if language == Language::Ar && digits == Digits::ArabicIndic {
+                        "١٢٫٥٪ / ١٬٢٥٠٫٥ m"
+                    } else {
+                        "12.5% / 1,250.5 m"
+                    }
+                );
+                assert_eq!(report.rows[0]["label"], "12.5% / 1,250.5 m");
+            }
+        }
+    }
 }

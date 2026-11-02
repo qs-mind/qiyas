@@ -19,6 +19,7 @@ fn check_export(format: Format) {
         drawing: None,
         kind: Kind::Boq,
         language: Language::En,
+        digits: Default::default(),
         layout: default_layout(Kind::Boq),
         rows: vec![
             json!({"code":"WF","section":"Finishes","description":description,"unit":"m2","quantity":12.5,"method":"measured net","citations":[{"source":"POMI (RICS)","clause":"Section D"},{"source":"POMI (RICS)","clause":"Section D"}]}),

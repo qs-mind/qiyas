@@ -14,6 +14,7 @@ pub enum DeliverableCommand {
     /// Export dimensions, BOQ, queries, variation or register using a stored layout. The
     /// shorthand deliverable.export accepts kind as the report kind; canonical wire uses report.
     #[schemars(example=serde_json::json!({"kind":"export","report":"boq","format":"excel"}))]
+    #[schemars(example=serde_json::json!({"kind":"export","report":"boq","format":"pdf","language":"ar","digits":"arabic_indic"}))]
     #[schemars(extend("x-takeoff-kit" = {"order":90}))]
     Export {
         report: Kind,
@@ -27,6 +28,10 @@ pub enum DeliverableCommand {
         /// The report's language; the user's language by default (English without one).
         #[serde(default)]
         language: Option<Language>,
+        /// Export digits: western (default) or arabic_indic. Only affects Arabic reports.
+        #[serde(default)]
+        #[schemars(example = serde_json::json!("arabic_indic"))]
+        digits: Option<Digits>,
         #[serde(default)]
         project: Option<String>,
     },
@@ -53,6 +58,16 @@ pub enum Language {
     #[default]
     En,
     Ar,
+}
+/// Digit system for Arabic exports; other report languages always use Western digits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Digits {
+    /// Western digits (0-9), the default for every language.
+    #[default]
+    Western,
+    /// Arabic-Indic digits (٠-٩) in Arabic reports only.
+    ArabicIndic,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -148,6 +163,8 @@ pub struct Report {
     pub drawing: Option<String>,
     pub kind: Kind,
     pub language: Language,
+    #[serde(default)]
+    pub digits: Digits,
     pub layout: Layout,
     pub rows: Vec<Value>,
     pub warnings: Vec<String>,
@@ -163,6 +180,9 @@ pub struct TableRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TraceTarget>,
     pub cells: Vec<Value>,
+    /// Fixed decimal places for numeric cells; identifiers and text have none.
+    #[serde(default)]
+    pub decimals: Vec<Option<usize>>,
     pub heading: bool,
     /// A section or trade title row (the writers draw it as a band across the table).
     #[serde(default)]
@@ -276,6 +296,7 @@ impl Report {
     /// The line every printed report ends with: Qiyas draws and measures, the engineer approves.
     pub fn status_row(&self) -> TableRow {
         TableRow {
+            decimals: vec![],
             target: None,
             cells: vec![json!(match self.language {
                 Language::En => "Status: For review",
@@ -299,6 +320,7 @@ impl Report {
         };
         for section in sections {
             result.push(TableRow {
+                decimals: vec![],
                 target: None,
                 cells: vec![json!(section.heading.text(self.language))],
                 heading: true,
@@ -322,6 +344,7 @@ impl Report {
                 groups.entry(key).or_default().push(row);
             }
             result.push(TableRow {
+                decimals: vec![],
                 target: None,
                 cells: self
                     .layout
@@ -335,6 +358,7 @@ impl Report {
             for (key, rows) in groups {
                 if !key.is_empty() {
                     result.push(TableRow {
+                        decimals: vec![],
                         target: None,
                         cells: vec![json!(key.join(" / "))],
                         heading: true,
@@ -364,6 +388,15 @@ impl Report {
                         cells.push(present(value, &c.field, row, self.language));
                     }
                     result.push(TableRow {
+                        decimals: self
+                            .layout
+                            .columns
+                            .iter()
+                            .map(|c| {
+                                (row[&c.field].is_number() && !identifier_field(&c.field))
+                                    .then(|| precision(row, &c.field))
+                            })
+                            .collect(),
                         target: row
                             .get("target")
                             .and_then(|v| serde_json::from_value(v.clone()).ok()),
@@ -376,12 +409,20 @@ impl Report {
                 // Different items, even in the same unit, are never summed into one figure.
                 if self.layout.columns.iter().any(|c| c.total) && one_item {
                     result.push(TableRow {
+                        decimals: vec![],
                         target: None,
                         cells: vec![json!(self.layout.total_heading.text(self.language))],
                         heading: true,
                         section: false,
                     });
                     result.push(TableRow {
+                        decimals: self
+                            .layout
+                            .columns
+                            .iter()
+                            .zip(&total_decimals)
+                            .map(|(c, d)| c.total.then_some(*d))
+                            .collect(),
                         target: None,
                         cells: self
                             .layout
@@ -405,6 +446,40 @@ impl Report {
         }
         Ok(result)
     }
+}
+impl TableRow {
+    /// Visible numeric text keeps trailing zeros; cell values remain numbers.
+    pub fn display(&self, column: usize) -> String {
+        let Some(value) = self.cells.get(column) else {
+            return String::new();
+        };
+        match (value.as_f64(), self.decimals.get(column).copied().flatten()) {
+            (Some(n), Some(decimals)) => format!("{n:.decimals$}"),
+            _ => display(value),
+        }
+    }
+}
+fn identifier_field(field: &str) -> bool {
+    matches!(
+        field,
+        "id" | "handle"
+            | "handles"
+            | "code"
+            | "sheet"
+            | "sheets"
+            | "drawing"
+            | "path"
+            | "file"
+            | "source_path"
+            | "layer"
+            | "layers"
+            | "number"
+            | "revision"
+            | "reference"
+            | "references"
+            | "sources"
+            | "elements"
+    )
 }
 fn rounded(n: f64, decimals: usize) -> Value {
     // Formatting and parsing avoids binary tails in the visible sheet; records stay untouched.
@@ -518,7 +593,11 @@ fn precision(row: &Value, field: &str) -> usize {
 fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
     let decimals = precision(row, field);
     if let Some(n) = v.as_f64() {
-        return rounded(n, decimals);
+        return if identifier_field(field) {
+            v.clone()
+        } else {
+            rounded(n, decimals)
+        };
     }
     if field == "unit" {
         let unit = v.as_str().unwrap_or_default();
@@ -544,7 +623,7 @@ fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
             .flatten()
             .map(|v| v
                 .as_f64()
-                .map(|n| display(&rounded(n, decimals)))
+                .map(|n| format!("{n:.decimals$}"))
                 .unwrap_or_else(|| display(v)))
             .collect::<Vec<_>>()
             .join(" × "));
@@ -565,7 +644,7 @@ fn present(v: &Value, field: &str, row: &Value, language: Language) -> Value {
                     output.push_str(
                         &number
                             .parse::<f64>()
-                            .map(|n| display(&rounded(n, decimals)))
+                            .map(|n| format!("{n:.decimals$}"))
                             .unwrap_or_else(|_| number.clone()),
                     );
                     number.clear();
@@ -836,6 +915,7 @@ pub fn drawing(
         drawing: (!path.is_empty()).then(|| path.into_owned()),
         kind,
         language,
+        digits: Digits::Western,
         layout,
         rows,
         warnings,
@@ -858,8 +938,12 @@ fn second_reading_column(
         let label = items
             .iter()
             .find(|i| row["code"].as_str() == Some(i.code.as_str()))
-            .map_or_else(String::new, |i| {
-                crate::second_reading::item_label(i, arabic)
+            .map_or_else(String::new, |i| match &i.second_reading {
+                Some(read) if read.status != crate::second_reading::SecondStatus::Agrees => {
+                    let decimals = precision(row, "quantity");
+                    format!("{}: {:.decimals$}", read.label(arabic), read.second)
+                }
+                _ => crate::second_reading::item_label(i, arabic),
             });
         row["second_reading_text"] = json!(label);
     }
@@ -978,12 +1062,14 @@ pub fn project(
         drawing: None,
         kind,
         language,
+        digits: Digits::Western,
         layout,
         rows,
         warnings,
     })
 }
 impl Session {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_deliverable(
         &self,
         kind: Kind,
@@ -991,6 +1077,7 @@ impl Session {
         layout: Option<&str>,
         path: &str,
         language: Language,
+        digits: Digits,
         project_path: Option<&str>,
     ) -> Result<Export, CoreError> {
         let (source, mut report) = if let Some(name) = project_path {
@@ -1000,6 +1087,7 @@ impl Session {
         } else {
             (self.export_source(), drawing(self, kind, language, layout)?)
         };
+        report.digits = digits;
         let ext = if format == Format::Excel {
             "xlsx"
         } else {
