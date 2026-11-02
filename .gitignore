@@ -25,3 +25,5 @@ crates/qiyas-desktop/resources/
 
 # Development data: research notes, benchmark store, the dev QIYAS_HOME. Never committed.
 .local/
+mutants.out/
+mutants.out.old/

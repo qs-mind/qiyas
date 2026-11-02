@@ -1,0 +1,77 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: 1
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: nightly
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang pkg-config libfontconfig1-dev
+      - name: Install cargo-fuzz
+        run: nice cargo install cargo-fuzz --version 0.13.1 --locked -j 1
+      - name: Record toolchain
+        run: |
+          mkdir -p fuzz/artifacts
+          rustc +nightly -Vv > fuzz/artifacts/toolchain.txt
+          cargo fuzz --version >> fuzz/artifacts/toolchain.txt
+      - name: Build harnesses
+        run: nice cargo +nightly fuzz build
+      - name: Run each target for three minutes
+        run: |
+          status=0
+          for target in plot_style expression cmdline raw_input records_where dxf excel_boq xdata_json mcp_request; do
+            case "$target" in
+              dxf|excel_boq) max_len=262144 ;;
+              plot_style) max_len=65536 ;;
+              *) max_len=16384 ;;
+            esac
+            mkdir -p "fuzz/artifacts/$target"
+            if nice cargo +nightly fuzz run "$target" -j 1 -- \
+              -max_total_time=180 -timeout=15 -rss_limit_mb=2048 \
+              -malloc_limit_mb=512 -max_len="$max_len" \
+              2>&1 | tee "fuzz/artifacts/$target/run.log"; then
+              echo "$target: passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "$target: failed (see crash artifacts and run.log)" >> "$GITHUB_STEP_SUMMARY"
+              status=1
+            fi
+          done
+          exit "$status"
+      - name: Upload crashes, logs and resolved dependencies
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            fuzz/artifacts/
+            fuzz/Cargo.lock
+          if-no-files-found: warn
+          retention-days: 14

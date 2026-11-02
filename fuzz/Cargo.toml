@@ -1,0 +1,93 @@
+[package]
+name = "qiyas-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[dependencies]
+# Development only; licence details are in README.md.
+libfuzzer-sys = "=0.4.13"
+arbitrary = "=1.4.2"
+qiyas-plot = { path = "../crates/qiyas-plot" }
+qiyas-param = { path = "../crates/qiyas-param" }
+qiyas-core = { path = "../crates/qiyas-core" }
+qiyas-boq = { path = "../crates/qiyas-boq" }
+serde_json = "1"
+tempfile = "3"
+# Match the production codec and MCP parser.
+opencadcodec = { git = "https://github.com/HakanSeven12/opencadcodec.git", rev = "a35f43e", features = ["serde"] }
+rmcp = { version = "3.5", default-features = false, features = ["server"] }
+
+[profile.release]
+debug = "line-tables-only"
+
+[[bin]]
+name = "plot_style"
+path = "fuzz_targets/plot_style.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expression"
+path = "fuzz_targets/expression.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cmdline"
+path = "fuzz_targets/cmdline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_input"
+path = "fuzz_targets/raw_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "records_where"
+path = "fuzz_targets/records_where.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dxf"
+path = "fuzz_targets/dxf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "excel_boq"
+path = "fuzz_targets/excel_boq.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xdata_json"
+path = "fuzz_targets/xdata_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_request"
+path = "fuzz_targets/mcp_request.rs"
+test = false
+doc = false
+bench = false

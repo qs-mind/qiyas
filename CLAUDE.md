@@ -3822,6 +3822,18 @@ of shipped values; `tests/walls.rs` covers custom block symbols and legacy openi
 
 ## Builds and tests (27 October 2026)
 
+- Parser fuzzing lives in `fuzz/`, its own Cargo workspace excluded from the app workspace.
+  `.github/workflows/fuzz.yml` runs nightly and manually on nightly Rust: nine targets,
+  three minutes each, sequentially, with crash artifacts and logs uploaded even on failure.
+  Local commands and seed provenance are in `fuzz/README.md`: niced, `-j 1`, with
+  `CARGO_BUILD_JOBS=1`. The raw command target validates arbitrary JSON against a blank
+  drawing and executes only a small set of in-memory commands; file commands stop at validation.
+  Development-only dependencies are `arbitrary` (MIT OR Apache-2.0) and `libfuzzer-sys`
+  (MIT OR Apache-2.0 wrapper, bundled NCSA libFuzzer); their versions and tool licences
+  are recorded in that README, not the generated shipped-dependency inventory.
+  `.cargo/mutants.toml` scopes the first cargo-mutants campaign to `qiyas-param/src/expr.rs`
+  and that crate's tests. Run niced, one job, in cargo-mutants' temporary source copy,
+  never `--in-place`; the campaign is not part of normal CI.
 - qiyas-core, qiyas-ai and qiyas-boq each build their integration tests as ONE binary, `tests/all.rs`
   (`autotests = false`). A new test file needs its `#[path = "x.rs"] mod x;` line there; the test
   `every_test_file_is_listed` fails otherwise. `villa_openings` and `clinic_performance` stay their
