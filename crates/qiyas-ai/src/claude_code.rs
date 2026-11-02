@@ -159,6 +159,37 @@ pub fn work_directory(home: &Path) -> Result<PathBuf, AiError> {
         .map_err(|_| error("claude_work_directory"))
 }
 
+struct McpConfig {
+    path: PathBuf,
+}
+
+impl McpConfig {
+    fn create(cwd: &Path, config: &Value) -> Result<Self, AiError> {
+        let path = cwd.join(format!("mcp-{}.json", uuid::Uuid::new_v4().simple()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|_| error("claude_work_directory"))?;
+        let guard = Self { path };
+        let result = serde_json::to_writer(&mut file, config);
+        drop(file);
+        result.map_err(|_| error("claude_work_directory"))?;
+        Ok(guard)
+    }
+}
+
+impl Drop for McpConfig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 #[derive(Clone)]
 struct Capabilities {
     help: String,
@@ -393,6 +424,7 @@ impl ClaudeCode {
         sink: Sink<'_>,
     ) -> Result<TurnResult, AiError> {
         capabilities.validate()?;
+        let config = McpConfig::create(cwd, &config)?;
         let mut cmd = command(&self.path, cwd);
         cmd.args([
             "-p",
@@ -418,10 +450,9 @@ impl ClaudeCode {
             "--allowedTools",
             &TOOLS.join(","),
             "--mcp-config",
-            &config.to_string(),
-            "--append-system-prompt",
-            &req.system,
-        ]);
+        ])
+        .arg(&config.path)
+        .args(["--append-system-prompt", &req.system]);
         if capabilities.has("--permission-prompts") {
             cmd.args(["--permission-prompts", "none"]);
         }
@@ -456,6 +487,7 @@ impl ClaudeCode {
             let child = cmd.spawn().map_err(|_| error("claude_missing"))?;
             let mut running = Running {
                 child: Some(child),
+                config: Some(config),
                 permit: Some(permit),
             };
             let child = running.child.as_mut().expect("spawned child");
@@ -536,6 +568,7 @@ impl ClaudeCode {
 /// Drop also handles cancellation by Agent::stream: interrupt now, terminate after five seconds.
 struct Running {
     child: Option<Child>,
+    config: Option<McpConfig>,
     permit: Option<Arc<OwnedSemaphorePermit>>,
 }
 
@@ -551,9 +584,12 @@ impl Drop for Running {
                 libc::kill(pid as i32, libc::SIGINT);
             }
         }
+        let config = self.config.take();
         let permit = self.permit.take();
         tokio::spawn(async move {
             let _permit = permit;
+            // Remove the config before another turn can acquire the permit.
+            let _config = config;
             if tokio::time::timeout(Duration::from_secs(5), child.wait())
                 .await
                 .is_err()
@@ -1694,7 +1730,22 @@ mod tests {
             }
             assert_eq!(arg("--permission-mode"), "dontAsk");
             assert_eq!(arg("--permission-prompts"), "none");
-            let mcp: Value = serde_json::from_str(arg("--mcp-config").as_str().unwrap()).unwrap();
+            assert!(argv.iter().all(|value| {
+                let value = value.as_str().unwrap();
+                !value.contains("Bearer") && !value.contains("fake-qiyas-only")
+            }));
+            let config_path = Path::new(arg("--mcp-config").as_str().unwrap());
+            assert_eq!(config_path.parent(), Some(cwd.as_path()));
+            assert_eq!(call["mcp_config_mode"], 0o600);
+            assert_eq!(call["mcp_has_bearer"], true);
+            assert!(
+                !config_path.exists(),
+                "completed turn must remove its config"
+            );
+            let mcp = &call["mcp_config"];
+            let mut expected = config();
+            expected["mcpServers"]["qiyas"]["headers"]["Authorization"] = json!("[redacted]");
+            assert_eq!(mcp, &expected);
             assert_eq!(
                 mcp["mcpServers"]
                     .as_object()
@@ -1707,6 +1758,9 @@ mod tests {
             assert_eq!(arg("--settings"), r#"{"disableAllHooks":true}"#);
         }
         let resumed = turns[1]["argv"].as_array().unwrap();
+        let first_argv = turns[0]["argv"].as_array().unwrap();
+        let config_index = first_argv.iter().position(|v| v == "--mcp-config").unwrap() + 1;
+        assert_ne!(first_argv[config_index], resumed[config_index]);
         assert_eq!(
             resumed[resumed.iter().position(|v| v == "--resume").unwrap() + 1],
             SESSION
@@ -1926,6 +1980,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_fake_cli_turns_remove_mcp_config() {
+        for fail_spawn in [false, true] {
+            let (dir, provider) = fixture(Vec::new());
+            let cwd = work_directory(&provider.home).unwrap();
+            if fail_spawn {
+                std::fs::remove_file(&provider.path).unwrap();
+            }
+            let semaphore = Arc::new(Semaphore::new(1));
+            let permit = Arc::new(semaphore.clone().try_acquire_owned().unwrap());
+            assert!(provider
+                .execute(
+                    request(),
+                    &cwd,
+                    &Capabilities { help: help() },
+                    config(),
+                    permit,
+                    &mut |_| {},
+                )
+                .await
+                .is_err());
+            let _released = tokio::time::timeout(Duration::from_secs(8), semaphore.acquire())
+                .await
+                .unwrap()
+                .unwrap();
+            if !fail_spawn {
+                let calls = records(dir.path());
+                let call = calls.iter().find(|call| call["argv"].is_array()).unwrap();
+                assert_eq!(call["mcp_config_mode"], 0o600);
+            }
+            assert!(std::fs::read_dir(&cwd).unwrap().next().is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn cancellation_interrupts_then_terminates_and_holds_the_process_permit() {
         for ignore_interrupt in [false, true] {
             let (dir, provider) = fixture(Vec::new());
@@ -1960,6 +2048,32 @@ mod tests {
                 _ = tokio::time::timeout(Duration::from_secs(5), ready) => {}
             }
             assert!(records(dir.path()).iter().any(|v| v["ready"] == true));
+            let calls = records(dir.path());
+            let argv = calls
+                .iter()
+                .find_map(|call| call["argv"].as_array())
+                .unwrap();
+            assert!(argv.iter().all(|value| {
+                let value = value.as_str().unwrap();
+                !value.contains("Bearer") && !value.contains("fake-qiyas-only")
+            }));
+            let config_path = PathBuf::from(
+                argv[argv
+                    .iter()
+                    .position(|value| value == "--mcp-config")
+                    .unwrap()
+                    + 1]
+                .as_str()
+                .unwrap(),
+            );
+            assert_eq!(config_path.parent(), Some(cwd.as_path()));
+            assert_eq!(
+                config_path.metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let contents: Value =
+                serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+            assert_eq!(contents, config());
             let stopped = std::time::Instant::now();
             drop(running);
             assert!(semaphore.clone().try_acquire_owned().is_err());
@@ -1967,6 +2081,11 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
+            assert!(
+                !config_path.exists(),
+                "cancelled turn must remove its config"
+            );
+            assert!(std::fs::read_dir(&cwd).unwrap().next().is_none());
             if ignore_interrupt {
                 assert!(stopped.elapsed() >= Duration::from_secs(5));
             }

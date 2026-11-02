@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import signal
+import stat
 import sys
 import time
 import urllib.request
@@ -14,16 +15,20 @@ scenario = json.loads((root / "scenario.json").read_text())
 
 
 def record(value):
-    # Keep argv structure for safety assertions without recording the private MCP token.
+    # Record argv unchanged so tests catch secrets passed on the command line.
     if "argv" in value and "--mcp-config" in value["argv"]:
-        logged = list(value["argv"])
-        index = logged.index("--mcp-config") + 1
-        config = json.loads(logged[index])
+        argument = value["argv"][value["argv"].index("--mcp-config") + 1]
+        if argument.startswith("{"):
+            config = json.loads(argument)
+        else:
+            path = pathlib.Path(argument)
+            config = json.loads(path.read_text())
+            value["mcp_config_mode"] = stat.S_IMODE(path.stat().st_mode)
+        value["mcp_has_bearer"] = config["mcpServers"]["qiyas"]["headers"]["Authorization"].startswith("Bearer ")
         for server in config.get("mcpServers", {}).values():
             if "headers" in server:
                 server["headers"] = {name: "[redacted]" for name in server["headers"]}
-        logged[index] = json.dumps(config)
-        value = dict(value, argv=logged)
+        value["mcp_config"] = config
     with (root / "calls.jsonl").open("a") as file:
         file.write(json.dumps(value) + "\n")
 
@@ -46,7 +51,7 @@ elif "-p" in args:
     for event in scenario.get("events_before_wait", []):
         print(json.dumps(event), flush=True)
     if scenario.get("mcp"):
-        config = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["qiyas"]
+        config = json.loads(pathlib.Path(args[args.index("--mcp-config") + 1]).read_text())["mcpServers"]["qiyas"]
         assert urllib.parse.urlparse(config["url"]).hostname == "127.0.0.1"
         headers = dict(config["headers"], **{
             "Content-Type": "application/json",
