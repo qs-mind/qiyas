@@ -131,7 +131,11 @@ pub async fn default_printer() -> Result<Option<String>, String> {
 /// Reads a CTB or STB plot style file.
 #[tauri::command]
 pub async fn load_plot_style(path: String) -> Result<PlotStyle, String> {
-    PlotStyle::load(Path::new(&path)).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        PlotStyle::load(Path::new(&path)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Writes `style` to `path`, a `.ctb` file for a CTB or `.stb` for an STB.

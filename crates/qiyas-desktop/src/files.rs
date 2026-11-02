@@ -427,8 +427,14 @@ pub async fn recover_drawing<R: Runtime>(
     if tabs::find_path(&state, Path::new(&path)).is_some() {
         return Err("This drawing is open: close its tab first to recover it from the file".into());
     }
-    let session = Session::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let report = session.read_report();
+    let recover_path = path.clone();
+    let (session, report) = tauri::async_runtime::spawn_blocking(move || {
+        let session = Session::open(Path::new(&recover_path)).map_err(|e| e.to_string())?;
+        let report = session.read_report();
+        Ok::<_, String>((session, report))
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     let id = tabs::add(&state, session)?;
     let state = state.scoped(Some(id))?;
     remember_recent(&state, &path);
@@ -502,8 +508,13 @@ pub async fn sheet_set_entry(
     drawing: String,
     state: State<'_, AppState>,
 ) -> Result<SheetSetDrawing, String> {
-    let layouts = layouts_of(&state, Path::new(&drawing))?;
-    entry_for(Path::new(&qss), Path::new(&drawing), layouts).map_err(|e| e.to_string())
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let layouts = layouts_of(&state, Path::new(&drawing))?;
+        entry_for(Path::new(&qss), Path::new(&drawing), layouts).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// A new sheet set `name` at `qss` (not written yet) holding every open drawing in its folder
