@@ -65,6 +65,8 @@ const core = vi.hoisted(() => ({
   /** While set, open_drawing and compare wait for it: the window is opening or comparing. */
   openHold: null as Promise<void> | null,
   compareHold: null as Promise<void> | null,
+  reportHold: null as Promise<void> | null,
+  batchHold: null as Promise<void> | null,
   /** More of settings.json than the autosave minutes and the tool palette. */
   settings: {} as Record<string, unknown>,
   /** The block edited in place, as drawing_info says. */
@@ -148,6 +150,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (core.compareHold) await core.compareHold;
         return [];
       case "measurement_report":
+        if (core.reportHold) await core.reportHold;
         return core.generated;
       case "export_evidence":
         if (core.evidenceError) throw core.evidenceError;
@@ -221,6 +224,7 @@ vi.mock("@tauri-apps/api/core", () => ({
           took_ms: 12,
         };
       case "render_batch":
+        if (core.batchHold) await core.batchHold;
         // "Not modified": the window keeps the batch it has.
         return core.batch ?? new Uint8Array([0x51, 0x49, 0x4e, 0x4d, 0, 0, 0, 0]).buffer;
       case "pick":
@@ -389,6 +393,8 @@ beforeEach(() => {
   core.scriptHold = null;
   core.openHold = null;
   core.compareHold = null;
+  core.reportHold = null;
+  core.batchHold = null;
   core.settings = {};
   core.blockEdit = null;
   core.hasBoq = false;
@@ -518,8 +524,7 @@ async function reveal(id: string, handles: number[], sheet = "*Model_Space") {
   await until(() => expect(core.calls.filter((call) => call === "drawing_info {\"workspace\":1}").length).toBeGreaterThan(infoReads));
 }
 
-/** What the drawing's open sends to the core after the core has it: its drafting settings, its
- *  take-off, BOQ and conflicts, then its batch. */
+/** Opening starts the report and canvas requests together after restoring the drawing's view. */
 const SHOWN = [
   "get_drafting {\"workspace\":1}",
   "takeoff {\"workspace\":1}",
@@ -531,6 +536,51 @@ const SHOWN = [
   "tabs null",
   "render_batch {\"workspace\":1}",
 ];
+
+test("opening starts batch and report together and shows the canvas while the report is pending", async () => {
+  await mount();
+  setDrawing([42, 84]);
+  let showBatch!: () => void;
+  let showReport!: () => void;
+  core.batchHold = new Promise(resolve => { showBatch = resolve; });
+  core.reportHold = new Promise(resolve => { showReport = resolve; });
+  core.generated = {
+    items: [{ code: "T-01", description_en: "Tower curtain wall", description_ar: "حائط ستائري للبرج",
+      section: "Walls", trade: "Walls", unit: "m²", quantity: 120000, lines: [] }],
+    warnings: [],
+  };
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: en.open })[0]));
+  await until(() => {
+    expect(core.calls).toContain('measurement_report {"workspace":1}');
+    expect(core.calls).toContain('render_batch {"workspace":1}');
+  });
+  expect(shownHandles()).toEqual([]);
+  await act(async () => showBatch());
+  await until(() => expect(shownHandles()).toEqual([42, 84]));
+  expect(screen.queryByText(/Tower curtain wall/)).toBeNull();
+  await act(async () => showReport());
+  await openOutput(en["outputs.boq"]);
+  expect(await screen.findByText(/Tower curtain wall/)).toBeTruthy();
+  expect(shownHandles()).toEqual([42, 84]);
+});
+
+test.each(["report", "batch"] as const)("opening still reports a failed %s request while the other finishes", async (failed) => {
+  await mount();
+  setDrawing([42]);
+  let reject!: (reason: Error) => void;
+  const held = new Promise<void>((_resolve, fail) => { reject = fail; });
+  if (failed === "report") core.reportHold = held;
+  else core.batchHold = held;
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: en.open })[0]));
+  await until(() => {
+    expect(core.calls).toContain('measurement_report {"workspace":1}');
+    expect(core.calls).toContain('render_batch {"workspace":1}');
+  });
+  if (failed === "report") await until(() => expect(shownHandles()).toEqual([42]));
+  await act(async () => reject(new Error(`${failed} unavailable`)));
+  await until(() => expect(toasts()).toContain(en["err.unknown"]));
+  await until(() => expect(document.querySelector("footer.status .message")?.textContent).toBe("plan.dwg"));
+});
 
 test("open → an autosave is asked about first → Discard deletes it, then the drawing opens and shows", async () => {
   await mount();

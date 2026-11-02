@@ -162,7 +162,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   The latest plan stays docked above the input (`ai/PlanDock.tsx`), with a compact count and an expandable checklist whose fold is kept on this computer.
   Approval opens the dock and its actions live there; completed plans leave on the next user turn, while the inline card stays in the thread as history.
 - The side panels' widths and folds are our own handle (`app/panelRails.tsx`: drag, double click, arrows;
-  kept on this computer), not `react-resizable-panels`. Mizan's column starts at 440 px (672 px while an
+  kept on this computer), not `react-resizable-panels`. Drag moves preview the panel's size directly
+  in its style without rendering the shell or writing storage; release commits the size and fold,
+  and each keyboard step saves. Pointer cancellation keeps the last preview; changing the output
+  discards an unfinished drag. Directions mirror in Arabic, with no resize animation.
+  Mizan's column starts at 440 px (672 px while an
   output is open, its own remembered width), 360 and 560 px in a window under 1300 px; the layers
   panel 260 px.
 - Dependencies (all MIT; `tslib`, 0BSD, comes with them, text in `LICENSES/tslib-0BSD.txt`):
@@ -2002,6 +2006,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Drawings, tabs, recents and views
 
+- Opening or switching a drawing starts its canvas batch and take-off report refresh together.
+  The canvas shows its batch as soon as it arrives, while the report fills in when ready; both
+  keep their error handling and discard results from an earlier drawing.
 - Several drawings open at once, one file tab each above the drawing (title, "•" while the drawing
   has unsaved changes, × or a middle click closes; Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W). Each tab
   owns a stable drawing workspace and Mizan. Activating a tab changes the visible workspace;

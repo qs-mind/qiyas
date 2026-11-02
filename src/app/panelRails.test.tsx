@@ -1,12 +1,86 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { StrictMode, type CSSProperties } from "react";
 import ar from "../i18n/ar.json";
 import en from "../i18n/en.json";
 import { LanguageProvider } from "../i18n";
 import { PANEL_WIDTH, PanelHandle, usePanelRails } from "./panelRails";
 
 const KEY = "qiyas.panels.hidden";
+
+test.each(["ltr", "rtl"])("30 drag moves in %s preview the width without rendering the shell; release and keyboard steps save once", (dir) => {
+  document.documentElement.dir = dir;
+  let renders = 0;
+  function Shell() {
+    renders++;
+    const panels = usePanelRails();
+    return <div className={`middle${panels.hidden.left ? " left-off" : ""}`}
+      style={{ "--left-w": `${panels.width.left}px` } as CSSProperties}>
+      <div className="left" />
+      <PanelHandle side="left" hidden={panels.hidden.left} width={panels.width.left}
+        onToggle={() => panels.toggle("left")} onFold={(folded) => panels.setFolded("left", folded)}
+        onResize={(width) => panels.resize("left", width)} />
+    </div>;
+  }
+  const { container } = render(<StrictMode><Shell /></StrictMode>);
+  const middle = container.firstElementChild as HTMLElement;
+  const sep = screen.getByRole("separator");
+  const write = vi.spyOn(Storage.prototype, "setItem");
+  const before = renders;
+  fireEvent.pointerDown(sep, { button: 0, clientX: 500, pointerId: 1 });
+  for (let move = 1; move <= 30; move++) {
+    fireEvent.pointerMove(sep, { clientX: 500 + (dir === "rtl" ? -1 : 1) * move * 3, pointerId: 1 });
+  }
+  expect(middle.querySelector<HTMLElement>(".left")!.style.width).toBe("350px");
+  expect(middle.style.getPropertyValue("--left-w")).toBe("260px");
+  expect(sep.getAttribute("aria-valuenow")).toBe("350");
+  expect(renders).toBe(before);
+  expect(write).not.toHaveBeenCalled();
+  fireEvent.pointerUp(sep, { pointerId: 1 });
+  expect(renders).toBeGreaterThan(before);
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(localStorage.getItem("qiyas.panels.width")!).left).toBe(350);
+  expect(middle.style.getPropertyValue("--left-w")).toBe("350px");
+  expect(middle.querySelector<HTMLElement>(".left")!.style.width).toBe("");
+  write.mockClear();
+  fireEvent.keyDown(sep, { key: dir === "rtl" ? "ArrowLeft" : "ArrowRight" });
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(localStorage.getItem("qiyas.panels.width")!).left).toBe(366);
+  document.documentElement.dir = "ltr";
+});
+
+test.each(["pointerCancel", "lostPointerCapture"] as const)("%s commits the last preview once", (event) => {
+  const { props } = handle();
+  const sep = screen.getByRole("separator");
+  fireEvent.pointerDown(sep, { button: 0, clientX: 220, pointerId: 1 });
+  fireEvent.pointerMove(sep, { clientX: 300, pointerId: 1 });
+  fireEvent[event](sep, { pointerId: 1 });
+  fireEvent.pointerUp(sep, { pointerId: 1 });
+  expect(props.onResize).toHaveBeenCalledExactlyOnceWith(300);
+});
+
+test("changing the output during a drag clears its preview without saving the old width", () => {
+  const onResize = vi.fn();
+  const view = (slot: "right" | "rightWide", width: number) => <div className="middle"
+    style={{ "--side-w": `${width}px` } as CSSProperties}>
+    <PanelHandle side="right" slot={slot} hidden={false} width={width}
+      onToggle={() => {}} onFold={() => {}} onResize={onResize} />
+    <aside className="side" />
+  </div>;
+  const { container, rerender } = render(view("right", 440));
+  const sep = screen.getByRole("separator");
+  const panel = container.querySelector<HTMLElement>(".side")!;
+  fireEvent.pointerDown(sep, { button: 0, clientX: 800, pointerId: 1 });
+  fireEvent.pointerMove(sep, { clientX: 700, pointerId: 1 });
+  expect(panel.style.width).toBe("540px");
+  rerender(view("rightWide", 672));
+  expect(panel.style.width).toBe("");
+  expect(sep.classList.contains("dragging")).toBe(false);
+  expect(sep.getAttribute("aria-valuenow")).toBe("672");
+  fireEvent.pointerUp(sep, { pointerId: 1 });
+  expect(onResize).not.toHaveBeenCalled();
+});
 
 const setWindowWidth = (width: number) => Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
 
@@ -118,9 +192,10 @@ test("the right panel grows when its handle is dragged towards the start", () =>
   const sep = screen.getByRole("separator");
   fireEvent.pointerDown(sep, { button: 0, clientX: 800, pointerId: 1 });
   fireEvent.pointerMove(sep, { clientX: 700, pointerId: 1 });
+  expect(props.onResize).not.toHaveBeenCalled();
+  fireEvent.pointerUp(sep, { pointerId: 1 });
   expect(props.onFold).toHaveBeenLastCalledWith(false);
   expect(props.onResize).toHaveBeenLastCalledWith(440);
-  fireEvent.pointerUp(sep, { pointerId: 1 });
   // Moving after the drag ended changes nothing.
   props.onResize.mockClear();
   fireEvent.pointerMove(sep, { clientX: 600, pointerId: 1 });
@@ -132,12 +207,14 @@ test("dragging a panel nearly shut folds it; dragging a folded one open unfolds 
   const sep = screen.getByRole("separator");
   fireEvent.pointerDown(sep, { button: 0, clientX: 220, pointerId: 1 });
   fireEvent.pointerMove(sep, { clientX: 40, pointerId: 1 });
-  expect(props.onFold).toHaveBeenLastCalledWith(true);
+  expect(props.onFold).not.toHaveBeenCalled();
   fireEvent.pointerUp(sep, { pointerId: 1 });
+  expect(props.onFold).toHaveBeenLastCalledWith(true);
 
   rerender(<PanelHandle {...props} hidden />);
   fireEvent.pointerDown(sep, { button: 0, clientX: 10, pointerId: 2 });
   fireEvent.pointerMove(sep, { clientX: 250, pointerId: 2 });
+  fireEvent.pointerUp(sep, { pointerId: 2 });
   expect(props.onFold).toHaveBeenLastCalledWith(false);
   expect(props.onResize).toHaveBeenLastCalledWith(240);
 });
@@ -211,6 +288,7 @@ test("in Arabic the left panel is on the right: dragging its handle left widens 
   const sep = screen.getByRole("separator");
   fireEvent.pointerDown(sep, { button: 0, clientX: 900, pointerId: 1 });
   fireEvent.pointerMove(sep, { clientX: 850, pointerId: 1 });
+  fireEvent.pointerUp(sep, { pointerId: 1 });
   expect(props.onResize).toHaveBeenLastCalledWith(270);
   document.documentElement.dir = "ltr";
 });
@@ -239,5 +317,6 @@ test("the wide tabs keep their own width with the same handle", () => {
   expect(sep.getAttribute("aria-valuemax")).toBe(String(PANEL_WIDTH.rightWide.max));
   fireEvent.pointerDown(sep, { button: 0, clientX: 500, pointerId: 1 });
   fireEvent.pointerMove(sep, { clientX: 450, pointerId: 1 });
+  fireEvent.pointerUp(sep, { pointerId: 1 });
   expect(onResize).toHaveBeenLastCalledWith(750);
 });

@@ -2,7 +2,7 @@
 // wider or narrower and folded away to give the drawing the whole width. Between each panel and
 // the drawing is a handle: drag it to resize, double-click it (or its round button) to fold or
 // unfold, arrows on the keyboard to resize. Widths and folds are remembered on this computer.
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useT } from "../i18n";
 
 export type PanelSide = "left" | "right";
@@ -71,22 +71,25 @@ function keep(key: string, value: unknown) {
 export function usePanelRails() {
   const [hidden, setHidden] = useState(storedHidden);
   const [width, setWidth] = useState(storedWidth);
+  const hiddenRef = useRef(hidden);
+  const widthRef = useRef(width);
   /** Folds or unfolds a panel; without `folded`, the other way round from now. */
-  const setFolded = (side: PanelSide, folded?: boolean) =>
-    setHidden((was) => {
-      const to = folded ?? !was[side];
-      if (was[side] === to) return was;
-      const next = { ...was, [side]: to };
-      keep(KEY, next);
-      return next;
-    });
+  const setFolded = (side: PanelSide, folded?: boolean) => {
+    const was = hiddenRef.current;
+    const to = folded ?? !was[side];
+    if (was[side] === to) return;
+    const next = { ...was, [side]: to };
+    hiddenRef.current = next;
+    setHidden(next);
+    keep(KEY, next);
+  };
   const toggle = (side: PanelSide) => setFolded(side);
-  const resize = (slot: WidthSlot, w: number) =>
-    setWidth((was) => {
-      const next = { ...was, [slot]: clampWidth(slot, w) };
-      keep(WIDTH_KEY, next);
-      return next;
-    });
+  const resize = (slot: WidthSlot, w: number) => {
+    const next = { ...widthRef.current, [slot]: clampWidth(slot, w) };
+    widthRef.current = next;
+    setWidth(next);
+    keep(WIDTH_KEY, next);
+  };
   return { hidden, width, toggle, setFolded, resize };
 }
 
@@ -105,42 +108,80 @@ type HandleProps = {
 export function PanelHandle({ side, slot = side, hidden, width, onToggle, onFold, onResize }: HandleProps) {
   const t = useT();
   const limits = PANEL_WIDTH[slot];
-  const drag = useRef<{ x: number; width: number; rtl: boolean; moved: boolean } | null>(null);
-  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{
+    x: number; width: number; rtl: boolean; moved: boolean; pointerId: number;
+    nextWidth: number; folded: boolean; restore(): void; preview(width: number, folded: boolean): void;
+  } | null>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
   const label = t(`panels.${hidden ? "show" : "hide"}.${side}`);
+
+  useLayoutEffect(() => {
+    handleRef.current?.classList.toggle("folded", hidden);
+    handleRef.current?.setAttribute("aria-valuenow", String(hidden ? 0 : width));
+    return () => {
+      drag.current?.restore();
+      drag.current = null;
+    };
+  }, [side, slot, hidden, width]);
 
   // The left panel is on the inline start: dragging towards the drawing widens it. In Arabic the
   // sides swap, so the pointer's direction does too.
   const grow = (dx: number, rtl: boolean) => (side === "left" ? 1 : -1) * (rtl ? -1 : 1) * dx;
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
-    if (e.button !== 0 || (e.target as Element).closest("button")) return;
+    if (drag.current || e.button !== 0 || (e.target as Element).closest("button")) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
-    drag.current = { x: e.clientX, width: hidden ? 0 : width, rtl, moved: false };
-    setDragging(true);
+    const handle = e.currentTarget;
+    const middle = handle.closest<HTMLElement>(".middle");
+    const panel = middle?.querySelector<HTMLElement>(side === "left" ? ":scope > .left" : ":scope > .side");
+    const savedWidth = panel?.style.width ?? "";
+    const savedDisplay = panel?.style.display ?? "";
+    drag.current = {
+      x: e.clientX, width: hidden ? 0 : width, rtl, moved: false, pointerId: e.pointerId,
+      nextWidth: width, folded: hidden,
+      preview: (w, folded) => {
+        if (panel) {
+          panel.style.width = `${w}px`;
+          panel.style.display = folded ? "none" : "flex";
+        }
+        handle.classList.toggle("folded", folded);
+        handle.setAttribute("aria-valuenow", String(folded ? 0 : w));
+      },
+      restore: () => {
+        if (panel) {
+          panel.style.width = savedWidth;
+          panel.style.display = savedDisplay;
+        }
+        handle.classList.remove("dragging");
+        handle.classList.toggle("folded", hidden);
+        handle.setAttribute("aria-valuenow", String(hidden ? 0 : width));
+      },
+    };
+    handle.classList.add("dragging");
   }
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
     const d = drag.current;
-    if (!d) return;
+    if (!d || d.pointerId !== e.pointerId) return;
     // A few pixels of jitter is still a click.
     if (!d.moved && Math.abs(e.clientX - d.x) < 3) return;
     d.moved = true;
     const w = d.width + grow(e.clientX - d.x, d.rtl);
-    if (w < limits.min * FOLD_BELOW) {
-      onFold(true);
-      return;
-    }
-    onFold(false);
-    onResize(w);
+    d.folded = w < limits.min * FOLD_BELOW;
+    if (!d.folded) d.nextWidth = clampWidth(slot, w);
+    d.preview(d.nextWidth, d.folded);
   }
   function onPointerUp(e: PointerEvent<HTMLDivElement>) {
     const d = drag.current;
-    if (!d) return;
+    if (!d || d.pointerId !== e.pointerId) return;
     drag.current = null;
-    setDragging(false);
-    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    d.restore();
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (d.moved) {
+      onFold(d.folded);
+      if (!d.folded) onResize(d.nextWidth);
+    }
     // A click on a folded panel's strip opens it.
     if (hidden && !d.moved && e.type === "pointerup") onToggle();
   }
@@ -166,7 +207,8 @@ export function PanelHandle({ side, slot = side, hidden, width, onToggle, onFold
 
   return (
     <div
-      className={`panel-handle at-${side}${hidden ? " folded" : ""}${dragging ? " dragging" : ""}`}
+      ref={handleRef}
+      className={`panel-handle at-${side}${hidden ? " folded" : ""}`}
       role="separator"
       aria-orientation="vertical"
       aria-label={t(`panels.resize.${side}`)}
@@ -178,6 +220,7 @@ export function PanelHandle({ side, slot = side, hidden, width, onToggle, onFold
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onLostPointerCapture={onPointerUp}
       onDoubleClick={onToggle}
       onKeyDown={onKeyDown}
     >

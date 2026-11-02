@@ -374,9 +374,8 @@ export function useDrawings({
     const drafting = await getDrafting();
     if (isStale(gen, switchGen.current)) return;
     setDraftingState(drafting);
-    await refreshTakeoffAndBoq();
-    if (isStale(gen, switchGen.current)) return;
-    await redraw(true);
+    // The canvas and report can fill in independently.
+    await Promise.all([refreshTakeoffAndBoq(), redraw(true)]);
     if (!isStale(gen, switchGen.current)) shownWorkspace.current = current?.active ?? null;
   }
 
