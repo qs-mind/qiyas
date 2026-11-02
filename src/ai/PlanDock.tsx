@@ -1,3 +1,4 @@
+import { locale } from "../i18n/locale";
 import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { translate, type Lang } from "../i18n";
@@ -51,8 +52,8 @@ function Dock({ plan, busy, language, threadItemId, awaitingApproval = plan.awai
   const bodyId = useId();
   const active = plan.phases.find((phase) => phase.status === "active");
   const count = plan.phases.filter((phase) => phase.status === "done" || phase.status === "skipped").length;
-  // Explicit Arabic numerals for this compact count; no grouping in a phase count.
-  const digits = new Intl.NumberFormat(language === "ar" ? "ar-EG" : "en", { useGrouping: false });
+  // Western digits with no grouping in a phase count.
+  const digits = new Intl.NumberFormat(locale(language), { useGrouping: false });
 
   useEffect(() => {
     if (awaitingApproval) setExpanded(true);
@@ -93,7 +94,7 @@ function Dock({ plan, busy, language, threadItemId, awaitingApproval = plan.awai
       onClick={() => toggle(!expanded)}>
       <span className="plan-mark" aria-hidden="true">{done ? "✓" : "☷"}</span>
       <span className="heading plan-dock-count">{t(done ? "ai.planDock.done" : "ai.planDock.count", {
-        done: digits.format(count), total: digits.format(plan.phases.length),
+        progress: `\u2066${digits.format(count)}/${digits.format(plan.phases.length)}\u2069`,
       })}</span>
       {busy && active && <DotLoader size="sm" />}
       {active && <span className="plan-dock-title" dir="auto">{planPhaseTitle(active, t)}</span>}

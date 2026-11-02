@@ -1,3 +1,4 @@
+import { locale } from "../i18n/locale";
 import { ModalDialog } from "../ui/ModalDialog";
 import { uiError } from "../i18n/errors";
 import { Popover } from "@base-ui/react/popover";
@@ -107,7 +108,7 @@ export function ConversationHistory({ history, disabled }: { history: Conversati
               }}>
                 <strong dir="auto">{chat.title}</strong>
                 <span dir="auto">{chat.drawing?.split(/[\\/]/).pop() ?? t("ai.untitledDrawing")}</span>
-                <time dateTime={new Date(chat.updated).toISOString()}>{new Date(chat.updated).toLocaleString(lang === "ar" ? "ar-EG-u-nu-latn" : "en", { dateStyle: "medium", timeStyle: "short" })}</time>
+                <time dateTime={new Date(chat.updated).toISOString()}>{new Date(chat.updated).toLocaleString(locale(lang), { dateStyle: "medium", timeStyle: "short" })}</time>
               </button>
               <button type="button" className="chat-history-delete" disabled={unavailable}
                 aria-label={t("ai.deleteChat", { title: chat.title })} onClick={() => { void history.remove(chat.id); }}>×</button>

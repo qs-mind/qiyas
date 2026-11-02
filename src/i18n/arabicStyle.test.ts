@@ -85,3 +85,7 @@ test("count labels remain grammatical with unrestricted counts and substituted n
   }
   expect(ar["activityFormat.numbered"]).toBe("{what} (العدد: {n})");
 });
+
+test("Arabic ranges do not join separately isolated placeholders with a dash or slash", () => {
+  expect(Object.entries(ar).filter(([, value]) => /}[-–/]\{/.test(value))).toEqual([]);
+});

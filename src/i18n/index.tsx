@@ -53,6 +53,8 @@ export function translate(lang: Lang, key: string, vars?: Record<string, string 
   const text = STRINGS[lang][key] ?? key;
   return vars ? text.replace(/\{(\w+)\}/g, (m, name: string) => {
     const value = String(vars[name] ?? m);
+    // Preserve a caller-supplied isolate, such as a left-to-right progress count.
+    if (/^[\u2066-\u2068][^\u2066-\u2069]*\u2069$/.test(value)) return value;
     // Isolate substituted names, numbers and paths from the surrounding Arabic sentence.
     return lang === "ar" && /[A-Za-z0-9]/.test(value) ? `\u2068${value}\u2069` : value;
   }) : text;

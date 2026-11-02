@@ -1,3 +1,4 @@
+import { unitText } from "./calculated";
 import { TechnicalDetails, ReviewNotes } from "../shell/TechnicalDetails";
 import { plainMethod } from "../shell/methodName";
 import { Explain, quantity } from "./Explain";
@@ -14,7 +15,7 @@ export function GeneratedBoq({ report, onShow }: { report: MeasurementReport | n
   return <section className="generated-boq" aria-label={t("boq.generated")}>
     <h3>{t("boq.generated")}</h3>
     {report.items.map((item) => <details key={item.code}>
-      <summary dir="auto" onClick={() => trace({ item: `generated:${item.code}`, panel: false })}>{item.code} · {lang === "ar" ? item.description_ar : item.description_en} · {quantity(item.quantity)} {item.unit}</summary>
+      <summary dir={lang === "ar" ? "rtl" : "ltr"} onClick={() => trace({ item: `generated:${item.code}`, panel: false })}>{item.code} · {lang === "ar" ? item.description_ar : item.description_en} · {quantity(item.quantity)} {unitText(item.unit)}</summary>
       <Explain item={`generated:${item.code}`} />
       <ol>{item.lines.map((line, index) => <li key={index}>
         <span>{line.label} · {line.included ? t("boq.included") : t("boq.excluded")}</span>

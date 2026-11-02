@@ -655,7 +655,7 @@ test("the latest airport plan docks outside the thread with the only live approv
   const log = document.querySelector<HTMLElement>(".assistant-log")!;
   expect(log.contains(dock)).toBe(false);
   expect(dock.compareDocumentPosition(screen.getByRole("textbox")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(within(dock).getByRole("button", { name: "Plan 0/2" }).getAttribute("aria-expanded")).toBe("true");
+  expect(within(dock).getByRole("button", { name: "Plan \u20660/2\u2069" }).getAttribute("aria-expanded")).toBe("true");
   expect(within(dock).getByText("Airport terminal quantities")).toBeTruthy();
   expect(within(dock).queryByText("Tower structure")).toBeNull();
   expect(log.querySelectorAll(".mizan-plan")).toHaveLength(2);
@@ -677,7 +677,7 @@ test("a completed hospital dock disappears on the next user message and keeps it
   ] };
   const props = { onShow() {}, onUndo() {}, onSettings() {} };
   const view = render(<AssistantPanel assistant={assistant({ transcript: { items: [hospital] } })} {...props} />);
-  expect(screen.getByRole("button", { name: "Plan done 2/2" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Plan done \u20662/2\u2069" })).toBeTruthy();
   view.rerender(<AssistantPanel assistant={assistant({ transcript: { items: [hospital, { kind: "user", text: "Review the airport" }] } })} {...props} />);
   expect(document.querySelector(".plan-dock")).toBeNull();
   expect(screen.getByRole("region", { name: "Plan" })).toBeTruthy();

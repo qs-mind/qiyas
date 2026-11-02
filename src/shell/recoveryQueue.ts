@@ -1,3 +1,4 @@
+import { locale } from "../i18n/locale";
 /** The recovery questions waiting their turn: one per drawing about to open (`then`), or the
  *  launch one (`then` null), each shown alone in `RecoveryDialog`, first in, first asked; inside
  *  one, the drawings Qiyas crashed with come first. Pure. */
@@ -51,7 +52,7 @@ export function laterOpens(ask: RecoveryAsk): string | null {
 
 /** `secs` (seconds since 1970) as a date and time in the app's language. */
 export const localTime = (secs: number, lang: Lang) =>
-  new Date(secs * 1000).toLocaleString(lang, { dateStyle: "medium", timeStyle: "short" });
+  new Date(secs * 1000).toLocaleString(locale(lang), { dateStyle: "medium", timeStyle: "short" });
 
 /** Rust's refusal of a Discard while another Qiyas holds the drawing ("… is open in another Qiyas
  *  (process N on HOST): its autosave stays"): who holds it, to say in the window's language. */

@@ -1,3 +1,4 @@
+import { locale } from "../i18n/locale";
 import { translate, type Lang } from "../i18n";
 import en from "../i18n/en.json";
 
@@ -33,7 +34,7 @@ export function providerFailure(error: string, lang: Lang) {
     const date = typeof reset === "number" ? new Date(reset < 1e12 ? reset * 1000 : reset)
       : typeof reset === "string" && /^\d{4}-\d\d-\d\dT/.test(reset) ? new Date(reset) : null;
     if (date && Number.isFinite(date.getTime())) {
-      text = translate(lang, "ai.error.limitReset", { time: date.toLocaleString(lang) });
+      text = translate(lang, "ai.error.limitReset", { time: date.toLocaleString(locale(lang)) });
     }
   }
   return { text, canContinue: !setup.has(name) };

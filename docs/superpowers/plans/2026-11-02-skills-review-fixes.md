@@ -179,7 +179,7 @@ it("keeps signs, thousands and products in one isolate", () => {
 ### Task 10: Arabic copy (A5, A7, A8, A9)
 
 **Files:**
-- Modify: `src/i18n/ar.json` (and `en.json` for A9); `crates/qiyas-core/src/discrepancy/compare.rs:72`, `crates/qiyas-ai/src/agent.rs:1316`, `crates/qiyas-core/src/space_planning.rs:521,1504`
+- Modify: `src/i18n/ar.json` (and `en.json` for A9); `crates/qiyas-core/src/measurement/evaluate.rs:536` (generated Arabic BOQ descriptions write sizes in Arabic-Indic digits, `٩٠٠ × ٢١٠٠ مم`, beside Western quantities in the window: write Western digits); `crates/qiyas-core/src/discrepancy/compare.rs:72`, `crates/qiyas-ai/src/agent.rs:1316`, `crates/qiyas-core/src/space_planning.rs:521,1504`
 - Test: `src/i18n/arabicStyle.test.ts`; the Rust Arabic glossary test (extend its pattern)
 
 - [ ] **Step 1: Failing tests** — arabicStyle: an Arabic value with `@`, `/`, `<` or a leading `.` next to Latin keeps that run inside U+2066…U+2069; the five button keys are not imperatives (`ai.send` = `إرسال`). Rust: no Arabic string matches `\{\}\s+(صفوف|ملاحظة|خطأ|حمامات|غرف|بند)`.

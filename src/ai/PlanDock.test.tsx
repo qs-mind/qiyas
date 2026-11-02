@@ -20,7 +20,7 @@ const plan: Extract<Item, { kind: "plan" }> = {
 };
 const props = { plan, busy: true, language: "en" as const, threadItemId: "tower-plan" };
 const finished = { ...plan, phases: plan.phases.map((phase) => ({ ...phase, status: phase.status === "skipped" ? "skipped" as const : "done" as const })) };
-const toggle = () => screen.getByRole("button", { name: /Plan (?:done )?\d\/8/ });
+const toggle = () => screen.getByRole("button", { name: /Plan (?:done )?\u2066\d\/8\u2069/ });
 
 afterEach(() => {
   cleanup();
@@ -31,7 +31,7 @@ afterEach(() => {
 
 test("collapsed tower plan shows done plus skipped, the active title, and small dots", () => {
   const { container } = render(<PlanDock {...props} />);
-  expect(toggle().textContent).toContain("Plan 3/8");
+  expect(toggle().textContent).toContain("Plan \u20663/8\u2069");
   expect(toggle().textContent).toContain("Tower structural frame");
   expect(toggle().getAttribute("aria-expanded")).toBe("false");
   expect(container.querySelector(".dot-loader.dot-sm")).toBeTruthy();
@@ -90,7 +90,7 @@ test("completed phases collapse to done only when Mizan stops working", () => {
   expect(toggle().getAttribute("aria-expanded")).toBe("true");
   screen.getByRole("button", { name: "Show in chat" }).focus();
   view.rerender(<PlanDock {...props} plan={finished} busy={false} />);
-  expect(toggle().textContent).toContain("Plan done 8/8");
+  expect(toggle().textContent).toContain("Plan done \u20668/8\u2069");
   expect(toggle().getAttribute("aria-expanded")).toBe("false");
   expect(document.activeElement).toBe(toggle());
   expect(document.querySelector(".dot-loader")).toBeNull();
@@ -117,11 +117,12 @@ test("Show in chat folds the dock and scrolls the original thread item", () => {
   } finally { original.remove(); }
 });
 
-test("Arabic uses RTL, Arabic digits, and a localized active phase title", () => {
+test("Arabic uses RTL, Western digits, and a localized active phase title", () => {
   const arabic = { ...plan, phases: plan.phases.map((phase) => phase.status === "active"
     ? { ...phase, title: "الهيكل الإنشائي لبرج المطار" } : phase) };
   const { container } = render(<PlanDock {...props} plan={arabic} language="ar" />);
-  const button = screen.getByRole("button", { name: /الخطة ٣\/٨/ });
+  const button = screen.getByRole("button", { name: /الخطة \u20663\/8\u2069/ });
+  expect(container.querySelector(".plan-dock-count")?.textContent).toBe("الخطة \u20663/8\u2069");
   expect(button.textContent).toContain("الهيكل الإنشائي لبرج المطار");
   expect(container.firstElementChild?.getAttribute("dir")).toBe("rtl");
   expect(container.firstElementChild?.getAttribute("lang")).toBe("ar");
@@ -210,7 +211,7 @@ test.each(["en", "ar"] as const)("expert frame has its own remembered fold and n
   const title = language === "en" ? "Expert frame" : "إطار الخبير";
   const details = screen.getByText(title).closest("details")!;
   expect(details.open).toBe(false);
-  expect(view.container.querySelector(".plan-dock-count")?.textContent).toMatch(language === "en" ? /3\/8/ : /٣\/٨/);
+  expect(view.container.querySelector(".plan-dock-count")?.textContent).toMatch(/\u20663\/8\u2069/);
   fireEvent.click(screen.getByText(title));
   await waitFor(() => expect(details.open).toBe(true));
   await waitFor(() => expect(localStorage.getItem("qiyas.planDock.frameExpanded")).toBe("true"));
@@ -228,7 +229,7 @@ test("a single work step can still show its expert frame", () => {
   expect(latestDockPlan([single])?.plan).toEqual(single);
   render(<PlanDock {...props} plan={single} />);
   expect(screen.getByText("Expert frame")).toBeTruthy();
-  expect(screen.getByRole("button", { name: /Plan 0\/1/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Plan \u20660\/1\u2069/ })).toBeTruthy();
 });
 
 test("frame and phase notes survive plan updates, approval and history replay", () => {

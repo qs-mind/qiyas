@@ -15,5 +15,5 @@ test("shows rule decisions and source counts and follows refreshed generated qua
   fireEvent.click(screen.getByRole("button", { name: "Show on drawing (1) · Model · A/1" }));
   expect(onShow).toHaveBeenCalledWith([42], "Model");
   view.rerender(<GeneratedBoq report={{ ...report, items: [{ ...report.items[0], quantity: 15 }] }} onShow={onShow} />);
-  expect(screen.getByText(/A · Test surface · 15 m2/)).toBeTruthy();
+  expect(screen.getByText(/A · Test surface · 15 m²/)).toBeTruthy();
 });
