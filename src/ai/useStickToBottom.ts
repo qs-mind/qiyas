@@ -16,25 +16,45 @@ export function useStickToBottom(changed: readonly unknown[]) {
   const intentUp = useRef(false);
   const [away, setAway] = useState(false);
 
-  // A new box (the conversation came back from the log) starts at the bottom again.
+  const observer = useRef<ResizeObserver | null>(null);
+  const observed = useRef(new Set<Element>());
+  const previousChanged = useRef<readonly unknown[] | null>(null);
+
+  const toBottom = useCallback((smooth: boolean) => {
+    const el = box.current;
+    if (!el) return;
+    el.scrollTo?.({ top: el.scrollHeight, behavior: smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
+  }, []);
+
+  const measureAway = useCallback(() => {
+    const el = box.current;
+    setAway(!!el && el.scrollHeight > el.clientHeight && el.scrollHeight - el.scrollTop - el.clientHeight > NEAR);
+  }, []);
+
+  // One observer per mounted box, including when history replaces the conversation.
   const ref = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    observed.current.clear();
+    previousChanged.current = null;
     box.current = el;
     pinned.current = true;
     intentUp.current = false;
     previousTop.current = 0;
     setAway(false);
-  }, []);
-
-  const toBottom = (smooth: boolean) => {
-    const el = box.current;
     if (!el) return;
-    el.scrollTo?.({ top: el.scrollHeight, behavior: smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
-  };
-
-  const measureAway = () => {
-    const el = box.current;
-    setAway(!!el && el.scrollHeight > el.clientHeight && el.scrollHeight - el.scrollTop - el.clientHeight > NEAR);
-  };
+    observer.current = new ResizeObserver(() => {
+      if (pinned.current) toBottom(false);
+      measureAway();
+    });
+    observer.current.observe(el);
+    for (const child of el.children) {
+      observer.current.observe(child);
+      observed.current.add(child);
+    }
+    toBottom(false);
+    measureAway();
+  }, [toBottom, measureAway]);
 
   const onScroll = () => {
     const el = box.current;
@@ -75,17 +95,23 @@ export function useStickToBottom(changed: readonly unknown[]) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, changed);
 
-  // Both the viewport and its contents can resize without a transcript update (e.g. an image).
+  // Reconcile subscriptions only after content or child-count changes. Existing children keep
+  // their subscriptions, so unrelated renders do not trigger initial resize notifications.
   useLayoutEffect(() => {
     const el = box.current;
-    if (!el) return;
-    const observer = new ResizeObserver(() => {
-      if (pinned.current) toBottom(false);
-      measureAway();
-    });
-    observer.observe(el);
-    for (const child of el.children) observer.observe(child);
-    return () => observer.disconnect();
+    const current = observer.current;
+    if (!el || !current) return;
+    if (previousChanged.current && changed.every((value, i) => Object.is(value, previousChanged.current![i]))
+      && observed.current.size === el.children.length) return;
+    previousChanged.current = changed;
+    const children = new Set(el.children);
+    for (const child of observed.current) {
+      if (!children.has(child)) current.unobserve(child);
+    }
+    for (const child of children) {
+      if (!observed.current.has(child)) current.observe(child);
+    }
+    observed.current = children;
   });
 
   const jump = (smooth = true) => {

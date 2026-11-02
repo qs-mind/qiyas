@@ -4,7 +4,7 @@ import { refreshInBackground } from "./background";
  *  tabs), and Mizan's column (the conversation, and the outputs in its place) on the right. */
 import { TraceCard } from "../boq/TraceCard";
 import type { Trace } from "./useTrace";
-import { useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { uiError } from "../i18n/errors";
 import { RecognitionPanel } from "../shell/RecognitionPanel";
 import type { Drafting, DrawingInfo, Sheet, TabInfo } from "../api";
@@ -14,7 +14,7 @@ import { BoqPanel } from "../boq/BoqPanel";
 import { ConflictsPanel } from "../boq/ConflictsPanel";
 import type { OutputFile } from "../shell/outputFiles";
 import { ArtifactFrame } from "../shell/ArtifactFrame";
-import { OUTPUT_IDS, outputList, type OutputId } from "../shell/outputs";
+import { OUTPUT_IDS, outputList, type OutputId, type ShownOutput } from "../shell/outputs";
 import { useT } from "../i18n";
 import { ImageDisplayPanel } from "../shell/AttachImageDialog";
 import { BlockEditBar } from "../shell/BlockDialogs";
@@ -379,94 +379,108 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
     openBoqTab,
   } = takeoff;
   const { assistant, showCard, undoCard, openSettings, pointing } = ai;
-  const shown = shownFile ? "file" : sideTab === "assistant" ? null : sideTab;
-  const back = () => { onCloseFile?.(); setSideTab("assistant"); };
-  const selectOutput = (id: OutputId) => { onCloseFile?.(); setSideTab(id); };
-  const drawing = info?.path.split(/[\\/]/).pop() ?? "";
-  const outputs = outputList(takeoffState);
+  const shown: ShownOutput | null = shownFile ? "file" : sideTab === "assistant" ? null : sideTab;
+  const back = useCallback(() => { onCloseFile?.(); setSideTab("assistant"); }, [onCloseFile, setSideTab]);
+  const path = info?.path;
+  const hasTakeoff = items.length > 0 || (generated?.items.length ?? 0) > 0;
+  const drawingContext = useMemo(() => path === undefined ? undefined : { path, revision: recognition.revision, hasTakeoff }, [path, recognition.revision, hasTakeoff]);
   /** The take-off report reads again when its head's Refresh is pressed. */
   const [reviewRefresh, setReviewRefresh] = useState(0);
-  const meta = (id: OutputId) => {
-    const count = outputs.find((o) => o.id === id)?.count;
-    // The BOQ is a workbook: its name says where it came from.
-    const name = id === "boq" && bill ? (bill.source.split(/[\\/]/).pop() ?? drawing) : drawing;
-    return [name, count ? t(count === 1 ? "outputs.oneItem" : "outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
-  };
-  const body = (id: OutputId) => {
-    switch (id) {
-      case "takeoff":
-        return (
-          <TakeoffPanel
-            items={items}
-            totals={itemTotals}
-            selectedId={selectedId}
-            onSelect={selectRow}
-            onRemove={removeRow}
-            onRename={renameRow}
-            boq={bill}
-            onLink={linkRow}
-            precision={drafting?.precision ?? 3}
-          />
-        );
-      case "boq":
-        return (
-          <BoqPanel
-            boq={bill}
-            generated={generated}
-            onShowGenerated={takeoff.showGenerated}
-            takeoff={items}
-            selectedCode={boqCode}
-            onSelect={selectBoq}
-            onTolerance={setTolerance}
-          />
-        );
-      case "conflicts":
-        return (
-          <ConflictsPanel
-            conflicts={conflicts}
-            compared={compared}
-            hasBoq={bill !== null}
-            onShow={showConflict}
-            onResolve={resolveConflict}
-            onOpenBoq={openBoqTab}
-          />
-        );
-      case "review":
-        return <RecognitionPanel active={sideTab === "review"} drawing={info?.path ?? null} revision={recognition.revision} run={recognition.run} refresh={reviewRefresh} />;
-    }
-  };
-  /** The buttons of an output's head: what its panel used to carry, now in one place. */
-  const actionsOf = (id: OutputId) => {
-    switch (id) {
-      case "takeoff":
-        return [{ id: "export", label: t("exportTakeoff"), onClick: () => onExportTakeoff?.(), disabled: !onExportTakeoff || items.length === 0 }];
-      case "boq":
-        return [{ id: "import", label: t("importBoq"), onClick: onImportBoq, disabled: !info }];
-      case "conflicts":
-        return [
-          { id: "compare", label: t("compare"), onClick: onCompare, disabled: !info, primary: true },
-          { id: "export", label: t("exportConflicts"), onClick: onExportConflicts, disabled: !info || conflicts.length === 0 },
-        ];
-      case "review":
-        return [{ id: "refresh", label: t("recognition.refresh"), onClick: () => setReviewRefresh((n) => n + 1), disabled: !info }];
-    }
-  };
-  const frames = OUTPUT_IDS.map((id) => (
-    <div key={id} className="art-item" hidden={!!shownFile || sideTab !== id}>
-      <ArtifactFrame
-        id={id}
-        outputs={outputs}
-        meta={meta(id)}
-        actions={actionsOf(id)}
-        onSelect={selectOutput}
-        files={files}
-        onSelectFile={onOpenFile}
-        onBack={back}
-      >
-        <div className="side-panel">{body(id)}</div>
-      </ArtifactFrame>
-    </div>
-  ));
+  const artifact = useMemo(() => {
+    const selectOutput = (id: OutputId) => { onCloseFile?.(); setSideTab(id); };
+    const drawing = path?.split(/[\\/]/).pop() ?? "";
+    const outputs = outputList({ items, bill, generated, conflicts });
+    const meta = (id: OutputId) => {
+      const count = outputs.find((o) => o.id === id)?.count;
+      // The BOQ is a workbook: its name says where it came from.
+      const name = id === "boq" && bill ? (bill.source.split(/[\\/]/).pop() ?? drawing) : drawing;
+      return [name, count ? t(count === 1 ? "outputs.oneItem" : "outputs.items", { n: count }) : ""].filter(Boolean).join(" · ");
+    };
+    const body = (id: OutputId) => {
+      switch (id) {
+        case "takeoff":
+          return (
+            <TakeoffPanel
+              items={items}
+              totals={itemTotals}
+              selectedId={selectedId}
+              onSelect={selectRow}
+              onRemove={removeRow}
+              onRename={renameRow}
+              boq={bill}
+              onLink={linkRow}
+              precision={drafting?.precision ?? 3}
+            />
+          );
+        case "boq":
+          return (
+            <BoqPanel
+              boq={bill}
+              generated={generated}
+              onShowGenerated={takeoff.showGenerated}
+              takeoff={items}
+              selectedCode={boqCode}
+              onSelect={selectBoq}
+              onTolerance={setTolerance}
+            />
+          );
+        case "conflicts":
+          return (
+            <ConflictsPanel
+              conflicts={conflicts}
+              compared={compared}
+              hasBoq={bill !== null}
+              onShow={showConflict}
+              onResolve={resolveConflict}
+              onOpenBoq={openBoqTab}
+            />
+          );
+        case "review":
+          return <RecognitionPanel active={sideTab === "review"} drawing={path ?? null} revision={recognition.revision} run={recognition.run} refresh={reviewRefresh} />;
+      }
+    };
+    /** The buttons of an output's head: what its panel used to carry, now in one place. */
+    const actionsOf = (id: OutputId) => {
+      switch (id) {
+        case "takeoff":
+          return [{ id: "export", label: t("exportTakeoff"), onClick: () => onExportTakeoff?.(), disabled: !onExportTakeoff || items.length === 0 }];
+        case "boq":
+          return [{ id: "import", label: t("importBoq"), onClick: onImportBoq, disabled: path === undefined }];
+        case "conflicts":
+          return [
+            { id: "compare", label: t("compare"), onClick: onCompare, disabled: path === undefined, primary: true },
+            { id: "export", label: t("exportConflicts"), onClick: onExportConflicts, disabled: path === undefined || conflicts.length === 0 },
+          ];
+        case "review":
+          return [{ id: "refresh", label: t("recognition.refresh"), onClick: () => setReviewRefresh((n) => n + 1), disabled: path === undefined }];
+      }
+    };
+    const frames = OUTPUT_IDS.map((id) => (
+      <div key={id} className="art-item" hidden={!!shownFile || sideTab !== id}>
+        <ArtifactFrame
+          id={id}
+          outputs={outputs}
+          meta={meta(id)}
+          actions={actionsOf(id)}
+          onSelect={selectOutput}
+          files={files}
+          onSelectFile={onOpenFile}
+          onBack={back}
+        >
+          <div className="side-panel">{body(id)}</div>
+        </ArtifactFrame>
+      </div>
+    ));
+
+    return { shown, node: <>{frames}{shownFile && <div className="art-item">
+      <ArtifactFrame key={shownFile.path} id="file" file={shownFile} outputs={outputs} files={files}
+        onSelectFile={onOpenFile} onSelect={selectOutput} onBack={back} />
+    </div>}</>, onBack: back };
+  }, [shown, shownFile, sideTab, back, onCloseFile, setSideTab, path, drafting?.precision,
+    items, itemTotals, selectedId, bill, generated, boqCode, conflicts, compared,
+    selectRow, removeRow, renameRow, linkRow, selectBoq, onImportBoq, setTolerance, onCompare,
+    onExportConflicts, showConflict, resolveConflict, openBoqTab, takeoff.showGenerated,
+    recognition.revision, recognition.run, reviewRefresh, onExportTakeoff, files, onOpenFile, t]);
 
   return (
     <aside className={shown ? "side col art-on" : "side col"} aria-label={t("assistant")}>
@@ -474,16 +488,13 @@ export function SidePanel({ showTechnicalDetails, info, drafting, shell, takeoff
       <AssistantPanel
         showTechnicalDetails={showTechnicalDetails}
         assistant={assistant}
-        drawing={info ? { path: info.path, revision: recognition.revision, hasTakeoff: items.length > 0 || (generated?.items.length ?? 0) > 0 } : undefined}
+        drawing={drawingContext}
         history={conversationHistory}
         onShow={showCard}
         onUndo={undoCard}
         onSettings={openSettings}
         pointing={pointing}
-        artifact={{ shown, node: <>{frames}{shownFile && <div className="art-item">
-          <ArtifactFrame key={shownFile.path} id="file" file={shownFile} outputs={outputs} files={files}
-            onSelectFile={onOpenFile} onSelect={selectOutput} onBack={back} />
-        </div>}</>, onBack: back }}
+        artifact={artifact}
         onCompare={onSlashCompare}
         onConnect={onConnect}
         ask={ask}

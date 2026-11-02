@@ -1,6 +1,6 @@
 /** One entry of Mizan's thread: the user's message, Mizan's answer, its questions, plan and steps,
  *  and the notices between them. */
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { translate, useLanguage, useT, type Lang } from "../i18n";
 import { chatText, contentLanguage, isolateRuns, messageFiles, plainDashes } from "./content";
 import { connectionLost, stopText } from "./chatErrors";
@@ -47,7 +47,7 @@ export function planActions(item: Extract<Item, { kind: "plan" }>, i: number, cx
   };
 }
 
-export function ThreadItem({ item, i, cx, id }: { item: Item; i: number; cx: ThreadContext; id?: string }): ReactNode {
+export const ThreadItem = memo(function ThreadItem({ item, i, cx, id }: { item: Item; i: number; cx: ThreadContext; id?: string }): ReactNode {
   const t = useT();
   const { lang } = useLanguage();
   const said = (key: string, vars?: Record<string, string | number>) => translate(cx.chatLang, key, vars);
@@ -146,5 +146,4 @@ export function ThreadItem({ item, i, cx, id }: { item: Item; i: number; cx: Thr
       );
   }
   return null;
-}
-
+});

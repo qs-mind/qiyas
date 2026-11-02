@@ -1,7 +1,8 @@
+import { useStableCallbacks } from "../shell/stableCallbacks";
 import { chatText } from "./content";
 import { errorText, connectionLost } from "./chatErrors";
 import { uiError } from "../i18n/errors";
-import { memo, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Pointing } from "../app/useAssistantWiring";
 import { useLanguage, useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
@@ -107,7 +108,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   const planItemId = (index: number) => `${planId}-plan-${index}`;
 
   const open = openQuestions(items);
-  const picks = open ? draft.picks : {};
+  const picks = draft.picks;
 
   /** Sends `text` (the box's words by default) with the box's pictures and PDFs. */
   async function submit(prompt?: string) {
@@ -160,13 +161,18 @@ export const AssistantPanel = memo(function AssistantPanel({
     wasBusy.current = busy;
   }, [busy]);
 
-  const cx: ThreadContext = {
+  const { onPick, onAnswer, send, focusBox: focusThreadBox } = useStableCallbacks({
+    onPick: pick, onAnswer: submit, send: (text: string) => { void assistant.send(text); }, focusBox,
+  });
+  const dockedPlanIndex = dock?.index;
+  const openIndex = open?.index ?? null;
+  const cx = useMemo<ThreadContext>(() => ({
     items, busy, unavailable: blocked, chatLang, showTechnicalDetails,
-    dockedPlanIndex: dock?.index,
-    openIndex: open?.index ?? null, picks, onPick: pick, onAnswer: submit,
+    dockedPlanIndex, openIndex, picks, onPick, onAnswer,
     runs: readRuns(items), recovery: recoveryGroups(items, busy), undoable: undoableCard(transcript),
-    onShow, onUndo, onSettings, send: (text) => { void assistant.send(text); }, focusBox,
-  };
+    onShow, onUndo, onSettings, send, focusBox: focusThreadBox,
+  }), [items, busy, blocked, chatLang, showTechnicalDetails, dockedPlanIndex, openIndex, picks,
+    onPick, onAnswer, transcript, onShow, onUndo, onSettings, send, focusThreadBox]);
 
   const empty = items.length === 0;
   const shownOutput = artifact?.shown ?? null;
