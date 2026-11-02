@@ -308,8 +308,8 @@ proptest! {
 
 ## Left for the founder's decision (not tasks yet)
 
-- **Window paths and command permissions (S3, S4):** extension and folder limits on ~25 IPC commands, and a `build.rs` permission list for all ~135 handlers; worth doing before any second webview.
-- **Arabic base direction in PDFs and panels (A2):** an RTL base level in `TextEngine::shape_line` for Arabic reports, and `dir="rtl"` for Arabic query text.
+- **Window paths and command permissions (S3, S4): decided 2 November 2026 (founder, relayed by the QS Mind launch session): lock the IPC commands to a small allowlist with path and extension limits.** Next tasks: extension and folder limits on the ~25 path-taking commands, and a `build.rs` permission list for all ~135 handlers with the capability file listing only what the window needs.
+- **Arabic base direction in PDFs and panels (A2): decided 2 November 2026 (same source): Arabic PDFs and panels get a right-to-left base direction.** Next task: an RTL base level in `TextEngine::shape_line` for Arabic reports, and `dir="rtl"` for Arabic query text in the panels.
 - **Float32 origin (G2):** tiles with their own origins, or a robust origin with far outliers as a second tile.
 - **Design work (W4–W6, seams, words):** panel-rail drag, parallel opening fetches, Ribbon and Dialogs interfaces, removing `qiyas-takeoff` and the `execute.rs` dispatch, one typed check finding.
 - **Fuzzing and mutation testing:** a nightly `fuzz/` outside the workspace (harnesses in the review report's sources), and a first `cargo-mutants` run on `crates/qiyas-param/src/expr.rs`, niced, `-j 1`, never `--in-place`.
