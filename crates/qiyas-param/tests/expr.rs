@@ -4,7 +4,19 @@
 
 use std::collections::BTreeMap;
 
+use proptest::prelude::*;
 use qiyas_param::{evaluate_all, Expr, ExprError};
+
+proptest! {
+    #[test]
+    fn expr_display_round_trips(text in "[0-9a-z_ +*/^().,<>=!'-]{0,64}") {
+        if let Ok(expr) = Expr::parse(&text) {
+            let displayed = expr.to_string();
+            prop_assert_eq!(Expr::parse(&displayed).unwrap().to_string(), displayed);
+            let _ = expr.eval(&|_| Some(1.0));
+        }
+    }
+}
 
 fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs

@@ -2,7 +2,23 @@
 
 use std::io::Write;
 
+use proptest::prelude::*;
 use qiyas_plot::{Pen, PlotStyle, StyleKind};
+
+proptest! {
+    #[test]
+    fn ctb_parse_never_panics_and_reaches_a_fixed_point(body in "[a-z_0-9={}\"\n. -]{0,400}") {
+        if let Ok(style) = PlotStyle::parse(format!("description=\"x\n{body}").as_bytes()) {
+            let bytes = style.to_bytes();
+            prop_assert_eq!(PlotStyle::parse(&bytes).unwrap().to_bytes(), bytes);
+        }
+    }
+
+    #[test]
+    fn ctb_parse_never_panics_on_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+        let _ = PlotStyle::parse(&bytes);
+    }
+}
 
 /// A small CTB text as AutoCAD writes it (three colours shown; the rest are the defaults), with
 /// a key Qiyas does not know.

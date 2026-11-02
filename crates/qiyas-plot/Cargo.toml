@@ -30,5 +30,7 @@ thiserror.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+# Parser property tests (MIT OR Apache-2.0); dev-only.
+proptest = "1"
 tempfile.workspace = true
 qiyas-core = { path = "../qiyas-core", features = ["fixtures"] }
