@@ -1313,7 +1313,7 @@ impl Agent {
             let recognised = s.recognition_evidence().ok()?.iter()
                 .filter(|c| c.state == qiyas_core::recognition::ReviewState::Accepted).count();
             Some(if arabic {
-                format!("احتفظ بـ {} بند كميات من {recognised} عنصر مقبول. توجد {} ملاحظة للمراجعة. النطاق غير المرتبط أو غير المؤكد لم يكتمل؛ لم تختلق كميات.", report.items.len(), report.warnings.len())
+                format!("احتفظ ببنود الكميات (العدد: {}) من العناصر المقبولة (العدد: {recognised}). عدد الملاحظات للمراجعة: {}. النطاق غير المرتبط أو غير المؤكد لم يكتمل؛ لم تختلق كميات.", report.items.len(), report.warnings.len())
             } else {
                 format!("{} generated BOQ items retained from {recognised} accepted recognised elements. {} Unmapped or uncertain scope remains incomplete; no quantities were invented.", report.items.len(), report.warnings.join("; "))
             })

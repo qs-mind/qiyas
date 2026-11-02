@@ -518,7 +518,7 @@ pub fn run_checks(
         format!("عدد الفحوص المنفذة دون ملاحظات: {}.", cx.checked.len())
     } else {
         format!(
-            "نتائج الفحوص: {errors} خطأ و {warnings} تحذير و {notes} ملاحظة. إجمالي الفحوص: {}.",
+            "نتائج الفحوص: عدد الأخطاء: {errors}، عدد التحذيرات: {warnings}، عدد الملاحظات: {notes}. إجمالي الفحوص: {}.",
             cx.checked.len()
         )
     });
@@ -1112,7 +1112,7 @@ fn stairs(cx: &mut Ctx, fl: &Fl) {
                             e(limit.value(), 0)
                         ),
                         format!(
-                            "{label} فيه {} درجة في مرقاة واحدة؛ والحد الأقصى {}.",
+                            "{label}؛ عدد الدرجات في مرقاة واحدة: {}؛ والحد الأقصى {}.",
                             a(f64::from(n), 0),
                             a(limit.value(), 0)
                         ),
@@ -1501,7 +1501,7 @@ fn bathroom_ratio(cx: &mut Ctx, floors: &[Fl]) {
                     "{bedrooms} bedrooms share {baths} bathrooms; {needed} or more are expected."
                 ),
                 format!(
-                    "{} غرف نوم تتشارك {} حمامات؛ والمتوقع {} أو أكثر.",
+                    "غرف النوم (العدد: {}) تتشارك الحمامات (العدد: {})؛ والعدد المتوقع للحمامات: {} أو أكثر.",
                     a(bedrooms as f64, 0),
                     a(baths as f64, 0),
                     a(needed as f64, 0)
@@ -1513,7 +1513,7 @@ fn bathroom_ratio(cx: &mut Ctx, floors: &[Fl]) {
                     needed - baths
                 ),
                 format!(
-                    "أضف {} حمام، الأول لغرفة النوم الرئيسية.",
+                    "أضف حمامات (العدد: {})، الأول لغرفة النوم الرئيسية.",
                     a((needed - baths) as f64, 0)
                 ),
             ),

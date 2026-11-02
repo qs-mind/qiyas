@@ -89,3 +89,47 @@ test("count labels remain grammatical with unrestricted counts and substituted n
 test("Arabic ranges do not join separately isolated placeholders with a dash or slash", () => {
   expect(Object.entries(ar).filter(([, value]) => /}[-–/]\{/.test(value))).toEqual([]);
 });
+
+// Inspect complete ASCII syntax runs so punctuation cannot escape its LTR isolate.
+function unisolatedSyntax(value: string): string[] {
+  if (![...value].some(arabic)) return [];
+  let plain = "", isolate = 0, nextIsolate = 0;
+  const owners: number[] = [], closed = new Set<number>();
+  for (const c of value.split("")) {
+    if (c === "\u2066") isolate = ++nextIsolate;
+    else if (c === "\u2069") { closed.add(isolate); isolate = 0; }
+    else { plain += c; owners.push(isolate); }
+  }
+  return [...plain.matchAll(/[A-Za-z0-9_@/<.,|\[\]\-]*[A-Za-z0-9_@/<|\[\]\-]/g)]
+    .filter(match => /[@/<]|\.[A-Za-z]/.test(match[0]) && /[A-Za-z]/.test(match[0]))
+    .filter(match => {
+      const owner = owners[match.index];
+      return !owner || !closed.has(owner) ||
+        owners.slice(match.index, match.index + match[0].length).some(id => id !== owner);
+    }).map(match => match[0]);
+}
+
+test("Arabic command syntax stays inside LRI and PDI", () => {
+  expect(Object.entries(ar).flatMap(([key, value]) =>
+    unisolatedSyntax(value).map(run => `${key}: ${run}`))).toEqual([]);
+  for (const run of ["@dx,dy", "@distance<angle", "/login", ".bak", "path/file", "file.dxf"]) {
+    expect(unisolatedSyntax(`اكتب ${run}`)).toEqual([run]);
+    expect(unisolatedSyntax(`اكتب \u2066${run}\u2069`)).toEqual([]);
+  }
+  for (const value of ["اكتب @\u2066dx,dy\u2069", "اكتب \u2066/login", "اكتب \u2066@dx\u2069,dy"]) {
+    expect(unisolatedSyntax(value)).not.toEqual([]);
+  }
+  expect(ar["cmd.badPoint"]).toContain("\u2066@distance<angle\u2069");
+});
+
+test("Arabic action buttons use verbal nouns", () => {
+  const labels = {
+    "ai.send": "إرسال",
+    "ai.newConversation": "محادثة جديدة",
+    "text.place": "وضع النص",
+    "inquiry.place": "وضع النقاط",
+    "ai.markArea": "تحديد منطقة لميزان",
+    "attachPdf.noFile": "لم يحدد ملف",
+  };
+  for (const [key, value] of Object.entries(labels)) expect(ar[key], key).toBe(value);
+});

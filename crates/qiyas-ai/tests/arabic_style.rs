@@ -109,10 +109,43 @@ impl Glossary {
                 errors.push(format!("missing space: {a}{b}"));
             }
         }
+        errors.extend(count_errors(value));
         errors.sort();
         errors.dedup();
         errors
     }
+}
+
+fn count_errors(value: &str) -> Vec<String> {
+    let nouns = [
+        "صفوف",
+        "ملاحظة",
+        "ملاحظات",
+        "خطأ",
+        "أخطاء",
+        "حمامات",
+        "غرف",
+        "بند",
+        "بنود",
+        "عناصر",
+        "طبقات",
+        "عنصر",
+        "حمام",
+        "درجة",
+    ];
+    value
+        .match_indices("{}")
+        .filter_map(|(i, _)| {
+            let rest = &value[i + 2..];
+            if rest.starts_with(char::is_whitespace)
+                && nouns.iter().any(|noun| rest.trim_start().starts_with(noun))
+            {
+                Some(format!("unrestricted count before noun: {value}"))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// A small lexer, not a quote regex: skip comments/characters, retain escaped,
@@ -238,6 +271,9 @@ fn arabic_style_sources_follow_shared_glossary() {
         root.join("src/prompt_ar.txt"),
         root.join("src/takeoff_workflow_ar.txt"),
     ]);
+    // Core authors count messages too; apply the count contract without broadening
+    // the existing AI-only glossary audit to unrelated core copy.
+    scan(&root.join("../qiyas-core/src"), &mut files);
     files.sort();
     let mut errors = Vec::new();
     let mut seen = vec![false; glossary.rust_literal_exceptions.len()];
@@ -269,7 +305,12 @@ fn arabic_style_sources_follow_shared_glossary() {
                 continue;
             }
             let line = source[..offset].bytes().filter(|b| *b == b'\n').count() + 1;
-            for error in glossary.errors(&text) {
+            let issues = if relative.starts_with("../qiyas-core/") {
+                count_errors(&text)
+            } else {
+                glossary.errors(&text)
+            };
+            for error in issues {
                 errors.push(format!("{relative}:{line}: {error} ({text})"));
             }
         }
@@ -292,6 +333,22 @@ fn arabic_style_guard_catches_regressions_and_lexes_real_strings() {
     }
     for value in &glossary.examples.invalid {
         assert!(!glossary.errors(value).is_empty(), "{value}");
+    }
+    for noun in [
+        "صفوف",
+        "ملاحظة",
+        "ملاحظات",
+        "خطأ",
+        "أخطاء",
+        "حمامات",
+        "غرف",
+        "بند",
+        "بنود",
+        "عناصر",
+        "طبقات",
+    ] {
+        assert!(!count_errors(&format!("{{}} {noun}")).is_empty());
+        assert!(count_errors(&format!("{noun} (العدد: {{}})")).is_empty());
     }
     let source = r###"// "ignored"
 /* outer /* "nested" */ comment */

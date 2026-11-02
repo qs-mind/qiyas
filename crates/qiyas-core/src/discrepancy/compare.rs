@@ -69,7 +69,7 @@ pub fn compare(inputs: &CompareInputs, default_tol: f64, previous: &[Conflict]) 
             let mut f = Found::new(
                 ConflictKind::DuplicateItem,
                 format!("BOQ code {code} occurs on {} rows", items.len()),
-                format!("رمز البند {code} مكرر في {} صفوف", items.len()),
+                format!("رمز البند {code} مكرر؛ عدد الصفوف: {}", items.len()),
             );
             f.boq_code = Some(code);
             f.subject = items

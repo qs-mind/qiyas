@@ -306,7 +306,7 @@ fn the_boq_lists_doors_and_windows_by_size_even_when_the_mapping_says_various() 
             .filter(|i| i.code.starts_with("A-W01"))
             .collect();
         assert_eq!(windows.len(), 1);
-        assert!(windows[0].description_ar.contains("١٢٠٠ × ١٢٠٠ مم"));
+        assert!(windows[0].description_ar.contains("1200 × 1200 مم"));
         // The printed BOQ has a section row per section and no total across doors and windows.
         let boq = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
         let table = boq.table().unwrap();
@@ -874,10 +874,18 @@ fn numbered_door_marks_preserve_quantities_and_roll_up_for_a_client_boq() {
         v
     };
     let before = lines(&s);
+    for (_, _, description_ar) in &before {
+        assert!(
+            !description_ar
+                .chars()
+                .any(|c| ('\u{0660}'..='\u{0669}').contains(&c)),
+            "{description_ar}"
+        );
+    }
     assert!(
         before.iter().any(|l| l.0 == "A-D01-900x2100"
             && l.1 == "Doors, various sizes - 900 × 2100 mm"
-            && l.2 == "أبواب بمقاسات متنوعة - ٩٠٠ × ٢١٠٠ مم"),
+            && l.2 == "أبواب بمقاسات متنوعة - 900 × 2100 مم"),
         "{before:?}"
     );
     // Numbering can split the rows by mark, but must preserve the measured quantity.
@@ -939,7 +947,7 @@ fn the_arabic_boq_reads_in_arabic_words_digits_and_units() {
         .collect::<Vec<_>>()
         .join("|");
     assert!(
-        text.contains("أبواب بمقاسات متنوعة - ٩٠٠ × ٢١٠٠ مم"),
+        text.contains("أبواب بمقاسات متنوعة - 900 × 2100 مم"),
         "{text}"
     );
     assert!(text.contains("عدد"), "the unit is in Arabic: {text}");

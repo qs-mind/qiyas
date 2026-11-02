@@ -134,7 +134,7 @@ pub fn describe(session: &Session, ctx: &TurnContext, lang: Lang) -> String {
             s,
             "{}",
             if ar {
-                format!("حدده المستخدم ({n} عنصر؛ «هذا» و«هذه» و«هنا» تعنيها):")
+                format!("حدده المستخدم (عدد العناصر: {n}؛ «هذا» و«هذه» و«هنا» تعنيها):")
             } else {
                 format!("Selected by the user ({n}; \"this\", \"these\" and \"here\" mean them):")
             }
@@ -168,7 +168,7 @@ pub fn describe(session: &Session, ctx: &TurnContext, lang: Lang) -> String {
             "{}",
             if ar {
                 format!(
-                    "منطقة حددها المستخدم ({kind}؛ الأركان {} بوحدات الرسم؛ {area:.3} م²)، فيها أو تقطعها {} عنصر («هنا» تعنيها):",
+                    "منطقة حددها المستخدم ({kind}؛ الأركان {} بوحدات الرسم؛ {area:.3} م²)، عدد العناصر التي فيها أو تقطعها: {} («هنا» تعنيها):",
                     corners.join(" "),
                     inside.len()
                 )

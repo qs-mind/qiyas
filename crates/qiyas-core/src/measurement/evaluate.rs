@@ -533,12 +533,12 @@ fn size_label(object: &ObjectRecord, unit: &str) -> Option<(String, String, Stri
         Some(h) => (
             format!("{}x{}", mm(width), mm(h)),
             format!("{} × {} mm", mm(width), mm(h)),
-            crate::numbers::arabic_numerals(&format!("{} × {} مم", mm(width), mm(h))),
+            format!("{} × {} مم", mm(width), mm(h)),
         ),
         None => (
             format!("{}", mm(width)),
             format!("{} mm", mm(width)),
-            crate::numbers::arabic_numerals(&format!("{} مم", mm(width))),
+            format!("{} مم", mm(width)),
         ),
     })
 }
