@@ -1967,3 +1967,207 @@ fn measurement_summary_distinguishes_an_additive_one_from_an_identity_factor() {
         .iter()
         .any(|r| r["name"] == "Length" && r["decided_by"] == "drawing"));
 }
+
+#[test]
+fn podium_rule_kind_must_agree_with_its_unit() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    method["rules"][0]["kind"] = json!("area");
+    method["rules"][0]["unit"] = json!("m");
+    let error = s
+        .run_input(
+            &json!({"type":"measurement","kind":"set_method",
+        "scope":"project","method":method}),
+            Source::User,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("podium") && error.contains("area") && error.contains("unit m"),
+        "{error}"
+    );
+    for (kind, units) in [
+        ("count", vec!["pcs", "nr", "count"]),
+        ("length", vec!["m", "mm", "cm", "ft", "in"]),
+        ("area", vec!["m2", "m²", "mm2", "cm2", "ft2", "sqm"]),
+        ("volume", vec!["m3", "m³", "mm3", "cm3", "ft3", "cum"]),
+    ] {
+        for unit in units {
+            method["rules"][0]["kind"] = json!(kind);
+            method["rules"][0]["unit"] = json!(unit);
+            let rules: qiyas_core::measurement::RuleSet =
+                serde_json::from_value(method.clone()).unwrap();
+            rules.validate().unwrap();
+        }
+    }
+}
+
+#[test]
+fn podium_net_area_with_a_hosted_deduction_is_an_error_even_when_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("tower-podium-wall.dwg"), 6);
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Podium wall","category":"Tower podium","geometry":"band","join":"union",
+        "properties":{"width":{"kind":"number","unit":"length","default":1}},
+        "vertical":{"height":"5"},"plan":{"band_faces":"width"},"quantities":{}}}),
+    );
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Podium opening","category":"Tower podium","geometry":"hosted",
+        "vertical":{"base":"0","height":"5"},"host_cut":{"width":"2","at":"4"},
+        "quantities":{"opening_area":"2"}}}),
+    );
+    let host = added(
+        &mut s,
+        json!({"type":"place_objects","objects":[{
+        "type":"Podium wall","points":[[0,0],[10,0]]}]}),
+    )[0];
+    added(
+        &mut s,
+        json!({"type":"place_objects","objects":[{
+        "type":"Podium opening","host":host,"points":[[4,0]]}]}),
+    );
+    let cite = json!({"source":"drawing","clause":"Tower podium test geometry"});
+    let mut method = json!({"name":"Podium method","title":"Tower podium","based_on":"drawing","source_note":"Test only",
+        "rules":[{"id":"podium","kind":"area","element_type":"Podium wall","unit":"m2","citation":cite,
+        "terms":[{"label":"Wall area","operation":"add","factors":["geometry.net_area"],"citation":cite}],
+        "deductions":[{"element_type":"Podium opening","when":"true","boundary":{"when":"false","deduct_when":"true","citation":cite},
+        "term":{"label":"Opening","operation":"deduct","factors":["void.opening_area"],"citation":cite}}]}]});
+    set_podium_method(&mut s, &method);
+    let report = s.measurement_report().unwrap();
+    let q = report.quantities.iter().find(|q| q.object == host).unwrap();
+    assert!((q.lines[0].value - 8.0).abs() < 1e-8);
+    assert!((q.quantity - 6.0).abs() < 1e-8);
+    let (_, entries, _) = summary_pages(&s, "");
+    let errors: Vec<_> = entries
+        .iter()
+        .filter(|e| e["code"] == "deduction_from_net")
+        .collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["section"], "measurement_errors");
+    assert_eq!(errors[0]["severity"], "error");
+    assert_eq!(errors[0]["rule"], "podium");
+    assert!(errors[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("geometry.net_area"));
+    assert!(errors[0]["message"].as_str().unwrap().contains("podium"));
+    method["rules"][0]["terms"][0]["factors"] = json!(["geometry.gross_area"]);
+    set_podium_method(&mut s, &method);
+    let report = s.measurement_report().unwrap();
+    assert!((report.quantities[0].quantity - 8.0).abs() < 1e-8);
+    assert!(!summary_pages(&s, "")
+        .1
+        .iter()
+        .any(|e| e["code"] == "deduction_from_net"));
+    method["rules"][0]["terms"][0]["factors"] = json!(["geometry.net_area"]);
+    method["rules"][0]["deductions"] = json!([]);
+    set_podium_method(&mut s, &method);
+    assert!(!summary_pages(&s, "")
+        .1
+        .iter()
+        .any(|e| e["code"] == "deduction_from_net"));
+}
+
+#[test]
+fn two_rules_on_one_podium_slab_ask_one_shared_source_question() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("tower-podium-slab.dwg"), 6);
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Podium slab","category":"Tower podium","geometry":"region","quantities":{}}}),
+    );
+    let host = added(
+        &mut s,
+        json!({"type":"place_objects","objects":[{
+        "type":"Podium slab","points":[[0,0],[180,0],[180,80],[0,80]]}]}),
+    )[0];
+    let cite = json!({"source":"drawing","clause":"Tower podium plan"});
+    let rules: Vec<_> = ["slab-a", "slab-b"].iter().map(|id| json!({
+        "id":id,"kind":"area","element_type":"Podium slab","unit":"m2","citation":cite,
+        "terms":[{"label":"Slab area","operation":"add","factors":["geometry.area"],"citation":cite}]})).collect();
+    let mappings: Vec<_> = rules.iter().map(|r| json!({"rule":r["id"],"code":"S-1",
+        "description_en":"Podium slab","description_ar":"بلاطة منصة البرج","unit":"m2","section":"Podium","trade":"","citation":cite})).collect();
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+    );
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_method","scope":"project","method":{
+        "name":"Podium","title":"Tower podium","based_on":"drawing","source_note":"Test only","rules":rules}}),
+    );
+    let (_, entries, _) = summary_pages(&s, "");
+    let questions: Vec<_> = entries
+        .iter()
+        .filter(|e| e["code"] == "shared_source")
+        .collect();
+    assert_eq!(questions.len(), 1);
+    assert_eq!(questions[0]["severity"], "question");
+    assert_eq!(questions[0]["handle"], host);
+    assert_eq!(questions[0]["rules"], json!(["slab-a", "slab-b"]));
+    assert_eq!(questions[0]["boq_code"], "S-1");
+    assert_ne!(questions[0]["section"], "measurement_errors");
+    assert_eq!(s.takeoff_check(0, &[]).unwrap()["measurement_errors"], 0);
+    let report = s.measurement_report().unwrap();
+    assert_eq!(report.items.len(), 1);
+    assert!((report.items[0].quantity - 28800.0).abs() < 1e-8);
+    let mut separate = mappings.clone();
+    separate[1]["code"] = json!("S-2");
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_mappings","mappings":separate}),
+    );
+    assert!(!summary_pages(&s, "")
+        .1
+        .iter()
+        .any(|e| e["code"] == "shared_source"));
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+    );
+    let slabs: Vec<_> = (1..=24)
+        .map(|i| {
+            let y = f64::from(i) * 100.0;
+            json!({"type":"Podium slab","points":[[0,y],[180,y],[180,y+80.0],[0,y+80.0]]})
+        })
+        .collect();
+    added(&mut s, json!({"type":"place_objects","objects":slabs}));
+    let (_, entries, pages) = summary_pages(&s, "");
+    assert!(pages > 1);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e["code"] == "shared_source")
+            .count(),
+        25
+    );
+}
+
+#[test]
+fn takeoff_overview_counts_failing_drawing_pack_lines_and_registry_exposes_the_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new_blank(&dir.path().join("tower-podium-register.dwg"), 6);
+    let card = s.pack_check().unwrap();
+    assert!(!card.line("register").unwrap().passes);
+    let check = s.takeoff_check(0, &[]).unwrap();
+    let failures = card.lines.iter().filter(|line| !line.passes).count();
+    assert!(failures >= 1);
+    assert_eq!(check["pack_check"], failures);
+    assert!(serde_json::to_vec(&check).unwrap().len() <= 6144);
+    let info = qiyas_core::registry::registry()
+        .get("measurement.pack_check")
+        .unwrap();
+    assert_eq!(info.takeoff_step.as_deref(), Some("1 drawing-pack check"));
+    // The step puts the pack check first in the workflow index; its one-field example
+    // isn't worth a kit entry's enum lists.
+    assert!(info.takeoff_kit.is_none());
+    assert!(qiyas_core::registry::registry()
+        .index_text()
+        .contains("drawing-pack check"));
+    let kit = qiyas_core::takeoff_kit::kit();
+    assert!(serde_json::to_vec(&kit).unwrap().len() < qiyas_core::takeoff_kit::MAX_BYTES - 256);
+}

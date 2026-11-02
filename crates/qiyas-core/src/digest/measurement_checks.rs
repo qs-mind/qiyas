@@ -2,6 +2,7 @@
 use crate::measurement::{MeasurementReport, Operation, Rule, Term};
 use qiyas_param::expr::{Expr, Op};
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
@@ -79,6 +80,39 @@ fn rule_scaled(rule: &Rule, factor: f64) -> bool {
 pub(super) fn findings(report: &MeasurementReport, notes: &[(u64, String)]) -> Vec<Value> {
     let mut errors = Vec::new();
     let method = report.selection.effective();
+    if let Some(method) = method {
+        for rule in &method.rules {
+            let mut net_names = BTreeSet::new();
+            for (terms, deductions) in std::iter::once((&rule.terms, &rule.deductions))
+                .chain(rule.bands.iter().map(|b| (&b.terms, &b.deductions)))
+            {
+                if deductions.is_empty() {
+                    continue;
+                }
+                for expression in terms
+                    .iter()
+                    .flat_map(|t| t.factors.iter().chain([&t.timesing]))
+                {
+                    if let Ok(expr) = Expr::parse(expression) {
+                        net_names.extend(expr.names().into_iter().filter(|name| {
+                            matches!(
+                                name.as_str(),
+                                "geometry.net_area"
+                                    | "geometry.volume"
+                                    | "geometry.internal_face_area"
+                                    | "geometry.external_face_area"
+                            )
+                        }));
+                    }
+                }
+            }
+            for name in net_names {
+                errors.push(json!({"section":"measurement_errors","severity":"error",
+                    "code":"deduction_from_net","rule":rule.id,"net_name":name,
+                    "message":format!("Rule {} deducts hosted openings from {name}, which already excludes them; use the corresponding gross quantity or remove the deduction.", rule.id)}));
+            }
+        }
+    }
     for q in &report.quantities {
         let kind = method
             .and_then(|m| m.rules.iter().find(|r| r.id == q.rule))
@@ -158,6 +192,47 @@ pub(super) fn findings(report: &MeasurementReport, notes: &[(u64, String)]) -> V
     errors
 }
 
+pub(super) fn shared_sources(report: &MeasurementReport) -> Vec<Value> {
+    let sources: BTreeMap<_, _> = report
+        .quantities
+        .iter()
+        .flat_map(|q| {
+            q.lines
+                .iter()
+                .filter(|l| !l.id.is_empty())
+                .map(move |l| (l.id.as_str(), (q.object, q.rule.as_str())))
+        })
+        .collect();
+    let mut groups: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+    for item in report.items.iter().filter(|i| !i.informational) {
+        let code = if item.base_code.is_empty() {
+            &item.code
+        } else {
+            &item.base_code
+        };
+        for line in item.lines.iter().filter(|l| l.included) {
+            if let Some(&(handle, rule)) = sources.get(line.id.as_str()) {
+                groups
+                    .entry((handle, code, &item.unit))
+                    .or_default()
+                    .insert(rule);
+            }
+        }
+    }
+    let mut questions = Vec::new();
+    for ((handle, code, unit), rules) in groups {
+        let rules: Vec<_> = rules.into_iter().collect();
+        for (i, first) in rules.iter().enumerate() {
+            for second in &rules[i + 1..] {
+                questions.push(json!({"section":"questions","severity":"question","code":"shared_source",
+                    "handle":handle,"rules":[first,second],"boq_code":code,"unit":unit,
+                    "message":"Do these rules intentionally measure the same element into this BOQ item? Ask the engineer or record an engineering basis for keeping both."}));
+            }
+        }
+    }
+    questions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +288,69 @@ mod tests {
             rule.terms[0].citation.clause = "note 24".into();
         }
         assert!(findings(&report, &[(24, "Allowance 10%".into())]).is_empty());
+    }
+
+    #[test]
+    fn net_deduction_checks_parse_names_in_factors_timesing_and_band_recipes() {
+        let mut report = report(false);
+        report.quantities.clear();
+        report.selection.project.as_mut().unwrap().rules.truncate(1);
+        let citation = json!({"source":"drawing","clause":"Tower podium openings"});
+        let deduction = json!({"element_type":"Podium opening","when":"true",
+            "boundary":{"when":"false","deduct_when":"true","citation":citation},
+            "term":{"label":"Opening","operation":"deduct","factors":["void.area"],"citation":citation}});
+        for (net, gross) in [
+            ("geometry.net_area", "geometry.gross_area"),
+            ("geometry.volume", "geometry.gross_volume"),
+            (
+                "geometry.internal_face_area",
+                "geometry.gross_internal_face_area",
+            ),
+            (
+                "geometry.external_face_area",
+                "geometry.gross_external_face_area",
+            ),
+        ] {
+            for band in [false, true] {
+                for timesing in [false, true] {
+                    let rule = &mut report.selection.project.as_mut().unwrap().rules[0];
+                    rule.bands.clear();
+                    rule.deductions = vec![serde_json::from_value(deduction.clone()).unwrap()];
+                    rule.terms[0].timesing = if timesing {
+                        format!("max({net}, 0)")
+                    } else {
+                        "1".into()
+                    };
+                    rule.terms[0].factors = if timesing {
+                        vec!["1".into()]
+                    } else {
+                        vec![format!("({net} + {net}) / 2")]
+                    };
+                    if band {
+                        rule.bands.push(
+                            serde_json::from_value(json!({"when":"true","unit":rule.unit,
+                            "terms":rule.terms,"deductions":rule.deductions,"citation":citation}))
+                            .unwrap(),
+                        );
+                        rule.deductions.clear();
+                        rule.terms[0].timesing = "1".into();
+                        rule.terms[0].factors = vec![gross.into()];
+                    }
+                    let errors = findings(&report, &[]);
+                    assert_eq!(errors.len(), 1, "{net}, band={band}, timesing={timesing}");
+                    assert_eq!(errors[0]["code"], "deduction_from_net");
+                    assert_eq!(errors[0]["net_name"], net);
+                    let rule = &mut report.selection.project.as_mut().unwrap().rules[0];
+                    let terms = if band {
+                        &mut rule.bands[0].terms
+                    } else {
+                        &mut rule.terms
+                    };
+                    terms[0].timesing = "1".into();
+                    terms[0].factors = vec![format!("if(true, {gross}, '{net}')")];
+                    assert!(findings(&report, &[]).is_empty());
+                }
+            }
+        }
     }
 }

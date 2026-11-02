@@ -550,6 +550,9 @@ impl Session {
             }
         }
         let error_count = errors.len();
+        let shared_sources = measurement_checks::shared_sources(&report);
+        let shared_source_count = shared_sources.len();
+        detail.extend(shared_sources);
         let unmeasured_count = unmeasured.len();
         let unmapped_count = unmapped.len();
         detail.extend(errors);
@@ -617,6 +620,13 @@ impl Session {
         overview["excluded"] = json!(excluded.len());
         overview["region_not_from_boundary"] = json!(region_advisory_count);
         overview["outside_check"] = self.outside_summary(end_report)?;
+        overview["pack_check"] = json!(self
+            .pack_check()?
+            .lines
+            .iter()
+            .filter(|line| !line.passes)
+            .count());
+        overview["shared_source"] = json!(shared_source_count);
         overview["measurement_summary"] = json!({"measured":[],"deductions":[],"factors":[]});
         overview["measurement_summary_detail"] = json!("Page with next_offset as offset. Text is previewed; explain generated:<item> has full operands and sources.");
         let mut summary = measurement_summary::rows(self, &report)?;

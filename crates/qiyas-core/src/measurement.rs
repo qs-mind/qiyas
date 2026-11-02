@@ -23,6 +23,22 @@ fn version_one() -> u32 {
     1
 }
 
+fn unit_kind(unit: &str) -> Option<&'static str> {
+    match unit
+        .trim()
+        .to_lowercase()
+        .replace('²', "2")
+        .replace('³', "3")
+        .as_str()
+    {
+        "pcs" | "nr" | "count" => Some("count"),
+        "m" | "mm" | "cm" | "ft" | "in" => Some("length"),
+        "m2" | "mm2" | "cm2" | "ft2" | "sqm" => Some("area"),
+        "m3" | "mm3" | "cm3" | "ft3" | "cum" => Some("volume"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Citation {
@@ -209,6 +225,7 @@ pub enum MeasurementCommand {
     /// page vector or scanned (a scan calibrated), page orientation, and the sheet number and
     /// revision the register rules read. Each line passes or names the fix.
     #[schemars(example = json!({"kind":"pack_check"}))]
+    #[schemars(extend("x-takeoff-step" = "1 drawing-pack check"))]
     PackCheck,
 }
 impl MeasurementCommand {
@@ -539,6 +556,14 @@ impl RuleSet {
                 return Err(invalid(
                     "Measurement kind must be count, length, area or volume",
                 ));
+            }
+            if let (Some(kind), Some(unit_kind)) = (r.kind.as_deref(), unit_kind(&r.unit)) {
+                if kind != unit_kind {
+                    return Err(invalid(format!(
+                        "Measurement rule {} has kind {kind} but unit {} is {unit_kind}",
+                        r.id, r.unit
+                    )));
+                }
             }
             if r.basis.as_deref().is_some_and(|b| {
                 b != "geometric"
