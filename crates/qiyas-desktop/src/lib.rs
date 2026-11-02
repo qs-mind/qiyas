@@ -13,6 +13,7 @@ pub mod methods;
 #[cfg(debug_assertions)]
 mod mock;
 mod output_files;
+mod paths;
 mod pdf;
 mod plot;
 mod projects;

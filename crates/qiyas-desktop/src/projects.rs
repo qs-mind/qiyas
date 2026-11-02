@@ -24,6 +24,9 @@ pub(crate) fn execute_checked(
     expected: Option<&Value>,
 ) -> Result<Value, String> {
     let command = qiyas_core::registry::parse_command(input.clone())?;
+    if let Command::Project(project) = &command {
+        crate::paths::project(project)?;
+    }
     // Keep the drawing used by this read stable through the project operation.
     let state = state.scoped(None)?;
     let open = crate::tabs::snapshot(&state);
@@ -69,7 +72,9 @@ pub(crate) fn execute_checked(
     }
     result["result"]["active_project"] = json!(workspace.active);
     if input["kind"] == "run" {
-        result["outputs"] = qiyas_boq::project::outputs(&outcome.outcome, None)?;
+        let path = workspace.active.as_deref().ok_or("No project is open")?;
+        let folder = crate::paths::project_output_folder(path)?;
+        result["outputs"] = qiyas_boq::project::outputs(&outcome.outcome, Some(&folder))?;
     }
     Ok(result)
 }

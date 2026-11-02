@@ -6,7 +6,7 @@
 //! scripts/pdfium.sh".
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, PoisonError};
 
 use qiyas_core::{AttachMode, CoreError, ImageDisplay, PreparedPdf};
@@ -102,12 +102,14 @@ async fn blocking<T: Send + 'static>(
 /// How many pages the PDF at `path` has.
 #[tauri::command]
 pub async fn pdf_page_count(path: String) -> Result<u32, String> {
+    let path = crate::paths::read(Path::new(&path), &["pdf"])?;
     blocking(move || qiyas_pdf::page_count(Path::new(&path)).map_err(|e| e.to_string())).await
 }
 
 /// Width and height in points of page `page` (from 1), as shown.
 #[tauri::command]
 pub async fn pdf_page_size(path: String, page: u32) -> Result<(f64, f64), String> {
+    let path = crate::paths::read(Path::new(&path), &["pdf"])?;
     blocking(move || qiyas_pdf::page_size(Path::new(&path), page).map_err(|e| e.to_string())).await
 }
 
@@ -121,8 +123,8 @@ pub async fn pdf_thumbnails(
     count: u32,
     px: u32,
 ) -> Result<Response, String> {
+    let path = crate::paths::read(Path::new(&path), &["pdf"])?;
     blocking(move || {
-        let path = PathBuf::from(path);
         let pages = qiyas_pdf::page_count(&path).map_err(|e| e.to_string())?;
         let first = first.max(1);
         let last = (first + count.min(MAX_THUMBNAILS)).min(pages + 1);
@@ -158,6 +160,7 @@ pub async fn attach_pdf(
     mode: AttachMode,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    let path = crate::paths::read(Path::new(&path), &["pdf"])?;
     let state = state.scoped(workspace)?;
     // The slow part, reading the page, without the session.
     let prepared = blocking(move || {
@@ -253,6 +256,7 @@ pub async fn underlay_image<R: Runtime>(
 /// Width and height in pixels of the raster image at `path`, as shown (EXIF orientation applied).
 #[tauri::command]
 pub async fn image_size(path: String) -> Result<(u32, u32), String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::IMAGES)?;
     blocking(move || qiyas_core::image_size(Path::new(&path)).map_err(|e| e.to_string())).await
 }
 
@@ -268,6 +272,7 @@ pub async fn attach_image(
     width: f64,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::IMAGES)?;
     let state = state.scoped(workspace)?;
     with_session(&state, |s| s.attach_image(Path::new(&path), [x, y], width))
 }

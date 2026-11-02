@@ -78,6 +78,9 @@ pub async fn open_drawing<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::DRAWINGS)?
+        .to_string_lossy()
+        .into_owned();
     let state = state.scoped(None)?;
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(id) = tabs::find_path(&state, Path::new(&path)) {
@@ -284,6 +287,12 @@ pub async fn set_xref_path(
     path: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    let path = path
+        .map(|p| {
+            crate::paths::read(Path::new(&p), crate::paths::DRAWINGS)
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .transpose()?;
     let state = state.scoped(workspace)?;
     with_session(&state, |s| {
         s.set_xref_path(&name, path.as_deref().map(Path::new))?;
@@ -584,7 +593,11 @@ pub async fn run_command(
         if matches!(parsed, Command::PasteFromClipboard { text: None, .. }) {
             cmd["text"] = serde_json::Value::String(files::clipboard_text(&state)?);
         }
-        let mut outcome = with_session(&state, |s| s.run_input(&cmd, Source::User))?;
+        let mut outcome = with_session(&state, |s| {
+            crate::paths::command(&parsed, s).map_err(CoreError::InvalidCommand)?;
+            s.run_input(&cmd, Source::User)
+        })?;
+        crate::paths::outcome(&outcome.outcome)?;
         qiyas_boq::deliverables::complete(&outcome.outcome)?;
         if let Outcome::Clipboard { text, .. } = &mut outcome.outcome {
             files::set_clipboard_text(&state, text)?;
@@ -663,6 +676,9 @@ pub async fn save_drawing_as(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let path = crate::paths::write(Path::new(&path), crate::paths::DRAWINGS)?
+        .to_string_lossy()
+        .into_owned();
     let state = state.scoped(workspace)?;
     tauri::async_runtime::spawn_blocking(move || {
         save_as_with_history(&state, Path::new(&path))?;
@@ -674,6 +690,8 @@ pub async fn save_drawing_as(
 }
 
 pub(crate) fn save_as_with_history(state: &AppState, path: &Path) -> Result<(), String> {
+    let checked = crate::paths::write(path, crate::paths::DRAWINGS)?;
+    let path = checked.as_path();
     let mut run = ai_run(state);
     let from = with_session(state, |s| {
         let from = s.drawing.path.clone();
@@ -692,6 +710,7 @@ pub async fn export_takeoff(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let path = crate::paths::write(Path::new(&path), &["xlsx"])?;
     let state = state.scoped(workspace)?;
     // Copy the take-off out, so writing the file doesn't hold the lock.
     let (items, totals, title, report, queries) = with_session(&state, |s| {
@@ -726,6 +745,7 @@ pub async fn export_table(
     columns: Vec<String>,
     rows: Vec<Vec<String>>,
 ) -> Result<(), String> {
+    let path = crate::paths::write(Path::new(&path), &["xlsx"])?;
     qiyas_boq::export_table(Path::new(&path), &columns, &rows).map_err(|e| e.to_string())
 }
 
@@ -737,6 +757,7 @@ pub async fn import_boq(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<Boq, String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::WORKBOOKS)?;
     let state = state.scoped(workspace)?;
     // Read the workbook before taking the lock, so a slow read doesn't block other commands.
     let boq = qiyas_boq::import_boq(Path::new(&path)).map_err(|e| e.to_string())?;
@@ -816,6 +837,7 @@ pub async fn export_conflicts(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let path = crate::paths::write(Path::new(&path), &["xlsx"])?;
     let state = state.scoped(workspace)?;
     // Copy the conflicts out, so writing the file doesn't hold the lock.
     let conflicts = with_session(&state, |s| Ok(s.conflicts.clone()))?;
@@ -853,6 +875,8 @@ pub async fn set_settings<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     settings::validate(&settings)?;
+    settings.claude_executable =
+        crate::paths::claude_executable(settings.claude_executable.as_deref())?;
     let old = state
         .settings
         .lock()
@@ -998,6 +1022,7 @@ pub async fn ai_models(
 pub async fn claude_code_status(
     executable: Option<String>,
 ) -> Result<qiyas_ai::claude_code::Status, String> {
+    let executable = crate::paths::claude_executable(executable.as_deref())?;
     let home = qiyas_core::data_home::qiyas_dir()?;
     qiyas_ai::claude_code::status(executable.as_deref(), &home)
         .await

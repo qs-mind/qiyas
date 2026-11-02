@@ -51,6 +51,7 @@ pub async fn block_thumbnail(
 /// definitions (the Design Center).
 #[tauri::command]
 pub async fn drawing_blocks(path: String) -> Result<Vec<BlockInfo>, String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::DRAWINGS)?;
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_core::drawing_blocks(Path::new(&path)).map_err(|e| e.to_string())
     })
@@ -61,6 +62,7 @@ pub async fn drawing_blocks(path: String) -> Result<Vec<BlockInfo>, String> {
 /// The layers of the drawing at `path`, opened read-only (the layer translator's standard).
 #[tauri::command]
 pub async fn drawing_layers(path: String) -> Result<Vec<LayerInfo>, String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::DRAWINGS)?;
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_core::drawing_layers(Path::new(&path)).map_err(|e| e.to_string())
     })
@@ -77,6 +79,7 @@ pub async fn write_block(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let path = crate::paths::write(Path::new(&path), &["dwg"])?;
     let state = state.scoped(workspace)?;
     with_session(&state, |s| s.write_block(&name, Path::new(&path)))
 }

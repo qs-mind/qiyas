@@ -100,6 +100,7 @@ pub async fn run_script<R: Runtime>(
     path: String,
     app: AppHandle<R>,
 ) -> Result<ScriptResult, String> {
+    let path = crate::paths::read(Path::new(&path), &["scr"])?;
     // DELAY sleeps and steps read and write files: off the async runtime's threads.
     let state = app.state::<AppState>().scoped(workspace)?;
     tauri::async_runtime::spawn_blocking(move || run_file_bound(&app, Path::new(&path), state))
@@ -309,6 +310,8 @@ fn run_step<R: Runtime>(
             (format!("current layer {name}"), true)
         }
         Action::Export(path) => {
+            let checked = crate::paths::write(path, &["xlsx"])?;
+            let path = checked.as_path();
             // As the Export button: the take-off copied out, so writing doesn't hold the lock.
             let (items, totals, title, report, queries) = with_session(state, |s| {
                 let title = match s.drawing.path.file_name() {
@@ -330,6 +333,8 @@ fn run_step<R: Runtime>(
             (format!("exported {}", path.display()), false)
         }
         Action::ImportBoq(path) => {
+            let checked = crate::paths::read(path, crate::paths::WORKBOOKS)?;
+            let path = checked.as_path();
             let boq = qiyas_boq::import_boq(path).map_err(|e| e.to_string())?;
             let items = boq.items.len();
             with_session(state, |s| s.run(Command::SetBoq { boq }))?;
@@ -346,7 +351,11 @@ fn run_step<R: Runtime>(
         }
         Action::Command(cmd) => {
             let input = step.input.clone().unwrap_or_else(|| serde_json::json!(cmd));
-            let outcome = with_session(state, |s| s.run_input(&input, Source::User))?;
+            let outcome = with_session(state, |s| {
+                crate::paths::command(cmd, s).map_err(qiyas_core::CoreError::InvalidCommand)?;
+                s.run_input(&input, Source::User)
+            })?;
+            crate::paths::outcome(&outcome.outcome)?;
             let change = !matches!(
                 &outcome.outcome,
                 Outcome::Nothing | Outcome::Info { .. } | Outcome::Table { .. }
@@ -376,6 +385,8 @@ pub(crate) fn open_checked<R: Runtime>(
     keep_conversation: bool,
     expected: Option<&serde_json::Value>,
 ) -> Result<String, String> {
+    let checked = crate::paths::read(path, crate::paths::DRAWINGS)?;
+    let path = checked.as_path();
     let shown = path.display().to_string();
     if let Some(id) = tabs::find_path(state, path) {
         tabs::activate_checked(app, state, id, keep_conversation, expected)?;

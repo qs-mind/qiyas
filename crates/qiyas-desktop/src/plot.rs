@@ -32,6 +32,7 @@ pub async fn plot_pdf(
             .and_then(|path| Ok((path, qiyas_plot::plot_snapshot(s, &job)?))))
     })?
     .map_err(|e| e.to_string())?;
+    let path = crate::paths::write(&path, &["pdf"])?;
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_plot::write_pdf(&snapshot, &path).map_err(|e| e.to_string())
     })
@@ -63,17 +64,11 @@ pub async fn plot_pdf_to(
 
 /// A Save dialog's answer as a PDF to write: an absolute path ending in `.pdf`.
 fn save_dialog_pdf(path: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(path);
+    let path = Path::new(path);
     if !path.is_absolute() {
         return Err("Choose where the PDF goes in the Save dialog".into());
     }
-    if !path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
-    {
-        return Err("A plot is a .pdf file".into());
-    }
-    Ok(path)
+    crate::paths::write(path, &["pdf"])
 }
 
 /// Plots `job` to a PDF in the user's print spool folder and prints it on `printer` (the
@@ -93,6 +88,7 @@ pub async fn plot_and_print(
             .and_then(|path| Ok((path, qiyas_plot::plot_snapshot(s, &job)?))))
     })?
     .map_err(|e| e.to_string())?;
+    let path = crate::paths::write(&path, &["pdf"])?;
     // The PDF is written and printed without the session locked.
     tauri::async_runtime::spawn_blocking(move || {
         let out = qiyas_plot::write_pdf(&snapshot, &path).map_err(|e| e.to_string())?;
@@ -105,6 +101,7 @@ pub async fn plot_and_print(
 /// Prints the PDF at `path` on `printer` (the default one when none).
 #[tauri::command]
 pub async fn print_pdf(path: String, printer: Option<String>) -> Result<String, String> {
+    let path = crate::paths::read(Path::new(&path), &["pdf"])?;
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_plot::print_pdf(Path::new(&path), printer.as_deref()).map_err(|e| e.to_string())
     })
@@ -131,6 +128,7 @@ pub async fn default_printer() -> Result<Option<String>, String> {
 /// Reads a CTB or STB plot style file.
 #[tauri::command]
 pub async fn load_plot_style(path: String) -> Result<PlotStyle, String> {
+    let path = crate::paths::read(Path::new(&path), &["ctb", "stb"])?;
     tauri::async_runtime::spawn_blocking(move || {
         PlotStyle::load(Path::new(&path)).map_err(|e| e.to_string())
     })
@@ -141,18 +139,12 @@ pub async fn load_plot_style(path: String) -> Result<PlotStyle, String> {
 /// Writes `style` to `path`, a `.ctb` file for a CTB or `.stb` for an STB.
 #[tauri::command]
 pub async fn save_plot_style(path: String, style: PlotStyle) -> Result<(), String> {
-    let path = Path::new(&path);
     let want = match style.kind {
         StyleKind::Ctb => "ctb",
         StyleKind::Stb => "stb",
     };
-    if !path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case(want))
-    {
-        return Err(format!("Save this plot style as a .{want} file"));
-    }
-    style.save(path).map_err(|e| e.to_string())
+    let path = crate::paths::write(Path::new(&path), &[want])?;
+    style.save(&path).map_err(|e| e.to_string())
 }
 
 /// Exports the generated BOQ's marked source sheets beside the BOQ. Like plotting, capture
@@ -174,6 +166,7 @@ pub async fn export_evidence(
         )
     })?
     .map_err(|e| e.to_string())?;
+    let path = crate::paths::write(&path, &["pdf"])?;
     tauri::async_runtime::spawn_blocking(move || {
         qiyas_plot::evidence::write(&snapshot, &path).map_err(|e| e.to_string())
     })
@@ -187,7 +180,8 @@ mod tests {
 
     #[test]
     fn a_save_dialog_pdf_is_absolute_and_ends_in_pdf() {
-        let anywhere = std::env::temp_dir().join("issue").join("plan.PDF");
+        let dir = tempfile::tempdir().unwrap();
+        let anywhere = dir.path().canonicalize().unwrap().join("tower-podium.PDF");
         assert_eq!(
             save_dialog_pdf(anywhere.to_str().unwrap()),
             Ok(anywhere.clone())
@@ -196,9 +190,7 @@ mod tests {
             save_dialog_pdf("plan.pdf"),
             Err("Choose where the PDF goes in the Save dialog".into())
         );
-        assert_eq!(
-            save_dialog_pdf(anywhere.with_extension("dwg").to_str().unwrap()),
-            Err("A plot is a .pdf file".into())
-        );
+        assert!(save_dialog_pdf(anywhere.with_extension("dwg").to_str().unwrap()).is_err());
+        assert!(save_dialog_pdf(dir.path().join("missing/tower.pdf").to_str().unwrap()).is_err());
     }
 }

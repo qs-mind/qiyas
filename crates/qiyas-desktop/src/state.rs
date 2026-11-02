@@ -37,6 +37,8 @@ pub struct DrawingWorkspace {
     pub provider: Mutex<Settings>,
     /// Last committed metadata, available even while a tool holds the drawing lock.
     pub published: Mutex<Option<DrawingInfo>>,
+    /// Rust-owned output scope, readable while an assistant holds the session lock.
+    pub output_folders: Mutex<Vec<PathBuf>>,
     publication: Mutex<Option<serde_json::Value>>,
     pub dirty: std::sync::atomic::AtomicBool,
     pub closed: std::sync::atomic::AtomicBool,
@@ -57,6 +59,7 @@ impl DrawingWorkspace {
             pictures: Mutex::new(PictureCache::default()),
             provider: Mutex::new(settings),
             published: Mutex::new(None),
+            output_folders: Mutex::default(),
             publication: Mutex::new(None),
             dirty: std::sync::atomic::AtomicBool::new(false),
             closed: std::sync::atomic::AtomicBool::new(false),
@@ -64,6 +67,11 @@ impl DrawingWorkspace {
     }
 
     pub fn publish(&self, session: &Session) {
+        let mut folders = vec![session.export_folder().to_path_buf()];
+        if let Some(parent) = session.drawing.path.parent() {
+            folders.push(parent.to_path_buf());
+        }
+        *lock(&self.output_folders) = folders;
         let stamp = serde_json::json!([
             session.revision(),
             session.batch_version(),

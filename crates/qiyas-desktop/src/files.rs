@@ -324,7 +324,8 @@ fn flush_dirty(state: &AppState) -> Flushed {
 pub async fn recoverable_drawings(paths: Vec<String>) -> Result<Vec<Recoverable>, String> {
     Ok(paths
         .iter()
-        .filter_map(|p| recoverable(Path::new(p)))
+        .filter_map(|p| crate::paths::recovery(Path::new(p)).ok())
+        .filter_map(|p| recoverable(&p))
         .collect())
 }
 
@@ -367,6 +368,9 @@ pub async fn recover_autosave<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<DrawingInfo, String> {
+    let path = crate::paths::recovery(Path::new(&path))?
+        .to_string_lossy()
+        .into_owned();
     let state = state.scoped(None)?;
     let mut session = Session::open_autosave(Path::new(&path)).map_err(|e| e.to_string())?;
     if Path::new(&path).starts_with(state.config_dir.join("untitled")) {
@@ -391,6 +395,9 @@ pub async fn recover_autosave<R: Runtime>(
 /// Deletes the autosave of the drawing `path` (see `discard`).
 #[tauri::command]
 pub async fn discard_autosave(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let path = crate::paths::recovery(Path::new(&path))?
+        .to_string_lossy()
+        .into_owned();
     discard(&state, Path::new(&path)).map_err(|e| e.to_string())
 }
 
@@ -423,6 +430,9 @@ pub async fn recover_drawing<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Recovered, String> {
+    let path = crate::paths::read(Path::new(&path), crate::paths::DRAWINGS)?
+        .to_string_lossy()
+        .into_owned();
     let state = state.scoped(None)?;
     if tabs::find_path(&state, Path::new(&path)).is_some() {
         return Err("This drawing is open: close its tab first to recover it from the file".into());
@@ -463,17 +473,17 @@ fn view(qss: &Path, set: SheetSet) -> SheetSetView {
 /// Reads the sheet set at `path` (a `.qss` file).
 #[tauri::command]
 pub async fn sheet_set_open(path: String) -> Result<SheetSetView, String> {
-    let qss = Path::new(&path);
-    let set = SheetSet::load(qss).map_err(|e| e.to_string())?;
-    Ok(view(qss, set))
+    let qss = crate::paths::read(Path::new(&path), &["qss"])?;
+    let set = SheetSet::load(&qss).map_err(|e| e.to_string())?;
+    Ok(view(&qss, set))
 }
 
 /// Writes `set` to `path` (a `.qss` file; nothing else is written).
 #[tauri::command]
 pub async fn sheet_set_save(path: String, set: SheetSet) -> Result<SheetSetView, String> {
-    let qss = Path::new(&path);
-    set.save(qss).map_err(|e| e.to_string())?;
-    Ok(view(qss, set))
+    let qss = crate::paths::write(Path::new(&path), &["qss"])?;
+    set.save(&qss).map_err(|e| e.to_string())?;
+    Ok(view(&qss, set))
 }
 
 /// The layout names of `s`, in tab order.
@@ -508,6 +518,8 @@ pub async fn sheet_set_entry(
     drawing: String,
     state: State<'_, AppState>,
 ) -> Result<SheetSetDrawing, String> {
+    let qss = crate::paths::write(Path::new(&qss), &["qss"])?;
+    let drawing = crate::paths::read(Path::new(&drawing), crate::paths::DRAWINGS)?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let layouts = layouts_of(&state, Path::new(&drawing))?;
@@ -531,14 +543,14 @@ pub async fn sheet_set_from_tabs(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<FromTabs, String> {
-    let qss = Path::new(&qss);
+    let qss = crate::paths::write(Path::new(&qss), &["qss"])?;
     let mut set = SheetSet {
         project: None,
         name,
         drawings: Vec::new(),
     };
     let mut skipped = Vec::new();
-    let mut add = |s: &Session| match entry_for(qss, &s.drawing.path, layouts(s)) {
+    let mut add = |s: &Session| match entry_for(&qss, &s.drawing.path, layouts(s)) {
         Ok(d) => set.drawings.push(d),
         Err(_) => skipped.push(s.drawing.path.display().to_string()),
     };

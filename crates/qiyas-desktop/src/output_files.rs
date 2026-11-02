@@ -3,8 +3,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::state::AppState;
 use serde::Serialize;
 use tauri::ipc::Response;
+use tauri::State;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,19 +38,8 @@ fn output_kind(path: &Path) -> Result<FileViewKind, String> {
     }
 }
 
-fn output_path(path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return Err("Use an absolute file path. استخدم مسار ملف مطلقا.".into());
-    }
-    let path = path.canonicalize().map_err(|_| {
-        "The file could not be found or accessed. تعذر العثور على الملف أو الوصول إليه.".to_string()
-    })?;
-    if !path.is_file() {
-        return Err("Choose a regular file. اختر ملفا عاديا.".into());
-    }
-    output_kind(&path)?;
-    Ok(path)
+fn output_path(path: &str, roots: &[PathBuf]) -> Result<PathBuf, String> {
+    crate::paths::output(Path::new(path), roots, false)
 }
 
 async fn blocking<T: Send + 'static>(
@@ -63,9 +54,13 @@ async fn blocking<T: Send + 'static>(
 
 /// The output's type, name, byte size and PDF page count.
 #[tauri::command]
-pub async fn file_view_info(path: String) -> Result<FileViewInfo, String> {
+pub async fn file_view_info(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<FileViewInfo, String> {
+    let roots = crate::paths::output_roots(&state)?;
     blocking(move || {
-        let path = output_path(&path)?;
+        let path = output_path(&path, &roots)?;
         let kind = output_kind(&path)?;
         let size_bytes = path
             .metadata()
@@ -103,9 +98,11 @@ pub async fn file_view_pdf_page(
     path: String,
     page: u32,
     width_px: u32,
+    state: State<'_, AppState>,
 ) -> Result<Response, String> {
+    let roots = crate::paths::output_roots(&state)?;
     blocking(move || {
-        let path = output_path(&path)?;
+        let path = output_path(&path, &roots)?;
         if output_kind(&path)? != FileViewKind::Pdf {
             return Err("Choose a PDF file. اختر ملف PDF.".into());
         }
@@ -129,9 +126,13 @@ const TEXT_LIMIT: u64 = 2 * 1024 * 1024;
 
 /// Every workbook sheet, with at most 5000 rows and 80 columns per sheet.
 #[tauri::command]
-pub async fn file_view_workbook(path: String) -> Result<serde_json::Value, String> {
+pub async fn file_view_workbook(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let roots = crate::paths::output_roots(&state)?;
     blocking(move || {
-        let path = output_path(&path)?;
+        let path = output_path(&path, &roots)?;
         if output_kind(&path)? != FileViewKind::Workbook {
             return Err("Choose an Excel workbook. اختر مصنف Excel.".into());
         }
@@ -172,9 +173,10 @@ fn read_view_bytes(path: &Path) -> Result<Vec<u8>, String> {
 
 /// Raw image or text bytes, within the preview size limit.
 #[tauri::command]
-pub async fn file_view_bytes(path: String) -> Result<Response, String> {
+pub async fn file_view_bytes(path: String, state: State<'_, AppState>) -> Result<Response, String> {
+    let roots = crate::paths::output_roots(&state)?;
     blocking(move || {
-        let path = output_path(&path)?;
+        let path = output_path(&path, &roots)?;
         read_view_bytes(&path).map(Response::new)
     })
     .await
@@ -214,9 +216,9 @@ fn viewer(path: &Path, reveal: bool) -> Command {
     }
 }
 
-async fn show(path: String, reveal: bool) -> Result<(), String> {
+async fn show(path: String, reveal: bool, roots: Vec<PathBuf>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let path = output_path(&path)?;
+        let path = crate::paths::output(Path::new(&path), &roots, !reveal)?;
         let status = viewer(&path, reveal)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -234,18 +236,19 @@ async fn show(path: String, reveal: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn open_output_file(path: String) -> Result<(), String> {
-    show(path, false).await
+pub async fn open_output_file(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    show(path, false, crate::paths::output_roots(&state)?).await
 }
 
 #[tauri::command]
-pub async fn reveal_output_file(path: String) -> Result<(), String> {
-    show(path, true).await
+pub async fn reveal_output_file(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    show(path, true, crate::paths::output_roots(&state)?).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager;
 
     #[test]
     fn all_preview_extensions_are_allowed_in_any_case() {
@@ -268,14 +271,15 @@ mod tests {
             for extension in [extension.to_string(), extension.to_ascii_uppercase()] {
                 let file = dir.path().join(format!("output.{extension}"));
                 std::fs::write(&file, b"test").unwrap();
-                let path = output_path(file.to_str().unwrap()).unwrap();
+                let path =
+                    output_path(file.to_str().unwrap(), &[dir.path().to_path_buf()]).unwrap();
                 assert_eq!(path, file.canonicalize().unwrap());
                 assert_eq!(output_kind(&path).unwrap(), kind);
             }
         }
         let directory = dir.path().join("directory.pdf");
         std::fs::create_dir(&directory).unwrap();
-        assert!(output_path(directory.to_str().unwrap()).is_err());
+        assert!(output_path(directory.to_str().unwrap(), &[dir.path().to_path_buf()]).is_err());
     }
 
     #[cfg(unix)]
@@ -287,14 +291,14 @@ mod tests {
         let link = dir.path().join("link.pdf");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert_eq!(
-            output_path(link.to_str().unwrap()).unwrap(),
+            output_path(link.to_str().unwrap(), &[dir.path().to_path_buf()]).unwrap(),
             target.canonicalize().unwrap()
         );
         let other = dir.path().join("other.sh");
         std::fs::write(&other, b"test").unwrap();
         let disguised = dir.path().join("disguised.txt");
         std::os::unix::fs::symlink(&other, &disguised).unwrap();
-        assert!(output_path(disguised.to_str().unwrap()).is_err());
+        assert!(output_path(disguised.to_str().unwrap(), &[dir.path().to_path_buf()]).is_err());
     }
 
     #[test]
@@ -320,24 +324,31 @@ mod tests {
         use tauri::ipc::{InvokeResponseBody, IpcResponse};
 
         let dir = tempfile::tempdir().unwrap();
+        let app = crate::paths::tests::tower_app(dir.path());
         let file = dir.path().join("الكمية.CSV");
         let content = "البند,الكمية\nجدار,2".as_bytes();
         std::fs::write(&file, content).unwrap();
         let path = file.to_str().unwrap().to_string();
-        let info = tauri::async_runtime::block_on(file_view_info(path.clone())).unwrap();
+        let info =
+            tauri::async_runtime::block_on(file_view_info(path.clone(), app.state())).unwrap();
         assert_eq!(
             serde_json::to_value(info).unwrap(),
             serde_json::json!({
                 "kind": "text", "name": "الكمية.CSV", "size_bytes": content.len(), "pages": null,
             })
         );
-        let response = tauri::async_runtime::block_on(file_view_bytes(path.clone())).unwrap();
+        let response =
+            tauri::async_runtime::block_on(file_view_bytes(path.clone(), app.state())).unwrap();
         let InvokeResponseBody::Raw(bytes) = response.body().unwrap() else {
             panic!("expected raw bytes");
         };
         assert_eq!(bytes, content);
-        assert!(tauri::async_runtime::block_on(file_view_workbook(path.clone())).is_err());
-        assert!(tauri::async_runtime::block_on(file_view_pdf_page(path, 1, 800)).is_err());
+        assert!(
+            tauri::async_runtime::block_on(file_view_workbook(path.clone(), app.state())).is_err()
+        );
+        assert!(
+            tauri::async_runtime::block_on(file_view_pdf_page(path, 1, 800, app.state())).is_err()
+        );
     }
 
     #[test]
@@ -349,15 +360,21 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
+        let app = crate::paths::tests::tower_app(dir.path());
         let path = qiyas_pdf::fixtures::write_wall(dir.path());
         let path = path.to_str().unwrap().to_string();
-        let info = tauri::async_runtime::block_on(file_view_info(path.clone())).unwrap();
+        let info =
+            tauri::async_runtime::block_on(file_view_info(path.clone(), app.state())).unwrap();
         assert_eq!(info.pages, Some(1));
         assert_eq!(info.kind, FileViewKind::Pdf);
         for (requested, width) in [(1, 200u32), (400, 400), (3000, 2400)] {
-            let response =
-                tauri::async_runtime::block_on(file_view_pdf_page(path.clone(), 1, requested))
-                    .unwrap();
+            let response = tauri::async_runtime::block_on(file_view_pdf_page(
+                path.clone(),
+                1,
+                requested,
+                app.state(),
+            ))
+            .unwrap();
             let InvokeResponseBody::Raw(bytes) = response.body().unwrap() else {
                 panic!("expected raw RGBA bytes");
             };
@@ -376,10 +393,13 @@ mod tests {
             assert_eq!(&bytes[8..], image.as_raw().as_slice());
         }
         for page in [0, 2] {
-            assert!(
-                tauri::async_runtime::block_on(file_view_pdf_page(path.clone(), page, 400))
-                    .is_err()
-            );
+            assert!(tauri::async_runtime::block_on(file_view_pdf_page(
+                path.clone(),
+                page,
+                400,
+                app.state()
+            ))
+            .is_err());
         }
     }
 
@@ -390,17 +410,21 @@ mod tests {
             let file = dir.path().join(name);
             std::fs::write(&file, b"test").unwrap();
             assert_eq!(
-                output_path(file.to_str().unwrap()).unwrap(),
+                output_path(file.to_str().unwrap(), &[dir.path().to_path_buf()]).unwrap(),
                 file.canonicalize().unwrap()
             );
         }
         let other = dir.path().join("run.sh");
         std::fs::write(&other, b"test").unwrap();
-        assert!(output_path(other.to_str().unwrap()).is_err());
-        assert!(output_path(dir.path().to_str().unwrap()).is_err());
-        assert!(output_path(dir.path().join("missing.pdf").to_str().unwrap()).is_err());
-        assert!(output_path("samples/plan.pdf").is_err());
-        assert!(output_path("https://example.test/plan.pdf").is_err());
+        assert!(output_path(other.to_str().unwrap(), &[dir.path().to_path_buf()]).is_err());
+        assert!(output_path(dir.path().to_str().unwrap(), &[dir.path().to_path_buf()]).is_err());
+        assert!(output_path(
+            dir.path().join("missing.pdf").to_str().unwrap(),
+            &[dir.path().to_path_buf()]
+        )
+        .is_err());
+        assert!(output_path("samples/plan.pdf", &[dir.path().to_path_buf()]).is_err());
+        assert!(output_path("https://example.test/plan.pdf", &[dir.path().to_path_buf()]).is_err());
     }
 
     #[cfg(target_os = "linux")]
@@ -423,6 +447,7 @@ mod tests {
 mod trace_tests {
     use super::*;
     use serde_json::json;
+    use tauri::Manager;
 
     #[test]
     fn pdf_file_info_returns_the_validated_trace_map() {
@@ -431,6 +456,7 @@ mod trace_tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
+        let app = crate::paths::tests::tower_app(dir.path());
         let path = dir.path().join("trace.pdf");
         let report: qiyas_core::deliverables::Report = serde_json::from_value(json!({
             "drawing": "/plans/source.dxf", "kind":"boq", "language":"en",
@@ -441,9 +467,11 @@ mod trace_tests {
         }))
         .unwrap();
         qiyas_plot::report::write(&path, &report).unwrap();
-        let info =
-            tauri::async_runtime::block_on(file_view_info(path.to_string_lossy().into_owned()))
-                .unwrap();
+        let info = tauri::async_runtime::block_on(file_view_info(
+            path.to_string_lossy().into_owned(),
+            app.state(),
+        ))
+        .unwrap();
         let trace = info.trace.unwrap();
         assert_eq!(trace.drawing.as_deref(), Some("/plans/source.dxf"));
         let targets: Vec<_> = trace.pages.iter().flat_map(|page| &page.regions).collect();
