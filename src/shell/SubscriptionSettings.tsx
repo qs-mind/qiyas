@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  chatgptAccount, chatgptSignIn, chatgptSignOut, cancelChatgptSignIn,
+  chatgptAccount, chatgptSignIn, chatgptSignOut, cancelChatgptSignIn, reopenChatgptSignIn,
   claudeCodeStatus, subscriptionLink, chatgptModels, chatgptSelectAccount, chatgptResumePlan,
   EFFORTS, type ChatgptAccount, type ClaudeCodeStatus, type Provider, type PlanModel,
 } from "../api";
@@ -29,7 +29,18 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const statusGeneration = useRef(0);
-  useEffect(() => () => { statusGeneration.current += 1; }, [provider, executable]);
+  const pendingSignIn = useRef(false);
+  useEffect(() => {
+    setBusy(false);
+    setSigningIn(false);
+    return () => {
+      statusGeneration.current += 1;
+      if (pendingSignIn.current) {
+        pendingSignIn.current = false;
+        void cancelChatgptSignIn().catch(() => {});
+      }
+    };
+  }, [provider, executable]);
   useEffect(() => {
     let mounted = true;
     setError(null);
@@ -83,11 +94,22 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
     : claude?.supports_effort ? claude.effort_levels ?? [] : [];
   const effortLabel = (value: string) => (EFFORTS as readonly string[]).includes(value) ? t(`effort.${value}`) : value;
 
+  async function waitingAction(operation: () => Promise<void>) {
+    const generation = statusGeneration.current;
+    try { await operation(); } catch (e) {
+      if (generation === statusGeneration.current) setError(uiError(e));
+    }
+  }
+
   async function act(operation: () => Promise<void>) {
+    const generation = statusGeneration.current;
     setBusy(true);
     setError(null);
-    try { await operation(); } catch (e) { setError(uiError(e)); }
-    finally { setBusy(false); }
+    try { await operation(); } catch (e) {
+      if (generation === statusGeneration.current) setError(uiError(e));
+    } finally {
+      if (generation === statusGeneration.current) setBusy(false);
+    }
   }
 
   return <section className="subscription-settings">
@@ -142,9 +164,19 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
       {account?.signed_in && !account.plan_granted && <p role="alert">{t("ai.error.chatgpt_scope")}</p>}
       <div className="subscription-actions">
         <button className="chatgpt-sign-in" type="button" disabled={busy || !account} onClick={() => void act(async () => {
+          const generation = statusGeneration.current;
+          pendingSignIn.current = true;
           setSigningIn(true);
-          try { setModels([]); onModel?.(""); setAccount(await chatgptSignIn()); }
-          finally { setSigningIn(false); }
+          try {
+            setModels([]); onModel?.("");
+            const signedInAccount = await chatgptSignIn();
+            if (generation === statusGeneration.current) setAccount(signedInAccount);
+          } finally {
+            if (generation === statusGeneration.current) {
+              pendingSignIn.current = false;
+              setSigningIn(false);
+            }
+          }
         })}>{t("settings.chatgptSignIn")}</button>
         {account?.signed_in && <button type="button" disabled={busy} onClick={() => void act(async () => {
           setModels([]); onModel?.(""); setAccount(await chatgptSignOut());
@@ -159,7 +191,7 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
       </>}
       {account?.signed_in && account.plan_granted && !account.paused && <label>
         <span>{t("settings.chatgptModel")}</span>
-        <select aria-label={t("settings.chatgptModel")} value={selectedModel?.id ?? ""} disabled={busy || !models.length} onChange={(e) => {
+        <select aria-label={t("settings.chatgptModel")} value={selectedModel?.id ?? ""} disabled={(busy && !signingIn) || !models.length} onChange={(e) => {
           onModel?.(e.target.value);
           if (effort && !models.find((m) => m.id === e.target.value)?.reasoning_efforts?.includes(effort)) onEffort?.(null);
         }}>
@@ -169,16 +201,17 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
       </label>}
       {signingIn && <>
         <p role="status">{t("settings.chatgptWaiting")}</p>
-        <button type="button" onClick={() => void cancelChatgptSignIn()}>{t("settings.cancel")}</button>
+        <button type="button" onClick={() => void waitingAction(reopenChatgptSignIn)}>{t("settings.chatgptReopen")}</button>
+        <button type="button" onClick={() => void waitingAction(cancelChatgptSignIn)}>{t("settings.cancel")}</button>
       </>}
       <p>{t("settings.chatgptUsage")}</p>
-      <button type="button" onClick={() => void act(async () => {
+      <button type="button" onClick={() => void waitingAction(async () => {
         await subscriptionLink("chatgpt_limits");
       })}>{t("settings.chatgptLimits")}</button>
     </>}
     {efforts.length > 0 && <label>
       <span>{t("settings.effort")}</span>
-      <select value={effort && efforts.includes(effort) ? effort : ""} disabled={busy} onChange={(e) => onEffort?.(e.target.value || null)}>
+      <select value={effort && efforts.includes(effort) ? effort : ""} disabled={busy && !signingIn} onChange={(e) => onEffort?.(e.target.value || null)}>
         <option value="">{t("settings.subscriptionDefault")}</option>
         {efforts.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
       </select>

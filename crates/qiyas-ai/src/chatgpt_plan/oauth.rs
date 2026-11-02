@@ -206,6 +206,21 @@ pub async fn loopback_code(
     pending: &Pending,
     cancel: &CancellationToken,
 ) -> Result<Grant, AiError> {
+    loopback_code_with_timeout(
+        listener,
+        pending,
+        cancel,
+        std::time::Duration::from_secs(600),
+    )
+    .await
+}
+
+async fn loopback_code_with_timeout(
+    listener: tokio::net::TcpListener,
+    pending: &Pending,
+    cancel: &CancellationToken,
+    timeout: std::time::Duration,
+) -> Result<Grant, AiError> {
     let receive = async {
         for _ in 0..32 {
             let (mut socket, peer) = listener.accept().await.map_err(|_| invalid())?;
@@ -263,8 +278,8 @@ pub async fn loopback_code(
         Err(invalid())
     };
     tokio::select! {
-        result = tokio::time::timeout(std::time::Duration::from_secs(300), receive) =>
-            result.map_err(|_| AiError::Subscription("chatgpt_cancelled"))?,
+        result = tokio::time::timeout(timeout, receive) =>
+            result.map_err(|_| AiError::Subscription("chatgpt_timeout"))?,
         () = cancel.cancelled() => Err(AiError::Subscription("chatgpt_cancelled")),
     }
 }
@@ -819,7 +834,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
     async fn mock_token_and_jwks_servers_exchange_without_real_accounts() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -871,7 +885,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
     async fn mock_loopback_ignores_wrong_state_and_never_echoes_the_code() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -908,6 +921,34 @@ mod tests {
             assert!(!answer.contains(&state));
         }
         assert_eq!(receive.await.unwrap().unwrap().code, "fake-code");
+    }
+
+    #[tokio::test]
+    async fn callback_cancellation_drops_listener_without_reporting_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let pending = Pending::new(format!("http://{addr}/auth/callback"), None).unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = loopback_code(listener, &pending, &cancel).await;
+        assert_eq!(result.err().unwrap().code(), "chatgpt_cancelled");
+        assert!(tokio::net::TcpStream::connect(addr).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn callback_timeout_is_distinct_and_drops_listener() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let pending = Pending::new(format!("http://{addr}/auth/callback"), None).unwrap();
+        let result = loopback_code_with_timeout(
+            listener,
+            &pending,
+            &CancellationToken::new(),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+        assert_eq!(result.err().unwrap().code(), "chatgpt_timeout");
+        assert!(tokio::net::TcpStream::connect(addr).await.is_err());
     }
 
     #[test]

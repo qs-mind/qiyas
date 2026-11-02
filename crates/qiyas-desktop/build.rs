@@ -92,6 +92,8 @@ fn main() {
             "ai_attach_pdf",
             "ai_models",
             "claude_code_status",
+            "ai_provider_status",
+            "reopen_chatgpt_sign_in",
             "chatgpt_account",
             "chatgpt_models",
             "chatgpt_select_account",

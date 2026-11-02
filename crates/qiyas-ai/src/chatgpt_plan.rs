@@ -53,6 +53,8 @@ pub struct Vault {
     pub host_id: String,
     pub active: Option<String>,
     pub registrations: Vec<Registration>,
+    #[serde(default)]
+    pub pending_client_id: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Registration {
@@ -63,6 +65,8 @@ pub struct Registration {
     pub tokens: Option<Tokens>,
     #[serde(default)]
     pub paused: bool,
+    #[serde(default)]
+    pub resets_at: Option<u64>,
 }
 impl Default for Vault {
     fn default() -> Self {
@@ -70,10 +74,18 @@ impl Default for Vault {
             host_id: format!("urn:uuid:{}", uuid::Uuid::new_v4()),
             active: None,
             registrations: Vec::new(),
+            pending_client_id: None,
         }
     }
 }
 impl Vault {
+    /// The host registration survives incomplete exchange and selecting Add account.
+    pub fn sign_in_client_id(&self) -> Option<&str> {
+        self.active()
+            .map(|r| r.client_id.as_str())
+            .or(self.pending_client_id.as_deref())
+            .or_else(|| self.registrations.first().map(|r| r.client_id.as_str()))
+    }
     pub fn active(&self) -> Option<&Registration> {
         self.registrations
             .iter()
@@ -92,6 +104,7 @@ impl Vault {
             r.display_name.clone_from(&tokens.display_name);
             r.tokens = Some(tokens);
             r.paused = false;
+            r.resets_at = None;
         } else {
             // The issuer may recognize this host and return an existing registration.
             // Match both identity and client ID; keep other registrations available for sign-out.
@@ -103,6 +116,7 @@ impl Vault {
                 r.display_name.clone_from(&tokens.display_name);
                 r.tokens = Some(tokens);
                 r.paused = false;
+                r.resets_at = None;
                 self.active = Some(r.id.clone());
                 return Ok(());
             }
@@ -114,6 +128,7 @@ impl Vault {
                 display_name: tokens.display_name.clone(),
                 tokens: Some(tokens),
                 paused: false,
+                resets_at: None,
             });
             self.active = Some(id);
         }
@@ -123,6 +138,7 @@ impl Vault {
         if let Some(r) = self.active_mut() {
             r.tokens = None;
             r.paused = false;
+            r.resets_at = None;
         }
     }
     pub fn select(&mut self, id: Option<String>) -> Result<(), AiError> {
@@ -144,6 +160,7 @@ impl Vault {
             display_name: active.map(|r| r.display_name.clone()),
             active_id: self.active.clone(),
             paused: active.is_some_and(|r| r.paused),
+            resets_at: active.and_then(|r| r.resets_at),
             accounts: self
                 .registrations
                 .iter()
@@ -198,6 +215,7 @@ pub struct Account {
     pub active_id: Option<String>,
     pub accounts: Vec<AccountChoice>,
     pub paused: bool,
+    pub resets_at: Option<u64>,
 }
 
 /// The blocking worker owns the lock. Cancelling its waiter must not admit another
@@ -232,8 +250,33 @@ pub async fn save(
     .map_err(|_| AiError::Subscription("chatgpt_keychain"))?
 }
 pub async fn account(store: Arc<dyn TokenStore>) -> Result<Account, AiError> {
-    let (_operation, vault) = load(store).await?;
+    let (operation, mut vault) = load(store.clone()).await?;
+    let expired = vault
+        .active()
+        .is_some_and(|r| r.paused && r.resets_at.is_some_and(|at| at <= oauth::now()));
+    if expired {
+        let r = vault.active_mut().expect("active registration");
+        r.paused = false;
+        r.resets_at = None;
+        let public = vault.public();
+        save(store, vault, operation).await?;
+        return Ok(public);
+    }
     Ok(vault.public())
+}
+
+/// A user request may resume immediately after changing the provider's spending settings.
+pub async fn resume(store: Arc<dyn TokenStore>) -> Result<(), AiError> {
+    let (operation, mut vault) = load(store.clone()).await?;
+    if let Some(r) = vault.active_mut() {
+        if !r.paused && r.resets_at.is_none() {
+            return Ok(());
+        }
+        r.paused = false;
+        r.resets_at = None;
+        save(store, vault, operation).await?;
+    }
+    Ok(())
 }
 
 /// Visible account models and only the effort levels explicitly advertised by discovery.
@@ -281,18 +324,35 @@ impl ChatgptPlan {
         // selected account after sign-out or an account switch.
         // Only terminal refresh failures restart OAuth, once, using the saved registration.
         for attempt in 0..2 {
-            let (operation, mut vault) = tokio::select! {
+            let (mut operation, mut vault) = tokio::select! {
                 result = load(self.store.clone()) => result?,
                 () = cancel.cancelled() => return Err(AiError::Subscription("chatgpt_cancelled")),
             };
             if cancel.is_cancelled() {
                 return Err(AiError::Subscription("chatgpt_cancelled"));
             }
+            if vault
+                .active()
+                .is_some_and(|r| r.paused && r.resets_at.is_some_and(|at| at <= oauth::now()))
+            {
+                let r = vault.active_mut().expect("active registration");
+                r.paused = false;
+                r.resets_at = None;
+                save(self.store.clone(), vault, operation).await?;
+                (operation, vault) = load(self.store.clone()).await?;
+                if cancel.is_cancelled() {
+                    return Err(AiError::Subscription("chatgpt_cancelled"));
+                }
+            }
             let registration = vault
                 .active_mut()
                 .ok_or(AiError::Subscription("chatgpt_auth"))?;
             if registration.paused {
-                return Err(AiError::Subscription("chatgpt_limit"));
+                return Err(AiError::SubscriptionFailure {
+                    code: "chatgpt_limit",
+                    resets_at: registration.resets_at,
+                    retry_after: None,
+                });
             }
             let mut tokens = registration
                 .tokens
@@ -358,7 +418,7 @@ impl ChatgptPlan {
             result = responses::models(&self.protocol.models, &tokens) => result,
             () = cancel.cancelled() => Err(AiError::Subscription("chatgpt_cancelled")),
         };
-        self.record_limit(&id, &result).await?;
+        self.record_limit(&id, &result, &cancel).await?;
         if let Ok(models) = &result {
             *self
                 .models
@@ -408,11 +468,25 @@ impl ChatgptPlan {
         }
         Ok(())
     }
-    async fn record_limit<T>(&self, id: &str, result: &Result<T, AiError>) -> Result<(), AiError> {
+    async fn record_limit<T>(
+        &self,
+        id: &str,
+        result: &Result<T, AiError>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), AiError> {
         if result.as_ref().is_err_and(|e| e.code() == "chatgpt_limit") {
             let (operation, mut vault) = load(self.store.clone()).await?;
+            // Sign-out or account selection may have completed while this old result
+            // waited for the vault. Never restore its pause onto the new session.
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
             if let Some(r) = vault.registrations.iter_mut().find(|r| r.id == id) {
                 r.paused = true;
+                r.resets_at = result
+                    .as_ref()
+                    .err()
+                    .and_then(|e| e.public_error().failure.resets_at);
             }
             save(self.store.clone(), vault, operation).await?;
         }
@@ -481,7 +555,7 @@ impl Provider for ChatgptPlan {
                 } => result,
                 () = cancel.cancelled() => Err(AiError::Subscription("chatgpt_cancelled")),
             };
-            self.record_limit(&id, &result).await?;
+            self.record_limit(&id, &result, &cancel).await?;
             result
         })
     }

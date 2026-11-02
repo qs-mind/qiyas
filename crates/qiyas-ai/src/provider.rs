@@ -264,6 +264,12 @@ pub enum AiError {
     /// A fixed translated subscription error. Never includes child stderr or credentials.
     #[error("{0}")]
     Subscription(&'static str),
+    #[error("{code}")]
+    SubscriptionFailure {
+        code: &'static str,
+        resets_at: Option<u64>,
+        retry_after: Option<u64>,
+    },
     #[error("{service} has no model {model}: choose one in Settings")]
     ModelNotFound { service: String, model: String },
     #[error("The API key was refused. Check it in Settings.")]
@@ -474,7 +480,7 @@ pub(crate) async fn retry_stream(
     true
 }
 
-fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+pub(crate) fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
     if let Ok(seconds) = value.trim().parse::<f64>() {
         return seconds.is_finite().then(|| seconds.max(0.0).ceil() as u64);
     }
@@ -739,6 +745,53 @@ impl SseReader {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn retry_after_reaches_the_window_without_confusing_api_credit_exhaustion() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (code, expected) in [
+            ("rate_limit_exceeded", "rate_limited"),
+            ("insufficient_quota", "out_of_credit"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("requires a socket-capable runner");
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let mut buf = [0; 1024];
+                    let size = stream.read(&mut buf).await.unwrap();
+                    assert!(size > 0);
+                    request.extend_from_slice(&buf[..size]);
+                }
+                let body = json!({"error":{"code":code}}).to_string();
+                stream.write_all(format!("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 45\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let client = http_client();
+            let error = tokio::time::timeout(
+                Duration::from_secs(5),
+                send_with_retry(|| client.get(&url), "", &Value::Null, false, &mut |_| {}),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+            let public = serde_json::to_value(error.public_error_for("openai")).unwrap();
+            assert_eq!(public["kind"], expected);
+            if code == "rate_limit_exceeded" {
+                assert_eq!(public["retry_after"], 45);
+            } else {
+                assert!(!error.retryable());
+                assert!(public["actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["page"] == "openai_billing"));
+            }
+            server.await.unwrap();
+        }
+    }
 
     #[test]
     fn quota_codes_after_long_metadata_are_not_lost_before_retry_classification() {

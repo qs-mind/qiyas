@@ -2074,7 +2074,7 @@ export type ClaudeCodeStatus = {
   supports_model?: boolean; supports_effort?: boolean; model_aliases?: string[]; effort_levels?: string[];
 };
 export const claudeCodeStatus = (executable?: string | null) => invoke<ClaudeCodeStatus>("claude_code_status", { executable: executable || null });
-export type ChatgptAccount = { signed_in: boolean; display_name: string | null; plan_granted: boolean; available?: boolean; active_id?: string | null; accounts?: { id: string; display_name: string; signed_in: boolean }[]; paused?: boolean; notice?: string | null };
+export type ChatgptAccount = { signed_in: boolean; display_name: string | null; plan_granted: boolean; available?: boolean; active_id?: string | null; accounts?: { id: string; display_name: string; signed_in: boolean }[]; paused?: boolean; resets_at?: number | null; notice?: string | null };
 export const chatgptAccount = () => invoke<ChatgptAccount>("chatgpt_account");
 export const chatgptSignIn = () => invoke<ChatgptAccount>("chatgpt_sign_in");
 export const chatgptSignOut = () => invoke<ChatgptAccount>("chatgpt_sign_out");
@@ -2083,7 +2083,9 @@ export const chatgptResumePlan = () => invoke<ChatgptAccount>("chatgpt_resume_pl
 export type PlanModel = ModelInfo & { reasoning_efforts?: string[] };
 export const chatgptModels = () => invoke<PlanModel[]>("chatgpt_models");
 export const cancelChatgptSignIn = () => invoke<void>("cancel_chatgpt_sign_in");
-export const subscriptionLink = (link: "claude_install" | "chatgpt_limits") => invoke<void>("subscription_link", { link });
+export const reopenChatgptSignIn = () => invoke<void>("reopen_chatgpt_sign_in");
+export type ProviderPage = "chatgpt_usage" | "claude_usage" | "openai_billing" | "anthropic_billing";
+export const subscriptionLink = (link: "claude_install" | "chatgpt_limits" | ProviderPage) => invoke<void>("subscription_link", { link });
 
 export type WorkspaceChoice = { provider: Provider; model: string; effort: string | null; base_url?: string | null };
 export type WorkspaceSnapshot = {
@@ -2096,3 +2098,20 @@ export const workspaceAttach = (workspace?: number | null) => invoke<WorkspaceSn
 export const workspaceProvider = (choice: WorkspaceChoice, workspace?: number | null) => invoke<void>("workspace_provider", { ...choice, workspace });
 
 export const workspaceViewState = (workspace: number, context: AiContext) => invoke<void>("workspace_view_state", { workspace, context });
+
+/** Local configuration plus the last request result; never probes a provider. */
+export type PublicProvider = "chatgpt_plan" | "claude_code" | "openai" | "anthropic" | "other";
+export type ProviderFailureKind = "plan_limit" | "spend_blocked" | "out_of_credit" | "rate_limited" | "auth" | "model_unavailable" | "temporary" | "offline" | "context_too_long" | "policy" | "other";
+export type ProviderFailureAction = { kind: "retry" | "open_provider_page" | "open_settings" | "switch_provider"; page?: ProviderPage };
+export type PublicProviderError = { code: string; message: string; message_ar: string; kind: ProviderFailureKind; provider: PublicProvider; resets_at?: number; retry_after?: number; actions: ProviderFailureAction[] };
+export type AiProviderStatus = {
+  provider: PublicProvider;
+  status: "connected" | "needs_sign_in" | "plan_limit" | "spend_blocked" | "out_of_credit" | "auth" | "ok";
+  configured: boolean;
+  /** Only a successful provider request verifies the current profile. */
+  verified: boolean;
+  last_failure: PublicProviderError | null;
+  actions: ProviderFailureAction[];
+  resets_at?: number;
+};
+export const aiProviderStatus = (workspace?: number | null) => invoke<AiProviderStatus>("ai_provider_status", workspace == null ? undefined : { workspace });

@@ -17,6 +17,7 @@ mod paths;
 mod pdf;
 mod plot;
 mod projects;
+mod provider_status;
 pub mod ribbon;
 mod script;
 pub mod secrets;
@@ -147,6 +148,8 @@ pub fn run() {
             documents::ai_attach_pdf,
             commands::ai_models,
             commands::claude_code_status,
+            provider_status::ai_provider_status,
+            subscriptions::reopen_chatgpt_sign_in,
             subscriptions::chatgpt_account,
             subscriptions::chatgpt_models,
             subscriptions::chatgpt_select_account,

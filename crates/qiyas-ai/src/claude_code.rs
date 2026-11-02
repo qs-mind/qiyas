@@ -803,14 +803,24 @@ struct PartialCall {
     arguments: String,
 }
 
-fn terminal_error(category: &str) -> Option<AiError> {
-    Some(error(match category {
+fn terminal_error(category: &str, detail: &Value) -> Option<AiError> {
+    let code = match category {
         "authentication_failed" => "claude_auth",
         "rate_limit" => "claude_limit",
         "billing_error" => "claude_billing",
         "account_on_hold" => "claude_hold",
         _ => return None,
-    }))
+    };
+    let resets_at = crate::provider_error::reset_timestamp(detail);
+    Some(if resets_at.is_some() {
+        AiError::SubscriptionFailure {
+            code,
+            resets_at,
+            retry_after: None,
+        }
+    } else {
+        error(code)
+    })
 }
 
 impl Events {
@@ -855,7 +865,7 @@ impl Events {
             }
             "system" if value["subtype"] == "api_retry" => {
                 let category = value["error"].as_str().unwrap_or("");
-                if let Some(error) = terminal_error(category) {
+                if let Some(error) = terminal_error(category, &value) {
                     return Err(error);
                 }
                 sink(StreamEvent::Diagnostic {
@@ -932,7 +942,9 @@ impl Events {
             }
             "assistant" => {
                 if let Some(category) = value["error"].as_str() {
-                    return Err(terminal_error(category).unwrap_or_else(|| error("claude_failed")));
+                    return Err(
+                        terminal_error(category, &value).unwrap_or_else(|| error("claude_failed"))
+                    );
                 }
                 for block in value["message"]["content"].as_array().into_iter().flatten() {
                     match block["type"].as_str().unwrap_or("") {
@@ -1010,7 +1022,9 @@ impl Events {
                         text: "Claude Code stopped without completing the turn.".into(),
                     });
                     let category = value["error"].as_str().unwrap_or("");
-                    return Err(terminal_error(category).unwrap_or_else(|| error("claude_failed")));
+                    return Err(
+                        terminal_error(category, &value).unwrap_or_else(|| error("claude_failed"))
+                    );
                 }
                 let u = &value["usage"];
                 self.usage = Usage {
@@ -1939,6 +1953,49 @@ mod tests {
                 .replace("ai.claude", "ai.provider")
                 .replace("https://code.claude.com", "https://official.invalid");
             assert!(!production.contains(forbidden), "{forbidden}");
+        }
+    }
+
+    #[test]
+    fn claude_limit_preserves_only_explicit_reset_metadata() {
+        let failure = Events::default()
+            .read(
+                json!({"type":"system","subtype":"api_retry",
+            "error":"rate_limit", "resets_at":1800000000}),
+                &mut |_| {},
+            )
+            .unwrap_err();
+        assert_eq!(
+            serde_json::to_value(failure.public_error()).unwrap()["resets_at"],
+            1800000000_u64
+        );
+    }
+
+    #[test]
+    fn subscription_failures_use_shared_kinds_without_automatic_retries() {
+        for (category, kind) in [
+            ("rate_limit", "plan_limit"),
+            ("billing_error", "spend_blocked"),
+            ("authentication_failed", "auth"),
+            ("account_on_hold", "policy"),
+        ] {
+            let failure = Events::default()
+                .read(
+                    json!({"type":"system","subtype":"api_retry","error":category}),
+                    &mut |_| {},
+                )
+                .unwrap_err();
+            let public = serde_json::to_value(failure.public_error()).unwrap();
+            assert_eq!(public["kind"], kind);
+            assert_eq!(public["provider"], "claude_code");
+            assert!(!failure.retryable());
+            if matches!(category, "rate_limit" | "billing_error") {
+                assert!(public["actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["page"] == "claude_usage"));
+            }
         }
     }
 

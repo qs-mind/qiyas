@@ -160,7 +160,11 @@ async fn plan_limits_pause_requests_until_user_resumes_and_never_clear_tokens() 
     let provider = ChatgptPlan::new(store.clone(), protocol());
     let id = store.load().unwrap().unwrap().active.unwrap();
     provider
-        .record_limit::<()>(&id, &Err(AiError::Subscription("chatgpt_limit")))
+        .record_limit::<()>(
+            &id,
+            &Err(AiError::Subscription("chatgpt_limit")),
+            &tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .unwrap();
     let error = provider
@@ -175,6 +179,44 @@ async fn plan_limits_pause_requests_until_user_resumes_and_never_clear_tokens() 
     store.save(&vault).unwrap();
     assert!(!account(store).await.unwrap().paused);
 }
+#[tokio::test]
+async fn cancelled_limit_waiting_on_vault_cannot_pause_signed_out_or_reconnected_account() {
+    use std::future::Future;
+    use std::task::Poll;
+
+    let _serial = SERIAL.lock().await;
+    for reconnect in [false, true] {
+        let store = memory(tokens(&[PLAN_SCOPE]));
+        let provider = ChatgptPlan::new(store.clone(), protocol());
+        let (operation, mut vault) = load(store.clone()).await.unwrap();
+        let id = vault.active.clone().unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let limit: Result<(), AiError> = Err(AiError::SubscriptionFailure {
+            code: "chatgpt_limit",
+            resets_at: Some(oauth::now() + 3600),
+            retry_after: None,
+        });
+        let mut pending = std::pin::pin!(provider.record_limit(&id, &limit, &cancel));
+        // The old request reaches persistence before the account transition finishes.
+        std::future::poll_fn(|cx| {
+            assert!(matches!(pending.as_mut().poll(cx), Poll::Pending));
+            Poll::Ready(())
+        })
+        .await;
+        cancel.cancel();
+        vault.disconnect();
+        if reconnect {
+            vault.connect(tokens(&[PLAN_SCOPE])).unwrap();
+        }
+        save(store.clone(), vault, operation).await.unwrap();
+        pending.await.unwrap();
+        let account = account(store).await.unwrap();
+        assert_eq!(account.signed_in, reconnect);
+        assert!(!account.paused);
+        assert_eq!(account.resets_at, None);
+    }
+}
+
 #[test]
 fn diagnostics_redact_all_token_material() {
     assert!(!tokens(&[PLAN_SCOPE])
@@ -254,7 +296,10 @@ fn streamed_unknown_and_server_failures_are_temporary_but_client_errors_are_not(
             "chatgpt_capability",
         ),
         (json!({"code":"invalid_api_key"}), "chatgpt_access"),
-        (json!({"code":"rate_limit_exceeded"}), "chatgpt_limit"),
+        (
+            json!({"code":"rate_limit_exceeded"}),
+            "chatgpt_rate_limited",
+        ),
     ] {
         for event in [
             json!({"type":"response.failed","response":{"error":detail}}),
@@ -1087,4 +1132,102 @@ fn model_picture_metadata_is_shared_with_the_conversation_without_a_probe() {
         }],
     );
     assert_eq!(provider.image_input("picture-model"), Some(false));
+}
+
+#[tokio::test]
+async fn explicit_retry_and_expired_reset_make_real_requests_after_pause() {
+    let _serial = SERIAL.lock().await;
+    for explicit in [true, false] {
+        let reset = oauth::now() + 3600;
+        let done = json!({"type":"response.completed","response":{"output":[
+            {"type":"message","content":[{"type":"output_text","text":"Resumed"}]}],"usage":{}}});
+        let (base, server) = mock_server(vec![
+            (429, json!({"error":{"code":"subscription_sharing_usage_limit_exceeded", "resets_at":reset}})),
+            (200, json!(format!("data: {done}\n\n"))),
+        ]).await;
+        let store = memory(tokens(&[PLAN_SCOPE]));
+        let provider = ChatgptPlan::new(store.clone(), local_protocol(&base));
+        let error = provider
+            .stream_turn(request(), &mut |_| {})
+            .await
+            .unwrap_err();
+        let public: Value = serde_json::from_str(&error.for_window()).unwrap();
+        assert_eq!(public["kind"], "plan_limit");
+        assert_eq!(public["resets_at"], reset);
+        assert!(public["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["page"] == "chatgpt_usage"));
+        assert!(public["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "retry"));
+        assert_eq!(
+            provider
+                .stream_turn(request(), &mut |_| panic!("automatic retry sent"))
+                .await
+                .unwrap_err()
+                .code(),
+            "chatgpt_limit"
+        );
+        if explicit {
+            resume(store.clone()).await.unwrap();
+        } else {
+            let (operation, mut vault) = load(store.clone()).await.unwrap();
+            vault.active_mut().unwrap().resets_at = Some(oauth::now() - 1);
+            save(store.clone(), vault, operation).await.unwrap();
+        }
+        let result = provider.stream_turn(request(), &mut |_| {}).await.unwrap();
+        assert!(
+            matches!(result.content.as_slice(), [ContentBlock::Text { text }] if text == "Resumed")
+        );
+        assert!(!account(store).await.unwrap().paused);
+        assert_eq!(server.await.unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn plan_http_retry_advice_reaches_the_failure_card() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _serial = SERIAL.lock().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0; 4096];
+            let n = socket.read(&mut chunk).await.unwrap();
+            assert!(n > 0);
+            request.extend_from_slice(&chunk[..n]);
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .map(|length| length.trim().parse::<usize>().unwrap())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        let body =
+            json!({"error":{"code":"subscription_sharing_usage_limit_exceeded"}}).to_string();
+        socket.write_all(format!("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 45\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    });
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        provider.stream_turn(request(), &mut |_| {}),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    let public: Value = serde_json::from_str(&error.for_window()).unwrap();
+    assert_eq!(public["kind"], "plan_limit");
+    assert_eq!(public["retry_after"], 45);
+    server.await.unwrap();
 }

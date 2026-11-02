@@ -1,10 +1,12 @@
+import { ProviderFailureCard } from "./ProviderFailureCard";
+import { providerFailure } from "./providerFailure";
 import { useStableCallbacks } from "../shell/stableCallbacks";
 import { chatText } from "./content";
 import { errorText, connectionLost } from "./chatErrors";
 import { uiError } from "../i18n/errors";
 import { memo, useMemo, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Pointing } from "../app/useAssistantWiring";
-import { useLanguage, useT } from "../i18n";
+import { translate, useLanguage, useT } from "../i18n";
 import { MizanMark } from "./MizanMark";
 import { PackCheckCard } from "./PackCheckCard";
 import { ConversationHistory, type ConversationHistoryState } from "./ConversationHistory";
@@ -79,6 +81,9 @@ export const AssistantPanel = memo(function AssistantPanel({
   const { lang } = useLanguage();
   const { transcript, busy, error } = assistant;
   const items = transcript.items;
+  const failure = error ? providerFailure(error, lang) : null;
+  const lastItem = items.at(-1);
+  const errorInThread = failure?.kind && lastItem?.kind === "stopped" && lastItem.reason === error;
   const chatLang = chatLanguage(items, lang);
   const blocked = busy || !!history?.pending;
   const drafts = useDrafts(assistant.workspace);
@@ -253,8 +258,10 @@ export const AssistantPanel = memo(function AssistantPanel({
       {dock && <PlanDock key={`${assistant.workspace ?? "chat"}:${dock.index}`} plan={dock.plan} busy={busy} language={chatLang}
         threadItemId={planItemId(dock.index)} awaitingApproval={dock.awaitingApproval} showTechnicalDetails={showTechnicalDetails}
         {...planActions(dock.plan, dock.index, cx)} onShowInChat={thread.onScroll} />}
-      {error && (
-        <div className="error" role="alert">
+      {error && !errorInThread && (failure?.kind
+        ? <ProviderFailureCard failure={failure} lang={lang} busy={blocked} role="alert"
+          onRetry={() => void assistant.send(translate(chatLang, "ai.continueWork"))} onSettings={onSettings} />
+        : <div className="error" role="alert">
           {errorText(error, lang)}
           {connectionLost(error)
             ? <button type="button" disabled={busy} onClick={() => void assistant.send(t("ai.continueWork"))}>{t("ai.continueWorkButton")}</button>

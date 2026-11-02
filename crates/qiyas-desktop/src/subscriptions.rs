@@ -15,7 +15,56 @@ use tokio_util::sync::CancellationToken;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
 
-static PENDING: Mutex<Option<CancellationToken>> = Mutex::new(None);
+static PENDING: Mutex<Option<Arc<PendingSignIn>>> = Mutex::new(None);
+
+// Authorization URLs and their state/nonce are backend memory only.
+struct PendingSignIn {
+    cancel: CancellationToken,
+    url: Mutex<Option<String>>,
+}
+struct SignInGuard(Arc<PendingSignIn>);
+impl Drop for SignInGuard {
+    fn drop(&mut self) {
+        clear_pending(&PENDING, &self.0);
+    }
+}
+fn clear_pending(registry: &Mutex<Option<Arc<PendingSignIn>>>, attempt: &Arc<PendingSignIn>) {
+    attempt.cancel.cancel();
+    let mut pending = registry.lock().unwrap_or_else(PoisonError::into_inner);
+    if pending
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, attempt))
+    {
+        pending.take();
+    }
+}
+fn replace_pending(registry: &Mutex<Option<Arc<PendingSignIn>>>) -> Arc<PendingSignIn> {
+    let mut pending = registry.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(previous) = pending.take() {
+        previous.cancel.cancel();
+    }
+    let attempt = Arc::new(PendingSignIn {
+        cancel: CancellationToken::new(),
+        url: Mutex::new(None),
+    });
+    *pending = Some(attempt.clone());
+    attempt
+}
+fn reopen_pending(
+    registry: &Mutex<Option<Arc<PendingSignIn>>>,
+    open: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let pending = registry.lock().unwrap_or_else(PoisonError::into_inner);
+    let attempt = pending
+        .as_ref()
+        .filter(|p| !p.cancel.is_cancelled())
+        .ok_or_else(|| AiError::Subscription("chatgpt_cancelled").for_window())?;
+    let url = attempt.url.lock().unwrap_or_else(PoisonError::into_inner);
+    let url = url
+        .as_deref()
+        .ok_or_else(|| AiError::Subscription("chatgpt_cancelled").for_window())?;
+    open(url).map_err(|_| AiError::Subscription("chatgpt_oauth").for_window())
+}
 
 pub struct PlanKeychain;
 impl PlanKeychain {
@@ -81,7 +130,23 @@ pub async fn chatgpt_models<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Vec<PlanModel>, String> {
-    let models = plan_provider().models().await.map_err(|e| e.for_window())?;
+    let saved = crate::state::lock(&state.settings).clone();
+    let observed_identity = if saved.provider == settings::Provider::ChatgptPlan {
+        crate::provider_status::identity(&saved).await.ok()
+    } else {
+        None
+    };
+    let result = plan_provider().models().await;
+    if let Some(identity) = observed_identity.as_ref() {
+        crate::provider_status::record_result(
+            identity,
+            result
+                .as_ref()
+                .err()
+                .map(|error| error.public_error_for("chatgpt_plan")),
+        );
+    }
+    let models = result.map_err(|error| error.for_window())?;
     remember_plan_model(&state.settings, &state.config_dir, &models)?;
     Ok(models)
 }
@@ -164,19 +229,20 @@ pub async fn ensure_plan_model(state: &AppState, draft: &mut Settings) -> Result
 
 #[tauri::command]
 pub fn cancel_chatgpt_sign_in() {
-    if let Some(cancel) = PENDING
+    if let Some(attempt) = PENDING
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take()
     {
-        cancel.cancel();
+        attempt.cancel.cancel();
     }
 }
-fn begin_sign_in() -> CancellationToken {
-    cancel_chatgpt_sign_in();
-    let cancel = CancellationToken::new();
-    *PENDING.lock().unwrap_or_else(PoisonError::into_inner) = Some(cancel.clone());
-    cancel
+#[tauri::command]
+pub fn reopen_chatgpt_sign_in() -> Result<(), String> {
+    reopen_pending(&PENDING, open_browser)
+}
+fn begin_sign_in() -> SignInGuard {
+    SignInGuard(replace_pending(&PENDING))
 }
 
 fn stop<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
@@ -208,23 +274,17 @@ pub async fn chatgpt_select_account<R: Runtime>(
             .await
             .map_err(|e| e.for_window())?;
     }
+    crate::provider_status::clear_provider("chatgpt_plan");
     account_with_default_model(&state).await
 }
 
 /// Only an explicit user action resumes requests after a plan limit.
 #[tauri::command]
 pub async fn chatgpt_resume_plan() -> Result<AccountStatus, String> {
-    {
-        let (operation, mut vault) = chatgpt_plan::load(Arc::new(PlanKeychain))
-            .await
-            .map_err(|e| e.for_window())?;
-        if let Some(r) = vault.active_mut() {
-            r.paused = false;
-        }
-        chatgpt_plan::save(Arc::new(PlanKeychain), vault, operation)
-            .await
-            .map_err(|e| e.for_window())?;
-    }
+    chatgpt_plan::resume(Arc::new(PlanKeychain))
+        .await
+        .map_err(|e| e.for_window())?;
+    crate::provider_status::clear_provider("chatgpt_plan");
     chatgpt_account().await
 }
 
@@ -249,6 +309,7 @@ pub async fn chatgpt_sign_out<R: Runtime>(
             .await
             .map_err(|e| e.for_window())?;
     }
+    crate::provider_status::clear_provider("chatgpt_plan");
     let mut status = chatgpt_account().await?;
     remember_plan_model(&state.settings, &state.config_dir, &[])?;
     if !confirmed {
@@ -270,22 +331,24 @@ pub async fn chatgpt_sign_in<R: Runtime>(
     )
     .await
     .map_err(|e| e.for_window())?;
+    crate::provider_status::clear_provider("chatgpt_plan");
     account_with_default_model(&state).await
 }
 
 async fn sign_in(
     protocol: oauth::Protocol,
-    cancel: CancellationToken,
+    attempt: SignInGuard,
     store: Arc<dyn TokenStore>,
 ) -> Result<(), AiError> {
-    let (operation, mut vault) = chatgpt_plan::load(store.clone()).await?;
+    let cancel = &attempt.0.cancel;
+    let (mut operation, mut vault) = chatgpt_plan::load(store.clone()).await?;
     if cancel.is_cancelled() {
         return Err(AiError::Subscription("chatgpt_cancelled"));
     }
     // An expired authorization code is discarded. One fresh browser authorization is
     // allowed; persistent failure returns to Settings rather than opening a login loop.
-    let mut client_id = vault.active().map(|r| r.client_id.clone());
-    for attempt in 0..2 {
+    let mut client_id = vault.sign_in_client_id().map(str::to_owned);
+    for retry in 0..2 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| AiError::Subscription("chatgpt_oauth"))?;
@@ -298,15 +361,32 @@ async fn sign_in(
             client_id.clone(),
         )?;
         let url = pending.authorization_url(&protocol, &vault.host_id)?;
-        open_browser(&url).map_err(|_| AiError::Subscription("chatgpt_oauth"))?;
-        let grant = oauth::loopback_code(listener, &pending, &cancel).await?;
+        {
+            let current = PENDING.lock().unwrap_or_else(PoisonError::into_inner);
+            if !current.as_ref().is_some_and(|p| Arc::ptr_eq(p, &attempt.0))
+                || cancel.is_cancelled()
+            {
+                return Err(AiError::Subscription("chatgpt_cancelled"));
+            }
+            *attempt.0.url.lock().unwrap_or_else(PoisonError::into_inner) = Some(url.clone());
+            open_browser(&url).map_err(|_| AiError::Subscription("chatgpt_oauth"))?;
+        }
+        let grant = oauth::loopback_code(listener, &pending, cancel).await?;
         client_id = Some(grant.client_id.clone());
+        // The issued ID is only known after a validated callback. Abandoning consent
+        // before that point cannot retain an ID that the issuer has not sent to Qiyas.
+        (operation, vault) =
+            remember_registration(store.clone(), vault, operation, grant.client_id.clone()).await?;
+        if cancel.is_cancelled() {
+            return Err(AiError::Subscription("chatgpt_cancelled"));
+        }
         let result = tokio::select! {
-            tokens = protocol.exchange(pending, grant) => tokens,
+            biased;
             () = cancel.cancelled() => return Err(AiError::Subscription("chatgpt_cancelled")),
+            tokens = protocol.exchange(pending, grant) => tokens,
         };
         match result {
-            Err(e) if e.code() == "chatgpt_reauthorize" && attempt == 0 => continue,
+            Err(e) if e.code() == "chatgpt_reauthorize" && retry == 0 => continue,
             Err(e) => return Err(e),
             Ok(tokens) => {
                 if cancel.is_cancelled() {
@@ -318,6 +398,22 @@ async fn sign_in(
         }
     }
     Err(AiError::Subscription("chatgpt_oauth"))
+}
+
+/// Persist the issued client before exchanging the code; retain the operation lock.
+async fn remember_registration(
+    store: Arc<dyn TokenStore>,
+    mut vault: Vault,
+    operation: tokio::sync::MutexGuard<'static, ()>,
+    client_id: String,
+) -> Result<(tokio::sync::MutexGuard<'static, ()>, Vault), AiError> {
+    vault.pending_client_id = Some(client_id);
+    tokio::task::spawn_blocking(move || {
+        store.save(&vault)?;
+        Ok((operation, vault))
+    })
+    .await
+    .map_err(|_| AiError::Subscription("chatgpt_keychain"))?
 }
 
 /// Only fixed official links or the internally constructed authorization URL reach the OS.
@@ -345,19 +441,163 @@ fn open_browser(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Fixed identifiers only: never accepts a URL supplied by the UI or a service error.
+fn subscription_url(link: &str) -> Result<&'static str, String> {
+    match link {
+        "claude_install" => Ok(qiyas_ai::claude_code::INSTALL_URL),
+        "chatgpt_limits" | "chatgpt_usage" => Ok("https://chatgpt.com/#settings"),
+        "claude_usage" => Ok("https://claude.ai/settings/usage"),
+        "openai_billing" => {
+            Ok("https://platform.openai.com/settings/organization/billing/overview")
+        }
+        "anthropic_billing" => Ok("https://platform.claude.com/settings/billing"),
+        _ => Err("Unknown subscription link".into()),
+    }
+}
+
 #[tauri::command]
 pub fn subscription_link(link: String) -> Result<(), String> {
-    let url = match link.as_str() {
-        "claude_install" => qiyas_ai::claude_code::INSTALL_URL,
-        "chatgpt_limits" => "https://chatgpt.com/#settings",
-        _ => return Err("Unknown subscription link".into()),
-    };
-    open_browser(url)
+    open_browser(subscription_url(&link)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_pages_are_fixed_official_urls_and_arbitrary_urls_are_refused() {
+        for (key, expected) in [
+            ("chatgpt_usage", "https://chatgpt.com/#settings"),
+            ("claude_usage", "https://claude.ai/settings/usage"),
+            (
+                "openai_billing",
+                "https://platform.openai.com/settings/organization/billing/overview",
+            ),
+            (
+                "anthropic_billing",
+                "https://platform.claude.com/settings/billing",
+            ),
+        ] {
+            assert_eq!(subscription_url(key).unwrap(), expected);
+        }
+        assert_eq!(
+            subscription_url("chatgpt_limits"),
+            subscription_url("chatgpt_usage")
+        );
+        assert!(subscription_url("claude_install").is_ok());
+        for invalid in [
+            "https://evil.example",
+            "javascript:alert(1)",
+            "file:///tmp/credentials",
+            "openai_billing?redirect=evil",
+            "",
+        ] {
+            assert!(subscription_url(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn reopening_keeps_the_same_url_and_old_cleanup_cannot_clear_a_new_attempt() {
+        let registry = Mutex::new(None);
+        let first = replace_pending(&registry);
+        *first.url.lock().unwrap() =
+            Some("https://auth.openai.com/authorize?state=fake-first".into());
+        let mut opened = Vec::new();
+        reopen_pending(&registry, |url| {
+            opened.push(url.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        reopen_pending(&registry, |url| {
+            opened.push(url.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(opened[0], opened[1]);
+        let second = replace_pending(&registry);
+        assert!(first.cancel.is_cancelled());
+        clear_pending(&registry, &first);
+        assert!(Arc::ptr_eq(
+            registry.lock().unwrap().as_ref().unwrap(),
+            &second
+        ));
+        clear_pending(&registry, &second);
+        assert!(
+            reopen_pending(&registry, |_| panic!("completed attempt must not reopen")).is_err()
+        );
+    }
+
+    #[test]
+    fn registration_selection_survives_add_account_and_legacy_vaults() {
+        let mut vault: Vault = serde_json::from_value(serde_json::json!({
+            "host_id": "urn:uuid:814178b2-ff06-4415-98ed-41518f0f88a8",
+            "active": null,
+            "registrations": [{ "id": "saved", "client_id": "oaiapp_saved", "subject": "person",
+                "display_name": "Surveyor", "tokens": null }]
+        }))
+        .unwrap();
+        assert_eq!(vault.sign_in_client_id(), Some("oaiapp_saved"));
+        vault.pending_client_id = Some("oaiapp_pending".into());
+        assert_eq!(vault.sign_in_client_id(), Some("oaiapp_pending"));
+        vault.select(Some("saved".into())).unwrap();
+        assert_eq!(vault.sign_in_client_id(), Some("oaiapp_saved"));
+        vault.select(None).unwrap();
+        assert_eq!(vault.sign_in_client_id(), Some("oaiapp_pending"));
+    }
+
+    #[tokio::test]
+    async fn issued_registration_is_saved_before_an_abandoned_exchange_and_reused() {
+        #[derive(Default)]
+        struct Store(Mutex<Option<String>>);
+        impl TokenStore for Store {
+            fn load(&self) -> Result<Option<Vault>, AiError> {
+                Ok(self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|s| serde_json::from_str(s).unwrap()))
+            }
+            fn save(&self, vault: &Vault) -> Result<(), AiError> {
+                *self.0.lock().unwrap() = Some(serde_json::to_string(vault).unwrap());
+                Ok(())
+            }
+        }
+        let store = Arc::new(Store::default());
+        let (operation, vault) = chatgpt_plan::load(store.clone()).await.unwrap();
+        let host = vault.host_id.clone();
+        let (operation, vault) =
+            remember_registration(store.clone(), vault, operation, "oaiapp_issued".into())
+                .await
+                .unwrap();
+        // No exchange follows: cancellation, timeout or a network failure must retain the ID.
+        drop(vault);
+        drop(operation);
+        let (_operation, restored) = chatgpt_plan::load(store).await.unwrap();
+        assert_eq!(restored.host_id, host);
+        assert_eq!(restored.sign_in_client_id(), Some("oaiapp_issued"));
+        assert!(restored.active().is_none());
+        let pending = oauth::Pending::new(
+            "http://127.0.0.1:43123/auth/callback".into(),
+            restored.sign_in_client_id().map(str::to_owned),
+        )
+        .unwrap();
+        let url = pending
+            .authorization_url(&oauth::Protocol::official(), &restored.host_id)
+            .unwrap();
+        let fields: std::collections::HashMap<_, _> = url
+            .split_once('?')
+            .unwrap()
+            .1
+            .split('&')
+            .filter_map(|field| field.split_once('='))
+            .collect();
+        assert_eq!(fields["client_id"], "oaiapp_issued");
+        assert!(
+            !fields.contains_key("agent_name_hint"),
+            "retries must not request dynamic registration"
+        );
+    }
+
     #[test]
     fn discovered_default_model_is_saved_and_explicit_choices_are_kept() {
         let dir = tempfile::tempdir().unwrap();

@@ -59,14 +59,20 @@ pub(super) async fn stream(
         let mut retry_after = None;
         let mut unsupported = None;
         let result = match response {
-            Err(_) => Err(AiError::Subscription("chatgpt_temporary")),
+            Err(error) => Err(AiError::Subscription(if error.is_timeout() {
+                "chatgpt_temporary"
+            } else if error.is_connect() {
+                "chatgpt_offline"
+            } else {
+                "chatgpt_temporary"
+            })),
             Ok(response) if !response.status().is_success() => {
                 let status = response.status().as_u16();
                 retry_after = response
                     .headers()
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok());
+                    .and_then(|v| crate::provider::retry_after_seconds(v, chrono::Utc::now()));
                 let body = response.text().await.unwrap_or_default();
                 let value = serde_json::from_str::<Value>(&body)
                     .unwrap_or_else(|_| json!({"message": body}));
@@ -81,7 +87,7 @@ pub(super) async fn stream(
                     Some(tokens),
                     account_id.as_deref(),
                 ));
-                Err(failure(status, detail))
+                Err(failure(status, detail).with_retry_after(retry_after))
             }
             Ok(response) => {
                 let mut events = Events::with_tokens(tokens);
@@ -97,7 +103,9 @@ pub(super) async fn stream(
                     Ok(()) => events
                         .result
                         .ok_or(AiError::Subscription("chatgpt_incomplete")),
-                    Err(e @ AiError::Subscription(_)) => Err(e),
+                    Err(e @ (AiError::Subscription(_) | AiError::SubscriptionFailure { .. })) => {
+                        Err(e)
+                    }
                     Err(_) => Err(AiError::Subscription("chatgpt_incomplete")),
                 }
             }
@@ -133,7 +141,7 @@ pub(super) async fn stream(
                     discard_partial: true,
                 });
             }
-            Err(e) if e.code() == "chatgpt_temporary" => {
+            Err(e) if matches!(e.code(), "chatgpt_temporary" | "chatgpt_rate_limited") => {
                 let Some(wait) = retry.next_delay(retry_after, started.elapsed()) else {
                     return Err(e);
                 };
@@ -167,13 +175,23 @@ fn classify_failure(status: Option<u16>, detail: &Value) -> AiError {
             Some(500..=599) | None => "chatgpt_temporary",
             _ => "chatgpt_failed",
         });
-    AiError::Subscription(code)
+    let resets_at = crate::provider_error::reset_timestamp(detail);
+    if resets_at.is_some() {
+        AiError::SubscriptionFailure {
+            code,
+            resets_at,
+            retry_after: None,
+        }
+    } else {
+        AiError::Subscription(code)
+    }
 }
 
 fn known_failure(code: &str) -> Option<&'static str> {
     Some(match code {
         "subscription_sharing_user_not_eligible" => "chatgpt_ineligible",
-        "subscription_sharing_usage_limit_exceeded" | "rate_limit_exceeded" => "chatgpt_limit",
+        "subscription_sharing_usage_limit_exceeded" => "chatgpt_limit",
+        "rate_limit_exceeded" => "chatgpt_rate_limited",
         "subscription_sharing_usage_unavailable"
         | "subscription_sharing_user_unavailable"
         | "server_error"
@@ -340,15 +358,30 @@ pub(super) async fn models(endpoint: &str, tokens: &Tokens) -> Result<Vec<PlanMo
             }
             Ok(r) => {
                 let status = r.status().as_u16();
+                let retry_after = r
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| crate::provider::retry_after_seconds(v, chrono::Utc::now()));
                 let value = r.json::<Value>().await.unwrap_or(Value::Null);
-                failure(status, &value["error"])
+                let detail = value
+                    .get("error")
+                    .filter(|v| v.is_object())
+                    .unwrap_or(&value);
+                failure(status, detail).with_retry_after(retry_after)
             }
-            Err(_) => AiError::Subscription("chatgpt_temporary"),
+            Err(error) => AiError::Subscription(if error.is_connect() {
+                "chatgpt_offline"
+            } else {
+                "chatgpt_temporary"
+            }),
         };
         if result.code() != "chatgpt_temporary" {
             return Err(result);
         }
-        let Some(wait) = retry.next_delay(None, started.elapsed()) else {
+        let Some(wait) =
+            retry.next_delay(result.public_error().failure.retry_after, started.elapsed())
+        else {
             return Err(result);
         };
         tokio::time::sleep(wait).await;
@@ -657,6 +690,17 @@ mod tests {
     }
 
     #[test]
+    fn short_term_rate_codes_do_not_pause_the_subscription() {
+        let rate = failure(429, &json!({"code":"rate_limit_exceeded"}));
+        assert_eq!(rate.code(), "chatgpt_rate_limited");
+        assert_eq!(
+            serde_json::to_value(rate.public_error()).unwrap()["kind"],
+            "rate_limited"
+        );
+        assert_eq!(failure(429, &Value::Null).code(), "chatgpt_limit");
+    }
+
+    #[test]
     fn subscription_errors_have_their_own_retry_and_account_policy() {
         for (code, expected) in [
             (
@@ -732,7 +776,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Requires a socket-capable runner; reviewer runs mock servers"]
     async fn mock_responses_server_gets_only_mizan_requests_and_no_stored_response() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

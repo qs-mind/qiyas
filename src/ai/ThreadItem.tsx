@@ -10,6 +10,7 @@ import { QuestionList } from "./QuestionList";
 import { ToolCard } from "./ToolCard";
 import type { Item, ToolCardItem } from "./messages";
 import { providerFailure } from "./providerFailure";
+import { ProviderFailureCard } from "./ProviderFailureCard";
 
 /** What every entry needs to know about the thread around it. */
 export type ThreadContext = {
@@ -135,7 +136,10 @@ export const ThreadItem = memo(function ThreadItem({ item, i, cx, id }: { item: 
           {cx.showTechnicalDetails && item.category && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{item.category}</pre></details>}
         </div>
       );
-    case "stopped":
+    case "stopped": {
+      const failure = providerFailure(item.reason, lang);
+      if (failure?.kind) return <ProviderFailureCard failure={failure} lang={lang} busy={cx.unavailable}
+        onRetry={() => cx.send(translate(cx.chatLang, "ai.continueWork"))} onSettings={cx.onSettings} />;
       return (
         <div className="msg notice stopped" role="note">
           {stopText(item.reason, lang, cx.chatLang)}
@@ -144,6 +148,7 @@ export const ThreadItem = memo(function ThreadItem({ item, i, cx, id }: { item: 
             : providerFailure(item.reason, lang) && <button type="button" className="link" onClick={cx.onSettings}>{t("settings")}</button>}
         </div>
       );
+    }
   }
   return null;
 });

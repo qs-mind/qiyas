@@ -97,6 +97,8 @@
     "allow-ai-attach-pdf",
     "allow-ai-models",
     "allow-claude-code-status",
+    "allow-ai-provider-status",
+    "allow-reopen-chatgpt-sign-in",
     "allow-chatgpt-account",
     "allow-chatgpt-models",
     "allow-chatgpt-select-account",

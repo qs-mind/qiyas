@@ -1003,6 +1003,16 @@ pub async fn ai_models(
             })
         }
     };
+    let observed_identity = if crate::provider_status::tracks_discovery(
+        &settings,
+        name,
+        &requested,
+        typed_key.is_some(),
+    ) {
+        crate::provider_status::identity(&settings).await.ok()
+    } else {
+        None
+    };
     let key = match typed_key {
         Some(key) => Some(key),
         None => keychain(move || secrets::get_saved(&settings, name)).await?,
@@ -1014,7 +1024,13 @@ pub async fn ai_models(
             base_url: &requested,
         }
     };
-    Ok(model_list(source, key.as_deref()).await)
+    let result = model_list(source, key.as_deref()).await;
+    if let Some(identity) = observed_identity.as_ref() {
+        if result.error.is_some() || result.from_service {
+            crate::provider_status::record_window_result(identity, result.error.as_deref());
+        }
+    }
+    Ok(result)
 }
 
 /// Checks only documented CLI metadata when the user presses Check in Settings.
@@ -1022,11 +1038,14 @@ pub async fn ai_models(
 pub async fn claude_code_status(
     executable: Option<String>,
 ) -> Result<qiyas_ai::claude_code::Status, String> {
-    let executable = crate::paths::claude_executable(executable.as_deref())?;
+    let requested_executable = executable;
+    let executable = crate::paths::claude_executable(requested_executable.as_deref())?;
     let home = qiyas_core::data_home::qiyas_dir()?;
-    qiyas_ai::claude_code::status(executable.as_deref(), &home)
+    let status = qiyas_ai::claude_code::status(executable.as_deref(), &home)
         .await
-        .map_err(|e| e.for_window())
+        .map_err(|e| e.for_window())?;
+    crate::provider_status::record_claude_status(requested_executable.as_deref(), &status);
+    Ok(status)
 }
 
 /// Stores the provider's API key in the OS keychain. The key never comes back to the window. The
@@ -1213,9 +1232,18 @@ pub async fn ai_send<R: Runtime>(
     }
     let language = ai_run(&state).language();
     let mut settings = state.turn_settings();
-    if ai::mock_provider(&state.session).is_none() {
+    let provider_name = crate::provider_status::provider_name(&settings);
+    let provider_identity = if ai::mock_provider(&state.session).is_none() {
+        if settings.provider == settings::Provider::ChatgptPlan {
+            qiyas_ai::chatgpt_plan::resume(Arc::new(crate::subscriptions::PlanKeychain))
+                .await
+                .map_err(|e| e.for_window())?;
+        }
         crate::subscriptions::ensure_plan_model(&state, &mut settings).await?;
-    }
+        crate::provider_status::identity(&settings).await.ok()
+    } else {
+        None
+    };
     let previous = ai_run(&state).checkpoint_conversation();
     let mut agent = match claim.kept.take() {
         Some(agent) => agent,
@@ -1249,7 +1277,14 @@ pub async fn ai_send<R: Runtime>(
         view.record(state.id, serde_json::json!({"type":"queued","text":message.text,"pointed":message.pointed,"memory_limited":memory_limited}))
     };
     let _ = app.emit("workspace:event", event);
-    tauri::async_runtime::spawn(supervise(app, state.clone(), turn, message));
+    tauri::async_runtime::spawn(supervise(
+        app,
+        state.clone(),
+        turn,
+        message,
+        provider_name,
+        provider_identity,
+    ));
     Ok(())
 }
 
@@ -1346,6 +1381,8 @@ async fn supervise<R: Runtime>(
     state: AppState,
     turn: Turn,
     message: qiyas_ai::UserMessage,
+    provider_name: &'static str,
+    provider_identity: Option<crate::provider_status::ProviderIdentity>,
 ) {
     let generation = turn.generation;
     let claude = crate::state::lock(&state.provider).provider == settings::Provider::ClaudeCode;
@@ -1374,12 +1411,19 @@ async fn supervise<R: Runtime>(
         view.record(state.id, serde_json::json!({"type":"working"}))
     };
     let _ = app.emit("workspace:event", event);
+    let cancellation = turn.cancel.clone();
     let task = tauri::async_runtime::spawn(run_turn(app.clone(), state.clone(), turn, message));
     let mut completion_generation = generation;
     let error = match task.await {
         Ok((agent, result)) => {
             ai_run(&state).finish(agent, generation);
-            result.err().map(|e| e.for_window())
+            let failure = result.err().map(|e| e.public_error_for(provider_name));
+            if !cancellation.is_cancelled() {
+                if let Some(identity) = &provider_identity {
+                    crate::provider_status::record_result(identity, failure.clone());
+                }
+            }
+            failure.map(|error| serde_json::to_string(&error).expect("plain provider error"))
         }
         Err(_) => {
             let mut run = ai_run(&state);

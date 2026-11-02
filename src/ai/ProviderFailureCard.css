@@ -1,0 +1,5 @@
+.provider-failure { text-align: start; }
+.provider-failure p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.provider-failure-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-block-start: 10px; }
+.provider-failure-actions button { white-space: normal; }
+.provider-failure [role="status"] { margin-block-start: 8px; }

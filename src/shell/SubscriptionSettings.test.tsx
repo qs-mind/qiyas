@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
 import { SubscriptionSettings } from "./SubscriptionSettings";
@@ -7,13 +7,14 @@ import { SubscriptionSettings } from "./SubscriptionSettings";
 const api = vi.hoisted(() => ({
   chatgptAccount: vi.fn(), chatgptSignIn: vi.fn(), chatgptSignOut: vi.fn(),
   chatgptModels: vi.fn(), chatgptSelectAccount: vi.fn(), chatgptResumePlan: vi.fn(),
-  cancelChatgptSignIn: vi.fn(), claudeCodeStatus: vi.fn(), subscriptionLink: vi.fn(),
+  cancelChatgptSignIn: vi.fn(), reopenChatgptSignIn: vi.fn(), claudeCodeStatus: vi.fn(), subscriptionLink: vi.fn(),
 }));
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
 beforeEach(() => {
   api.chatgptAccount.mockResolvedValue({ signed_in: false, display_name: null, plan_granted: false });
   api.chatgptModels.mockResolvedValue([{ id: "mock-slug", label: "Mock model" }]);
   api.subscriptionLink.mockResolvedValue(undefined);
+  api.cancelChatgptSignIn.mockResolvedValue(undefined);
   api.claudeCodeStatus.mockResolvedValue({ installed: false, compatible: false, signed_in: null, version: null, code: "claude_missing" });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
@@ -202,4 +203,91 @@ test("a late Claude status cannot change the newly selected provider", async () 
   await screen.findByRole("button", { name: "Continue with ChatGPT" });
   await waitFor(() => expect(api.chatgptAccount).toHaveBeenCalled());
   expect(onModel).not.toHaveBeenCalled();
+});
+
+
+test("waiting keeps cancel and reopen usable and timeout enables a fresh sign-in", async () => {
+  let reject!: (reason: unknown) => void;
+  api.chatgptSignIn.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
+  api.reopenChatgptSignIn.mockResolvedValue(undefined);
+  api.cancelChatgptSignIn.mockResolvedValue(undefined);
+  render(<SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} />);
+  const start = await screen.findByRole("button", { name: "Continue with ChatGPT" });
+  await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(start);
+  const reopen = await screen.findByRole("button", { name: "Open the page again" });
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  expect((reopen as HTMLButtonElement).disabled).toBe(false);
+  expect((cancel as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(reopen);
+  await waitFor(() => expect(api.reopenChatgptSignIn).toHaveBeenCalledTimes(1));
+  expect(api.chatgptSignIn).toHaveBeenCalledTimes(1);
+  expect((start as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(cancel);
+  expect(api.cancelChatgptSignIn).toHaveBeenCalledTimes(1);
+  reject(JSON.stringify({ code: "chatgpt_timeout", message: "Sign-in timed out." }));
+  await screen.findByRole("alert");
+  await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.queryByRole("button", { name: "Open the page again" })).toBeNull();
+});
+
+
+test.each(["complete", "fail"] as const)("switching provider cancels sign-in and ignores its late %s", async (outcome) => {
+  let complete!: (value: unknown) => void;
+  let fail!: (reason: unknown) => void;
+  api.chatgptSignIn.mockReturnValueOnce(new Promise((resolve, reject) => { complete = resolve; fail = reject; }));
+  api.claudeCodeStatus.mockResolvedValue({ installed: true, compatible: true, signed_in: true,
+    supports_model: true, supports_effort: true, model_aliases: ["sonnet"], effort_levels: ["high"] });
+  const onModel = vi.fn();
+  const props = { executable: "", onExecutable: () => {}, onModel };
+  const view = render(<SubscriptionSettings {...props} provider="chatgpt_plan" />);
+  const start = await screen.findByRole("button", { name: "Continue with ChatGPT" });
+  await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(start);
+  await screen.findByRole("button", { name: "Open the page again" });
+  onModel.mockClear();
+  view.rerender(<SubscriptionSettings {...props} provider="claude_code" model="sonnet" />);
+  expect(api.cancelChatgptSignIn).toHaveBeenCalledTimes(1);
+  expect((screen.getByLabelText("Claude Code program (optional)") as HTMLInputElement).disabled).toBe(false);
+  await screen.findByLabelText("Model");
+  await act(async () => {
+    if (outcome === "complete") complete({ signed_in: true, plan_granted: true, display_name: "Old ChatGPT account" });
+    else fail(JSON.stringify({ code: "ai.error.chatgpt_timeout" }));
+  });
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("sonnet");
+  expect((screen.getByLabelText("Model") as HTMLSelectElement).disabled).toBe(false);
+  expect(onModel).not.toHaveBeenCalled();
+  expect(api.chatgptModels).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("an old sign-in completion cannot release a new sign-in's waiting controls", async () => {
+  let completeOld!: (value: unknown) => void;
+  api.chatgptSignIn.mockReturnValueOnce(new Promise((resolve) => { completeOld = resolve; }))
+    .mockReturnValueOnce(new Promise(() => {}));
+  const props = { executable: "", onExecutable: () => {} };
+  const view = render(<SubscriptionSettings {...props} provider="chatgpt_plan" />);
+  const start = await screen.findByRole("button", { name: "Continue with ChatGPT" });
+  await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(start);
+  view.rerender(<SubscriptionSettings {...props} provider="claude_code" />);
+  view.rerender(<SubscriptionSettings {...props} provider="chatgpt_plan" />);
+  const nextStart = screen.getByRole("button", { name: "Continue with ChatGPT" });
+  await waitFor(() => expect((nextStart as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(nextStart);
+  await act(async () => { completeOld({ signed_in: true, plan_granted: true, display_name: "Old account" }); });
+  expect((nextStart as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Open the page again" })).toBeTruthy();
+  expect(screen.queryByText("Old account")).toBeNull();
+  expect(api.chatgptModels).not.toHaveBeenCalled();
+});
+
+test("closing settings cancels a pending ChatGPT sign-in", async () => {
+  api.chatgptSignIn.mockReturnValueOnce(new Promise(() => {}));
+  const view = render(<SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} />);
+  const start = await screen.findByRole("button", { name: "Continue with ChatGPT" });
+  await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(start);
+  view.unmount();
+  expect(api.cancelChatgptSignIn).toHaveBeenCalledTimes(1);
 });

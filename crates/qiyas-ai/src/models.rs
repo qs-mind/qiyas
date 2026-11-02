@@ -279,6 +279,12 @@ pub struct ModelList {
 
 /// `list_models`, or the built-in list with the error when the service can't be asked.
 pub async fn model_list(source: ModelSource<'_>, key: Option<&str>) -> ModelList {
+    let provider = match source {
+        ModelSource::Anthropic => "anthropic",
+        ModelSource::OpenAiCompatible { base_url } => {
+            crate::provider_error::compatible_provider(base_url)
+        }
+    };
     match list_models(source, key).await {
         Ok(models) => ModelList {
             models,
@@ -288,7 +294,7 @@ pub async fn model_list(source: ModelSource<'_>, key: Option<&str>) -> ModelList
         Err(e) => ModelList {
             models: builtin_models(source),
             from_service: false,
-            error: Some(e.for_window()),
+            error: Some(e.for_window_for(provider)),
         },
     }
 }
