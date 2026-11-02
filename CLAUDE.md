@@ -20,6 +20,22 @@ Moved here from the team's memory so they live with the code; later sections giv
 - Examples, demos and tests use mega projects and extreme cases, never a villa or a small building.
 - Coding work is written as tasks for Codex on the founder's computer; keep the dev app running so it can be tried directly.
 
+Founder's rulings, 2 November 2026:
+
+- Measurement facts (whether openings are deducted and from what size, waste, laps, allowances,
+  rounding): Mizan takes them from the drawing, a document or the engineer; where none gives them
+  it may ask, or decide itself with an engineering basis (as in Mizan autonomy and trust). Either
+  way, when Mizan finishes it tells the engineer in plain words what it measured, what it
+  deducted (each deduction with its quantity) and every factor it applied, with its value and
+  source, marking the ones it decided itself.
+- Arabic exports (Excel and PDF) offer both digit systems: Western (0-9) or Arabic-Indic (٠-٩),
+  chosen per export; Western by default. Excel cells stay numbers either way. The window itself
+  keeps Western digits (Goal F).
+- Engineering terms only, in English and Arabic, from one reference: `src/i18n/ar-glossary.json`
+  (each concept's English term and Arabic term; prose rules in `docs/arabic-glossary.md`). The
+  window, Mizan's prompts and answers, exports, docs and code comments follow it; a new term is
+  added there first.
+
 ## Layout
 
 ```
@@ -2701,6 +2717,9 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
 - Plan (Phase 1b, drawing I/O): `docs/superpowers/plans/2026-10-08-qiyas-phase1b-drawing-io.md`
 - Plan (Phase 3, edit and annotate): `docs/superpowers/plans/2026-10-08-qiyas-phase3-edit-annotate.md`
 - Plan (Phase 4, output): `docs/superpowers/plans/2026-10-08-qiyas-phase4-output.md`
+- Plan (dynamic core): `docs/superpowers/plans/2026-10-20-qiyas-dynamic-core.md`
+- Plan (skills review fixes): `docs/superpowers/plans/2026-11-02-skills-review-fixes.md`, from the
+  review `docs/2026-11-02-skills-review.md`
 - Checks: `docs/2026-10-08-qiyas-foundation-check.md`, `docs/2026-10-09-qiyas-phase2-check.md`,
   `docs/2026-10-09-qiyas-phase1b-check.md`, `docs/2026-10-09-qiyas-phase3-check.md`,
   `docs/2026-10-12-qiyas-phase4-check.md`, `docs/2026-10-19-qiyas-units-mizan-check.md`

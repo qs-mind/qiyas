@@ -1,7 +1,20 @@
-# Arabic in Qiyas and Mizan
+# Terms and Arabic in Qiyas and Mizan
 
-The shared vocabulary and machine-readable style contract live in
-`src/i18n/ar-glossary.json`. Use familiar Egyptian and Gulf engineering Arabic,
+`src/i18n/ar-glossary.json` is the one reference for every term Qiyas uses, in English and
+Arabic (founder's ruling, 2 November 2026): engineering terms only. Each concept has its English
+term (`en`, with `en_avoid`) and its Arabic term (`preferred`, with `avoid`), and a `context` where
+two meanings meet. The window, Mizan's prompts and answers, exports, docs and code comments follow
+it; a new term is added there before it is used anywhere.
+
+Settled on 2 November 2026: a drawing **revision** is **إصدار** (رقم الإصدار), a **review** stays
+**مراجعة**; a BOQ–drawing **discrepancy** is **تعارض** (never "conflict" in English text) and
+what is raised to the engineer is a **query**, **استفسار**; a building **element** and a CAD
+**entity** are both **عنصر** (عنصر الرسم when both appear); the job is the **take-off**, **حصر**,
+and a hand-measured row a **manual measurement**, **قياس يدوي**; a rule's multiplier is a
+**factor**, **معامل**, and a named parametric value a **parameter**, **متغير**; **waste allowance**
+نسبة الهالك, **lap** تراكب, **allowance** سماحية, **rounding** تقريب.
+
+The machine-readable style contract lives in the same file. Use familiar Egyptian and Gulf engineering Arabic,
 with short, direct sentences. Keep established labels that already read naturally.
 
 - BOQ is **مقايسة**, take-off **حصر**, a BOQ item **بند**, a drawing entity

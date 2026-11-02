@@ -6,17 +6,20 @@
       "plural_or_context": "رسومات",
       "avoid": [
         "رسمة"
-      ]
+      ],
+      "en": "drawing"
     },
     "sheet": {
       "preferred": "لوحة",
       "plural_or_context": "لوحات",
-      "avoid": []
+      "avoid": [],
+      "en": "sheet"
     },
     "worksheet": {
       "preferred": "ورقة عمل",
       "plural_or_context": "أوراق عمل",
-      "avoid": []
+      "avoid": [],
+      "en": "worksheet"
     },
     "layer": {
       "preferred": "طبقة",
@@ -24,12 +27,18 @@
       "avoid": [
         "لاير",
         "لايرات"
-      ]
+      ],
+      "en": "layer"
     },
     "takeoff": {
       "preferred": "حصر",
       "plural_or_context": "حصر الكميات",
-      "avoid": []
+      "avoid": [],
+      "en": "take-off",
+      "en_avoid": [
+        "takeoff",
+        "take off"
+      ]
     },
     "boq": {
       "preferred": "مقايسة",
@@ -38,44 +47,63 @@
         "جدول الكميات",
         "جدول كميات",
         "قائمة الكميات"
+      ],
+      "en": "bill of quantities (BOQ)",
+      "en_avoid": [
+        "bill of materials"
       ]
     },
     "item": {
       "preferred": "بند",
       "plural_or_context": "بنود",
-      "avoid": []
+      "avoid": [],
+      "en": "BOQ item",
+      "en_avoid": [
+        "BOQ line",
+        "BOQ row"
+      ]
     },
     "entity": {
       "preferred": "عنصر",
       "plural_or_context": "عناصر",
       "avoid": [
         "كائن رسومي"
-      ]
+      ],
+      "en": "entity",
+      "en_avoid": [
+        "object"
+      ],
+      "context": "A CAD primitive (line, arc, text, block reference). Arabic uses عنصر for it and for a building element; write عنصر الرسم when both appear together."
     },
     "quantity": {
       "preferred": "كمية",
       "plural_or_context": "كميات",
-      "avoid": []
+      "avoid": [],
+      "en": "quantity"
     },
     "measurement": {
       "preferred": "قياس",
       "plural_or_context": "قياسات",
-      "avoid": []
+      "avoid": [],
+      "en": "measurement"
     },
     "measurement_method": {
       "preferred": "طريقة القياس",
       "plural_or_context": "طرق القياس",
-      "avoid": []
+      "avoid": [],
+      "en": "method of measurement"
     },
     "opening": {
       "preferred": "فتحة",
       "plural_or_context": "فتحات",
-      "avoid": []
+      "avoid": [],
+      "en": "opening"
     },
     "door": {
       "preferred": "باب",
       "plural_or_context": "أبواب",
-      "avoid": []
+      "avoid": [],
+      "en": "door"
     },
     "window": {
       "preferred": "نافذة",
@@ -83,7 +111,8 @@
       "avoid": [
         "شباك",
         "شبابيك"
-      ]
+      ],
+      "en": "window"
     },
     "wall": {
       "preferred": "جدار",
@@ -91,102 +120,125 @@
       "avoid": [
         "حائط",
         "حوائط"
-      ]
+      ],
+      "en": "wall"
     },
     "room": {
       "preferred": "غرفة",
       "plural_or_context": "غرف",
-      "avoid": []
+      "avoid": [],
+      "en": "room"
     },
     "space": {
       "preferred": "فراغ",
       "plural_or_context": "فراغات",
-      "avoid": []
+      "avoid": [],
+      "en": "space"
     },
     "region": {
       "preferred": "مساحة مغلقة",
       "plural_or_context": "مساحات مغلقة",
-      "avoid": []
+      "avoid": [],
+      "en": "enclosed region"
     },
     "area": {
       "preferred": "مساحة",
       "plural_or_context": "مساحات",
-      "avoid": []
+      "avoid": [],
+      "en": "area"
     },
     "plan": {
       "preferred": "خطة",
       "plural_or_context": "خطط",
-      "avoid": []
+      "avoid": [],
+      "en": "plan"
     },
     "floor_plan": {
       "preferred": "مسقط",
       "plural_or_context": "مساقط",
-      "avoid": []
+      "avoid": [],
+      "en": "floor plan"
     },
     "phase": {
       "preferred": "مرحلة",
       "plural_or_context": "مراحل",
-      "avoid": []
+      "avoid": [],
+      "en": "phase"
     },
     "step": {
       "preferred": "خطوة",
       "plural_or_context": "خطوات",
-      "avoid": []
+      "avoid": [],
+      "en": "step"
     },
     "check": {
       "preferred": "فحص",
       "plural_or_context": "فحوص",
-      "avoid": []
+      "avoid": [],
+      "en": "check"
     },
     "query": {
       "preferred": "استفسار",
       "plural_or_context": "استفسارات",
-      "avoid": []
+      "avoid": [],
+      "en": "query",
+      "en_avoid": [
+        "RFI"
+      ]
     },
     "data_query": {
       "preferred": "استعلام",
       "plural_or_context": "استعلامات",
-      "avoid": []
+      "avoid": [],
+      "en": "data query"
     },
     "variation": {
       "preferred": "فروق الكميات",
       "plural_or_context": "تقرير فروق الكميات",
-      "avoid": []
+      "avoid": [],
+      "en": "variation"
     },
     "revision": {
-      "preferred": "مراجعة",
-      "plural_or_context": "مراجعات",
-      "avoid": []
+      "preferred": "إصدار",
+      "plural_or_context": "رقم الإصدار",
+      "avoid": [],
+      "en": "revision"
     },
     "review": {
       "preferred": "مراجعة",
       "plural_or_context": "للمراجعة",
-      "avoid": []
+      "avoid": [],
+      "en": "review"
     },
     "export": {
       "preferred": "تصدير",
       "plural_or_context": "صدر",
-      "avoid": []
+      "avoid": [],
+      "en": "export"
     },
     "import": {
       "preferred": "استيراد",
       "plural_or_context": "استورد",
-      "avoid": []
+      "avoid": [],
+      "en": "import"
     },
     "undo": {
       "preferred": "تراجع",
       "plural_or_context": "تراجع عن آخر تعديل",
-      "avoid": []
+      "avoid": [],
+      "en": "undo"
     },
     "redo": {
       "preferred": "إعادة",
       "plural_or_context": "أعد التعديل",
-      "avoid": []
+      "avoid": [],
+      "en": "redo"
     },
     "settings": {
       "preferred": "إعدادات",
       "plural_or_context": "الإعدادات",
-      "avoid": []
+      "avoid": [],
+      "en": "settings"
     },
     "working": {
       "preferred": "قيد التنفيذ",
@@ -194,164 +246,201 @@
       "avoid": [
         "جار",
         "جاري"
-      ]
+      ],
+      "en": "in progress"
     },
     "done": {
       "preferred": "اكتمل",
       "plural_or_context": "مكتمل",
-      "avoid": []
+      "avoid": [],
+      "en": "done"
     },
     "failed": {
       "preferred": "تعذر التنفيذ",
       "plural_or_context": "فشل",
-      "avoid": []
+      "avoid": [],
+      "en": "failed"
     },
     "pending": {
       "preferred": "قيد الانتظار",
       "plural_or_context": "لم يبدأ بعد",
-      "avoid": []
+      "avoid": [],
+      "en": "pending"
     },
     "waiting": {
       "preferred": "بانتظار الإجابة",
       "plural_or_context": "بانتظارك",
-      "avoid": []
+      "avoid": [],
+      "en": "waiting for your answer"
     },
     "recommended": {
       "preferred": "موصى به",
       "plural_or_context": "موصى بها",
-      "avoid": []
+      "avoid": [],
+      "en": "recommended"
     },
     "block": {
       "preferred": "بلوك",
       "plural_or_context": "بلوكات",
       "avoid": [
         "كتلة رسومية"
-      ]
+      ],
+      "en": "block"
     },
     "viewport": {
       "preferred": "نافذة عرض",
       "plural_or_context": "نوافذ عرض",
-      "avoid": []
+      "avoid": [],
+      "en": "viewport"
     },
     "dimension": {
       "preferred": "بعد",
       "plural_or_context": "أبعاد",
-      "avoid": []
+      "avoid": [],
+      "en": "dimension"
     },
     "dimension_sheet": {
       "preferred": "ورقة قياس",
       "plural_or_context": "أوراق القياس",
-      "avoid": []
+      "avoid": [],
+      "en": "dimension sheet"
     },
     "annotation": {
       "preferred": "الكتابات والأبعاد",
       "plural_or_context": "مقياس الكتابات والأبعاد",
-      "avoid": []
+      "avoid": [],
+      "en": "annotation"
     },
     "note": {
       "preferred": "ملاحظة",
       "plural_or_context": "ملاحظات",
-      "avoid": []
+      "avoid": [],
+      "en": "note"
     },
     "tag": {
       "preferred": "رمز العنصر",
       "plural_or_context": "رموز العناصر",
-      "avoid": []
+      "avoid": [],
+      "en": "tag"
     },
     "handle": {
       "preferred": "معرف العنصر",
       "plural_or_context": "معرفات العناصر",
-      "avoid": []
+      "avoid": [],
+      "en": "handle"
     },
     "attribute": {
       "preferred": "سمة",
       "plural_or_context": "سمات",
-      "avoid": []
+      "avoid": [],
+      "en": "attribute"
     },
     "property": {
       "preferred": "خاصية",
       "plural_or_context": "خصائص",
-      "avoid": []
+      "avoid": [],
+      "en": "property"
     },
     "parameter": {
-      "preferred": "معامل",
-      "plural_or_context": "معاملات",
-      "avoid": []
+      "preferred": "متغير",
+      "plural_or_context": "متغيرات",
+      "avoid": [],
+      "en": "parameter",
+      "context": "A named parametric value such as d1; a multiplier in a rule is a factor."
     },
     "constraint": {
       "preferred": "قيد",
       "plural_or_context": "قيود",
-      "avoid": []
+      "avoid": [],
+      "en": "constraint"
     },
     "hatch": {
       "preferred": "تهشير",
       "plural_or_context": "نمط التهشير",
-      "avoid": []
+      "avoid": [],
+      "en": "hatch"
     },
     "polyline": {
       "preferred": "خط متعدد",
       "plural_or_context": "خطوط متعددة",
-      "avoid": []
+      "avoid": [],
+      "en": "polyline"
     },
     "multiline": {
       "preferred": "خط مركب",
       "plural_or_context": "خطوط مركبة",
-      "avoid": []
+      "avoid": [],
+      "en": "multiline"
     },
     "ellipse": {
       "preferred": "قطع ناقص",
       "plural_or_context": "قطوع ناقصة",
-      "avoid": []
+      "avoid": [],
+      "en": "ellipse"
     },
     "xref": {
       "preferred": "مرجع خارجي",
       "plural_or_context": "مراجع خارجية",
-      "avoid": []
+      "avoid": [],
+      "en": "external reference (xref)"
     },
     "view": {
       "preferred": "منظر",
       "plural_or_context": "مناظر",
-      "avoid": []
+      "avoid": [],
+      "en": "view"
     },
     "title_block": {
       "preferred": "جدول بيانات اللوحة",
       "plural_or_context": "بيانات اللوحة",
-      "avoid": []
+      "avoid": [],
+      "en": "title block"
     },
     "drawing_set": {
       "preferred": "مجموعة الرسومات",
       "plural_or_context": "مجموعات الرسومات",
-      "avoid": []
+      "avoid": [],
+      "en": "drawing set"
     },
     "evidence": {
       "preferred": "أدلة القياس",
       "plural_or_context": "دليل القياس",
-      "avoid": []
+      "avoid": [],
+      "en": "measurement evidence"
     },
     "conflict": {
       "preferred": "تعارض",
       "plural_or_context": "تعارضات",
-      "avoid": []
+      "avoid": [],
+      "en": "discrepancy",
+      "en_avoid": [
+        "conflict",
+        "conflicts"
+      ]
     },
     "deduction": {
       "preferred": "خصم",
       "plural_or_context": "خصومات",
-      "avoid": []
+      "avoid": [],
+      "en": "deduction"
     },
     "gross": {
       "preferred": "إجمالي",
       "plural_or_context": "الكمية الإجمالية",
-      "avoid": []
+      "avoid": [],
+      "en": "gross"
     },
     "net": {
       "preferred": "صافي",
       "plural_or_context": "الكمية الصافية",
-      "avoid": []
+      "avoid": [],
+      "en": "net"
     },
     "scale": {
       "preferred": "مقياس الرسم",
       "plural_or_context": "المقياس",
-      "avoid": []
+      "avoid": [],
+      "en": "drawing scale"
     },
     "excel": {
       "preferred": "Excel",
@@ -359,28 +448,94 @@
       "avoid": [
         "إكسل",
         "اكسل"
-      ]
+      ],
+      "en": "Excel"
     },
     "aligned": {
       "preferred": "محاذي للخط",
       "plural_or_context": "بمحاذاة الخط",
       "avoid": [
         "محاذ"
-      ]
+      ],
+      "en": "aligned"
     },
     "parallel": {
       "preferred": "توازي",
       "plural_or_context": "متوازي",
       "avoid": [
         "تواز"
-      ]
+      ],
+      "en": "parallel"
     },
     "equal": {
       "preferred": "تساوي",
       "plural_or_context": "متساوي",
       "avoid": [
         "تساو"
-      ]
+      ],
+      "en": "equal"
+    },
+    "element": {
+      "preferred": "عنصر",
+      "plural_or_context": "عناصر",
+      "avoid": [],
+      "en": "element",
+      "en_avoid": [
+        "object"
+      ],
+      "context": "A building element Qiyas measures (wall, door, slab). A CAD primitive is an entity."
+    },
+    "manual_measurement": {
+      "preferred": "قياس يدوي",
+      "plural_or_context": "قياسات يدوية",
+      "avoid": [],
+      "en": "manual measurement",
+      "context": "A row the engineer measured by hand. The whole job is the take-off."
+    },
+    "measured_quantity": {
+      "preferred": "كمية مقاسة",
+      "plural_or_context": "كميات مقاسة",
+      "avoid": [],
+      "en": "measured quantity",
+      "context": "One element measured under one rule."
+    },
+    "dimension_line": {
+      "preferred": "سطر قياس",
+      "plural_or_context": "أسطر القياس",
+      "avoid": [],
+      "en": "dimension line",
+      "context": "A line of a dimension sheet: timesing, dimensions, squaring."
+    },
+    "waste": {
+      "preferred": "نسبة الهالك",
+      "plural_or_context": "الهالك",
+      "avoid": [],
+      "en": "waste allowance"
+    },
+    "lap": {
+      "preferred": "تراكب",
+      "plural_or_context": "أطوال التراكب",
+      "avoid": [],
+      "en": "lap"
+    },
+    "allowance": {
+      "preferred": "سماحية",
+      "plural_or_context": "سماحيات",
+      "avoid": [],
+      "en": "allowance"
+    },
+    "rounding": {
+      "preferred": "تقريب",
+      "plural_or_context": "قاعدة التقريب",
+      "avoid": [],
+      "en": "rounding"
+    },
+    "factor": {
+      "preferred": "معامل",
+      "plural_or_context": "معاملات",
+      "avoid": [],
+      "en": "factor",
+      "context": "A multiplier in a measurement rule; a parameter is a named drawing value."
     }
   },
   "bannedPatterns": [
