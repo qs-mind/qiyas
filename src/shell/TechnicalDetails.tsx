@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import type { ReactNode } from "react";
 import { useT } from "../i18n";
 
@@ -10,6 +11,6 @@ export function ReviewNotes({ notes }: { notes: string[] }) {
   const t = useT();
   if (!notes.length) return null;
   return <div><p>{t("evidence.review", { n: notes.length })}</p>
-    <TechnicalDetails><ul>{notes.map((note, i) => <li key={i} dir="auto">{note}</li>)}</ul></TechnicalDetails>
+    <TechnicalDetails><ul>{notes.map((note, i) => <li key={i} {...readingDirection(note)}>{note}</li>)}</ul></TechnicalDetails>
   </div>;
 }

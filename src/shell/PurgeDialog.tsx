@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 /** PURGE: a dry run lists, by kind, what nothing in the drawing uses; the kinds ticked are then
  *  taken out as one undo step, and the dialog says what went. The window does not open it while a
@@ -79,7 +80,7 @@ export function PurgeDialog({ look, apply, onUndo, onClose }: Props) {
           {t("purge.title")}
         </h2>
         {found?.limited_reason && (
-          <p className="status" dir="auto">
+          <p className="status" {...readingDirection(found.limited_reason)}>
             {found.limited_reason}
           </p>
         )}

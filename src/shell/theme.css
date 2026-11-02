@@ -4429,3 +4429,12 @@ code, kbd, .chip { unicode-bidi: isolate; }
   width: max-content;
 }
 .ribbon-tab-sizer .ribbon-tab { display: inline-flex; align-items: center; }
+
+/* Arabic letters stay joined and upright, including content in an English window. */
+:lang(ar),
+[dir="rtl"],
+[dir="rtl"] :not([dir="ltr"]):not(:lang(en)) {
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  font-style: normal !important;
+}

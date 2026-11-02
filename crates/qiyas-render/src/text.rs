@@ -29,6 +29,24 @@ const LINE_PITCH: f64 = 5.0 / 3.0;
 /// Where a text's bottom sits under its baseline, in text heights (bottom alignment).
 const DESCENT: f64 = 1.0 / 3.0;
 
+/// Base direction supplied by the report language, or inferred for drawing text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum BaseDirection {
+    #[default]
+    Auto,
+    Ltr,
+    Rtl,
+}
+impl BaseDirection {
+    fn level(self) -> Option<unicode_bidi::Level> {
+        match self {
+            Self::Auto => None,
+            Self::Ltr => Some(unicode_bidi::Level::ltr()),
+            Self::Rtl => Some(unicode_bidi::Level::rtl()),
+        }
+    }
+}
+
 /// One shaped glyph: font, glyph id, and pen position in text heights (x along the baseline from
 /// the line's left end, y up from the baseline).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -118,8 +136,8 @@ pub struct TextEngine {
     buffer: Option<UnicodeBuffer>,
     /// Fallback chain and height and width factor of each text style, by style name as written.
     styles: HashMap<String, StyleFont>,
-    /// Lines shaped during the current build, by chain, text and reversal.
-    shaped: HashMap<(Vec<u16>, String, bool), ShapedLine>,
+    /// Lines shaped during the current build, including reversal and base direction.
+    shaped: HashMap<(Vec<u16>, String, bool, BaseDirection), ShapedLine>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,17 +219,24 @@ impl TextEngine {
     /// `arabic_reversed` forces when its letters can't tell) is drawn as stored, each Arabic word
     /// joined in place (`visual_pieces`).
     pub fn shape_line(&mut self, chain: &[u16], text: &str, arabic_reversed: bool) -> ShapedLine {
-        let key = (chain.to_vec(), text.to_string(), arabic_reversed);
+        self.shape_line_with_direction(chain, text, arabic_reversed, BaseDirection::Auto)
+    }
+
+    /// Shape report text with an explicit base while keeping Latin runs left to right.
+    pub fn shape_line_with_direction(
+        &mut self,
+        chain: &[u16],
+        text: &str,
+        arabic_reversed: bool,
+        direction: BaseDirection,
+    ) -> ShapedLine {
+        let key = (chain.to_vec(), text.to_string(), arabic_reversed, direction);
         if let Some(line) = self.shaped.get(&key) {
             return line.clone();
         }
-        let line = self.shape_uncached(chain, text, arabic_reversed);
+        let line = self.shape_range(chain, text, 0..text.len(), arabic_reversed, direction);
         self.shaped.insert(key, line.clone());
         line
-    }
-
-    fn shape_uncached(&mut self, chain: &[u16], text: &str, arabic_reversed: bool) -> ShapedLine {
-        self.shape_range(chain, text, 0..text.len(), arabic_reversed)
     }
 
     /// Resolve directional levels for the whole paragraph before applying line reordering.
@@ -222,6 +247,7 @@ impl TextEngine {
         paragraph: &str,
         range: Range<usize>,
         arabic_reversed: bool,
+        direction: BaseDirection,
     ) -> ShapedLine {
         let text = &paragraph[range.clone()];
         let mut line = ShapedLine::default();
@@ -243,13 +269,13 @@ impl TextEngine {
                     pen = self.shape_piece(font, part, at, piece.rtl, pen, &mut line.glyphs);
                 }
             }
-        } else if !paragraph.chars().any(is_rtl_char) {
+        } else if direction != BaseDirection::Rtl && !paragraph.chars().any(is_rtl_char) {
             for (font, range) in self.itemize(chain, text, None) {
                 let at = range.start;
                 pen = self.shape_piece(font, &text[range], at, false, pen, &mut line.glyphs);
             }
         } else {
-            for (run, rtl) in logical_runs(paragraph, range.clone()) {
+            for (run, rtl) in logical_runs(paragraph, range.clone(), direction) {
                 let part = &paragraph[run.clone()];
                 let mut pieces = self.itemize(chain, part, None);
                 if rtl {
@@ -476,6 +502,7 @@ impl TextEngine {
                             paragraph,
                             range.clone(),
                             arabic_reversed,
+                            BaseDirection::Auto,
                         );
                         lines.push((paragraph[range].to_string(), shaped));
                     }
@@ -770,12 +797,16 @@ pub fn decode_codes(value: &str) -> Cow<'_, str> {
 
 /// Visual runs in original UTF-8 coordinates. Treat a leading numbered-note marker as
 /// an LTR isolate, so "5." stays one marker at the paragraph's reading start. The paragraph
-/// base direction still comes from the first strong character of the authored text.
-fn logical_runs(text: &str, line: Range<usize>) -> Vec<(Range<usize>, bool)> {
+/// base direction comes from the caller or the first strong character of drawing text.
+fn logical_runs(
+    text: &str,
+    line: Range<usize>,
+    direction: BaseDirection,
+) -> Vec<(Range<usize>, bool)> {
     if line.is_empty() {
         return Vec::new();
     }
-    let plain = unicode_bidi::ParagraphBidiInfo::new(text, None);
+    let plain = unicode_bidi::ParagraphBidiInfo::new(text, direction.level());
     let base = plain.paragraph_level;
     let digits = text
         .chars()
@@ -1203,6 +1234,33 @@ mod tests {
     }
 
     #[test]
+    fn report_base_direction_overrides_latin_prefix_and_is_cached_separately() {
+        let mut engine = TextEngine::bundled_only();
+        let text = "D1 عدده 3 في A-101";
+        let auto = engine.shape_line(&DEFAULT_CHAIN, text, false);
+        let rtl = engine.shape_line_with_direction(&DEFAULT_CHAIN, text, false, BaseDirection::Rtl);
+        let ltr = engine.shape_line_with_direction(&DEFAULT_CHAIN, text, false, BaseDirection::Ltr);
+        assert_eq!(ltr, auto);
+        assert_ne!(rtl.glyphs, ltr.glyphs);
+        let clusters: Vec<_> = rtl.glyphs.iter().map(|g| g.cluster as usize).collect();
+        let sheet = text.find("A-101").unwrap();
+        assert_eq!(
+            &clusters[..5],
+            &[sheet, sheet + 1, sheet + 2, sheet + 3, sheet + 4]
+        );
+        assert_eq!(&clusters[clusters.len() - 2..], &[0, 1]);
+        assert_eq!(
+            rtl,
+            engine.shape_line_with_direction(&DEFAULT_CHAIN, text, false, BaseDirection::Rtl)
+        );
+        let english = "D1 count 3 on A-101";
+        assert_eq!(
+            engine.shape_line(&DEFAULT_CHAIN, english, false),
+            engine.shape_line_with_direction(&DEFAULT_CHAIN, english, false, BaseDirection::Ltr),
+        );
+    }
+
+    #[test]
     fn codes_decode() {
         assert_eq!(decode_codes("45%%d"), "45°");
         assert_eq!(decode_codes("%%c100 %%p5 50%%%"), "Ø100 ±5 50%");
@@ -1252,7 +1310,13 @@ mod annotation_bidi_tests {
         let mut engine = TextEngine::bundled_only();
         let text = "Shop 04 / متجر / A12";
         let start = text.find('م').unwrap();
-        let line = engine.shape_range(&DEFAULT_CHAIN, text, start..text.len(), false);
+        let line = engine.shape_range(
+            &DEFAULT_CHAIN,
+            text,
+            start..text.len(),
+            false,
+            BaseDirection::Auto,
+        );
         let latin = text.find('A').unwrap() - start;
         assert!(
             x(&line, 0) < x(&line, latin),
@@ -1263,7 +1327,13 @@ mod annotation_bidi_tests {
         let ranges = engine.wrap(&DEFAULT_CHAIN, text, Some(width), false);
         assert!(ranges.len() > 1);
         for range in ranges {
-            let line = engine.shape_range(&DEFAULT_CHAIN, text, range.clone(), false);
+            let line = engine.shape_range(
+                &DEFAULT_CHAIN,
+                text,
+                range.clone(),
+                false,
+                BaseDirection::Auto,
+            );
             assert!(line
                 .glyphs
                 .iter()

@@ -1,3 +1,4 @@
+import { readingDirection } from "./content";
 /** Mizan's box: what the user writes, the pictures and PDFs going with it, what they point at, the
  *  slash commands, the model button and send / stop. */
 import { useRef, useState, type RefObject } from "react";
@@ -104,7 +105,7 @@ export function Composer({ drafts, box, busy, blocked, pointing, shownOutput, mo
           {slashList.map((command, k) => (
             <button key={command.id} id={`slash-${command.id}`} type="button" role="option" aria-selected={k === slashRow}
               className={k === slashRow ? "sl on" : "sl"} onMouseDown={(e) => e.preventDefault()} onClick={() => runSlash(command)}>
-              <span className="cmd" dir="auto">/{slashWord(command, lang)}</span>
+              <span className="cmd" {...readingDirection(slashWord(command, lang))}>/{slashWord(command, lang)}</span>
               <span className="d">{t(`ai.slash.${command.id}.desc`)}</span>
             </button>
           ))}
@@ -138,7 +139,7 @@ export function Composer({ drafts, box, busy, blocked, pointing, shownOutput, mo
       <div className="box">
         <textarea
           ref={box}
-          dir="auto"
+          {...readingDirection(draft.text, lang)}
           rows={3}
           aria-label={ask}
           placeholder={ask}

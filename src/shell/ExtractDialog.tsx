@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { entityKind } from "../i18n/entityKind";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
@@ -244,7 +245,7 @@ export function ExtractDialog({ layers, onRun, onExport, onClose }: Props) {
                     {table.rows.map((r, i) => (
                       <tr key={i}>
                         {r.map((c, j) => (
-                          <td key={j} dir="auto">
+                          <td key={j} {...readingDirection(String(c))}>
                             {c}
                           </td>
                         ))}

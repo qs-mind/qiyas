@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { TextMatch, TextScope } from "../api";
@@ -109,11 +110,11 @@ export function FindReplaceDialog({ onFind, onReplaceAll, onShow, onClose }: Pro
         </h2>
         <label>
           <span>{t("find.find")}</span>
-          <input dir="auto" autoFocus value={find} onChange={(e) => setFind(e.target.value)} />
+          <input {...readingDirection(find)} autoFocus value={find} onChange={(e) => setFind(e.target.value)} />
         </label>
         <label>
           <span>{t("find.replace")}</span>
-          <input dir="auto" value={replace} onChange={(e) => setReplace(e.target.value)} />
+          <input {...readingDirection(replace)} value={replace} onChange={(e) => setReplace(e.target.value)} />
         </label>
         <label>
           <span>{t("find.scope")}</span>

@@ -1,3 +1,4 @@
+import { readingDirection } from "./content";
 import { locale } from "../i18n/locale";
 import { ModalDialog } from "../ui/ModalDialog";
 import { uiError } from "../i18n/errors";
@@ -106,8 +107,8 @@ export function ConversationHistory({ history, disabled }: { history: Conversati
                 setOpen(false);
                 void history.resume(chat);
               }}>
-                <strong dir="auto">{chat.title}</strong>
-                <span dir="auto">{chat.drawing?.split(/[\\/]/).pop() ?? t("ai.untitledDrawing")}</span>
+                <strong {...readingDirection(chat.title)}>{chat.title}</strong>
+                <span {...readingDirection(chat.drawing?.split(/[\\/]/).pop() ?? t("ai.untitledDrawing"))}>{chat.drawing?.split(/[\\/]/).pop() ?? t("ai.untitledDrawing")}</span>
                 <time dateTime={new Date(chat.updated).toISOString()}>{new Date(chat.updated).toLocaleString(locale(lang), { dateStyle: "medium", timeStyle: "short" })}</time>
               </button>
               <button type="button" className="chat-history-delete" disabled={unavailable}

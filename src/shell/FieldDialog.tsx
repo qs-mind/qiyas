@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { entityKind } from "../i18n/entityKind";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
@@ -144,7 +145,7 @@ export function FieldDialog(props: Props) {
         {kind === "count" && (
           <label>
             <span>{t("insertField.block")}</span>
-            <input dir="auto" value={block} onChange={(e) => setBlock(e.target.value)} />
+            <input {...readingDirection(block)} value={block} onChange={(e) => setBlock(e.target.value)} />
           </label>
         )}
         {error && (

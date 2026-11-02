@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 /** What floats over the drawing while a quantity is traced: a small bar naming the item with
  *  "How was it calculated?", or that working itself. */
 import type { Trace } from "../app/useTrace";
@@ -24,7 +25,7 @@ export function TraceCard({ trace }: { trace: Trace }) {
     );
   return (
     <div className="trace-bar" role="status">
-      <bdi dir="auto" className="trace-bar-item">
+      <bdi {...readingDirection(itemTitle(exp, lang))} className="trace-bar-item">
         {itemTitle(exp, lang)}
       </bdi>
       <bdi dir="ltr">

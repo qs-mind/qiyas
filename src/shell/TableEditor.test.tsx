@@ -52,7 +52,7 @@ test("shows the cells in the drawing's column order, whatever the language's dir
   expect(cellInput(0, 0).value).toBe("Room");
   expect(cellInput(1, 1).value).toBe("12.000");
   // Arabic or English, each cell's text runs its own way.
-  expect(cellInput(0, 0).getAttribute("dir")).toBe("auto");
+  expect(cellInput(0, 0).getAttribute("dir")).toBe("ltr");
   // A field's cell says so.
   expect(cellInput(1, 1).getAttribute("title")).toBe("Field");
 });
@@ -224,4 +224,13 @@ test.each([true, false])("a structural edit waits for the cell save; success = %
     expect(onRun).toHaveBeenCalledTimes(1);
     expect(cellInput(0, 0).value).toBe("Unsaved room");
   }
+});
+
+test("a cell containing Arabic after a Latin code reads RTL as it is edited", () => {
+  editor();
+  const input = cellInput(1, 0);
+  fireEvent.change(input, { target: { value: "D1 عدده 3 في A-101" } });
+  expect(input.dir).toBe("rtl");
+  fireEvent.change(input, { target: { value: "D1 count 3 on A-101" } });
+  expect(input.dir).toBe("ltr");
 });

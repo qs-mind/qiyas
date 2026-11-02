@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { PaletteItem } from "../api";
@@ -57,7 +58,7 @@ export function ToolPalettes({ items, onRun, onSave, onClose }: Props) {
           <li key={`${i}-${item.label}`}>
             <button
               type="button"
-              dir="auto"
+              {...readingDirection(item.label)}
               onClick={() => {
                 dialog.current?.close();
                 onRun(item);
@@ -95,11 +96,11 @@ export function ToolPalettes({ items, onRun, onSave, onClose }: Props) {
         </label>
         <label>
           <span>{t("palette.label")}</span>
-          <input dir="auto" value={label} onChange={(e) => setLabel(e.target.value)} />
+          <input {...readingDirection(label)} value={label} onChange={(e) => setLabel(e.target.value)} />
         </label>
         <label>
           <span>{t("palette.value")}</span>
-          <input dir="auto" value={value} onChange={(e) => setValue(e.target.value)} />
+          <input {...readingDirection(value)} value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
         <button type="submit" disabled={!valid}>
           {t("palette.add")}

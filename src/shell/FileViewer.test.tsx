@@ -60,7 +60,7 @@ test("workbook hides record sheets, gives Arabic cells their own direction, and 
   vi.mocked(fileViewInfo).mockResolvedValue(info("workbook", "takeoff.xlsx"));
   const sheet = { hidden: false, rows_total: 10, cols_total: 2, truncated: true };
   vi.mocked(fileViewWorkbook).mockResolvedValue({ sheets: [
-    { ...sheet, name: "الحصر", rows: [["الوصف", "الكمية"], ["خرسانة", "12"]] },
+    { ...sheet, name: "الحصر", rows: [["الوصف", "الكمية"], ["D1 خرسانة", "12"]] },
     { ...sheet, name: "Qiyas record", hidden: true, rows: [["private record"]] },
     { ...sheet, name: "Summary", rows: [["Total"], ["99"]], truncated: false },
   ] });
@@ -68,8 +68,8 @@ test("workbook hides record sheets, gives Arabic cells their own direction, and 
   expect(await screen.findByRole("tab", { name: "الحصر" })).toBeTruthy();
   expect(screen.queryByText("Qiyas record")).toBeNull();
   expect(screen.queryByText("private record")).toBeNull();
-  expect(screen.getByRole("cell", { name: "خرسانة" }).getAttribute("dir")).toBe("auto");
-  expect(screen.getByRole("columnheader", { name: "الوصف" }).getAttribute("dir")).toBe("auto");
+  expect(screen.getByRole("cell", { name: "D1 خرسانة" }).getAttribute("dir")).toBe("rtl");
+  expect(screen.getByRole("columnheader", { name: "الوصف" }).getAttribute("dir")).toBe("rtl");
   expect(screen.getByRole("note").textContent).toContain("2 of 10 rows");
   fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
   expect(await screen.findByRole("cell", { name: "99" })).toBeTruthy();
@@ -89,20 +89,20 @@ test("large workbook sheets mount a limited number of rows", async () => {
 
 test("CSV is a table with quoted commas, escaped quotes, multiline cells and Arabic direction", async () => {
   vi.mocked(fileViewInfo).mockResolvedValue(info("text", "items.csv"));
-  vi.mocked(fileViewBytes).mockResolvedValue(bytes('Name,Note\r\n"خرسانة","first, second\n""quoted"""\r\n'));
+  vi.mocked(fileViewBytes).mockResolvedValue(bytes('Name,Note\r\n"D1 خرسانة","first, second\n""quoted"""\r\n'));
   render(<FileViewer path="/items.csv" />);
   expect(await screen.findByRole("table", { name: "items.csv" })).toBeTruthy();
-  expect(screen.getByRole("cell", { name: "خرسانة" }).getAttribute("dir")).toBe("auto");
+  expect(screen.getByRole("cell", { name: "D1 خرسانة" }).getAttribute("dir")).toBe("rtl");
   expect(screen.getByRole("cell", { name: /first, second\s+"quoted"/ }).textContent).toBe('first, second\n"quoted"');
   expect(parseCsv("a,b\r\n1,\r\n")).toEqual([["a", "b"], ["1", ""]]);
 });
 
-test.each(["txt", "json"])("%s preserves text in a pre with automatic direction", async extension => {
+test.each(["txt", "json"])("%s preserves text in a pre with content direction", async extension => {
   vi.mocked(fileViewInfo).mockResolvedValue(info("text", `notes.${extension}`));
   vi.mocked(fileViewBytes).mockResolvedValue(bytes('نص <script>example</script>'));
   render(<FileViewer path={`/notes.${extension}`} />);
   const text = await screen.findByText('نص <script>example</script>');
-  expect(text.tagName).toBe("PRE"); expect(text.getAttribute("dir")).toBe("auto");
+  expect(text.tagName).toBe("PRE"); expect(text.getAttribute("dir")).toBe("rtl");
 });
 
 test("Markdown uses the existing renderer", async () => {

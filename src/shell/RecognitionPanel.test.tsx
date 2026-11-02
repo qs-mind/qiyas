@@ -59,3 +59,12 @@ test("background recognition skips a busy read and retries on the next revision"
   view.rerender(<RecognitionPanel active drawing="drawing.dxf" revision={2} run={vi.fn()} />);
   expect(await screen.findByText("Accept")).toBeTruthy();
 });
+
+test("take-off review notes use Arabic direction after a Latin code", async () => {
+  const arabic = "D1 عدده 3 في A-101";
+  const english = "D1 count 3 on A-101";
+  read.mockResolvedValue({ type: "recognition", result: { candidates: [{ ...row, issues: [arabic, english] }] } });
+  render(<RecognitionPanel active drawing="tower.dxf" revision={1} run={vi.fn()} />);
+  expect((await screen.findByText(arabic)).getAttribute("dir")).toBe("rtl");
+  expect(screen.getByText(english).getAttribute("dir")).toBe("ltr");
+});

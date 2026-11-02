@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 /** The reverse of a trace, in the properties palette: the BOQ items the picked element feeds, and
  *  what it gives each (or deducts from it, for an opening). A click traces that item. */
 import { useEffect, useState } from "react";
@@ -31,7 +32,7 @@ export function ElementItems({ handle }: { handle: number }) {
         {items.items.map((i) => (
           <li key={i.item}>
             <button type="button" onClick={() => trace({ item: i.item, line: i.lines[0], panel: true })}>
-              <span dir="auto">
+              <span {...readingDirection(lang === "ar" ? i.description_ar || i.description_en : i.description_en || i.description_ar)}>
                 {i.code} · {lang === "ar" ? i.description_ar || i.description_en : i.description_en || i.description_ar}
               </span>
               <bdi dir="ltr">
@@ -44,7 +45,7 @@ export function ElementItems({ handle }: { handle: number }) {
         {items.takeoff.map((m) => (
           <li key={m.item}>
             <button type="button" onClick={() => trace({ item: m.item, panel: true })}>
-              <span dir="auto">{m.description}</span>
+              <span {...readingDirection(m.description)}>{m.description}</span>
               <bdi dir="ltr">
                 {num(m.quantity)} {unitText(m.unit)}
               </bdi>

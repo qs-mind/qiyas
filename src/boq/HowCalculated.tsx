@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 /** "How was it calculated": a side card beside the drawing with the item's working in engineering
  *  terms (Length × Thickness × Height = m³), each value with where it came from, and each element
  *  it measures. Nothing here edits; a source on the drawing is shown there with one click. */
@@ -34,7 +35,7 @@ export function HowCalculated({ explanation, line, focus, onFocus, onShowSource,
         </button>
       </header>
       <p className="trace-item">
-        <bdi dir="auto">{itemTitle(explanation, lang)}</bdi>
+        <bdi {...readingDirection(itemTitle(explanation, lang))}>{itemTitle(explanation, lang)}</bdi>
       </p>
       <p className="trace-total">
         <bdi dir="ltr">
@@ -52,7 +53,7 @@ export function HowCalculated({ explanation, line, focus, onFocus, onShowSource,
                   aria-pressed={focus === share.handle}
                   onClick={() => onFocus(focus === share.handle ? null : share.handle)}
                 >
-                  <span dir="auto">{elementName(explanation, share.handle) || t("trace.element", { n: i + 1 })}</span>
+                  <span {...readingDirection(elementName(explanation, share.handle) || t("trace.element", { n: i + 1 }))}>{elementName(explanation, share.handle) || t("trace.element", { n: i + 1 })}</span>
                   <bdi dir="ltr">
                     {num(share.value)} {unitText(share.unit)}
                   </bdi>
@@ -75,7 +76,7 @@ export function HowCalculated({ explanation, line, focus, onFocus, onShowSource,
         <TechnicalDetails>
           <ul>
             {explanation.notes.map((note, i) => (
-              <li key={i} dir="auto">
+              <li key={i} {...readingDirection(note)}>
                 {note}
               </li>
             ))}
@@ -98,7 +99,7 @@ function Line({ line, marked, onShowSource }: { line: DimensionLine; marked: boo
   const deduct = line.operation === "deduct";
   return (
     <li ref={ref} className={`trace-line${marked ? " trace-line-marked" : ""}${line.included ? "" : " trace-line-excluded"}`}>
-      <p className="trace-label" dir="auto">
+      <p className="trace-label" {...readingDirection(`${deduct ? t("trace.deduct") : ""} ${line.label} ${!line.included ? t("boq.excluded") : ""}`)}>
         {deduct ? `${t("trace.deduct")}: ` : ""}
         {line.label}
         {!line.included && <span className="trace-muted"> · {t("boq.excluded")}</span>}
@@ -114,7 +115,7 @@ function Line({ line, marked, onShowSource }: { line: DimensionLine; marked: boo
               title={kindOf(op) === "none" ? undefined : t(`trace.kind.${kindOf(op)}`)}
               onClick={() => setOpen(open === i ? null : i)}
             >
-              <bdi dir="auto">{op.label ? operandText(op) : num(op.value)}</bdi>
+              <bdi {...readingDirection(op.label ? operandText(op) : num(op.value))}>{op.label ? operandText(op) : num(op.value)}</bdi>
             </button>
           </span>
         ))}
@@ -126,7 +127,7 @@ function Line({ line, marked, onShowSource }: { line: DimensionLine; marked: boo
       </p>
       {open !== null && operands[open] && <Sources operand={operands[open]} onShowSource={onShowSource} />}
       {line.citations.length > 0 && (
-        <p className="trace-cite" dir="auto">
+        <p className="trace-cite" {...readingDirection(line.citations.map((c) => `${c.source} ${c.clause}`).join(" "))}>
           {line.citations.map((c) => [c.source, c.clause].filter(Boolean).join(" / ")).join("; ")}
         </p>
       )}
@@ -161,7 +162,7 @@ function Sources({ operand, onShowSource }: { operand: Operand; onShowSource(han
         <li key={i}>
           <span className={`trace-kind trace-kind-${s.kind}`}>{t(`trace.kind.${s.kind}`)}</span>
           {s.text && (
-            <span dir="auto">
+            <span {...readingDirection(s.text)}>
               {" "}
               · {s.text}
             </span>

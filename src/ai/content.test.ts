@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { isolateRuns, plainDashes } from "./content";
+import { contentLanguage, readingDirection, isolateRuns, plainDashes } from "./content";
 
 test.each([
   ["الفرق -12.5 م² من 1,234.50 و 3 × 4 و +12%", ["-12.5", "1,234.50", "3 × 4", "+12%"]],
@@ -31,4 +31,16 @@ test("saved Mizan words use plain dashes, keeping surrounding spaces", () => {
   expect(plainDashes("حصر — جاهز – راجع―تم")).toBe("حصر - جاهز - راجع-تم");
   expect(plainDashes("—start\nend–\n―")).toBe("-start\nend-\n-");
   expect(plainDashes("1-2: unchanged")).toBe("1-2: unchanged");
+});
+
+test.each([
+  ["D1 عدده 3 في A-101", "ar", "rtl"],
+  ["Alexander International Tower باب", "ar", "rtl"],
+  ["D1 \u{1ee00}", "ar", "rtl"],
+  ["D1 count 3 on A-101", "en", "ltr"],
+  ["Tower ١٢٣", "en", "ltr"],
+  ["Tower ،", "en", "ltr"],
+])("Arabic letters anywhere determine direction: %s", (text, lang, dir) => {
+  expect(contentLanguage(text)).toBe(lang);
+  expect(readingDirection(text)).toEqual({ lang, dir });
 });

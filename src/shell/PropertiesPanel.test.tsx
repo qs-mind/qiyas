@@ -349,3 +349,14 @@ test("several entities show the count, the sums and what they share", () => {
   expect(got.Handle).toBeUndefined();
   expect(document.querySelector(".properties input, .properties select")).toBeNull();
 });
+
+test("drawing text direction follows Arabic letters while reading and editing properties", () => {
+  const text: EntityInfo = { ...door, kind: "Text", block_name: null, attributes: [], text: "D1 عدده 3 في A-101", height: 0.25, rotation: 0 };
+  const { rerender } = render(<PropertiesPanel entity={text} units="metres" precision={3} sheet="Tower" />);
+  expect(screen.getByText(text.text!).getAttribute("dir")).toBe("rtl");
+  rerender(<PropertiesPanel entity={text} units="metres" precision={3} sheet="Tower" {...editing} onSet={vi.fn()} />);
+  const input = field("Text");
+  expect(input.dir).toBe("rtl");
+  fireEvent.change(input, { target: { value: "D1 count 3 on A-101" } });
+  expect(input.dir).toBe("ltr");
+});

@@ -88,8 +88,8 @@ test("nothing found says so; the inputs read either way", async () => {
   const onFind = vi.fn(async () => ({ count: 0, matches: [] }));
   const onShow = vi.fn();
   render(<FindReplaceDialog onFind={onFind} onReplaceAll={vi.fn()} onShow={onShow} onClose={() => {}} />);
-  expect(screen.getByLabelText("Find").getAttribute("dir")).toBe("auto");
-  expect(screen.getByLabelText("Replace with").getAttribute("dir")).toBe("auto");
+  expect(screen.getByLabelText("Find").getAttribute("dir")).toBe("ltr");
+  expect(screen.getByLabelText("Replace with").getAttribute("dir")).toBe("ltr");
   fireEvent.change(screen.getByLabelText("Find"), { target: { value: "x" } });
   fireEvent.click(screen.getByRole("button", { name: "Find next" }));
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("No matches"));

@@ -186,6 +186,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                 &legends[code],
                 (WIDTH - DRAW_WIDTH - 15.0) * PT_PER_MM,
                 FONT,
+                language,
             );
             for line in lines {
                 if legend_pages.last().unwrap().len() == capacity {
@@ -208,13 +209,30 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                         ))
                     })?;
                 let lane = labels.entry(*handle).or_default();
-                let width = f64::from(engine.shape_line(&DEFAULT_CHAIN, code, false).width) * FONT;
+                let width = f64::from(
+                    engine
+                        .shape_line_with_direction(
+                            &DEFAULT_CHAIN,
+                            code,
+                            false,
+                            crate::report::base_direction(language),
+                        )
+                        .width,
+                ) * FONT;
                 let x = bounds[1][0]
                     .min(DRAW_WIDTH * PT_PER_MM - width - 4.0)
                     .max(4.0);
                 let y =
                     (bounds[1][1] + 4.0 + *lane as f64 * PITCH).min((HEIGHT - 22.0) * PT_PER_MM);
-                add_text(&mut marks, &mut engine, code, [x, y], colors[code], false);
+                add_text(
+                    &mut marks,
+                    &mut engine,
+                    code,
+                    [x, y],
+                    colors[code],
+                    false,
+                    language,
+                );
                 *lane += 1;
             }
         }
@@ -237,6 +255,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                 ],
                 0,
                 arabic,
+                language,
             );
             add_text(
                 &mut overlay,
@@ -256,6 +275,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                 ],
                 0,
                 arabic,
+                language,
             );
             let heading = if arabic {
                 "البند - الوصف - الكمية والوحدة"
@@ -274,6 +294,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                 [x, (HEIGHT - 23.0) * PT_PER_MM],
                 0,
                 arabic,
+                language,
             );
             for (i, (color, line)) in legend.iter().enumerate() {
                 add_text(
@@ -283,6 +304,7 @@ pub fn snapshot(session: &Session, language: Language) -> Result<EvidenceSnapsho
                     [x, (HEIGHT - 30.0) * PT_PER_MM - i as f64 * PITCH],
                     *color,
                     arabic,
+                    language,
                 );
             }
             page.looks.insert(
@@ -321,8 +343,18 @@ fn add_text(
     at: [f64; 2],
     color: u32,
     right: bool,
+    language: Language,
 ) {
-    let width = f64::from(engine.shape_line(&DEFAULT_CHAIN, text, false).width) * FONT;
+    let width = f64::from(
+        engine
+            .shape_line_with_direction(
+                &DEFAULT_CHAIN,
+                text,
+                false,
+                crate::report::base_direction(language),
+            )
+            .width,
+    ) * FONT;
     let mut laid = crate::report::laid(
         engine,
         &DEFAULT_CHAIN,
@@ -330,6 +362,7 @@ fn add_text(
         at[0] - if right { width } else { 0.0 },
         at[1],
         FONT,
+        language,
     );
     laid.color = color;
     batch.texts.push(laid);

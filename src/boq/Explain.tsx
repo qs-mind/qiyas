@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { useId, useState } from "react";
 import { explainItem, type Explanation } from "../api";
 import { useT } from "../i18n";
@@ -57,7 +58,7 @@ export function Explain({ item, project }: { item: string; project?: string }) {
         {result.drawings.map(d => <p key={d}><bdi>{d.split(/[\\/]/).pop()}</bdi></p>)}
         <h3>{t("evidence.dimensions")}</h3>
         <ol>{result.dimension_lines.map((line, i) => <li key={i}>
-          <span dir="auto">{line.label}</span> · <Formula {...line} />
+          <span {...readingDirection(line.label)}>{line.label}</span> · <Formula {...line} />
           <span> · {t(line.included ? "boq.included" : "boq.excluded")}</span>
           <p>{line.citations.map(c => `${c.source} / ${c.clause}`).join("; ")}</p>
           <TechnicalDetails><pre>{line.expression}{"\n"}{line.decision}</pre></TechnicalDetails>

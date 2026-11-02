@@ -38,6 +38,9 @@ Founder's rulings, 2 November 2026:
 - The window's IPC commands are locked to a small allowlist, and commands that take a path are
   limited by folder and extension. Arabic reads right to left in PDFs and panels: Arabic text
   gets a right-to-left base direction even when it starts with a Latin code or name.
+  Window content uses `ai/content.tsx` `readingDirection`: any Arabic letter selects RTL,
+  independent of the first character and window language. Arabic text has no letter-spacing,
+  uppercase transform or italic styling.
 - Fully AI-driven, no static content (founder, 3 November 2026): Qiyas ships no ready-made
   drawing libraries, symbol sets or fixed design data. Mizan draws each component it needs
   itself, at real size and in full detail, as a block in the drawing, and reuses or improves
@@ -931,7 +934,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Arabic reports. Core prepares the report; shared `qiyas-boq::deliverables` completes it
   in desktop, AI/MCP and CLI/script hosts. Paths and client templates stay in the source folder.
 - PDF uses the existing plot text shaping/font embedding/ActualText machinery, with pagination
-  and wrapping. Thmanyah is requested through the existing font loader; no font files are added.
+  and wrapping. Report language supplies the base direction through `qiyas-boq::deliverables`:
+  Arabic is RTL even after a Latin code, English is LTR; Latin runs keep their order. Wrapping,
+  evidence legends and searchable fallback text use the same base. Arabic table columns run
+  from the right in PDF and Excel. Thmanyah is requested through the existing font loader; no font files are added.
   Visible Excel/PDF cells format counts as integers and quantities to the method's rounding, else
   two decimals for m² and m and three for other units (W3). References show sheet, element kind/mark and short
   handles; drawing cells show filenames. Full precision, paths and structured provenance remain

@@ -1,4 +1,4 @@
-import { plainDashes } from "./content";
+import { readingDirection, plainDashes } from "./content";
 import { withoutBody } from "../shell/methodName";
 import type { PlanPhase } from "../api";
 import { translate, useT, type Lang } from "../i18n";
@@ -34,7 +34,7 @@ export function PlanChecklist({ id, phases, stale = false, announceStale = true,
         {phases.map((phase) => (
           <li key={phase.id} data-status={phase.status} aria-current={phase.status === "active" ? "step" : undefined}>
             <span className="plan-mark" aria-hidden="true">{busy && phase.status === "active" ? <DotLoader size="sm" /> : MARK[phase.status]}</span>
-            <div className="plan-title" dir="auto">{planPhaseTitle(phase, t)}
+            <div className="plan-title" {...readingDirection(planPhaseTitle(phase, t))}>{planPhaseTitle(phase, t)}
               {phase.note && <p className="plan-note">{plainDashes(phase.note)}</p>}
             </div>
             {showTechnicalDetails && phase.id === "drawing-check-review" && <details className="technical-details"><summary>{t("technical.details")}</summary><pre>{plainDashes(phase.title)}</pre></details>}

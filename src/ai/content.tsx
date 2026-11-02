@@ -3,10 +3,14 @@ import type { Lang } from "../i18n";
 
 /** Layer names and code do not decide the direction of a surrounding Arabic sentence. */
 export function contentLanguage(text: string, fallback: Lang = "en"): Lang {
-  const prose = text.replace(/\[PDF attachment:[^\]]*\]/g, "").replace(/`[^`]*`/g, "").replace(/\b[A-Z][A-Z0-9_-]*\b/g, "");
-  const arabic = prose.match(/[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/g)?.length ?? 0;
-  const latin = prose.match(/[a-z]/gi)?.length ?? 0;
-  return arabic > 0 && arabic >= latin / 2 ? "ar" : latin > 0 ? "en" : fallback;
+  if (/(?=\p{Script_Extensions=Arabic})\p{Letter}/u.test(text)) return "ar";
+  return /[a-z]/i.test(text) ? "en" : fallback;
+}
+
+/** Content direction does not depend on the first letter or the window language. */
+export function readingDirection(text: string, fallback: Lang = "en") {
+  const lang = contentLanguage(text, fallback);
+  return { lang, dir: lang === "ar" ? "rtl" as const : "ltr" as const };
 }
 
 const PDF_MARKER = /\[PDF attachment:\s*("(?:\\.|[^"\\])*");\s*(\d+) pages; path: ("(?:\\.|[^"\\])*")\]/g;

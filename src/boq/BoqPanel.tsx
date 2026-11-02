@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { memo, useMemo, useRef, useState } from "react";
 import { Explain } from "./Explain";
 import { GeneratedBoq } from "./GeneratedBoq";
@@ -121,7 +122,7 @@ export const BoqPanel = memo(function BoqPanel({
         minSize: 80,
         grow: true,
         sortValue: (l) => l.item.description,
-        cell: (l) => <span dir="auto">{l.item.description}</span>,
+        cell: (l) => <span {...readingDirection(l.item.description)}>{l.item.description}</span>,
         title: (l) => l.item.description,
       },
       {

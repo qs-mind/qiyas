@@ -1,4 +1,4 @@
-import { chatText, contentLanguage, isolateRuns } from "./content";
+import { chatText, contentLanguage, isolateRuns, readingDirection } from "./content";
 import { Children, isValidElement, cloneElement, memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -34,28 +34,27 @@ function prose(children: ReactNode): string {
     : isValidElement<{ children?: ReactNode }>(child) ? prose(child.props.children) : "").join(" ");
 }
 
-function readingDirection(children: ReactNode) {
-  const lang = contentLanguage(prose(children));
-  return { lang, dir: lang === "ar" ? "rtl" : "ltr" };
+function nodeDirection(children: ReactNode) {
+  return readingDirection(prose(children));
 }
 
 const components: Components = {
   a: ({ href, children }) => <Link href={href}>{children}</Link>,
   table: ({ children }) => <Table>{children}</Table>,
   // Headings in a chat answer are section titles, not page titles: one quiet size.
-  h1: ({ children }) => <h4 {...readingDirection(children)}>{isolated(children)}</h4>,
-  h2: ({ children }) => <h4 {...readingDirection(children)}>{isolated(children)}</h4>,
-  h3: ({ children }) => <h4 {...readingDirection(children)}>{isolated(children)}</h4>,
-  h4: ({ children }) => <h4 {...readingDirection(children)}>{isolated(children)}</h4>,
-  h5: ({ children }) => <h4>{isolated(children)}</h4>,
-  h6: ({ children }) => <h4>{isolated(children)}</h4>,
-  p: ({ children }) => <p {...readingDirection(children)}>{isolated(children)}</p>,
+  h1: ({ children }) => <h4 {...nodeDirection(children)}>{isolated(children)}</h4>,
+  h2: ({ children }) => <h4 {...nodeDirection(children)}>{isolated(children)}</h4>,
+  h3: ({ children }) => <h4 {...nodeDirection(children)}>{isolated(children)}</h4>,
+  h4: ({ children }) => <h4 {...nodeDirection(children)}>{isolated(children)}</h4>,
+  h5: ({ children }) => <h4 {...nodeDirection(children)}>{isolated(children)}</h4>,
+  h6: ({ children }) => <h4 {...nodeDirection(children)}>{isolated(children)}</h4>,
+  p: ({ children }) => <p {...nodeDirection(children)}>{isolated(children)}</p>,
   ul: ({ children }) => <ul>{children}</ul>,
   ol: ({ children }) => <ol>{children}</ol>,
-  li: ({ children }) => <li {...readingDirection(children)}>{isolated(children)}</li>,
-  th: ({ children }) => <th {...readingDirection(children)}>{isolated(children)}</th>,
-  td: ({ children }) => <td {...readingDirection(children)}>{isolated(children)}</td>,
-  code: ({ children }) => <code dir="auto">{children}</code>,
+  li: ({ children }) => <li {...nodeDirection(children)}>{isolated(children)}</li>,
+  th: ({ children }) => <th {...nodeDirection(children)}>{isolated(children)}</th>,
+  td: ({ children }) => <td {...nodeDirection(children)}>{isolated(children)}</td>,
+  code: ({ children }) => <code {...nodeDirection(children)}>{children}</code>,
   img: ({ alt }) => <span className="md-link">{alt}</span>,
 };
 

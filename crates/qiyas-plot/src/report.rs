@@ -3,7 +3,7 @@ use crate::font::{em_to_text, FontSet};
 use lopdf::{dictionary, Document, Object, Stream};
 use qiyas_core::deliverables::{Digits, Kind, Language, Report, TableRow, TraceTarget};
 use qiyas_geom::Xform;
-use qiyas_render::{LaidText, TextEngine, CAP_EM};
+use qiyas_render::{BaseDirection, LaidText, TextEngine, CAP_EM};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -28,6 +28,13 @@ pub struct PdfTraceRegion {
     pub target: TraceTarget,
 }
 
+pub(crate) fn base_direction(language: Language) -> BaseDirection {
+    match language {
+        Language::Ar => BaseDirection::Rtl,
+        Language::En => BaseDirection::Ltr,
+    }
+}
+
 pub(crate) fn laid(
     engine: &mut TextEngine,
     chain: &[u16],
@@ -35,8 +42,9 @@ pub(crate) fn laid(
     x: f64,
     y: f64,
     size: f64,
+    language: Language,
 ) -> LaidText {
-    let shaped = engine.shape_line(chain, text, false);
+    let shaped = engine.shape_line_with_direction(chain, text, false, base_direction(language));
     LaidText {
         top: 0,
         entity: 0,
@@ -54,6 +62,7 @@ pub(crate) fn wrap(
     text: &str,
     width: f64,
     size: f64,
+    language: Language,
 ) -> Vec<String> {
     let mut lines = vec![];
     for paragraph in text.split('\n') {
@@ -82,7 +91,13 @@ pub(crate) fn wrap(
                 format!("{line}{separator}{word}")
             };
             separator = if span.ends_with(' ') { " " } else { "" };
-            if f64::from(engine.shape_line(chain, &candidate, false).width) * size <= width {
+            if f64::from(
+                engine
+                    .shape_line_with_direction(chain, &candidate, false, base_direction(language))
+                    .width,
+            ) * size
+                <= width
+            {
                 line = candidate;
                 continue;
             }
@@ -97,7 +112,17 @@ pub(crate) fn wrap(
             for cluster in word.graphemes(true) {
                 let candidate = format!("{line}{cluster}");
                 if !line.is_empty()
-                    && f64::from(engine.shape_line(chain, &candidate, false).width) * size > width
+                    && f64::from(
+                        engine
+                            .shape_line_with_direction(
+                                chain,
+                                &candidate,
+                                false,
+                                base_direction(language),
+                            )
+                            .width,
+                    ) * size
+                        > width
                 {
                     lines.push(std::mem::take(&mut line));
                 }
@@ -211,6 +236,7 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
                     &cell_text(report, &row, i),
                     if wide { available - 6. } else { widths[i] - 6. },
                     size,
+                    report.language,
                 )
             })
             .collect();
@@ -252,16 +278,30 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
                     x -= w;
                 }
                 if let Some(text) = cell.get(line) {
-                    let advance = f64::from(engine.shape_line(&chain, text, false).width) * size;
+                    let advance = f64::from(
+                        engine
+                            .shape_line_with_direction(
+                                &chain,
+                                text,
+                                false,
+                                base_direction(report.language),
+                            )
+                            .width,
+                    ) * size;
                     let start = if report.language == Language::Ar {
                         x + w - 3. - advance
                     } else {
                         x + 3.
                     };
-                    pages
-                        .last_mut()
-                        .unwrap()
-                        .push(laid(&mut engine, &chain, text, start, y, size));
+                    pages.last_mut().unwrap().push(laid(
+                        &mut engine,
+                        &chain,
+                        text,
+                        start,
+                        y,
+                        size,
+                        report.language,
+                    ));
                 }
                 if report.language == Language::En {
                     x += w;
@@ -279,7 +319,12 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
             fonts.prepare(text, &|id| engine.font_face(id));
             let mut fallback = text.clone();
             fallback.glyphs = engine
-                .shape_line(&qiyas_render::DEFAULT_CHAIN, &text.text, false)
+                .shape_line_with_direction(
+                    &qiyas_render::DEFAULT_CHAIN,
+                    &text.text,
+                    false,
+                    base_direction(report.language),
+                )
                 .glyphs;
             fonts.prepare(&fallback, &|id| engine.font_face(id));
             searchable.push(fallback);

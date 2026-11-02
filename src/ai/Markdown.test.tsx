@@ -12,7 +12,7 @@ describe("Markdown", () => {
     expect(paragraphs[1].getAttribute("dir")).toBe("ltr");
   });
 
-  it.each(["#", "##", "###", "####"])("gives %s headings their own reading direction", (prefix) => {
+  it.each(["#", "##", "###", "####", "#####", "######"])("gives %s headings their own reading direction", (prefix) => {
     const { container } = render(<Markdown text={`${prefix} مساحة الجدار\n\n${prefix} Wall area`} />);
     const headings = container.querySelectorAll("h4");
     expect(headings[0].getAttribute("dir")).toBe("rtl");
@@ -25,4 +25,11 @@ describe("Markdown", () => {
     expect(text).not.toMatch(/RICS/);
     expect(screen.getByText(/Measured to POMI rules and the NRM2 note\./)).toBeTruthy();
   });
+});
+
+it("keeps a Latin prefix inside an Arabic paragraph and heading RTL", () => {
+  const { container } = render(<Markdown text={"# Alexander International Tower باب\n\nD1 عدده 3 في A-101\n\nD1 count 3 on A-101"} />);
+  expect(container.querySelector("h4")?.dir).toBe("rtl");
+  expect([...container.querySelectorAll("p")].map(p => p.dir)).toEqual(["rtl", "ltr"]);
+  expect([...container.querySelectorAll("p:first-of-type bdi")].map(b => b.textContent)).toEqual(["D1", "3", "A-101"]);
 });

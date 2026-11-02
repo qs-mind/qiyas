@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
@@ -62,7 +63,7 @@ export function InPlaceText(props: InPlaceProps) {
       <input
         className="text-value"
         aria-label={t("text.value")}
-        dir="auto"
+        {...readingDirection(value)}
         autoFocus
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -160,7 +161,7 @@ export function TextDialog(props: DialogProps) {
           <span>{t("text.value")}</span>
           {multiline ? (
             <textarea
-              dir="auto"
+              {...readingDirection(value)}
               rows={6}
               autoFocus
               value={value}
@@ -173,7 +174,7 @@ export function TextDialog(props: DialogProps) {
               }}
             />
           ) : (
-            <input dir="auto" autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
+            <input {...readingDirection(value)} autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
           )}
         </label>
         {styles && (

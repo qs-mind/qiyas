@@ -53,7 +53,7 @@ test("each line run shows with its mark and what it did; the failing line says w
   // Diagnostic words are available only by opening the details, in their own direction.
   const details = rows[3].querySelector("details")!;
   expect(details.open).toBe(false);
-  expect(details.querySelector("pre")?.getAttribute("dir")).toBe("auto");
+  expect(details.querySelector("pre")?.getAttribute("dir")).toBe("ltr");
   expect(rows[3].querySelector("td > span[dir]")?.textContent).not.toContain("FFFF");
   // The file name is isolated inside the title.
   expect(screen.getByRole("heading").querySelector("bdi")?.textContent).toBe("count.scr");

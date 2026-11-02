@@ -1443,3 +1443,68 @@ fn arabic_dimension_report_digits_and_decimals_preserve_identifiers() {
         }
     }
 }
+
+#[test]
+fn report_language_sets_pdf_glyph_order_and_table_column_order() {
+    use qiyas_core::deliverables::{default_layout, Digits, Kind, Language, Report};
+    let dir = tempfile::tempdir().unwrap();
+    for language in [Language::Ar, Language::En] {
+        let mut layout = default_layout(Kind::Queries);
+        layout.font = "NotoSans-Regular.ttf".into();
+        layout.group_by.clear();
+        layout.sections.clear();
+        layout.columns = ["question", "reference"]
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let heading = format!("COL{}", i + 1);
+                serde_json::from_value(json!({
+                    "field":field,"heading":{"en":heading,"ar":heading},"width":1
+                }))
+                .unwrap()
+            })
+            .collect();
+        let report = Report {
+            drawing: None,
+            kind: Kind::Queries,
+            language,
+            digits: Digits::Western,
+            layout,
+            rows: vec![json!({"question":"D1 عدده 3 في A-101", "reference":"Tower B"})],
+            warnings: vec![],
+        };
+        let path = dir.path().join("tower-queries.pdf");
+        qiyas_plot::report::write(&path, &report).unwrap();
+        let doc = lopdf::Document::load(&path).unwrap();
+        let page = doc.get_pages()[&1];
+        let painted = evidence_text(&doc, page);
+        let line = painted.lines().find(|line| line.contains("D1")).unwrap();
+        if language == Language::Ar {
+            assert!(line.starts_with("A-101") && line.ends_with("D1"), "{line}");
+        } else {
+            assert!(line.starts_with("D1") && line.ends_with("A-101"), "{line}");
+        }
+        // Each text object starts at the first painted glyph of its cell.
+        let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+        let mut starts = Vec::new();
+        let mut first = false;
+        for op in content.operations {
+            if op.operator == "BT" {
+                first = true;
+            }
+            if op.operator == "Tm" && first {
+                starts.push(op.operands[4].as_float().unwrap());
+                first = false;
+            }
+        }
+        let positions: Vec<_> = painted
+            .lines()
+            .zip(starts)
+            .filter(|(text, _)| text.starts_with("COL"))
+            .collect();
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[0].0, "COL1");
+        assert_eq!(positions[1].0, "COL2");
+        assert_eq!(positions[0].1 > positions[1].1, language == Language::Ar);
+    }
+}

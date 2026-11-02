@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { BlockInfo } from "../api";
@@ -78,7 +79,7 @@ export function BlockPalette({ load, thumbnail, onInsert, onWrite, onAddToPalett
               onClick={() => leave(() => onInsert(b))}
             >
               {pictures[b.name] ? <img src={pictures[b.name]} alt={b.name} /> : <span className="block-blank" />}
-              <span dir="auto">{b.name}</span>
+              <span {...readingDirection(b.name)}>{b.name}</span>
             </button>
             <button
               type="button"

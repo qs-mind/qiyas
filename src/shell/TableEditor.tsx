@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Command, TableInfo } from "../api";
@@ -190,7 +191,7 @@ export function TableEditor(props: EditorProps) {
                       aria-selected={inRange}
                     >
                       <input
-                        dir="auto"
+                        {...readingDirection(drafts[key(cell)] ?? text)}
                         aria-label={t("table.cell", { row: r + 1, col: c + 1 })}
                         title={isField(cell) ? t("table.isField") : undefined}
                         className={isField(cell) ? "field" : undefined}

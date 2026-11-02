@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { useState } from "react";
 import type { Units } from "../api";
 import { useT } from "../i18n";
@@ -30,7 +31,7 @@ export function InfoCard({ info, onClose }: { info: Info; onClose(): void }) {
           <div key={i}>
             <dt>{tr(`info.${label}`, label)}</dt>
             {/* Numbers and coordinates read left to right in both languages. */}
-            <dd dir={label === "text" || label === "layer" ? "auto" : "ltr"}>
+            <dd {...(label === "text" || label === "layer" ? readingDirection(value) : { dir: "ltr" })}>
               {label === "snap" ? tr(`snap.${value}`, value) : value}
             </dd>
           </div>

@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Paper, PlotJob, PlotScale, PlotStyle, Sheet, Units } from "../api";
@@ -583,7 +584,7 @@ export function PlotDialog(props: Props) {
           </p>
         )}
         {error && (
-          <p className="error" role="alert" dir="auto">
+          <p className="error" role="alert" {...readingDirection(error)}>
             {error}
           </p>
         )}

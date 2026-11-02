@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { useEffect, useRef } from "react";
 import type { ScriptResult } from "../api";
 import { useT } from "../i18n";
@@ -65,8 +66,8 @@ export function ScriptResultDialog({
                   <span role="img" aria-label={t(l.ok ? "script.ok" : "script.error")}>
                     {l.ok ? "✓" : "✗"}
                   </span>{" "}
-                  <span dir="auto">{l.ok ? t("script.ok") : uiError(l.message)}</span>
-                  <TechnicalDetails><pre dir="auto">{l.text}{"\n"}{l.message}</pre></TechnicalDetails>
+                  <span {...readingDirection(l.ok ? t("script.ok") : uiError(l.message))}>{l.ok ? t("script.ok") : uiError(l.message)}</span>
+                  <TechnicalDetails><pre {...readingDirection(`${l.text}\n${l.message}`)}>{l.text}{"\n"}{l.message}</pre></TechnicalDetails>
                 </td>
               </tr>
             ))}

@@ -28,13 +28,14 @@ test("the in-place editor sits at the click, reads either way and places on Ente
   expect(form.style.left).toBe("120px");
   expect(form.style.top).toBe("40px");
   const input = screen.getByRole("textbox", { name: "Text" });
-  expect(input.getAttribute("dir")).toBe("auto");
+  expect(input.getAttribute("dir")).toBe("ltr");
   expect(document.activeElement).toBe(input);
-  fireEvent.change(input, { target: { value: "قياس D1" } });
+  fireEvent.change(input, { target: { value: "D1 عدده 3 في A-101" } });
+  expect(input.getAttribute("dir")).toBe("rtl");
   fireEvent.change(screen.getByRole("combobox", { name: "Style" }), { target: { value: "Standard" } });
   fireEvent.change(screen.getByRole("spinbutton", { name: "Height" }), { target: { value: "5" } });
   fireEvent.submit(form);
-  expect(onSubmit).toHaveBeenCalledWith({ value: "قياس D1", style: "Standard", height: 5 });
+  expect(onSubmit).toHaveBeenCalledWith({ value: "D1 عدده 3 في A-101", style: "Standard", height: 5 });
   // Once only: the blur that follows places nothing more.
   fireEvent.blur(input);
   expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -90,8 +91,9 @@ test("the MText dialog gives the lines, the style and the height; Ctrl+Enter pla
   expect(screen.getByRole("heading").textContent).toBe("New MText");
   const area = screen.getByRole("textbox", { name: "Text" });
   expect(area.tagName).toBe("TEXTAREA");
-  expect(area.getAttribute("dir")).toBe("auto");
+  expect(area.getAttribute("dir")).toBe("ltr");
   fireEvent.change(area, { target: { value: "غرفة\nRoom" } });
+  expect(area.getAttribute("dir")).toBe("rtl");
   fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
   await waitFor(() => expect(onClose).toHaveBeenCalled());
   expect(onSubmit).toHaveBeenCalledWith({ value: "غرفة\nRoom", style: "NOTES", height: 3.5 });

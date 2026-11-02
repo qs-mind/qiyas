@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { entityKind } from "../i18n/entityKind";
 import { uiError } from "../i18n/errors";
 import { useState, type ReactNode } from "react";
@@ -87,7 +88,7 @@ export function RecoveryDialog({ items, onRecover, onDiscard, onOpen, onClose }:
           const copies = item.older_copies ?? [];
           return (
             <li key={item.drawing}>
-              <span className="recovery-file" dir="auto">
+              <span className="recovery-file" {...readingDirection(item.drawing)}>
                 <strong>{name}</strong> <span className="muted">{folder}</span>
               </span>
               {mixed && crashedRow(item) && <span className="warn">{t("recovery.crashedItem")}</span>}

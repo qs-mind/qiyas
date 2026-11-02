@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { TechnicalDetails, ReviewNotes } from "./TechnicalDetails";
 import { entityKind } from "../i18n/entityKind";
 import { isWorkspaceBusy, uiError } from "../i18n/errors";
@@ -74,8 +75,8 @@ function ReviewRow({ row, busy, decide }: {
     <ReviewNotes notes={row.issues} />
     {row.state !== "pending" && <p>{t(row.state === "accepted" ? "recognition.included" : "recognition.excluded")}</p>}
     {fix && row.state === "pending" && <fieldset disabled={busy}>
-      <label>{t("recognition.type")}<input value={type} onChange={(e) => setType(e.target.value)} /></label>
-      {Object.entries(values).map(([key, value], index) => <label key={key}>{t(`props.${key}`) === `props.${key}` ? t("recognition.property", { n: index + 1 }) : t(`props.${key}`)}<input value={value}
+      <label>{t("recognition.type")}<input {...readingDirection(type)} value={type} onChange={(e) => setType(e.target.value)} /></label>
+      {Object.entries(values).map(([key, value], index) => <label key={key}>{t(`props.${key}`) === `props.${key}` ? t("recognition.property", { n: index + 1 }) : t(`props.${key}`)}<input {...readingDirection(value)} value={value}
         onChange={(e) => setValues((now) => ({ ...now, [key]: e.target.value }))} /></label>)}
       <button disabled={Object.entries(values).some(([key, value]) => !value.trim()
         || (typeof row.placement.props[key] === "number" && !Number.isFinite(Number(value)))

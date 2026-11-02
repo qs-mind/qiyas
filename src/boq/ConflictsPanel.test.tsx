@@ -207,3 +207,14 @@ test("queries show severity, question and cited drawing evidence without an impo
   fireEvent.click(screen.getByRole("button", { name: "Show" }));
   expect(props.onShow).toHaveBeenCalledWith(query);
 });
+
+test.each([
+  ["D1 عدده 3 في A-101", "rtl"],
+  ["D1 count 3 on A-101", "ltr"],
+])("query content chooses its direction in an English window: %s", (question, dir) => {
+  renderPanel({ conflicts: [conflict("tower-query", "document_mismatch", "Check tower openings", {
+    query: { severity: "error", question_en: question, question_ar: question,
+      references: [], citations: [], clouds: [], rule: "openings" },
+  })] });
+  expect(screen.getByText(question).getAttribute("dir")).toBe(dir);
+});

@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AttDefInfo, BlockInfo } from "../api";
@@ -96,7 +97,7 @@ export function CreateBlockDialog({ names, onSubmit, onClose }: CreateProps) {
     <Shell modal={modal} id="create-block-title" title={t("block.createTitle")} onClose={onClose} onSubmit={submit}>
       <label>
         <span>{t("block.name")}</span>
-        <input dir="auto" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+        <input {...readingDirection(name)} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       {taken && <p className="error">{t("block.nameTaken")}</p>}
       {bad && <p className="error">{t("block.nameBad")}</p>}
@@ -146,7 +147,7 @@ export function AttributesDialog({ heading, fields, onSubmit, onClose }: Attribu
         <label key={f.tag}>
           <span>{f.prompt || f.tag}</span>
           <input
-            dir="auto"
+            {...readingDirection(values[i])}
             autoFocus={i === 0}
             value={values[i]}
             onChange={(e) => setValues(values.map((v, j) => (j === i ? e.target.value : v)))}
@@ -191,15 +192,15 @@ export function AttDefDialog({ height, onSubmit, onClose }: AttDefProps) {
     <Shell modal={modal} id="attdef-title" title={t("block.attdefTitle")} onClose={onClose} onSubmit={submit}>
       <label>
         <span>{t("block.tag")}</span>
-        <input dir="auto" autoFocus value={tag} onChange={(e) => setTag(e.target.value)} />
+        <input {...readingDirection(tag)} autoFocus value={tag} onChange={(e) => setTag(e.target.value)} />
       </label>
       <label>
         <span>{t("block.prompt")}</span>
-        <input dir="auto" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        <input {...readingDirection(prompt)} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
       </label>
       <label>
         <span>{t("block.default")}</span>
-        <input dir="auto" value={value} onChange={(e) => setValue(e.target.value)} />
+        <input {...readingDirection(value)} value={value} onChange={(e) => setValue(e.target.value)} />
       </label>
       <label>
         <span>{t("block.height")}</span>
@@ -277,10 +278,10 @@ export function AttributeManager({ blocks, onSave, onSync, onClose }: ManagerPro
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.tag}>
-                  <td dir="auto">{r.tag}</td>
+                  <td {...readingDirection(r.tag)}>{r.tag}</td>
                   <td>
                     <input
-                      dir="auto"
+                      {...readingDirection(r.prompt)}
                       aria-label={t("block.promptOf", { tag: r.tag })}
                       value={r.prompt}
                       onChange={(e) => edit(i, "prompt", e.target.value)}
@@ -288,7 +289,7 @@ export function AttributeManager({ blocks, onSave, onSync, onClose }: ManagerPro
                   </td>
                   <td>
                     <input
-                      dir="auto"
+                      {...readingDirection(r.default)}
                       aria-label={t("block.defaultOf", { tag: r.tag })}
                       value={r.default}
                       onChange={(e) => edit(i, "default", e.target.value)}

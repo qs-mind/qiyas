@@ -20,7 +20,8 @@ pub use color::resolve_color;
 pub use fonts::{DEFAULT_CHAIN, NOTO_ARABIC, NOTO_SANS};
 pub use index::PickIndex;
 pub use text::{
-    arabic_stored_visually, decode_codes, size_bucket, visual_pieces, Laid, LaidText, Quad,
-    ShapedGlyph, ShapedLine, TextEngine, VisualPiece, CAP_EM, QUAD_IN_BLOCK, SIZE_BUCKETS,
+    arabic_stored_visually, decode_codes, size_bucket, visual_pieces, BaseDirection, Laid,
+    LaidText, Quad, ShapedGlyph, ShapedLine, TextEngine, VisualPiece, CAP_EM, QUAD_IN_BLOCK,
+    SIZE_BUCKETS,
 };
 pub use visibility::{layer_on_in_file, layer_on_in_file_with, layer_shown, layer_shown_with};

@@ -1,7 +1,7 @@
 import { ProviderFailureCard } from "./ProviderFailureCard";
 import { providerFailure } from "./providerFailure";
 import { useStableCallbacks } from "../shell/stableCallbacks";
-import { chatText } from "./content";
+import { readingDirection, chatText } from "./content";
 import { errorText, connectionLost } from "./chatErrors";
 import { uiError } from "../i18n/errors";
 import { memo, useMemo, useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -251,7 +251,7 @@ export const AssistantPanel = memo(function AssistantPanel({
           <i className={busy ? "live" : undefined} aria-hidden="true" />
           <span><b>{t("assistant")}</b>{asked > 0 ? ` · ${t(asked === 1 ? "ai.oneQuestion" : "ai.nQuestions", { n: asked })}` : ""}</span>
           <span className="grow" />
-          <span className="back-title" dir="auto">{title || t("outputs.backToChat")}</span>
+          <span className="back-title" {...readingDirection(title || t("outputs.backToChat"))}>{title || t("outputs.backToChat")}</span>
           <Glyph name="next" mirror size={14} />
         </button>
       )}

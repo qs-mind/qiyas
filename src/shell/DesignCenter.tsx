@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { BlockInfo } from "../api";
@@ -68,14 +69,14 @@ export function DesignCenter({ choose, list, has, onInsert, onRedefine, onClose 
         <button type="button" disabled={busy} onClick={open}>
           {t("block.openDrawing")}
         </button>{" "}
-        {path && <span dir="auto">{path}</span>}
+        {path && <span {...readingDirection(path)}>{path}</span>}
       </p>
       {path && blocks.length === 0 && <p>{t("block.none")}</p>}
       <ul className="design-center-blocks">
         {path &&
           blocks.map((block) => (
             <li key={block.name}>
-              <span dir="auto">{block.name}</span>
+              <span {...readingDirection(block.name)}>{block.name}</span>
               <button
                 type="button"
                 aria-label={t("block.insertOne", { name: block.name })}

@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
@@ -79,13 +80,13 @@ export function ToleranceDialog({ onSubmit, onClose }: Props) {
         </label>
         <label>
           <span>{t("dim.tol.value")}</span>
-          <input dir="auto" autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
+          <input {...readingDirection(value)} autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
         {datums.map((d, i) => (
           <label key={i}>
             <span>{t("dim.tol.datum", { n: i + 1 })}</span>
             <input
-              dir="auto"
+              {...readingDirection(d)}
               value={d}
               onChange={(e) => setDatums(datums.map((x, j) => (j === i ? e.target.value : x)))}
             />

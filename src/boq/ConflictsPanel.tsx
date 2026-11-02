@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Command, Conflict, ConflictKind } from "../api";
 import { useLanguage, useT } from "../i18n";
@@ -98,7 +99,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         size: 200,
         grow: true,
         wrap: true,
-        cell: (c) => c.query ? <span dir="auto">{lang === "ar" ? c.query.question_ar : c.query.question_en}</span> : "—",
+        cell: (c) => c.query ? <span {...readingDirection(lang === "ar" ? c.query.question_ar : c.query.question_en)}>{lang === "ar" ? c.query.question_ar : c.query.question_en}</span> : "—",
         title: (c) => c.query?.citations.map((r) => `${r.source}: ${r.clause}`).join("; "),
       },
       {
@@ -117,7 +118,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         grow: true,
         wrap: true,
         sortValue: (c) => reasonIn(c, lang),
-        cell: (c) => <span dir="auto">{reasonIn(c, lang)}</span>,
+        cell: (c) => <span {...readingDirection(reasonIn(c, lang))}>{reasonIn(c, lang)}</span>,
         title: (c) => reasonIn(c, lang),
         cellClass: () => "reason",
       },
@@ -153,7 +154,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         size: 64,
         minSize: 48,
         sortValue: (c) => c.sheets.join(", "),
-        cell: (c) => <span dir="auto">{c.sheets.join(", ")}</span>,
+        cell: (c) => <span {...readingDirection(c.sheets.join(", "))}>{c.sheets.join(", ")}</span>,
         title: (c) => (c.sheets.length > 0 ? c.sheets.join(", ") : undefined),
         cellClass: () => "muted",
       },
@@ -197,7 +198,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
           editing === c.id ? (
             <input
               type="text"
-              dir="auto"
+              {...readingDirection(draft, lang)}
               aria-label={t("conflicts.note")}
               placeholder={t("conflicts.note")}
               value={draft}
@@ -212,7 +213,7 @@ export const ConflictsPanel = memo(function ConflictsPanel({
           ) : (
             <button
               type="button"
-              dir="auto"
+              {...readingDirection(c.note || t("conflicts.note"))}
               aria-label={c.note ? undefined : t("conflicts.note")}
               className={c.note ? undefined : "muted"}
               onClick={() => {

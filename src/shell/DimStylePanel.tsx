@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { useEffect, useRef, useState } from "react";
 import type { DimStyleFields, DimStyleInfo } from "../api";
@@ -161,7 +162,7 @@ export function DimStylePanel({ styles, current, annotationScale, onSave, onScal
         </div>
         <label>
           <span>{t("dim.style.newName")}</span>
-          <input dir="auto" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <input {...readingDirection(newName)} value={newName} onChange={(e) => setNewName(e.target.value)} />
         </label>
         <div className="buttons">
           <button

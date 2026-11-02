@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { Tabs } from "@base-ui/react/tabs";
 import Papa from "papaparse";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -190,7 +191,7 @@ function FileTable({ rows, name, targets, drawing }: {
   const top = items.length ? Math.max(0, items[0].start - headerHeight) : 0;
   const bottom = items.length ? Math.max(0, virtual.getTotalSize() - (items.at(-1)!.end - headerHeight)) : 0;
   const cells = (row: string[], head = false) => Array.from({ length: columns }, (_, i) => head
-    ? <th key={i} scope="col" dir="auto">{row[i] ?? ""}</th> : <td key={i} dir="auto">{row[i] ?? ""}</td>);
+    ? <th key={i} scope="col" {...readingDirection(row[i] ?? "")}>{row[i] ?? ""}</th> : <td key={i} {...readingDirection(row[i] ?? "")}>{row[i] ?? ""}</td>);
   const traceRow = (row: number) => {
     const target = targets?.[row];
     if (!target) return {};
@@ -258,5 +259,5 @@ function TextViewer({ bytes, name }: { bytes: ArrayBuffer; name: string }) {
   const text = new TextDecoder().decode(bytes);
   const extension = name.split(".").pop()?.toLowerCase();
   if (extension === "csv") return <FileTable rows={parseCsv(text)} name={name} />;
-  return <div className="file-scroll file-text">{extension === "md" ? <Markdown text={text} /> : <pre dir="auto">{text}</pre>}</div>;
+  return <div className="file-scroll file-text">{extension === "md" ? <Markdown text={text} /> : <pre {...readingDirection(text)}>{text}</pre>}</div>;
 }

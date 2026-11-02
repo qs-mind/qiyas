@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { hotkeysCoreFeature, selectionFeature, syncDataLoaderFeature } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
 import { measureElement, observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
@@ -113,7 +114,7 @@ function LayerProps({ layer, linetypes, onSet, onRename, onDelete }: LayerPropsP
       {onRename && (
         <label>
           <span>{t("layer.rename")}</span>
-          <input dir="auto" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onEnter(commitName)} />
+          <input {...readingDirection(name)} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onEnter(commitName)} />
         </label>
       )}
       {onDelete && (
@@ -525,7 +526,7 @@ export const LayersPanel = memo(function LayersPanel({
           {onNewLayer && (
             <span className="layer-new">
               <input
-                dir="auto"
+                {...readingDirection(fresh)}
                 aria-label={t("layer.new")}
                 placeholder={t("layer.new")}
                 value={fresh}

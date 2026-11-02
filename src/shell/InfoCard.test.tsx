@@ -53,3 +53,9 @@ test("the step is typed in metres and given in drawing units", () => {
   fireEvent.keyDown(screen.getByRole("spinbutton"), { key: "Escape" });
   expect(onCancel).toHaveBeenCalled();
 });
+
+test("inquiry text uses RTL after a Latin code and keeps English LTR", () => {
+  render(<InfoCard info={{ title: "Tower", rows: [["text", "D1 عدده 3 في A-101"], ["layer", "Tower Walls"]] }} onClose={() => {}} />);
+  expect(screen.getByText("D1 عدده 3 في A-101").getAttribute("dir")).toBe("rtl");
+  expect(screen.getByText("Tower Walls").getAttribute("dir")).toBe("ltr");
+});

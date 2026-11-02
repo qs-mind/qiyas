@@ -1,3 +1,4 @@
+import { readingDirection } from "./content";
 import { locale } from "../i18n/locale";
 import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -96,7 +97,7 @@ function Dock({ plan, busy, language, threadItemId, awaitingApproval = plan.awai
         progress: `\u2066${digits.format(count)}/${digits.format(plan.phases.length)}\u2069`,
       })}</span>
       {busy && active && <DotLoader size="sm" />}
-      {active && <span className="plan-dock-title" dir="auto">{planPhaseTitle(active, t)}</span>}
+      {active && <span className="plan-dock-title" {...readingDirection(planPhaseTitle(active, t))}>{planPhaseTitle(active, t)}</span>}
       <span className="plan-dock-progress" aria-hidden="true"><span style={{ inlineSize: `${100 * count / plan.phases.length}%` }} /></span>
     </button>
     <div id={bodyId} ref={body} className="plan-dock-body" hidden={!expanded}>

@@ -191,3 +191,11 @@ test("the description's full text is its tooltip, and the numbers are in tabular
   expect(cells[1].getAttribute("title")).toBe("Block walls 200 mm");
   for (const i of [3, 4, 5, 6, 7]) expect(cells[i].className).toContain("end");
 });
+
+test.each([
+  ["D1 عدده 3 في A-101", "rtl"],
+  ["D1 count 3 on A-101", "ltr"],
+])("BOQ descriptions follow content direction: %s", (description, dir) => {
+  renderPanel({ boq: { ...boq, items: [boqItem("D1", description, "pcs", 3)] } });
+  expect(screen.getByText(description).getAttribute("dir")).toBe(dir);
+});

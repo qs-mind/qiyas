@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { useState, type KeyboardEvent } from "react";
 import { useT } from "../i18n";
 import { Shell, useModal } from "./BlockDialogs";
@@ -28,7 +29,7 @@ function StateRow({ name, act, props }: { name: string; act: ReturnType<typeof u
   return (
     <li>
       <input
-        dir="auto"
+        {...readingDirection(to)}
         aria-label={t("layerState.renameNamed", { name })}
         value={to}
         onChange={(e) => setTo(e.target.value)}
@@ -71,7 +72,7 @@ export function LayerStatesDialog(props: StatesProps) {
       )}
       <label>
         <span>{t("layerState.new")}</span>
-        <input dir="auto" value={name} onChange={(e) => setName(e.target.value)} />
+        <input {...readingDirection(name)} value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       <div className="buttons">
         <button type="button" onClick={modal.close}>
@@ -106,7 +107,7 @@ export function GroupNameDialog({ names, onSubmit, onClose }: GroupProps) {
     <Shell modal={modal} id="group-name-title" title={t("group.title")} onClose={onClose} onSubmit={submit}>
       <label>
         <span>{t("group.name")}</span>
-        <input dir="auto" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+        <input {...readingDirection(name)} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       {taken && <p className="error">{t("group.nameTaken")}</p>}
       {bad && <p className="error">{t("block.nameBad")}</p>}

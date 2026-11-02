@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { uiError } from "../i18n/errors";
 import { Command } from "cmdk";
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
@@ -220,7 +221,7 @@ export function CommandLine({ state, prompt, onAction, inputRef, words = [], onT
     <section className="command-line" aria-label={t("cmd.label")}>
       <ol className="command-log" aria-live="polite">
         {log.map((line, i) => (
-          <li key={i} dir="auto">
+          <li key={i} {...readingDirection(line)}>
             {line}
           </li>
         ))}
@@ -248,7 +249,7 @@ export function CommandLine({ state, prompt, onAction, inputRef, words = [], onT
           autoComplete="off"
           spellCheck={false}
           placeholder={t("cmd.placeholder")}
-          dir="auto"
+          {...readingDirection(text)}
           value={text}
           onChange={(e) => {
             setText(e.target.value);

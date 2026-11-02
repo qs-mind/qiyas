@@ -1,3 +1,4 @@
+import { readingDirection } from "../ai/content";
 import { entityKind } from "../i18n/entityKind";
 import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Current, EntityInfo, EntityProp, Units } from "../api";
@@ -49,13 +50,13 @@ const onEnter = (commit: () => void) => (e: KeyboardEvent<HTMLInputElement>) => 
 };
 
 /** A text field that sends its value on Enter or when it loses focus, if it changed. */
-function Field({ label, value, onCommit, dir = "ltr" }: { label: string; value: string; onCommit(v: string): void; dir?: string }) {
+function Field({ label, value, onCommit }: { label: string; value: string; onCommit(v: string): void }) {
   const [text, setText] = useState(value);
   const commit = () => text !== value && onCommit(text);
   return (
     <input
       aria-label={label}
-      dir={dir}
+      {...readingDirection(text)}
       value={text}
       onChange={(e) => setText(e.target.value)}
       onKeyDown={onEnter(commit)}
@@ -111,6 +112,7 @@ function Value({ row }: { row: GeoRow }) {
     <button
       type="button"
       className="value"
+      {...(row.prose ? readingDirection(row.text) : { dir: "ltr" })}
       data-copied={copied || undefined}
       title={t(copied ? "props.copied" : "props.copy")}
       onClick={copy}
@@ -280,7 +282,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
                     : r.key === "text" && textual
                       ? [
                           "props.text",
-                          <Field label={t("props.text")} dir="auto" value={e.plain_text ?? e.text ?? ""} onCommit={(v) => onSet?.("text", v)} />,
+                          <Field label={t("props.text")} value={e.plain_text ?? e.text ?? ""} onCommit={(v) => onSet?.("text", v)} />,
                           true,
                         ]
                       : r.key === "viewportScale" && e.viewport_scale != null
@@ -313,7 +315,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
       sum.layerShort === null ? (
         varies
       ) : (
-        <span title={sum.layer ?? undefined}>{sum.layerShort}</span>
+        <span {...readingDirection(sum.layerShort)} title={sum.layer ?? undefined}>{sum.layerShort}</span>
       ),
       true,
     );
@@ -348,7 +350,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     geometryOf(entity, true);
   } else if (entity) {
     row("props.kind", entityKind(entity.kind, t));
-    row("props.layer", <span title={entity.layer}>{entity.layer_short}</span>, true);
+    row("props.layer", <span {...readingDirection(entity.layer_short)} title={entity.layer}>{entity.layer_short}</span>, true);
     row("props.color", <>{swatch(entity.color_rgb)}{byName(entity.color)}</>);
     row("props.linetype", byName(entity.linetype), true);
     row("props.lineweight", weight(entity.lineweight));
@@ -397,7 +399,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
                     {section.rows.map(([label, value, text]) => (
                       <div key={label}>
                         <dt>{t(label)}</dt>
-                        <dd dir={text ? "auto" : "ltr"}>{value}</dd>
+                        <dd {...(text ? typeof value === "string" ? readingDirection(value) : {} : { dir: "ltr" })}>{value}</dd>
                       </div>
                     ))}
                   </dl>
@@ -414,8 +416,8 @@ export const PropertiesPanel = memo(function PropertiesPanel({
                   <dl>
                     {attributes.map(([tag, value], i) => (
                       <div key={i}>
-                        <dt dir="auto">{tag}</dt>
-                        <dd dir="auto">{value}</dd>
+                        <dt {...readingDirection(tag)}>{tag}</dt>
+                        <dd {...readingDirection(value)}>{value}</dd>
                       </div>
                     ))}
                   </dl>
