@@ -350,7 +350,7 @@ test("sheet, records, lookup and export lines name their objects", () => {
     .toBe("Looked up how to use 2 commands");
   expect(line({ key: "activity.line.lookup", params: { what: "command", name: "rooms, free_space" } }))
     .toBe("Looked up how to use room search and available space");
-  expect(line({ key: "activity.line.lookup", params: { what: "command", name: "drafting_knowledge" } }))
+  expect(line({ key: "activity.line.lookup", params: { what: "command", name: "custom_check" } }))
     .toBe("Looked up how to use 1 command");
   // Model space by its window name, not its block's.
   expect(line({ key: "activity.line.read", params: { what: "table", n: 2, sheet: "*Model_Space" } }))

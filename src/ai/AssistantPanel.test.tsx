@@ -619,14 +619,14 @@ test("an alef carrying tanween is written with the tanween first in the box, so 
 test("an Arabic conversation shows Mizan's steps and its waiting line in Arabic in an English window", () => {
   const user = { kind: "user" as const, text: "ارسم فيلا صغيرة" };
   const lookup: ToolCardItem = { ...card, id: "t2", label: "commands", mutating: false, handles: [],
-    activity: { category: "drawing", effect: "read", detail: { key: "activity.line.lookup", params: { what: "command", name: "drafting_knowledge, space_check" } } } };
+    activity: { category: "drawing", effect: "read", detail: { key: "activity.line.lookup", params: { what: "command", name: "wall_groups, space_check" } } } };
   setup({ items: [user, lookup] }, true);
   const line = document.querySelector(".tool-card")!;
   expect(line.getAttribute("lang")).toBe("ar");
   expect(line.getAttribute("dir")).toBe("rtl");
   expect(line.textContent).toContain("بحث عن طريقة استخدام");
   // Never the commands' own names.
-  expect(line.textContent).not.toMatch(/drafting_knowledge|space_check/);
+  expect(line.textContent).not.toMatch(/wall_groups|space_check/);
   expect(document.querySelector(".working")).toBeNull();
   // The window's own words stay in its language.
   expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Ask Mizan, or type / for commands");

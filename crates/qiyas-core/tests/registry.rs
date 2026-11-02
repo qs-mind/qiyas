@@ -47,6 +47,11 @@ fn takeoff_kit_is_stable_bounded_and_generated_from_registry_metadata() {
         let report = qiyas_core::validation::validate_command(example, None);
         assert!(report.valid, "{}: {}", info.name, report.message());
     }
+    assert!(kit["drawing"]
+        .as_str()
+        .unwrap()
+        .contains("symbol:block_name"));
+    assert!(kit["drawing"].as_str().unwrap().contains("exact"));
     assert!(kit.get("batch").is_none());
     assert_eq!(kit["phases"].as_object().unwrap().len(), 4);
     let mut session = sample();
@@ -470,10 +475,9 @@ fn search_finds_commands_by_what_they_do() {
 #[test]
 fn domain_options_are_optional_and_registered_with_open_room_classification() {
     for value in [
-        serde_json::json!({"type":"space_check","profile":"villa","building_type":"mall","plan":{"floors":[{"name":"Mall","rooms":[{"name":"Shop","kind":"retail unit","area_m2":30}]}]}}),
+        serde_json::json!({"type":"space_check","plan":{"floors":[{"name":"Mall","rooms":[{"name":"Shop","kind":"retail unit","area_m2":30}]}]}}),
         serde_json::json!({"type":"comment","points":[[0,0],[4,0],[4,3],[0,3]],"text":"Review","layer":"Notes"}),
         serde_json::json!({"type":"grid","x":[{"label":"A","at":0}],"layer":"Axes"}),
-        serde_json::json!({"type":"symbol","kind":"door","a":[0,0],"b":[1,0],"side_point":[0,1],"layer":"Doors"}),
     ] {
         let report = qiyas_core::validation::validate_command(&value, None);
         assert!(report.valid, "{}", report.message());

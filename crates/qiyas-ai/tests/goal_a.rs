@@ -635,3 +635,55 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_statuses_and_resume() {
     assert!(text.contains("Two bedrooms of the requested sizes"));
     assert!(text.contains("May need a recheck"));
 }
+
+#[test]
+fn brief_read_without_limit_reports_measurement_and_decision_supplies_cited_expectation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("terminal.dxf"), 6);
+    s.run_input(
+        &json!({"type":"draw","kind":"line","a":[0,0],"b":[30,0]}),
+        Source::Ai,
+    )
+    .unwrap();
+    let read = json!({"op":"run","args":{"command":{"type":"space_check","plan":{"floors":[{"name":"Concourse","rooms":[{"name":"Platform","area_m2":300}]}]}}},"pointer":"/outcome/result/floors/0/area_m2"});
+    let out = call(
+        &mut s,
+        surface::READ,
+        "brief_check",
+        json!({"expectations":[{"id":"area","text":"Platform area","read":read}]}),
+    )
+    .unwrap();
+    assert!(out["results"][0]["passed"].is_null());
+    assert_eq!(out["results"][0]["measured"], 300.0);
+    assert_eq!(out["not_checked"], 1);
+    assert_eq!(out["failed"], 0);
+    s.run_input(&json!({"type":"decision","kind":"set","entries":{"name":"platform_area","value":300,"unit":"m2","reason":"Terminal programme","source":"document","citation":"Programme section 8","set_by":"mizan","status":"answered"}}),Source::Ai).unwrap();
+    let mut read = read;
+    read["decision"] = json!("platform_area");
+    let out = call(
+        &mut s,
+        surface::READ,
+        "brief_check",
+        json!({"expectations":[{"id":"area","text":"Platform area","read":read}]}),
+    )
+    .unwrap();
+    assert_eq!(out["results"][0]["passed"], true);
+    assert!(out["results"][0]["citation"]
+        .to_string()
+        .contains("Programme section 8"));
+}
+
+#[test]
+fn brief_verify_without_expected_value_measures_count_without_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("terminal.dxf"), 6);
+    run(
+        &mut s,
+        json!({"type":"draw","kind":"line","a":[0,0],"b":[30,0]}),
+    );
+    let out=call(&mut s,surface::READ,"brief_check",json!({"expectations":[{"id":"count","text":"Concourse lines","verify":{"kind":"count","entity_type":"Line"}}]})).unwrap();
+    assert_eq!(out["results"][0]["measured"], 1.0);
+    assert!(out["results"][0]["passed"].is_null());
+    assert_eq!(out["failed"], 0);
+    assert_eq!(out["not_checked"], 1);
+}

@@ -17,7 +17,7 @@ const operations: Record<string, [string, string]> = {
   measure_room: ["measure", "room"], add_measurement: ["add", "takeoff"], remove_measurement: ["remove", "takeoff"],
   make_sheet: ["make", "sheet"], new_layout: ["make", "sheet"], set_sheet: ["show", "sheet"],
   table: ["add", "table"], room_schedule: ["add", "table"], opening_schedule: ["add", "table"],
-  object_schedule: ["add", "table"], drafting_knowledge: ["read", "drafting_guidance"],
+  object_schedule: ["add", "table"],
   state: ["read", "state"], document: ["read", "drawing"], capabilities: ["read", "capability"],
   commands: ["lookup", "command"], validate: ["check", "command"], records: ["read", "item"],
   record_schema: ["read", "record_schema"], query: ["read", "query"], measure: ["measure", "item"],

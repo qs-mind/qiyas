@@ -1700,7 +1700,10 @@ fn measurement_summary_large_podium_pages_every_item_and_factor() {
 #[test]
 fn measurement_summary_discrepancy_tolerance_discloses_only_default_as_default() {
     let (_dir, mut s, _, _, _) = podium_summary_fixture();
-    for (tolerance, value, who) in [(None, 5.0, "qiyas_default"), (Some(3.0), 3.0, "engineer")] {
+    for (tolerance, value, who) in [
+        (None, 0.0, "exact_comparison"),
+        (Some(3.0), 3.0, "engineer"),
+    ] {
         let outcome = run(
             &mut s,
             json!({"type":"discrepancy_check","tolerance":tolerance}),
@@ -1708,7 +1711,7 @@ fn measurement_summary_discrepancy_tolerance_discloses_only_default_as_default()
         let result = serde_json::to_value(outcome).unwrap();
         assert_eq!(
             result["result"]["tolerance"],
-            json!({"value":value,"decided_by":who})
+            json!({"value":value,"decided_by":who,"comparison":if value==0.0 {"exact"} else {"supplied_tolerance"}})
         );
     }
 }

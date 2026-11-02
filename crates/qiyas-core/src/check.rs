@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 27] = [
+pub const RULES: [&str; 28] = [
+    "job_limit",
     "placement",
     "literal_newline",
     "internal_id_in_text",
@@ -70,10 +71,6 @@ const TOUCH_M: f64 = 0.0005;
 const NEAR_M: f64 = 0.2;
 /// A segment shorter than this is a scrap (metres).
 const TINY_M: f64 = 0.001;
-/// Room size labels and rooms may differ by this much (a fraction).
-const SIZE_SLACK: f64 = 0.05;
-/// Dimension overrides may differ by 5 mm as well as 1% of the measured length.
-const DIM_TOL_M: f64 = 0.005;
 /// Text on paper smaller than this can't be read, larger than this shouts (millimetres).
 pub(crate) const PAPER_MIN_MM: f64 = 2.5;
 pub(crate) const PAPER_MAX_MM: f64 = 15.0;
@@ -99,7 +96,7 @@ pub struct CheckScope {
     /// dim_override_mismatch, text_overlaps_text, text_over_lines, text_height_vs_scale,
     /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark,
     /// room_area_mismatch, annotation_overlap, annotation_over_grid, label_outside_room, object_tag_mismatch,
-    /// internal_id_in_text, opening_untagged, part_overlap, sheet_without_title_block.
+    /// internal_id_in_text, opening_untagged, part_overlap, sheet_without_title_block, job_limit.
     #[schemars(extend("items" = serde_json::json!({"type":"string","enum":RULES})))]
     pub rules: Vec<String>,
 }
@@ -130,6 +127,8 @@ pub struct Finding {
 pub struct CheckReport {
     /// The sheet checked (its block).
     pub sheet: String,
+    /// Numeric facts when job_limit is in scope; null passed means unjudged.
+    pub measurements: Vec<serde_json::Value>,
     /// Entities looked at.
     pub entities: usize,
     /// False when a nested entity or room could not be checked completely.
@@ -630,7 +629,7 @@ impl Session {
                 };
                 let measured_m = measured * to_m;
                 let agrees_in = |factor: f64| {
-                    (written * factor - measured_m).abs() <= 0.01 * measured_m.abs() + DIM_TOL_M
+                    (written * factor - measured_m).abs() <= self.measure_tol() * to_m
                 };
                 // A stated unit is binding. With none, allow drawing units or a metric size.
                 let agrees = unit.map_or_else(
@@ -773,6 +772,33 @@ impl Session {
             found.retain(|f| f.handles.iter().any(|h| scope.handles.contains(h)));
         }
         let rank = |rule: &str| RULES.iter().position(|r| *r == rule).unwrap_or(RULES.len());
+        let measurements = if wanted("job_limit") {
+            self.drawing_measurements(&sheet, &scope.handles)
+                .unwrap_or_else(|e| vec![serde_json::json!({"passed":null,"status":"unavailable","message":e.to_string()})])
+        } else {
+            Vec::new()
+        };
+        if wanted("job_limit") {
+            for row in measurements.iter().filter(|r| r["passed"] == false) {
+                found.push(Finding {
+                    rule: "job_limit",
+                    pack: "general",
+                    severity: Severity::Warning,
+                    handles: row["handle"].as_u64().into_iter().collect(),
+                    at: None,
+                    message: format!(
+                        "{}: {} = {} {}; minimum {}, maximum {}; source {}",
+                        row["rule"],
+                        row["metric"],
+                        row["measured"],
+                        row["unit"],
+                        row["minimum"],
+                        row["maximum"],
+                        row["citations"]
+                    ),
+                });
+            }
+        }
         found.sort_by(|a, b| {
             a.severity
                 .cmp(&b.severity)
@@ -793,7 +819,9 @@ impl Session {
         found.truncate(limit);
         not_checked.sort_unstable();
         not_checked.dedup();
-        let complete = not_checked.is_empty() && placement_complete;
+        let complete = not_checked.is_empty()
+            && placement_complete
+            && !measurements.iter().any(|r| r["status"] == "unavailable");
         let mut line = check_line(errors, warnings, found.len(), &counts);
         if !complete {
             line = format!(
@@ -802,6 +830,7 @@ impl Session {
             );
         }
         CheckReport {
+            measurements,
             sheet,
             entities: entities.len(),
             complete,
@@ -1000,7 +1029,7 @@ impl Session {
                     let (bw, bh) = ((b[1][0] - b[0][0]) * to_m, (b[1][1] - b[0][1]) * to_m);
                     let (lo, hi) = (w.min(h), w.max(h));
                     let (blo, bhi) = (bw.min(bh), bw.max(bh));
-                    let off = |a: f64, b: f64| (a - b).abs() > SIZE_SLACK * b.max(1e-9);
+                    let off = |a: f64, b: f64| (a - b).abs() > self.measure_tol() * to_m;
                     if off(lo, blo) || off(hi, bhi) {
                         push(Finding {
                             rule: "room_size_text_differs",

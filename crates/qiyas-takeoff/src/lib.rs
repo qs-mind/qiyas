@@ -6,7 +6,8 @@ mod accuracy;
 pub use accuracy::{accuracy, net_room_accuracy, Accuracy, NetRoomAccuracy};
 pub use qiyas_core::discrepancy::{compare, CompareInputs};
 use qiyas_core::{Conflict, CoreError, Session, Source};
-pub const DEFAULT_TOLERANCE: f64 = 5.0;
+/// No job tolerance means exact comparison, ignoring only binary arithmetic noise.
+pub const DEFAULT_TOLERANCE: f64 = 0.0;
 
 /// Run the shared discrepancy engine and raise drawing queries in one undo step.
 pub fn compare_session(

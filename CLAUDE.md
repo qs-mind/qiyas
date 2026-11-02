@@ -524,8 +524,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Arabic digits inside strings remain literal. `geometry.*` is separate from named quantities.
 - Legacy wall, room and opening definitions are stored in `data/legacy-object-types.json`.
   The converter runs on open and edits, retaining visible geometry and old quantity behavior.
-  Door/window symbols use the stored recipes; redefining them repoints their existing inserts
-  to regenerated symbol blocks, retaining placement, schedules and references.
+  Legacy/manual door and window symbols use stored recipes; redefining those recipes repoints
+  their inserts to regenerated blocks. A wall opening with an explicit drawing block `symbol`
+  keeps that block through edits, undo and reopen; legacy recipe refresh never replaces it.
   Wall commands translate old arguments into ordinary typed drivers and shared band rendering;
   legacy tags remain for old API/field compatibility. Rooms use the shared seeded-region source
   (`QIYAS_OBJECT_REGION`), with holes and validity; invalid regions expose no usable quantity.
@@ -814,7 +815,12 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - BOQ comparison finds mapped codes absent from the client list, unmeasured client scope,
   wrong quantities/units (including measurement unit bands) and duplicate codes. A method rule
   may supply `tolerance:{percent,absolute}`; generated items retain their applicable tolerances
-  and citations. Existing manual comparison defaults remain for older drawings.
+  and citations. Without a method, job or engineer tolerance, comparison is exact (0%),
+  reported as such; no 5% fallback is supplied, including for manual take-offs. Exact comparison
+  ignores binary arithmetic noise up to `16 × f64::EPSILON × max(|expected|, |found|)`
+  (about 3.55e-15 relative), with no absolute allowance near zero. Thus 58.29 and
+  58.28999999999999 agree, but 58.29 and 58.30 differ. The shared core/take-off comparison
+  and BOQ panel use this same numerical allowance; it is not a design or job tolerance.
 - Findings carry `query` metadata: severity, source citations, bilingual question, evidence
   handles/sheets/grids, rule identity and cloud handles. Stable finding ids retain statuses and
   notes on repeated checks. The drawing's `queries/result` XRecord stores the list; standalone
@@ -1113,12 +1119,18 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   member roles, runs and openings. The drawing is authoritative: DWG/DXF saves, copies and
   undo retain the editable definition. The centreline's first two real values remain its
   thickness in drawing units and height in metres. Measure hatches for net wall plan area.
-- `add_wall_openings {centreline, openings: [{at, width, kind, swing?, sill?, head?}]}` adds
+- `add_wall_openings {centreline, openings: [{at, width, kind, symbol?, swing?, sill?, head?}]}` adds
   doors/windows to the run named by its centreline handle. `remove_wall_openings {inserts}`
   closes the cuts named by opening insert handles. `edit_wall_opening {insert, at?, width?,
-  kind?, swing?, sill?, head?, mark?}` moves or resizes an opening or changes its properties.
+  kind?, symbol?, swing?, sill?, head?, mark?}` moves or resizes an opening or changes its properties.
   Geometry changes rebuild the group in one undo step; an empty edit does not rebuild. `delete_entities` refuses wall opening inserts and
   names `remove_wall_openings`, so erasing a symbol cannot leave an unexplained hole.
+  Mizan draws each detailed component as a block in this drawing and supplies its name as
+  `symbol` in `walls`, `add_wall_openings` or `edit_wall_opening`. The block's local X extent
+  scales uniformly to the cut width and rotates with the run. Doors anchor at the jamb and
+  block base Y on the wall face (right swing reflects X); windows centre in the cut.
+  Omitting `symbol` keeps the old recipe only for manual tools and existing drawings.
+  `legacy-object-types.json` remains for compatibility; no symbol library is installed.
 - `wall_groups {width?}` is a read command, reachable with `qiyas_read run`. It reports each
   group on the sheet, its layers, and runs with centreline handle, length, thickness, height,
   justification and opening insert handles/properties. With `width`, each run includes
@@ -2574,7 +2586,7 @@ and Mizan's turn epoch together.
   | `MEASURE <decimal handle or 0x…>` | `MeasureEntity` of the drawing's own entity. |
   | `EXPORT [xlsx path]` | The take-off to Excel; bare, `{name}.{ext}.xlsx`. |
   | `IMPORTBOQ <xlsx path>` | BOQ from Excel, then `SetBoq`. |
-  | `COMPARE` | `compare_session`, default tolerance. |
+  | `COMPARE` | `compare_session`, exact unless the job supplies a tolerance. |
   | `ZOOM E\|EXTENTS\|IN\|OUT` | Nothing headless (`W` is refused). |
   | `ECHO <text>` | Prints the text in the report. |
   | `{"type":…}` | Any `Command` in its wire form, e.g. `{"type":"draw","kind":"line","a":[0,0],"b":[0,5]}`; its `path` and `…_path` fields go through the folder rule below and become absolute. |
@@ -3373,11 +3385,14 @@ New untitled drawings skip placeholder names already present in chat history or 
   exact defining points in site units, metres, and local UCS coordinates. Do not add the
   origin again to the reported site points.
 - `qiyas_read brief_check` takes `expectations:[{id,text,verify:{...}}]` or items with
-  `read:{op,args,pointer,expected,tolerance?,subtract?}`. `verify` uses the existing verifier
+  `read:{op,args,pointer,expected?,decision?,tolerance?,subtract?}`. `verify` uses the existing verifier
   and must be tied to the drawing. A read selects a measured field with a JSON pointer;
   `subtract` compares signed change from an earlier observed value. It never runs edits.
-  Each item returns pass/fail, measured value and evidence. The caller supplies the user's
-  actual words and thresholds; the engine has no room, villa or trade-specific brief rules.
+  Each item returns its measured value and evidence. An explicit expected value or a cited,
+  answered decision supplies the comparison; without one it returns `passed:null` and says
+  no limit was given. A numeric `verify` without `value` also measures without judgment.
+  The caller supplies the user's actual words and thresholds; the engine has no room or
+  trade-specific brief rules. Omitted brief comparison tolerance is zero.
   An `artifact` read checks only existence/size of an export beside the drawing, not contents.
   A `verify` with no targets is refused unless it is a count: literal points prove nothing
   about the drawing (a tied verify passes or fails on its own result).
@@ -3746,21 +3761,48 @@ review of a take-off; every evidence page carries For review / للمراجعة.
   sample villa's items, both languages, continuation-page notices and the export folder;
   `crates/qiyas-ai/tests/surface.rs` covers the agent export.
 
-## W5: drafting and design knowledge (27 October 2026)
+## Drawing facts and job-owned design limits (3 November 2026)
 
-W5 adds built-in drafting knowledge and villa planning checks from
-`data/drafting-standards.json` and `data/code-register.json`. `drafting_knowledge`
-and `space_check` are read-only inquiry commands returning measurements; source
-citations and `practice_default` labels travel with limits, and missing evidence
-is reported separately. `symbol` draws single/double doors with leaves and swings,
-straight stairs with floor-specific UP/cut or DN/void/handrails, elevation levels,
-ground/foundation lines and labelled material hatches through the existing drawing,
-block, text and leader APIs in one undo step. Coordinates use drawing units and
-`_m` fields stay in metres. Mizan accesses them through the ordinary registry tools;
-draw at once, one floor and one part at a time; read only the knowledge the current part needs and check each floor once its walls exist (changed 28 October 2026 at the founder's request).
-Outputs remain for review, with design and approval assigned to the engineer.
-`tests/w5_drafting.rs` is included in `tests/all.rs`; the registry-index ceiling is
-5,000 bytes. This handoff has not yet been compiled or tested.
+Qiyas ships no drafting standards dataset, building-code register, project sheet packages,
+room-kind word list or `symbol`/`drafting_knowledge` commands. Mizan decides the sheets,
+views and design values, records each engineering basis and source, and draws detailed
+components as blocks in the current drawing. Unit-system drafting conventions remain.
+
+`space_check` reads polygon areas, interior clear widths, shared boundaries, opening widths,
+and counts. Stair sizes and clearances come from supplied plan facts or the drawing's own
+stair object properties. Explicit room classifications come from object properties, plan
+input, or drawing knowledge `rules` entries with
+`{kind:"space_classification",floor,name,classification}`; names never trigger a word list.
+Supplied plan facts remain distinguished from geometry read from the drawing.
+
+Numeric limits are ordinary undoable, saved drawing knowledge. Use `set_knowledge` with
+`kind:"rules"`, a rule name, and data such as:
+`{kind:"measurement_limit",target:"room",metric:"area_m2",unit:"m2",
+classification:"retail",minimum:{decision:"retail_area"}}`.
+The decision is recorded by `decision.set`, with value, matching unit, reason and citation.
+Alternatively supply numeric `minimum`/`maximum` and `citation:{source,clause}` directly from
+an engineer or document. Selectors `floor`, `name` and `classification` are optional and exact;
+multiple applicable rules are all reported. Targets include room, door, stair, floor and
+object categories; metrics are the measured field names (`width_m`, `riser_m`, `going_m`,
+`passage_beside_m`, `room_count`, and so on). No source, missing evidence or mismatched units
+never produces a pass. Numeric limits without a source and clause are refused on write.
+
+`space_check` and drawing `check` return `measurements` with values, units, limits, citations
+and nullable `passed`. A fact without a limit says "No limit was given" and has no pass/fail.
+Drawing checks also report supplied-limit failures under `job_limit`; geometric integrity
+and annotation checks remain. Numeric facts are evaluated only when `job_limit` is in scope
+(including a default full check), so annotation-only checks do not run job measurements.
+Room widths reuse retained polygons and sweep the edges crossing each projected interval;
+the minimum-only drawing check does not build every chord's JSON. This keeps circular islands
+at measurement precision without rescanning every edge for every interval. Classifications
+are indexed once per check. The CPU-relative guard in `tests/room_objects.rs` covers labelling
+24 rooms with circular islands and Mizan's following touched-entity check.
+Size labels and dimension overrides compare to their drawn
+geometry within the kernel's measurement precision, without a percentage allowance.
+`brief_check` can read these facts or reference a cited decision.
+The comparison engine and BOQ panel use exact comparison when no tolerance was supplied.
+`tests/w5_drafting.rs` retains polygon measurement coverage and tests supplied limits instead
+of shipped values; `tests/walls.rs` covers custom block symbols and legacy opening round trips.
 
 ## Builds and tests (27 October 2026)
 
@@ -3805,12 +3847,10 @@ autonomous. Audit and plan: `docs/2026-10-29-*.md` (one note per part).
 - `scripts/replay-mizan-history.py` is an offline development measurement tool, never an app
   dependency. It reads a saved conversation without changing it, estimates retained-history
   context under both policies and states missing-history/image/tokenizer limitations.
-- Domain data is optional knowledge (`optional-domain-knowledge`): `space_check` returns
-  polygon facts and applies a practice profile only when selected; room kinds are free; no
-  villa or storey defaults; jurisdictions kept as given; physical defaults carry
-  `type_default` provenance and generated items `assumed`; no GFA keyword reclassification;
-  public names Wall/Door/Window/Room in both languages; optional `layer` on comments, grids
-  and symbols.
+- Design knowledge belongs to the job: `space_check` returns measured facts and compares only
+  cited drawing-owned limits. Room kinds are free classifications, with no built-in profiles,
+  jurisdictions, sheet packages or room word lists. Manual/legacy physical defaults retain
+  `type_default` provenance; generated quantities retain their sources.
 - Decisions and outside check (`decisions-outside-check`): `decision.set` / `decision.list`
   (drawing knowledge kind `decisions`, undoable, saved in the drawing; source engineer,
   drawing, document, mizan_design, code_or_standard, assumption_allowed or default); field

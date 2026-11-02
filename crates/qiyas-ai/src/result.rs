@@ -66,7 +66,7 @@ pub(crate) fn format(
         if let Some(rows) = value["results"].as_array() {
             out["results"] = json!(rows
                 .iter()
-                .map(|r| json!({"id":r["id"],"text":r["text"],"passed":r["passed"]}))
+                .map(|r| json!({"id":r["id"],"text":r["text"],"passed":r["passed"],"measured":r["measured"],"expected":r["expected"],"citation":r["citation"],"message":r["message"]}))
                 .collect::<Vec<_>>());
         }
     }

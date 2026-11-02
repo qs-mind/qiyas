@@ -409,9 +409,8 @@ fn command_detail(command: &Value, result: &Value, activity: &Activity) -> Optio
         .unwrap_or(out);
     let subkind = command["kind"].as_str().unwrap_or_default();
     let (verb, what) = match kind {
-        "draw" | "symbol" => ("draw", noun(subkind)),
+        "draw" => ("draw", noun(subkind)),
         "wall" | "walls" => ("draw", "wall".into()),
-        "drafting_knowledge" => ("read", "drafting_guidance".into()),
         "modify" => (
             match subkind {
                 "move" => "move",
@@ -552,8 +551,6 @@ fn command_detail(command: &Value, result: &Value, activity: &Activity) -> Optio
         // A wall is a run, not every line/hatch generated to draw that run.
         let n = if what == "wall" {
             length(&command["runs"])
-        } else if kind == "symbol" {
-            length(&command["levels"]).or(Some(1))
         } else if matches!(verb, "draw" | "add") {
             length(first(&[&result["added_count"], &out["added_count"]]))
                 .or_else(|| length(&out["handles"]))

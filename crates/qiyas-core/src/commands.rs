@@ -68,6 +68,7 @@ pub enum Command {
     },
     /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
+    /// Without a supplied tolerance, comparison is exact.
     #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
     #[serde(rename = "discrepancy_check")]
     #[schemars(example = json!({"type":"discrepancy_check"}))]
@@ -171,8 +172,10 @@ pub enum Command {
     OutsideCheck(crate::outside_check::OutsideQuery),
     /// Writes versioned drawing knowledge (levels, lookup tables, rules and future engine data).
     /// Types use define_object_type/redefine_object_type so their schema can be validated.
+    /// Cited numeric limits use rules with data kind measurement_limit; no limits are shipped.
     #[schemars(extend("x-category" = "objects", "x-words" = ["SETKNOWLEDGE"]))]
     #[schemars(example = json!({"type":"set_knowledge","kind":"levels","name":"Ground","data":{"elevation":0}}))]
+    #[schemars(example = json!({"type":"set_knowledge","kind":"rules","name":"Concourse width","data":{"kind":"measurement_limit","target":"room","classification":"concourse","metric":"width_m","unit":"m","minimum":{"decision":"concourse_width"}}}))]
     SetKnowledge {
         kind: crate::knowledge::Kind,
         name: String,
@@ -216,59 +219,24 @@ pub enum Command {
         #[serde(default)]
         layer: Option<String>,
     },
-    /// Built-in sheet sets, view checklists, symbols, material hatches and sourced code limits.
-    /// Unsourced values are labelled practice_default. Read only the topics relevant to the
-    /// current part; select applicable knowledge, not a mandatory design recipe or code approval.
-    /// اقرأ موضوعات الجزء الحالي فقط واختر المعرفة المنطبقة؛ القيم المعتادة ليست اشتراطات كود
-    /// ولا وصفة تصميم ملزمة أو اعتمادا هندسيا.
+    /// Measures spaces, openings and stairs; compares only the job's cited knowledge rules.
+    /// Store rules as kind rules, data kind measurement_limit, with target, metric, unit,
+    /// minimum/maximum (number with citation or {decision:name}); optional floor/name/classification.
+    /// No limit means measured facts without pass/fail. Plan sizes use metres and square metres.
+    /// يقيس الفراغات والفتحات والسلالم ويقارن فقط بحدود العمل المسجلة بمصادرها.
     #[schemars(extend("x-category" = "inquiry"))]
-    #[schemars(example = json!({"type":"drafting_knowledge","topic":"sheet_set","project_type":"villa","storeys":2,"market":"egypt"}))]
-    DraftingKnowledge {
-        topic: crate::drafting_standards::KnowledgeTopic,
-        #[serde(default)]
-        project_type: Option<String>,
-        #[serde(default)]
-        market: Option<String>,
-        #[serde(default)]
-        storeys: Option<u32>,
-        #[serde(default)]
-        view: Option<String>,
-        #[serde(default)]
-        language: Option<crate::rooms::LabelLanguage>,
-        #[serde(default)]
-        assumptions: Vec<String>,
-    },
-    /// Reads space geometry and explicit classifications. Optional practice profiles apply only
-    /// to a caller-supplied compatible building_type; omitted or mismatched profiles return facts.
-    /// Explicit plan sizes are metres/m²; floors read real polygons from drawing-unit windows.
-    /// Read geometry after enclosure edits; choose a profile only when its stated scope applies.
-    /// اقرأ الهندسة بعد تعديل حدود المساحات، واختر ملف ممارسة فقط إذا انطبق نطاقه على العمل.
-    #[schemars(extend("x-category" = "inquiry"))]
-    #[schemars(example = json!({"type":"space_check","plan":{"floors":[{"name":"Ground floor","rooms":[{"name":"Living","area_m2":24,"width_m":4}]}]}}))]
-    #[schemars(example = json!({"type":"space_check","profile":"villa","building_type":"villa","plan":{"floors":[{"name":"Floor","rooms":[{"name":"Living","kind":"living","area_m2":24,"width_m":4}]}]}}))]
+    #[schemars(example = json!({"type":"space_check","plan":{"floors":[{"name":"Concourse","rooms":[{"name":"Platform","area_m2":300,"width_m":10}]}]}}))]
     SpaceCheck {
         #[serde(default)]
         plan: Option<crate::space_planning::PlanModel>,
         #[serde(default)]
         floors: Vec<crate::space_planning::FloorQuery>,
         #[serde(default)]
-        market: Option<String>,
-        #[serde(default)]
         language: Option<crate::rooms::LabelLanguage>,
-        #[serde(default)]
-        profile: Option<String>,
-        #[serde(default)]
-        building_type: Option<String>,
     },
-    /// Draws conventional doors, floor-specific stairs, level markers, ground lines and
-    /// labelled material hatches. Coordinates use drawing units; _m fields remain metres.
-    /// Geometry and any layers, blocks and linetypes form one undo step.
-    /// Use these symbols for door leaves, each floor's stairs, levels, ground lines and cut hatches.
-    /// استخدم هذه الرموز لضلف الأبواب وسلالم كل طابق والمناسيب وخطوط الأرض وتهشير القطاعات.
-    #[schemars(extend("x-category" = "draw"))]
-    #[schemars(example = json!({"type":"symbol","kind":"door","a":[0,0],"b":[1.5,0],"side_point":[0,1],"leaves":2}))]
-    Symbol(crate::draft_symbols::SymbolSpec),
     /// Draws editable wall systems with measurable hatches, centrelines and door/window blocks.
+    /// Mizan draws detailed components as drawing blocks and supplies openings[].symbol.
+    /// يرسم ميزان المكونات بالتفصيل كبلوكات داخل الرسم ويحدد اسم البلوك في symbol لكل فتحة.
     /// Touching systems on the same layers join and rebuild unless join is false. Each run may
     /// override thickness, height and justification. Use wall_groups to read current handles
     /// and free opening ranges, then add_wall_openings to cut openings in existing walls.
@@ -302,7 +270,8 @@ pub enum Command {
     #[schemars(example = json!({"type": "remove_wall_openings", "inserts": [1234]}))]
     RemoveWallOpenings { inserts: Vec<u64> },
     /// Moves, resizes or changes a wall opening picked by its insert handle. Omitted fields
-    /// keep their values. Distances use drawing units; sill and head use metres.
+    /// keep their values, including the drawing block symbol. Distances use drawing units;
+    /// sill and head use metres.
     /// Checks junction clearance and rebuilds the group in one undo step.
     #[schemars(extend("x-category" = "modify", "x-words" = ["EDITWALLOPENING"]))]
     #[schemars(example = json!({"type": "edit_wall_opening", "insert": 1234, "at": 2500, "width": 1000}))]
@@ -1806,7 +1775,6 @@ impl Command {
             | Command::ListConstraints
             | Command::ListParameters
             | Command::WallGroups { .. }
-            | Command::DraftingKnowledge { .. }
             | Command::SpaceCheck { .. }
             | Command::Records { .. }
             | Command::RecordSchema { .. }
@@ -1880,7 +1848,6 @@ impl Command {
             | Command::CenterLine { .. }
             | Command::SymmetryAxis { .. }
             | Command::Grid { .. }
-            | Command::Symbol(_)
             | Command::NewLayout { .. }
             | Command::SetLayoutPaper { .. }
             | Command::RenameLayout { .. }
@@ -2268,51 +2235,13 @@ impl Session {
                     handles: self.reference_grid(&x, &y, extent, bubble, layer.as_deref())?,
                 });
             }
-            Command::DraftingKnowledge {
-                topic,
-                project_type,
-                market,
-                storeys,
-                view,
-                language,
-                assumptions,
-            } => {
-                return Ok(Outcome::Measurement {
-                    result: crate::drafting_standards::knowledge(
-                        topic,
-                        project_type.as_deref(),
-                        market.as_deref(),
-                        storeys,
-                        view.as_deref(),
-                        language
-                            .or(self.sheet_language())
-                            .unwrap_or(crate::rooms::LabelLanguage::En),
-                        &assumptions,
-                    )?,
-                });
-            }
             Command::SpaceCheck {
                 plan,
                 floors,
-                market,
                 language,
-                profile,
-                building_type,
             } => {
                 return Ok(Outcome::Measurement {
-                    result: self.space_check(
-                        plan,
-                        &floors,
-                        market.as_deref(),
-                        language,
-                        profile.as_deref(),
-                        building_type.as_deref(),
-                    )?,
-                });
-            }
-            Command::Symbol(spec) => {
-                return Ok(Outcome::Added {
-                    handles: self.draft_symbol(spec)?,
+                    result: self.space_check(plan, &floors, language)?,
                 });
             }
             Command::CompareRevisions {
@@ -2449,6 +2378,9 @@ impl Session {
                 }
                 if kind == crate::knowledge::Kind::Placement {
                     crate::placement_pack::validate_checks(&data)?;
+                }
+                if kind == crate::knowledge::Kind::Rules {
+                    crate::job_checks::validate(&data)?;
                 }
                 if kind == crate::knowledge::Kind::Checks {
                     let rule: crate::discrepancy::CheckRule = serde_json::from_value(data.clone())

@@ -154,6 +154,16 @@ impl Session {
                 let EntityType::Insert(insert) = entity else {
                     return None;
                 };
+                if crate::walls::wall_tag(entity).is_some_and(|tag| {
+                    tag.role == "opening"
+                        && tag
+                            .spec
+                            .openings
+                            .get(tag.index)
+                            .is_some_and(|o| o.symbol.is_some())
+                }) {
+                    return None;
+                }
                 let object = instance(entity)?;
                 let cached = crate::xdata::read_json::<SymbolRecipe>(&insert.common, SYMBOL_APP);
                 Some((

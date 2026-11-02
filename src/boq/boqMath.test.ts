@@ -32,13 +32,25 @@ test("an item without a code has no links", () => {
 test("difference against the tolerance", () => {
   const item = boqItem("A", "Walls", "m", 100);
   expect(difference(item, null)).toEqual({ percent: null, status: "none" });
-  expect(difference(item, 104)).toEqual({ percent: 4, status: "within" });
-  expect(difference(item, 105).status).toBe("within");
+  expect(difference(item, 100).status).toBe("within");
+  expect(difference(item, 100.0000000001).status).toBe("over");
+  expect(difference(item, 104)).toEqual({ percent: 4, status: "over" });
+  expect(difference(item, 105).status).toBe("over");
   expect(difference(item, 110)).toEqual({ percent: 10, status: "over" });
   expect(difference(item, 80)).toEqual({ percent: -20, status: "under" });
   expect(difference({ ...item, tolerance: 15 }, 110).status).toBe("within");
   expect(difference({ ...item, tolerance: 0 }, 100.5).status).toBe("over");
   expect(difference({ ...item, quantity: 0 }, 3)).toEqual({ percent: null, status: "over" });
+});
+
+test("exact quantities ignore arithmetic noise but detect a hundredth", () => {
+  const item = boqItem("A.3", "Floor area", "m2", 58.29);
+  for (const tolerance of [null, 0]) {
+    expect(difference({ ...item, tolerance }, 58.28999999999999).status).toBe("within");
+    expect(difference({ ...item, tolerance }, 58.30).status).toBe("over");
+    expect(difference({ ...item, tolerance }, 58.28).status).toBe("under");
+  }
+  expect(difference({ ...item, quantity: 0 }, 1e-15).status).toBe("over");
 });
 
 test("search ignores case and Arabic letter forms", () => {

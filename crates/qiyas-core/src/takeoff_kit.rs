@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use crate::registry::{registry, CommandInfo};
 
-pub const MAX_BYTES: usize = 6144;
+pub const MAX_BYTES: usize = 6656;
 
 /// Required object members and enum choices, grouped by schema path. Alternatives retain
 /// their tag so callers can distinguish their requirements. No descriptions are duplicated.
@@ -149,7 +149,7 @@ pub fn kit() -> Value {
         )
     })
     .collect();
-    json!({"regions":{"example":{"type":"place_objects","objects":[{"type":"Floor","seed":[2,2]}]}},"exclusions":"decision.set: reason + takeoff_exclusion:{handles:[1]}|{object_type:T}","measurement_rules":"basis=geometric|rule:<cited note name>; named_handles factors; integer counts.","complete":true,"project":project,"revision_commands":revision,"commands":commands,"phases":phases})
+    json!({"drawing":"Draw detailed components as blocks here; pass opening symbol:block_name. No external library. Choose views/sheets and cite design values with decision.set. Checks without job limits report facts; omitted comparison tolerance is exact.","regions":{"example":{"type":"place_objects","objects":[{"type":"Floor","seed":[2,2]}]}},"exclusions":"decision.set: reason + takeoff_exclusion:{handles:[1]}|{object_type:T}","measurement_rules":"basis=geometric|rule:<cited note name>; named_handles factors; integer counts.","complete":true,"project":project,"revision_commands":revision,"commands":commands,"phases":phases})
 }
 
 /// Return exactly the kit entry for covered commands, including the auxiliary paths.

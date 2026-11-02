@@ -55,7 +55,7 @@ function objectText(detail: Detail, t: Translate): string {
 }
 
 /** The commands Mizan read how to use: their plain names when the window has them, else how many
- *  ("4 commands"): a command's own name (`drafting_knowledge`) is not for the engineer. */
+ *  ("4 commands"): a command's own name (`wall_groups`) is not for the engineer. */
 function lookedUp(names: string, t: Translate): string {
   const list = names.split(",").map((name) => name.trim()).filter(Boolean);
   const plain = list.map((name) => [`activity.line.command.${name}`, `command.${name}`].find((key) => t(key) !== key));

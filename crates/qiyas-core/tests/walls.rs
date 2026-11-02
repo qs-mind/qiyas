@@ -625,3 +625,146 @@ fn explicit_ai_inputs_keep_their_actor_and_size_groups_keep_default_sources() {
             .any(|s| s.source.kind == SourceKind::TypeDefault && s.name == "head"));
     }
 }
+
+#[test]
+fn drawing_block_opening_scales_in_the_cut_through_edit_undo_and_reopen() {
+    for (units, k) in [(4, 0.001), (5, 0.01), (6, 1.0), (1, 0.0254)] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("terminal.dxf");
+        let mut s = Session::new_blank(&path, units);
+        s.run_input(
+            &json!({"type":"define_block","name":"Concourse door","base":[0,0],"entities":[
+                {"type":"Line","data":{"start":{"x":0,"y":0,"z":0},"end":{"x":2.0/k,"y":0,"z":0}}},
+                {"type":"Line","data":{"start":{"x":0,"y":0,"z":0},"end":{"x":0,"y":1.0/k,"z":0}}}
+            ]}),
+            qiyas_core::Source::Ai,
+        )
+        .unwrap();
+        let result=draw(&mut s,serde_json::from_value(json!({"type":"walls","runs":[{"points":[[0,0],[20.0/k,0]]}],"thickness":0.3/k,"height":4,
+            "openings":[{"run":0,"at":5.0/k,"width":1.2/k,"kind":"door","symbol":"Concourse door","sill":0,"head":3}]})).unwrap());
+        let opening = s.wall_groups(None).unwrap()[0].runs[0].openings[0].insert;
+        let assert_insert = |s: &Session, width: f64| {
+            let groups = s.wall_groups(None).unwrap();
+            let h = groups[0].runs[0].openings[0].insert;
+            let EntityType::Insert(i) = s.drawing.doc.get_entity(Handle::new(h)).unwrap() else {
+                panic!("insert")
+            };
+            assert_eq!(i.block_name, "Concourse door");
+            near(i.x_scale(), width / 2.0);
+            near(i.y_scale(), width / 2.0);
+            near(i.insert_point.x * k, 5.0 - width / 2.0);
+            near(i.insert_point.y * k, -0.15);
+            let leaf = s
+                .drawing
+                .doc
+                .entities_in_block("Concourse door")
+                .find(|e| matches!(e, EntityType::Line(l) if l.start.y == l.end.y))
+                .unwrap();
+            let measured = s.entity_info(leaf.common().handle.value(), &[h]).unwrap();
+            near(measured.length.unwrap() * k, width);
+            near(measured.start.unwrap()[0] * k, 5.0 - width / 2.0);
+            near(measured.end.unwrap()[0] * k, 5.0 + width / 2.0);
+        };
+        assert_insert(&s, 1.2);
+        s.run_input(
+            &json!({"type":"edit_wall_opening","insert":opening,"width":1.8/k}),
+            qiyas_core::Source::Ai,
+        )
+        .unwrap();
+        assert_insert(&s, 1.8);
+        s.undo();
+        assert_insert(&s, 1.2);
+        s.redo();
+        assert_insert(&s, 1.8);
+        let h = s.wall_groups(None).unwrap()[0].runs[0].openings[0].insert;
+        s.run_input(
+            &json!({"type":"edit_wall_opening","insert":h,"swing":"right"}),
+            qiyas_core::Source::Ai,
+        )
+        .unwrap();
+        let EntityType::Insert(i) = s.drawing.doc.get_entity(Handle::new(h)).unwrap() else {
+            panic!("insert")
+        };
+        assert_eq!(i.block_name, "Concourse door");
+        near(i.x_scale(), -0.9);
+        near(i.insert_point.x * k, 5.9);
+        s.undo();
+        assert_insert(&s, 1.8);
+        s.save_as_headless(&path).unwrap();
+        let reopened = Session::open_standalone(&path).unwrap();
+        assert_insert(&reopened, 1.8);
+        near(result.net_area, 5.64);
+        let openings = reopened
+            .objects(&qiyas_core::objects::ObjectFilter {
+                category: Some("opening".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(openings.len(), 1);
+        near(openings[0].instance.props["width"].as_f64().unwrap(), 1.8);
+    }
+}
+
+#[test]
+fn added_opening_uses_a_drawing_symbol_and_missing_symbol_rolls_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("terminal.dxf"), 6);
+    s.run_input(
+        &json!({"type":"define_block","name":"Concourse glazing","base":[10,20],"entities":[
+            {"type":"Line","data":{"start":{"x":9,"y":19,"z":0},"end":{"x":11,"y":19,"z":0}}}
+        ]}),
+        qiyas_core::Source::Ai,
+    )
+    .unwrap();
+    let result = draw(
+        &mut s,
+        serde_json::from_value(
+            json!({"type":"walls","runs":[{"points":[[0,0],[0,20]]}],"thickness":0.3,"height":4}),
+        )
+        .unwrap(),
+    );
+    let command = json!({"type":"add_wall_openings","centreline":result.centrelines[0],"openings":[{"at":5,"width":3,"kind":"window","symbol":"Concourse glazing","sill":1,"head":3}]});
+    s.run_input(&command, qiyas_core::Source::Ai).unwrap();
+    let groups = s.wall_groups(None).unwrap();
+    let h = groups[0].runs[0].openings[0].insert;
+    let EntityType::Insert(i) = s.drawing.doc.get_entity(Handle::new(h)).unwrap() else {
+        panic!("insert")
+    };
+    assert_eq!(i.block_name, "Concourse glazing");
+    near(i.x_scale(), 1.5);
+    near(i.insert_point.x, -1.5);
+    near(i.insert_point.y, 5.0);
+    near(i.rotation, std::f64::consts::FRAC_PI_2);
+    let leaf = s
+        .drawing
+        .doc
+        .entities_in_block("Concourse glazing")
+        .next()
+        .unwrap();
+    let measured = s.entity_info(leaf.common().handle.value(), &[h]).unwrap();
+    near(measured.length.unwrap(), 3.0);
+    near(measured.start.unwrap()[0], 0.0);
+    near(measured.start.unwrap()[1], 3.5);
+    near(measured.end.unwrap()[0], 0.0);
+    near(measured.end.unwrap()[1], 6.5);
+    let before = serde_json::to_value(s.wall_groups(None).unwrap()).unwrap();
+    let steps = s.history_steps().0.len();
+    assert!(s
+        .run_input(
+            &json!({"type":"edit_wall_opening","insert":h,"symbol":"Missing block"}),
+            qiyas_core::Source::Ai
+        )
+        .is_err());
+    assert_eq!(
+        serde_json::to_value(s.wall_groups(None).unwrap()).unwrap(),
+        before
+    );
+    assert_eq!(s.history_steps().0.len(), steps);
+    s.undo();
+    assert!(s.wall_groups(None).unwrap()[0].runs[0].openings.is_empty());
+    s.redo();
+    assert_eq!(
+        serde_json::to_value(s.wall_groups(None).unwrap()).unwrap(),
+        before
+    );
+}

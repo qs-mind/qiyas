@@ -2396,7 +2396,7 @@ impl Session {
             let host_definition = self.object_type(&host.type_name)?;
             let member = self.band_member(&host, &host_definition)?;
             let evaluated = self.band_cut(&object, &definition)?;
-            let (centre, direction) = if cut.cuts_host {
+            let (centre, direction, opening_placement) = if cut.cuts_host {
                 let built = crate::object_bands::derive_band(
                     &[member],
                     &[evaluated],
@@ -2408,7 +2408,7 @@ impl Session {
                     .openings
                     .first()
                     .ok_or_else(|| invalid("Missing hosted position"))?;
-                (placed.centre, placed.dir)
+                (placed.centre, placed.dir, Some(*placed))
             } else {
                 let mut station = evaluated.at_m / self.drawing.units.to_metres();
                 let mut points = member.points;
@@ -2434,7 +2434,9 @@ impl Session {
                     }
                     station -= length;
                 }
-                placement.ok_or_else(|| invalid("The placement station is outside its host"))?
+                let (centre, direction) = placement
+                    .ok_or_else(|| invalid("The placement station is outside its host"))?;
+                (centre, direction, None)
             };
             let context = self.object_context(&object, &definition)?;
             let factor = self.drawing.units.to_metres();
@@ -2473,6 +2475,36 @@ impl Session {
                 .doc
                 .get_entity_arc(Handle::new(object.id))
                 .ok_or_else(|| invalid("Missing hosted driver"))?;
+            let custom_frame = if let (Some(placed), Some(tag)) =
+                (opening_placement, crate::walls::wall_tag(before.as_ref()))
+            {
+                if let Some(opening) = tag
+                    .spec
+                    .openings
+                    .get(tag.index)
+                    .filter(|_| tag.role == "opening")
+                {
+                    opening
+                        .symbol
+                        .as_deref()
+                        .map(|name| {
+                            self.opening_block_frame(
+                                name,
+                                &placed,
+                                opening.kind,
+                                mirror.unwrap_or(matches!(
+                                    opening.swing,
+                                    crate::walls::DoorSwing::Right
+                                )),
+                            )
+                        })
+                        .transpose()?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let mut entity = before.as_ref().clone();
             match &mut entity {
                 EntityType::Point(point) => {
@@ -2484,24 +2516,34 @@ impl Session {
                     }
                 }
                 EntityType::Insert(insert) => {
-                    insert.insert_point.x = at[0];
-                    insert.insert_point.y = at[1];
-                    insert.rotation = angle;
-                    if definition.plan.symbols_in_driver {
-                        // The evaluated block already carries the physical dimensions.
-                        insert.set_x_scale(insert.x_scale().signum());
-                        insert.set_y_scale(insert.y_scale().signum());
-                        insert.set_z_scale(1.0);
-                    }
-                    if let Some(mirror) = mirror {
-                        // The hosted frame expression owns reflection after ordinary copy
-                        // or mirror commands have transformed the native INSERT scales.
-                        insert.set_y_scale(insert.y_scale().abs());
-                        insert.set_x_scale(if mirror {
-                            -insert.x_scale().abs()
-                        } else {
-                            insert.x_scale().abs()
-                        });
+                    if let Some(frame) = custom_frame {
+                        // Drawing blocks keep their own geometry; fit their frame to the cut.
+                        insert.insert_point.x = frame.at[0];
+                        insert.insert_point.y = frame.at[1];
+                        insert.rotation = angle;
+                        insert.set_x_scale(frame.scale[0]);
+                        insert.set_y_scale(frame.scale[1]);
+                        insert.set_z_scale(frame.scale[2]);
+                    } else {
+                        insert.insert_point.x = at[0];
+                        insert.insert_point.y = at[1];
+                        insert.rotation = angle;
+                        if definition.plan.symbols_in_driver {
+                            // The evaluated block already carries the physical dimensions.
+                            insert.set_x_scale(insert.x_scale().signum());
+                            insert.set_y_scale(insert.y_scale().signum());
+                            insert.set_z_scale(1.0);
+                        }
+                        if let Some(mirror) = mirror {
+                            // The hosted frame expression owns reflection after ordinary copy
+                            // or mirror commands have transformed the native INSERT scales.
+                            insert.set_y_scale(insert.y_scale().abs());
+                            insert.set_x_scale(if mirror {
+                                -insert.x_scale().abs()
+                            } else {
+                                insert.x_scale().abs()
+                            });
+                        }
                     }
                 }
                 _ => return Err(invalid("Hosted cut drivers must be points or inserts")),

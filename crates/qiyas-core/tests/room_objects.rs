@@ -54,6 +54,65 @@ fn cell(s: &Session, h: u64, row: usize) -> String {
 }
 
 #[test]
+fn labelling_many_rooms_with_round_islands_and_checking_the_edit_stays_quick() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("terminal.dxf"), 6);
+    let mut commands = Vec::new();
+    let mut seeds = Vec::new();
+    for i in 0..24 {
+        let x = (i % 6) as f64 * 14.0;
+        let y = (i / 6) as f64 * 14.0;
+        commands.push(json!({"type":"draw","kind":"rectangle","a":[x,y],"b":[x+10.0,y+10.0]}));
+        commands.push(json!({"type":"draw","kind":"circle","centre":[x+5.0,y+5.0],"radius":1.5}));
+        seeds.push(json!({"name":format!("Terminal hall {}", i+1),"point":[x+1.0,y+1.0]}));
+    }
+    run(&mut s, json!({"type":"batch","commands":commands}));
+    let reference = crate::performance::reference();
+    let started = std::time::Instant::now();
+    let Outcome::Rooms { report } = run(
+        &mut s,
+        json!({"type":"label_spaces","query":{"seeds":seeds},"layer":"A-AREA"}),
+    ) else {
+        panic!("rooms");
+    };
+    // Mizan checks the touched entities after labelling, including retained boundaries.
+    let change = s.last_change();
+    let checked = s.check_drawing(&CheckScope {
+        handles: change
+            .added
+            .iter()
+            .chain(&change.changed)
+            .copied()
+            .collect(),
+        ..Default::default()
+    });
+    crate::performance::assert_relative(
+        started.elapsed(),
+        reference,
+        25.0,
+        "label and check 24 rooms with circular islands",
+    );
+    assert_eq!(report.labels_written, Some(24));
+    for room in &report.rooms {
+        assert!((room.net_area_m2 - (100.0 - std::f64::consts::PI * 2.25)).abs() < 1e-5);
+        assert_eq!(room.islands.len(), 1);
+    }
+    let widths: Vec<_> = checked
+        .measurements
+        .iter()
+        .filter(|row| row["target"] == "room" && row["metric"] == "width_m")
+        .collect();
+    assert_eq!(widths.len(), 24);
+    for width in widths {
+        assert!(
+            (width["measured"].as_f64().unwrap() - 3.5).abs() < 1e-4,
+            "{width}"
+        );
+        assert_eq!(width["status"], "no_limit");
+    }
+}
+
+#[test]
 fn room_label_schedule_and_takeoff_follow_edits_and_undo_in_every_unit() {
     for units in [4, 5, 6, 1] {
         let (_dir, mut s, outline, label, boundary) = setup(units);

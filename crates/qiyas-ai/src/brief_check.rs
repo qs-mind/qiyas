@@ -21,7 +21,10 @@ struct Read {
     op: String,
     args: Value,
     pointer: String,
-    expected: Value,
+    #[serde(default)]
+    expected: Option<Value>,
+    #[serde(default)]
+    decision: Option<String>,
     #[serde(default)]
     tolerance: f64,
     /// A previously read value, for a signed change such as +1.5 m east. The current
@@ -94,10 +97,32 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
             })
             .or_else(|| item.read.as_ref().and_then(|r| explicit_handles(&r.args)));
         let checked = match (item.verify, item.read) {
-            (Some(expectation), None) => {
+            (Some(mut expectation), None) => {
+                let numeric = matches!(
+                    expectation.kind,
+                    qiyas_core::VerifyKind::Length
+                        | qiyas_core::VerifyKind::Distance
+                        | qiyas_core::VerifyKind::Angle
+                        | qiyas_core::VerifyKind::Radius
+                        | qiyas_core::VerifyKind::Area
+                        | qiyas_core::VerifyKind::Count
+                );
+                let no_limit = numeric && expectation.value.is_none();
+                if no_limit {
+                    expectation.value = Some(0.0);
+                }
+                expectation.tolerance.get_or_insert(0.0);
                 let r = session.verify(&[expectation])?.remove(0);
-                json!({"passed":r.passed,"measured":r.measured,"expected":r.expected,"tolerance":r.tolerance,
-                    "evidence":r,"message":r.message})
+                let mut evidence = json!(r);
+                if no_limit {
+                    evidence["passed"] = Value::Null;
+                    evidence["expected"] = Value::Null;
+                    evidence["message"] = json!("No limit was given");
+                }
+                json!({"passed":if no_limit {Value::Null} else {json!(r.passed)},"measured":r.measured,
+                    "expected":if no_limit {Value::Null} else {json!(r.expected)},"tolerance":r.tolerance,
+                    "citation":if no_limit {Value::Null} else {json!({"source":"Supplied brief","clause":item.text})},
+                    "evidence":evidence,"message":if no_limit {"No limit was given"} else {&r.message}})
             }
             (None, Some(read)) => {
                 // No recursive checklist, captures, file mutations or conversational reads.
@@ -119,6 +144,35 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
                         "Use a drawing read and a nonnegative tolerance".into(),
                     ));
                 }
+                if read.expected.is_some() && read.decision.is_some() {
+                    return Err(ToolError::BadInput(
+                        "Supply expected or decision, not both".into(),
+                    ));
+                }
+                let decision = read
+                    .decision
+                    .as_ref()
+                    .map(|name| {
+                        session
+                            .decisions()?
+                            .into_iter()
+                            .find(|d| &d.name == name)
+                            .filter(|d| {
+                                d.status != qiyas_core::decisions::Status::Asked
+                                    && !d.citation.trim().is_empty()
+                            })
+                            .ok_or_else(|| {
+                                qiyas_core::CoreError::InvalidCommand(format!(
+                                    "Decision {name} needs a value and citation"
+                                ))
+                            })
+                    })
+                    .transpose()?;
+                let expected = decision.as_ref().map(|d| d.value.clone()).or(read.expected);
+                let citation = decision
+                    .as_ref()
+                    .map(|d| json!(d))
+                    .unwrap_or_else(|| json!({"source":"Supplied brief","clause":item.text}));
                 let evidence = if read.op == "artifact" {
                     artifact(session, &read.args).map(ToolOutput::Json)
                 } else {
@@ -140,13 +194,15 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
                             Some(before) => difference(v, before),
                             None => Some(v.clone()),
                         });
-                        let passed = tied
-                            && measured
+                        let passed = expected.as_ref().map(|expected| {
+                            tied && measured
                                 .as_ref()
-                                .is_some_and(|v| equal(v, &read.expected, read.tolerance));
-                        json!({"passed":passed,"measured":measured,"observed":raw,"expected":read.expected,"tolerance":read.tolerance,
+                                .is_some_and(|v| equal(v, expected, read.tolerance))
+                        });
+                        json!({"passed":passed,"measured":measured,"observed":raw,"expected":expected,"tolerance":read.tolerance,
+                            "comparison":if read.tolerance==0.0 {"exact"} else {"supplied_tolerance"},"citation":if expected.is_some(){citation}else{Value::Null},
                             "evidence":{"op":read.op,"args":read.args,"pointer":read.pointer,"subtract":read.subtract},
-                            "message":if !tied {"Literal arithmetic does not verify the drawing"} else if passed {"Matches the stated expectation"} else {"The measured value does not match, or that value is missing"}})
+                            "message":if !tied {"Literal arithmetic does not verify the drawing"} else if expected.is_none() {"No limit was given"} else if passed==Some(true) {"Matches the stated expectation"} else {"The measured value does not match, or that value is missing"}})
                     }
                     Ok(_) => {
                         json!({"passed":false,"measured":null,"message":"A picture cannot prove this expectation"})
@@ -167,8 +223,9 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
         results.push(result);
     }
     let passed = results.iter().filter(|r| r["passed"] == true).count();
+    let failed = results.iter().filter(|r| r["passed"] == false).count();
     Ok(
-        json!({"passed":passed,"failed":results.len()-passed,"results":results,
+        json!({"passed":passed,"failed":failed,"not_checked":results.len()-passed-failed,"results":results,
         "basis":"The caller supplied these expectations from the user's brief. This checks the stated facts, not whether the brief was interpreted completely."}),
     )
 }
@@ -316,6 +373,8 @@ impl Watch {
                     (Lang::Ar, Some("needed"), _) => "يحتاج إعادة فحص",
                     (Lang::En, Some(_), _) => "May need a recheck",
                     (Lang::Ar, Some(_), _) => "قد يحتاج إعادة فحص",
+                    (Lang::En, None, false) if r["passed"].is_null() => "Not compared",
+                    (Lang::Ar, None, false) if r["passed"].is_null() => "لم يقارن",
                     (Lang::En, None, false) => "Unmet",
                     (Lang::Ar, None, false) => "لم يتحقق",
                     (_, None, true) => return None,
@@ -337,8 +396,8 @@ pub(crate) fn contract() -> (Value, Value) {
         json!({"type":"object","additionalProperties":false,"required":["expectations"],"properties":{"expectations":{"type":"array","minItems":1,"maxItems":100,"items":{
         "type":"object","additionalProperties":false,"required":["id","text"],"properties":{
             "id":{"type":"string"},"text":{"type":"string"},"verify":verify,
-            "read":{"type":"object","additionalProperties":false,"required":["op","args","pointer","expected"],"properties":{
-                "op":{"type":"string","enum":["records","query","state","run","rooms","measure","check","history","artifact"]},"args":{"type":"object"},"pointer":{"type":"string"},"expected":{},"subtract":{},"tolerance":{"type":"number","minimum":0}
+            "read":{"type":"object","additionalProperties":false,"required":["op","args","pointer"],"properties":{
+                "op":{"type":"string","enum":["records","query","state","run","rooms","measure","check","history","artifact"]},"args":{"type":"object"},"pointer":{"type":"string"},"expected":{},"decision":{"type":"string"},"subtract":{},"tolerance":{"type":"number","minimum":0}
             }}}}}}}),
         json!({"expectations":[{"id":"count","text":"The brief asks for four circles","verify":{"kind":"count","entity_type":"Circle","value":4}}]}),
     )

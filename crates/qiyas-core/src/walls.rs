@@ -59,6 +59,10 @@ pub enum DoorSwing {
 /// A cut centred `at` along a run, with `width` in drawing units. Vertical sizes are metres.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WallOpening {
+    /// A block in this drawing, with local X spanning the opening. Uniformly scaled to its width.
+    /// Mizan supplies its own detailed block. Omission retains the manual/legacy recipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     pub run: usize,
     pub at: f64,
     pub width: f64,
@@ -71,6 +75,11 @@ pub struct WallOpening {
     /// Conventional head in metres: 2.1 m or the wall height, whichever is lower.
     #[serde(default)]
     pub head: Option<f64>,
+}
+
+pub(crate) struct OpeningBlockFrame {
+    pub at: [f64; 2],
+    pub scale: [f64; 3],
 }
 
 /// Optional layer names; missing names use the architectural wall, door and glazing layers.
@@ -463,12 +472,128 @@ impl Session {
         Ok(result)
     }
 
+    pub(crate) fn opening_block_frame(
+        &self,
+        name: &str,
+        placed: &walls::Placed,
+        kind: OpeningKind,
+        mirror: bool,
+    ) -> Result<OpeningBlockFrame, CoreError> {
+        let doc = &self.drawing.doc;
+        let block = doc
+            .block_records
+            .get(name)
+            .ok_or_else(|| invalid(format!("Opening symbol block not found: {name}")))?;
+        if name.starts_with('*') || qiyas_geom::is_xref_block(doc, name) {
+            return Err(invalid(
+                "An opening symbol must be a named block in this drawing",
+            ));
+        }
+        let base = [block.base_point.x, block.base_point.y];
+        let mut bounds = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
+        for entity in doc.entities_in_block(name) {
+            for path in qiyas_geom::flatten(
+                doc,
+                entity,
+                &qiyas_geom::Xform::identity(),
+                self.measure_tol(),
+            )
+            .into_paths()
+            {
+                for p in path.points {
+                    for axis in 0..2 {
+                        bounds[0][axis] = bounds[0][axis].min(p[axis]);
+                        bounds[1][axis] = bounds[1][axis].max(p[axis]);
+                    }
+                }
+            }
+        }
+        let width = bounds[1][0] - bounds[0][0];
+        if !width.is_finite() || width <= 0.0 {
+            return Err(invalid(
+                "Opening symbol must have a measurable local X width",
+            ));
+        }
+        let scale = placed.width / width;
+        let mirror = matches!(kind, OpeningKind::Door) && mirror;
+        let sx = if mirror { -scale } else { scale };
+        let [dx, dy] = placed.dir;
+        let anchor = match kind {
+            OpeningKind::Door => [bounds[0][0], base[1]],
+            OpeningKind::Window => [
+                (bounds[0][0] + bounds[1][0]) / 2.0,
+                (bounds[0][1] + bounds[1][1]) / 2.0,
+            ],
+        };
+        let along = if matches!(kind, OpeningKind::Window) {
+            0.0
+        } else if mirror {
+            placed.width / 2.0
+        } else {
+            -placed.width / 2.0
+        };
+        let across = if matches!(kind, OpeningKind::Door) {
+            -placed.thickness / 2.0
+        } else {
+            0.0
+        };
+        let x = along - (anchor[0] - base[0]) * sx;
+        let y = across - (anchor[1] - base[1]) * scale;
+        let at = [
+            placed.centre[0] + dx * x - dy * y,
+            placed.centre[1] + dy * x + dx * y,
+        ];
+        Ok(OpeningBlockFrame {
+            at,
+            scale: [sx, scale, scale],
+        })
+    }
+
+    fn drawing_opening_block(
+        &mut self,
+        name: &str,
+        opening: &WallOpening,
+        placed: &walls::Placed,
+    ) -> Result<u64, CoreError> {
+        let frame = self.opening_block_frame(
+            name,
+            placed,
+            opening.kind,
+            matches!(opening.swing, DoorSwing::Right),
+        )?;
+        let block = self
+            .drawing
+            .doc
+            .block_records
+            .get(name)
+            .ok_or_else(|| invalid(format!("Opening symbol block not found: {name}")))?;
+        let unit_scale =
+            crate::units::insert_unit_factor(block.units, self.drawing.doc.header.insertion_units);
+        let handle = self.insert_block(
+            name,
+            frame.at,
+            frame.scale[1] / unit_scale,
+            placed.dir[1].atan2(placed.dir[0]).to_degrees(),
+            &BTreeMap::new(),
+            None,
+        )?;
+        if let Some(EntityType::Insert(insert)) =
+            self.drawing.doc.get_entity_mut(Handle::new(handle))
+        {
+            insert.set_x_scale(frame.scale[0]);
+        }
+        Ok(handle)
+    }
+
     fn wall_opening_block(
         &mut self,
         opening: &WallOpening,
         placed: &walls::Placed,
         factor: f64,
     ) -> Result<u64, CoreError> {
+        if let Some(name) = &opening.symbol {
+            return self.drawing_opening_block(name, opening, placed);
+        }
         let mm = 0.001 / factor;
         let width_mm = placed.width / mm;
         let thickness_mm = placed.thickness / mm;
@@ -545,6 +670,10 @@ impl Session {
 /// An opening added to a picked centreline. Distances use drawing units; vertical sizes metres.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddedWallOpening {
+    /// A block in this drawing, with local X spanning the opening. Uniformly scaled to its width.
+    /// Mizan supplies its own detailed block. Omission retains the manual/legacy recipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     pub at: f64,
     pub width: f64,
     pub kind: OpeningKind,
@@ -559,6 +688,10 @@ pub struct AddedWallOpening {
 /// Changes to one opening, picked by its insert. Omitted properties stay as they are.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WallOpeningEdit {
+    /// A block in this drawing, with local X spanning the opening. Uniformly scaled to its width.
+    /// Mizan supplies its own detailed block. Omission retains the manual/legacy recipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     /// Custom opening ID; empty uses the size mark.
     #[serde(default)]
     pub mark: Option<String>,
@@ -1645,6 +1778,7 @@ impl Session {
                 swing: o.swing,
                 sill: o.sill,
                 head: o.head,
+                symbol: o.symbol.clone(),
             }));
             explicit_runs(spec);
             for opening in &spec.openings {
@@ -1710,6 +1844,7 @@ impl Session {
                 swing: o.swing,
                 sill: o.sill,
                 head: o.head,
+                symbol: o.symbol.clone(),
             }));
         explicit_runs(&mut spec);
         self.rebuild_walls(spec, &[group], source)
@@ -1752,6 +1887,9 @@ impl Session {
         let (group, index) = self.wall_group_for(insert, "opening")?;
         let mut spec = group.spec.clone();
         let opening = &mut spec.openings[index];
+        if let Some(v) = edit.symbol {
+            opening.symbol = Some(v);
+        }
         if let Some(v) = edit.at {
             opening.at = v;
         }

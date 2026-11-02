@@ -2,8 +2,8 @@
  *  far that is from the item's quantity. Pure, so it is tested on its own. */
 import type { BoqItem, Measurement } from "../api";
 
-/** Allowed difference, in percent, when an item has none of its own. */
-export const DEFAULT_TOLERANCE = 5;
+/** Exact comparison, ignoring binary arithmetic noise, when the job supplies no tolerance. */
+export const DEFAULT_TOLERANCE = 0;
 
 /** Linked rows whose unit is not the item's: their sum in their own unit. */
 export type OtherUnit = { unit: string; sum: number };
@@ -45,7 +45,7 @@ export type Difference = {
   status: Status;
 };
 
-/** How far `measured` is from the item's quantity, against its tolerance (or 5 %). `none` when
+/** How far `measured` is from the item's quantity, against its tolerance (or exactly). `none` when
  *  nothing in the item's unit is linked. */
 export function difference(item: BoqItem, measured: number | null): Difference {
   if (measured === null) return { percent: null, status: "none" };
@@ -54,8 +54,16 @@ export function difference(item: BoqItem, measured: number | null): Difference {
     return { percent: null, status: measured === 0 ? "within" : "over" };
   }
   const percent = ((measured - item.quantity) / Math.abs(item.quantity)) * 100;
-  // A hair over the line from rounding is still within it.
-  if (Math.abs(percent) <= tolerance + 1e-9) return { percent, status: "within" };
+  // Keep the same numerical allowance as the core discrepancy engine.
+  const noise = 16 * Number.EPSILON * Math.max(Math.abs(item.quantity), Math.abs(measured));
+  if (
+    Number.isFinite(item.quantity) &&
+    Number.isFinite(measured) &&
+    Math.abs(measured - item.quantity) <= noise
+  ) {
+    return { percent, status: "within" };
+  }
+  if (Math.abs(percent) <= tolerance) return { percent, status: "within" };
   return { percent, status: percent > 0 ? "over" : "under" };
 }
 

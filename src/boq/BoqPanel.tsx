@@ -207,7 +207,7 @@ export const BoqPanel = memo(function BoqPanel({
             />
           ) : (
             <span dir="ltr" className={l.item.tolerance === null ? "muted" : undefined}>
-              {l.item.tolerance ?? DEFAULT_TOLERANCE} %
+              {l.item.tolerance === null ? t("boq.exactComparison") : `${l.item.tolerance} %`}
             </span>
           ),
       },

@@ -1,6 +1,12 @@
 {
   "version": 1,
   "concepts": {
+    "exact_comparison": {
+      "preferred": "مطابقة تامة",
+      "plural_or_context": "مطابقة تامة",
+      "avoid": [],
+      "en": "exact comparison"
+    },
     "drawing": {
       "preferred": "رسم",
       "plural_or_context": "رسومات",

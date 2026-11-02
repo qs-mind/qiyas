@@ -70,7 +70,7 @@ test("measured sum and an over-tolerance difference", () => {
     "120.000",
     "+20.0 %",
     "2",
-    "5 %",
+    "Exact",
     "Explain",
   ]);
   expect(within(cells[8]).getByRole("button", { name: "How was this measured?" })).toBeTruthy();
@@ -165,7 +165,7 @@ test("an item without a code can't be selected", () => {
 test("a click on a title sorts the items inside their sections; the sections keep their order", () => {
   renderPanel();
   const title = () => within(screen.getByRole("columnheader", { name: /Difference/ })).getByRole("button");
-  // The largest difference first (numbers start with the largest): A.1 is +20 %, A.2 within 5 %.
+  // The largest difference first (numbers start with the largest): A.1 is +20 %, A.2 matches exactly.
   fireEvent.click(title());
   expect(bodyRows().map((r) => r.textContent?.slice(0, 7))).toEqual([
     "Masonry",

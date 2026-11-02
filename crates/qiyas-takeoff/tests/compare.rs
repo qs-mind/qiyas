@@ -554,3 +554,56 @@ fn plural_descriptions_match_singular_ones() {
     let conflicts = run(&bill, &takeoff(vec![doors]), &[]);
     assert!(conflicts.is_empty(), "{conflicts:#?}");
 }
+
+#[test]
+fn no_job_tolerance_compares_exactly_and_an_explicit_tolerance_can_allow_difference() {
+    let boq = boq(vec![item("T", "Terminal slab", "m2", 10000.0)]);
+    for measured in [10000.0, 10000.0000001, 10100.0] {
+        let takeoff = takeoff(vec![m(
+            Kind::Area,
+            measured,
+            "Terminal slab",
+            "Concourse",
+            Some("T"),
+        )]);
+        let inputs = CompareInputs {
+            boq: Some(&boq),
+            takeoff: &takeoff,
+            schedules: &[],
+            blocks: &[],
+            units_label: "metres",
+        };
+        let conflicts = compare(&inputs, qiyas_takeoff::DEFAULT_TOLERANCE, &[]);
+        assert_eq!(
+            of_kind(&conflicts, ConflictKind::QuantityMismatch).is_empty(),
+            measured == 10000.0
+        );
+        assert!(of_kind(&compare(&inputs, 2.0, &[]), ConflictKind::QuantityMismatch).is_empty());
+    }
+}
+
+#[test]
+fn exact_comparison_ignores_arithmetic_noise_but_detects_a_hundredth() {
+    let boq = boq(vec![item("A.3", "Floor area", "m2", 58.29)]);
+    for (measured, mismatch_count) in [(58.28999999999999, 0), (58.30, 1)] {
+        let takeoff = takeoff(vec![m(
+            Kind::Area,
+            measured,
+            "Floor area",
+            "Plan",
+            Some("A.3"),
+        )]);
+        let inputs = CompareInputs {
+            boq: Some(&boq),
+            takeoff: &takeoff,
+            schedules: &[],
+            blocks: &[],
+            units_label: "metres",
+        };
+        let conflicts = compare(&inputs, qiyas_takeoff::DEFAULT_TOLERANCE, &[]);
+        assert_eq!(
+            of_kind(&conflicts, ConflictKind::QuantityMismatch).len(),
+            mismatch_count
+        );
+    }
+}

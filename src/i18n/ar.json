@@ -438,6 +438,7 @@
   "boq.measured": "الكمية المقاسة",
   "boq.difference": "الفرق",
   "boq.links": "الروابط",
+  "boq.exactComparison": "مطابقة تامة",
   "boq.tolerance": "التفاوت",
   "boq.link": "ربط",
   "boq.unlink": "فك الربط",

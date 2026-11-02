@@ -438,6 +438,7 @@
   "boq.measured": "Measured",
   "boq.difference": "Difference",
   "boq.links": "Links",
+  "boq.exactComparison": "Exact",
   "boq.tolerance": "Tolerance",
   "boq.link": "Link",
   "boq.unlink": "Unlink",

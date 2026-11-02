@@ -245,11 +245,11 @@ ops:
 - records {collection, type, layer, handles, names, where, fields, detail}; record_schema {name}: raw entity, layer, text_style or header data. Read what the finished part needs. / بيانات العناصر والطبقات وأنماط النص والرأس الأصلية؛ اقرأ ما يحتاجه الجزء المكتمل.
 - query {kind: near|window|entity|texts|tables|dimensions|blocks|boundary|layers, ...}. / بحث مكاني أو حسب نوع البيانات.
 - measure {handle} or {points}: numbers without a take-off row. Find drawn entities with records/query and measure by handle for exact lines, arcs and polylines; do not approximate curves with invented points. / قياس دون صف حصر؛ حدد العناصر من السجلات وقم بقياس بمعرفها بدقة، ولا تقرب المنحنيات بنقاط مختلقة.
-- run {command}: any read command, including decision.list, outside_check, spatial_query and wall_groups. Optional practice data requires applicability to this job; defaults are not code requirements. / أي أمر قراءة؛ المعرفة الاختيارية تحتاج تحققا من انطباقها على العمل، والقيم المعتادة ليست اشتراطات كود.
+- run {command}: any read command, including decision.list, outside_check, spatial_query, wall_groups and space_check. Checks measure facts and compare only cited job limits in drawing knowledge rules, including decision references. / أي أمر قراءة؛ تقيس الفحوص الحقائق وتقارن فقط بحدود العمل المسجلة بمصادرها في قواعد معرفة الرسم، ومنها مراجع القرارات.
 - check {handles, rules}: drawing findings. history; events {after?, session?}: commits, changed handles and resync flag. / ملاحظات الرسم، وسجل التعديلات والعناصر المتغيرة والحاجة لإعادة المزامنة.
 - drawings; selection; panel_state {}: tabs, selection, panels, folders, rows and controls. / المخططات والتحديد واللوحات الجانبية والمجلدات والصفوف وأدوات التحكم.
 - rooms {text_layer|seeds}: candidate boundaries and areas, not engineering approval. / حدود ومساحات مرشحة وليست اعتمادا هندسيا.
-- brief_check {expectations:[{id,text,verify:{...}} or {id,text,read:{op,args,pointer,expected,tolerance?,subtract?}}]}: compare the engineer's brief with measured results, including requested outputs. / قارن موجز المهندس بالنتائج المقاسة والمخرجات المطلوبة."#,
+- brief_check {expectations:[{id,text,verify:{...}} or {id,text,read:{op,args,pointer,expected?,decision?,tolerance?,subtract?}}]}: measure brief facts and outputs; optional expected or a cited decision name supplies the comparison. No limit gives no pass/fail. / قس حقائق الموجز والمخرجات؛ تحدد القيمة المتوقعة أو قرار ذو مصدر المقارنة. دون حد لا توجد نتيجة نجاح أو إخفاق."#,
             input_schema: json!({
                 "type": "object",
                 "properties": {

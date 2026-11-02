@@ -255,10 +255,15 @@ fn is_linked(m: &Measurement) -> bool {
 /// The quantity mismatch of `item` against the linked `sum`, or `None` within `tol` percent.
 fn mismatch(item: &BoqItem, sum: f64, tol: f64, units_label: &str) -> Option<Found> {
     let q = item.quantity;
+    // Ignore binary arithmetic noise without adding a job tolerance.
+    let noise = 16.0 * f64::EPSILON * q.abs().max(sum.abs());
+    if q.is_finite() && sum.is_finite() && (sum - q).abs() <= noise {
+        return None;
+    }
     let percent = (q != 0.0).then(|| (sum - q) / q.abs() * 100.0);
     let within = match percent {
-        Some(p) => p.abs() <= tol + 1e-9,
-        None => sum.abs() < 1e-9,
+        Some(p) => p.abs() <= tol,
+        None => sum == 0.0,
     };
     if within {
         return None;
@@ -648,5 +653,33 @@ fn quote(text: &str) -> String {
         text.to_string()
     } else {
         text.chars().take(QUOTE).chain(['…']).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_quantities_ignore_arithmetic_noise_but_detect_a_hundredth() {
+        let item = BoqItem {
+            code: "A.3".into(),
+            description: "Floor area".into(),
+            unit: "m2".into(),
+            quantity: 58.29,
+            rate: None,
+            section: String::new(),
+            tolerance: None,
+            row: 2,
+        };
+        assert!(mismatch(&item, 58.28999999999999, 0.0, "metres").is_none());
+        assert!(mismatch(&item, 58.30, 0.0, "metres").is_some());
+        assert!(mismatch(&item, 58.28, 0.0, "metres").is_some());
+        let zero = BoqItem {
+            quantity: 0.0,
+            ..item
+        };
+        assert!(mismatch(&zero, 0.0, 0.0, "metres").is_none());
+        assert!(mismatch(&zero, 1e-15, 0.0, "metres").is_some());
     }
 }
