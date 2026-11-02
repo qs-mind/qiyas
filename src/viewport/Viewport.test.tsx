@@ -5,19 +5,28 @@
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { Batch } from "./batch";
+import type { Batch, Target } from "./batch";
+import { palette } from "./colours";
 import { Viewport, type ViewportHandle } from "./Viewport";
 
-const { setHighlight } = vi.hoisted(() => ({ setHighlight: vi.fn() }));
+const { setHighlight, createRenderer } = vi.hoisted(() => ({
+  setHighlight: vi.fn(),
+  createRenderer: vi.fn(() => ({
+    setAtlas: vi.fn(), setBatch: vi.fn(), setPictures: vi.fn(),
+    setHighlight: vi.fn((targets: Target[]) => setHighlight(targets)), setOverlay: vi.fn(), setGrid: vi.fn(),
+    setInset: vi.fn(), draw: vi.fn(), read: vi.fn(), dispose: vi.fn(),
+  })),
+}));
 
 vi.mock("./gl", () => ({
-  createRenderer: () => new Proxy({}, { get: (_t, name) => (name === "setHighlight" ? setHighlight : () => undefined) }),
+  createRenderer,
 }));
 
 const batch = { bounds: [[0, 0], [100, 50]], quads: [], imageTable: [], images: [], origin: [0, 0], pxPerUnit: 1, baseTol: 0, curveTol: 0 } as unknown as Batch;
 
 beforeEach(() => {
   setHighlight.mockClear();
+  createRenderer.mockClear();
   vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON() {} });
   HTMLCanvasElement.prototype.setPointerCapture = vi.fn();
   HTMLCanvasElement.prototype.releasePointerCapture = vi.fn();
@@ -173,4 +182,60 @@ test("equal highlight handles and chains are uploaded only once", () => {
   expect(setHighlight).toHaveBeenCalledTimes(2);
   rerender(<Viewport {...props} highlight={[]} />);
   expect(setHighlight).toHaveBeenCalledTimes(3);
+});
+
+
+test("a lost context is cancelled and restored with the latest drawing state", () => {
+  const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(42);
+  const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+  const props = { batch, atlas: [], highlight: [{ handle: 7, chain: [] }],
+    overlay: new Float64Array([0, 0, 10, 10]), tool: "select" as const,
+    theme: "light" as const, onClick: () => {}, onMove: () => {} };
+  const { container, rerender } = render(<Viewport {...props} />);
+  const canvas = container.querySelector("canvas")!;
+  const lost = new Event("webglcontextlost", { cancelable: true });
+  fireEvent(canvas, lost);
+  expect(lost.defaultPrevented).toBe(true);
+  expect(cancelFrame).toHaveBeenCalledWith(42);
+  requestFrame.mockClear();
+  const current = { ...props, batch: { ...batch }, highlight: [{ handle: 8, chain: [9] }],
+    overlay: new Float64Array([1, 2, 3, 4]), atlas: [...props.atlas],
+    pictures: new Map(), grid: 5, inset: { batch, views: [] }, theme: "dark" as const };
+  const first = createRenderer.mock.results[0].value;
+  const batchCalls = first.setBatch.mock.calls.length;
+  expect(() => rerender(<Viewport {...current} />)).not.toThrow();
+  expect(first.setBatch).toHaveBeenCalledTimes(batchCalls);
+  expect(requestFrame).not.toHaveBeenCalled();
+  fireEvent(canvas, new Event("webglcontextrestored"));
+  expect(createRenderer).toHaveBeenCalledTimes(2);
+  const restored = createRenderer.mock.results[1].value;
+  expect(restored.setAtlas).toHaveBeenCalledWith(current.atlas);
+  expect(restored.setBatch).toHaveBeenCalledWith(current.batch);
+  expect(restored.setPictures).toHaveBeenCalledWith(current.pictures);
+  expect(restored.setHighlight).toHaveBeenCalledWith(current.highlight);
+  expect(restored.setOverlay).toHaveBeenCalledWith(current.overlay);
+  expect(restored.setGrid).toHaveBeenCalledWith(current.grid, null);
+  expect(restored.setInset).toHaveBeenCalledWith(current.inset.batch, current.inset.views);
+  expect(requestFrame).toHaveBeenCalledOnce();
+  act(() => requestFrame.mock.calls[0][0](0));
+  expect(restored.draw).toHaveBeenCalledWith(expect.any(Object), palette(current.theme, null));
+  // The restored highlight participates in the usual deduplication.
+  rerender(<Viewport {...current} highlight={[{ handle: 8, chain: [9] }]} />);
+  expect(restored.setHighlight).toHaveBeenCalledOnce();
+});
+
+test("unmount removes the context loss and restore listeners", () => {
+  const { canvas, unmount } = mount();
+  const remove = vi.spyOn(canvas, "removeEventListener");
+  unmount();
+  expect(remove).toHaveBeenCalledWith("webglcontextlost", expect.any(Function));
+  expect(remove).toHaveBeenCalledWith("webglcontextrestored", expect.any(Function));
+  createRenderer.mockClear();
+  setHighlight.mockClear();
+  const lost = new Event("webglcontextlost", { cancelable: true });
+  fireEvent(canvas, lost);
+  fireEvent(canvas, new Event("webglcontextrestored"));
+  expect(lost.defaultPrevented).toBe(false);
+  expect(createRenderer).not.toHaveBeenCalled();
+  expect(setHighlight).not.toHaveBeenCalled();
 });

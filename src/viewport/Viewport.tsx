@@ -183,6 +183,8 @@ export function Viewport({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<Renderer | null>(null);
   const sentHighlight = useRef<Target[] | null>(null);
+  const restoreRef = useRef({ atlas, highlight, overlay, grid, inset });
+  restoreRef.current = { atlas, highlight, overlay, grid, inset };
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
   /** The world box the user (or the app) last chose to show; a resize keeps it in view. */
   const view = useRef<Bounds | null>(null);
@@ -257,7 +259,7 @@ export function Viewport({
   }
 
   function requestDraw() {
-    if (frame.current) return;
+    if (!renderer.current || frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       renderer.current?.draw(camera.current, lookRef.current);
@@ -331,6 +333,32 @@ export function Viewport({
     const canvas = canvasRef.current!;
     renderer.current = createRenderer(canvas);
     sentHighlight.current = null;
+
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+      renderer.current = null;
+    };
+    const onContextRestored = () => {
+      const r = createRenderer(canvas);
+      renderer.current = r;
+      sentHighlight.current = null;
+      const { atlas, highlight, overlay, grid, inset } = restoreRef.current;
+      // Pages must be uploaded before either batch's glyphs.
+      r.setAtlas(atlas);
+      r.setBatch(batchRef.current);
+      r.setPictures(picturesRef.current);
+      r.setHighlight(highlight);
+      sentHighlight.current = highlight.map(({handle, chain}) => ({handle, chain: [...chain]}));
+      r.setOverlay(overlay);
+      r.setGrid(grid, ucsRef.current);
+      r.setInset(inset?.batch ?? null, inset?.views ?? []);
+      // draw reads the current camera and theme colours from their refs.
+      requestDraw();
+    };
+    canvas.addEventListener("webglcontextlost", onContextLost);
+    canvas.addEventListener("webglcontextrestored", onContextRestored);
 
     const resize = () => {
       const { width, height } = canvas.getBoundingClientRect();
@@ -414,6 +442,8 @@ export function Viewport({
     window.addEventListener("blur", onBlur);
 
     return () => {
+      canvas.removeEventListener("webglcontextlost", onContextLost);
+      canvas.removeEventListener("webglcontextrestored", onContextRestored);
       observer.disconnect();
       ratio?.removeEventListener("change", onRatio);
       interactionRoot.removeEventListener("wheel", onWheel);
@@ -431,21 +461,21 @@ export function Viewport({
 
   // Before the batch, so its quads find their pages.
   useEffect(() => {
-    renderer.current!.setAtlas(atlas);
+    renderer.current?.setAtlas(atlas);
     requestDraw();
   }, [atlas]);
 
   // No fit here: hiding a layer gives a new batch but should keep the view. The app fits on open.
   useEffect(() => {
     batchRef.current = batch;
-    renderer.current!.setBatch(batch);
+    renderer.current?.setBatch(batch);
     requestDraw();
     checkGlyphs();
     checkPictures();
   }, [batch]);
 
   useEffect(() => {
-    renderer.current!.setPictures(pictures);
+    renderer.current?.setPictures(pictures);
     requestDraw();
   }, [pictures]);
 
@@ -455,22 +485,23 @@ export function Viewport({
   }, [theme, colours?.background, colours?.highlight]);
 
   useEffect(() => {
+    if (!renderer.current) return;
     const previous = sentHighlight.current;
     if (previous?.length === highlight.length && highlight.every((target, i) =>
       target.handle === previous[i].handle && target.chain.length === previous[i].chain.length &&
       target.chain.every((handle, j) => handle === previous[i].chain[j]))) return;
-    renderer.current!.setHighlight(highlight);
+    renderer.current?.setHighlight(highlight);
     sentHighlight.current = highlight.map(({handle, chain}) => ({handle, chain: [...chain]}));
     requestDraw();
   }, [highlight]);
 
   useEffect(() => {
-    renderer.current!.setOverlay(overlay);
+    renderer.current?.setOverlay(overlay);
     requestDraw();
   }, [overlay]);
 
   useEffect(() => {
-    renderer.current!.setGrid(grid, ucs);
+    renderer.current?.setGrid(grid, ucs);
     requestDraw();
   }, [grid, ucs]);
 
@@ -479,7 +510,7 @@ export function Viewport({
   }, [ucsIcon]);
 
   useEffect(() => {
-    renderer.current!.setInset(inset?.batch ?? null, inset?.views ?? []);
+    renderer.current?.setInset(inset?.batch ?? null, inset?.views ?? []);
     requestDraw();
   }, [inset]);
 

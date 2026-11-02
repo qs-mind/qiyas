@@ -982,7 +982,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
     dispose() {
       // The context stays: React may mount the same canvas again (StrictMode), and a lost
-      // context can't be recovered from the same element.
+      // context is restored on the same canvas when the loss event is cancelled.
       gl.deleteBuffer(positions);
       gl.deleteBuffer(colors);
       gl.deleteBuffer(highlightIndices);
