@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::sync::PoisonError;
 
-use qiyas_ai::host::asked;
+use qiyas_ai::host::{asked, user_named_path};
 use qiyas_ai::prompt::DrawingFacts;
 use qiyas_ai::{DrawingHost, Screen, TurnContext};
 use qiyas_core::Session;
@@ -267,7 +267,7 @@ impl<R: Runtime> DrawingHost for AppHost<R> {
         let Ok(path) = path.canonicalize() else {
             return Ok(());
         };
-        if user_text.is_some_and(|text| text.contains(named))
+        if user_text.is_some_and(|text| user_named_path(text, named))
             || self.document_allowed(&path)
             || self.confirm_read(&path)
         {
@@ -798,6 +798,24 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn document_shorter_path_inside_named_path_still_asks() {
+        let (dir, app) = app();
+        let host = document_host(&app, &dir.path().join("tower"));
+        let pdf = dir.path().join("spec.pdf");
+        std::fs::write(&pdf, b"PDF").unwrap();
+        let message = format!("Read /megaproject/tower{}", pdf.display());
+        for (name, input) in document_calls(&pdf) {
+            assert!(host
+                .before_tool_with_user(name, &input, Some(&message))
+                .is_err());
+        }
+        assert_eq!(
+            *app.state::<ReadConfirmation>().paths.lock().unwrap(),
+            vec![pdf.canonicalize().unwrap(); 2]
+        );
     }
 
     #[test]

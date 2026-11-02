@@ -35,6 +35,64 @@ pub fn changes_drawing(name: &str) -> bool {
     )
 }
 
+/// Whether the user named this absolute path as a whole candidate in their message.
+pub fn user_named_path(user_text: &str, path: &str) -> bool {
+    if !std::path::Path::new(path).is_absolute() {
+        return false;
+    }
+    let equal = |a: &str, b: &str| {
+        if cfg!(windows) {
+            a.to_lowercase() == b.to_lowercase()
+        } else {
+            a == b
+        }
+    };
+    let canonical = std::fs::canonicalize(path).ok();
+    let matches = |candidate: &str| {
+        let candidate =
+            candidate.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '،', '؛', '؟']);
+        equal(candidate, path)
+            || canonical.as_ref().is_some_and(|path| {
+                std::fs::canonicalize(candidate).is_ok_and(|candidate| {
+                    if cfg!(windows) {
+                        equal(&candidate.to_string_lossy(), &path.to_string_lossy())
+                    } else {
+                        candidate == *path
+                    }
+                })
+            })
+    };
+    let mut start = 0;
+    let mut quote = None;
+    for (index, ch) in user_text.char_indices() {
+        if let Some(end) = quote {
+            if ch == end {
+                if matches(&user_text[start..index]) {
+                    return true;
+                }
+                quote = None;
+                start = index + ch.len_utf8();
+            }
+        } else {
+            let end = match ch {
+                '"' | '\'' | '`' => Some(ch),
+                '«' => Some('»'),
+                '“' => Some('”'),
+                _ => None,
+            }
+            .filter(|end| user_text[index + ch.len_utf8()..].contains(*end));
+            if end.is_some() || ch.is_whitespace() {
+                if matches(&user_text[start..index]) {
+                    return true;
+                }
+                quote = end;
+                start = index + ch.len_utf8();
+            }
+        }
+    }
+    quote.is_none() && matches(&user_text[start..])
+}
+
 /// The app's side of the file tools. Each answer is JSON for the model; an `Err` is said to it
 /// as the tool's error.
 pub trait DrawingHost: Send + Sync {
@@ -195,7 +253,7 @@ pub fn dispatch_host<H: DrawingHost + ?Sized>(
                 .map(str::trim)
                 .filter(|p| !p.is_empty())
                 .ok_or("path is required")?;
-            let user_named = user_text.is_some_and(|text| text.contains(path));
+            let user_named = user_text.is_some_and(|text| user_named_path(text, path));
             host.open(path, user_named)
         }
         "switch_drawing" => host.switch(tab_id(input)?.ok_or("id is required")?),
@@ -329,6 +387,73 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn named_paths_require_whole_absolute_candidates() {
+        let named = |text: &str, path: &str| {
+            let host = Fake::default();
+            run_host(&host, "open_drawing", &json!({"path": path}), Some(text)).unwrap();
+            let calls = host.calls.lock().unwrap();
+            calls[0] == format!("open {path} true")
+        };
+        let text = "please open /home/k/plans/tower-a.dwg";
+        assert!(!named(text, "/tower-a.dwg"));
+        assert!(named(text, "/home/k/plans/tower-a.dwg"));
+        assert!(!named(text, "plans/tower-a.dwg"));
+    }
+
+    #[test]
+    fn named_paths_keep_quoted_spaces_and_strip_punctuation() {
+        for (text, path, expected) in [
+            (
+                "افتح \"/tmp/مشروع البرج/podium plan.dwg\" من فضلك",
+                "/tmp/مشروع البرج/podium plan.dwg",
+                true,
+            ),
+            (
+                "افتح \"/tmp/مشروع البرج/podium plan.dwg\" من فضلك",
+                "/tmp/مشروع",
+                false,
+            ),
+            ("open /srv/towers/north.dwg.", "/srv/towers/north.dwg", true),
+            ("افتح /srv/towers/north.dwg،", "/srv/towers/north.dwg", true),
+        ] {
+            let host = Fake::default();
+            run_host(&host, "open_drawing", &json!({"path": path}), Some(text)).unwrap();
+            assert_eq!(
+                *host.calls.lock().unwrap(),
+                [format!("open {path} {expected}")]
+            );
+        }
+    }
+
+    #[test]
+    fn named_paths_match_all_quote_pairs_and_canonical_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let tower = dir.path().join("tower");
+        std::fs::create_dir(&tower).unwrap();
+        let path = tower.join("podium plan.dwg");
+        std::fs::write(&path, b"drawing").unwrap();
+        let path = path.to_str().unwrap();
+        for (open, close) in [('"', '"'), ('\'', '\''), ('`', '`'), ('«', '»'), ('“', '”')] {
+            assert!(user_named_path(&format!("open {open}{path}{close}"), path));
+            let alias = tower.join("..").join("tower").join("podium plan.dwg");
+            assert!(user_named_path(
+                &format!("open {open}{}{close}", alias.display()),
+                path
+            ));
+        }
+        assert!(!user_named_path(&format!("open \"{path}"), path));
+        for punctuation in ['.', ',', ';', ':', '!', '?', ')', ']', '،', '؛', '؟'] {
+            let path = tower.join("north.dwg");
+            assert!(user_named_path(
+                &format!("open {}{punctuation}", path.display()),
+                path.to_str().unwrap()
+            ));
+        }
+        let uppercase = path.to_uppercase();
+        assert_eq!(user_named_path(&uppercase, path), cfg!(windows));
+    }
+
     #[test]
     fn finish_never_calls_save_or_opens_a_dialog() {
         let host = Fake::default();
