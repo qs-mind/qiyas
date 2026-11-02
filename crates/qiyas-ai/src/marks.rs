@@ -92,9 +92,9 @@ pub(crate) fn choose(batch: &Batch, view: &View, first: &[u64], max: usize) -> V
         }
     }
     // Solid fills with no outline (a hatch without its boundary) are marked by their triangles.
-    let [ox, oy] = batch.origin;
     for r in &batch.fill_ranges {
         for t in r.first as usize..(r.first + r.count) as usize {
+            let [ox, oy] = batch.fill_origin(t);
             let Some(tri) = batch.fills.get(t * 6..t * 6 + 6) else {
                 break;
             };

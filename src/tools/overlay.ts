@@ -1,7 +1,7 @@
 /** Violet line work drawn over the drawing: the rubber band of a measure in progress, and the
  *  points of the selected take-off line. */
 import type { Measurement } from "../api";
-import { matchingRanges, type Batch, type Target } from "../viewport/batch";
+import { originAt, matchingRanges, type Batch, type Target } from "../viewport/batch";
 import type { Bounds, Point } from "../viewport/camera";
 import type { Tool } from "../viewport/Viewport";
 
@@ -62,9 +62,9 @@ function around(points: Point[], entities: Target[], batch: Batch | null): Bound
   };
   for (const [x, y] of points) add(x, y);
   if (batch) {
-    const [ox, oy] = batch.origin;
     for (const [first, count] of matchingRanges(batch, entities)) {
       for (let i = 4 * first; i < 4 * (first + count); i += 2) {
+        const [ox, oy] = originAt(batch, "segmentTiles", Math.floor(i / 4));
         add(batch.segments[i] + ox, batch.segments[i + 1] + oy);
       }
     }

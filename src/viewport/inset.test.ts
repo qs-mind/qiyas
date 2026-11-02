@@ -65,3 +65,27 @@ test("an off-screen sheet is fetched again only when the core's changed, or for 
   expect(changed.version).toBe(8);
   expect(changed.batch.segments).not.toBe(first.segments);
 });
+
+test("tile camera subtraction preserves fractional survey coordinates", async () => {
+  const { tileCamera } = await import("./inset");
+  const camera = { cx: 500_000.125, cy: 3_300_000_000.25, scale: 0.01, width: 800, height: 600 };
+  const out = new Float32Array(2);
+  tileCamera(camera, [500_000, 3_300_000_000], out);
+  expect(Array.from(out)).toEqual([0.125, 0.25]);
+  camera.cy += 0.125;
+  tileCamera(camera, [500_000, 3_300_000_000], out);
+  expect(out[1]).toBe(0.375);
+});
+
+test("glyph refresh retains origin spans with the held line and fill buffers", async () => {
+  const { keepLines } = await import("./inset");
+  const segmentTiles = [{ first: 0, count: 1, origin: [500_000, 3_300_000_000] }];
+  const quadTiles = [{ first: 0, count: 2, origin: [500_001, 3_300_000_001] }];
+  const held = { segments: new Float32Array(4), fills: {}, segmentTiles, fillTiles: segmentTiles } as unknown as Batch;
+  const next = { segments: new Float32Array(4), fills: {}, quadTiles } as unknown as Batch;
+  const refreshed = keepLines(held, next);
+  expect(refreshed.segments).toBe(held.segments);
+  expect(refreshed.segmentTiles).toBe(held.segmentTiles);
+  expect(refreshed.fillTiles).toBe(held.fillTiles);
+  expect(refreshed.quadTiles).toBe(next.quadTiles);
+});

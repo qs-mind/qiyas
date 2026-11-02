@@ -11,7 +11,7 @@ use crate::visibility::layer_shown_with;
 /// First four bytes of a batch: "BYIQ" read as bytes, `0x51495942` as a little-endian `u32`.
 pub const MAGIC: u32 = 0x5149_5942;
 /// Layout version of `Batch::to_bytes`.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// `Range::chain` of an entity drawn at the top level, outside any block.
 pub const NO_CHAIN: u32 = u32::MAX;
 
@@ -34,6 +34,10 @@ pub mod section {
     pub const IMAGE_TABLE: u32 = 11;
     pub const FILLS: u32 = 12;
     pub const FILL_RANGES: u32 = 13;
+    pub const SEGMENT_TILES: u32 = 14;
+    pub const FILL_TILES: u32 = 15;
+    pub const QUAD_TILES: u32 = 16;
+    pub const IMAGE_TILES: u32 = 17;
 }
 
 /// `Batch::fill_colors` bit: fill with the background colour (a wipeout), not the RGB below it.
@@ -67,7 +71,7 @@ pub struct ImagePlacement {
     pub flags: u32,
 }
 
-/// An image quad for the GPU: `corners` x y relative to the batch origin, in `ImagePlacement`'s
+/// An image quad for the GPU: `corners` x y relative to its tile origin, in `ImagePlacement`'s
 /// order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImageQuad {
@@ -120,11 +124,11 @@ const DEFAULT_FIT_PX: f64 = 1600.0;
 
 /// Line segments of one sheet, ready for the GPU.
 ///
-/// Segment coordinates are relative to `origin`, so drawings far from (0, 0), such as
-/// survey grids, keep their precision in `f32`. Add `origin` back for drawing coordinates.
+/// Vertices use the origin of their tile span, or `origin` when that stream has no spans.
+/// CPU readers use the origin accessors or `world_segment` to recover drawing coordinates.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Batch {
-    /// `x0 y0 x1 y1` per segment, relative to `origin`.
+    /// `x0 y0 x1 y1` per segment, relative to `segment_origin(i)`.
     pub segments: Vec<f32>,
     /// `0xRRGGBB` per segment.
     pub colors: Vec<u32>,
@@ -137,10 +141,15 @@ pub struct Batch {
     pub bounds: [[f64; 2]; 2],
     /// Centre of `bounds`; zeros when empty.
     pub origin: [f64; 2],
+    /// Local origins by primitive stream; empty means all use `origin`.
+    pub segment_tiles: Vec<TileSpan>,
+    pub fill_tiles: Vec<TileSpan>,
+    pub quad_tiles: Vec<TileSpan>,
+    pub image_tiles: Vec<TileSpan>,
     /// Some block content was too deep or too large to draw (see `qiyas_geom::FlattenOutcome`).
     /// Not part of `to_bytes`.
     pub truncated: bool,
-    /// Glyph quads of the texts, relative to `origin`; empty without a text engine.
+    /// Glyph quads relative to `quad_origin(i)`; empty without a text engine.
     pub quads: Vec<Quad>,
     /// One per drawn text, over `quads`, in quad order.
     pub text_ranges: Vec<Range>,
@@ -161,12 +170,100 @@ pub struct Batch {
     pub images: Vec<ImageQuad>,
     pub image_table: Vec<ImageEntry>,
     /// Filled triangles (solid hatches, 2D solids, traces, wipeouts), drawn under the lines:
-    /// `x0 y0 x1 y1 x2 y2` per triangle, relative to `origin`.
+    /// `x0 y0 x1 y1 x2 y2` per triangle, relative to `fill_origin(i)`.
     pub fills: Vec<f32>,
     /// `0xRRGGBB` per triangle, or `FILL_BACKGROUND` for the background colour.
     pub fill_colors: Vec<u32>,
     /// One per filled entity, over the triangles, in triangle order (flags 0).
     pub fill_ranges: Vec<Range>,
+}
+
+/// A contiguous run of primitives sharing an absolute origin. Indices never change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileSpan {
+    pub first: u32,
+    pub count: u32,
+    pub origin: [f64; 2],
+}
+
+// Keep float32 steps below a tenth of a drawing unit for ordinary local geometry.
+const TILE_REACH: f64 = 1_000_000.0;
+
+pub(crate) fn tile_origin(tiles: &[TileSpan], fallback: [f64; 2], i: usize) -> [f64; 2] {
+    let at = tiles.partition_point(|t| (t.first + t.count) as usize <= i);
+    tiles.get(at).map_or(fallback, |t| t.origin)
+}
+
+/// Select an origin before converting a primitive to float32.
+pub(crate) fn append_tile(
+    tiles: &mut Vec<TileSpan>,
+    fallback: [f64; 2],
+    i: usize,
+    points: &[f64],
+) -> [f64; 2] {
+    let previous = tiles.last().map_or(fallback, |t| t.origin);
+    let fits = points
+        .iter()
+        .enumerate()
+        .all(|(k, v)| (v - previous[k % 2]).abs() <= TILE_REACH);
+    let origin = if fits {
+        previous
+    } else {
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        for (k, &v) in points.iter().enumerate() {
+            lo[k % 2] = lo[k % 2].min(v);
+            hi[k % 2] = hi[k % 2].max(v);
+        }
+        [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]
+    };
+    if let Some(last) = tiles.last_mut() {
+        if last.origin == origin && (last.first + last.count) as usize == i {
+            last.count += 1;
+            return origin;
+        }
+    } else if origin == fallback {
+        return origin;
+    } else if i > 0 {
+        tiles.push(TileSpan {
+            first: 0,
+            count: i as u32,
+            origin: fallback,
+        });
+    }
+    tiles.push(TileSpan {
+        first: i as u32,
+        count: 1,
+        origin,
+    });
+    origin
+}
+
+fn local_vertices<const N: usize>(
+    absolute: &[[f64; N]],
+    origin: [f64; 2],
+    tiles: &mut Vec<TileSpan>,
+    compact: bool,
+) -> Vec<f32> {
+    if compact {
+        return absolute
+            .iter()
+            .flat_map(|s| {
+                let local: [f32; N] = std::array::from_fn(|k| (s[k] - origin[k % 2]) as f32);
+                local
+            })
+            .collect();
+    }
+    let mut out = Vec::with_capacity(N * absolute.len());
+    for (i, s) in absolute.iter().enumerate() {
+        let origin = append_tile(tiles, origin, i, s);
+        out.extend(
+            s.iter()
+                .enumerate()
+                .map(|(k, v)| (v - origin[k % 2]) as f32),
+        );
+    }
+    out
 }
 
 /// What the user has hidden on top of the drawing's own layer state.
@@ -237,7 +334,8 @@ pub fn build_batch_with_xrefs(
 /// Draws the batch's texts again for a zoom of `px_per_unit` screen pixels per drawing unit:
 /// new quads, text ranges and atlas fields; the lines stay.
 pub fn place_text(batch: &mut Batch, engine: &mut TextEngine, px_per_unit: f64) {
-    let (quads, ranges) = engine.place(&batch.texts, batch.origin, px_per_unit);
+    let (quads, ranges, tiles) = engine.place(&batch.texts, batch.origin, px_per_unit);
+    batch.quad_tiles = tiles;
     batch.quads = quads;
     batch.text_ranges = ranges;
     batch.atlas_version = engine.atlas().version();
@@ -245,7 +343,7 @@ pub fn place_text(batch: &mut Batch, engine: &mut TextEngine, px_per_unit: f64) 
     batch.px_per_unit = px_per_unit;
 }
 
-/// Adds pictures to draw under the lines: their quads, relative to the batch origin, and one
+/// Adds pictures to draw under the lines: their quads, relative to local origins, and one
 /// table entry per image id. The bounds grow to hold them; a batch with nothing else in it takes
 /// their centre as its origin.
 pub fn add_images(batch: &mut Batch, images: &[ImagePlacement]) {
@@ -272,8 +370,13 @@ pub fn add_images(batch: &mut Batch, images: &[ImagePlacement]) {
             [b1[0].max(hi[0]), b1[1].max(hi[1])],
         ];
     }
-    let origin = batch.origin;
     for image in images {
+        let origin = append_tile(
+            &mut batch.image_tiles,
+            batch.origin,
+            batch.images.len(),
+            image.corners.as_flattened(),
+        );
         let mut corners = [0f32; 8];
         for (k, [x, y]) in image.corners.iter().enumerate() {
             corners[2 * k] = (x - origin[0]) as f32;
@@ -298,11 +401,16 @@ pub fn add_images(batch: &mut Batch, images: &[ImagePlacement]) {
 /// highlighted, never drawn), after the segments already there. Call after `add_images`, which
 /// sets the origin of a batch with nothing else in it.
 pub fn add_pick_outlines(batch: &mut Batch, outlines: &[(u64, [[f64; 2]; 4])]) {
-    let origin = batch.origin;
     for (handle, corners) in outlines {
         let first = (batch.segments.len() / 4) as u32;
         for k in 0..4 {
             let [a, b] = [corners[k], corners[(k + 1) % 4]];
+            let origin = append_tile(
+                &mut batch.segment_tiles,
+                batch.origin,
+                batch.segments.len() / 4,
+                &[a[0], a[1], b[0], b[1]],
+            );
             batch.segments.extend([
                 (a[0] - origin[0]) as f32,
                 (a[1] - origin[1]) as f32,
@@ -616,32 +724,9 @@ fn build(
         }
     }
     let origin = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-    batch.segments = absolute
-        .iter()
-        .flat_map(|s| {
-            [
-                s[0] - origin[0],
-                s[1] - origin[1],
-                s[2] - origin[0],
-                s[3] - origin[1],
-            ]
-            .map(|v| v as f32)
-        })
-        .collect();
-    batch.fills = triangles
-        .iter()
-        .flat_map(|t| {
-            [
-                t[0] - origin[0],
-                t[1] - origin[1],
-                t[2] - origin[0],
-                t[3] - origin[1],
-                t[4] - origin[0],
-                t[5] - origin[1],
-            ]
-            .map(|v| v as f32)
-        })
-        .collect();
+    let compact = side <= TILE_REACH && infinite.is_empty() && marks.is_empty();
+    batch.segments = local_vertices(&absolute, origin, &mut batch.segment_tiles, compact);
+    batch.fills = local_vertices(&triangles, origin, &mut batch.fill_tiles, compact);
     batch.bounds = [lo, hi];
     batch.origin = origin;
     batch
@@ -823,6 +908,28 @@ fn segments(path: &Path) -> impl Iterator<Item = ([f64; 2], [f64; 2])> + '_ {
 }
 
 impl Batch {
+    /// Absolute origin of segment `i`.
+    pub fn segment_origin(&self, i: usize) -> [f64; 2] {
+        tile_origin(&self.segment_tiles, self.origin, i)
+    }
+    /// Absolute origin of fill triangle `i`.
+    pub fn fill_origin(&self, i: usize) -> [f64; 2] {
+        tile_origin(&self.fill_tiles, self.origin, i)
+    }
+    /// Absolute origin of glyph quad `i`.
+    pub fn quad_origin(&self, i: usize) -> [f64; 2] {
+        tile_origin(&self.quad_tiles, self.origin, i)
+    }
+    /// Absolute origin of image quad `i`.
+    pub fn image_origin(&self, i: usize) -> [f64; 2] {
+        tile_origin(&self.image_tiles, self.origin, i)
+    }
+    /// Segment endpoints in absolute drawing coordinates, for CPU readers.
+    pub fn world_segment(&self, i: usize) -> [f64; 4] {
+        let origin = self.segment_origin(i);
+        std::array::from_fn(|k| f64::from(self.segments[4 * i + k]) + origin[k % 2])
+    }
+
     /// The range holding segment `i`.
     pub fn range_of(&self, i: usize) -> Option<&Range> {
         let at = self
@@ -838,14 +945,14 @@ impl Batch {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// Encodes the batch for the frontend: layout version 2. Little-endian; every section
+    /// Encodes the batch for the frontend: layout version 3. Little-endian; every section
     /// starts on an 8-byte boundary (zero padding before it). With k = sections (7, plus 2 with
     /// images, plus 2 with fills):
     ///
     /// | offset   | size  | contents                                                     |
     /// |----------|-------|--------------------------------------------------------------|
     /// | 0        | 4     | `u32` magic `0x51495942`                                     |
-    /// | 4        | 4     | `u32` version, 2                                             |
+    /// | 4        | 4     | `u32` version, 3                                             |
     /// | 8        | 32    | `f64` x4 bounds: min x, min y, max x, max y (absolute)       |
     /// | 40       | 16    | `f64` x2 origin: x, y                                        |
     /// | 56       | 4     | `u32` k, the number of sections                              |
@@ -883,6 +990,10 @@ impl Batch {
     /// |      |                | background colour instead); under the lines                 |
     /// | 13   | fill ranges    | 32 bytes per filled entity, as kind 3 but over the          |
     /// |      |                | triangles (flags 0)                                         |
+    ///
+    /// Kinds 14..17 hold segment, fill, glyph and image tile spans: 24 bytes each,
+    /// `u32 first, count; f64 origin_x, origin_y`. When absent the header origin applies.
+    /// When present they cover the stream in order; vertices use the span's origin.
     ///
     /// Kinds 12 and 13 are written only when the batch has fills, after the images'. Range flags
     /// bit 1 (`PATTERN`) marks a hatch's pattern lines.
@@ -957,6 +1068,23 @@ impl Batch {
             sections.push((section::FILL_RANGES, ranges_bytes(&self.fill_ranges)));
         }
 
+        for (kind, tiles) in [
+            (section::SEGMENT_TILES, &self.segment_tiles),
+            (section::FILL_TILES, &self.fill_tiles),
+            (section::QUAD_TILES, &self.quad_tiles),
+            (section::IMAGE_TILES, &self.image_tiles),
+        ] {
+            if tiles.is_empty() {
+                continue;
+            }
+            let mut bytes = Vec::with_capacity(24 * tiles.len());
+            for tile in tiles {
+                bytes.extend(tile.first.to_le_bytes());
+                bytes.extend(tile.count.to_le_bytes());
+                bytes.extend(le_bytes(&tile.origin, f64::to_le_bytes));
+            }
+            sections.push((kind, bytes));
+        }
         let mut out = Vec::new();
         out.extend(MAGIC.to_le_bytes());
         out.extend(VERSION.to_le_bytes());

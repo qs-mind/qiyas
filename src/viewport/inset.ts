@@ -54,8 +54,8 @@ export type HeldSheet = { version: number; batch: Batch };
 /** `next`, its glyphs drawn again for another zoom, with the lines, fills and ranges of `held`
  *  (the same arrays, so the GPU keeps them). */
 export const keepLines = (held: Batch, next: Batch): Batch => {
-  const { segments, colors, ranges, chains, fills, fillRanges } = held;
-  return { ...next, segments, colors, ranges, chains, fills, fillRanges };
+  const { segments, colors, ranges, chains, fills, fillRanges, segmentTiles, fillTiles } = held;
+  return { ...next, segments, colors, ranges, chains, fills, fillRanges, segmentTiles, fillTiles };
 };
 
 /** The batch of an off-screen sheet (model space for viewports, a split window's other sheet) as
@@ -73,4 +73,10 @@ export async function refreshSheet(
   const next = await api.fetch(pxPerUnit);
   if (!next) return held;
   return { version, batch: same ? keepLines(held.batch, next) : next };
+}
+
+/** Subtract in double precision before passing the camera to GL. Reuses `out`. */
+export function tileCamera(camera: Camera, origin: [number, number], out: Float32Array): void {
+  out[0] = camera.cx - origin[0];
+  out[1] = camera.cy - origin[1];
 }

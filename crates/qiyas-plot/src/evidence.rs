@@ -9,7 +9,7 @@ use qiyas_core::Session;
 use qiyas_geom::Xform;
 use qiyas_render::{Batch, Range, TextEngine, DEFAULT_CHAIN};
 
-use super::{absolute, pdf_document, save_document, LayerPlan, PlotSnapshot};
+use super::{pdf_document, save_document, LayerPlan, PlotSnapshot};
 use crate::look::Look;
 use crate::{Area, Orientation, Paper, PlotError, PlotJob, PlotOutput, Scale, PT_PER_MM};
 
@@ -399,9 +399,9 @@ fn outline(
             continue;
         }
         for i in r.first..r.first + r.count {
-            let s = &batch.segments[i as usize * 4..i as usize * 4 + 4];
-            let a = xf.apply(absolute(batch, s[0], s[1]));
-            let b = xf.apply(absolute(batch, s[2], s[3]));
+            let s = batch.world_segment(i as usize);
+            let a = xf.apply([s[0], s[1]]);
+            let b = xf.apply([s[2], s[3]]);
             points.extend([a, b]);
             segment(out, a, b, color);
         }
@@ -412,11 +412,12 @@ fn outline(
             continue;
         }
         for i in r.first..r.first + r.count {
+            let o = batch.fill_origin(i as usize);
             for p in batch.fills[i as usize * 6..i as usize * 6 + 6]
                 .as_chunks::<2>()
                 .0
             {
-                points.push(xf.apply(absolute(batch, p[0], p[1])));
+                points.push(xf.apply([o[0] + f64::from(p[0]), o[1] + f64::from(p[1])]));
             }
         }
     }

@@ -158,7 +158,7 @@ fn bytes_decode_every_section() {
     assert_eq!(u32_at(&bytes, 0), MAGIC);
     assert_eq!(&bytes[..4], b"BYIQ");
     assert_eq!(u32_at(&bytes, 4), VERSION);
-    assert_eq!(VERSION, 2);
+    assert_eq!(VERSION, 3);
     let header: Vec<f64> = (0..6).map(|i| f64_at(&bytes, 8 + 8 * i)).collect();
     assert_eq!(
         header,
@@ -374,7 +374,7 @@ fn line_handle(doc: &CadDocument) -> u64 {
 }
 
 /// The batch `src/viewport/batch.test.ts` decodes from the same bytes, so both sides agree on
-/// layout version 2: a text's box (handle 7, flagged) drawn as one glyph quad, and a line (9)
+/// layout version 3: a text's box (handle 7, flagged) drawn as one glyph quad, and a line (9)
 /// inside block reference 8.
 #[test]
 fn bytes_match_the_frontend_fixture() {
@@ -438,7 +438,7 @@ fn bytes_match_the_frontend_fixture() {
 
 /// Also in `src/viewport/batch.test.ts`.
 const FRONTEND_FIXTURE: &str = concat!(
-    "4259495102000000000000000000594000000000000069400000000000005a400000000000606940",
+    "4259495103000000000000000000594000000000000069400000000000005a400000000000606940",
     "000000000080594000000000003069400700000003000000900000004000000004000000d0000000",
     "0c00000005000000e000000020000000060000000001000008000000070000000801000030000000",
     "08000000380100002800000009000000600100002000000007000000000000000700000000000000",
@@ -568,7 +568,7 @@ fn image_sections_match_the_frontend_fixture() {
 
 /// Also in `src/viewport/batch.test.ts`.
 const IMAGES_FIXTURE: &str = concat!(
-    "42594951020000000000000000000000000000000000000000000000000034400000000000002440",
+    "42594951030000000000000000000000000000000000000000000000000034400000000000002440",
     "000000000000244000000000000014400900000003000000a80000000000000004000000a8000000",
     "0000000005000000a80000000000000006000000a80000000000000007000000a800000000000000",
     "08000000a80000002800000009000000d0000000000000000a000000d0000000280000000b000000",
@@ -646,3 +646,109 @@ fn a_big_block_inserted_many_times_stops_at_the_sheet_budget() {
     let drawn = batch.segments.len() / 4;
     assert!(drawn > 0 && drawn <= MAX_SHEET_WORK, "{drawn} segments");
 }
+
+#[test]
+fn survey_work_with_zero_outlier_keeps_local_vertices_and_picks() {
+    let (mut doc, handles) =
+        doc_with_lines(&[(500_000.0, 3_300_000_000.0, 500_000.125, 3_300_000_000.25)]);
+    doc.add_entity(EntityType::Point(opencadcodec::entities::Point::at(
+        Vector3::new(0.0, 0.0, 0.0),
+    )))
+    .unwrap();
+    let b = build_batch(&doc, MODEL, &Visibility::default(), 1e-3);
+    assert_eq!(b.segment_tiles.len(), 2);
+    assert!(b.segments.iter().all(|v| v.abs() < 1e7));
+    let s = b.world_segment(0);
+    assert_eq!(
+        s,
+        [500_000.0, 3_300_000_000.0, 500_000.125, 3_300_000_000.25]
+    );
+    let index = PickIndex::new(&b);
+    let i = index.pick([500_000.125, 3_300_000_000.25], 0.001).unwrap();
+    assert_eq!(b.range_of(i).unwrap().top, handles[0]);
+    assert!(index
+        .within(
+            [499_999.0, 3_299_999_999.0],
+            [500_001.0, 3_300_000_001.0],
+            10,
+            |_| true
+        )
+        .contains(&0));
+    let bytes = b.to_bytes();
+    assert_eq!(u32_at(&bytes, 4), 3);
+    assert!((0..u32_at(&bytes, 56) as usize)
+        .any(|i| u32_at(&bytes, 60 + i * 12) == section::SEGMENT_TILES));
+}
+
+#[test]
+fn survey_session_picks_windows_polygons_and_snaps() {
+    use qiyas_core::{Command, DrawSpec, Outcome, Session, SnapKind, SnapModes};
+    let mut session = Session::new_blank(std::path::Path::new("/tmp/survey-tiles.dwg"), 4);
+    let a = [500_000.0, 3_300_000_000.0];
+    let b = [500_000.125, 3_300_000_000.25];
+    let Outcome::Added { handles } = session.run(Command::Draw(DrawSpec::Line { a, b })).unwrap()
+    else {
+        panic!("line")
+    };
+    session
+        .run(Command::Draw(DrawSpec::Line {
+            a: [0.0, 0.0],
+            b: [1.0, 1.0],
+        }))
+        .unwrap();
+    assert_eq!(session.pick(b, 0.01).unwrap().entity, handles[0]);
+    let bounds = [[499_999.0, 3_299_999_999.0], [500_001.0, 3_300_000_001.0]];
+    let polygon = [
+        bounds[0],
+        [bounds[1][0], bounds[0][1]],
+        bounds[1],
+        [bounds[0][0], bounds[1][1]],
+    ];
+    for crossing in [false, true] {
+        let window = session.pick_window(bounds, crossing);
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].entity, handles[0]);
+        let picked = session.pick_polygon(&polygon, crossing);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].entity, handles[0]);
+    }
+    let snap = session.snap(b, 0.01, &SnapModes::default(), None).unwrap();
+    assert_eq!(snap.kind, SnapKind::End);
+    assert_eq!(snap.point, b);
+}
+
+#[test]
+fn tiled_bytes_match_the_window_fixture() {
+    let b = Batch {
+        bounds: [[0.0, 0.0], [500_001.0, 3_300_000_001.0]],
+        origin: [250_000.0, 1_650_000_000.0],
+        segments: vec![0.0, 0.0, 0.125, 0.25, 0.0, 0.0, 1.0, 1.0],
+        colors: vec![0xffffff; 2],
+        ranges: (0..2)
+            .map(|i| Range {
+                top: u64::from(i + 1),
+                entity: u64::from(i + 1),
+                chain: NO_CHAIN,
+                first: i,
+                count: 1,
+                flags: 0,
+            })
+            .collect(),
+        segment_tiles: vec![
+            qiyas_render::TileSpan {
+                first: 0,
+                count: 1,
+                origin: [500_000.0, 3_300_000_000.0],
+            },
+            qiyas_render::TileSpan {
+                first: 1,
+                count: 1,
+                origin: [0.0, 0.0],
+            },
+        ],
+        ..Batch::default()
+    };
+    let hex: String = b.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex, TILED_BYTES);
+}
+const TILED_BYTES: &str = "4259495103000000000000000000000000000000000000000000000084841e41000020204096e8410000000080840e41000000204096d8410800000003000000a00000004000000004000000e00000000000000005000000e0000000200000000600000000010000080000000700000008010000000000000800000008010000280000000900000030010000000000000e00000030010000300000000000000001000000000000000100000000000000ffffffff00000000010000000000000002000000000000000200000000000000ffffffff01000000010000000000000000000000000000000000003e0000803e00000000000000000000803f0000803fffffff00ffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000080841e41000000204096e841010000000100000000000000000000000000000000000000";

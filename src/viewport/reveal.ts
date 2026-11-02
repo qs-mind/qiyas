@@ -1,6 +1,6 @@
 /** Mizan's changes drawn live: the entities a step added grow one after another, line by line,
  *  over the drawing as it was, then the new drawing takes their place. */
-import type { Batch } from "./batch";
+import { originAt, type Batch } from "./batch";
 
 /** Longest and shortest time one entity takes to draw, in ms. */
 export const ENTITY_MIN_MS = 120;
@@ -47,13 +47,13 @@ export function planReveal(batch: Batch, handles: number[]): RevealPlan | null {
   const gap = n > 1 ? (span - duration) / (n - 1) : 0;
   const segments = new Float64Array(total * 4);
   const entities: RevealPlan["entities"] = [];
-  const [ox, oy] = batch.origin;
   let at = 0;
   drawn.forEach((own, i) => {
     const first = at;
     for (const [start, count] of own) {
       for (let j = start; j < start + count; j++) {
         const s = batch.segments;
+        const [ox, oy] = originAt(batch, "segmentTiles", j);
         segments[4 * at] = s[4 * j] + ox;
         segments[4 * at + 1] = s[4 * j + 1] + oy;
         segments[4 * at + 2] = s[4 * j + 2] + ox;

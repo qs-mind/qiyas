@@ -8,12 +8,16 @@
  *
  * Precision: drawings can sit far from (0, 0) (survey grids in metres or millimetres), where f32
  * keeps only a few useful digits. So no absolute coordinate ever reaches the GPU. The segments arrive
- * relative to `batch.origin` and are uploaded once as f32. On each draw the view transform is built
+ * relative to each tile origin and are uploaded once as f32. On each draw the view transform is built
  * in f64 on the JS side relative to that same origin (camera centre minus origin), and only that
  * small offset is passed to the shader as f32.
  */
 import {
   FILL_BACKGROUND,
+  originAt,
+  tileIndex,
+  tiledSpans,
+  type TileSpan,
   imageUniforms,
   wipeoutSpans,
   matchingRanges,
@@ -27,7 +31,7 @@ import type { PaperView, Ucs } from "../api";
 import type { Camera } from "./camera";
 import { GRID_MAJOR, gridLevels, offsetInPeriod } from "./grid";
 import type { Palette } from "./colours";
-import { scissorBox, viewCamera, viewSpans } from "./inset";
+import { scissorBox, tileCamera, viewCamera, viewSpans } from "./inset";
 
 export type { Theme } from "./colours";
 
@@ -72,7 +76,7 @@ const HIGHLIGHT_PX = 2;
 const VERTEX = `#version 300 es
 in vec2 a_pos;
 in vec4 a_color;
-uniform vec2 u_center;  // camera centre minus batch origin
+uniform vec2 u_center;  // camera centre minus tile origin
 uniform vec2 u_toClip;  // 2 / (canvas size in world units)
 uniform vec2 u_offset;  // clip-space nudge, used to thicken the highlight
 out vec4 v_color;
@@ -238,44 +242,56 @@ function link(gl: WebGL2RenderingContext, vertex: string, fragment: string): Web
   return program;
 }
 
-/** Element indices of the quads `[first, first + count)` per atlas page, two triangles each. */
-function quadIndices(b: Batch, spans: Iterable<[number, number]>): Map<number, number[]> {
-  const byPage = new Map<number, number[]>();
+/** One index buffer, grouped by tile and atlas page. */
+type PagedIndices = { pages: { page: number; origin: [number, number]; offset: number; count: number }[] };
+
+function uploadPaged(gl: WebGL2RenderingContext, b: Batch, input: Iterable<[number, number]>): PagedIndices {
+  const spans = Array.from(input);
+  const groups = new Map<number, { page: number; origin: [number, number]; offset: number; count: number; cursor: number }>();
+  let length = 0;
   for (const [first, count] of spans) {
     for (let i = first; i < first + count; i++) {
       const page = b.quads.page(i);
-      let list = byPage.get(page);
-      if (!list) byPage.set(page, (list = []));
-      const v = 4 * i;
-      list.push(v, v + 1, v + 2, v, v + 2, v + 3);
+      const key = tileIndex(b.quadTiles, i) * 65536 + page;
+      let group = groups.get(key);
+      if (!group) {
+        group = { page, origin: originAt(b, "quadTiles", i), offset: 0, count: 0, cursor: 0 };
+        groups.set(key, group);
+      }
+      group.count += 6;
+      length += 6;
     }
   }
-  return byPage;
-}
-
-/** One index buffer holding the pages' lists back to back, and where each page's list starts. */
-type PagedIndices = { pages: { page: number; offset: number; count: number }[] };
-
-function uploadPaged(gl: WebGL2RenderingContext, byPage: Map<number, number[]>): PagedIndices {
-  const all: number[] = [];
-  const pages = [];
-  for (const [page, list] of byPage) {
-    pages.push({ page, offset: 4 * all.length, count: list.length });
-    for (const i of list) all.push(i);
+  let at = 0;
+  for (const group of groups.values()) {
+    group.offset = 4 * at;
+    group.cursor = at;
+    at += group.count;
   }
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(all), gl.STATIC_DRAW);
-  return { pages };
+  const indices = new Uint32Array(length);
+  for (const [first, count] of spans) {
+    for (let i = first; i < first + count; i++) {
+      const key = tileIndex(b.quadTiles, i) * 65536 + b.quads.page(i);
+      const group = groups.get(key)!;
+      const at = group.cursor, v = 4 * i;
+      indices[at] = v; indices[at + 1] = v + 1; indices[at + 2] = v + 2;
+      indices[at + 3] = v; indices[at + 4] = v + 2; indices[at + 5] = v + 3;
+      group.cursor += 6;
+    }
+  }
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  return { pages: Array.from(groups.values()) };
 }
 
 /** One RGBA byte quad per segment end; both ends of a segment share its colour. A text's box
  *  gets alpha 0: it is drawn only when highlighted. */
-function lineColors(b: Batch | null): Uint8Array {
+export function lineColors(b: Batch | null): Uint8Array {
   const segmentColors = b?.colors ?? new Uint32Array();
   const n = segmentColors.length;
   const rgba = new Uint8Array(8 * n);
   for (let i = 0; i < n; i++) {
     const c = segmentColors[i];
-    for (const at of [8 * i, 8 * i + 4]) {
+    for (let at = 8 * i; at < 8 * i + 8; at += 4) {
       rgba[at] = (c >> 16) & 255;
       rgba[at + 1] = (c >> 8) & 255;
       rgba[at + 2] = c & 255;
@@ -389,14 +405,13 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   gl.vertexAttribPointer(aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
   gl.bindVertexArray(null);
   const backgroundVao = gl.createVertexArray();
-  const backgroundPositions = gl.createBuffer();
   gl.bindVertexArray(backgroundVao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, backgroundPositions);
+  gl.bindBuffer(gl.ARRAY_BUFFER, fillPositions);
   gl.enableVertexAttribArray(aPos);
   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
-  let fillCount = 0;
-  let backgroundCount = 0;
+  let fillSpans: TileSpan[] = [];
+  let backgroundSpans: TileSpan[] = [];
 
   // The overlay has positions only; u_color gives its colour.
   const overlayVao = gl.createVertexArray();
@@ -506,76 +521,88 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   let inset: Batch | null = null;
   let insetViews: {
     view: PaperView;
-    lines: [number, number][];
-    fills: [number, number][];
+    lines: TileSpan[];
+    fills: TileSpan[];
     text: PagedIndices;
     buffer: WebGLBuffer;
   }[] = [];
 
   let batch: Batch | null = null;
   // The segments drawn under the wipeouts and the wipeouts' frames drawn over them.
-  let spans: ReturnType<typeof wipeoutSpans> = { lines: [], frames: [] };
+  let spans: { lines: TileSpan[]; frames: TileSpan[] } = { lines: [], frames: [] };
   let highlight: Target[] = [];
-  let highlightCount = 0;
-  let overlay: Float64Array | null = null;
+  let highlightSpans: TileSpan[] = [];
+  let overlaySpans: TileSpan[] = [];
+  const center = new Float32Array(2);
+  function setCenter(location: WebGLUniformLocation | null, camera: Camera, origin: [number, number]) {
+    tileCamera(camera, origin, center);
+    gl.uniform2fv(location, center);
+  }
+  function drawSpans(mode: number, vertices: number, spans: TileSpan[], camera: Camera) {
+    for (const span of spans) {
+      setCenter(uCenter, camera, span.origin);
+      gl.drawArrays(mode, vertices * span.first, vertices * span.count);
+    }
+  }
 
   function uploadHighlight() {
     const indices = buildHighlightIndices(batch, highlight);
-    highlightCount = indices.length;
+    highlightSpans = [];
+    if (batch) {
+      for (let i = 0; i < indices.length; i += 2) {
+        const origin = originAt(batch, "segmentTiles", indices[i] / 2);
+        const last = highlightSpans[highlightSpans.length - 1];
+        if (last?.origin === origin) last.count += 2;
+        else highlightSpans.push({ first: i, count: 2, origin });
+      }
+    }
     gl.bindVertexArray(vao);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
     gl.bindVertexArray(textVao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, textHighlightIndices);
     textHighlight = batch
-      ? uploadPaged(gl, quadIndices(batch, matchingRanges(batch, highlight, batch.textRanges)))
+      ? uploadPaged(gl, batch, matchingRanges(batch, highlight, batch.textRanges))
       : { pages: [] };
     gl.bindVertexArray(null);
   }
 
   function uploadLines(b: Batch | null) {
-    spans = b ? wipeoutSpans(b) : { lines: [], frames: [] };
+    const visible = b ? wipeoutSpans(b) : { lines: [], frames: [] };
+    spans = b ? { lines: tiledSpans(b, "segmentTiles", visible.lines), frames: tiledSpans(b, "segmentTiles", visible.frames) } : { lines: [], frames: [] };
     gl.bindBuffer(gl.ARRAY_BUFFER, positions);
     gl.bufferData(gl.ARRAY_BUFFER, b?.segments ?? new Float32Array(), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, colors);
     gl.bufferData(gl.ARRAY_BUFFER, lineColors(b), gl.STATIC_DRAW);
   }
 
-  /** The fill triangles: coloured ones and background ones apart, three vertices each. */
+  /** Keep fill order and share positions between the colour and wipeout passes. */
   function uploadFills(b: Batch | null) {
     const n = b?.fills.length ?? 0;
-    let background = 0;
-    for (let i = 0; i < n; i++) if (b!.fills.color(i) & FILL_BACKGROUND) background++;
-    const colored = new Float32Array(6 * (n - background));
-    const rgba = new Uint8Array(12 * (n - background));
-    const behind = new Float32Array(6 * background);
-    let [c, w] = [0, 0];
+    const xy = new Float32Array(6 * n);
+    const rgba = new Uint8Array(12 * n);
+    const colored: [number, number][] = [], background: [number, number][] = [];
     for (let i = 0; i < n; i++) {
-      const f = b!.fills;
-      const color = f.color(i);
-      const target = color & FILL_BACKGROUND ? behind : colored;
-      const at = 6 * (color & FILL_BACKGROUND ? w++ : c);
+      const f = b!.fills, color = f.color(i);
+      const spans = color & FILL_BACKGROUND ? background : colored;
+      const last = spans[spans.length - 1];
+      if (last && last[0] + last[1] === i) last[1]++;
+      else spans.push([i, 1]);
       for (let k = 0; k < 3; k++) {
-        target[at + 2 * k] = f.x(i, k);
-        target[at + 2 * k + 1] = f.y(i, k);
-      }
-      if (color & FILL_BACKGROUND) continue;
-      for (let k = 0; k < 3; k++) {
-        const o = 12 * c + 4 * k;
+        xy[6 * i + 2 * k] = f.x(i, k);
+        xy[6 * i + 2 * k + 1] = f.y(i, k);
+        const o = 12 * i + 4 * k;
         rgba[o] = (color >> 16) & 255;
         rgba[o + 1] = (color >> 8) & 255;
         rgba[o + 2] = color & 255;
         rgba[o + 3] = 255;
       }
-      c++;
     }
-    fillCount = 3 * c;
-    backgroundCount = 3 * w;
+    fillSpans = b ? tiledSpans(b, "fillTiles", colored) : [];
+    backgroundSpans = b ? tiledSpans(b, "fillTiles", background) : [];
     gl.bindBuffer(gl.ARRAY_BUFFER, fillPositions);
-    gl.bufferData(gl.ARRAY_BUFFER, colored, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, xy, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, fillColors);
     gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, backgroundPositions);
-    gl.bufferData(gl.ARRAY_BUFFER, behind, gl.STATIC_DRAW);
   }
 
   function uploadText(b: Batch | null) {
@@ -587,7 +614,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, textColors);
     gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, textIndices);
-    textAll = b ? uploadPaged(gl, quadIndices(b, [[0, n]])) : { pages: [] };
+    textAll = b ? uploadPaged(gl, b, [[0, n]]) : { pages: [] };
     gl.bindVertexArray(null);
   }
 
@@ -655,11 +682,12 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   }
 
   /** Draws the quads of `indices` from the bound text VAO, a page texture at a time. */
-  function drawText(indices: PagedIndices, buffer: WebGLBuffer) {
+  function drawText(indices: PagedIndices, buffer: WebGLBuffer, camera: Camera) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
-    for (const { page, offset, count } of indices.pages) {
+    for (const { page, offset, count, origin } of indices.pages) {
       const texture = textures.get(page);
       if (!texture || count === 0) continue;
+      setCenter(tCenter, camera, origin);
       gl.bindTexture(gl.TEXTURE_2D, texture.texture);
       gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, offset);
     }
@@ -752,7 +780,21 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     },
 
     setOverlay(segments) {
-      overlay = segments;
+      overlaySpans = [];
+      if (!segments?.length) return;
+      const relative = new Float32Array(segments.length);
+      let origin: [number, number] = [segments[0], segments[1]];
+      for (let i = 0; i < segments.length; i += 4) {
+        if (Math.abs(segments[i] - origin[0]) > 1e6 || Math.abs(segments[i + 1] - origin[1]) > 1e6) {
+          origin = [segments[i], segments[i + 1]];
+        }
+        const last = overlaySpans[overlaySpans.length - 1];
+        if (last?.origin === origin) last.count++;
+        else overlaySpans.push({ first: i / 4, count: 1, origin });
+        for (let k = 0; k < 4; k++) relative[i + k] = segments[i + k] - origin[k % 2];
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, overlayPositions);
+      gl.bufferData(gl.ARRAY_BUFFER, relative, gl.DYNAMIC_DRAW);
     },
 
     setGrid(spacing, ucs) {
@@ -777,8 +819,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         const buffer = gl.createBuffer();
         const spans = viewSpans(view, b);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
-        const text = uploadPaged(gl, quadIndices(b, spans.texts));
-        return { view, lines: spans.lines, fills: spans.fills, text, buffer };
+        const text = uploadPaged(gl, b, spans.texts);
+        return { view, lines: tiledSpans(b, "segmentTiles", spans.lines), fills: tiledSpans(b, "fillTiles", spans.fills), text, buffer };
       });
       gl.bindVertexArray(null);
     },
@@ -822,7 +864,6 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       // its frame: the layout's own pictures, fills, lines and text (labels, title blocks) draw
       // over it, each pass setting the layout's camera again.
       if (inset && insetViews.length > 0) {
-        const m = inset;
         gl.enable(gl.SCISSOR_TEST);
         for (const v of insetViews) {
           const box = scissorBox(camera, v.view, canvas.width, canvas.height);
@@ -831,7 +872,6 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
           const mc = viewCamera(camera, v.view);
           const toClip: [number, number] = [2 / (mc.width * mc.scale), 2 / (mc.height * mc.scale)];
           gl.useProgram(program);
-          gl.uniform2f(uCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
           gl.uniform2f(uToClip, ...toClip);
           gl.uniform4f(uColor, 0, 0, 0, 0);
           gl.uniform2f(uOffset, 0, 0);
@@ -839,13 +879,12 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
           gl.uniform3f(uInk, ...ink);
           gl.uniform3f(uPaper, ...paper);
           gl.bindVertexArray(insetFillVao);
-          for (const [first, count] of v.fills) gl.drawArrays(gl.TRIANGLES, 3 * first, 3 * count);
+          drawSpans(gl.TRIANGLES, 3, v.fills, mc);
           gl.bindVertexArray(insetVao);
-          for (const [first, count] of v.lines) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
+          drawSpans(gl.LINES, 2, v.lines, mc);
           if (v.text.pages.length > 0) {
             gl.useProgram(textProgram);
             gl.bindVertexArray(insetTextVao);
-            gl.uniform2f(tCenter, mc.cx - m.origin[0], mc.cy - m.origin[1]);
             gl.uniform2f(tToClip, ...toClip);
             gl.uniform1i(tLight, light ? 1 : 0);
             gl.uniform3f(tInk, ...ink);
@@ -855,7 +894,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
             gl.activeTexture(gl.TEXTURE0);
             gl.enable(gl.BLEND);
             gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            drawText(v.text, v.buffer);
+            drawText(v.text, v.buffer, mc);
             gl.disable(gl.BLEND);
           }
         }
@@ -867,7 +906,6 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       if (batch.images.length > 0) {
         gl.useProgram(imageProgram);
         gl.bindVertexArray(imageVao);
-        gl.uniform2f(iCenter, camera.cx - batch.origin[0], camera.cy - batch.origin[1]);
         gl.uniform2f(iToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
         gl.uniform1i(iLight, light ? 1 : 0);
         gl.uniform3f(iBackground, ...background);
@@ -875,6 +913,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.activeTexture(gl.TEXTURE0);
         for (let i = 0; i < batch.images.length; i++) {
           const picture = pictures.get(batch.images.id(i));
+          setCenter(iCenter, camera, originAt(batch, "imageTiles", i));
           if (!picture) continue;
           gl.bindTexture(gl.TEXTURE_2D, picture.texture);
           const look = imageUniforms(batch.images.flags(i));
@@ -889,7 +928,6 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
       gl.useProgram(program);
       gl.bindVertexArray(vao);
-      gl.uniform2f(uCenter, camera.cx - batch.origin[0], camera.cy - batch.origin[1]);
       gl.uniform2f(uToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
       gl.uniform1i(uLight, light ? 1 : 0);
       gl.uniform3f(uInk, ...ink);
@@ -897,27 +935,26 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.uniform2f(uOffset, 0, 0);
       // Fills under the lines; wipeouts over both in the background colour, their frames last.
       gl.uniform4f(uColor, 0, 0, 0, 0);
-      if (fillCount > 0) {
+      if (fillSpans.length > 0) {
         gl.bindVertexArray(fillVao);
-        gl.drawArrays(gl.TRIANGLES, 0, fillCount);
+        drawSpans(gl.TRIANGLES, 3, fillSpans, camera);
       }
       gl.bindVertexArray(vao);
-      for (const [first, count] of spans.lines) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
-      if (backgroundCount > 0) {
+      drawSpans(gl.LINES, 2, spans.lines, camera);
+      if (backgroundSpans.length > 0) {
         gl.bindVertexArray(backgroundVao);
         gl.uniform4f(uColor, ...background, 1);
-        gl.drawArrays(gl.TRIANGLES, 0, backgroundCount);
+        drawSpans(gl.TRIANGLES, 3, backgroundSpans, camera);
         gl.uniform4f(uColor, 0, 0, 0, 0);
         gl.bindVertexArray(vao);
       }
-      for (const [first, count] of spans.frames) gl.drawArrays(gl.LINES, 2 * first, 2 * count);
+      drawSpans(gl.LINES, 2, spans.frames, camera);
 
       // The text over the lines, its coverage blended onto them.
       const text = (indices: PagedIndices, buffer: WebGLBuffer, color: number[] | null) => {
         if (indices.pages.length === 0) return;
         gl.useProgram(textProgram);
         gl.bindVertexArray(textVao);
-        gl.uniform2f(tCenter, camera.cx - batch!.origin[0], camera.cy - batch!.origin[1]);
         gl.uniform2f(tToClip, 2 / (camera.width * camera.scale), 2 / (camera.height * camera.scale));
         gl.uniform1i(tLight, light ? 1 : 0);
         gl.uniform3f(tInk, ...ink);
@@ -928,7 +965,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.enable(gl.BLEND);
         // The canvas keeps opaque alpha where text is drawn over it.
         gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-        drawText(indices, buffer);
+        drawText(indices, buffer, camera);
         gl.disable(gl.BLEND);
         gl.bindVertexArray(null);
         gl.useProgram(program);
@@ -938,37 +975,27 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
       text(textHighlight, textHighlightIndices, [...violet, 1]);
 
-      // Line width is 1 device pixel on most platforms, so violet work is thickened by redrawing
-      // it nudged one device pixel at a time across and down.
+      // Thicken highlights without rebuilding or uploading geometry on a frame.
       const dpr = canvas.width / camera.width;
       const steps = Math.max(2, Math.round(HIGHLIGHT_PX * dpr));
-      const px = 2 / canvas.width;
-      const py = 2 / canvas.height;
-      const thick = (drawOnce: () => void) => {
+      const px = 2 / canvas.width, py = 2 / canvas.height;
+      if (highlightSpans.length || overlaySpans.length) {
         gl.uniform4f(uColor, ...violet, 1);
-        for (let i = 0; i < steps; i++) {
-          for (const [dx, dy] of i === 0 ? [[0, 0]] : [[i, 0], [0, -i]]) {
-            gl.uniform2f(uOffset, dx * px, dy * py);
-            drawOnce();
+        for (let i = 0; i < 2 * steps - 1; i++) {
+          const step = Math.ceil(i / 2);
+          gl.uniform2f(uOffset, i % 2 ? step * px : 0, i > 0 && i % 2 === 0 ? -step * py : 0);
+          if (highlightSpans.length) {
+            gl.bindVertexArray(vao);
+            for (const span of highlightSpans) {
+              setCenter(uCenter, camera, span.origin);
+              gl.drawElements(gl.LINES, span.count, gl.UNSIGNED_INT, 4 * span.first);
+            }
+          }
+          if (overlaySpans.length) {
+            gl.bindVertexArray(overlayVao);
+            drawSpans(gl.LINES, 2, overlaySpans, camera);
           }
         }
-      };
-
-      if (highlightCount > 0) {
-        thick(() => gl.drawElements(gl.LINES, highlightCount, gl.UNSIGNED_INT, 0));
-      }
-
-      if (overlay && overlay.length > 0) {
-        // Relative to the batch origin in f64 first, like the batch itself (see the top comment).
-        const relative = new Float32Array(overlay.length);
-        for (let i = 0; i < overlay.length; i += 2) {
-          relative[i] = overlay[i] - batch.origin[0];
-          relative[i + 1] = overlay[i + 1] - batch.origin[1];
-        }
-        gl.bindVertexArray(overlayVao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, overlayPositions);
-        gl.bufferData(gl.ARRAY_BUFFER, relative, gl.DYNAMIC_DRAW);
-        thick(() => gl.drawArrays(gl.LINES, 0, relative.length / 2));
       }
       gl.bindVertexArray(null);
     },
@@ -992,7 +1019,6 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteBuffer(fillPositions);
       gl.deleteBuffer(fillColors);
       gl.deleteVertexArray(fillVao);
-      gl.deleteBuffer(backgroundPositions);
       gl.deleteVertexArray(backgroundVao);
       gl.deleteProgram(program);
       gl.deleteBuffer(textVertices);

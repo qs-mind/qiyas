@@ -342,3 +342,37 @@ fn a_wide_text_draws_from_a_size_that_fits_its_width() {
         rows(narrow)
     );
 }
+
+#[test]
+fn survey_glyphs_keep_local_origins_when_zoom_changes() {
+    let mut doc = CadDocument::new();
+    add(
+        &mut doc,
+        EntityType::Line(opencadcodec::Line::from_coords(
+            0.0, 0.0, 0.0, 1.0, 1.0, 0.0,
+        )),
+    );
+    add(
+        &mut doc,
+        EntityType::Text(
+            Text::with_value("MEGA SITE", Vector3::new(500_000.0, 3_300_000_000.0, 0.0))
+                .with_height(2.0),
+        ),
+    );
+    let (mut batch, mut engine) = text_batch(&doc, at_zoom(8.0));
+    let segments = batch.segments.clone();
+    let tiles = batch.segment_tiles.clone();
+    for zoom in [8.0, 64.0] {
+        place_text(&mut batch, &mut engine, zoom);
+        assert!(!batch.quads.is_empty());
+        assert!(!batch.quad_tiles.is_empty());
+        for (i, q) in batch.quads.iter().enumerate() {
+            assert!(q.corners.iter().all(|v| v.abs() < 1e7));
+            let o = batch.quad_origin(i);
+            assert!((o[0] + f64::from(q.corners[0]) - 500_000.0).abs() < 40.0);
+            assert!((o[1] + f64::from(q.corners[1]) - 3_300_000_000.0).abs() < 4.0);
+        }
+        assert_eq!(batch.segments, segments);
+        assert_eq!(batch.segment_tiles, tiles);
+    }
+}

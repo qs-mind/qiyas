@@ -618,14 +618,15 @@ impl TextEngine {
     }
 
     /// The glyph quads of `texts` at `px_per_unit` screen pixels per drawing unit, relative to
-    /// `origin`, with one range per text over them (same shape as the segment ranges). Draws the
-    /// glyphs not in the atlas yet and commits the atlas.
+    /// local origins, with one range per text and tile spans over the quads. Uses `origin`
+    /// near it; draws missing glyphs and commits the atlas.
     pub fn place(
         &mut self,
         texts: &[LaidText],
         origin: [f64; 2],
         px_per_unit: f64,
-    ) -> (Vec<Quad>, Vec<crate::Range>) {
+    ) -> (Vec<Quad>, Vec<crate::Range>, Vec<crate::TileSpan>) {
+        let mut tiles = Vec::new();
         let mut quads = Vec::new();
         let mut ranges: Vec<crate::Range> = Vec::new();
         for text in texts {
@@ -649,7 +650,7 @@ impl TextEngine {
                         f64::from(g.y - (slot.top + cy) / px),
                     ];
                     let [x, y] = text.xf.apply(p);
-                    [(x - origin[0]) as f32, (y - origin[1]) as f32]
+                    [x, y]
                 };
                 let [a, b, c, d] = [
                     corner(0.0, 0.0),
@@ -657,8 +658,10 @@ impl TextEngine {
                     corner(w, h),
                     corner(0.0, h),
                 ];
+                let corners = [a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1]];
+                let local = crate::batch::append_tile(&mut tiles, origin, quads.len(), &corners);
                 quads.push(Quad {
-                    corners: [a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1]],
+                    corners: std::array::from_fn(|k| (corners[k] - local[k % 2]) as f32),
                     uv: slot.rect,
                     color: text.color,
                     page: slot.page,
@@ -687,7 +690,7 @@ impl TextEngine {
             }
         }
         self.atlas.commit();
-        (quads, ranges)
+        (quads, ranges, tiles)
     }
 
     /// Where glyph `glyph` of `font` at size bucket `bucket` sits in the atlas, drawing it there

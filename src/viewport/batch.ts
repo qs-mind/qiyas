@@ -64,7 +64,7 @@ export class Ranges {
   }
 }
 
-/** One glyph quad: corners relative to the batch origin (top-left, top-right, bottom-right,
+/** One glyph quad: corners relative to their tile origin (top-left, top-right, bottom-right,
  *  bottom-left of the glyph), texel rectangle `u0 v0 u1 v1` on atlas page `page`. */
 export type Quad = { corners: number[]; uv: number[]; color: number; page: number; flags: number };
 
@@ -83,7 +83,7 @@ export class Quads {
   get length() {
     return this.f32.length / 12;
   }
-  /** Corner `k` (0 to 3) of quad `i`: x, y relative to the batch origin. */
+  /** Corner `k` (0 to 3) of quad `i`: x, y relative to their tile origin. */
   x(i: number, k: number) {
     return this.f32[12 * i + 2 * k];
   }
@@ -124,7 +124,7 @@ export const IMAGE_FADED = 2;
 export const IMAGE_ADJUSTED = 4;
 
 /** The image quads section read in place; quad `i` is the 40-byte record `i`: corners (top-left,
- *  top-right, bottom-right, bottom-left of the picture) relative to the batch origin, image id,
+ *  top-right, bottom-right, bottom-left of the picture) relative to their tile origin, image id,
  *  flags. */
 export class ImageQuads {
   /** The same bytes as f32 and u32 (10 per record). */
@@ -161,7 +161,7 @@ export class ImageQuads {
 export const FILL_BACKGROUND = 0x01000000;
 
 /** The fill triangles section read in place; triangle `i` is the 28-byte record `i`: corners
- *  `x0 y0 x1 y1 x2 y2` relative to the batch origin, then `0xRRGGBB` or `FILL_BACKGROUND`. */
+ *  `x0 y0 x1 y1 x2 y2` relative to their tile origin, then `0xRRGGBB` or `FILL_BACKGROUND`. */
 export class Fills {
   /** The same bytes as f32 and u32 (7 per record). */
   constructor(
@@ -215,8 +215,52 @@ export function wipeoutSpans(b: Batch): { lines: [number, number][]; frames: [nu
 /** The pixels image quads need: picture `id` as of `version`. */
 export type ImageEntry = { id: number; version: number };
 
+export type TileSpan = { first: number; count: number; origin: [number, number] };
+export type TileStream = "segmentTiles" | "fillTiles" | "quadTiles" | "imageTiles";
+
+/** Index of the origin span containing a primitive. */
+export function tileIndex(tiles: TileSpan[] | undefined, i: number): number {
+  if (!tiles?.length) return 0;
+  let lo = 0, hi = tiles.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (tiles[mid].first + tiles[mid].count <= i) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+export function originAt(b: Batch, stream: TileStream, i: number): [number, number] {
+  const tiles = b[stream];
+  return tiles?.[tileIndex(tiles, i)]?.origin ?? b.origin;
+}
+
+/** Intersect visibility spans with origin spans once, during upload. */
+export function tiledSpans(b: Batch, stream: TileStream, spans: Iterable<[number, number]>): TileSpan[] {
+  const tiles = b[stream];
+  const out: TileSpan[] = [];
+  for (const [first, count] of spans) {
+    if (!tiles?.length) {
+      if (count) out.push({ first, count, origin: b.origin });
+      continue;
+    }
+    for (let i = tileIndex(tiles, first); i < tiles.length; i++) {
+      const t = tiles[i];
+      if (t.first >= first + count) break;
+      const start = Math.max(first, t.first);
+      const end = Math.min(first + count, t.first + t.count);
+      if (end > start) out.push({ first: start, count: end - start, origin: t.origin });
+    }
+  }
+  return out;
+}
+
 export type Batch = {
-  /** `x0 y0 x1 y1` per segment, relative to `origin`. */
+  segmentTiles?: TileSpan[];
+  fillTiles?: TileSpan[];
+  quadTiles?: TileSpan[];
+  imageTiles?: TileSpan[];
+  /** `x0 y0 x1 y1` per segment, relative to its segment tile origin. */
   segments: Float32Array;
   /** `0xRRGGBB` per segment. */
   colors: Uint32Array;
@@ -226,7 +270,7 @@ export type Batch = {
   chains: bigint[][];
   /** `[[min x, min y], [max x, max y]]` in absolute drawing coordinates; zeros when empty. */
   bounds: [[number, number], [number, number]];
-  /** Absolute drawing point that `segments` and `quads` are relative to. */
+  /** Default origin for streams without tile spans. */
   origin: [number, number];
   /** Glyph quads of the texts. */
   quads: Quads;
@@ -257,7 +301,7 @@ export type Target = { handle: number; chain: number[] };
 
 /** "BYIQ": `0x51495942` read little-endian. */
 const MAGIC = 0x51495942;
-const VERSION = 2;
+const VERSION = 3;
 export const NO_CHAIN = 0xffffffff;
 const SECTION = {
   ranges: 3,
@@ -271,10 +315,14 @@ const SECTION = {
   imageTable: 11,
   fills: 12,
   fillRanges: 13,
+  segmentTiles: 14,
+  fillTiles: 15,
+  quadTiles: 16,
+  imageTiles: 17,
 };
 
 /**
- * Decodes layout version 2 documented on `Batch::to_bytes` (crates/qiyas-render/src/batch.rs): a
+ * Decodes layout versions 2 and 3 documented on `Batch::to_bytes` (crates/qiyas-render/src/batch.rs): a
  * header, then a table of sections found by kind; unknown kinds are skipped, and the text sections
  * (7, 8, 9), the image sections (10, 11) and the fill sections (12, 13) may be left out (no texts,
  * no underlays, no fills). The typed views share `buf` (every section is 8-byte
@@ -287,7 +335,7 @@ export function parseBatch(buf: ArrayBuffer): Batch {
     throw new Error("Render batch is not in the Qiyas batch format");
   }
   const version = v.getUint32(4, true);
-  if (version !== VERSION) {
+  if (version !== VERSION && version !== 2) {
     throw new Error(`Render batch is layout version ${version}; this window reads version ${VERSION}`);
   }
   const f = (i: number) => v.getFloat64(8 + 8 * i, true);
@@ -398,7 +446,28 @@ export function parseBatch(buf: ArrayBuffer): Batch {
   const fr = sections.has(SECTION.fillRanges) ? section(SECTION.fillRanges, 32) : empty;
   const fillRanges = readRanges(SECTION.fillRanges, fr, fills.length);
 
+  const readTiles = (kind: number, count: number): TileSpan[] | undefined => {
+    if (!sections.has(kind)) return undefined;
+    const found = section(kind, 24);
+    const tiles: TileSpan[] = [];
+    let covered = 0;
+    for (let at = found.at; at < found.at + found.length; at += 24) {
+      const first = v.getUint32(at, true), n = v.getUint32(at + 4, true);
+      const origin: [number, number] = [v.getFloat64(at + 8, true), v.getFloat64(at + 16, true)];
+      if (first !== covered || n === 0 || !origin.every(Number.isFinite)) {
+        throw new Error(`Render batch section ${kind} has invalid tiles`);
+      }
+      tiles.push({ first, count: n, origin });
+      covered += n;
+    }
+    if (covered !== count) throw new Error(`Render batch section ${kind} does not cover its primitives`);
+    return tiles;
+  };
   return {
+    segmentTiles: readTiles(SECTION.segmentTiles, n),
+    fillTiles: readTiles(SECTION.fillTiles, fills.length),
+    quadTiles: readTiles(SECTION.quadTiles, quads.length),
+    imageTiles: readTiles(SECTION.imageTiles, images.length),
     bounds: [
       [f(0), f(1)],
       [f(2), f(3)],
@@ -536,9 +605,9 @@ export function picturesInView(batch: Batch | null, visible: WorldBounds): Set<n
   if (!batch) return out;
   const [[x0, y0], [x1, y1]] = visible;
   const [mx, my] = [(x1 - x0) * PICTURE_MARGIN, (y1 - y0) * PICTURE_MARGIN];
-  const [ox, oy] = batch.origin;
   const q = batch.images;
   for (let i = 0; i < q.length; i++) {
+    const [ox, oy] = originAt(batch, "imageTiles", i);
     let [lx, ly, hx, hy] = [Infinity, Infinity, -Infinity, -Infinity];
     for (let k = 0; k < 4; k++) {
       const [x, y] = [q.x(i, k) + ox, q.y(i, k) + oy];
@@ -554,11 +623,11 @@ export function picturesInView(batch: Batch | null, visible: WorldBounds): Set<n
 export function newPictureBounds(before: Batch | null, after: Batch | null): WorldBounds | null {
   if (!after) return null;
   const old = new Set((before?.imageTable ?? []).map((e) => e.id));
-  const [ox, oy] = after.origin;
   const q = after.images;
   let [lx, ly, hx, hy] = [Infinity, Infinity, -Infinity, -Infinity];
   for (let i = 0; i < q.length; i++) {
     if (old.has(q.id(i))) continue;
+    const [ox, oy] = originAt(after, "imageTiles", i);
     for (let k = 0; k < 4; k++) {
       const [x, y] = [q.x(i, k) + ox, q.y(i, k) + oy];
       [lx, ly, hx, hy] = [Math.min(lx, x), Math.min(ly, y), Math.max(hx, x), Math.max(hy, y)];

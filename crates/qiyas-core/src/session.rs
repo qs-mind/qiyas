@@ -1432,14 +1432,8 @@ impl Session {
     pub fn pick_window(&self, bounds: [[f64; 2]; 2], crossing: bool) -> Vec<Picked> {
         self.with_cache(None, |cached| {
             let batch = &cached.batch;
-            let [ox, oy] = batch.origin;
-            // In the batch's own coordinates, as its segments are.
-            let lo = [bounds[0][0] - ox, bounds[0][1] - oy];
-            let hi = [bounds[1][0] - ox, bounds[1][1] - oy];
-            let segment = |i: usize| -> [f64; 4] {
-                let s = &batch.segments[4 * i..4 * i + 4];
-                [s[0], s[1], s[2], s[3]].map(f64::from)
-            };
+            let [lo, hi] = bounds;
+            let segment = |i: usize| batch.world_segment(i);
             let near = cached
                 .index()
                 .within(bounds[0], bounds[1], usize::MAX, |_| true);
@@ -1493,18 +1487,13 @@ impl Session {
             .fold([f64::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
         self.with_cache(None, |cached| {
             let batch = &cached.batch;
-            let [ox, oy] = batch.origin;
-            // In the batch's own coordinates, as its segments are.
-            let ring: Vec<[f64; 2]> = points.iter().map(|p| [p[0] - ox, p[1] - oy]).collect();
-            let segment = |i: usize| -> [f64; 4] {
-                let s = &batch.segments[4 * i..4 * i + 4];
-                [s[0], s[1], s[2], s[3]].map(f64::from)
-            };
+            let ring = points;
+            let segment = |i: usize| batch.world_segment(i);
             let near = cached.index().within(lo, hi, usize::MAX, |_| true);
             let mut tops = std::collections::BTreeSet::new();
             if crossing {
                 for i in near {
-                    if touches_ring(segment(i), &ring) {
+                    if touches_ring(segment(i), ring) {
                         tops.extend(batch.range_of(i).map(|r| r.top));
                     }
                 }
@@ -1517,7 +1506,7 @@ impl Session {
                 let mut outside = HashSet::new();
                 for r in batch.ranges.iter().filter(|r| reached.contains(&r.top)) {
                     let out = (r.first..r.first + r.count)
-                        .any(|i| !inside_ring(segment(i as usize), &ring));
+                        .any(|i| !inside_ring(segment(i as usize), ring));
                     if out {
                         outside.insert(r.top);
                     }
@@ -1618,7 +1607,6 @@ impl Session {
             }
             let [b0, b1] = batch.bounds;
             let whole_sheet = lo[0] <= b0[0] && lo[1] <= b0[1] && hi[0] >= b1[0] && hi[1] >= b1[1];
-            let [ox, oy] = batch.origin;
             let mut sources: Vec<(u64, Vec<u64>)> = Vec::new();
             let mut seen: HashMap<(u64, u32), usize> = HashMap::new();
             let mut drawn = Vec::with_capacity(found.len());
@@ -1630,9 +1618,7 @@ impl Session {
                     sources.push((r.entity, batch.chain_of(r).to_vec()));
                     sources.len() - 1
                 });
-                let s = &batch.segments[4 * i..4 * i + 4];
-                let at = |k: usize, o: f64| f64::from(s[k]) + o;
-                drawn.push((source, [at(0, ox), at(1, oy), at(2, ox), at(3, oy)]));
+                drawn.push((source, batch.world_segment(i)));
             }
             Some(Near {
                 sources,

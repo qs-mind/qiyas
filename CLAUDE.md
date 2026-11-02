@@ -459,6 +459,16 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
     (`qiyas-geom` `SAME_POINT`) grow with the coordinates' size past a million (`tol_near`,
     1e-12 of it; `SAME_POINT_REL` 1e-13), as float steps there exceed them: JOIN once refused two
     walls meeting at a 3.3e9 mm UTM northing.
+- Render batches use layout version 3. Sections 14–17 carry contiguous origin spans for lines,
+  fills, glyphs and images (`u32 first, count; f64 x, y`, 24 bytes). Without a span section the
+  header origin applies; compact drawings keep the same buffer sizes and pick-index build path.
+  Distant geometry gets local origins before vertices become float32, so a point at zero cannot
+  spoil survey work at a 3.3e9 mm northing. Primitive order and entity ranges stay unchanged.
+  CPU readers use `Batch::world_segment` and the per-stream origin accessors. GL subtracts each
+  origin from the camera in double precision, including inset views and highlights; glyph-only
+  refreshes keep the line and fill origins with their buffers. The window still reads version 2.
+  Overlay vertices are converted and uploaded in `setOverlay`, never during redraw. Glyph index
+  uploads fill one typed array directly; line colours allocate no array per segment.
 - The batch also carries fill triangles (section 12, `u32` colour each, bit 24 =
   `FILL_BACKGROUND`) and their ranges (13), only when there are fills; GL draws fills under the
   lines, then wipeouts in the background colour over all lines (they hide line work under them,

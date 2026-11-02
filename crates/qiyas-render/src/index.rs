@@ -15,7 +15,7 @@ pub struct PickIndex {
 
 impl PickIndex {
     pub fn new(batch: &Batch) -> Self {
-        let segments = batch
+        let mut segments: Vec<Segment> = batch
             .segments
             .as_chunks::<4>()
             .0
@@ -26,6 +26,26 @@ impl PickIndex {
                 GeomWithData::new(Line::new([x0, y0], [x1, y1]), i)
             })
             .collect();
+        // Compact drawings keep the original bulk-load path.
+        for tile in &batch.segment_tiles {
+            let dx = tile.origin[0] - batch.origin[0];
+            let dy = tile.origin[1] - batch.origin[1];
+            for (i, segment) in segments
+                .iter_mut()
+                .enumerate()
+                .skip(tile.first as usize)
+                .take(tile.count as usize)
+            {
+                let s = &batch.segments[4 * i..4 * i + 4];
+                *segment = GeomWithData::new(
+                    Line::new(
+                        [f64::from(s[0]) + dx, f64::from(s[1]) + dy],
+                        [f64::from(s[2]) + dx, f64::from(s[3]) + dy],
+                    ),
+                    i,
+                );
+            }
+        }
         Self {
             tree: RTree::bulk_load(segments),
             origin: batch.origin,

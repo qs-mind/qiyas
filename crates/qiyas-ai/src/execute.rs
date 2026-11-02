@@ -1633,16 +1633,11 @@ fn drawn_bounds(session: &Session, handles: &[u64]) -> Result<[[f64; 2]; 2], Too
         let drawn = ranges
             .get(&h)
             .ok_or_else(|| bad(&format!("Entity {h} is not drawn on the sheet shown")))?;
-        let [ox, oy] = batch.origin;
         for &(first, count) in drawn {
-            let segments = &batch.segments[first as usize * 4..(first + count) as usize * 4];
-            points.extend(
-                segments
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|[x, y]| [f64::from(*x) + ox, f64::from(*y) + oy]),
-            );
+            for i in first..first + count {
+                let [x0, y0, x1, y1] = batch.world_segment(i as usize);
+                points.extend([[x0, y0], [x1, y1]]);
+            }
         }
     }
     Ok(bounds_of(&points))

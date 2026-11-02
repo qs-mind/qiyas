@@ -389,8 +389,8 @@ export function useSheets({ switchGen, viewport, run, autosave, setInfo, refresh
       const held = batchHeld.current;
       if (held && version === batchVersionRef.current) {
         // The same lines and fills: keep the arrays the viewport has uploaded already.
-        const { segments, colors, ranges, chains, fills, fillRanges } = held;
-        next = { ...next, segments, colors, ranges, chains, fills, fillRanges };
+        const { segments, colors, ranges, chains, fills, fillRanges, segmentTiles, fillTiles } = held;
+        next = { ...next, segments, colors, ranges, chains, fills, fillRanges, segmentTiles, fillTiles };
       }
       batchVersionRef.current = version;
       batchHeld.current = next;

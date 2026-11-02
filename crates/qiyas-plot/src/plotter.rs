@@ -107,13 +107,6 @@ fn chain_at(batch: &Batch, chain: u32) -> &[u64] {
     batch.chains.get(chain as usize).map_or(&[], Vec::as_slice)
 }
 
-fn absolute(batch: &Batch, x: f32, y: f32) -> [f64; 2] {
-    [
-        batch.origin[0] + f64::from(x),
-        batch.origin[1] + f64::from(y),
-    ]
-}
-
 fn rgb_of(c: u32) -> [u8; 3] {
     let [_, r, g, b] = c.to_be_bytes();
     [r, g, b]
@@ -529,7 +522,8 @@ impl Plotter<'_> {
                     break;
                 };
                 for (k, op) in ["m", "l", "l"].iter().enumerate() {
-                    let p = absolute(batch, v[2 * k], v[2 * k + 1]);
+                    let o = batch.fill_origin(t as usize);
+                    let p = [o[0] + f64::from(v[2 * k]), o[1] + f64::from(v[2 * k + 1])];
                     self.out.point(layer.xf.apply(p), op);
                 }
                 self.out.op("h");
@@ -544,7 +538,7 @@ impl Plotter<'_> {
     fn lines(&mut self, layer: &Layer, frames: &HashSet<u64>, only_frames: bool) {
         let batch = layer.batch;
         let mut open: Option<([u8; 3], f64)> = None;
-        let mut end: Option<[f32; 2]> = None;
+        let mut end: Option<[f64; 2]> = None;
         for r in &batch.ranges {
             if r.flags & TEXT_BOX != 0
                 || r.count == 0
@@ -556,11 +550,12 @@ impl Plotter<'_> {
             let look = self.look(batch, r.entity, r.chain);
             for i in r.first..r.first + r.count {
                 let i = i as usize;
-                let (Some(&c), Some(s)) =
+                let (Some(&c), Some(_)) =
                     (batch.colors.get(i), batch.segments.get(4 * i..4 * i + 4))
                 else {
                     break;
                 };
+                let s = batch.world_segment(i);
                 let Some((pen, width)) = self.drawn(&look, rgb_of(c)) else {
                     continue;
                 };
@@ -574,11 +569,9 @@ impl Plotter<'_> {
                     end = None;
                 }
                 if end != Some([s[0], s[1]]) {
-                    self.out
-                        .point(layer.xf.apply(absolute(batch, s[0], s[1])), "m");
+                    self.out.point(layer.xf.apply([s[0], s[1]]), "m");
                 }
-                self.out
-                    .point(layer.xf.apply(absolute(batch, s[2], s[3])), "l");
+                self.out.point(layer.xf.apply([s[2], s[3]]), "l");
                 end = Some([s[2], s[3]]);
             }
         }

@@ -13,8 +13,8 @@ pub use atlas::{Atlas, PageView, PAGE_SIZE};
 pub use batch::{
     add_images, add_pick_outlines, build_batch, build_batch_with_text, build_batch_with_xrefs,
     image_flags, place_text, section, Batch, ImageEntry, ImagePlacement, ImageQuad, Range,
-    TextOptions, Visibility, FILL_BACKGROUND, IMAGE_ADJUSTED, IMAGE_FADED, IMAGE_MONOCHROME, MAGIC,
-    MAX_SHEET_WORK, NO_CHAIN, PATTERN, TEXT_BOX, VERSION,
+    TextOptions, TileSpan, Visibility, FILL_BACKGROUND, IMAGE_ADJUSTED, IMAGE_FADED,
+    IMAGE_MONOCHROME, MAGIC, MAX_SHEET_WORK, NO_CHAIN, PATTERN, TEXT_BOX, VERSION,
 };
 pub use color::resolve_color;
 pub use fonts::{DEFAULT_CHAIN, NOTO_ARABIC, NOTO_SANS};

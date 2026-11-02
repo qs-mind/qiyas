@@ -332,17 +332,12 @@ fn drawn_points(session: &Session, tops: &[u64]) -> Vec<[f64; 2]> {
     }
     let wanted: HashSet<u64> = tops.iter().copied().collect();
     let batch = session.batch();
-    let [ox, oy] = batch.origin;
     let mut points = Vec::new();
     for r in batch.ranges.iter().filter(|r| wanted.contains(&r.top)) {
-        let segments = &batch.segments[r.first as usize * 4..(r.first + r.count) as usize * 4];
-        points.extend(
-            segments
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|[x, y]| [f64::from(*x) + ox, f64::from(*y) + oy]),
-        );
+        for i in r.first..r.first + r.count {
+            let [x0, y0, x1, y1] = batch.world_segment(i as usize);
+            points.extend([[x0, y0], [x1, y1]]);
+        }
     }
     points
 }

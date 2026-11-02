@@ -268,14 +268,7 @@ pub(crate) fn normalized([a, b]: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
 
 /// The segment `i` of `batch` in drawing coordinates.
 pub(crate) fn segment(batch: &Batch, i: usize) -> [f64; 4] {
-    let s = &batch.segments[i * 4..i * 4 + 4];
-    let [ox, oy] = batch.origin;
-    [
-        f64::from(s[0]) + ox,
-        f64::from(s[1]) + oy,
-        f64::from(s[2]) + ox,
-        f64::from(s[3]) + oy,
-    ]
+    batch.world_segment(i)
 }
 
 /// Which items `spans` (`[first, count]` each) take, of `len`; `None` takes them all.
@@ -319,9 +312,9 @@ fn paint(
     let quads_kept = allowed(view_of.and_then(|v| v.texts.as_ref()), batch.quads.len());
 
     // Fills first, one path per colour; a wipeout's background is the white.
-    let [ox, oy] = batch.origin;
     let mut fills: HashMap<u32, PathBuilder> = HashMap::new();
     for (t, rgb) in batch.fill_colors.iter().enumerate() {
+        let [ox, oy] = batch.fill_origin(t);
         if fills_kept.as_ref().is_some_and(|k| !k[t]) {
             continue;
         }
@@ -550,7 +543,6 @@ fn region(pixmap: &mut Pixmap, view: &View, points: &[[f64; 2]]) {
 /// How tall the texts drawn in the picture are: each text's tallest glyph, in pixels; `None`
 /// when no text is in view.
 fn text_size(batch: &Batch, view: &View) -> Option<TextSize> {
-    let [ox, oy] = batch.origin;
     let (w, h) = (view.width as f32, view.height as f32);
     let mut sizes: Vec<f32> = batch
         .text_ranges
@@ -560,7 +552,8 @@ fn text_size(batch: &Batch, view: &View) -> Option<TextSize> {
                 .quads
                 .get(r.first as usize..(r.first + r.count) as usize)?;
             let mut tallest: Option<f32> = None;
-            for q in quads {
+            for (i, q) in quads.iter().enumerate() {
+                let [ox, oy] = batch.quad_origin(r.first as usize + i);
                 let c = |k: usize| {
                     view.px(
                         f64::from(q.corners[2 * k]) + ox,
@@ -616,8 +609,8 @@ fn glyphs(
     kept: Option<&[bool]>,
 ) {
     let side = PAGE_SIZE as usize;
-    let [ox, oy] = batch.origin;
     for (n, q) in batch.quads.iter().enumerate() {
+        let [ox, oy] = batch.quad_origin(n);
         if kept.is_some_and(|k| !k[n]) {
             continue;
         }

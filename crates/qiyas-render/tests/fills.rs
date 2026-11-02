@@ -298,7 +298,7 @@ fn fill_sections_match_the_frontend_fixture() {
 
 /// Also in `src/viewport/batch.test.ts`.
 const FILLS_FIXTURE: &str = concat!(
-    "42594951020000000000000000000000000000000000000000000000000000400000000000000040",
+    "42594951030000000000000000000000000000000000000000000000000000400000000000000040",
     "000000000000f03f000000000000f03f0900000003000000a80000002000000004000000c8000000",
     "0000000005000000c80000001000000006000000d80000000400000007000000e000000000000000",
     "08000000e0000000280000000900000008010000000000000c00000008010000380000000d000000",
@@ -409,5 +409,67 @@ fn fill_in_a_block_inserted_500_times_is_triangulated_once() {
     assert!(
         build < per_instance / 4.0,
         "build {build:.4} s, 500 triangulations {per_instance:.4} s"
+    );
+}
+
+#[test]
+fn survey_fills_and_images_use_local_origins() {
+    let mut h = Hatch::solid();
+    h.add_path(ring(&[
+        [500_000.0, 3_300_000_000.0],
+        [500_001.0, 3_300_000_000.0],
+        [500_001.0, 3_300_000_001.0],
+        [500_000.0, 3_300_000_001.0],
+    ]));
+    let (mut b, _) = batch_of(vec![
+        EntityType::Hatch(h),
+        EntityType::Point(Point::at(Vector3::new(0.0, 0.0, 0.0))),
+    ]);
+    assert!(!b.fills.is_empty());
+    assert!(b.fills.iter().all(|v| v.abs() < 1e7));
+    assert!(
+        (b.fill_colors
+            .iter()
+            .enumerate()
+            .map(|(i, _)| triangle_area(&b, i))
+            .sum::<f64>()
+            - 1.0)
+            .abs()
+            < 1e-6
+    );
+    for i in 0..b.fill_colors.len() {
+        let o = b.fill_origin(i);
+        assert!((o[1] + f64::from(b.fills[6 * i + 1]) - 3_300_000_000.0).abs() <= 1.0);
+    }
+    let corners = [
+        [500_000.0, 3_300_000_001.0],
+        [500_001.0, 3_300_000_001.0],
+        [500_001.0, 3_300_000_000.0],
+        [500_000.0, 3_300_000_000.0],
+    ];
+    add_images(
+        &mut b,
+        &[ImagePlacement {
+            id: 1,
+            version: 1,
+            corners,
+            flags: 0,
+        }],
+    );
+    qiyas_render::add_pick_outlines(&mut b, &[(999, corners)]);
+    let o = b.image_origin(0);
+    for (i, p) in corners.iter().enumerate() {
+        assert_eq!(
+            [
+                o[0] + f64::from(b.images[0].corners[2 * i]),
+                o[1] + f64::from(b.images[0].corners[2 * i + 1])
+            ],
+            *p
+        );
+    }
+    let last = b.ranges.last().unwrap();
+    assert_eq!(
+        b.world_segment(last.first as usize),
+        [500_000.0, 3_300_000_001.0, 500_001.0, 3_300_000_001.0]
     );
 }
