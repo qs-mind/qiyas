@@ -33,7 +33,7 @@ use qiyas_param::{evaluate_each, Constraint, Curve, Expr, ExprError, PointId, Sk
 use serde::{Deserialize, Serialize};
 
 use crate::session::variant_name;
-use crate::{CoreError, DimSpec, Session, Target};
+use crate::{xdata, CoreError, DimSpec, Session, Target};
 
 /// The xdata application holding constraints (never `QIYAS`: `embed_measurements` deletes those).
 pub const PARAM_APP: &str = "QIYAS-PARAM";
@@ -259,7 +259,7 @@ fn read_record(common: &EntityCommon) -> Vec<Stored> {
     let mut text: Option<String> = None;
     let mut flush = |text: &mut Option<String>| {
         if let Some(t) = text.take() {
-            if let Ok(s) = serde_json::from_str::<Stored>(&t) {
+            if let Ok(s) = serde_json::from_str::<Stored>(&xdata::decode_legacy_unicode(&t)) {
                 out.push(s);
             }
         }
@@ -291,7 +291,9 @@ fn write_record(common: &mut EntityCommon, list: &[Stored]) {
     let mut record = ExtendedDataRecord::new(PARAM_APP);
     for s in list {
         record.add_value(XDataValue::Integer16(1));
-        let json = serde_json::to_string(s).expect("plain data");
+        // Keep literal CAD escapes out of the codec's Unicode decoder.
+        let json = xdata::ascii_json(&serde_json::to_string(s).expect("plain data"))
+            .replace(r"\\U+", r"\\\u0055+");
         let mut rest = json.as_str();
         while !rest.is_empty() {
             let mut cut = rest.len().min(CHUNK);
@@ -2465,6 +2467,76 @@ fn pairs_within(values: &mut [f64], tol: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arabic_constraint_expression_survives_legacy_dwg_save_and_reopen() {
+        use opencadcodec::types::DxfVersion;
+
+        for version in [DxfVersion::AC1015, DxfVersion::AC1018] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tower-podium.dwg");
+            let mut s = Session::new_blank(&path, 6);
+            s.drawing.doc.version = version;
+            crate::xdata::register(&mut s.drawing.doc, PARAM_APP);
+            let handle = s
+                .drawing
+                .doc
+                .add_entity(EntityType::Dimension(Dimension::Linear(Default::default())))
+                .unwrap();
+            let stored = Stored {
+                id: 1,
+                holder: handle.value(),
+                kind: ConstraintKind::Linear,
+                refs: Vec::new(),
+                at: None,
+                dim: Some(DimData {
+                    name: "tower_podium \\U+0645 literal".into(),
+                    expression: "if(a > 1, 'نعم', 'لا')".into(),
+                    rotation: 0.0,
+                    sides: [1.0, 1.0],
+                }),
+            };
+            write_record(
+                s.drawing.doc.get_entity_mut(handle).unwrap().common_mut(),
+                std::slice::from_ref(&stored),
+            );
+            let record = s
+                .drawing
+                .doc
+                .get_entity(handle)
+                .unwrap()
+                .common()
+                .extended_data
+                .get_record(PARAM_APP)
+                .unwrap();
+            assert!(record.values.iter().all(|value| match value {
+                XDataValue::String(text) => text.is_ascii() && text.len() <= 250,
+                _ => true,
+            }));
+            s.save_as(&path).unwrap();
+            let s = Session::open(&path).unwrap();
+            let common = s.drawing.doc.get_entity(handle).unwrap().common();
+            assert_eq!(read_record(common), [stored], "{version:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_constraint_json_unicode_is_decoded_after_joining_chunks() {
+        let json = r#"{"id":1,"holder":42,"kind":"linear","refs":[],"dim":{"name":"tower_podium","expression":"if(a > 1, '\U+0646\U+0639\U+0645', '\U+0644\U+0627')"}}"#;
+        let mut record = ExtendedDataRecord::new(PARAM_APP);
+        record.add_value(XDataValue::Integer16(1));
+        let cut = json.find("U+0646").unwrap() + 3;
+        record.add_value(XDataValue::String(json[..cut].into()));
+        record.add_value(XDataValue::String(json[cut..].into()));
+        let mut common = EntityCommon::new();
+        common.extended_data.add_record(record);
+        let read = read_record(&common);
+        assert_eq!(read.len(), 1);
+        assert_eq!(
+            read[0].dim.as_ref().unwrap().expression,
+            "if(a > 1, 'نعم', 'لا')"
+        );
+    }
 
     #[test]
     fn constraints_round_trip_through_xdata_strings() {

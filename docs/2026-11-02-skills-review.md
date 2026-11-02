@@ -108,6 +108,17 @@ them as facts Mizan asks for.
   (`commands.rs:72`).
 - Words: settled on 2 November 2026 in `src/i18n/ar-glossary.json`, now the one terms reference (plan Task 18).
 
+## Flaky tests seen while landing the fixes
+
+- `qiyas-desktop` `commands::tests::a_cancelled_turn_says_so_and_ends` (`commands.rs:2865-2871`):
+  `ai_send` then `ai_cancel` at once; the last event was sometimes not `stopped/cancelled`
+  (`None`). It failed in 2 of 10 runs of the desktop suite under memory pressure, passed 5 of 5
+  without the change being landed and 6 of 6 after it; the race is between the cancel and the
+  turn's end, not in the drawing code.
+- `src/shell/LayerDialogs.test.tsx` "layer states: save one, restore, rename and delete the
+  others": `onRestore` not called once in a full `pnpm test` under load; 3 of 3 alone, 1182 of
+  1182 on the rerun. Base UI's delayed focus moves likely need a longer wait.
+
 ## Not run
 
 - Screenshots on a virtual display (`screenshotting-gui`): the second Qiyas on Xvfb `:99` with a
