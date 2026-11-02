@@ -142,6 +142,90 @@ const CTB_HEADER: &str = "PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec";
 const STB_HEADER: &str = "PIAFILEVERSION_2.0,STBVER1,compress\r\npmzlibcodec";
 
 #[test]
+fn save_refuses_multiline_text_without_changing_the_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    for kind in [StyleKind::Ctb, StyleKind::Stb] {
+        let path = dir.path().join("pens.ctb");
+        let mut style = office_ctb();
+        style.kind = kind;
+        style.save(&path).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        for bad in ["name\n}", "name\r", "name\0"] {
+            for field in 0..4 {
+                let mut invalid = style.clone();
+                match field {
+                    0 => invalid.styles[0].name = bad.into(),
+                    1 => invalid.styles[0].localized_name = bad.into(),
+                    2 => invalid.styles[0].description = bad.into(),
+                    _ => invalid.description = bad.into(),
+                }
+                let error = invalid.save(&path).unwrap_err().to_string();
+                assert!(error.contains("line breaks or NUL"), "{error}");
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+            }
+        }
+        style.styles[0].name = "برج \\ \" { }".into();
+        style.save(&path).unwrap();
+        assert_eq!(PlotStyle::load(&path).unwrap(), style);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn save_preserves_the_destination_when_the_temporary_file_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pens.ctb");
+    let tmp = dir.path().join(".pens.ctb.qiyas-tmp");
+    let mut style = office_ctb();
+    style.save(&path).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    std::fs::write(&tmp, b"another save").unwrap();
+    style.description = "Changed".into();
+    assert!(style.save(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(std::fs::read(&tmp).unwrap(), b"another save");
+    std::fs::remove_file(&tmp).unwrap();
+    style.save(&path).unwrap();
+    assert_eq!(PlotStyle::load(&path).unwrap(), style);
+    assert!(!tmp.exists());
+}
+
+#[test]
+fn failed_rename_removes_the_temporary_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pens.ctb");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("keep"), b"keep").unwrap();
+    assert!(office_ctb().save(&path).is_err());
+    assert_eq!(std::fs::read(path.join("keep")).unwrap(), b"keep");
+    assert!(!dir.path().join(".pens.ctb.qiyas-tmp").exists());
+}
+
+#[test]
+fn gappy_ctb_indices_keep_their_original_pens() {
+    let text = "description=\"Sparse\nplot_style{\n 4{\n name=\"Blue\n screen=0\n }\n \
+        2{\n name=\"Green\n lineweight=13\n }\n}\naci_table_available=TRUE\n";
+    for bytes in [text.as_bytes().to_vec(), binary(CTB_HEADER, text)] {
+        let style = PlotStyle::parse(&bytes).unwrap();
+        assert_eq!(style.styles.len(), 255);
+        assert_eq!(style.styles[0].name, "Color_1");
+        assert_eq!(style.styles[2].name, "Green");
+        assert_eq!(style.styles[4].name, "Blue");
+        assert!(style.apply([255, 0, 0], None).plot);
+        assert_eq!(style.apply([255, 255, 0], None).lineweight_mm, None);
+        assert_eq!(style.apply([0, 255, 0], None).lineweight_mm, Some(0.5));
+        assert!(!style.apply([0, 0, 255], None).plot);
+        assert_eq!(PlotStyle::parse(&style.to_bytes()).unwrap(), style);
+    }
+    for index in [255, usize::MAX] {
+        let text = format!(
+            "description=\"Invalid\naci_table_available=TRUE\nplot_style{{\n{index}{{\n}}\n}}\n"
+        );
+        assert!(PlotStyle::parse(text.as_bytes()).is_err());
+    }
+}
+
+#[test]
 fn deep_nesting_is_refused_not_a_crash() {
     let text = format!("description=\"x\"\n{}", "a{\n".repeat(200_000));
     let result = PlotStyle::parse(text.as_bytes());

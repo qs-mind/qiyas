@@ -806,7 +806,7 @@ impl Session {
         let app = self.object_app(OBJECT_APP)?;
         let text = serde_json::to_string(object)
             .map_err(|e| invalid(format!("Invalid {OBJECT_APP} metadata: {e}")))?;
-        let values = crate::xdata::chunks(&text);
+        let values = crate::xdata::chunks(&crate::xdata::ascii_json(&text));
         if self
             .drawing
             .doc
@@ -3046,4 +3046,129 @@ fn default_object_layer(name: &str) -> String {
             .collect::<String>()
             .to_uppercase()
     )
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    use crate::walls::{wall_tag, WallTag, WALL_APP};
+    use opencadcodec::{DwgWriter, DxfVersion, DxfWriter, Line};
+
+    fn stamped(text: &str) -> (tempfile::TempDir, Session, u64, ObjectInstance, WallTag) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new_blank(&dir.path().join("tower.dwg"), 6);
+        let handle = session
+            .drawing
+            .doc
+            .add_entity(EntityType::Line(Line::from_coords(
+                0.0, 0.0, 0.0, 1200.0, 0.0, 0.0,
+            )))
+            .unwrap()
+            .value();
+        let object: ObjectInstance = serde_json::from_value(json!({
+            "id":handle,"type":"Tower wall","props":{"note":text},"level":null
+        }))
+        .unwrap();
+        let wall: WallTag = serde_json::from_value(json!({
+            "group":handle,"role":"run","index":0,
+            "spec":{"runs":[{"points":[[0,0],[1200,0]]}],"thickness":0.3,"height":180,
+                "layers":{"outline":text}}
+        }))
+        .unwrap();
+        session.stamp_object(handle, &object).unwrap();
+        crate::xdata::register(&mut session.drawing.doc, WALL_APP);
+        session.stamp_wall(handle, &wall).unwrap();
+        (dir, session, handle, object, wall)
+    }
+
+    #[test]
+    fn object_and_wall_metadata_round_trip_arabic_and_backslashes() {
+        let text = "برج \\م \\U+0645 \\u0645 \"واجهة\" 🏗".repeat(12);
+        for version in [DxfVersion::AC1015, DxfVersion::AC1018] {
+            for extension in ["dwg", "dxf"] {
+                let (dir, mut session, handle, object, wall) = stamped(&text);
+                session.drawing.doc.version = version;
+                let entity = session.drawing.doc.get_entity(Handle::new(handle)).unwrap();
+                for app in [OBJECT_APP, WALL_APP] {
+                    let values = &entity
+                        .common()
+                        .extended_data
+                        .get_record(app)
+                        .unwrap()
+                        .values;
+                    let chunks: Vec<_> = values
+                        .iter()
+                        .filter_map(|v| match v {
+                            opencadcodec::xdata::XDataValue::String(s) => Some(s),
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(chunks.len() > 1);
+                    assert!(chunks.iter().all(|s| s.is_ascii() && s.len() <= 250));
+                    assert!(!chunks.iter().any(|s| s.contains(r"\U+")));
+                }
+                let path = dir.path().join(format!("tower.{extension}"));
+                let bytes = if extension == "dwg" {
+                    DwgWriter::write_to_vec(&session.drawing.doc).unwrap()
+                } else {
+                    DxfWriter::new(&session.drawing.doc).write_to_vec().unwrap()
+                };
+                std::fs::write(&path, bytes).unwrap();
+                let drawing = crate::Drawing::open(&path).unwrap();
+                let entity = drawing
+                    .doc
+                    .entities()
+                    .find(|e| matches!(e, EntityType::Line(_)))
+                    .unwrap_or_else(|| panic!("{version:?} {extension}: missing driver"));
+                for app in [OBJECT_APP, WALL_APP] {
+                    let text = crate::xdata::read_text(entity.common(), app)
+                        .unwrap_or_else(|| panic!("{version:?} {extension}: missing {app}"));
+                    serde_json::from_str::<Value>(&text).unwrap_or_else(|error| {
+                        panic!("{version:?} {extension}: invalid {app} JSON: {error}: {text}")
+                    });
+                }
+                assert_eq!(
+                    serde_json::to_value(instance(entity).unwrap()).unwrap(),
+                    serde_json::to_value(&object).unwrap(),
+                    "{version:?} {extension}"
+                );
+                assert_eq!(
+                    serde_json::to_value(wall_tag(entity).unwrap()).unwrap(),
+                    serde_json::to_value(&wall).unwrap(),
+                    "{version:?} {extension}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn object_and_wall_readers_keep_old_raw_and_legacy_unicode_json() {
+        let (_dir, mut session, handle, object, wall) = stamped("برج");
+        for legacy in [false, true] {
+            for (app, value) in [
+                (OBJECT_APP, serde_json::to_value(&object).unwrap()),
+                (WALL_APP, serde_json::to_value(&wall).unwrap()),
+            ] {
+                let text = serde_json::to_string(&value).unwrap();
+                let text = if legacy {
+                    crate::xdata::ascii_json(&text).replace("\\u", "\\U+")
+                } else {
+                    text
+                };
+                let app_handle = crate::xdata::app_handle(&session.drawing.doc, app);
+                let entity = session
+                    .drawing
+                    .doc
+                    .get_entity_mut(Handle::new(handle))
+                    .unwrap();
+                crate::xdata::write_text(entity.common_mut(), app, app_handle, Some(&text));
+            }
+            let entity = session.drawing.doc.get_entity(Handle::new(handle)).unwrap();
+            assert_eq!(instance(entity).unwrap().props, object.props);
+            assert_eq!(
+                wall_tag(entity).unwrap().spec.layers.outline,
+                wall.spec.layers.outline
+            );
+        }
+    }
 }

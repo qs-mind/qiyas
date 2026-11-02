@@ -476,6 +476,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (`discrepancy_check`, `resolve_conflict`) run the inner `SetKnowledge` as `Source::User`
   inside the agent's transaction, which keeps the agent's source for undo. `xdata.rs` shares
   UTF-8 chunking and application-specific raw EED invalidation among walls, rooms and fields.
+  Object instances and wall tags also pass their JSON through `ascii_json` before chunking;
+  their readers still accept old raw JSON and legacy Unicode escapes.
+  `ascii_json` writes the `U` in literal `\U+` text as `\u0055`, preventing the codec's CAD
+  escape decoder from changing JSON strings, including escaped backslashes.
 - `objects.rs`: `define_object_type`, `redefine_object_type`, `delete_object_type`,
   `place_objects`, `set_object_props`, `object_schedule` and `set_knowledge`. Type properties,
   geometry recipes and quantity expressions are data. Physical property values use metres,
@@ -1832,7 +1836,10 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `crates/qiyas-plot/tests/fixtures/` are written by Qiyas's own writer (`write_fixtures`),
   never vendor files. A CTB's pen is the ACI of the drawn colour (exact, else
   nearest); an STB's style is the layer's plot style name, else Normal. Screen 0 is "no plot";
-  screening fades toward white; grayscale greys.
+  screening fades toward white; grayscale greys. Missing CTB indices use default pens without
+  shifting the supplied pens; indices outside 0 to 254 are refused. Save refuses line breaks
+  and NULs in text, writes and syncs a sibling temporary file, then renames it over the target.
+  An existing temporary file is left intact and the save fails without changing the target.
 - Printing (`print.rs`) hands the PDF to the OS: Linux `lp -d <printer>` (no printer: the PDF
   viewer through `xdg-open`), macOS `lpr`, Windows the PDF handler's Print or PrintTo verb
   through a fixed `-EncodedCommand` script that reads the file and printer from
@@ -2064,6 +2071,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   `<Qiyas data home>/claude-work` directory. User/project settings and hooks are excluded.
   Qiyas never reads Claude credentials, runs an SDK/ACP adapter, or scripts a login. Cancel
   sends SIGINT, then SIGTERM after five seconds; a process permit stays held until reaping.
+  Unix signal targets must convert to `pid_t` and be positive, excluding process-group targets.
   This cancellation implementation is Unix-only; other platforms refuse this provider.
   It currently requires Work autonomously: per-job/per-phase approvals are refused before
   starting a turn, because Qiyas cannot yet enforce those pauses inside the CLI's tool loop.

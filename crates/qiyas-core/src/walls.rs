@@ -837,9 +837,8 @@ impl Session {
             ));
             record.add_value(XDataValue::Real(run.height.unwrap_or(tag.spec.height)));
         }
-        for chunk in
-            crate::field::chunks(&serde_json::to_string(tag).map_err(|e| invalid(e.to_string()))?)
-        {
+        let text = serde_json::to_string(tag).map_err(|e| invalid(e.to_string()))?;
+        for chunk in crate::xdata::chunks(&crate::xdata::ascii_json(&text)) {
             record.add_value(chunk);
         }
         crate::xdata::write_values(

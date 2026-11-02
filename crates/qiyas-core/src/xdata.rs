@@ -26,7 +26,7 @@ pub fn string_chunks(text: &str) -> Vec<&str> {
 
 /// JSON with every non-ASCII character as a `\uXXXX` escape. DWG 2000 and 2004 store text
 /// in a code page and write other characters as `\U+XXXX`, which a JSON reader refuses;
-/// ASCII JSON reads back the same in every DWG version and in DXF.
+/// literal CAD escapes are protected too, so the codec cannot decode them inside JSON.
 pub fn ascii_json(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut units = [0u16; 2];
@@ -39,7 +39,8 @@ pub fn ascii_json(text: &str) -> String {
             }
         }
     }
-    out
+    // The codec decodes CAD escapes even after a JSON-escaped backslash.
+    out.replace(r"\\U+", r"\\\u0055+")
 }
 
 /// Turn the `\U+XXXX` escapes that DWG 2000 and 2004 leave in stored text back into
@@ -176,6 +177,21 @@ pub fn write_json(
 mod tests {
     use super::*;
     use serde_json::{json, Value};
+
+    #[test]
+    fn ascii_json_preserves_literal_cad_escapes_and_backslash_runs() {
+        for slashes in 1..=4 {
+            for suffix in ["U+0645", "U+0041", "U+D83D\\U+DE00", "U+GGGG", "u0645", "م"] {
+                let text = format!("برج {}{suffix} 🏗", "\\".repeat(slashes));
+                let value = json!({text.clone(): text});
+                let encoded = ascii_json(&value.to_string());
+                assert!(encoded.is_ascii());
+                assert!(!encoded.contains(r"\U+"), "{encoded}");
+                assert_eq!(serde_json::from_str::<Value>(&encoded).unwrap(), value);
+                assert_eq!(ascii_json(&encoded), encoded);
+            }
+        }
+    }
 
     #[test]
     fn unicode_chunks_and_metadata_edits_preserve_other_applications() {

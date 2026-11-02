@@ -607,6 +607,11 @@ struct Running {
     permit: Option<Arc<OwnedSemaphorePermit>>,
 }
 
+#[cfg(unix)]
+fn positive_pid(pid: i64) -> Option<libc::pid_t> {
+    libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
 impl Drop for Running {
     fn drop(&mut self) {
         let Some(mut child) = self.child.take() else {
@@ -616,10 +621,15 @@ impl Drop for Running {
             let _ = child.start_kill();
         }
         #[cfg(unix)]
-        if let Some(pid) = child.id().filter(|_| !self.probe) {
-            // SAFETY: signal only this owned, unreaped child. No shell or process-name matching.
+        if let Some(pid) = child
+            .id()
+            .filter(|_| !self.probe)
+            .and_then(|pid| positive_pid(i64::from(pid)))
+        {
+            // SAFETY: kill takes no pointers. A positive pid_t targets one process;
+            // SIGINT is valid, and this owned child has not been reaped.
             unsafe {
-                libc::kill(pid as i32, libc::SIGINT);
+                libc::kill(pid, libc::SIGINT);
             }
         }
         let config = self.config.take();
@@ -633,10 +643,11 @@ impl Drop for Running {
                 .is_err()
             {
                 #[cfg(unix)]
-                if let Some(pid) = child.id() {
-                    // SAFETY: the child is still owned and has not been reaped.
+                if let Some(pid) = child.id().and_then(|pid| positive_pid(i64::from(pid))) {
+                    // SAFETY: kill takes no pointers. A positive pid_t targets one process;
+                    // SIGTERM is valid, and this owned child has not been reaped.
                     unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
+                        libc::kill(pid, libc::SIGTERM);
                     }
                 }
                 if tokio::time::timeout(Duration::from_secs(5), child.wait())
@@ -1147,6 +1158,18 @@ mod tests {
 
     const SESSION: &str = "6d22c32a-00da-4d6b-86b4-f13482078290";
     static TEST_PROCESS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[test]
+    fn signal_pids_must_be_positive_and_fit_pid_t() {
+        for pid in [i64::MIN, -1, 0, i64::from(u32::MAX), i64::MAX] {
+            assert_eq!(positive_pid(pid), None, "{pid}");
+        }
+        assert_eq!(positive_pid(1), Some(1));
+        assert_eq!(
+            positive_pid(i64::from(libc::pid_t::MAX)),
+            Some(libc::pid_t::MAX)
+        );
+    }
 
     fn help() -> String {
         format!("{} --permission-mode dontAsk --permission-prompts --setting-sources --settings --tools --model --resume\n auth Manage authentication", REQUIRED.join(" "))
@@ -1784,9 +1807,10 @@ mod tests {
             let sentinel = credential_dir.join(".credentials.json");
             std::fs::write(&sentinel, "sentinel-must-never-be-read").unwrap();
             let watched = std::ffi::CString::new(sentinel.as_os_str().as_encoded_bytes()).unwrap();
-            // SAFETY: these calls watch a test-owned path; descriptors are checked and closed.
+            // SAFETY: inotify_init1 takes only valid flags, with no pointers.
             let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
             assert!(fd >= 0);
+            // SAFETY: fd is open; watched is a live NUL-terminated CString; IN_OPEN is valid.
             assert!(unsafe { libc::inotify_add_watch(fd, watched.as_ptr(), libc::IN_OPEN) } >= 0);
             let mut child_test = std::process::Command::new(std::env::current_exe().unwrap());
             child_test
@@ -1811,7 +1835,9 @@ mod tests {
             }
             let result = child_test.output().unwrap();
             let mut events = [0u8; 512];
+            // SAFETY: fd is open and events is writable for exactly events.len() bytes.
             let count = unsafe { libc::read(fd, events.as_mut_ptr().cast(), events.len()) };
+            // SAFETY: fd is open, owned here, and is not used or closed again.
             unsafe {
                 libc::close(fd);
             }

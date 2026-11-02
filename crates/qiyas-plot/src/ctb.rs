@@ -181,8 +181,54 @@ impl PlotStyle {
 
     /// Writes the table to `path` in AutoCAD's compressed form.
     pub fn save(&self, path: &Path) -> Result<(), PlotError> {
-        std::fs::write(path, self.to_bytes())
-            .map_err(|e| bad(format!("Can't write {}: {e}", path.display())))
+        let check = |value: &str| {
+            if value.contains(['\n', '\r', '\0']) {
+                Err(bad(
+                    "Plot style text cannot contain line breaks or NUL characters",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        check(&self.description)?;
+        for s in &self.styles {
+            for value in [&s.name, &s.localized_name, &s.description] {
+                check(value)?;
+            }
+        }
+        for (key, value) in self
+            .extra
+            .iter()
+            .chain(self.styles.iter().flat_map(|s| &s.extra))
+        {
+            check(key)?;
+            check(value)?;
+        }
+        let name = path
+            .file_name()
+            .ok_or_else(|| bad("Give the plot style a file name"))?;
+        let mut tmp_name = std::ffi::OsString::from(".");
+        tmp_name.push(name);
+        tmp_name.push(".qiyas-tmp");
+        let tmp = path.with_file_name(tmp_name);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| bad(format!("Can't write {}: {e}", path.display())))?;
+        let written = (|| -> std::io::Result<()> {
+            file.write_all(&self.to_bytes())?;
+            file.sync_all()?;
+            if let Ok(meta) = std::fs::metadata(path) {
+                std::fs::set_permissions(&tmp, meta.permissions())?;
+            }
+            drop(file);
+            std::fs::rename(&tmp, path)
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        written.map_err(|e| bad(format!("Can't write {}: {e}", path.display())))
     }
 
     /// Reads a plot style file's bytes: compressed (CTB or STB header) or plain text.
@@ -487,6 +533,7 @@ fn from_text(kind: Option<StyleKind>, text: &str) -> Result<PlotStyle, PlotError
     style.lineweights.clear();
     let mut aci = None;
     let mut weights: Vec<(usize, f64)> = Vec::new();
+    let mut numbered = Vec::new();
     let mut seen_description = false;
     for (k, node) in nodes {
         match (k.as_str(), node) {
@@ -502,7 +549,7 @@ fn from_text(kind: Option<StyleKind>, text: &str) -> Result<PlotStyle, PlotError
             }
             ("aci_table", Node::Block(_)) => {}
             ("plot_style", Node::Block(entries)) => {
-                let mut numbered = Vec::new();
+                numbered.clear();
                 for (i, node) in entries {
                     let Node::Block(fields) = node else {
                         continue;
@@ -510,7 +557,6 @@ fn from_text(kind: Option<StyleKind>, text: &str) -> Result<PlotStyle, PlotError
                     numbered.push((num::<usize>("plot_style", &i)?, entry(fields)?));
                 }
                 numbered.sort_by_key(|(i, _)| *i);
-                style.styles = numbered.into_iter().map(|(_, e)| e).collect();
             }
             ("custom_lineweight_table", Node::Block(entries)) => {
                 for (i, node) in entries {
@@ -547,16 +593,18 @@ fn from_text(kind: Option<StyleKind>, text: &str) -> Result<PlotStyle, PlotError
         }
     }
     if style.kind == StyleKind::Ctb {
-        if style.styles.len() > 255 {
+        if numbered.len() > 255 || numbered.iter().any(|(i, _)| *i >= 255) {
             return Err(bad("A CTB has 255 pens"));
         }
-        for i in style.styles.len()..255 {
-            style
-                .styles
-                .push(StyleEntry::plain(&format!("Color_{}", i + 1)));
+        style.styles = PlotStyle::default_ctb().styles;
+        for (i, entry) in numbered {
+            style.styles[i] = entry;
         }
-    } else if style.styles.is_empty() {
-        style.styles.push(StyleEntry::plain("Normal"));
+    } else {
+        style.styles = numbered.into_iter().map(|(_, e)| e).collect();
+        if style.styles.is_empty() {
+            style.styles.push(StyleEntry::plain("Normal"));
+        }
     }
     Ok(style)
 }
