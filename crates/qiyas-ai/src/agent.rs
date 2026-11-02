@@ -335,12 +335,11 @@ impl TurnCounts {
 }
 
 impl Agent {
-    /// Whether this model takes pictures: the profile's explicit or discovered choice first,
-    /// then what the provider knows. None is unknown, and pictures are sent only when true.
+    /// Detection wins over an old saved choice. Only false withholds pictures.
     fn vision(&self) -> Option<bool> {
-        self.settings
-            .image_input
-            .or_else(|| self.provider.image_input(&self.settings.model))
+        self.provider
+            .image_input(&self.settings.model)
+            .or(self.settings.image_input)
     }
 
     pub fn new(
@@ -903,10 +902,10 @@ impl Agent {
             content.push(ContentBlock::Text { text: "[resumed] This conversation continues after a pause; the drawing may have changed: read it before acting.".into() });
         }
         let vision = self.vision();
-        let vision_text = if vision == Some(true) {
-            "[image input] This model accepts pictures."
-        } else {
-            "[image input] Pictures are unavailable for this model (unsupported or unconfirmed metadata). Use exact queries and checks. Do not claim to have inspected a picture."
+        let vision_text = match vision {
+            Some(true) => "[image input] This model accepts pictures.",
+            Some(false) => "[image input] Pictures are unavailable for this model. Use exact queries and checks. Do not claim to have inspected a picture.",
+            None => "[image input] Picture support is being checked. Pictures are sent unless the provider refuses them. Use exact drawing checks alongside any pictures received.",
         };
         if let ContentBlock::Text { text } = &mut content[0] {
             text.push('\n');
@@ -926,7 +925,7 @@ impl Agent {
             )
             .await;
         }
-        if let Some((png, caption)) = picture.filter(|_| vision == Some(true)) {
+        if let Some((png, caption)) = picture.filter(|_| vision != Some(false)) {
             let hash = crate::artifact::hash(&png);
             if self.last_picture.as_ref() == Some(&hash) {
                 content.push(ContentBlock::Text {
@@ -947,12 +946,12 @@ impl Agent {
                 }
             }
         }
-        if vision != Some(true) && !images.is_empty() {
+        if vision == Some(false) && !images.is_empty() {
             content.push(ContentBlock::Text { text: format!("{} attached pictures were not sent: this model cannot see images. Use exact drawing checks, or ask for the missing facts.", images.len()) });
         }
         for image in images
             .into_iter()
-            .filter(|_| vision == Some(true))
+            .filter(|_| vision != Some(false))
             .take(context::MAX_USER_IMAGES)
         {
             self.image_bytes += image.data.len();
@@ -2198,10 +2197,10 @@ impl Agent {
             }
             Ok(ToolOutput::Image { png, caption }) => {
                 let vision = self.vision();
-                if vision != Some(true) {
+                if vision == Some(false) {
                     return json_result(
                         id,
-                        &serde_json::json!({"status":"unavailable","image_input":crate::models::image_state(vision),"image_sent":false,"message":"Pictures are unsupported or unconfirmed for this model. Use exact queries and checks; no picture was sent."}),
+                        &serde_json::json!({"status":"unavailable","image_input":crate::models::image_state(vision),"image_sent":false,"message":"Pictures are unsupported for this model. Use exact queries and checks; no picture was sent."}),
                     );
                 }
                 let hash = crate::artifact::hash(&png);
@@ -2305,7 +2304,7 @@ impl Agent {
         let build_system = self.system.is_none();
         let country = self.country.clone();
         let image_input = self.vision();
-        let vision = image_input == Some(true);
+        let vision = image_input != Some(false);
         let cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
@@ -3524,7 +3523,7 @@ mod tests {
     }
 
     #[test]
-    fn identical_captures_are_unchanged_and_unknown_models_receive_no_image() {
+    fn identical_captures_are_unchanged_and_only_text_only_models_withhold_images() {
         let picture = || {
             Ok(ToolOutput::Image {
                 png: vec![1, 2, 3],
@@ -3563,6 +3562,10 @@ mod tests {
             AgentSettings::default(),
         );
         let result = unknown.output_result("c", picture()).0;
+        assert!(matches!(result, ContentBlock::ToolResult { content, .. }
+            if content.iter().any(|part| matches!(part, ResultPart::Png(_)))));
+        unknown.settings.image_input = Some(false);
+        let result = unknown.output_result("d", picture()).0;
         assert!(serde_json::to_string(&result)
             .unwrap()
             .contains("unavailable"));

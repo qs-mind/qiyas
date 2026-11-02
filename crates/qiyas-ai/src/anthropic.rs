@@ -51,11 +51,54 @@ impl Anthropic {
 
 impl Provider for Anthropic {
     fn image_input(&self, model: &str) -> Option<bool> {
-        crate::models::known_image_input(API_URL, model).or_else(|| {
-            crate::models::CLAUDE_MODELS
-                .iter()
-                .any(|(id, _)| *id == model)
-                .then_some(true)
+        crate::models::known_image_input(&self.url, model)
+    }
+    fn probe_image_input<'a>(&'a self, model: &'a str) -> BoxFuture<'a, Result<bool, AiError>> {
+        Box::pin(async move {
+            if self.url == API_URL {
+                if let Ok(models) = crate::models::list_models(
+                    crate::models::ModelSource::Anthropic,
+                    Some(&self.api_key),
+                )
+                .await
+                {
+                    if let Some(answer) = models
+                        .iter()
+                        .find(|m| m.id == model)
+                        .and_then(|m| m.image_input)
+                    {
+                        return Ok(answer);
+                    }
+                }
+            }
+            let mut body = request_body(&crate::pictures::probe_request(model));
+            for field in ["fallbacks", "cache_control", "system"] {
+                body.as_object_mut().unwrap().remove(field);
+            }
+            body["stream"] = json!(false);
+            let response = send_with_retry(
+                || {
+                    self.client
+                        .post(&self.url)
+                        .header("x-api-key", &self.api_key)
+                        .header("anthropic-version", VERSION)
+                        .json(&body)
+                },
+                &self.api_key,
+                &body,
+                false,
+                &mut |_| {},
+            )
+            .await?;
+            let value: Value = response
+                .json()
+                .await
+                .map_err(|e| AiError::Network(e.to_string()).scrubbed(&self.api_key))?;
+            if value["type"] == "message" {
+                Ok(true)
+            } else {
+                Err(AiError::Stream("Missing message".into()))
+            }
         })
     }
     fn stream_turn<'a>(

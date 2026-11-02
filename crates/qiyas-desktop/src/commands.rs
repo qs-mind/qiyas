@@ -929,6 +929,8 @@ pub async fn set_settings<R: Runtime>(
     if mcp_changed {
         mcp::restart(&app);
     }
+    let selected = crate::state::lock(&state.settings).clone();
+    crate::pictures::selected(state.inner().clone(), selected);
     let _ = app.emit("measurement:changed", ());
     Ok(())
 }
@@ -1354,6 +1356,11 @@ async fn new_agent(
             (ai::build_provider(settings, key)?, name)
         }
     };
+    let provider = if name == "mock" {
+        provider
+    } else {
+        crate::pictures::wrap(state, settings, provider).await?
+    };
     let log = AgentLog::new(ai::log_path(&state.config_dir));
     log.write(
         "NEW CONVERSATION",
@@ -1583,8 +1590,9 @@ pub async fn workspace_provider<R: Runtime>(
             }
         }
     }
-    *crate::state::lock(&state.provider) = next;
+    *crate::state::lock(&state.provider) = next.clone();
     drop(run);
+    crate::pictures::selected(state.clone(), next);
     let _ = app.emit("workspace:changed", state.id);
     Ok(())
 }
@@ -1888,6 +1896,7 @@ pub struct AiStatus {
     has_key: bool,
     busy: bool,
     message_count: usize,
+    image_input: Option<bool>,
 }
 
 #[tauri::command]
@@ -1911,6 +1920,7 @@ pub async fn ai_status(
             .await
             .is_ok_and(|key| key.is_some())
     };
+    let image_input = crate::pictures::known(&state, &settings).await;
     let run = ai_run(&state);
     Ok(AiStatus {
         provider: if mock {
@@ -1925,6 +1935,7 @@ pub async fn ai_status(
             settings.profile().model.clone()
         },
         has_key,
+        image_input,
         busy: run.busy(),
         message_count: run.message_count(),
     })

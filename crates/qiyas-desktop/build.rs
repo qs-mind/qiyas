@@ -91,6 +91,7 @@ fn main() {
             "workspace_provider",
             "ai_attach_pdf",
             "ai_models",
+            "ai_picture_support",
             "claude_code_status",
             "ai_provider_status",
             "reopen_chatgpt_sign_in",

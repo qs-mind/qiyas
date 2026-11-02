@@ -392,6 +392,8 @@ pub struct ClaudeCode {
     session_id: Mutex<Option<String>>,
     evidence: crate::mcp::EvidenceCache,
     user_text: Mutex<String>,
+    image_input: Mutex<Option<bool>>,
+    reported_model: Mutex<Option<String>>,
 }
 
 impl ClaudeCode {
@@ -411,6 +413,8 @@ impl ClaudeCode {
             session_id: Mutex::new(None),
             evidence: crate::mcp::EvidenceCache::default(),
             user_text: Mutex::new(String::new()),
+            image_input: Mutex::new(None),
+            reported_model: Mutex::new(None),
         })
     }
 
@@ -424,7 +428,13 @@ impl ClaudeCode {
         sink: Sink<'_>,
     ) -> Result<TurnResult, AiError> {
         capabilities.validate()?;
+        let probe = req.cache_key == "picture-support";
         let config = McpConfig::create(cwd, &config)?;
+        let allowed_tools = if probe {
+            String::new()
+        } else {
+            TOOLS.join(",")
+        };
         let mut cmd = command(&self.path, cwd);
         cmd.args([
             "-p",
@@ -448,11 +458,19 @@ impl ClaudeCode {
             "--disallowedTools",
             "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,NotebookEdit,Skill",
             "--allowedTools",
-            &TOOLS.join(","),
+            allowed_tools.as_str(),
             "--mcp-config",
         ])
         .arg(&config.path)
         .args(["--append-system-prompt", &req.system]);
+        if probe {
+            cmd.env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "1")
+                .env("MAX_THINKING_TOKENS", "0")
+                .env("CLAUDE_CODE_MAX_RETRIES", "0");
+            if capabilities.has("--max-turns") {
+                cmd.args(["--max-turns", "1"]);
+            }
+        }
         if capabilities.has("--permission-prompts") {
             cmd.args(["--permission-prompts", "none"]);
         }
@@ -473,7 +491,7 @@ impl ClaudeCode {
             .lock()
             .map_err(|_| error("claude_unavailable"))?
             .clone();
-        if let Some(id) = &resume {
+        if let Some(id) = resume.as_ref().filter(|_| !probe) {
             if !capabilities.has("--resume") {
                 return Err(error("claude_flags"));
             }
@@ -489,6 +507,7 @@ impl ClaudeCode {
                 child: Some(child),
                 config: Some(config),
                 permit: Some(permit),
+                probe,
             };
             let child = running.child.as_mut().expect("spawned child");
             let mut stdin = child
@@ -529,8 +548,23 @@ impl ClaudeCode {
                     return Err(error("claude_stream"));
                 }
                 let value = serde_json::from_slice(&line).map_err(|_| error("claude_stream"))?;
-                state.read(value, sink)?;
-                if let Some(id) = &state.session_id {
+                if let Err(error) = state.read(value, sink) {
+                    // Do not resume a transcript that still contains the rejected image.
+                    if !probe && crate::pictures::image_refusal(&error) {
+                        *self
+                            .session_id
+                            .lock()
+                            .map_err(|_| self::error("claude_unavailable"))? = None;
+                    }
+                    return Err(error);
+                }
+                if let Some(model) = &state.model {
+                    *self
+                        .reported_model
+                        .lock()
+                        .map_err(|_| error("claude_unavailable"))? = Some(model.clone());
+                }
+                if let Some(id) = state.session_id.as_ref().filter(|_| !probe) {
                     *self
                         .session_id
                         .lock()
@@ -567,6 +601,7 @@ impl ClaudeCode {
 
 /// Drop also handles cancellation by Agent::stream: interrupt now, terminate after five seconds.
 struct Running {
+    probe: bool,
     child: Option<Child>,
     config: Option<McpConfig>,
     permit: Option<Arc<OwnedSemaphorePermit>>,
@@ -577,8 +612,11 @@ impl Drop for Running {
         let Some(mut child) = self.child.take() else {
             return;
         };
+        if self.probe {
+            let _ = child.start_kill();
+        }
         #[cfg(unix)]
-        if let Some(pid) = child.id() {
+        if let Some(pid) = child.id().filter(|_| !self.probe) {
             // SAFETY: signal only this owned, unreaped child. No shell or process-name matching.
             unsafe {
                 libc::kill(pid as i32, libc::SIGINT);
@@ -620,11 +658,38 @@ impl Drop for ServerLifetime {
 }
 
 impl Provider for ClaudeCode {
-    fn image_input(&self, model: &str) -> Option<bool> {
-        crate::models::CLAUDE_MODELS
-            .iter()
-            .any(|(id, _)| *id == model)
-            .then_some(true)
+    fn image_input(&self, _model: &str) -> Option<bool> {
+        self.image_input.lock().ok().and_then(|value| *value)
+    }
+    fn resolved_model(&self) -> Option<String> {
+        self.reported_model
+            .lock()
+            .ok()
+            .and_then(|model| model.clone())
+    }
+    fn set_image_input(&self, supported: Option<bool>) {
+        if let Ok(mut value) = self.image_input.lock() {
+            *value = supported;
+        }
+    }
+    fn probe_image_input<'a>(&'a self, model: &'a str) -> BoxFuture<'a, Result<bool, AiError>> {
+        Box::pin(async move {
+            let permit = process_permit().await?;
+            let cwd = work_directory(&self.home)?;
+            let capabilities = Capabilities {
+                help: output(&self.path, &cwd, &["--help"]).await?,
+            };
+            self.execute(
+                crate::pictures::probe_request(model),
+                &cwd,
+                &capabilities,
+                json!({"mcpServers":{}}),
+                permit,
+                &mut |_| {},
+            )
+            .await
+            .map(|_| true)
+        })
     }
     fn owns_turn(&self) -> bool {
         true
@@ -789,6 +854,7 @@ struct Events {
     text: String,
     message_streamed: bool,
     session_id: Option<String>,
+    model: Option<String>,
     calls: HashMap<String, (String, Value)>,
     partial_calls: HashMap<u64, PartialCall>,
     completed: HashSet<String>,
@@ -853,6 +919,10 @@ impl Events {
     fn read(&mut self, value: Value, sink: Sink<'_>) -> Result<(), AiError> {
         match value["type"].as_str().unwrap_or("") {
             "system" if value["subtype"] == "init" => {
+                self.model = value["model"]
+                    .as_str()
+                    .filter(|model| valid_option(model))
+                    .map(str::to_owned);
                 self.session_id = value["session_id"]
                     .as_str()
                     .filter(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -942,6 +1012,11 @@ impl Events {
             }
             "assistant" => {
                 if let Some(category) = value["error"].as_str() {
+                    if terminal_error(category, &value).is_none()
+                        && crate::pictures::unsupported_image_message(&value.to_string())
+                    {
+                        return Err(error("image_unsupported"));
+                    }
                     return Err(
                         terminal_error(category, &value).unwrap_or_else(|| error("claude_failed"))
                     );
@@ -1017,6 +1092,11 @@ impl Events {
             }
             "result" => {
                 if value["is_error"] == true || value["subtype"] != "success" {
+                    if terminal_error(value["error"].as_str().unwrap_or(""), &value).is_none()
+                        && crate::pictures::unsupported_image_message(&value.to_string())
+                    {
+                        return Err(error("image_unsupported"));
+                    }
                     sink(StreamEvent::Diagnostic {
                         kind: "CLAUDE RESULT".into(),
                         text: "Claude Code stopped without completing the turn.".into(),
@@ -1102,6 +1182,116 @@ mod tests {
         .unwrap();
         (dir, provider)
     }
+    #[tokio::test]
+    async fn picture_probe_uses_stream_input_without_tools_or_a_resumed_session() {
+        let _serial = TEST_PROCESS.lock().await;
+        let (dir, provider) = fixture(vec![
+            json!({"type":"system","subtype":"init","model":"claude-sonnet-5-5","session_id":SESSION}),
+            json!({"type":"result","subtype":"success","result":"OK"}),
+        ]);
+        *provider.session_id.lock().unwrap() = Some(SESSION.into());
+        assert!(provider.probe_image_input("sonnet").await.unwrap());
+        assert_eq!(
+            provider.resolved_model().as_deref(),
+            Some("claude-sonnet-5-5")
+        );
+        let calls = records(dir.path());
+        let invocation = calls
+            .iter()
+            .find(|call| {
+                call["argv"]
+                    .as_array()
+                    .is_some_and(|args| args.iter().any(|a| a == "-p"))
+            })
+            .unwrap();
+        let args = invocation["argv"].as_array().unwrap();
+        let allowed = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[allowed + 1], "");
+        assert!(!args.iter().any(|a| a == "--resume"));
+        assert_eq!(invocation["mcp_config"], json!({"mcpServers":{}}));
+        assert_eq!(
+            invocation["environment"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"],
+            "1"
+        );
+        let input = calls.iter().find_map(|call| call.get("input")).unwrap();
+        assert_eq!(
+            input["message"]["content"][0]["source"]["data"],
+            crate::pictures::PNG
+        );
+        assert_eq!(input["message"]["content"][1]["text"], "Describe");
+    }
+
+    #[tokio::test]
+    async fn cli_image_refusal_is_distinct_from_authentication_or_limits() {
+        let _serial = TEST_PROCESS.lock().await;
+        for (category, message, unsupported) in [
+            (
+                "invalid_request",
+                "This model does not support images",
+                true,
+            ),
+            (
+                "authentication_failed",
+                "image input is not supported",
+                false,
+            ),
+            ("rate_limit", "image input is not supported", false),
+        ] {
+            let (dir, provider) = fixture(vec![
+                json!({"type":"result","subtype":"error_during_execution","is_error":true,"error":category,"result":message}),
+            ]);
+            let error = provider.probe_image_input("sonnet").await.unwrap_err();
+            assert_eq!(crate::pictures::image_refusal(&error), unsupported);
+            assert_eq!(
+                records(dir.path())
+                    .iter()
+                    .filter(|call| call.get("input").is_some())
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_user_image_is_resent_once_as_text() {
+        let _serial = TEST_PROCESS.lock().await;
+        let (dir, inner) = fixture(success());
+        std::fs::write(
+            dir.path().join("scenario.json"),
+            json!({"help":help(),"events":success(),"refuse_images":true}).to_string(),
+        )
+        .unwrap();
+        let cache = Arc::new(crate::pictures::Cache::new(
+            dir.path().join("pictures.json"),
+        ));
+        let key = crate::pictures::Key {
+            provider: "claude_code".into(),
+            scope: "fixture".into(),
+            model: "sonnet".into(),
+        };
+        let provider = crate::pictures::Detected::new(Box::new(inner), cache.clone(), key.clone());
+        let mut req = request();
+        req.model = "sonnet".into();
+        req.messages[0].content.push(ContentBlock::Image {
+            media_type: "image/png".into(),
+            data: crate::pictures::PNG.into(),
+        });
+        provider.stream_turn(req, &mut |_| {}).await.unwrap();
+        let calls = records(dir.path());
+        let inputs: Vec<_> = calls.iter().filter_map(|call| call.get("input")).collect();
+        assert_eq!(inputs.len(), 2);
+        let invocations: Vec<_> = calls
+            .iter()
+            .filter_map(|call| call["argv"].as_array())
+            .filter(|args| args.iter().any(|arg| arg == "-p"))
+            .collect();
+        assert!(!invocations[1].iter().any(|arg| arg == "--resume"));
+        assert!(inputs[0].to_string().contains(crate::pictures::PNG));
+        assert!(!inputs[1].to_string().contains(crate::pictures::PNG));
+        assert!(inputs[1].to_string().contains("Pictures are unavailable"));
+        assert_eq!(cache.get(&key), Some(false));
+    }
+
     fn records(dir: &Path) -> Vec<Value> {
         std::fs::read_to_string(dir.join("calls.jsonl"))
             .unwrap_or_default()

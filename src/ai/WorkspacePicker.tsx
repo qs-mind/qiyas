@@ -5,6 +5,7 @@ import { useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 import { Glyph } from "../shell/glyphs";
 import { ModelPicker } from "../shell/ModelPicker";
+import { PictureSupport } from "../shell/PictureSupport";
 import { DotLoader } from "../shell/DotLoader";
 
 /** What the button says when no model is chosen yet: the service. */
@@ -111,6 +112,8 @@ function SubscriptionChoice({ choice, ready, executable, onChange }: {
   // Read once when the choices open (the founder: no refresh button, the list is just there).
   useEffect(() => { if (ready) void readChoices(); }, [ready, executable]);
   return <div aria-busy={loading}>
+    <PictureSupport provider={choice.provider} model={choice.model} executable={executable}
+      metadata={models.find(model => model.id === choice.model)?.image_input} ready={ready && !loading && (isClaude ? !!claude?.compatible : models.length > 0)} />
     {loading && <DotLoader pattern="spiral" size="sm" label={t("settings.modelsLoading")} />}
     {isClaude && claude?.supports_model && <label>{t("settings.model")}
       <input aria-label={t("settings.model")} dir="ltr" value={choice.model} placeholder={t("settings.subscriptionDefault")}

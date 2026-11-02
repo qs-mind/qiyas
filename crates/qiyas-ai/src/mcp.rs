@@ -78,7 +78,7 @@ pub(crate) async fn serve_agent(
     handler.user_text = Some(user_text);
     handler.known_contracts = evidence.0.contracts;
     handler.last_picture = evidence.0.picture;
-    handler.image_input = Some(evidence.1 == Some(true));
+    handler.image_input = evidence.1;
     serve_handler(handler, 0, token, shutdown).await
 }
 
@@ -594,7 +594,7 @@ impl Qiyas {
         let route = surface::route(name, input).map_err(ToolError::BadInput)?;
         if name == surface::CAPTURE && self.image_input == Some(false) {
             return Ok(ToolOutput::Json(
-                serde_json::json!({"status":"unavailable","message":"Picture support is unsupported or unconfirmed for this model. Use exact queries and checks; no picture was sent."}),
+                serde_json::json!({"status":"unavailable","message":"Pictures are unsupported for this model. Use exact queries and checks; no picture was sent."}),
             ));
         }
         if let Some(host) = self.host.as_deref() {

@@ -2389,3 +2389,50 @@ async fn mock_openai_keeps_cache_identity_prefix_and_exact_deepseek_reasoning() 
         .unwrap();
     assert_eq!(assistant["reasoning_content"], "Exact thinking\nأفكار");
 }
+
+#[tokio::test]
+async fn unknown_picture_support_sends_attached_photo_then_retries_a_refusal_as_text() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let mock = serve(|n| match n {
+            0 => Reply::Status(
+                400,
+                vec![],
+                json!({"error":{"type":"invalid_request_error","message":"This model does not support image input"}}).to_string(),
+            ),
+            _ => text_turn(&["I will use exact drawing checks."]),
+        }).await;
+        let (dir, session) = sample();
+        let settings = AgentSettings::default();
+        let inner = mock.anthropic();
+        assert_eq!(inner.image_input(&settings.model), None);
+        let path = dir.path().join("picture-support.json");
+        let cache = Arc::new(qiyas_ai::pictures::Cache::new(path.clone()));
+        let key = qiyas_ai::pictures::Key {
+            provider: "anthropic".into(), scope: mock.base.clone(), model: settings.model.clone(),
+        };
+        let provider = qiyas_ai::pictures::Detected::new(Box::new(inner), cache.clone(), key.clone());
+        assert_eq!(provider.image_input(&settings.model), None);
+        let mut agent = Agent::new(Box::new(provider), session, settings);
+        turn_with(&mut agent, qiyas_ai::UserMessage {
+            text: "What is in this photo?".into(),
+            images: vec![qiyas_ai::UserImage { media_type: "image/jpeg".into(), data: "QUJD".into() }],
+            ..Default::default()
+        }).await.unwrap();
+
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 2, "one image request and one text retry");
+        let first = &requests[0].body["messages"][0]["content"];
+        assert_eq!(first[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(first[1]["source"]["data"], "QUJD");
+        assert_eq!(first[2]["text"], "What is in this photo?");
+        let retry = &requests[1].body;
+        for message in retry["messages"].as_array().unwrap() {
+            assert!(message["content"].as_array().unwrap().iter().all(|block| block["type"] != "image"));
+        }
+        assert!(!retry.to_string().contains("QUJD"));
+        assert!(retry.to_string().contains("Pictures are unavailable"));
+        assert_eq!(requests[0].body["tools"], retry["tools"]);
+        assert_eq!(cache.get(&key), Some(false));
+        assert_eq!(qiyas_ai::pictures::Cache::new(path).get(&key), Some(false));
+    }).await.expect("test unknown_picture_support_sends_attached_photo_then_retries_a_refusal_as_text timed out after 60 seconds");
+}

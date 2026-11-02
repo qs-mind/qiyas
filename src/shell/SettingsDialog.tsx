@@ -242,19 +242,8 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                     value={profile.model}
                     typedKey={key}
                     onChange={(model) => changeProfile({ model, image_input: undefined })}
-                    onImageInputChange={(image_input) => { if (image_input !== (profile.image_input ?? null)) changeProfile({ image_input }); }}
                   />
                 </div>}
-                <label>
-                  <span>{t("settings.imageInput")}</span>
-                  <select value={profile.image_input == null ? "unknown" : String(profile.image_input)}
-                    onChange={(e) => changeProfile({ image_input: e.target.value === "unknown" ? null : e.target.value === "true" })}>
-                    <option value="unknown">{t("settings.imageUnknown")}</option>
-                    <option value="true">{t("settings.imageSupported")}</option>
-                    <option value="false">{t("settings.imageUnsupported")}</option>
-                  </select>
-                </label>
-                {profile.image_input !== true && <p className="note">{t(profile.image_input === false ? "ai.noVision" : "ai.unknownVision")}</p>}
                 {draft.provider === "openai_compatible" && (
                   <label>
                     <span>{t("settings.baseUrl")}</span>

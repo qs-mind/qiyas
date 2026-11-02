@@ -96,6 +96,7 @@
     "allow-workspace-provider",
     "allow-ai-attach-pdf",
     "allow-ai-models",
+    "allow-ai-picture-support",
     "allow-claude-code-status",
     "allow-ai-provider-status",
     "allow-reopen-chatgpt-sign-in",

@@ -1104,34 +1104,23 @@ async fn mock_cache_key_and_prefix_survive_plan_followup() {
 }
 
 #[test]
-fn model_picture_metadata_is_shared_with_the_conversation_without_a_probe() {
-    let endpoint = "http://localhost:44771/models";
-    crate::models::remember(
-        endpoint,
-        &[crate::models::ModelInfo {
-            id: "picture-model".into(),
-            label: "Model".into(),
-            image_input: Some(true),
-        }],
-    );
-    let provider = ChatgptPlan::new(
-        memory(tokens(&[PLAN_SCOPE])),
-        oauth::Protocol {
-            models: endpoint.into(),
-            ..protocol()
-        },
-    );
-    assert_eq!(provider.image_input("picture-model"), Some(true));
-    assert_eq!(provider.image_input("unconfirmed"), None);
-    crate::models::remember(
-        endpoint,
-        &[crate::models::ModelInfo {
-            id: "picture-model".into(),
-            label: "Model".into(),
-            image_input: Some(false),
-        }],
-    );
-    assert_eq!(provider.image_input("picture-model"), Some(false));
+fn model_picture_metadata_belongs_to_the_account_provider() {
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+    for supported in [true, false] {
+        *provider.models.lock().unwrap() = Some((
+            "registration".into(),
+            vec![PlanModel {
+                id: "picture-model".into(),
+                label: "Model".into(),
+                image_input: Some(supported),
+                reasoning_efforts: vec![],
+            }],
+        ));
+        assert_eq!(provider.image_input("picture-model"), Some(supported));
+        assert_eq!(provider.image_input("unconfirmed"), None);
+        let other = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), protocol());
+        assert_eq!(other.image_input("picture-model"), None);
+    }
 }
 
 #[tokio::test]
@@ -1230,4 +1219,132 @@ async fn plan_http_retry_advice_reaches_the_failure_card() {
     assert_eq!(public["kind"], "plan_limit");
     assert_eq!(public["retry_after"], 45);
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn picture_metadata_is_used_before_a_responses_probe() {
+    let _serial = SERIAL.lock().await;
+    for modalities in [json!(["text", "image"]), json!(["text"])] {
+        let expected = modalities
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "image");
+        let (base, server) = mock_server(vec![(200, json!({"models":[{
+            "slug":"mock-model","display_name":"Model","visibility":"list","input_modalities":modalities
+        }]}))]).await;
+        let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+        assert_eq!(
+            provider.probe_image_input("mock-model").await.unwrap(),
+            expected
+        );
+        assert_eq!(server.await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn missing_picture_metadata_probes_responses_once_and_saves_the_date() {
+    let _serial = SERIAL.lock().await;
+    let done = json!({"type":"response.completed","response":{"output":[
+        {"type":"message","content":[{"type":"output_text","text":"OK"}]}],"usage":{}}});
+    let (base, server) = mock_server(vec![
+        (
+            200,
+            json!({"models":[{"slug":"mock-model","display_name":"Model","visibility":"list"}]}),
+        ),
+        (200, json!(format!("data: {done}\n\n"))),
+    ])
+    .await;
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pictures.json");
+    let cache = crate::pictures::Cache::new(path.clone());
+    let key = crate::pictures::Key {
+        provider: "chatgpt_plan".into(),
+        scope: "local-account".into(),
+        model: "mock-model".into(),
+    };
+    assert_eq!(
+        crate::pictures::detect(&cache, &key, &provider).await,
+        Some(true)
+    );
+    assert_eq!(
+        crate::pictures::detect(&cache, &key, &provider).await,
+        Some(true)
+    );
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: Value = serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert!(body.to_string().contains("input_image"));
+    assert!(body.to_string().contains(crate::pictures::PNG));
+    assert_eq!(body["max_output_tokens"], 16);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["stream"], true);
+    assert!(body.get("tools").is_none());
+    let saved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(saved[0]["model"], "mock-model");
+    assert!(saved[0]["checked_at"].as_str().unwrap().contains('T'));
+}
+
+#[tokio::test]
+async fn image_refusal_in_responses_retries_as_text_and_remembers_the_account_model() {
+    let _serial = SERIAL.lock().await;
+    let done = json!({"type":"response.completed","response":{"output":[
+        {"type":"message","content":[{"type":"output_text","text":"Using drawing checks"}]}],"usage":{}}});
+    let (base, server) = mock_server(vec![
+        (400, json!({"error":{"code":"subscription_sharing_unsupported_capability","param":"input[1].content[0]"}})),
+        (200, json!(format!("data: {done}\n\n"))),
+    ]).await;
+    let inner = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(crate::pictures::Cache::new(
+        dir.path().join("pictures.json"),
+    ));
+    let key = crate::pictures::Key {
+        provider: "chatgpt_plan".into(),
+        scope: "local-account".into(),
+        model: "mock-model".into(),
+    };
+    let provider = crate::pictures::Detected::new(Box::new(inner), cache.clone(), key.clone());
+    let mut req = request();
+    req.messages[0].content.push(ContentBlock::Image {
+        media_type: "image/png".into(),
+        data: crate::pictures::PNG.into(),
+    });
+    provider.stream_turn(req, &mut |_| {}).await.unwrap();
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].contains("input_image"));
+    assert!(!requests[1].contains("input_image"));
+    assert!(requests[1].contains("Pictures are unavailable"));
+    assert_eq!(cache.get(&key), Some(false));
+}
+
+#[tokio::test]
+async fn failed_plan_probes_do_not_write_capability_guesses() {
+    let _serial = SERIAL.lock().await;
+    for (status, detail) in [
+        (401, json!({"code":"invalid_token"})),
+        (
+            429,
+            json!({"code":"subscription_sharing_usage_limit_exceeded"}),
+        ),
+    ] {
+        let (base, server) = mock_server(vec![
+            (200, json!({"models":[{"slug":"mock-model","display_name":"Model","visibility":"list"}]})),
+            (status, json!({"error":detail})),
+        ]).await;
+        let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pictures.json");
+        let cache = crate::pictures::Cache::new(path.clone());
+        let key = crate::pictures::Key {
+            provider: "chatgpt_plan".into(),
+            scope: "local-account".into(),
+            model: "mock-model".into(),
+        };
+        assert_eq!(crate::pictures::detect(&cache, &key, &provider).await, None);
+        assert!(!path.exists());
+        assert_eq!(server.await.unwrap().len(), 2);
+    }
 }

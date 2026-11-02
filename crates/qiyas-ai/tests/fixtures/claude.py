@@ -24,7 +24,7 @@ def record(value):
             path = pathlib.Path(argument)
             config = json.loads(path.read_text())
             value["mcp_config_mode"] = stat.S_IMODE(path.stat().st_mode)
-        value["mcp_has_bearer"] = config["mcpServers"]["qiyas"]["headers"]["Authorization"].startswith("Bearer ")
+        value["mcp_has_bearer"] = config.get("mcpServers", {}).get("qiyas", {}).get("headers", {}).get("Authorization", "").startswith("Bearer ")
         for server in config.get("mcpServers", {}).values():
             if "headers" in server:
                 server["headers"] = {name: "[redacted]" for name in server["headers"]}
@@ -47,7 +47,15 @@ elif args == ["auth", "--help"]:
 elif args == ["auth", "status"]:
     print(json.dumps({"loggedIn": True}))
 elif "-p" in args:
-    record({"input": json.loads(sys.stdin.readline())})
+    user_input = json.loads(sys.stdin.readline())
+    record({"input": user_input})
+    if scenario.get("refuse_images") and any(block.get("type") == "image" for block in user_input["message"]["content"]):
+        for event in scenario.get("events", []):
+            if event.get("type") == "system" and event.get("subtype") == "init":
+                print(json.dumps(event), flush=True)
+        print(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "result": "This model does not support image input"}), flush=True)
+        sys.exit(0)
     for event in scenario.get("events_before_wait", []):
         print(json.dumps(event), flush=True)
     if scenario.get("mcp"):

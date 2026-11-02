@@ -1851,6 +1851,7 @@ export type AiStatus = {
   has_key: boolean;
   busy: boolean;
   message_count: number;
+  image_input?: boolean | null;
 };
 
 /** A region the user marked for Mizan: a box (two opposite corners) or a polygon, drawing
@@ -1932,6 +1933,10 @@ export type ModelList = { models: ModelInfo[]; from_service: boolean; error: str
  *  the core. */
 export const aiModels = (provider?: Provider, baseUrl?: string | null, typedKey?: string) =>
   invoke<ModelList>("ai_models", { provider: provider ?? null, baseUrl: baseUrl ?? null, typedKey: typedKey || null });
+
+/** Returns the local answer and schedules background detection when needed. */
+export const aiPictureSupport = (provider: Provider, model: string, baseUrl?: string | null, typedKey?: string, executable?: string | null) =>
+  invoke<boolean | null>("ai_picture_support", { provider, model, baseUrl: baseUrl ?? null, typedKey: typedKey || null, executable: executable ?? null });
 
 /** The agent log: where the file is and its newest part (empty before the first conversation). */
 export type AiLog = { path: string; text: string };

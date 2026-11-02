@@ -37,7 +37,7 @@ pub struct ModelInfo {
     pub image_input: Option<bool>,
 }
 
-type Capabilities = BTreeMap<(String, String), bool>;
+type Capabilities = BTreeMap<(String, String), (bool, std::time::Instant)>;
 static IMAGE_INPUT: OnceLock<Mutex<Capabilities>> = OnceLock::new();
 
 pub(crate) fn known_image_input(endpoint: &str, model: &str) -> Option<bool> {
@@ -46,7 +46,8 @@ pub(crate) fn known_image_input(endpoint: &str, model: &str) -> Option<bool> {
         .lock()
         .ok()?
         .get(&(crate::endpoint::normalize(endpoint).ok()?, model.into()))
-        .copied()
+        .filter(|(_, checked)| checked.elapsed() < Duration::from_secs(30 * 24 * 60 * 60))
+        .map(|(supported, _)| *supported)
 }
 
 pub(crate) fn remember(endpoint: &str, models: &[ModelInfo]) {
@@ -57,7 +58,7 @@ pub(crate) fn remember(endpoint: &str, models: &[ModelInfo]) {
     for model in models {
         let key = (endpoint.trim_end_matches('/').to_owned(), model.id.clone());
         if let Some(vision) = model.image_input {
-            known.insert(key, vision);
+            known.insert(key, (vision, std::time::Instant::now()));
         } else {
             known.remove(&key);
         }
@@ -70,6 +71,7 @@ pub fn image_input(model: &Value) -> Option<bool> {
         "/capabilities/vision",
         "/capabilities/image_input",
         "/supports_image_input",
+        "/supports_vision",
     ] {
         if let Some(value) = model.pointer(path) {
             if let Some(flag) = value.as_bool().or_else(|| value["supported"].as_bool()) {
@@ -77,7 +79,12 @@ pub fn image_input(model: &Value) -> Option<bool> {
             }
         }
     }
-    for path in ["/architecture/input_modalities", "/input_modalities"] {
+    for path in [
+        "/architecture/input_modalities",
+        "/input_modalities",
+        "/modalities/input",
+        "/supported_input_modalities",
+    ] {
         if let Some(modalities) = model.pointer(path).and_then(Value::as_array) {
             return Some(modalities.iter().any(|m| m == "image"));
         }
@@ -101,7 +108,7 @@ pub fn builtin_models(source: ModelSource) -> Vec<ModelInfo> {
             .map(|(id, label)| ModelInfo {
                 id: (*id).to_string(),
                 label: (*label).to_string(),
-                image_input: Some(true),
+                image_input: None,
             })
             .collect(),
         ModelSource::OpenAiCompatible { .. } => Vec::new(),
@@ -194,12 +201,7 @@ pub fn parse_anthropic_page(page: &Value) -> (Vec<ModelInfo>, Option<String>) {
             }
             let id = m["id"].as_str()?.to_string();
             let label = m["display_name"].as_str().unwrap_or(&id).to_string();
-            let image_input = image_input(m).or_else(|| {
-                CLAUDE_MODELS
-                    .iter()
-                    .any(|(known, _)| *known == id)
-                    .then_some(true)
-            });
+            let image_input = image_input(m);
             Some(ModelInfo {
                 id,
                 label,
@@ -264,7 +266,7 @@ pub(crate) fn image_state(supported: Option<bool>) -> Value {
     serde_json::json!({"supported":supported,"instruction":match supported {
         Some(true) => "Images are supported. Verify exact geometry first, then inspect pictures.",
         Some(false) => "This model cannot see images. Use exact queries and checks. Never claim to have inspected a picture.",
-        None => "Image capability is unknown. Use exact queries and checks; do not claim visual inspection without confirmed image support.",
+        None => "Picture support is being checked. Pictures may be sent unless the provider refuses them. Use exact drawing checks alongside any pictures received.",
     }})
 }
 

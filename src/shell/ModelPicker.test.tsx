@@ -114,3 +114,13 @@ test("missing model metadata preserves the user's saved image capability", async
   expect(screen.getByRole("option", { name: "Claude Opus 5.5 — claude-opus-5-5" })).toBeTruthy();
   expect(capability).not.toHaveBeenCalled();
 });
+
+test.each([
+  [true, "Reads pictures"],
+  [false, "Text only — Mizan uses exact drawing checks"],
+  [null, "Checking picture support…"],
+])("shows detected picture support %s", async (image_input, label) => {
+  setup({ from_service: true, error: null, models: [{ id: "model", label: "Model", image_input: image_input as boolean | null }] }, "model");
+  await settle();
+  expect(screen.getByRole("note").textContent).toBe(label);
+});

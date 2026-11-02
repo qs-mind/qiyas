@@ -61,6 +61,77 @@ impl Provider for OpenAiCompatible {
     fn image_input(&self, model: &str) -> Option<bool> {
         crate::models::known_image_input(&self.base_url, model)
     }
+    fn probe_image_input<'a>(&'a self, model: &'a str) -> BoxFuture<'a, Result<bool, AiError>> {
+        Box::pin(async move {
+            if let Ok(models) = crate::models::list_models(
+                crate::models::ModelSource::OpenAiCompatible {
+                    base_url: &self.base_url,
+                },
+                self.api_key.as_deref(),
+            )
+            .await
+            {
+                if let Some(answer) = models
+                    .iter()
+                    .find(|m| m.id == model)
+                    .and_then(|m| m.image_input)
+                {
+                    return Ok(answer);
+                }
+            }
+            let base = crate::endpoint::normalize(&self.base_url).map_err(AiError::Network)?;
+            let mut body = json!({"model":model,"max_completion_tokens":1,"messages":[{"role":"user","content":[
+                {"type":"text","text":"Describe"},
+                {"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}", crate::pictures::PNG)}}
+            ]}]});
+            loop {
+                let sent = send_with_retry(
+                    || {
+                        let request = self
+                            .client
+                            .post(format!("{base}/chat/completions"))
+                            .json(&body);
+                        match &self.api_key {
+                            Some(key) => request.bearer_auth(key),
+                            None => request,
+                        }
+                    },
+                    self.api_key.as_deref().unwrap_or(""),
+                    &body,
+                    false,
+                    &mut |_| {},
+                )
+                .await;
+                match sent {
+                    Err(AiError::Api {
+                        status: 400,
+                        ref message,
+                        body: ref answer,
+                        ..
+                    }) if body.get("max_completion_tokens").is_some()
+                        && refused_field(&format!("{message} {answer}"), &HashSet::new())
+                            == Some("max_completion_tokens") =>
+                    {
+                        body.as_object_mut()
+                            .unwrap()
+                            .remove("max_completion_tokens");
+                        body["max_tokens"] = json!(1);
+                    }
+                    other => {
+                        let value: Value = other?.json().await.map_err(|e| {
+                            AiError::Network(e.to_string())
+                                .scrubbed(self.api_key.as_deref().unwrap_or(""))
+                        })?;
+                        return if value["choices"].as_array().is_some_and(|v| !v.is_empty()) {
+                            Ok(true)
+                        } else {
+                            Err(AiError::Stream("Missing completion".into()))
+                        };
+                    }
+                }
+            }
+        })
+    }
     fn save_state(&self) -> Value {
         json!({
             "extras": self.extras.lock().map(|v| v.clone()).unwrap_or_default(),
@@ -448,6 +519,9 @@ impl Turn {
                     .unwrap_or("error"),
                 err["message"].as_str().unwrap_or("error")
             );
+            if crate::pictures::unsupported_image_message(&message) {
+                return Err(AiError::Subscription("image_unsupported"));
+            }
             return Err(AiError::Stream(message));
         }
         if let Some(u) = e.get("usage").filter(|u| u.is_object()) {

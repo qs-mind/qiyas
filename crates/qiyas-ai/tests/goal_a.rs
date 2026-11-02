@@ -528,11 +528,24 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_statuses_and_resume() {
     calls.push((surface::READ, input("state", json!({}))));
     calls.push((surface::CAPTURE, json!({"source":"picture","args":"{}"})));
     let settings = qiyas_ai::AgentSettings {
-        image_input: Some(false),
+        image_input: Some(true),
         ..Default::default()
     };
+    let cache = Arc::new(qiyas_ai::pictures::Cache::new(
+        dir.path().join("pictures.json"),
+    ));
+    let capability_key = qiyas_ai::pictures::Key {
+        provider: "scripted".into(),
+        scope: "test".into(),
+        model: settings.model.clone(),
+    };
+    cache.remember(&capability_key, false);
     let mut agent = qiyas_ai::Agent::new(
-        Box::new(scripted::Script::new(calls, requests.clone())),
+        Box::new(qiyas_ai::pictures::Detected::new(
+            Box::new(scripted::Script::new(calls, requests.clone())),
+            cache.clone(),
+            capability_key.clone(),
+        )),
         session.clone(),
         settings.clone(),
     );
@@ -595,7 +608,11 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_statuses_and_resume() {
     let snapshot = agent.snapshot();
     let mut resumed = qiyas_ai::Agent::resume(
         snapshot,
-        Box::new(scripted::Script::new(vec![], Arc::default())),
+        Box::new(qiyas_ai::pictures::Detected::new(
+            Box::new(scripted::Script::new(vec![], Arc::default())),
+            cache,
+            capability_key,
+        )),
         session,
         settings,
     );

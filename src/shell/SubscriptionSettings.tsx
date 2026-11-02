@@ -5,6 +5,7 @@ import {
   EFFORTS, type ChatgptAccount, type ClaudeCodeStatus, type Provider, type PlanModel,
 } from "../api";
 import { DotLoader } from "./DotLoader";
+import { PictureSupport } from "./PictureSupport";
 import { useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 
@@ -113,6 +114,9 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
   }
 
   return <section className="subscription-settings">
+    <PictureSupport provider={provider} model={model} executable={executable}
+      account={account?.active_id} metadata={selectedModel?.image_input}
+      ready={provider === "claude_code" ? !!claude?.compatible : !!account?.signed_in && !!account.plan_granted && !account.paused && models.length > 0} />
     {provider === "claude_code" && <>
       <p>{t("settings.claudeLogin")}</p>
       <label>

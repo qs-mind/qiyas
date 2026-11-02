@@ -415,3 +415,10 @@ test("technical details default off and save through the existing settings IPC",
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await vi.waitFor(() => expect(api.setSettings).toHaveBeenLastCalledWith({...settings, show_technical_details: false}));
 });
+
+test("picture support is automatic with no manual choice", async () => {
+  setup();
+  await screen.findByLabelText("Provider");
+  expect(screen.queryByLabelText("Image support")).toBeNull();
+  expect(screen.queryByText("Image support is unknown. Mizan will rely on measured checks.")).toBeNull();
+});

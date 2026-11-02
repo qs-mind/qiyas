@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { aiModels, type ModelList, type Provider } from "../api";
 import { useT } from "../i18n";
 import { DotLoader } from "./DotLoader";
+import { PictureSupport } from "./PictureSupport";
 
 /** The option that opens the custom id field. */
 const OTHER = "\u0000other";
@@ -67,7 +68,7 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onIm
   const models = list?.models ?? [];
   const selectedCapability = models.find((m) => m.id === value)?.image_input;
   useEffect(() => {
-    // Missing service metadata must not erase the user's saved capability choice.
+    // Report only an explicit capability.
     if (selectedCapability != null) onImageInputChange?.(selectedCapability);
   }, [list, value, selectedCapability]);
   const known = models.some((m) => m.id === value);
@@ -80,8 +81,8 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onIm
 
   return (
     <div className="model-picker">
-      {!!value && !loading && list && models.find((m) => m.id === value)?.image_input !== true &&
-        <p className="muted" role="note">{t(models.find((m) => m.id === value)?.image_input === false ? "ai.visionUnavailable" : "ai.visionUnknown")}</p>}
+      {!!value && <PictureSupport provider={provider} model={value} baseUrl={baseUrl} typedKey={typedKey}
+        metadata={selectedCapability} ready={!!list && !loading} />}
       {models.length > FILTER_FROM && (
         <input
           type="search"

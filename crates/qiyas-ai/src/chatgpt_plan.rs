@@ -495,22 +495,35 @@ impl ChatgptPlan {
 }
 impl Provider for ChatgptPlan {
     fn image_input(&self, model: &str) -> Option<bool> {
-        self.models
-            .lock()
-            .ok()
-            .and_then(|models| {
-                models
-                    .as_ref()
-                    .and_then(|(_, models)| {
-                        if model.trim().is_empty() {
-                            models.first()
-                        } else {
-                            models.iter().find(|m| m.id == model)
-                        }
-                    })
-                    .and_then(|m| m.image_input)
-            })
-            .or_else(|| crate::models::known_image_input(&self.protocol.models, model))
+        self.models.lock().ok().and_then(|models| {
+            models
+                .as_ref()
+                .and_then(|(_, models)| {
+                    if model.trim().is_empty() {
+                        models.first()
+                    } else {
+                        models.iter().find(|m| m.id == model)
+                    }
+                })
+                .and_then(|m| m.image_input)
+        })
+    }
+    fn probe_image_input<'a>(&'a self, model: &'a str) -> BoxFuture<'a, Result<bool, AiError>> {
+        Box::pin(async move {
+            let models = self.models().await?;
+            let selected = if model.trim().is_empty() {
+                models.first()
+            } else {
+                models.iter().find(|m| m.id == model)
+            };
+            if let Some(answer) = selected.and_then(|m| m.image_input) {
+                return Ok(answer);
+            }
+            let mut request =
+                crate::pictures::probe_request(selected.map_or(model, |m| m.id.as_str()));
+            request.max_tokens = 16;
+            self.stream_turn(request, &mut |_| {}).await.map(|_| true)
+        })
     }
     fn save_state(&self) -> serde_json::Value {
         let refused = self

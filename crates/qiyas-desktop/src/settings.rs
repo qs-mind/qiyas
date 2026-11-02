@@ -111,7 +111,7 @@ pub struct ProviderProfile {
     /// Only OpenAI-compatible services use an address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    /// Model capability reported by the service or confirmed in Settings.
+    /// Old saved choice, used only until automatic detection answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_input: Option<bool>,
 }
@@ -121,7 +121,7 @@ fn anthropic_profile() -> ProviderProfile {
         effort: None,
         model: "claude-opus-5-5".into(),
         base_url: None,
-        image_input: Some(true),
+        image_input: None,
     }
 }
 

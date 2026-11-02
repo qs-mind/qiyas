@@ -22,7 +22,13 @@ pub(super) async fn stream(
     sink: Sink<'_>,
 ) -> Result<TurnResult, AiError> {
     tokens.require_plan()?;
+    let probe = req.cache_key == "picture-support";
     let mut body = request(&req)?;
+    if probe {
+        for field in ["tools", "include", "prompt_cache_key"] {
+            body.as_object_mut().unwrap().remove(field);
+        }
+    }
     if refused_effort
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -111,7 +117,15 @@ pub(super) async fn stream(
             }
         };
         match result {
-            Err(e) if e.code() == "chatgpt_capability" && adaptations < 3 => {
+            Err(e)
+                if e.code() == "chatgpt_capability"
+                    && unsupported
+                        .as_deref()
+                        .is_some_and(|param| image_parameter(&body, param)) =>
+            {
+                return Err(AiError::Subscription("image_unsupported"));
+            }
+            Err(e) if !probe && e.code() == "chatgpt_capability" && adaptations < 3 => {
                 if !unsupported
                     .as_deref()
                     .is_some_and(|param| drop_capability(&mut body, param))
@@ -141,7 +155,9 @@ pub(super) async fn stream(
                     discard_partial: true,
                 });
             }
-            Err(e) if matches!(e.code(), "chatgpt_temporary" | "chatgpt_rate_limited") => {
+            Err(e)
+                if !probe && matches!(e.code(), "chatgpt_temporary" | "chatgpt_rate_limited") =>
+            {
                 let Some(wait) = retry.next_delay(retry_after, started.elapsed()) else {
                     return Err(e);
                 };
@@ -163,18 +179,23 @@ pub(super) fn failure(status: u16, detail: &Value) -> AiError {
 }
 
 fn classify_failure(status: Option<u16>, detail: &Value) -> AiError {
-    // A specific code wins over a broad type (e.g. context length vs invalid request).
-    let code = detail["code"]
+    let classified = detail["code"]
         .as_str()
         .and_then(known_failure)
-        .or_else(|| detail["type"].as_str().and_then(known_failure))
-        .unwrap_or(match status {
-            Some(401) => "chatgpt_access",
-            Some(403) => "chatgpt_policy",
-            Some(429) => "chatgpt_limit",
-            Some(500..=599) | None => "chatgpt_temporary",
-            _ => "chatgpt_failed",
-        });
+        .or_else(|| detail["type"].as_str().and_then(known_failure));
+    if matches!(status, None | Some(400 | 415 | 422))
+        && matches!(classified, None | Some("chatgpt_capability"))
+        && crate::pictures::unsupported_image_message(&detail.to_string())
+    {
+        return AiError::Subscription("image_unsupported");
+    }
+    let code = classified.unwrap_or(match status {
+        Some(401) => "chatgpt_access",
+        Some(403) => "chatgpt_policy",
+        Some(429) => "chatgpt_limit",
+        Some(500..=599) | None => "chatgpt_temporary",
+        _ => "chatgpt_failed",
+    });
     let resets_at = crate::provider_error::reset_timestamp(detail);
     if resets_at.is_some() {
         AiError::SubscriptionFailure {
@@ -273,6 +294,32 @@ pub(super) fn error_diagnostic(
     }
 }
 
+fn image_parameter(body: &Value, param: &str) -> bool {
+    let path = param.replace('[', ".").replace(']', "");
+    let mut value = body;
+    for part in path.split('.') {
+        if value["type"] == "input_image" {
+            return true;
+        }
+        value = match value {
+            Value::Object(object) => match object.get(part) {
+                Some(value) => value,
+                None => return false,
+            },
+            Value::Array(array) => match part
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| array.get(index))
+            {
+                Some(value) => value,
+                None => return false,
+            },
+            _ => return false,
+        };
+    }
+    value["type"] == "input_image"
+}
+
 /// Remove only the specific optional feature identified by the provider. Required
 /// protocol fields cannot be removed, and an unchanged body is never sent again.
 fn drop_capability(body: &mut Value, param: &str) -> bool {
@@ -342,19 +389,7 @@ pub(super) async fn models(endpoint: &str, tokens: &Tokens) -> Result<Vec<PlanMo
                     .json()
                     .await
                     .map_err(|_| AiError::Subscription("chatgpt_failed"))?;
-                let models = visible_models(value)?;
-                crate::models::remember(
-                    endpoint,
-                    &models
-                        .iter()
-                        .map(|model| crate::models::ModelInfo {
-                            id: model.id.clone(),
-                            label: model.label.clone(),
-                            image_input: model.image_input,
-                        })
-                        .collect::<Vec<_>>(),
-                );
-                return Ok(models);
+                return visible_models(value);
             }
             Ok(r) => {
                 let status = r.status().as_u16();
@@ -494,6 +529,29 @@ pub(super) use streamed::Events;
 #[cfg(test)]
 mod tests {
     use super::super::PLAN_SCOPE;
+
+    #[test]
+    fn a_refused_picture_parameter_is_not_an_optional_field_to_drop() {
+        let body = serde_json::json!({"input":[{"role":"user","content":[
+            {"type":"input_image","image_url":"data:image/png;base64,picture"},
+            {"type":"input_text","text":"Describe"}
+        ]}]});
+        for param in [
+            "input[0].content[0]",
+            "input.0.content.0.image_url",
+            "input[0].content[0].type",
+        ] {
+            assert!(super::image_parameter(&body, param), "{param}");
+        }
+        for param in [
+            "input",
+            "input[0]",
+            "input[0].content[1]",
+            "reasoning.effort",
+        ] {
+            assert!(!super::image_parameter(&body, param), "{param}");
+        }
+    }
 
     #[test]
     fn cache_key_and_reasoning_prefix_are_stable() {

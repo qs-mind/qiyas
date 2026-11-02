@@ -15,6 +15,7 @@ mod mock;
 mod output_files;
 mod paths;
 mod pdf;
+mod pictures;
 mod plot;
 mod projects;
 mod provider_status;
@@ -147,6 +148,7 @@ pub fn run() {
             commands::workspace_provider,
             documents::ai_attach_pdf,
             commands::ai_models,
+            pictures::ai_picture_support,
             commands::claude_code_status,
             provider_status::ai_provider_status,
             subscriptions::reopen_chatgpt_sign_in,

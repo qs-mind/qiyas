@@ -32,6 +32,7 @@ pub mod mcp;
 pub mod models;
 pub mod openai;
 mod output_files;
+pub mod pictures;
 pub mod prompt;
 pub mod provider;
 mod result;

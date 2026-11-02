@@ -20,11 +20,26 @@ pub type Sink<'a> = &'a mut (dyn FnMut(StreamEvent) + Send);
 
 /// One AI service that can stream a turn of the conversation.
 pub trait Provider: Send + Sync {
-    /// Unknown capability means pictures stay local. Metadata, never a paid probe.
+    /// Unknown allows pictures while detection runs; only false withholds them.
     fn image_input(&self, _model: &str) -> Option<bool> {
         None
     }
-    /// A local agent owns its tool loop and must never be restarted automatically.
+    fn set_image_input(&self, _supported: Option<bool>) {}
+
+    /// Concrete model reported by a CLI that accepts aliases or a default.
+    fn resolved_model(&self) -> Option<String> {
+        None
+    }
+
+    /// A tiny, tool-free request, used only by background detection.
+    fn probe_image_input<'a>(&'a self, model: &'a str) -> BoxFuture<'a, Result<bool, AiError>> {
+        Box::pin(async move {
+            self.stream_turn(crate::pictures::probe_request(model), &mut |_| {})
+                .await
+                .map(|_| true)
+        })
+    }
+    /// A local agent owns its tool loop; generic retries must not restart it.
     fn owns_turn(&self) -> bool {
         false
     }
