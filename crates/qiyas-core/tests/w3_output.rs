@@ -1489,3 +1489,481 @@ fn declared_count_kind_is_exact_with_an_unfamiliar_unit_and_a_configured_percent
         "unknown-count"
     ));
 }
+
+fn podium_summary_fixture() -> (tempfile::TempDir, Session, Value, u64, Vec<u64>) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("tower-podium.dwg"), 6);
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Podium wall","category":"Tower podium","geometry":"path",
+        "properties":{"height":{"kind":"number","unit":"length","default":0}},
+        "quantities":{}}}),
+    );
+    run(
+        &mut s,
+        json!({"type":"define_object_type","definition":{
+        "name":"Podium opening","category":"Tower podium","geometry":"point",
+        "properties":{"opening_area":{"kind":"number","unit":"area","default":0}},
+        "quantities":{}}}),
+    );
+    let host = added(
+        &mut s,
+        json!({"type":"place_objects","objects":[{
+        "type":"Podium wall","points":[[0,0],[180,0]],"props":{"height":8}}]}),
+    )[0];
+    let voids = added(
+        &mut s,
+        json!({"type":"place_objects","objects":[
+        {"type":"Podium opening","host":host,"points":[[30,0]],"props":{"opening_area":12}},
+        {"type":"Podium opening","host":host,"points":[[90,0]],"props":{"opening_area":20}}]}),
+    );
+    let cite = json!({"source":"Mizan","clause":"Podium engineering basis"});
+    let method = json!({"name":"Podium method","title":"Tower podium","based_on":"Project evidence","source_note":"Test only",
+        "rules":[{"id":"podium","element_type":"Podium wall","unit":"m2","citation":cite,
+        "terms":[{"label":"Wall area","operation":"add","factors":["geometry.length","height","1.05"],
+            "factor_labels":["Length","Height","Waste allowance"],"citation":cite}],
+        "deductions":[{"element_type":"Podium opening","when":"true","boundary":{"when":"false","deduct_when":"true","citation":cite},
+            "term":{"label":"Opening","operation":"deduct","factors":["void.opening_area"],"citation":cite}}]}]});
+    set_podium_method(&mut s, &method);
+    (dir, s, method, host, voids)
+}
+
+fn set_podium_method(s: &mut Session, method: &Value) {
+    let mappings: Vec<_> = method["rules"].as_array().unwrap().iter().map(|r| json!({
+        "rule":r["id"],"code":r["id"],"description_en":"Tower podium wall","description_ar":"جدار منصة البرج",
+        "section":"Podium","trade":"","unit":"m2","citation":r["citation"]})).collect();
+    run(
+        s,
+        json!({"type":"measurement","kind":"set_mappings","mappings":mappings}),
+    );
+    run(
+        s,
+        json!({"type":"measurement","kind":"set_method","scope":"project","method":method}),
+    );
+}
+
+fn summary_pages(s: &Session, end_report: &str) -> (Value, Vec<Value>, usize) {
+    let mut summary = json!({"measured":[],"deductions":[],"factors":[]});
+    let mut entries = Vec::new();
+    let mut offset = 0;
+    let mut pages = 0;
+    loop {
+        let page = s
+            .takeoff_check_with_report(offset, &[], end_report)
+            .unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 6144);
+        for key in ["measured", "deductions", "factors"] {
+            summary[key].as_array_mut().unwrap().extend(
+                page["measurement_summary"][key]
+                    .as_array()
+                    .expect("measurement summary array")
+                    .iter()
+                    .cloned(),
+            );
+        }
+        entries.extend(page["entries"].as_array().unwrap().iter().cloned());
+        pages += 1;
+        let Some(next) = page["next_offset"].as_u64() else {
+            break;
+        };
+        assert!(next as usize > offset, "pagination must make progress");
+        offset = next as usize;
+    }
+    (summary, entries, pages)
+}
+
+#[test]
+fn measurement_summary_discloses_uncited_waste_and_assumption() {
+    let (_dir, s, _, _, _) = podium_summary_fixture();
+    let (summary, entries, _) = summary_pages(&s, "Podium measured");
+    assert_eq!(
+        summary["measured"],
+        json!([{"item":"podium","quantity":1480.0,"unit":"m2"}])
+    );
+    let factors: Vec<_> = summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["name"] == "Waste allowance")
+        .collect();
+    assert_eq!(factors.len(), 1);
+    assert_eq!(factors[0]["value"], 1.05);
+    assert_eq!(factors[0]["decided_by"], "mizan");
+    let assumed: Vec<_> = entries
+        .iter()
+        .filter(|r| {
+            r["section"] == "assumed_values"
+                && r["item"] == "podium"
+                && r["name"] == "Waste allowance"
+        })
+        .collect();
+    assert_eq!(assumed.len(), 1);
+    assert_eq!(assumed[0]["rule"], "podium");
+    assert_eq!(assumed[0]["value"], 1.05);
+    assert!(assumed[0]["message_ar"].is_string());
+}
+
+#[test]
+fn measurement_summary_resolves_drawing_note_citation() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    let note = added(
+        &mut s,
+        json!({"type":"text","at":[0,20],"value":"Podium waste allowance 5%"}),
+    )[0];
+    method["rules"][0]["terms"][0]["citation"] =
+        json!({"source":"Drawing","clause":format!("note 0x{note:X}")});
+    set_podium_method(&mut s, &method);
+    let (summary, entries, _) = summary_pages(&s, "");
+    let factor = summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Waste allowance")
+        .unwrap();
+    assert_eq!(factor["decided_by"], "drawing");
+    assert!(!entries
+        .iter()
+        .any(|r| r["section"] == "assumed_values" && r["name"] == "Waste allowance"));
+}
+
+#[test]
+fn measurement_summary_keeps_each_opening_quantity() {
+    let (_dir, s, _, host, voids) = podium_summary_fixture();
+    let (summary, _, _) = summary_pages(&s, "");
+    let deductions = summary["deductions"].as_array().unwrap();
+    assert_eq!(deductions.len(), 2);
+    for (row, (void, area)) in deductions.iter().zip(voids.iter().zip([12.0, 20.0])) {
+        assert_eq!(row["item"], "podium");
+        assert_eq!(row["from"], host);
+        assert_eq!(row["deducted"], *void);
+        assert_eq!(row["quantity"], area);
+        assert_eq!(row["unit"], "m2");
+        assert_eq!(row["rule"], "podium");
+    }
+}
+
+#[test]
+fn measurement_summary_covers_timesing_expression_allowance_and_rounding() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    method["rules"][0]["terms"][0]["timesing"] = json!("2");
+    method["rules"][0]["terms"][0]["factors"] = json!(["geometry.length + 0.25", "height", "1"]);
+    method["rules"][0]["rounding"] =
+        json!({"decimals":2,"mode":"up","citation":{"source":"Mizan","clause":"Podium basis"}});
+    set_podium_method(&mut s, &method);
+    let (summary, entries, _) = summary_pages(&s, "");
+    let factors = summary["factors"].as_array().unwrap();
+    for (name, value) in [
+        ("Times", 2.0),
+        ("Length", 180.25),
+        ("Rounding decimals (up)", 2.0),
+    ] {
+        assert!(
+            factors
+                .iter()
+                .any(|r| r["name"] == name && r["value"] == value && r["decided_by"] == "mizan"),
+            "{name}: {factors:?}"
+        );
+    }
+    assert!(!entries
+        .iter()
+        .any(|r| r["section"] == "assumed_values" && r["name"] == "Waste allowance"));
+}
+
+#[test]
+fn measurement_summary_large_podium_pages_every_item_and_factor() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    let rule = method["rules"][0].clone();
+    method["rules"] = json!((0..80)
+        .map(|n| {
+            let mut r = rule.clone();
+            r["id"] = json!(format!("podium-{n:03}"));
+            r
+        })
+        .collect::<Vec<_>>());
+    set_podium_method(&mut s, &method);
+    let (summary, _, pages) = summary_pages(&s, "Tower podium report");
+    assert!(pages > 1);
+    assert_eq!(summary["measured"].as_array().unwrap().len(), 80);
+    assert_eq!(summary["deductions"].as_array().unwrap().len(), 160);
+    assert_eq!(
+        summary["factors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["name"] == "Waste allowance")
+            .count(),
+        80
+    );
+}
+
+#[test]
+fn measurement_summary_discrepancy_tolerance_discloses_only_default_as_default() {
+    let (_dir, mut s, _, _, _) = podium_summary_fixture();
+    for (tolerance, value, who) in [(None, 5.0, "qiyas_default"), (Some(3.0), 3.0, "engineer")] {
+        let outcome = run(
+            &mut s,
+            json!({"type":"discrepancy_check","tolerance":tolerance}),
+        );
+        let result = serde_json::to_value(outcome).unwrap();
+        assert_eq!(
+            result["result"]["tolerance"],
+            json!({"value":value,"decided_by":who})
+        );
+    }
+}
+
+#[test]
+fn measurement_summary_resolves_documents_and_answered_engineer_decisions() {
+    for (citation, who) in [
+        ("table Podium-spec", "document"),
+        ("decision podium-waste", "engineer"),
+        ("decision pending-waste", "mizan"),
+        ("engineer says so", "mizan"),
+    ] {
+        let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+        run(
+            &mut s,
+            json!({"type":"set_knowledge","kind":"tables","name":"Podium-spec","data":{"citation":"Podium specification page 40","wall":{"waste":1.05}}}),
+        );
+        for (name, status) in [
+            ("podium-waste", "answered"),
+            ("pending-waste", "provisional"),
+        ] {
+            run(
+                &mut s,
+                json!({"type":"decision","kind":"set","entries":{
+                "name":name,"value":1.05,"unit":"","reason":"Podium specification clarification",
+                "source":"engineer","citation":"Engineer response","set_by":"engineer","status":status}}),
+            );
+        }
+        method["rules"][0]["terms"][0]["citation"] = json!({"source":citation,"clause":"waste"});
+        set_podium_method(&mut s, &method);
+        let (summary, entries, _) = summary_pages(&s, "");
+        let factor = summary["factors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "Waste allowance")
+            .unwrap();
+        assert_eq!(factor["decided_by"], who, "{citation}");
+        assert_eq!(
+            entries
+                .iter()
+                .any(|r| r["section"] == "assumed_values" && r["name"] == "Waste allowance"),
+            who == "mizan"
+        );
+    }
+}
+
+#[test]
+fn measurement_summary_classifies_property_sources_and_derived_allowances() {
+    for (kind, who) in [
+        ("measured", "drawing"),
+        ("drawing_note", "drawing"),
+        ("drawing_attribute", "drawing"),
+        ("drawing_table", "drawing"),
+        ("drawing_block", "drawing"),
+        ("document", "document"),
+        ("engineer", "engineer"),
+        ("mizan", "mizan"),
+        ("unknown", "mizan"),
+        ("type_default", "qiyas_default"),
+    ] {
+        let (_dir, mut s, method, host, _) = podium_summary_fixture();
+        run(
+            &mut s,
+            json!({"type":"set_object_props","targets":[host],"props":{"height":8},"sources":{"height":{"kind":kind,"text":"Podium source"}}}),
+        );
+        set_podium_method(&mut s, &method);
+        let (summary, _, _) = summary_pages(&s, "");
+        let factor = summary["factors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "Height")
+            .unwrap();
+        assert_eq!(factor["decided_by"], who, "{kind}");
+    }
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    run(
+        &mut s,
+        json!({"type":"redefine_object_type","definition":{
+        "name":"Podium wall","category":"Tower podium","geometry":"path",
+        "properties":{"height":{"kind":"number","unit":"length","default":0}},
+        "quantities":{"allowed_length":"geometry.length + 0.25"}}}),
+    );
+    method["rules"][0]["terms"][0]["factors"][0] = json!("allowed_length");
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    assert!(summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "Length" && r["value"] == 180.25 && r["decided_by"] == "mizan"));
+}
+
+#[test]
+fn measurement_summary_exposes_embedded_factor_values_and_omits_excluded_openings() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    method["rules"][0]["terms"][0]["factors"] = json!(["geometry.length * (1 + 5/100)", "height"]);
+    method["rules"][0]["deductions"][0]["when"] = json!("void.opening_area > 15");
+    set_podium_method(&mut s, &method);
+    let (summary, entries, _) = summary_pages(&s, "");
+    assert!(summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["value"] == 1.05 && r["decided_by"] == "mizan"));
+    assert!(entries
+        .iter()
+        .any(|r| r["section"] == "assumed_values" && r["value"] == 1.05));
+    assert_eq!(summary["deductions"].as_array().unwrap().len(), 1);
+    assert_eq!(summary["deductions"][0]["quantity"], 20.0);
+}
+
+#[test]
+fn measurement_summary_preserves_document_lookup_and_inline_adjustment_sources() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    run(
+        &mut s,
+        json!({"type":"set_knowledge","kind":"tables","name":"Podium-spec","data":{"citation":"Podium specification page 40","wall":{"waste":1.05}}}),
+    );
+    for (expression, who) in [
+        ("lookup(\"Podium-spec\", \"wall\", \"waste\")", "document"),
+        (
+            "lookup(\"Podium-spec\", \"wall\", \"waste\") + 0.02",
+            "mizan",
+        ),
+    ] {
+        method["rules"][0]["terms"][0]["factors"][2] = json!(expression);
+        set_podium_method(&mut s, &method);
+        let (summary, _, _) = summary_pages(&s, "");
+        let factor = summary["factors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "Waste allowance")
+            .unwrap();
+        assert_eq!(factor["decided_by"], who, "{expression}");
+    }
+}
+
+#[test]
+fn measurement_summary_long_citations_and_item_names_still_make_page_progress() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    method["rules"][0]["id"] = json!("podium-package-".repeat(400));
+    method["rules"][0]["terms"][0]["citation"]["clause"] =
+        json!("Podium engineering basis ".repeat(400));
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    assert_eq!(summary["measured"][0]["quantity"], 1480.0);
+    assert_eq!(summary["deductions"].as_array().unwrap().len(), 2);
+    assert!(summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "Waste allowance" && r["value"] == 1.05));
+}
+
+#[test]
+fn measurement_summary_reports_only_the_applied_conditional_allowance() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    method["rules"][0]["terms"][0]["factors"][0] =
+        json!("if(height > 7, geometry.length * 1.08, geometry.length * 1.2)");
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    let factors = summary["factors"].as_array().unwrap();
+    assert!(factors
+        .iter()
+        .any(|r| r["value"] == 1.08 && r["decided_by"] == "mizan"));
+    assert!(
+        !factors.iter().any(|r| r["value"] == 1.2),
+        "unused branch was not applied"
+    );
+}
+
+#[test]
+fn measurement_summary_does_not_call_an_uncited_lookup_a_document() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    run(
+        &mut s,
+        json!({"type":"set_knowledge","kind":"tables","name":"Podium-values","data":{"wall":{"waste":1.05}}}),
+    );
+    method["rules"][0]["terms"][0]["factors"][2] =
+        json!("lookup(\"Podium-values\", \"wall\", \"waste\")");
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    let factor = summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Waste allowance")
+        .unwrap();
+    assert_eq!(factor["decided_by"], "mizan");
+}
+
+#[test]
+fn measurement_summary_traces_allowances_inside_lookup_arguments() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    run(
+        &mut s,
+        json!({"type":"set_knowledge","kind":"tables","name":"Podium-spec",
+        "data":{"citation":"Podium specification page 40","8.25":{"waste":1.05}}}),
+    );
+    method["rules"][0]["terms"][0]["factors"][2] =
+        json!("lookup(\"Podium-spec\", height + 0.25, \"waste\")");
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    let factors = summary["factors"].as_array().unwrap();
+    assert!(factors
+        .iter()
+        .any(|r| r["name"] == "Waste allowance" && r["decided_by"] == "mizan"));
+    assert!(factors
+        .iter()
+        .any(|r| r["value"] == 0.25 && r["decided_by"] == "mizan"));
+}
+
+#[test]
+fn measurement_summary_pages_a_tower_sheet_packs_large_overview() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("tower-podium-sheet-pack.dwg"), 0);
+    for floor in 0..80 {
+        run(
+            &mut s,
+            json!({"type":"new_layout","name":format!("Tower floor {floor}"),"paper":"ISO A1"}),
+        );
+    }
+    let (_, entries, pages) = summary_pages(&s, "");
+    assert!(pages > 1);
+    assert!(
+        entries
+            .iter()
+            .filter(|r| r["section"] == "outside_check_sheets")
+            .count()
+            >= 80
+    );
+}
+
+#[test]
+fn measurement_summary_distinguishes_an_additive_one_from_an_identity_factor() {
+    let (_dir, mut s, mut method, _, _) = podium_summary_fixture();
+    method["rules"][0]["terms"][0]["factors"][0] = json!("geometry.length + 1");
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    let factors = summary["factors"].as_array().unwrap();
+    assert!(factors
+        .iter()
+        .any(|r| r["name"] == "Length" && r["value"] == 181.0 && r["decided_by"] == "mizan"));
+    assert!(factors
+        .iter()
+        .any(|r| r["name"] == "Length: 1" && r["value"] == 1.0 && r["decided_by"] == "mizan"));
+    method["rules"][0]["terms"][0]["factors"][0] = json!("geometry.length * 1");
+    set_podium_method(&mut s, &method);
+    let (summary, _, _) = summary_pages(&s, "");
+    assert!(summary["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "Length" && r["decided_by"] == "drawing"));
+}

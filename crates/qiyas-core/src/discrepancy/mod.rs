@@ -130,6 +130,13 @@ impl Session {
         tolerance: Option<f64>,
         source: Source,
     ) -> Result<Outcome, CoreError> {
+        let decided_by = if tolerance.is_none() {
+            "qiyas_default"
+        } else if source == Source::User {
+            "engineer"
+        } else {
+            "mizan"
+        };
         let tolerance = tolerance.unwrap_or(5.);
         if !tolerance.is_finite() || tolerance < 0. {
             return Err(invalid("Tolerance must be finite and nonnegative"));
@@ -282,7 +289,9 @@ impl Session {
             }
         }
         self.raise_queries(conflicts, schedules, source)?;
-        Ok(Outcome::Changed)
+        Ok(Outcome::Measurement {
+            result: json!({"tolerance":{"value":tolerance,"decided_by":decided_by}}),
+        })
     }
     /// Atomically replace findings and their clouds, preserving status by stable finding id.
     pub fn raise_queries(

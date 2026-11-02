@@ -448,8 +448,8 @@ mod tests {
         for rule in [
             "complete, traceable take-off",
             "selected method's rules from the engineer's documents or the drawing",
-            "When the standard's text is unavailable, ask for it",
-            "clearly marked provisional geometric rules",
+            "Take deductions, waste, laps, allowances and rounding from the drawing, a document or the engineer",
+            "ask, or decide with an engineering basis and record each with decision.set",
             "Never invent clause numbers",
             "without a fixed structure for any trade",
             "structured evidence",

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use opencadcodec::Handle;
-use qiyas_param::expr::{Resolver, Value as EValue};
+use qiyas_param::expr::{Expr, Func, Op, Resolver, Value as EValue};
 
 use super::*;
 use crate::objects::{ObjectFilter, ObjectRecord};
@@ -106,15 +106,17 @@ impl Context<'_> {
                 source: source.clone(),
             });
             if source.kind == SourceKind::Derived {
-                if let Ok(expression) = self.session.evaluation_expression(&source.text) {
-                    for dependency in expression.names() {
-                        let dependency = if name.starts_with("void.") {
-                            format!("void.{dependency}")
-                        } else if name.starts_with("host.") {
-                            format!("host.{dependency}")
-                        } else {
-                            dependency
-                        };
+                if let Ok(mut expression) = self.session.evaluation_expression(&source.text) {
+                    let prefix = if name.starts_with("void.") {
+                        "void."
+                    } else if name.starts_with("host.") {
+                        "host."
+                    } else {
+                        ""
+                    };
+                    qualify(&mut expression, prefix);
+                    out.extend(self.literal_sources(&expression, &source.text));
+                    for dependency in self.active_names(&expression) {
                         out.extend(self.named_sources(&dependency, seen));
                     }
                 }
@@ -123,12 +125,112 @@ impl Context<'_> {
         out
     }
 
+    fn active_parts<'a>(&self, expression: &'a Expr) -> Vec<&'a Expr> {
+        match expression {
+            Expr::Call(Func::If, args) if args.len() == 3 => {
+                match args[0].eval_with(self).and_then(|v| v.as_bool()) {
+                    Ok(yes) => vec![&args[0], &args[if yes { 1 } else { 2 }]],
+                    Err(_) => args.iter().collect(),
+                }
+            }
+            Expr::Binary(op @ (Op::And | Op::Or), a, b) => {
+                let skip = a
+                    .eval_with(self)
+                    .and_then(|v| v.as_bool())
+                    .is_ok_and(|value| value == (*op == Op::Or));
+                if skip {
+                    vec![a]
+                } else {
+                    vec![a, b]
+                }
+            }
+            Expr::Binary(_, a, b) => vec![a, b],
+            Expr::Neg(e) | Expr::Not(e) => vec![e],
+            Expr::Call(_, args) => args.iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn active_names(&self, expression: &Expr) -> Vec<String> {
+        if let Expr::Name(name) = expression {
+            vec![name.clone()]
+        } else {
+            self.active_parts(expression)
+                .into_iter()
+                .flat_map(|part| self.active_names(part))
+                .collect()
+        }
+    }
+
+    fn literal_sources(&self, expression: &Expr, citation: &str) -> Vec<NamedSource> {
+        if expression.eval(&|_| None).is_ok() {
+            return vec![NamedSource {
+                name: expression.to_string(),
+                source: PropSource {
+                    kind: SourceKind::Rule,
+                    text: citation.to_owned(),
+                    ..Default::default()
+                },
+            }];
+        }
+        match expression {
+            Expr::Binary(Op::Mul, a, b) => [a.as_ref(), b.as_ref()]
+                .into_iter()
+                .filter(|part| !part.eval(&|_| None).is_ok_and(|value| value == 1.0))
+                .flat_map(|part| self.literal_sources(part, citation))
+                .collect(),
+            Expr::Binary(Op::Div, a, b) if b.eval(&|_| None).is_ok_and(|value| value == 1.0) => {
+                self.literal_sources(a, citation)
+            }
+            Expr::Call(Func::Lookup, args) => {
+                let mut sources = Vec::new();
+                if let Some(EValue::Text(name)) = args.first().and_then(|e| e.eval_with(self).ok())
+                {
+                    let table = knowledge::get(&self.session.drawing.doc, Kind::Tables, &name)
+                        .ok()
+                        .flatten();
+                    let text = table
+                        .as_ref()
+                        .and_then(|t| t.data.get("citation"))
+                        .filter(|c| {
+                            c.as_str().is_some_and(|s| !s.trim().is_empty())
+                                || c.get("source")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|s| !s.trim().is_empty())
+                        })
+                        .map(|c| c.as_str().map_or_else(|| c.to_string(), str::to_owned))
+                        .unwrap_or_default();
+                    sources.push(NamedSource {
+                        name: name.clone(),
+                        source: PropSource {
+                            kind: if text.trim().is_empty() {
+                                SourceKind::Unknown
+                            } else {
+                                SourceKind::Document
+                            },
+                            text,
+                            ..Default::default()
+                        },
+                    });
+                }
+                for argument in args {
+                    sources.extend(self.literal_sources(argument, citation));
+                }
+                sources
+            }
+            _ => self
+                .active_parts(expression)
+                .into_iter()
+                .flat_map(|part| self.literal_sources(part, citation))
+                .collect(),
+        }
+    }
+
     fn expression_sources(&self, expression: &str) -> Vec<NamedSource> {
         self.session
             .evaluation_expression(expression)
             .map(|expression| {
-                expression
-                    .names()
+                self.active_names(&expression)
                     .iter()
                     .flat_map(|name| self.named_sources(name, &mut Vec::new()))
                     .collect()
@@ -209,11 +311,11 @@ impl Context<'_> {
             }
             let mut dependencies = Vec::new();
             for expression in expressions {
-                if let Ok(expr) = self.session.evaluation_expression(expression) {
-                    for name in expr.names() {
-                        dependencies.extend(
-                            self.named_sources(&format!("{prefix}{name}"), &mut Vec::new()),
-                        );
+                if let Ok(mut expr) = self.session.evaluation_expression(expression) {
+                    qualify(&mut expr, prefix);
+                    dependencies.extend(self.literal_sources(&expr, expression));
+                    for name in self.active_names(&expr) {
+                        dependencies.extend(self.named_sources(&name, &mut Vec::new()));
                     }
                 }
             }
@@ -230,7 +332,9 @@ impl Context<'_> {
             self.values
                 .insert(format!("{prefix}geometry.{k}"), EValue::Number(*v));
             for name in [format!("{prefix}{k}"), format!("{prefix}geometry.{k}")] {
-                self.sources.insert(name.clone(), measured.clone());
+                self.sources
+                    .entry(name.clone())
+                    .or_insert_with(|| measured.clone());
                 self.units.insert(name, fact_unit(k).into());
             }
         }
@@ -269,6 +373,19 @@ impl Context<'_> {
         }
     }
 }
+fn qualify(expression: &mut Expr, prefix: &str) {
+    match expression {
+        Expr::Name(name) => name.insert_str(0, prefix),
+        Expr::Binary(_, a, b) => {
+            qualify(a, prefix);
+            qualify(b, prefix);
+        }
+        Expr::Neg(e) | Expr::Not(e) => qualify(e, prefix),
+        Expr::Call(_, args) => args.iter_mut().for_each(|e| qualify(e, prefix)),
+        _ => {}
+    }
+}
+
 fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
@@ -328,67 +445,29 @@ fn operands(context: &Context<'_>, term: &Term) -> Result<Vec<Operand>, CoreErro
         let names = context
             .session
             .evaluation_expression(expression)
-            .map(|e| e.names())
+            .map(|e| context.active_names(&e))
             .unwrap_or_default();
-        // A value looked up in a table the drawing knows (a schedule or document table).
-        let tables: Vec<NamedSource> = expression
-            .match_indices("lookup(")
-            .filter_map(|(at, _)| {
-                let rest = expression[at + 7..].trim_start();
-                let rest = rest.strip_prefix('"')?;
-                let name = &rest[..rest.find('"')?];
-                let citation = knowledge::get(&context.session.drawing.doc, Kind::Tables, name)
-                    .ok()
-                    .flatten()
-                    .and_then(|k| k.data.get("citation").cloned())
-                    .map(|c| match c {
-                        Value::String(s) => s,
-                        other => other.to_string(),
-                    })
-                    .unwrap_or_default();
-                Some(NamedSource {
-                    name: name.to_string(),
-                    source: PropSource {
-                        decision: None,
-                        kind: SourceKind::DrawingTable,
-                        handle: None,
-                        text: citation,
-                    },
-                })
-            })
-            .collect();
-        let mut sources: Vec<NamedSource> = if !tables.is_empty() {
-            tables
-                .into_iter()
-                .chain(names.iter().filter_map(|name| {
-                    context.sources.get(name).map(|source| NamedSource {
-                        name: name.clone(),
-                        source: source.clone(),
-                    })
-                }))
-                .collect()
-        } else if names.is_empty() {
-            // A number written in the rule: the rule's citation is its source.
-            vec![NamedSource {
+        let citation = format!("{} {}", term.citation.source, term.citation.clause);
+        let parsed = context.session.evaluation_expression(expression)?;
+        let mut sources = context.literal_sources(&parsed, citation.trim());
+        if sources.is_empty() && names.is_empty() {
+            sources.push(NamedSource {
                 name: expression.clone(),
                 source: PropSource {
-                    decision: None,
                     kind: SourceKind::Rule,
-                    handle: None,
-                    text: format!("{} {}", term.citation.source, term.citation.clause)
-                        .trim()
-                        .to_string(),
+                    text: citation.trim().to_owned(),
+                    ..Default::default()
                 },
-            }]
-        } else {
-            names
-                .iter()
-                .map(|name| NamedSource {
+            });
+        }
+        for name in &names {
+            if !context.sources.contains_key(name) {
+                sources.push(NamedSource {
                     name: name.clone(),
-                    source: context.sources.get(name).cloned().unwrap_or_default(),
-                })
-                .collect()
-        };
+                    source: PropSource::default(),
+                });
+            }
+        }
         for name in &names {
             for dependency in context.named_sources(name, &mut Vec::new()) {
                 if !sources.contains(&dependency) {
@@ -456,7 +535,22 @@ fn line(
     refs.push(term.citation.clone());
     Ok(DimensionLine {
         id: String::new(),
-        operands: operands(context, term)?,
+        operands: {
+            let mut operands = operands(context, term)?;
+            for source in operands
+                .iter_mut()
+                .flat_map(|o| &mut o.sources)
+                .filter(|s| s.source.kind == SourceKind::Rule)
+            {
+                for citation in citations {
+                    source
+                        .source
+                        .text
+                        .push_str(&format!("; {} {}", citation.source, citation.clause));
+                }
+            }
+            operands
+        },
         label: term.label.clone(),
         operation: term.operation,
         timesing,
@@ -794,7 +888,30 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 let adjustment = context.number(&expression)?;
                 lines.push(DimensionLine {
                     id: line_id("rounding"),
-                    operands: vec![],
+                    operands: vec![Operand {
+                        label: format!(
+                            "Rounding decimals ({})",
+                            match rounding.mode {
+                                RoundMode::Nearest => "nearest",
+                                RoundMode::Up => "up",
+                                RoundMode::Down => "down",
+                            }
+                        ),
+                        expression: rounding.decimals.to_string(),
+                        value: f64::from(rounding.decimals),
+                        unit: String::new(),
+                        sources: vec![NamedSource {
+                            name: "Rounding".into(),
+                            source: PropSource {
+                                kind: SourceKind::Rule,
+                                text: format!(
+                                    "{} {}",
+                                    rounding.citation.source, rounding.citation.clause
+                                ),
+                                ..Default::default()
+                            },
+                        }],
+                    }],
                     label: "Rounding adjustment".into(),
                     operation: if adjustment < 0.0 {
                         Operation::Deduct

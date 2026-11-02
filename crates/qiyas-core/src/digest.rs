@@ -2,6 +2,7 @@
 mod detail_geometry;
 mod exclusions;
 mod measurement_checks;
+mod measurement_summary;
 mod note_scope;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,8 +23,8 @@ fn short(s: &str) -> String {
     text
 }
 
-/// Page complete entries, retaining the same overview on every page. Large source text is
-/// previewed, with its handle available for a full records read.
+/// Page complete entries and measurement summaries within one byte budget.
+/// Large source text is previewed for a full records read.
 fn page(mut overview: Value, entries: Vec<Value>, offset: usize) -> Value {
     overview["total_entries"] = json!(entries.len());
     overview["offset"] = json!(offset);
@@ -33,10 +34,26 @@ fn page(mut overview: Value, entries: Vec<Value>, offset: usize) -> Value {
         if serde_json::to_vec(&entry).unwrap().len() > 3000 {
             entry = json!({"section":entry["section"],"handle":entry["handle"],"row":entry["row"],"preview":short(&entry.to_string()),"detail":"Read the source record by handle"});
         }
-        overview["entries"].as_array_mut().unwrap().push(entry);
+        let summary = (entry["section"] == "measurement_summary")
+            .then(|| entry["kind"].as_str().unwrap().to_owned());
+        if let Some(kind) = &summary {
+            overview["measurement_summary"][kind]
+                .as_array_mut()
+                .unwrap()
+                .push(entry["row"].take());
+        } else {
+            overview["entries"].as_array_mut().unwrap().push(entry);
+        }
         overview["next_offset"] = json!(i + 1);
         if serde_json::to_vec(&overview).unwrap().len() > MAX_BYTES {
-            overview["entries"].as_array_mut().unwrap().pop();
+            if let Some(kind) = &summary {
+                overview["measurement_summary"][kind]
+                    .as_array_mut()
+                    .unwrap()
+                    .pop();
+            } else {
+                overview["entries"].as_array_mut().unwrap().pop();
+            }
             overview["next_offset"] = json!(i);
             break;
         }
@@ -600,7 +617,22 @@ impl Session {
         overview["excluded"] = json!(excluded.len());
         overview["region_not_from_boundary"] = json!(region_advisory_count);
         overview["outside_check"] = self.outside_summary(end_report)?;
-        Ok(page(overview, detail, offset))
+        overview["measurement_summary"] = json!({"measured":[],"deductions":[],"factors":[]});
+        overview["measurement_summary_detail"] = json!("Page with next_offset as offset. Text is previewed; explain generated:<item> has full operands and sources.");
+        let mut summary = measurement_summary::rows(self, &report)?;
+        if serde_json::to_vec(&overview).unwrap().len() > MAX_BYTES / 2 {
+            let sheets = overview["outside_check"]["sheets"].take();
+            overview["outside_check"]["sheets"] = json!({});
+            overview["outside_check"]["sheets_paged"] = json!(true);
+            if let Some(sheets) = sheets.as_object() {
+                overview["outside_check"]["sheet_count"] = json!(sheets.len());
+                for (sheet, totals) in sheets {
+                    detail.push(json!({"section":"outside_check_sheets","sheet":short(sheet),"totals":totals}));
+                }
+            }
+        }
+        summary.extend(detail);
+        Ok(page(overview, summary, offset))
     }
 }
 
