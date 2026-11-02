@@ -1,6 +1,9 @@
 //! Explicitly approved, budgeted Mizan evaluations. Tests inject a scripted provider and never
 //! load app settings or ask the OS keychain for credentials.
 
+#[path = "design.rs"]
+pub(crate) mod design;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -308,6 +311,9 @@ impl Provider for Metered {
     }
 
     fn budget_notice(&self) -> Option<String> {
+        if let Some(notice) = self.inner.budget_notice() {
+            return Some(notice);
+        }
         let totals = self.totals.lock().ok()?;
         let remaining = (self.max_cost - totals.estimated_usd).max(0.0);
         let finish = totals.requests.saturating_mul(5) >= self.max_requests.saturating_mul(4)
@@ -615,30 +621,27 @@ impl SavedProvider {
         let name = value["provider"]
             .as_str()
             .ok_or("No saved provider; choose one in Qiyas Settings")?;
-        if !matches!(name, "anthropic" | "openai_compatible" | "chatgpt_plan") {
+        if !matches!(
+            name,
+            "anthropic" | "openai_compatible" | "chatgpt_plan" | "claude_code"
+        ) {
             return Err("Unknown saved provider".into());
         }
         let profile = &value["providers"][name];
         let model = profile["model"]
             .as_str()
-            .filter(|m| !m.trim().is_empty())
+            .filter(|m| !m.trim().is_empty() || name == "claude_code")
+            .or_else(|| (name == "claude_code").then_some(""))
             .ok_or("Choose a model in Qiyas Settings")?;
-        let base_url = profile["base_url"].as_str().map(str::to_string);
-        if name == "openai_compatible"
-            && base_url.as_deref().is_none_or(|s| {
-                !s.starts_with("https://")
-                    && !s.starts_with("http://localhost:")
-                    && !s.starts_with("http://127.0.0.1:")
-            })
-        {
-            return Err("Saved provider requires an HTTPS address, or a local HTTP server".into());
-        }
-        if base_url
-            .as_deref()
-            .is_some_and(|s| s.contains(['@', '?', '#']))
-        {
-            return Err("Provider addresses containing credentials, queries or fragments cannot be used for evaluation".into());
-        }
+        let base_url = if name == "openai_compatible" {
+            Some(qiyas_ai::endpoint::normalize(
+                profile["base_url"]
+                    .as_str()
+                    .ok_or("No saved provider address")?,
+            )?)
+        } else {
+            None
+        };
         Ok(Self {
             image_input: profile["image_input"].as_bool(),
             name: name.into(),
@@ -693,10 +696,25 @@ impl SavedProvider {
                 qiyas_ai::chatgpt_plan::oauth::Protocol::official(),
             )));
         }
-        let entry = keyring_core::Entry::new("qiyas", &self.name)
+        let address = if self.name == "anthropic" {
+            "https://api.anthropic.com/v1".to_string()
+        } else {
+            qiyas_ai::endpoint::normalize(
+                self.base_url
+                    .as_deref()
+                    .ok_or("No saved provider address")?,
+            )?
+        };
+        let entry = keyring_core::Entry::new("qiyas", &format!("{}:{address}", self.name))
             .map_err(|_| "Could not open the provider's OS keychain entry".to_string())?;
         let key =
-            match entry.get_password() {
+            match entry.get_password().or_else(|error| {
+                if matches!(error, keyring_core::Error::NoEntry) {
+                    keyring_core::Entry::new("qiyas", &self.name)?.get_password()
+                } else {
+                    Err(error)
+                }
+            }) {
                 Ok(key) => Some(key),
                 Err(keyring_core::Error::NoEntry) if self.name == "openai_compatible" => None,
                 Err(_) => return Err(
@@ -749,6 +767,10 @@ impl qiyas_ai::chatgpt_plan::TokenStore for PlanKeychain {
 }
 
 fn saved_provider() -> Result<SavedProvider, String> {
+    SavedProvider::from_value(&saved_settings()?)
+}
+
+fn saved_settings() -> Result<Value, String> {
     // Tauri's app_config_dir is the platform config directory plus the bundle identifier.
     // Only this explicitly approved runtime path reads the file; it never rewrites settings.
     let home = || {
@@ -768,8 +790,7 @@ fn saved_provider() -> Result<SavedProvider, String> {
             .map(Ok)
             .unwrap_or_else(|| home().map(|p| p.join(".config")))?
     };
-    let value: Value = read_json(&base.join("com.qsmind.qiyas/settings.json"))?;
-    SavedProvider::from_value(&value)
+    read_json(&base.join("com.qsmind.qiyas/settings.json"))
 }
 
 pub(crate) struct PreparedCase {

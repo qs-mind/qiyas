@@ -1064,3 +1064,46 @@ fn outputs_that_differ_only_in_case_collide() {
     assert_eq!(failed(run), "qiyas-cli: 2 of 2 drawings failed");
     assert_eq!(text.matches("collides with").count(), 2, "{text}");
 }
+
+#[test]
+fn design_compare_prints_both_reports_without_a_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    for (path, requests, answer) in [(&a, 3, "Concourse A"), (&b, 7, "Concourse B")] {
+        std::fs::create_dir(path).unwrap();
+        std::fs::write(
+            path.join("report.json"),
+            serde_json::json!({
+                "schema_version":1,"kind":"design_run","provider":"scripted",
+                "requests":requests,"final_answer":answer
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let output = cli(&["design-compare", a.to_str().unwrap(), b.to_str().unwrap()]);
+    assert!(output.status.success());
+    let markdown = String::from_utf8(output.stdout).unwrap();
+    assert!(markdown.contains("| requests | 3 | 7 |"));
+    assert!(markdown.contains("Concourse A") && markdown.contains("Concourse B"));
+}
+
+#[test]
+fn design_run_rejects_invalid_choices_before_loading_settings() {
+    for flag in ["--provider", "--language", "--max-requests"] {
+        let output = cli(&[
+            "design-run",
+            "--brief",
+            "Regional interchange",
+            "--out",
+            "unused-design-output",
+            flag,
+            "invalid",
+        ]);
+        assert!(!output.status.success());
+        assert!(!String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("keychain"));
+    }
+}

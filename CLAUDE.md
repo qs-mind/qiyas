@@ -676,6 +676,41 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   requests each. These results do not replace a live MIZAN ALONE score.
 - No dependencies added. Validation and measured results: `docs/2026-10-22-mizan-autonomous-takeoff.md`.
 
+### Headless design runs
+
+- `qiyas-cli design-run --brief <text-or-file> --out <empty-folder>` runs the production Mizan
+  agent on a new drawing in metres. `--provider chatgpt_plan|claude_code|anthropic|openai_compatible`,
+  `--model` and `--language en|ar` override the saved desktop choices for this run only.
+  `--max-requests` defaults to 40 (1 to 100). Invoking this command explicitly starts AI;
+  no real-provider design run belongs in CI, tests or implementation checks.
+- Settings come from the desktop's platform config folder, `com.qsmind.qiyas/settings.json`.
+  API keys use the desktop's address-scoped OS keychain entries, with a read-only legacy fallback;
+  ChatGPT uses the desktop subscription vault and Claude Code owns its authentication.
+  API runs share eval's `.local/autopilot/budget.json` prices, daily cap and reservation ledger;
+  subscriptions use the request cap without invented dollar pricing. Output tokens are capped
+  at 4096 for API requests. Settings and credentials are never copied to the output folder.
+- Each run writes `drawing.dwg`, `model.png`, numbered `layout-001.png` images (all layouts,
+  including their model viewports), `agent.log`, `steps.jsonl`, `report.json` and `report.md`.
+  Reports retain request usage and input/output token max/mean, tool operations and command kinds,
+  failed calls and errors, elapsed agent time, stored entities by kind/layer, definitions and
+  direct/nested block inserts, sheet/title-block presence, text/dimension counts and the answer.
+  Counts include hidden entities, exclude expanded instances, and separate block definitions.
+  Title-block presence uses the existing title layer/name convention, not a quality judgement.
+  Questions, provider failures and request limits retain partial work and their actual status;
+  save/render failures are listed and set `artifacts_complete` false.
+- `qiyas-cli design-compare <run-A> <run-B>` reads only the two reports and prints their metrics
+  side by side in Markdown. These are review evidence, not a creativity or engineering score.
+- Claude Code receives its documented `--max-turns` limit; this is an agentic-turn cap, not a
+  transport-retry cap. Request usage is retained from assistant message IDs without double-counting
+  repeated message parts. If the CLI omits per-request usage, the report labels its turn aggregate
+  instead of presenting it as individual requests. See the
+  [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference).
+- Offline coverage: `crates/qiyas-cli/src/design_tests.rs` drives the real agent with a scripted
+  provider, including reusable concourse blocks, a failed insert, dimensions, a titled sheet,
+  PNG/DWG output, token accounting, limits, comparison and a credential sentinel scan.
+  CLI integration checks compare stdout and argument validation; the Claude adapter uses its
+  existing fake-process fixture for the cap and numeric usage events.
+
 ### First live-run corrections (22 October 2026)
 
 - MIZAN ALONE remains the priority. No paid eval is part of implementation. The first six-case
@@ -2652,8 +2687,9 @@ and Mizan's turn epoch together.
   put on screen as a tab switch does, or reads the one on screen again (info, hidden layers,
   take-off, batch), and saves the take-off.
 - `qiyas-cli` (`crates/qiyas-cli`, clap without colour): no window. Ordinary drawing commands
-  and `bench` are offline and never read provider settings or credentials. Only `eval`, with
-  explicit approval for each run, reads saved provider settings and the OS keychain itself.
+  and `bench` are offline and never read provider settings or credentials. Explicit `eval`
+  and `design-run` invocations read saved provider settings and the OS keychain. Never run
+  either with a real provider during implementation or automated checks.
   - `bench generate`: 60 deterministic dev cases in six project types, each with 12 variants,
     in git-ignored `.local/benchmark`; six separate holdout cases are sealed and listed by hash.
     ResPlan conversion skips and reports invalid whole plans before writing any case, continuing

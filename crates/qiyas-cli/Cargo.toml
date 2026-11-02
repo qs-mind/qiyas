@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-# Headless drawing commands and the local QS benchmark. Only explicitly approved `eval`
-# reads provider settings and the keychain; ordinary commands remain entirely offline.
+# Headless drawing commands and the local QS benchmark. Explicit `eval` and `design-run`
+# read provider settings and the keychain; ordinary commands remain entirely offline.
 [dependencies]
 qiyas-core = { path = "../qiyas-core" }
 qiyas-boq = { path = "../qiyas-boq" }

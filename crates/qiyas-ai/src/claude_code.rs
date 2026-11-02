@@ -394,6 +394,7 @@ pub struct ClaudeCode {
     user_text: Mutex<String>,
     image_input: Mutex<Option<bool>>,
     reported_model: Mutex<Option<String>>,
+    request_limit: Option<u32>,
 }
 
 impl ClaudeCode {
@@ -415,7 +416,14 @@ impl ClaudeCode {
             user_text: Mutex::new(String::new()),
             image_input: Mutex::new(None),
             reported_model: Mutex::new(None),
+            request_limit: None,
         })
+    }
+
+    /// Bound headless runs through the CLI's own agent loop.
+    pub fn with_request_limit(mut self, limit: u32) -> Self {
+        self.request_limit = Some(limit.max(1));
+        self
     }
 
     async fn execute(
@@ -463,6 +471,12 @@ impl ClaudeCode {
         ])
         .arg(&config.path)
         .args(["--append-system-prompt", &req.system]);
+        if let Some(limit) = self.request_limit.filter(|_| !probe) {
+            if !capabilities.has("--max-turns") {
+                return Err(error("claude_flags"));
+            }
+            cmd.arg("--max-turns").arg(limit.to_string());
+        }
         if probe {
             cmd.env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "1")
                 .env("MAX_THINKING_TOKENS", "0")
@@ -533,7 +547,10 @@ impl ClaudeCode {
                 "Claude Code; one user turn".into(),
             ));
             let mut reader = BufReader::new(stdout);
-            let mut state = Events::default();
+            let mut state = Events {
+                report_usage: self.request_limit.is_some(),
+                ..Events::default()
+            };
             loop {
                 let mut line = Vec::new();
                 // A bounded read prevents a malformed child stream exhausting memory.
@@ -862,6 +879,7 @@ fn user_content(req: &TurnRequest) -> Result<Vec<Value>, AiError> {
 
 #[derive(Default)]
 struct Events {
+    report_usage: bool,
     text: String,
     message_streamed: bool,
     session_id: Option<String>,
@@ -1031,6 +1049,26 @@ impl Events {
                     return Err(
                         terminal_error(category, &value).unwrap_or_else(|| error("claude_failed"))
                     );
+                }
+                if self.report_usage {
+                    if let (Some(id), Some(usage)) = (
+                        value["message"]["id"].as_str(),
+                        value["message"]["usage"].as_object(),
+                    ) {
+                        let number =
+                            |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+                        sink(StreamEvent::Diagnostic {
+                            kind: "CLAUDE REQUEST USAGE".into(),
+                            text: json!({"id":id,"usage":Usage {
+                                input_tokens: number("input_tokens"),
+                                output_tokens: number("output_tokens"),
+                                cache_read_input_tokens: number("cache_read_input_tokens"),
+                                cache_creation_input_tokens: number("cache_creation_input_tokens"),
+                                ..Usage::default()
+                            }})
+                            .to_string(),
+                        });
+                    }
                 }
                 for block in value["message"]["content"].as_array().into_iter().flatten() {
                     match block["type"].as_str().unwrap_or("") {
@@ -1205,6 +1243,67 @@ mod tests {
         .unwrap();
         (dir, provider)
     }
+    #[tokio::test]
+    async fn headless_limit_uses_cli_turn_cap_and_reports_only_numeric_usage() {
+        let _serial = TEST_PROCESS.lock().await;
+        let events = vec![
+            json!({"type":"assistant","message":{"id":"request-a","content":[],"usage":{"input_tokens":100,"output_tokens":20,"api_key":"credential-sentinel"}}}),
+            json!({"type":"result","subtype":"success","usage":{"input_tokens":100,"output_tokens":20}}),
+        ];
+        let (dir, provider) = fixture(events.clone());
+        std::fs::write(
+            dir.path().join("scenario.json"),
+            json!({"help":format!("{} --max-turns", help()),"events":events}).to_string(),
+        )
+        .unwrap();
+        let provider = provider.with_request_limit(7);
+        let capabilities = Capabilities {
+            help: format!("{} --max-turns", help()),
+        };
+        let mut diagnostics = Vec::new();
+        provider
+            .execute(
+                request(),
+                dir.path(),
+                &capabilities,
+                config(),
+                permit(),
+                &mut |event| {
+                    if let StreamEvent::Diagnostic { kind, text } = event {
+                        if kind == "CLAUDE REQUEST USAGE" {
+                            diagnostics.push(text);
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        let calls = records(dir.path());
+        assert!(calls
+            .iter()
+            .filter_map(|call| call["argv"].as_array())
+            .any(|args| args
+                .windows(2)
+                .any(|pair| pair[0] == "--max-turns" && pair[1] == "7")));
+        assert_eq!(diagnostics.len(), 1);
+        assert!(!diagnostics[0].contains("credential-sentinel"));
+        let usage: Value = serde_json::from_str(&diagnostics[0]).unwrap();
+        assert_eq!(usage["usage"]["input_tokens"], 100);
+        assert_eq!(usage["usage"]["output_tokens"], 20);
+        let missing = Capabilities { help: help() };
+        assert!(provider
+            .execute(
+                request(),
+                dir.path(),
+                &missing,
+                config(),
+                permit(),
+                &mut |_| {}
+            )
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn picture_probe_uses_stream_input_without_tools_or_a_resumed_session() {
         let _serial = TEST_PROCESS.lock().await;

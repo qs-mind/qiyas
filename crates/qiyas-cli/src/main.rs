@@ -5,7 +5,7 @@
 //! It opens drawings as the app does (the failsafe reader, the `.qiyas` project file beside a
 //! drawing when there is one) and writes only what it is asked to: a converted drawing (alone,
 //! no project file), a script's SAVE, SAVEAS and EXPORT, a take-off workbook. It never opens a
-//! window. Only explicitly approved `eval` runs access provider settings, keychain and AI.
+//! window. Explicit `eval` and `design-run` commands access provider settings, keychain and AI.
 //! Ordinary commands never touch these, or the autosaves and
 //! lock files beside drawings. Exit codes: 0 done; 1 an error (one line on stderr,
 //! `qiyas-cli: ...`, a mistake in the arguments too); 2 done, but a drawing opened with problems
@@ -86,6 +86,10 @@ enum Cmd {
     Bench(bench::BenchArgs),
     /// Run Mizan headlessly on one dev case, with explicit approval and a daily budget.
     Eval(eval::EvalArgs),
+    /// Run Mizan on a new drawing and retain design evidence. Explicitly invokes AI.
+    DesignRun(eval::design::DesignArgs),
+    /// Compare two saved design runs without accessing a provider.
+    DesignCompare { a: PathBuf, b: PathBuf },
     /// Serve the three Qiyas MCP tools over stdio without a window or credentials.
     Mcp(headless::McpArgs),
     /// Evaluate a subscription agent through headless MCP, without paid API calls.
@@ -265,6 +269,16 @@ impl Out {
 fn dispatch(cmd: &Cmd, out: &Out) -> Done {
     match cmd {
         Cmd::Mcp(args) => headless::run(args),
+        Cmd::DesignRun(args) => {
+            let report = eval::design::run(args)?;
+            out.text(eval::design::markdown(&report));
+            out.json(&report);
+            Ok(None)
+        }
+        Cmd::DesignCompare { a, b } => {
+            println!("{}", eval::design::compare(a, b)?);
+            Ok(None)
+        }
         Cmd::EvalAgent(args) => {
             let result = eval_agent::run(args)?;
             out.text(serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
