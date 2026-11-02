@@ -38,6 +38,10 @@ Founder's rulings, 2 November 2026:
 - The window's IPC commands are locked to a small allowlist, and commands that take a path are
   limited by folder and extension. Arabic reads right to left in PDFs and panels: Arabic text
   gets a right-to-left base direction even when it starts with a Latin code or name.
+- Fully AI-driven, no static content (founder, 3 November 2026): Qiyas ships no ready-made
+  drawing libraries, symbol sets or fixed design data. Mizan draws each component it needs
+  itself, at real size and in full detail, keeps it in its own library on this computer
+  (it starts empty and grows as Mizan works) and reuses or improves it next time.
 - No code-signing certificates and no spending: every tool the work needs is free. The download
   pages explain the operating system's warning instead.
 
