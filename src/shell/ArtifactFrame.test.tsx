@@ -61,7 +61,7 @@ test("an output has a way back, a menu to the others, its meta and one action", 
   fireEvent.click(screen.getByRole("button", { name: en["outputs.switch"] }));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Take-off/ }));
   expect(onSelect).toHaveBeenCalledWith("takeoff");
-  expect(screen.queryByRole("menuitemradio", { name: /^Conflicts/ })).toBeNull();
+  expect(screen.queryByRole("menuitemradio", { name: /^Discrepancies/ })).toBeNull();
 });
 
 test("while an output is shown it takes the conversation's place, the box stays with its draft, and the strip goes back", () => {

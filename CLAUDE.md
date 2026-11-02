@@ -759,7 +759,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 ## Discrepancies and queries (Phase 19)
 
-- The registry command `discrepancy_check` (legacy alias `check`) compares the imported client BOQ with mapped element quantities
+- The registry command `discrepancy_check` (its old alias `check` was removed on 2 November 2026: `check` is the read-only drawing check) compares the imported client BOQ with mapped element quantities
   and manual take-off, evaluates drawing knowledge kind `checks`, and raises queries and Comment
   clouds as one transaction. `qiyas-takeoff::compare` and `compare_session` retain their public
   API; the shared comparison implementation now lives in `qiyas-core/src/discrepancy/` so the

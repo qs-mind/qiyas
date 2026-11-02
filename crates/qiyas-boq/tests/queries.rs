@@ -5,7 +5,8 @@ fn queries_excel_preserves_bilingual_evidence_and_status() {
     let d = tempfile::tempdir().unwrap();
     let mut s = Session::new_blank(&d.path().join("p.dxf"), 6);
     s.run_input(&json!({"type":"set_boq","boq":{"source":"client.xlsx","imported":"","items":[{"code":"A","description":"Scope","quantity":2,"unit":"pcs","row":1}]}}),Source::User).unwrap();
-    s.run_input(&json!({"type":"check"}), Source::Ai).unwrap();
+    s.run_input(&json!({"type":"discrepancy_check"}), Source::Ai)
+        .unwrap();
     let path = d.path().join("takeoff.xlsx");
     qiyas_boq::export_takeoff_with_queries(
         &path,

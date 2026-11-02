@@ -343,7 +343,7 @@ test("as the panel narrows, groups put more buttons behind their ⋯ until it fi
         fireEvent.keyDown(document.body, { key: "Escape" });
       } else reach.add(name);
     }
-    for (const name of ["Select", "Distance", "Area", "Count", "Geometry", "Divide", "Measure along", "ID point", "Extract data", "Export take-off", "Import BOQ", "Compare", "Export conflicts", "Linear", "Dimension style…", "Revision cloud", "Comment cloud", "Leader", "MText"]) {
+    for (const name of ["Select", "Distance", "Area", "Count", "Geometry", "Divide", "Measure along", "ID point", "Extract data", "Export take-off", "Import BOQ", "Compare", "Export discrepancies", "Linear", "Dimension style…", "Revision cloud", "Comment cloud", "Leader", "MText"]) {
       expect(reach.has(name), name).toBe(true);
     }
   });

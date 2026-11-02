@@ -1269,7 +1269,7 @@ fn run_working_session(
         (READ, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
             if matches!(command, Command::Check { .. }) {
-                return Err(bad("For drawing checks, use qiyas_read with op check. For the BOQ comparison, use qiyas_execute run with discrepancy_check."));
+                return Err(bad(CHECK_HINT));
             }
             if effect_of(&command) != Effect::Read {
                 return Err(bad(format!(
@@ -1927,7 +1927,13 @@ pub fn parse_command(session: &Session, raw: &Value) -> Result<Command, ToolErro
 }
 
 /// Keep the accepted input beside its typed command; serialization would fill omitted fields.
+const CHECK_HINT: &str = "For drawing checks, use qiyas_read with op check. For the BOQ comparison, use qiyas_execute run with discrepancy_check.";
+
 fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), ToolError> {
+    // `check` names the read-only drawing check; the BOQ comparison is discrepancy_check.
+    if raw["type"] == "check" || raw.as_str().is_some_and(|text| text.trim() == "check") {
+        return Err(bad(CHECK_HINT));
+    }
     let mut value = command_value(raw).map_err(|error| {
         let value = match raw {
             Value::String(text) => serde_json::from_str(text).unwrap_or_else(|_| raw.clone()),

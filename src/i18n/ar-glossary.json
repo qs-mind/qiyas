@@ -70,10 +70,7 @@
         "كائن رسومي"
       ],
       "en": "entity",
-      "en_avoid": [
-        "object"
-      ],
-      "context": "A CAD primitive (line, arc, text, block reference). Arabic uses عنصر for it and for a building element; write عنصر الرسم when both appear together."
+      "context": "A CAD primitive (line, arc, text, block reference). Arabic uses عنصر for it and for a building element; write عنصر الرسم when both appear together. In CAD prompts and labels follow AutoCAD's own words: \"Select objects\", \"Object snap\", \"UCS from object\"."
     },
     "quantity": {
       "preferred": "كمية",
@@ -480,9 +477,6 @@
       "plural_or_context": "عناصر",
       "avoid": [],
       "en": "element",
-      "en_avoid": [
-        "object"
-      ],
       "context": "A building element Qiyas measures (wall, door, slab). A CAD primitive is an entity."
     },
     "manual_measurement": {

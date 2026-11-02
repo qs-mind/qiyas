@@ -22,6 +22,9 @@ struct Glossary {
 #[derive(Deserialize)]
 struct Concept {
     avoid: Vec<String>,
+    #[serde(default)]
+    en_avoid: Vec<String>,
+    preferred: String,
 }
 #[derive(Deserialize)]
 struct Pattern {
@@ -373,4 +376,137 @@ let multiline = "نص
     assert!(!glossary.errors(&values[1]).is_empty());
     assert!(glossary.errors(&values[2]).is_empty());
     assert!(glossary.errors(&values[3]).is_empty());
+}
+
+// Mask code spans and quoted command/wire names, but still inspect quoted prose.
+fn english_prose(source: &str) -> String {
+    let mut prose = String::new();
+    let mut rest = source;
+    while let Some(c) = rest.chars().next() {
+        if matches!(c, '`' | '"' | '\'') {
+            if let Some(end) = rest[c.len_utf8()..].find(c) {
+                let end = end + c.len_utf8();
+                let inner = &rest[c.len_utf8()..end];
+                let identifier = inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                let wire = identifier
+                    && (inner.contains('_')
+                        || matches!(inner, "conflicts" | "takeoff")
+                        || rest[end + c.len_utf8()..].trim_start().starts_with(':')
+                        || qiyas_core::registry::registry().get(inner).is_some());
+                if c == '`' || wire {
+                    prose.push(' ');
+                    rest = &rest[end + c.len_utf8()..];
+                    continue;
+                }
+            }
+        }
+        prose.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    prose
+}
+fn english_errors(glossary: &Glossary, source: &str) -> Vec<String> {
+    let prose = english_prose(source).to_ascii_lowercase();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    glossary
+        .concepts
+        .values()
+        .flat_map(|c| &c.en_avoid)
+        .filter(|term| {
+            let term = term.to_ascii_lowercase();
+            prose.match_indices(&term).any(|(i, _)| {
+                !prose[..i].chars().next_back().is_some_and(word)
+                    && !prose[i + term.len()..].chars().next().is_some_and(word)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn english_model_text_follows_shared_glossary() {
+    let glossary = glossary();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    fn texts(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                texts(&path, files);
+            } else if path.extension().is_some_and(|e| e == "txt") {
+                files.push(path);
+            }
+        }
+    }
+    texts(&root, &mut files);
+    files.sort();
+    let mut errors = Vec::new();
+    for file in files {
+        if file.file_stem().unwrap().to_string_lossy().ends_with("_ar") {
+            continue;
+        }
+        let source = fs::read_to_string(&file).unwrap();
+        for term in english_errors(&glossary, &source) {
+            errors.push(format!("{}: {term}", file.display()));
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
+fn english_guard_distinguishes_prose_from_wire_names() {
+    let glossary = glossary();
+    for source in [
+        "Conflicts",
+        "CONFLICT",
+        "takeoff",
+        "take off",
+        "BOQ row",
+        "'Conflict'",
+    ] {
+        assert!(!english_errors(&glossary, source).is_empty(), "{source}");
+    }
+    for source in [
+        "Discrepancies",
+        "entity",
+        "an object",
+        "\"an object\"",
+        "Select objects",
+        "Object snap",
+        "UCS from object",
+        "take-off",
+        "conflicting",
+        "takeoff_check",
+        "discrepancy_check",
+        "takeoff_exclusion",
+        "`conflicts`",
+        "\"conflicts\"",
+        "'takeoff'",
+        r#"{"conflicts":[],"type":"discrepancy_check"}"#,
+        "`object` then an entity",
+    ] {
+        assert!(english_errors(&glossary, source).is_empty(), "{source}");
+    }
+    assert!(!english_errors(&glossary, "`conflicts` then conflicts").is_empty());
+}
+
+#[test]
+fn arabic_prompt_distinguishes_revision_from_review() {
+    let glossary = glossary();
+    let prompt = include_str!("../src/prompt_ar.txt");
+    assert!(prompt.contains(&format!(
+        "استفسار، {}، تصدير",
+        glossary.concepts["revision"].preferred
+    )));
+    assert!(prompt.contains(&format!("لل{}", glossary.concepts["review"].preferred)));
+    for text in [prompt, include_str!("../src/takeoff_workflow_ar.txt")] {
+        for old in [
+            "سحابة مراجعة",
+            "سحب مراجعة",
+            "رقم المراجعة",
+            "مدير المعاملات",
+        ] {
+            assert!(!text.contains(old), "{old}");
+        }
+    }
 }

@@ -31,7 +31,7 @@ fn client(s: &mut Session, items: Value) {
     );
 }
 fn check(s: &mut Session) {
-    run(s, json!({"type":"check"}));
+    run(s, json!({"type":"discrepancy_check"}));
 }
 #[test]
 fn mapped_missing_quantity_units_duplicates_and_no_evidence_are_checked() {

@@ -69,7 +69,7 @@ pub enum Command {
     /// Compare the client BOQ with measured elements, evaluate cited checks and raise bilingual
     /// queries with comment clouds. One undo step. Tolerances in rule data take precedence.
     #[schemars(extend("x-category" = "takeoff", "x-takeoff-step" = "6 check BOQ and documents; raise queries"))]
-    #[serde(rename = "discrepancy_check", alias = "check")]
+    #[serde(rename = "discrepancy_check")]
     #[schemars(example = json!({"type":"discrepancy_check"}))]
     #[schemars(extend("x-takeoff-kit" = {"order":80,"example":0}))]
     Check {

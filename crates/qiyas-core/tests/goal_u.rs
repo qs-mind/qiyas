@@ -268,13 +268,15 @@ fn u9_imported_block_enclosures_work_and_voids_are_an_explicit_type_property() {
 }
 
 #[test]
-fn u11_discrepancy_check_has_a_clear_name_and_legacy_alias() {
+fn u11_discrepancy_check_has_a_clear_name_without_ambiguous_alias() {
     assert!(qiyas_core::registry::registry()
         .get("discrepancy_check")
         .is_some());
-    let old: qiyas_core::Command = serde_json::from_value(json!({"type":"check"})).unwrap();
+    assert!(serde_json::from_value::<qiyas_core::Command>(json!({"type":"check"})).is_err());
+    let command: qiyas_core::Command =
+        serde_json::from_value(json!({"type":"discrepancy_check"})).unwrap();
     assert_eq!(
-        serde_json::to_value(old).unwrap()["type"],
+        serde_json::to_value(command).unwrap()["type"],
         "discrepancy_check"
     );
 }

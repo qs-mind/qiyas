@@ -439,3 +439,12 @@ fn domain_options_are_optional_and_registered_with_open_room_classification() {
         let _: Command = serde_json::from_value(value).unwrap();
     }
 }
+
+#[test]
+fn check_is_not_a_discrepancy_command_alias() {
+    assert!(registry().get("check").is_none());
+    assert_eq!(
+        registry().get("discrepancy_check").unwrap().name,
+        "discrepancy_check"
+    );
+}

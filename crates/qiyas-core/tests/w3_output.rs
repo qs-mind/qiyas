@@ -919,7 +919,7 @@ fn numbered_door_marks_preserve_quantities_and_roll_up_for_a_client_boq() {
             {"code":"A-D01","description":"Doors","unit":"pcs","quantity":quantity,"row":1}]}})
     };
     run(&mut s, doors(3.0));
-    run(&mut s, json!({"type":"check"}));
+    run(&mut s, json!({"type":"discrepancy_check"}));
     assert!(
         s.conflicts
             .iter()
@@ -928,7 +928,7 @@ fn numbered_door_marks_preserve_quantities_and_roll_up_for_a_client_boq() {
         s.conflicts
     );
     run(&mut s, doors(5.0));
-    run(&mut s, json!({"type":"check"}));
+    run(&mut s, json!({"type":"discrepancy_check"}));
     assert!(s.conflicts.iter().any(|c| {
         c.boq_code.as_deref() == Some("A-D01")
             && c.kind == qiyas_core::ConflictKind::QuantityMismatch

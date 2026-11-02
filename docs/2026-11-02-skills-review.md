@@ -104,7 +104,7 @@ them as facts Mizan asks for.
   if its callers called core.
 - Five check modules with five result shapes (`takeoff_check`, `outside_check`, `pack_check`,
   `check::Finding`, `Conflict`); one typed finding would make T1–T5 small rules.
-- `check` is both the read-only drawing check and an alias of the mutating `discrepancy_check`
+- `check` was both the read-only drawing check and an alias of the mutating `discrepancy_check` (alias removed under the 2 November ruling)
   (`commands.rs:72`).
 - Words: settled on 2 November 2026 in `src/i18n/ar-glossary.json`, now the one terms reference (plan Task 18).
 

@@ -21,7 +21,7 @@ fn test_session(path: &Path) -> Session {
         &mut s,
         json!({"type":"set_boq","boq":{"source":"client.xlsx","imported":"2026-10-22T00:00:00Z","items":[{"code":item.code,"description":item.description_en,"unit":item.unit,"quantity":item.quantity+100.,"section":item.section,"row":2}]}}),
     );
-    fixture::run(&mut s, json!({"type":"check"}));
+    fixture::run(&mut s, json!({"type":"discrepancy_check"}));
     assert!(!s.conflicts.is_empty());
     s
 }

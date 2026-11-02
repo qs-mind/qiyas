@@ -77,7 +77,7 @@ test("rows are grouped by kind, in kind order, with their counts and details", (
   // Compare and Export conflicts are in the output's head, one heading and one set of actions.
   expect(screen.queryByRole("button", { name: "Compare" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Export conflicts" })).toBeNull();
-  expect(screen.queryByRole("heading", { name: "Conflicts" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Discrepancies" })).toBeNull();
 });
 
 test("the status filter hides resolved ones; kind chips filter and count", () => {
@@ -99,7 +99,7 @@ test("the status filter hides resolved ones; kind chips filter and count", () =>
 
   // Ignored: nothing matches; the chips stay.
   fireEvent.click(within(status).getByRole("radio", { name: "Ignored" }));
-  expect(screen.getByText("No conflicts match the filter")).toBeTruthy();
+  expect(screen.getByText("No discrepancies match the filter")).toBeTruthy();
   fireEvent.click(within(kinds).getByRole("button", { name: "All 0" }));
   fireEvent.click(within(status).getByRole("radio", { name: "Resolved" }));
   expect(reasons()).toEqual(["Plaster: BOQ 12, measured 14"]);
@@ -151,7 +151,7 @@ test("empty states: no BOQ, not compared, none found", () => {
   expect(screen.getByText("Not compared yet, press Compare.")).toBeTruthy();
   cleanup();
   renderPanel({ conflicts: [] });
-  expect(screen.getByText("No conflicts")).toBeTruthy();
+  expect(screen.getByText("No discrepancies")).toBeTruthy();
 });
 
 test("a hint under the toolbar says to link or name measurements", () => {

@@ -104,7 +104,7 @@ fn project_deliverable_flags_and_drawing_export_write_both_formats() {
         &mut session,
         json!({"type":"set_boq","boq":{"source":"client.xlsx","imported":"2026-10-22T00:00:00Z","items":[{"code":item.code,"description":item.description_en,"unit":item.unit,"quantity":100.,"section":item.section,"row":2}]}}),
     );
-    fixture::run(&mut session, json!({"type":"check"}));
+    fixture::run(&mut session, json!({"type":"discrepancy_check"}));
     session.save_as_headless(&drawing).unwrap();
     let project = home.join("projects/Deliverables.qss");
     std::fs::write(&project,json!({"name":"Deliverables","drawings":[{"path":drawing}],"project":ProjectData::default()}).to_string()).unwrap();

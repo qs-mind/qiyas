@@ -484,12 +484,7 @@ impl Registry {
     /// A command by its wire name (`draw`, `draw.line`), in any case, `-` or `_` alike.
     pub fn get(&self, name: &str) -> Option<&CommandInfo> {
         let key = name.trim().to_ascii_lowercase().replace('-', "_");
-        let key = if key == "check" {
-            "discrepancy_check"
-        } else {
-            &key
-        };
-        self.by_name.get(key).map(|&i| &self.commands[i])
+        self.by_name.get(&key).map(|&i| &self.commands[i])
     }
 
     /// A command by one of its command-line words or aliases, in any case.

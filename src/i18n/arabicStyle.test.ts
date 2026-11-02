@@ -133,3 +133,43 @@ test("Arabic action buttons use verbal nouns", () => {
   };
   for (const [key, value] of Object.entries(labels)) expect(ar[key], key).toBe(value);
 });
+
+
+const englishBanned = [...new Set(Object.values(glossary.concepts)
+  .flatMap(c => "en_avoid" in c ? c.en_avoid : []))];
+function englishErrors(value: string): string[] {
+  // Substitution names are wire names, not displayed prose.
+  const prose = value.replace(/\{\w+\}/g, "");
+  return englishBanned.filter(term => new RegExp(
+    `\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i",
+  ).test(prose));
+}
+
+test("English window text follows each concept's en_avoid terms", () => {
+  expect(Object.entries(en).flatMap(([key, value]) =>
+    englishErrors(value).map(term => `${key}: ${term} (${value})`))).toEqual([]);
+});
+
+test("English terms match whole words without changing identifiers or placeholders", () => {
+  for (const value of ["Conflicts", "CONFLICT", "takeoff", "Take off quantities", "BOQ row"]) {
+    expect(englishErrors(value), value).not.toEqual([]);
+  }
+  for (const value of ["Discrepancies", "entity", "Pick an object", "Select objects", "Object snap", "UCS from object", "take-off", "takeoff_check", "{object}", "conflicting"]) {
+    expect(englishErrors(value), value).toEqual([]);
+  }
+});
+
+test("Arabic drawing revisions and named parameters retain their distinct meanings", () => {
+  const revision = glossary.concepts.revision.preferred;
+  const parameter = glossary.concepts.parameter.preferred;
+  expect(Object.entries(en).filter(([key, value]) => /\brevision\b|\brev\b/i.test(value) || /revcloud/i.test(key))
+    .filter(([key]) => ar[key].includes(glossary.concepts.review.preferred))).toEqual([]);
+  for (const key of ["draw.revcloud", "activity.line.object.revcloud.one", "activity.line.object.revcloud.many", "ai.packCheck.register"]) {
+    expect(ar[key], key).toContain(revision);
+  }
+  for (const key of ["param.parameters", "param.manager", "activity.line.object.parameter.one", "activity.line.object.parameter.many"]) {
+    expect(ar[key], key).toContain(parameter);
+  }
+  expect(ar["boq.measurementReview"]).toContain(glossary.concepts.review.preferred);
+  expect(ar["modify.prompt.factor"]).toContain(glossary.concepts.factor.preferred);
+});
