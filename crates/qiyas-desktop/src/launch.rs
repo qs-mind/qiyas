@@ -273,6 +273,101 @@ mod tests {
     }
 
     #[test]
+    fn window_content_security_policies_are_restricted() {
+        let base: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        for (name, text) in [
+            ("tauri.conf.json", include_str!("../tauri.conf.json")),
+            (
+                "tauri.bundle.conf.json",
+                include_str!("../tauri.bundle.conf.json"),
+            ),
+            (
+                "tauri.windows.conf.json",
+                include_str!("../tauri.windows.conf.json"),
+            ),
+            (
+                "tauri.fast.conf.json",
+                include_str!("../tauri.fast.conf.json"),
+            ),
+            (
+                "tauri.updater.conf.json",
+                include_str!("../tauri.updater.conf.json"),
+            ),
+        ] {
+            let conf: serde_json::Value = serde_json::from_str(text).unwrap();
+            let Some(security) = conf["app"].get("security") else {
+                continue;
+            };
+            assert!(security.is_object(), "{name}: security must be an object");
+            for key in ["csp", "devCsp"] {
+                // Merge patches inherit omitted fields, but null disables a policy.
+                let policy = security
+                    .get(key)
+                    .unwrap_or(&base["app"]["security"][key])
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name}: {key} must be a CSP string"));
+                assert!(!policy.contains("'unsafe-eval'"), "{name}: {key}");
+                let directives: Vec<Vec<&str>> = policy
+                    .split(';')
+                    .map(|directive| directive.split_whitespace().collect())
+                    .filter(|directive: &Vec<&str>| !directive.is_empty())
+                    .collect();
+                for required in ["base-uri", "form-action", "object-src"] {
+                    let matching: Vec<_> = directives
+                        .iter()
+                        .filter(|directive| directive[0] == required)
+                        .collect();
+                    assert_eq!(
+                        matching,
+                        [&vec![required, "'none'"]],
+                        "{name}: {key} must restrict {required} to 'none'"
+                    );
+                }
+                for directive in &directives {
+                    if directive[0] == "script-src" {
+                        assert_eq!(directive, &["script-src", "'self'"], "{name}: {key}");
+                    }
+                    for source in &directive[1..] {
+                        if source.starts_with("http:")
+                            || source.starts_with("https:")
+                            || source.starts_with("ws:")
+                            || source.starts_with("wss:")
+                        {
+                            assert!(
+                                *source == "http://ipc.localhost"
+                                    || (key == "devCsp"
+                                        && matches!(
+                                            *source,
+                                            "http://localhost:1420" | "ws://localhost:1420"
+                                        )),
+                                "{name}: {key} has unexpected origin {source}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn default_capability_is_limited_to_the_main_window_and_known_permissions() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert_eq!(capability["windows"], serde_json::json!(["main"]));
+        assert_eq!(
+            capability["permissions"],
+            serde_json::json!([
+                "core:default",
+                "dialog:default",
+                "dialog:allow-open",
+                "dialog:allow-save",
+                "core:window:allow-destroy"
+            ])
+        );
+    }
+
+    #[test]
     fn file_addresses_are_read_as_their_files() {
         let dir = folder();
         let url = Url::from_file_path(dir.path().join("plan.dwg")).unwrap();
