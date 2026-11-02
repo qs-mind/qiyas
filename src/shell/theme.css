@@ -2267,95 +2267,115 @@ span.grid-sort {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
-/* Settings in sections: a list of sections on the start side, one section shown beside it. The
-   body keeps one height, so the dialog does not jump between sections. */
+/* Settings keeps the drawing visible around a single reading column. */
 .settings.settings-sections {
-  width: 700px;
-}
-.settings-body {
-  display: grid;
-  grid-template-columns: 176px minmax(0, 1fr);
-  gap: 20px;
-  height: min(470px, calc(100vh - 190px));
-}
-.settings-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-inline-end: 12px;
-  border-inline-end: 1px solid var(--rule);
-}
-.settings .settings-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
-  font: inherit;
-  text-align: start;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: color 120ms ease, background-color 120ms ease;
-}
-.settings-nav-item svg {
-  flex: none;
-  width: 17px;
-  height: 17px;
-}
-.settings .settings-nav-item:hover {
-  color: var(--fg);
-  background: var(--row-hover);
-}
-.settings .settings-nav-item[data-active] {
-  color: var(--fg);
-  background: var(--accent-soft);
-}
-.settings .settings-nav-item[data-active] svg {
-  color: var(--accent);
-}
-.settings .settings-nav-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-.settings-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
+  width: 764px;
+  height: min(850px, calc(100dvh - 56px));
+  padding: 0;
   overflow-y: auto;
-  padding-inline-end: 4px;
+  scrollbar-gutter: stable;
 }
-.settings-section[hidden] {
-  display: none;
+.settings-sheet { min-height: 100%; }
+.settings-body { min-height: 100%; }
+.settings-head {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  padding: 24px 40px 0;
+  background: var(--bg);
 }
-.settings-section > p {
-  margin: -6px 0 0;
-  color: var(--muted);
-  font-size: 12px;
+.settings-title-row { display: flex; align-items: center; gap: 16px; margin-block-end: 18px; }
+.settings .settings-title-row h2 { font-size: 24px; font-weight: 600; }
+.settings-saved { margin-inline-start: auto; color: var(--muted); min-height: 1.4em; }
+.settings .settings-close { width: 32px; height: 32px; padding: 0; font-size: 24px; border: 0; }
+.settings-nav { position: relative; display: flex; gap: 22px; border-block-end: 1px solid var(--rule); overflow-x: auto; }
+.settings .settings-nav-item {
+  flex: none; padding: 8px 0 12px; border: 0; border-radius: 0; color: var(--muted); background: none; font-weight: 500;
 }
-@media (prefers-reduced-motion: reduce) {
-  .settings .settings-nav-item {
-    transition: none;
-  }
+.settings .settings-nav-item[data-active] { color: var(--fg); }
+.settings .settings-nav-item:hover { background: none; color: var(--fg); }
+.settings-tab-indicator {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-end: 0;
+  width: var(--active-tab-width);
+  height: 2px;
+  background: var(--accent);
+  transform: translateX(var(--active-tab-left));
+  transition: transform 180ms ease-out;
+  pointer-events: none;
 }
-@media (max-width: 760px) {
-  .settings-body {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 12px;
-  }
-  .settings-nav {
-    flex-direction: row;
-    overflow-x: auto;
-    padding: 0 0 8px;
-    border-inline-end: none;
-    border-bottom: 1px solid var(--rule);
-  }
-  .settings .settings-nav-item {
-    white-space: nowrap;
-  }
+.settings-tab-indicator:dir(rtl) { transform: translateX(calc(-1 * var(--active-tab-right))); }
+.settings-section { display: flex; flex-direction: column; gap: 16px; max-width: 760px; padding: 28px 40px 40px; margin-inline: auto; }
+.settings-section[hidden] { display: none; }
+.settings-group { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.settings-group:empty, .settings-model-slot:empty { display: none; }
+.settings-section > .settings-group:not(:first-child), .settings-model-slot:not(:empty) { margin-block-start: 16px; padding-block-start: 24px; border-block-start: 1px solid var(--rule); }
+.settings-section h3 { margin: 0; font-size: 15px; font-weight: 600; text-wrap: balance; }
+.settings-section p { margin: 0; color: var(--muted); line-height: 1.6; text-wrap: pretty; }
+.settings-section h3 + p { margin-block-start: -8px; }
+.settings-section button, .settings-section input, .settings-section select { min-height: 34px; scroll-margin-block-start: 140px; }
+.settings-sections button, .settings-sections label { cursor: default; }
+.settings-provider-list { display: flex; flex-direction: column; gap: 8px; }
+.settings-provider { border: 1px solid var(--rule); border-radius: 10px; overflow: clip; }
+.settings-provider.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 25%, var(--bg)); }
+.settings .settings-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid var(--rule); border-radius: 8px; }
+.settings .settings-choice:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 25%, var(--bg)); }
+.settings .settings-choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings .settings-choice input { flex: none; width: 15px; height: 15px; min-height: 0; margin: 3px 0 0; padding: 0; border: 0; accent-color: var(--accent); }
+.settings .settings-choice > span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-choice strong { font-weight: 600; }
+.settings-choice span span { color: var(--muted); line-height: 1.5; }
+.settings .provider-choice, .settings .provider-choice:has(input:checked) { border: 0; background: none; border-radius: 0; }
+.settings .settings-provider-logo { display: block; flex: none; width: 24px; height: 24px; background: currentColor; mask: var(--provider-mark) center / contain no-repeat; }
+.settings-provider-setup { display: flex; flex-direction: column; gap: 14px; margin: 0 16px 16px; padding-block-start: 16px; border-block-start: 1px solid var(--rule); }
+.settings-provider-chips, .subscription-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-provider-chips button { display: inline-flex; align-items: center; gap: 8px; }
+.settings-provider-chips .settings-provider-logo { width: 18px; height: 18px; }
+.settings-connection-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-account { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.settings-account > div { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.settings-avatar { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--panel); font-size: 16px; }
+.settings-status { display: flex; align-items: baseline; gap: 7px; color: var(--muted); }
+.settings-status::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.settings-status[data-state="ok"]::before, .settings-status[data-state="connected"]::before { background: #47815b; }
+.settings-status[data-state="plan_limit"]::before, .settings-status[data-state="spend_blocked"]::before { background: var(--warn); }
+.settings .settings-choices { padding: 0; border: 0; margin: 0; gap: 8px; }
+.settings-choices legend { margin-block-end: 10px; padding: 0; color: var(--muted); font-weight: 400; }
+.settings-stepper { display: flex; flex: none; align-items: center; border: 1px solid var(--rule); border-radius: 6px; }
+.settings .settings-stepper input { width: 48px; text-align: center; border: 0; appearance: textfield; font-variant-numeric: tabular-nums; }
+.settings-stepper input::-webkit-inner-spin-button { appearance: none; }
+.settings .settings-stepper button { border: 0; width: 32px; padding: 0; }
+.settings-sections .subscription-settings { display: flex; flex-direction: column; gap: 14px; }
+.settings-sign-in-wait { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; background: var(--panel); border-radius: 6px; }
+.settings-sign-in-wait p { flex: 1 1 220px; }
+.settings-sections .error { color: var(--warn); padding: 8px 0; background: none; }
+.settings-sections .model-picker { display: flex; flex-direction: row; flex-wrap: wrap; gap: 10px; align-items: center; }
+.settings-sections .model-picker .model-row { flex: 1 1 280px; order: -1; }
+.settings-sections .model-picker > input, .settings-sections .model-picker .note, .settings-sections .model-picker > .settings-field-error { flex-basis: 100%; }
+.settings-sections .model-picker .model-filter { order: -2; }
+.settings-sections .model-row select { width: 100%; }
+.settings-sections .settings-effort .segmented { display: flex; flex-wrap: wrap; gap: 6px; border: 0; background: none; }
+.settings-sections .settings-effort .segment { border: 1px solid var(--rule); border-radius: 6px; }
+.settings-sections .settings-effort .segment[data-checked] { border-color: var(--accent); background: var(--accent-soft); }
+.settings-model-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.settings-model-input:empty { display: none; }
+.settings-sections .field { gap: 8px; }
+.settings-sections .field > h3 + p { margin-block-start: 0; }
+.settings-sections .settings-close:lang(ar) { font-size: 24px; }
+.settings-section input[inputmode="numeric"], .settings-section input[type="number"] { max-width: 140px; }
+.settings-model-input { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.settings-sections .picture-support { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.settings-sections .picture-support:lang(ar) { font-size: 14px; }
+.settings-sections .check { padding-block: 12px; border-block-end: 1px solid var(--rule); }
+.settings-sections :is(.settings-saved, .settings-section, input, select, button):lang(ar) { font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .settings-tab-indicator { transition: none; } }
+@media (max-width: 640px) {
+  .settings-head { padding: 20px 20px 0; }
+  .settings-section { padding: 24px 20px; }
+  .settings-nav { gap: 18px; }
+  .settings-connection-row { flex-wrap: wrap; }
+  .settings-sections .row { flex-wrap: wrap; }
 }
 .gear svg {
   width: 16px;

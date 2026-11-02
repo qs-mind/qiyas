@@ -855,3 +855,31 @@ against its SHA-256. Versions are in those scripts.
 | ONNX Runtime | MIT | onnxruntime-MIT.txt (its third-party notices ship beside the runtime) |
 | PP-OCRv5 detector, Arabic recogniser and dictionary (PaddlePaddle) | Apache-2.0 | oar-ocr-Apache-2.0.txt |
 | Oniguruma (built into onig_sys) | BSD-2-Clause | Oniguruma-BSD-2-Clause.txt |
+
+## Provider marks in the window
+
+Three SVG marks (Anthropic, OpenAI and Claude) from `@lobehub/icons-static-svg` 1.101.0 (MIT), published 26 October 2026. Only these marks are vendored in `src/shell/provider-marks/`; the package manager store is read-only in the window workspace. This release is over seven days old.
+
+Source: https://www.npmjs.com/package/@lobehub/icons-static-svg/v/1.101.0
+
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

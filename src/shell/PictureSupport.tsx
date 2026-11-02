@@ -32,5 +32,5 @@ export function PictureSupport({ provider, model, baseUrl = null, typedKey, exec
     return () => { active = false; clearTimeout(timer); };
   }, [identity, typedKey, ready]);
   const supported = answer?.identity === identity ? answer.supported : metadata;
-  return <p className="muted" role="note">{t(supported === true ? "ai.visionAvailable" : supported === false ? "ai.visionUnavailable" : "ai.visionUnknown")}</p>;
+  return <p className="muted picture-support" role="note">{t(supported === true ? "ai.visionAvailable" : supported === false ? "ai.visionUnavailable" : "ai.visionUnknown")}</p>;
 }

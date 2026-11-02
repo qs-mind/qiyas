@@ -4,7 +4,7 @@ import { uiError } from "../i18n/errors";
  *  filter narrows a long list (OpenRouter offers hundreds); "Other…" takes an id the list lacks;
  *  the saved model stays listed even when the service no longer offers it. When the service
  *  can't be asked, Claude's built-in list shows, and why. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { aiModels, type ModelList, type Provider } from "../api";
 import { useT } from "../i18n";
 import { DotLoader } from "./DotLoader";
@@ -22,14 +22,18 @@ type Props = {
   baseUrl: string | null;
   value: string;
   typedKey?: string;
+  connectionVersion?: number;
+  error?: string | null;
+  onRetry?(): void;
   onChange(model: string): void;
   onImageInputChange?(supported: boolean | null): void;
   /** Reads the list (tests give their own). */
   load?: typeof aiModels;
 };
 
-export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onImageInputChange, load = aiModels }: Props) {
+export function ModelPicker({ provider, baseUrl, value, typedKey, connectionVersion = 0, error, onRetry, onChange, onImageInputChange, load = aiModels }: Props) {
   const t = useT();
+  const errorId = useId();
   const [list, setList] = useState<ModelList | null>(null);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("");
@@ -63,7 +67,7 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onIm
       ++asked.current;
       window.clearTimeout(timer);
     };
-  }, [provider, baseUrl, typedKey]);
+  }, [provider, baseUrl, typedKey, connectionVersion]);
 
   const models = list?.models ?? [];
   const selectedCapability = models.find((m) => m.id === value)?.image_input;
@@ -97,6 +101,7 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onIm
       <div className="model-row">
         <select
           aria-label={t("settings.model")}
+          aria-invalid={!!error} aria-describedby={error ? errorId : undefined}
           dir="ltr"
           value={typing ? OTHER : value}
           onChange={(e) => {
@@ -127,11 +132,13 @@ export function ModelPicker({ provider, baseUrl, value, typedKey, onChange, onIm
         <input
           dir="ltr"
           aria-label={t("settings.modelCustom")}
+          aria-invalid={!!error} aria-describedby={error ? errorId : undefined}
           placeholder={t("settings.modelCustom")}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
       )}
+      {error && <div className="settings-field-error"><p id={errorId} className="error" role="alert">{error}</p>{onRetry && <button type="button" onClick={onRetry}>{t("ai.failure.retry")}</button>}</div>}
       {list && !list.from_service && (
         <p className="note" role="status">
           {list.error === "save_address_first"

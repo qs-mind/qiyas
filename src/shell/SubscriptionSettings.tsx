@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  aiProviderStatus, type AiProviderStatus,
   chatgptAccount, chatgptSignIn, chatgptSignOut, cancelChatgptSignIn, reopenChatgptSignIn,
   claudeCodeStatus, subscriptionLink, chatgptModels, chatgptSelectAccount, chatgptResumePlan,
-  EFFORTS, type ChatgptAccount, type ClaudeCodeStatus, type Provider, type PlanModel,
+  type ChatgptAccount, type ClaudeCodeStatus, type Provider, type PlanModel,
 } from "../api";
+import { createPortal } from "react-dom";
+import { locale } from "../i18n/locale";
 import { DotLoader } from "./DotLoader";
+import { EffortChoices } from "./SettingsChoices";
 import { PictureSupport } from "./PictureSupport";
-import { useT } from "../i18n";
+import { useLanguage, useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 
 /** Account controls never receive tokens. Claude login stays in the user's terminal. */
 const OTHER_MODEL = "\u0000other";
 
-export function SubscriptionSettings({ provider, executable, onExecutable, model = "", onModel, effort, onEffort }: {
+export function SubscriptionSettings({ provider, executable, onExecutable, model = "", onModel, effort, onEffort, modelContainer }: {
+  modelContainer?: HTMLElement | null;
   provider: Provider;
   executable: string;
   onExecutable: (value: string) => void;
@@ -22,6 +27,9 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
   onEffort?: (value: string | null) => void;
 }) {
   const t = useT();
+  const { lang } = useLanguage();
+  const [connection, setConnection] = useState<AiProviderStatus | null>(null);
+  const [switchingAccount, setSwitchingAccount] = useState(false);
   const [account, setAccount] = useState<ChatgptAccount | null>(null);
   const [claude, setClaude] = useState<ClaudeCodeStatus | null>(null);
   const [models, setModels] = useState<PlanModel[]>([]);
@@ -88,12 +96,27 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
     return () => window.clearTimeout(timer);
   }, [provider, executable]);
 
+  useEffect(() => {
+    if (provider !== "chatgpt_plan") return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    setConnection(null);
+    async function refresh() {
+      try {
+        const next = await aiProviderStatus();
+        if (active && next.provider === provider) setConnection(next);
+      } catch { /* Account controls report sign-in errors. */ }
+      if (active) timer = setTimeout(refresh, 5000);
+    }
+    void refresh();
+    return () => { active = false; clearTimeout(timer); };
+  }, [provider, account]);
+
   const selectedModel = models.find((item) => item.id === model) ?? models[0];
   const modelAliases = claude?.model_aliases ?? [];
   const customModel = otherModel || !!(model && !modelAliases.includes(model));
   const efforts = provider === "chatgpt_plan" ? selectedModel?.reasoning_efforts ?? []
     : claude?.supports_effort ? claude.effort_levels ?? [] : [];
-  const effortLabel = (value: string) => (EFFORTS as readonly string[]).includes(value) ? t(`effort.${value}`) : value;
 
   async function waitingAction(operation: () => Promise<void>) {
     const generation = statusGeneration.current;
@@ -113,31 +136,20 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
     }
   }
 
-  return <section className="subscription-settings">
-    <PictureSupport provider={provider} model={model} executable={executable}
-      account={account?.active_id} metadata={selectedModel?.image_input}
-      ready={provider === "claude_code" ? !!claude?.compatible : !!account?.signed_in && !!account.plan_granted && !account.paused && models.length > 0} />
-    {provider === "claude_code" && <>
-      <p>{t("settings.claudeLogin")}</p>
-      <label>
-        <span>{t("settings.claudeExecutable")}</span>
-        <input dir="ltr" value={executable} disabled={busy} onChange={(e) => { onExecutable(e.target.value); setClaude(null); setOtherModel(false); }} />
-      </label>
-      <p>{t("settings.claudePathHint")}</p>
-      {busy && !claude && <DotLoader pattern="spiral" size="sm" label={t("settings.modelsLoading")} />}
-      {claude && <p role="status">
-        {claude.code ? t("ai.error." + claude.code) : claude.signed_in === true
-          ? t("settings.claudeReady") : claude.signed_in === false
-            ? t("ai.error.claude_auth") : t("settings.claudeUnknownLogin")}
-        {claude.version && <> <bdi>{claude.version}</bdi></>}
-      </p>}
-      {claude?.installed === false && <button type="button" onClick={() => void act(async () => {
-        await subscriptionLink("claude_install");
-      })}>{t("settings.claudeInstall")}</button>}
-      {claude?.supports_model && <>
+  const connectionState = account?.signed_in === false ? "needs_sign_in" : connection?.status;
+  const connectionText = connectionState === "ok" || connectionState === "connected" ? t("settings.connected")
+    : connectionState === "plan_limit" ? connection?.resets_at
+      ? t("settings.allowanceUntil", { time: new Date(connection.resets_at * 1000).toLocaleString(locale(lang)) }) : t("settings.allowanceUsed")
+    : connectionState === "spend_blocked" ? t("settings.creditsSwitch")
+    : connectionState === "needs_sign_in" || connectionState === "auth" ? t("settings.signedOut")
+    : connection?.last_failure ? uiError(JSON.stringify(connection.last_failure)) : t("settings.checkingConnection");
+  const modelControls = <section className="settings-group subscription-model">
+    <h3>{t("settings.model")}</h3><p>{t("settings.modelHint")}</p>
+    <div className="settings-model-choice"><div className="settings-model-input">
+    {provider === "claude_code" && claude?.supports_model && <>
         <label>
           <span>{t("settings.model")}</span>
-          <select value={customModel ? OTHER_MODEL : model} disabled={busy} onChange={(e) => {
+          <select dir="ltr" value={customModel ? OTHER_MODEL : model} disabled={busy} onChange={(e) => {
             setOtherModel(e.target.value === OTHER_MODEL);
             onModel?.(e.target.value === OTHER_MODEL ? "" : e.target.value);
           }}>
@@ -150,24 +162,55 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
           <span>{t("settings.modelName")}</span>
           <input dir="ltr" value={model} onChange={(e) => onModel?.(e.target.value)} />
         </label>}
-      </>}
+    </>}
+    {provider === "chatgpt_plan" && account?.signed_in && account.plan_granted && !account.paused && <label>
+        <span>{t("settings.chatgptModel")}</span>
+        <select dir="ltr" aria-label={t("settings.chatgptModel")} value={selectedModel?.id ?? ""} disabled={(busy && !signingIn) || !models.length} onChange={(e) => {
+          onModel?.(e.target.value);
+          if (effort && !models.find((m) => m.id === e.target.value)?.reasoning_efforts?.includes(effort)) onEffort?.(null);
+        }}>
+          {!models.length && <option value="">{t("settings.chatgptNoModels")}</option>}
+          {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
+      </label>}
+    </div>
+    <PictureSupport provider={provider} model={model} executable={executable}
+      account={account?.active_id} metadata={selectedModel?.image_input}
+      ready={provider === "claude_code" ? !!claude?.compatible : !!account?.signed_in && !!account.plan_granted && !account.paused && models.length > 0} />
+    </div>
+    {efforts.length > 0 && <EffortChoices values={efforts} value={effort && efforts.includes(effort) ? effort : ""}
+      defaultChoice disabled={busy && !signingIn} onChange={value => onEffort?.(value || null)} />}
+  </section>;
+
+  return <section className="subscription-settings">
+    {provider === "claude_code" && <>
+      <p>{t("settings.claudeLogin")}</p>
+      <label>
+        <span>{t("settings.claudeExecutable")}</span>
+        <input dir="ltr" value={executable} disabled={busy} onChange={(e) => { onExecutable(e.target.value); setClaude(null); setOtherModel(false); }} />
+      </label>
+      <p>{t("settings.claudePathHint")}</p>
+      {busy && !claude && <DotLoader pattern="spiral" size="sm" label={t("settings.modelsLoading")} />}
+      {claude && <p role="status" className="settings-status" data-state={claude.signed_in && claude.compatible ? "ok" : "auth"}>
+        {claude.code ? t("ai.error." + claude.code) : claude.signed_in === true
+          ? t("settings.claudeReady") : claude.signed_in === false
+            ? t("ai.error.claude_auth") : t("settings.claudeUnknownLogin")}
+        {claude.version && <> <bdi>{claude.version}</bdi></>}
+      </p>}
+      {claude?.installed === false && <button type="button" onClick={() => void act(async () => {
+        await subscriptionLink("claude_install");
+      })}>{t("settings.claudeInstall")}</button>}
     </>}
     {provider === "chatgpt_plan" && <>
-      <label>
-        <span>{t("settings.chatgptAccount")}</span>
-        <select aria-label={t("settings.chatgptAccount")} value={account?.active_id ?? ""} disabled={busy || !account} onChange={(e) => {
-          const id = e.target.value || null;
-          setModels([]); onModel?.("");
-          void act(async () => { setAccount(await chatgptSelectAccount(id)); });
-        }}>
-          <option value="">{t("settings.chatgptAddAccount")}</option>
-          {account?.accounts?.map((a) => <option key={a.id} value={a.id}>{a.display_name}</option>)}
-        </select>
-      </label>
-      {account?.display_name && <p><bdi>{account.display_name}</bdi></p>}
-      {account?.signed_in && !account.plan_granted && <p role="alert">{t("ai.error.chatgpt_scope")}</p>}
+      <div className="settings-connection-row">
+        <div className="settings-account">
+          <span className="settings-avatar" aria-hidden="true">{account?.display_name?.slice(0, 1).toUpperCase() || "C"}</span>
+          <div><strong><bdi>{account?.display_name || t("settings.chatgptAccount")}</bdi></strong>
+            <p className="settings-status" data-state={connectionState} role="status">{connectionText}</p>
+          </div>
+        </div>
       <div className="subscription-actions">
-        <button className="chatgpt-sign-in" type="button" disabled={busy || !account} onClick={() => void act(async () => {
+        {(!account?.signed_in || !account.plan_granted || switchingAccount || signingIn || connectionState === "auth" || connectionState === "needs_sign_in") && <button className="chatgpt-sign-in" type="button" disabled={busy || !account} onClick={() => void act(async () => {
           const generation = statusGeneration.current;
           pendingSignIn.current = true;
           setSigningIn(true);
@@ -181,45 +224,54 @@ export function SubscriptionSettings({ provider, executable, onExecutable, model
               setSigningIn(false);
             }
           }
-        })}>{t("settings.chatgptSignIn")}</button>
+        })}>{t("settings.chatgptSignIn")}</button>}
         {account?.signed_in && <button type="button" disabled={busy} onClick={() => void act(async () => {
           setModels([]); onModel?.(""); setAccount(await chatgptSignOut());
         })}>{t("settings.chatgptSignOut")}</button>}
+
+        {account?.signed_in && <button type="button" disabled={busy} aria-expanded={switchingAccount} onClick={() => setSwitchingAccount(!switchingAccount)}>{t("settings.switchAccount")}</button>}
       </div>
+      </div>
+      {switchingAccount && <>
+      <label>
+        <span>{t("settings.chatgptAccount")}</span>
+        <select aria-label={t("settings.chatgptAccount")} value={account?.active_id ?? ""} disabled={busy || !account} onChange={(e) => {
+          const id = e.target.value || null;
+          setModels([]); onModel?.("");
+          void act(async () => { setAccount(await chatgptSelectAccount(id)); });
+        }}>
+          <option value="">{t("settings.chatgptAddAccount")}</option>
+          {account?.accounts?.map((a) => <option key={a.id} value={a.id}>{a.display_name}</option>)}
+        </select>
+      </label>
+      </>}
+      {account?.signed_in && !account.plan_granted && <p role="alert">{t("ai.error.chatgpt_scope")}</p>}
       {account?.notice && <p role="status">{t("ai.error." + account.notice)}</p>}
-      {account?.paused && <>
+      {account?.paused && !connection?.actions.some(a => a.kind === "retry") && <>
         <p role="alert">{t("settings.chatgpt_paused")}</p>
         <button type="button" disabled={busy} onClick={() => void act(async () => {
           setAccount(await chatgptResumePlan());
         })}>{t("settings.chatgptResume")}</button>
       </>}
-      {account?.signed_in && account.plan_granted && !account.paused && <label>
-        <span>{t("settings.chatgptModel")}</span>
-        <select aria-label={t("settings.chatgptModel")} value={selectedModel?.id ?? ""} disabled={(busy && !signingIn) || !models.length} onChange={(e) => {
-          onModel?.(e.target.value);
-          if (effort && !models.find((m) => m.id === e.target.value)?.reasoning_efforts?.includes(effort)) onEffort?.(null);
-        }}>
-          {!models.length && <option value="">{t("settings.chatgptNoModels")}</option>}
-          {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
-      </label>}
-      {signingIn && <>
+      {signingIn && <div className="settings-sign-in-wait">
+        <DotLoader pattern="spiral" size="sm" />
         <p role="status">{t("settings.chatgptWaiting")}</p>
         <button type="button" onClick={() => void waitingAction(reopenChatgptSignIn)}>{t("settings.chatgptReopen")}</button>
         <button type="button" onClick={() => void waitingAction(cancelChatgptSignIn)}>{t("settings.cancel")}</button>
-      </>}
+      </div>}
+      {connectionState === "spend_blocked" && <p>{t("settings.creditsHint")}</p>}
       <p>{t("settings.chatgptUsage")}</p>
-      <button type="button" onClick={() => void waitingAction(async () => {
-        await subscriptionLink("chatgpt_limits");
-      })}>{t("settings.chatgptLimits")}</button>
+      <div className="subscription-actions">
+        {connection?.actions.some(a => a.kind === "retry") && <button type="button" disabled={busy} onClick={() => void act(async () => {
+          setAccount(await chatgptResumePlan());
+          setConnection(await aiProviderStatus());
+        })}>{t("ai.failure.retry")}</button>}
+        <button type="button" onClick={() => void waitingAction(async () => {
+          await subscriptionLink(connection?.actions.find(a => a.kind === "open_provider_page")?.page ?? "chatgpt_usage");
+        })}>{t("settings.usageSettings")}</button>
+      </div>
     </>}
-    {efforts.length > 0 && <label>
-      <span>{t("settings.effort")}</span>
-      <select value={effort && efforts.includes(effort) ? effort : ""} disabled={busy && !signingIn} onChange={(e) => onEffort?.(e.target.value || null)}>
-        <option value="">{t("settings.subscriptionDefault")}</option>
-        {efforts.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
-      </select>
-    </label>}
+    {modelContainer ? createPortal(modelControls, modelContainer) : modelContainer === undefined ? modelControls : null}
     {error && <p className="error" role="alert">{error}</p>}
   </section>;
 }

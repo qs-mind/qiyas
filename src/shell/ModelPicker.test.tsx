@@ -124,3 +124,26 @@ test.each([
   await settle();
   expect(screen.getByRole("note").textContent).toBe(label);
 });
+
+test("inline validation is associated with both the model list and custom id", async () => {
+  render(<ModelPicker provider="anthropic" baseUrl={null} value="missing" onChange={() => {}}
+    load={async () => claude} error="This model is not available." />);
+  const error = await screen.findByRole("alert");
+  await settle();
+  for (const label of ["Model", "Model id"]) {
+    const field = screen.getByLabelText(label);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")).toBe(error.id);
+  }
+});
+
+test("finishing a connection reloads model discovery even when the address is unchanged", async () => {
+  const load = vi.fn().mockResolvedValue(claude);
+  const props = { provider: "anthropic" as const, baseUrl: null, value: "claude-opus-5-5", onChange: () => {}, load };
+  const view = render(<ModelPicker {...props} connectionVersion={0} />);
+  await settle();
+  expect(load).toHaveBeenCalledTimes(1);
+  view.rerender(<ModelPicker {...props} connectionVersion={1} />);
+  await settle();
+  expect(load).toHaveBeenCalledTimes(2);
+});

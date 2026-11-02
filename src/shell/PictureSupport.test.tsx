@@ -14,6 +14,9 @@ test("shows checking until background detection answers, including a false answe
   check.mockResolvedValueOnce(null).mockResolvedValueOnce(false);
   render(<PictureSupport provider="anthropic" model="model" />);
   expect(screen.getByRole("note").textContent).toBe("Checking picture support…");
+  expect(screen.getByRole("note").classList.contains("picture-support")).toBe(true);
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
   await tick(500);
   expect(check).toHaveBeenCalledTimes(1);
   await tick(2000);

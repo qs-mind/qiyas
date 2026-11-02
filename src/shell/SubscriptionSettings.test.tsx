@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LanguageProvider } from "../i18n";
+import { LanguageProvider, translate, type Lang } from "../i18n";
 import { SubscriptionSettings } from "./SubscriptionSettings";
 
 const api = vi.hoisted(() => ({
+  aiProviderStatus: vi.fn(),
   chatgptAccount: vi.fn(), chatgptSignIn: vi.fn(), chatgptSignOut: vi.fn(),
   chatgptModels: vi.fn(), chatgptSelectAccount: vi.fn(), chatgptResumePlan: vi.fn(),
   cancelChatgptSignIn: vi.fn(), reopenChatgptSignIn: vi.fn(), claudeCodeStatus: vi.fn(), subscriptionLink: vi.fn(),
 }));
 vi.mock("../api", async (original) => ({ ...(await original<object>()), ...api }));
 beforeEach(() => {
+  api.aiProviderStatus.mockResolvedValue({ provider: "chatgpt_plan", status: "connected", configured: true, verified: false, last_failure: null, actions: [] });
   api.chatgptAccount.mockResolvedValue({ signed_in: false, display_name: null, plan_granted: false });
   api.chatgptModels.mockResolvedValue([{ id: "mock-slug", label: "Mock model" }]);
   api.subscriptionLink.mockResolvedValue(undefined);
@@ -64,6 +66,7 @@ test("account changes clear the old model list and load visible models for the a
   const onModel = vi.fn();
   render(<SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} model="first-slug" onModel={onModel} />);
   await screen.findByRole("option", { name: "First model" });
+  fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
   fireEvent.change(screen.getByRole("combobox", { name: "ChatGPT account" }), { target: { value: "second" } });
   await screen.findByRole("option", { name: "Second model" });
   expect(screen.queryByRole("option", { name: "First model" })).toBeNull();
@@ -129,8 +132,8 @@ test.each(["en", "ar"])("Claude shows only help-listed model and effort choices 
   expect(screen.queryByRole("combobox", { name: modelLabel })).toBeNull();
   const model = await screen.findByRole("combobox", { name: modelLabel }) as HTMLSelectElement;
   expect(Array.from(model.options, (o) => o.value)).toEqual(["", "fable", "opus", "sonnet", "\u0000other"]);
-  expect(Array.from((screen.getByRole("combobox", { name: language === "en" ? "Effort" : "مستوى الجهد" }) as HTMLSelectElement).options, (o) => o.value))
-    .toEqual(["", "low", "medium", "high", "xhigh", "max"]);
+  expect(within(screen.getByRole("radiogroup", { name: language === "en" ? "Effort" : "مستوى الجهد" })).getAllByRole("radio").map(radio => radio.textContent))
+    .toEqual(["settings.subscriptionDefault", "effort.low", "effort.medium", "effort.high", "effort.xhigh", "effort.max"].map(key => translate(language as Lang, key)));
   fireEvent.change(model, { target: { value: "sonnet" } });
   expect(onModel).toHaveBeenLastCalledWith("sonnet");
 });
@@ -146,17 +149,18 @@ test.each(["en", "ar"])("ChatGPT effort follows the chosen model in %s", async (
   const props = { provider: "chatgpt_plan" as const, executable: "", onExecutable: () => {}, model: "reasoning", effort: "high", onEffort };
   const { rerender } = render(<LanguageProvider><SubscriptionSettings {...props} /></LanguageProvider>);
   const label = language === "en" ? "Effort" : "مستوى الجهد";
-  const select = await screen.findByRole("combobox", { name: label }) as HTMLSelectElement;
-  expect(Array.from(select.options, (o) => o.value)).toEqual(["", "low", "high"]);
-  expect(select.value).toBe("high");
-  fireEvent.change(select, { target: { value: "low" } });
+  const group = await screen.findByRole("radiogroup", { name: label });
+  const choices = within(group).getAllByRole("radio");
+  expect(choices.map(radio => radio.textContent)).toEqual(["settings.subscriptionDefault", "effort.low", "effort.high"].map(key => translate(language as Lang, key)));
+  expect(choices[2].getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(choices[1]);
   expect(onEffort).toHaveBeenLastCalledWith("low");
-  fireEvent.change(select, { target: { value: "" } });
+  fireEvent.click(choices[0]);
   expect(onEffort).toHaveBeenLastCalledWith(null);
   fireEvent.change(screen.getByRole("option", { name: "Plain model" }).parentElement!, { target: { value: "plain" } });
   expect(onEffort).toHaveBeenLastCalledWith(null);
   rerender(<LanguageProvider><SubscriptionSettings {...props} model="plain" effort={null} /></LanguageProvider>);
-  expect(screen.queryByRole("combobox", { name: label })).toBeNull();
+  expect(screen.queryByRole("radiogroup", { name: label })).toBeNull();
 });
 
 test("Claude hides unsupported flags and forgets capabilities when the program changes", async () => {
@@ -217,6 +221,8 @@ test("waiting keeps cancel and reopen usable and timeout enables a fresh sign-in
   fireEvent.click(start);
   const reopen = await screen.findByRole("button", { name: "Open the page again" });
   const cancel = screen.getByRole("button", { name: "Cancel" });
+  expect(screen.getByText("Finish signing in in your browser")).toBeTruthy();
+  expect(reopen.closest(".settings-sign-in-wait")?.querySelector(".dot-loader")).toBeTruthy();
   expect((reopen as HTMLButtonElement).disabled).toBe(false);
   expect((cancel as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(reopen);
@@ -290,4 +296,45 @@ test("closing settings cancels a pending ChatGPT sign-in", async () => {
   fireEvent.click(start);
   view.unmount();
   expect(api.cancelChatgptSignIn).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  ["plan_limit", "Allowance used until", true],
+  ["spend_blocked", "Needs the credits switch", true],
+  ["ok", "Connected", false],
+] as const)("the account row renders %s and its recovery actions from provider status", async (status, label, retry) => {
+  const account = { signed_in: true, display_name: "Project surveyor", plan_granted: true, paused: retry };
+  api.chatgptAccount.mockResolvedValue(account);
+  api.aiProviderStatus.mockResolvedValue({
+    provider: "chatgpt_plan", status, configured: true, verified: !retry, last_failure: null,
+    resets_at: status === "plan_limit" ? 1793700000 : undefined,
+    actions: retry ? [{ kind: "retry" }, { kind: "open_provider_page", page: "chatgpt_usage" }, { kind: "switch_provider" }] : [],
+  });
+  api.chatgptResumePlan.mockResolvedValue({ ...account, paused: false });
+  render(<SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} />);
+  const line = await screen.findByText(new RegExp(`^${label}`));
+  expect(line.getAttribute("data-state")).toBe(status);
+  expect(line.classList.contains("settings-status")).toBe(true);
+  expect(screen.getByText("Project surveyor").tagName).toBe("BDI");
+  expect(screen.getByRole("button", { name: "Switch account" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Open ChatGPT usage settings" }));
+  await waitFor(() => expect(api.subscriptionLink).toHaveBeenCalledWith("chatgpt_usage"));
+  if (retry) {
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(api.chatgptResumePlan).toHaveBeenCalledOnce());
+  } else {
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  }
+});
+
+test("Arabic limit times use Western digits and an isolated date", async () => {
+  localStorage.setItem("qiyas.lang", "ar");
+  api.chatgptAccount.mockResolvedValue({ signed_in: true, plan_granted: true, paused: true });
+  api.aiProviderStatus.mockResolvedValue({ provider: "chatgpt_plan", status: "plan_limit", configured: true, verified: false,
+    resets_at: 1793700000, last_failure: null, actions: [{ kind: "retry" }] });
+  render(<LanguageProvider><SubscriptionSettings provider="chatgpt_plan" executable="" onExecutable={() => {}} /></LanguageProvider>);
+  const line = await screen.findByText(/^تم استهلاك الحصة حتى/);
+  expect(line.textContent).toMatch(/\u2068.*[0-9].*\u2069/);
+  expect(line.textContent).not.toMatch(/[٠-٩]/);
 });
