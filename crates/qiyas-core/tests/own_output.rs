@@ -599,6 +599,12 @@ fn prepare_example(session: &mut Session, name: &str, example: &mut Value) {
             session,
             json!({"type":"draw","kind":"rectangle","a":[-10,-10],"b":[-5,-6]}),
         );
+    } else if name == "generate" && example["loops"][0]["along"].is_object() {
+        // Path stations are computed before the recipe's commands execute.
+        handles = added_by(
+            session,
+            json!({"type":"draw","kind":"arc","centre":[0,0],"radius":30,"start":0,"end":120}),
+        );
     } else if name == "insert_block" || name == "modify.explode" {
         let block = example["name"]
             .as_str()

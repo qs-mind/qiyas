@@ -25,6 +25,9 @@ draw.trace{points:P[],width:N} => {"type":"draw","kind":"trace","points":[[0,0],
 draw.mline{points:P[],style?:S,scale?:N} => {"type":"draw","kind":"mline","points":[[0,0],[1,0]]}
 draw.sketch{points:P[]} => {"type":"draw","kind":"sketch","points":[[0,0],[1,0],[2,1]]}
 batch{commands:J[],layer?:S,color?:S} => {"type":"batch","layer":"A-DETAIL","color":"ByLayer","commands":[{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}]}
+E=N|S (expression); G={var:S,from?:E,to?:E,step?:E,count?:E,along?:{path?:U,points?:[E,E][],spacing?:E,count?:E}}.
+generate{vars?:{string:E},loops?:G[],when?:S,commands:J[]} => {"type":"generate","vars":{"pitch":"8*unit"},"loops":[{"var":"col","count":6},{"var":"row","count":4}],"commands":[{"type":"draw","kind":"circle","centre":["=col*pitch","=row*pitch"],"radius":"=0.3*unit"},{"type":"text","at":["=col*pitch","=row*pitch+unit"],"value":"C{col+1}-{row+1}"}]}
+Generate: one atomic undo step; no files/code/nested batches. Vars share quantity expressions (trig degrees, mod, if); unit= drawing units/metre. Loops nest in order: count starts at 0, from/to/step includes to. Along uses path or points and spacing or count; exposes x,y,angle. Fields use "=expr", text "{expr}" (double braces escape). when=false skips an iteration or one command template. Define blocks once with template when:"i==0". Max20000 commands,100000 visits,8 loops,expression depth128; failures name template/iteration; results group handles by template/iteration.
 text{at:P,height?:N,rotation?:N,value:S,style?:S} => {"type":"text","at":[0,0],"height":0.25,"value":"Terminal concourse"}
 mtext{at:P,width?:N,height?:N,value:S,style?:S} => {"type":"mtext","at":[0,0],"width":10,"height":0.25,"value":"Terminal\nFor review"}
 dimension.linear{p1:P,p2:P,line_point:P,rotation?:N} => {"type":"dimension","kind":"linear","p1":[0,0],"p2":[600,0],"line_point":[300,-5]}

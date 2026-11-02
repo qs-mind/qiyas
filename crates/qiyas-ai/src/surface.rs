@@ -666,10 +666,26 @@ pub fn destructive_count(name: &str, input: &Value) -> usize {
             return 0;
         };
         usize::from(info.destructive)
-            + if info.name == "batch" {
-                command["commands"]
-                    .as_array()
-                    .map_or(0, |commands| commands.iter().map(count).sum())
+            + if matches!(info.name.as_str(), "batch" | "generate") {
+                command["commands"].as_array().map_or(0, |commands| {
+                    commands
+                        .iter()
+                        .map(|command| {
+                            // A computed discriminator may select a destructive command.
+                            if info.name == "generate"
+                                && ["type", "kind"].iter().any(|key| {
+                                    command[*key]
+                                        .as_str()
+                                        .is_some_and(|s| s.starts_with('=') || s.contains('{'))
+                                })
+                            {
+                                1
+                            } else {
+                                count(command)
+                            }
+                        })
+                        .sum()
+                })
             } else {
                 0
             }

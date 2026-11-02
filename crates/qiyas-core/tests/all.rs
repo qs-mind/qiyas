@@ -235,5 +235,7 @@ fn every_test_file_is_listed() {
 
 #[path = "decisions.rs"]
 mod decisions;
+#[path = "generate.rs"]
+mod generate;
 #[path = "outside_check.rs"]
 mod outside_check;

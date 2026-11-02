@@ -1012,6 +1012,35 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   state the commands changed. A failure is `CoreError::Step { index, label, error }` ("Batch step
   2 (draw.line): …", from 0). `Outcome::Batch { outcomes, added }`. The AI's drawing tools use
   it.
+- `generate` (`generate.rs`, `Command::Generate`) evaluates data-only geometry recipes through
+  `qiyas-param::expr`, then runs the expanded wire commands through the same `batch_with`
+  transaction as `Command::Batch`. One undo step; any expansion, validation or runtime failure
+  leaves the drawing unchanged. No code, scripts, file imports or nested batches/generators.
+  `vars` are expressions, `loops` nest in array order (`count` is zero-based; `from/to/step`
+  includes the end); bounds and variables may use outer loop values. `when` keeps true/nonzero
+  iterations; a template's own `when` keeps only that command. `=expr` returns a typed field;
+  `{expr}` interpolates text, with doubled braces for literal braces. The shared quantity
+  expression language includes `mod(a,b)` (Euclidean remainder); trigonometry uses degrees.
+  `unit` is drawing units per metre, as in symbol recipes. `along` takes an existing line, arc,
+  circle or lightweight polyline handle, or connected `points`, plus `spacing` or `count`.
+  Stations expose `x,y,angle` (tangent degrees) and the zero-based loop index. Counts include
+  open-path ends; closed paths never repeat their start. Paths are read before edits execute.
+  Limits name their refusal: 20,000 expanded commands, 100,000 loop visits and entity changes,
+  8 nested loops, 128 variables, expression depth 128/nodes 4,096/bytes 65,536, recipe 1 MiB,
+  expanded JSON budget 16 MiB, template depth 32, path vertices 4,096, generated strings
+  65,536 bytes. An 8,388,608 work budget charges expression bytes and 32 per path vertex or
+  station, including paths with zero stations. Variables are ordered without recursive lookup.
+  `Outcome::Generated` gives visited `iterations`, `skipped`, `templates` (count and handles),
+  `steps` (template index, one-based iteration, loop values, touched handles, defaults/warnings)
+  and final `added` handles. Failures carry `/commands/i/...` and the offending iteration values.
+  Mizan/MCP use `qiyas_execute` op `run` with the recipe as `command`; registry examples cover
+  desks/chairs, stairs, a labelled 6×4 column grid, seats along an existing arc, and room hatches.
+  The drawing kit includes a complete `generate` form and a filled grid example; take-off kit
+  space stays for quantity work. Full schema/examples remain in ordinary command discovery.
+  Desk/chair recipes define their blocks once; curved seating uses an existing arc fixture.
+  Stair treads and nosings meet both stringers; example labels use the annotation-size default.
+  Room hatch labels sit one metre beyond the filled boundary, clear of the geometry.
+  Destructive templates retain the existing approval count.
 - `Session::current` (layer, colour, linetype, lineweight; layer "0" and ByLayer by default)
   styles new entities. `Command::SetCurrent` is not an undo step; saved in the project file;
   layer and linetype as the drawing spells them, lineweights from AutoCAD's standard set; a
@@ -3762,8 +3791,8 @@ autonomous. Audit and plan: `docs/2026-10-29-*.md` (one note per part).
   check close quantity jobs only. Each named tidy sheet is For review; one final review line is
   enough. The brief's facts are never invented, and quantity sources/measurement rulings remain.
 - `qiyas-ai/src/drawing_kit.txt` puts compact complete command forms and filled examples in the
-  execute tool description, shared by Mizan and MCP. It is 8,027 UTF-8 bytes, guarded at 8,192:
-  all draw kinds, batches, text, dimensions, walls/openings, block definition/insertion/editing, move/copy/
+  execute tool description, shared by Mizan and MCP. It is 9,072 UTF-8 bytes, guarded at 9,216:
+  all draw kinds, batches, computed geometry (`generate`), text, dimensions, walls/openings, block definition/insertion/editing, move/copy/
   arrays, hatches, sheets/title blocks, properties and records. Examples are syntax, not shipped
   design content. Tests validate their registry schemas and watch for omitted command fields.
   Unknown-field diagnostics suggest `prop`, `target` or `field` where applicable, and union

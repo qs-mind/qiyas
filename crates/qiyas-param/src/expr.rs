@@ -98,6 +98,7 @@ pub enum Func {
     Ceil,
     Floor,
     Lookup,
+    Mod,
 }
 
 impl Func {
@@ -115,6 +116,7 @@ impl Func {
             "ceil" => Func::Ceil,
             "floor" => Func::Floor,
             "lookup" => Func::Lookup,
+            "mod" => Func::Mod,
             _ => return None,
         })
     }
@@ -123,6 +125,7 @@ impl Func {
         let expected = match self {
             Self::If | Self::Lookup if count != 3 => Some("three arguments"),
             Self::Min | Self::Max if count == 0 => Some("at least one argument"),
+            Self::Mod if count != 2 => Some("two arguments"),
             Self::Round if !(1..=2).contains(&count) => Some("one or two arguments"),
             Self::Sin
             | Self::Cos
@@ -277,9 +280,9 @@ impl Parser {
         parse: fn(&mut Self) -> Result<Expr, ExprError>,
     ) -> Result<Expr, ExprError> {
         if self.depth >= MAX_DEPTH {
-            return Err(ExprError::Syntax(
-                "The expression is nested too deeply".into(),
-            ));
+            return Err(ExprError::Syntax(format!(
+                "Expression depth limit {MAX_DEPTH} exceeded"
+            )));
         }
         self.depth += 1;
         let result = parse(self);
@@ -290,7 +293,9 @@ impl Parser {
     fn node(&mut self) -> Result<(), ExprError> {
         self.nodes += 1;
         if self.nodes > MAX_NODES {
-            return Err(ExprError::Syntax("The expression is too large".into()));
+            return Err(ExprError::Syntax(format!(
+                "Expression node limit {MAX_NODES} exceeded"
+            )));
         }
         Ok(())
     }
@@ -537,7 +542,9 @@ impl Expr {
     /// unary minus; comparisons bind more tightly than `not`, `and`, then `or`.
     pub fn parse(text: &str) -> Result<Expr, ExprError> {
         if text.len() > 65536 {
-            return Err(ExprError::Syntax("The expression is too large".into()));
+            return Err(ExprError::Syntax(
+                "Expression length limit 65536 bytes exceeded".into(),
+            ));
         }
         let mut p = Parser {
             chars: ascii_digits(text).chars().collect(),
@@ -550,9 +557,9 @@ impl Expr {
         let mut pending = vec![(&e, 0)];
         while let Some((node, depth)) = pending.pop() {
             if depth > MAX_DEPTH {
-                return Err(ExprError::Syntax(
-                    "The expression is nested too deeply".into(),
-                ));
+                return Err(ExprError::Syntax(format!(
+                    "Expression depth limit {MAX_DEPTH} exceeded"
+                )));
             }
             match node {
                 Self::Neg(e) | Self::Not(e) => pending.push((e, depth + 1)),
@@ -672,6 +679,7 @@ impl Expr {
             Func::Tan => x.to_radians().tan(),
             Func::Sqrt => x.sqrt(),
             Func::Abs => x.abs(),
+            Func::Mod => x.rem_euclid(args[1]),
             Func::Min => args.iter().copied().fold(x, f64::min),
             Func::Max => args.iter().copied().fold(x, f64::max),
             Func::Ceil => x.ceil(),
@@ -901,6 +909,16 @@ pub fn evaluate_each(exprs: &BTreeMap<String, String>) -> BTreeMap<String, Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modulo_is_shared_with_quantity_expressions() {
+        assert_eq!(
+            Expr::parse("mod(-1, 4)").unwrap().eval(&|_| None).unwrap(),
+            3.0
+        );
+        assert!(Expr::parse("mod(1)").is_err());
+        assert!(Expr::parse("mod(1, 0)").unwrap().eval(&|_| None).is_err());
+    }
 
     #[test]
     fn arabic_digits_and_names() {

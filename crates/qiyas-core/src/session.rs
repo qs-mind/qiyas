@@ -1928,6 +1928,9 @@ impl Session {
             return self.run_discrepancy_check(tolerance, source);
         }
 
+        if let Command::Generate(recipe) = cmd {
+            return self.generate(*recipe, source);
+        }
         if let Command::Batch {
             commands,
             layer,

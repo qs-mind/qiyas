@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 #[test]
 fn drawing_kit_is_upfront_under_budget_with_complete_valid_examples() {
     let kit = include_str!("drawing_kit.txt");
-    assert!(kit.len() <= 8192, "drawing kit is {} bytes", kit.len());
+    assert!(kit.len() <= 9216, "drawing kit is {} bytes", kit.len());
     let tools = surface::tools();
     assert!(tools
         .iter()
@@ -45,6 +45,7 @@ fn drawing_kit_is_upfront_under_budget_with_complete_valid_examples() {
         "draw.ellipse",
         "draw.hatch",
         "batch",
+        "generate",
         "text",
         "mtext",
         "dimension.linear",

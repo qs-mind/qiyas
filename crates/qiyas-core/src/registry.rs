@@ -201,6 +201,9 @@ pub fn canonicalize(value: &mut Value) {
             }
         }
     }
+    if value["type"] == "generate" {
+        return;
+    }
     if let Some(commands) = value.get_mut("commands").and_then(Value::as_array_mut) {
         for command in commands {
             canonicalize(command);

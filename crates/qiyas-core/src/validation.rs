@@ -179,6 +179,9 @@ impl Session {
     /// Stage knowledge in command order. The live drawing and its undo history are untouched;
     /// every kind shares the same document, including types created by schedule interpretation.
     fn validate_batch_knowledge(&self, input: &Value, report: &mut ValidationReport) {
+        if input["type"] == "generate" {
+            return;
+        }
         let Some(commands) = input.get("commands").and_then(Value::as_array) else {
             return;
         };

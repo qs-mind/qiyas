@@ -488,7 +488,7 @@ fn nearest_piece(pieces: &[Curve], p: [f64; 2]) -> usize {
 
 /// The entity's pieces in the order a walk from its start meets them, each with whether it runs
 /// backwards (a clockwise bulge is stored counter-clockwise, so from its far end).
-fn oriented_path(located: &Located, tol: f64) -> Vec<(Curve, bool)> {
+pub(crate) fn oriented_path(located: &Located, tol: f64) -> Vec<(Curve, bool)> {
     let shapes = snap_shapes(located.doc, located.entity, &located.xf, tol);
     let mut out = Vec::new();
     for shape in shapes {
@@ -508,7 +508,7 @@ fn end_of((c, reversed): &(Curve, bool)) -> [f64; 2] {
 }
 
 /// The point `d` along `path` from its start (its end when past it).
-fn point_at(path: &[(Curve, bool)], d: f64) -> [f64; 2] {
+pub(crate) fn point_at(path: &[(Curve, bool)], d: f64) -> [f64; 2] {
     let mut walked = 0.0;
     for (i, (c, reversed)) in path.iter().enumerate() {
         let len = c.length();

@@ -33,6 +33,7 @@ mod error;
 mod field;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
+pub mod generate;
 mod groups;
 mod handle_refs;
 mod image;
