@@ -31,7 +31,8 @@ export function chatText(text: string): string {
 
 /** Isolate Latin words, dimensions and numbers without changing their characters. */
 export function isolateRuns(text: string): ReactNode {
-  return text.split(/([A-Za-z0-9][A-Za-z0-9_.:/\\×+−%²³-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.:/\\×+−%²³-]*)*)/g)
+  // Numeric separators and spaced operators join only digits; retain Latin/path runs.
+  return text.split(/((?:[+\-−±(](?=\d)|[A-Za-z0-9])(?:(?<=\d)[,.](?=\d)|(?<=\d) ?[×x*/=+−-] ?(?=\d)|[A-Za-z0-9_.:/\\×+−%²³-]|[ \t]+(?:[+\-−±(](?=\d)|[A-Za-z0-9]))*)/g)
     .map((part, i) => i % 2 ? <bdi key={i} dir="ltr">{part}</bdi> : <Fragment key={i}>{part}</Fragment>);
 }
 

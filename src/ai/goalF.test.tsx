@@ -42,7 +42,7 @@ test("Arabic loose lists and bubbles keep RTL after a Latin layer name, in an En
   expect(md.getAttribute("dir")).toBe("rtl");
   expect(md.getAttribute("lang")).toBe("ar");
   expect(md.querySelector("ul")?.hasAttribute("dir")).toBe(false);
-  expect(md.querySelector("p")?.hasAttribute("dir")).toBe(false);
+  expect(md.querySelector("p")?.getAttribute("dir")).toBe("rtl");
   expect(md.querySelector("li")?.getAttribute("dir")).toBe("rtl");
   expect(md.querySelector("bdi")?.getAttribute("dir")).toBe("ltr");
   expect(contentLanguage("A-WALL كام متر؟")).toBe("ar");

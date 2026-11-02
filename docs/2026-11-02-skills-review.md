@@ -120,6 +120,9 @@ them as facts Mizan asks for.
 - `src/shell/LayerDialogs.test.tsx` "layer states: save one, restore, rename and delete the
   others": `onRestore` not called once in a full `pnpm test` under load; 3 of 3 alone, 1182 of
   1182 on the rerun. Base UI's delayed focus moves likely need a longer wait.
+- `src/shell/BlockPalette.test.tsx` "the tool palette runs its buttons and keeps what is added or
+  removed": failed once in a full `pnpm test` while Task 8 landed (which it doesn't import);
+  5 of 5 alone with and without the change, 1226 of 1226 on the rerun.
 
 ## Not run
 
