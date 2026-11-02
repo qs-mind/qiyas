@@ -1944,6 +1944,7 @@ impl Agent {
         let mut phase = self.phase_state.clone();
         let churn = self.churn.clone();
         let host = self.host.clone();
+        let user_text = self.turn_text.clone();
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let (reader_tx, mut reader_rx) = tokio::sync::mpsc::unbounded_channel();
         let second_reading = self.second_reading;
@@ -1952,6 +1953,18 @@ impl Agent {
         let mut pending = tokio::task::spawn_blocking(move || {
             if let Some(host) = host.as_deref() {
                 crate::window::sync_selection(host, &session);
+                if op == "document" && matches!(tool.as_str(), surface::READ | surface::CAPTURE) {
+                    let field = if tool == surface::CAPTURE {
+                        "source"
+                    } else {
+                        "op"
+                    };
+                    host.before_tool_with_user(
+                        &tool,
+                        &serde_json::json!({field:op,"args":args}),
+                        Some(&user_text),
+                    )?;
+                }
             }
             let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
             check_turn(guard.as_ref(), &cancel, epoch)?;

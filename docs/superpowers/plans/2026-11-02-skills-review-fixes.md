@@ -97,7 +97,7 @@ Run: `nice cargo test -p qiyas-core --lib embed`
 ### Task 4: Exact match for "the user named this path" (S8)
 
 **Files:**
-- Modify: `crates/qiyas-desktop/src/host.rs:189`
+- Modify: `crates/qiyas-desktop/src/host.rs:189`, and the same `user_text.contains(named)` test in `crates/qiyas-desktop/src/drawing_host.rs` `before_tool_with_user` (added by Task 3 for PDF reads)
 - Test: `host.rs` tests
 
 - [ ] **Step 1: Failing test** — message `please open /home/k/plans/tower-a.dwg`; the model asks for `/tower-a.dwg`: not named (today: named, since `contains`).

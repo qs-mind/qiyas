@@ -42,6 +42,15 @@ pub trait DrawingHost: Send + Sync {
     fn before_tool(&self, _name: &str, _input: &Value) -> Result<(), String> {
         Ok(())
     }
+    /// Check a call with the original user message, when the caller has one.
+    fn before_tool_with_user(
+        &self,
+        name: &str,
+        input: &Value,
+        _user_text: Option<&str>,
+    ) -> Result<(), String> {
+        self.before_tool(name, input)
+    }
     /// Record a finished tool call: whether it succeeded and how long Qiyas took.
     fn after_tool(&self, _name: &str, _input: &Value, _ok: bool, _took: std::time::Duration) {}
     /// Hosts check expected_revision again while holding the lock which applies the change.

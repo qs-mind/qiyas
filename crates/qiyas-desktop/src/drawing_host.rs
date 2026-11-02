@@ -124,6 +124,78 @@ impl<R: Runtime> AppHost<R> {
             ))
             .blocking_show()
     }
+
+    fn confirm_read(&self, path: &Path) -> bool {
+        #[cfg(test)]
+        if let Some(confirmation) = self.app.try_state::<tests::ReadConfirmation>() {
+            confirmation.paths.lock().unwrap().push(path.to_path_buf());
+            return confirmation
+                .answer
+                .load(std::sync::atomic::Ordering::Relaxed);
+        }
+        let arabic = self
+            .state()
+            .settings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .language
+            == "ar";
+        let shown = path.display();
+        let (text, read, cancel, title) = if arabic {
+            (
+                format!("ميزان يريد قراءة ملف PDF هذا:\n\u{2068}{shown}\u{2069}"),
+                "قراءة",
+                "إلغاء",
+                "قياس",
+            )
+        } else {
+            (
+                format!("Mizan wants to read this PDF:\n{shown}"),
+                "Read",
+                "Cancel",
+                "Qiyas",
+            )
+        };
+        self.app
+            .dialog()
+            .message(text)
+            .title(title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                read.into(),
+                cancel.into(),
+            ))
+            .blocking_show()
+    }
+
+    fn document_allowed(&self, path: &Path) -> bool {
+        let state = self.state();
+        let inside = |folder: &Path| {
+            folder
+                .canonicalize()
+                .is_ok_and(|folder| path.starts_with(folder))
+        };
+        let beside = |drawing: &Path| drawing.parent().is_some_and(inside);
+        if tabs::snapshot(&state)
+            .tabs
+            .iter()
+            .any(|tab| beside(Path::new(&tab.path)))
+        {
+            return true;
+        }
+        let project = crate::state::lock(&state.projects).active.clone();
+        if let Some(project) = project {
+            if let Ok(set) = qiyas_core::projects::load(&project) {
+                if qiyas_core::sheet_set_entries(&project, &set)
+                    .iter()
+                    .any(|entry| beside(Path::new(&entry.full)))
+                {
+                    return true;
+                }
+            }
+        }
+        qiyas_core::data_home::qiyas_dir().is_ok_and(|home| inside(&home.join("attachments")))
+    }
 }
 
 /// What the model needs of a drawing it just got on screen: the system prompt's summary is of
@@ -149,6 +221,62 @@ fn summary(s: &Session) -> Value {
 }
 
 impl<R: Runtime> DrawingHost for AppHost<R> {
+    fn before_tool(&self, name: &str, input: &Value) -> Result<(), String> {
+        self.before_tool_with_user(name, input, None)
+    }
+
+    fn before_tool_with_user(
+        &self,
+        name: &str,
+        input: &Value,
+        user_text: Option<&str>,
+    ) -> Result<(), String> {
+        if !((name == qiyas_ai::surface::READ && input["op"] == "document")
+            || (name == qiyas_ai::surface::CAPTURE && input["source"] == "document"))
+        {
+            return Ok(());
+        }
+        let qiyas_ai::surface::Route::Session { args, .. } = qiyas_ai::surface::route(name, input)?
+        else {
+            return Ok(());
+        };
+        let Some(named) = args["path"].as_str() else {
+            return Ok(());
+        };
+        let path = Path::new(named);
+        if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+        {
+            return Ok(());
+        }
+        let mut path = path.to_path_buf();
+        if path.is_relative() {
+            let state = self.state();
+            let guard = crate::state::lock(&state.session);
+            if let Some(session) = guard.as_ref() {
+                path = session
+                    .drawing
+                    .path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(path);
+            }
+        }
+        // Leave missing files and other filesystem errors to the document reader.
+        let Ok(path) = path.canonicalize() else {
+            return Ok(());
+        };
+        if user_text.is_some_and(|text| text.contains(named))
+            || self.document_allowed(&path)
+            || self.confirm_read(&path)
+        {
+            Ok(())
+        } else {
+            Err(format!("The user did not allow reading {}", path.display()))
+        }
+    }
+
     fn run_file(
         &self,
         name: &str,
@@ -420,6 +548,328 @@ mod tests {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .generation()
+    }
+
+    #[derive(Default)]
+    pub(super) struct ReadConfirmation {
+        pub answer: std::sync::atomic::AtomicBool,
+        pub paths: std::sync::Mutex<Vec<std::path::PathBuf>>,
+    }
+
+    fn document_host(app: &App<MockRuntime>, folder: &std::path::Path) -> AppHost<MockRuntime> {
+        std::fs::create_dir_all(folder).unwrap();
+        tabs::add(
+            &app.state::<AppState>(),
+            qiyas_core::Session::new_blank(&folder.join("tower-podium.dxf"), 6),
+        )
+        .unwrap();
+        app.manage(ReadConfirmation::default());
+        AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
+        }
+    }
+
+    fn document_calls(path: &std::path::Path) -> [(&'static str, Value); 2] {
+        [
+            ("qiyas_read", json!({"op":"document","args":{"path":path}})),
+            (
+                "qiyas_capture",
+                json!({"source":"document","args":{"path":path,"page":1}}),
+            ),
+        ]
+    }
+
+    fn assert_document_refused(host: &AppHost<MockRuntime>, path: &std::path::Path) {
+        for (name, input) in document_calls(path) {
+            let mut reading_reached = false;
+            let result = host.before_tool(name, &input).map(|()| {
+                reading_reached = true;
+            });
+            assert!(!reading_reached, "the PDF read must not be reached");
+            assert!(result
+                .unwrap_err()
+                .starts_with("The user did not allow reading "));
+        }
+        let confirmation = host.app.state::<ReadConfirmation>();
+        assert!(!confirmation
+            .answer
+            .load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(confirmation.paths.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn document_outside_open_drawings_is_refused_before_reading() {
+        let (dir, app) = app();
+        let host = document_host(&app, &dir.path().join("tower"));
+        let pdf = dir.path().join("private.pdf");
+        std::fs::write(&pdf, b"PDF contents must not be read").unwrap();
+        assert_document_refused(&host, &pdf);
+        assert_eq!(
+            *app.state::<ReadConfirmation>().paths.lock().unwrap(),
+            vec![pdf.canonicalize().unwrap(); 2]
+        );
+    }
+
+    #[test]
+    fn document_beside_open_drawing_is_allowed_without_asking() {
+        let (dir, app) = app();
+        let folder = dir.path().join("tower");
+        let host = document_host(&app, &folder);
+        std::fs::write(folder.join("podium-spec.pdf"), b"PDF").unwrap();
+        for path in [folder.join("podium-spec.pdf"), "podium-spec.pdf".into()] {
+            for (name, input) in document_calls(&path) {
+                host.before_tool(name, &input).unwrap();
+            }
+        }
+        assert!(app
+            .state::<ReadConfirmation>()
+            .paths
+            .lock()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn document_beside_another_tab_or_project_drawing_is_allowed() {
+        let (dir, app) = app();
+        let host = document_host(&app, &dir.path().join("tower"));
+        let bound = AppHost {
+            binding: Some(host.state()),
+            ..host
+        };
+        let other = dir.path().join("transit-hub");
+        std::fs::create_dir_all(&other).unwrap();
+        tabs::add(
+            &app.state::<AppState>(),
+            qiyas_core::Session::new_blank(&other.join("concourse.dxf"), 6),
+        )
+        .unwrap();
+        let project = dir.path().join("megaproject.qss");
+        std::fs::write(&project, serde_json::to_vec(&json!({
+            "name":"Tower and transit hub", "drawings":[{"path":"project-tower/core.dxf"}], "project":{}
+        })).unwrap()).unwrap();
+        app.state::<AppState>().projects.lock().unwrap().active = Some(project);
+        let project_folder = dir.path().join("project-tower");
+        std::fs::create_dir_all(&project_folder).unwrap();
+        for folder in [other, project_folder] {
+            let pdf = folder.join("spec.pdf");
+            std::fs::write(&pdf, b"PDF").unwrap();
+            for (name, input) in document_calls(&pdf) {
+                bound.before_tool(name, &input).unwrap();
+            }
+        }
+        assert!(app
+            .state::<ReadConfirmation>()
+            .paths
+            .lock()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn document_attachment_is_allowed_without_a_drawing() {
+        let (_dir, app) = app();
+        app.manage(ReadConfirmation::default());
+        let host = AppHost {
+            app: app.handle().clone(),
+            expected_revision: None,
+            binding: None,
+        };
+        let attachments = qiyas_core::data_home::qiyas_dir()
+            .unwrap()
+            .join("attachments");
+        std::fs::create_dir_all(&attachments).unwrap();
+        let folder = tempfile::tempdir_in(attachments).unwrap();
+        let pdf = folder.path().join("podium-spec.pdf");
+        std::fs::write(&pdf, b"PDF").unwrap();
+        for (name, input) in document_calls(&pdf) {
+            host.before_tool(name, &input).unwrap();
+        }
+        assert!(app
+            .state::<ReadConfirmation>()
+            .paths
+            .lock()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn document_symlink_beside_drawing_cannot_escape_its_folder() {
+        let (dir, app) = app();
+        let folder = dir.path().join("tower");
+        let host = document_host(&app, &folder);
+        let outside = dir.path().join("private.pdf");
+        std::fs::write(&outside, b"PDF contents must not be read").unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("podium-spec.pdf")).unwrap();
+        assert_document_refused(&host, std::path::Path::new("podium-spec.pdf"));
+        assert_eq!(
+            *app.state::<ReadConfirmation>().paths.lock().unwrap(),
+            vec![outside.canonicalize().unwrap(); 2]
+        );
+    }
+
+    #[test]
+    fn document_parent_components_cannot_escape_drawing_folder() {
+        let (dir, app) = app();
+        let host = document_host(&app, &dir.path().join("tower"));
+        let outside = dir.path().join("private.pdf");
+        std::fs::write(&outside, b"PDF contents must not be read").unwrap();
+        assert_document_refused(&host, std::path::Path::new("../private.pdf"));
+        assert_eq!(
+            *app.state::<ReadConfirmation>().paths.lock().unwrap(),
+            vec![outside.canonicalize().unwrap(); 2]
+        );
+    }
+
+    struct DocumentProvider {
+        call: std::sync::Mutex<Option<qiyas_ai::ContentBlock>>,
+    }
+
+    impl qiyas_ai::Provider for DocumentProvider {
+        fn image_input(&self, _: &str) -> Option<bool> {
+            Some(true)
+        }
+
+        fn stream_turn<'a>(
+            &'a self,
+            _: qiyas_ai::TurnRequest,
+            _: qiyas_ai::provider::Sink<'a>,
+        ) -> qiyas_ai::provider::BoxFuture<'a, Result<qiyas_ai::TurnResult, qiyas_ai::AiError>>
+        {
+            Box::pin(async move {
+                let call = self.call.lock().unwrap().take();
+                Ok(qiyas_ai::TurnResult {
+                    stop_reason: if call.is_some() {
+                        qiyas_ai::StopReason::ToolUse
+                    } else {
+                        qiyas_ai::StopReason::EndTurn
+                    },
+                    content: vec![call.unwrap_or(qiyas_ai::ContentBlock::Text {
+                        text: "Finished.".into(),
+                    })],
+                    usage: Default::default(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn document_mizan_checks_permission_before_reading_or_capture() {
+        for index in 0..2 {
+            let (dir, app) = app();
+            let host = document_host(&app, &dir.path().join("tower"));
+            let pdf = dir.path().join("private.pdf");
+            std::fs::write(&pdf, b"PDF contents must not be read").unwrap();
+            let state = host.state();
+            let (name, input) = document_calls(&pdf)[index].clone();
+            let provider = DocumentProvider {
+                call: std::sync::Mutex::new(Some(qiyas_ai::ContentBlock::ToolUse {
+                    id: "document".into(),
+                    name: name.into(),
+                    input,
+                })),
+            };
+            let mut agent = qiyas_ai::Agent::new(
+                Box::new(provider),
+                state.session.clone(),
+                qiyas_ai::AgentSettings::default(),
+            )
+            .with_host(std::sync::Arc::new(host));
+            let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+            let (result, ()) = tokio::join!(
+                agent.run_turn(
+                    "Inspect the podium specification".into(),
+                    tx,
+                    tokio_util::sync::CancellationToken::new()
+                ),
+                async { while rx.recv().await.is_some() {} }
+            );
+            result.unwrap();
+            let history = serde_json::to_string(agent.history()).unwrap();
+            assert!(
+                history.contains("The user did not allow reading"),
+                "{history}"
+            );
+            assert_eq!(
+                app.state::<ReadConfirmation>().paths.lock().unwrap().len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn document_user_named_paths_and_confirmation_allow_reading() {
+        let (dir, app) = app();
+        let host = document_host(&app, &dir.path().join("tower"));
+        let pdf = dir.path().join("private.pdf");
+        std::fs::write(&pdf, b"PDF").unwrap();
+        for (name, input) in document_calls(&pdf) {
+            host.before_tool_with_user(name, &input, Some(&format!("Read {}", pdf.display())))
+                .unwrap();
+        }
+        assert!(app
+            .state::<ReadConfirmation>()
+            .paths
+            .lock()
+            .unwrap()
+            .is_empty());
+        assert_document_refused(&host, &pdf);
+        let confirmation = app.state::<ReadConfirmation>();
+        confirmation.paths.lock().unwrap().clear();
+        confirmation
+            .answer
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        for (name, input) in document_calls(&pdf) {
+            host.before_tool(name, &input).unwrap();
+        }
+        assert_eq!(
+            app.state::<ReadConfirmation>().paths.lock().unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn document_missing_and_non_pdf_paths_keep_reader_errors() {
+        let (dir, app) = app();
+        let host = document_host(&app, &dir.path().join("tower"));
+        let text = dir.path().join("private.txt");
+        std::fs::write(&text, b"text").unwrap();
+        for path in [text, dir.path().join("missing.pdf")] {
+            for (name, input) in document_calls(&path) {
+                host.before_tool(name, &input).unwrap();
+                let args = &input["args"];
+                let expected = qiyas_ai::surface::run_without_drawing(name, "document", args, None)
+                    .unwrap()
+                    .unwrap_err()
+                    .to_string();
+                let actual = with_session(&host.state(), |s| {
+                    Ok(qiyas_ai::surface::run_session(
+                        s,
+                        name,
+                        "document",
+                        args,
+                        qiyas_core::Source::Ai,
+                    ))
+                })
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+                assert_eq!(actual, expected);
+            }
+        }
+        host.before_tool("qiyas_read", &json!({"op":"state"}))
+            .unwrap();
+        host.before_tool("qiyas_capture", &json!({"source":"picture"}))
+            .unwrap();
+        assert!(app
+            .state::<ReadConfirmation>()
+            .paths
+            .lock()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

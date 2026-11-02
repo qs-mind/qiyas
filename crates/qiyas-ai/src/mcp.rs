@@ -598,7 +598,8 @@ impl Qiyas {
             ));
         }
         if let Some(host) = self.host.as_deref() {
-            host.before_tool(name, input).map_err(ToolError::Failed)?;
+            host.before_tool_with_user(name, input, self.user_text.as_deref())
+                .map_err(ToolError::Failed)?;
         }
         let op = input[if name == surface::CAPTURE {
             "source"
