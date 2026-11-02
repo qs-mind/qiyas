@@ -1331,13 +1331,14 @@ async fn supervise<R: Runtime>(
     if permit.is_none() {
         ai_run(&state).finish(turn.agent, generation);
         if ai_run(&state).generation() == generation {
-            let event = crate::state::lock(&state.view).agent_event(
-                state.id,
-                AgentEvent::Stopped {
-                    reason: "cancelled".into(),
-                },
-            );
-            let _ = app.emit("workspace:event", event);
+            let event = AgentEvent::Stopped {
+                reason: "cancelled".into(),
+            };
+            let window_event = crate::state::lock(&state.view).agent_event(state.id, event.clone());
+            let _ = app.emit("workspace:event", window_event);
+            let mut payload = serde_json::to_value(&event).expect("agent event serializes");
+            payload["workspace"] = serde_json::json!(state.id);
+            let _ = app.emit("ai:event", payload);
             workspace_finished(&app, &state, None);
         }
         return;
@@ -1979,6 +1980,10 @@ mod tests {
     impl Ipc {
         /// The app on the mock runtime with the canned AI provider and the sample drawing open.
         fn open() -> Ipc {
+            Self::open_with_memory(None)
+        }
+
+        fn open_with_memory(available_memory: Option<u64>) -> Ipc {
             std::env::set_var("QIYAS_AI_MOCK", "1");
             let dir = tempfile::tempdir().unwrap();
             let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
@@ -2065,7 +2070,9 @@ mod tests {
                 ])
                 .build(mock_context(noop_assets()))
                 .unwrap();
-            app.manage(AppState::new(dir.path().join("config")));
+            let mut state = AppState::new(dir.path().join("config"));
+            state.available_memory = available_memory;
+            app.manage(state);
             let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
                 .build()
                 .unwrap();
@@ -2874,6 +2881,38 @@ mod tests {
             );
             let status = ipc.call("ai_status", json!({})).unwrap();
             assert_eq!(status["busy"], false);
+        });
+    }
+
+    #[test]
+    fn a_queued_cancelled_turn_says_so_and_ends() {
+        ai_test("a_queued_cancelled_turn_says_so_and_ends", || {
+            let ipc = Ipc::open_with_memory(Some(0));
+            let state = ipc._app.state::<AppState>();
+            crate::state::lock(&state.settings).max_concurrent_turns = 2;
+            assert_eq!(state.turn_limit(), 1);
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let _permit = tauri::async_runtime::block_on(state.turn_queue.acquire(
+                false,
+                &cancel,
+                || state.turn_limit(),
+            ))
+            .unwrap();
+            ipc.call("ai_send", json!({ "text": "Measure the wall" }))
+                .unwrap();
+            assert_eq!(
+                ipc.call("workspace_attach", json!({})).unwrap()["status"],
+                "queued"
+            );
+            assert_eq!(ipc.call("ai_status", json!({})).unwrap()["busy"], true);
+            ipc.call("ai_cancel", json!({})).unwrap();
+            let (events, done) = ipc.turn();
+            assert_eq!(done, json!({ "error": null }));
+            assert_eq!(
+                events.last(),
+                Some(&json!({ "type": "stopped", "reason": "cancelled" }))
+            );
+            assert_eq!(ipc.call("ai_status", json!({})).unwrap()["busy"], false);
         });
     }
 

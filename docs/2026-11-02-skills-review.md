@@ -114,7 +114,9 @@ them as facts Mizan asks for.
   `ai_send` then `ai_cancel` at once; the last event was sometimes not `stopped/cancelled`
   (`None`). It failed in 2 of 10 runs of the desktop suite under memory pressure, passed 5 of 5
   without the change being landed and 6 of 6 after it; the race is between the cancel and the
-  turn's end, not in the drawing code.
+  turn's end, not in the drawing code. Fixed the same day: a turn cancelled before it took
+  its queue slot sent `stopped` only as `workspace:event`, never as `ai:event`; it now sends both
+  (`a_queued_cancelled_turn_says_so_and_ends` holds the queue and fails without the fix).
 - `src/shell/LayerDialogs.test.tsx` "layer states: save one, restore, rename and delete the
   others": `onRestore` not called once in a full `pnpm test` under load; 3 of 3 alone, 1182 of
   1182 on the rerun. Base UI's delayed focus moves likely need a longer wait.
