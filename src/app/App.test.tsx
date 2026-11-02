@@ -1503,6 +1503,11 @@ test("Connect an AI app opens from the top bar and from the /connect command (no
   fireEvent.change(box, { target: { value: "/connect" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await until(() => expect(screen.getByRole("heading", { name: en["connect.title"] })).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: en["connect.more"] }));
+  await until(() => {
+    expect(screen.queryByRole("heading", { name: en["connect.title"] })).toBeNull();
+    expect(screen.getByRole("heading", { name: en.settings })).toBeTruthy();
+  });
 });
 
 /** A key pressed in the window, as the keyboard handler hears it (the physical key, as it matches on any layout). */

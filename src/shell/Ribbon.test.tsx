@@ -2,14 +2,17 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
+import en from "../i18n/en.json";
+import { DEFAULT_RIBBON, QUICK_ACCESS, isRibbonCommand } from "./ribbonLayout";
 import { Ribbon } from "./Ribbon";
+import { ribbonProps } from "./ribbonTestProps";
 import css from "./theme.css?raw";
 
 // Tool-layout tests exercise the user's expanded choice.
 beforeEach(() => localStorage.setItem("qiyas.ribbon.collapsed", "0"));
 afterEach(() => { cleanup(); localStorage.removeItem("qiyas.ribbon.collapsed"); });
 
-const props = { active: "select" as const, onTool() {}, onOpen() {}, onZoomExtents() {} };
+const props = ribbonProps();
 
 /** Shows a tab: a click on it, or, for the tabs under "More", the menu and its item. */
 function go(name: string) {
@@ -25,15 +28,15 @@ function go(name: string) {
 test("the View tab says whether the drawing's Arabic text is reversed", () => {
   const onArabicReversed = vi.fn();
   const { rerender } = render(
-    <Ribbon {...props} arabicReversed={false} onArabicReversed={onArabicReversed} />,
+    <Ribbon {...ribbonProps({ arabicReversed: onArabicReversed }, undefined, { arabicReversed: false })} />,
   );
   go("View");
   const box = screen.getByRole("button", { name: "Arabic text is reversed" }) as HTMLButtonElement;
   expect(box.getAttribute("aria-pressed")).toBe("false");
   fireEvent.click(box);
-  expect(onArabicReversed).toHaveBeenCalledWith(true);
+  expect(onArabicReversed).toHaveBeenCalledWith("arabicReversed");
 
-  rerender(<Ribbon {...props} arabicReversed />);
+  rerender(<Ribbon {...ribbonProps({  }, undefined, { arabicReversed: true })} />);
   const off = screen.getByRole("button", { name: "Arabic text is reversed" }) as HTMLButtonElement;
   expect(off.getAttribute("aria-pressed")).toBe("true");
   // No drawing open: nothing to set.
@@ -43,7 +46,7 @@ test("the View tab says whether the drawing's Arabic text is reversed", () => {
 test("the Measure tab has the inquiry tools and Extract data", () => {
   const onTool = vi.fn();
   const onExtract = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} onExtract={onExtract} />);
+  render(<Ribbon {...ribbonProps({ extract: onExtract }, onTool, {  })} />);
   go("Measure");
   for (const [name, tool] of [
     ["Geometry", "geometry"],
@@ -61,16 +64,14 @@ test("the Measure tab has the inquiry tools and Extract data", () => {
 test("Open has the recent drawings beside it, and View has the named views", async () => {
   const loadViews = vi.fn(async () => []);
   render(
-    <Ribbon
-      {...props}
+    <Ribbon {...props}
       loadRecents={async () => []}
       onOpenRecent={() => {}}
       onClearRecents={async () => {}}
       loadViews={loadViews}
       onGoToView={() => {}}
       onSaveView={async () => {}}
-      onDeleteView={async () => {}}
-    />,
+      onDeleteView={async () => {}} />,
   );
   expect(screen.getByRole("button", { name: "Open…" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Recent drawings" })).toBeTruthy();
@@ -115,7 +116,7 @@ test("the ribbon tabs have a roving tab stop; the arrows move between them, roun
 
 test("the Home tab has the Draw group", () => {
   const onTool = vi.fn();
-  const { rerender } = render(<Ribbon {...props} onTool={onTool} />);
+  const { rerender } = render(<Ribbon {...ribbonProps({  }, onTool, {  })} />);
   go("Draw");
   for (const [name, tool] of [
     ["Line", "line"],
@@ -134,7 +135,7 @@ test("the Home tab has the Draw group", () => {
     expect(onTool).toHaveBeenLastCalledWith(tool);
   }
   // The tool on goes back to Select when pressed again.
-  rerender(<Ribbon {...props} active="line" onTool={onTool} />);
+  rerender(<Ribbon {...ribbonProps({  }, onTool, { ["line"]: true, select: false })} />);
   const line = screen.getByRole("button", { name: "Line" });
   expect(line.getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(line);
@@ -143,7 +144,7 @@ test("the Home tab has the Draw group", () => {
 
 test("the Home tab has the Modify group", () => {
   const onTool = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} />);
+  render(<Ribbon {...ribbonProps({  }, onTool, {  })} />);
   go("Draw");
   const group = screen.getByRole("group", { name: "Modify" });
   expect(group).toBeTruthy();
@@ -167,7 +168,7 @@ test("the Home tab has the Modify group", () => {
 test("the Home tab has the Annotation group with Find and replace", () => {
   const onTool = vi.fn();
   const onFind = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} onFind={onFind} />);
+  render(<Ribbon {...ribbonProps({ find: onFind }, onTool, {  })} />);
   go("Draw");
   const group = screen.getByRole("group", { name: "Annotation" });
   for (const [name, tool] of [
@@ -185,7 +186,7 @@ test("the Home tab has the Annotation group with Find and replace", () => {
 test("the Annotate tab has the Dimensions group, the dimension style and the Leaders group", () => {
   const onTool = vi.fn();
   const onDimStyle = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} onDimStyle={onDimStyle} />);
+  render(<Ribbon {...ribbonProps({ dimStyle: onDimStyle }, onTool, {  })} />);
   go("Annotate");
   const dims = screen.getByRole("group", { name: "Dimensions" });
   for (const [name, tool] of [
@@ -223,7 +224,7 @@ test("the Annotate tab has the Dimensions group, the dimension style and the Lea
 test("the Annotate tab has the Tables group: table, edit, field and update fields", () => {
   const onTool = vi.fn();
   const onUpdateFields = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} onUpdateFields={onUpdateFields} />);
+  render(<Ribbon {...ribbonProps({ updateFields: onUpdateFields }, onTool, {  })} />);
   go("Annotate");
   const group = screen.getByRole("group", { name: "Tables" });
   for (const [name, tool] of [
@@ -241,13 +242,13 @@ test("the Annotate tab has the Tables group: table, edit, field and update field
 test("the Insert tab has the Block group", () => {
   const onTool = vi.fn();
   const handlers = {
-    onInsertBlock: vi.fn(),
-    onWriteBlock: vi.fn(),
-    onAttributeManager: vi.fn(),
-    onDesignCenter: vi.fn(),
-    onToolPalettes: vi.fn(),
+    blockPalette: vi.fn(),
+    writeBlock: vi.fn(),
+    attributeManager: vi.fn(),
+    designCenter: vi.fn(),
+    toolPalettes: vi.fn(),
   };
-  render(<Ribbon {...props} onTool={onTool} {...handlers} />);
+  render(<Ribbon {...ribbonProps({ ...handlers }, onTool, {  })} />);
   go("Insert");
   const group = screen.getByRole("group", { name: "Block" });
   for (const [name, tool] of [
@@ -260,11 +261,11 @@ test("the Insert tab has the Block group", () => {
     expect(onTool).toHaveBeenLastCalledWith(tool);
   }
   for (const [name, handler] of [
-    ["Insert…", handlers.onInsertBlock],
-    ["Write block…", handlers.onWriteBlock],
-    ["Attribute manager", handlers.onAttributeManager],
-    ["Design Center", handlers.onDesignCenter],
-    ["Tool palette", handlers.onToolPalettes],
+    ["Insert…", handlers.blockPalette],
+    ["Write block…", handlers.writeBlock],
+    ["Attribute manager", handlers.attributeManager],
+    ["Design Center", handlers.designCenter],
+    ["Tool palette", handlers.toolPalettes],
   ] as const) {
     fireEvent.click(within(group).getByRole("button", { name }));
     expect(handler).toHaveBeenCalled();
@@ -277,14 +278,7 @@ test("Home has a Layers group: layer states, the translator, groups, match prope
   const onTranslateLayers = vi.fn();
   const onGroupSelect = vi.fn();
   render(
-    <Ribbon
-      {...props}
-      onTool={onTool}
-      onLayerStates={onLayerStates}
-      onTranslateLayers={onTranslateLayers}
-      groupSelect
-      onGroupSelect={onGroupSelect}
-    />,
+    <Ribbon {...ribbonProps({ layerStates: onLayerStates, translateLayers: onTranslateLayers, groupSelect: onGroupSelect }, onTool, { groupSelect: true })} />,
   );
   go("Draw");
   const layers = within(screen.getByRole("group", { name: "Layers" }));
@@ -305,13 +299,13 @@ test("Home has a Layers group: layer states, the translator, groups, match prope
   const box = layers.getByRole("button", { name: "Group selection" });
   expect(box.getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(box);
-  expect(onGroupSelect).toHaveBeenCalledWith(false);
+  expect(onGroupSelect).toHaveBeenCalledWith("groupSelect");
 });
 
 test("the Home tab has the Clipboard group, and Recover is on Manage beside Audit and Purge", () => {
   const onTool = vi.fn();
   const onRecover = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} onRecover={onRecover} />);
+  render(<Ribbon {...ribbonProps({ recover: onRecover }, onTool, {  })} />);
   go("Draw");
   const group = screen.getByRole("group", { name: "Clipboard" });
   for (const [name, tool] of [
@@ -341,7 +335,7 @@ test("the View tab has the Viewports group: MVIEW, two views, the UCS and sheet 
   const onUcsWorld = vi.fn();
   const onSheetSet = vi.fn();
   const { rerender } = render(
-    <Ribbon {...props} onTool={onTool} onSplit={onSplit} onUcsWorld={onUcsWorld} onSheetSet={onSheetSet} />,
+    <Ribbon {...ribbonProps({ split: onSplit, ucsWorld: onUcsWorld, sheetSet: onSheetSet }, onTool, {  })} />,
   );
   go("View");
   const group = screen.getByRole("group", { name: "Viewports" });
@@ -354,30 +348,30 @@ test("the View tab has the Viewports group: MVIEW, two views, the UCS and sheet 
   fireEvent.click(within(group).getByRole("button", { name: "World UCS" }));
   expect(onUcsWorld).toHaveBeenCalled();
   fireEvent.click(within(group).getByRole("button", { name: "Two viewports" }));
-  expect(onSplit).toHaveBeenCalledWith(true);
+  expect(onSplit).toHaveBeenCalledWith("split");
   fireEvent.click(within(group).getByRole("button", { name: "Sheet set…" }));
   expect(onSheetSet).toHaveBeenCalled();
-  rerender(<Ribbon {...props} split onSplit={onSplit} />);
+  rerender(<Ribbon {...ribbonProps({ split: onSplit }, undefined, { split: true })} />);
   fireEvent.click(screen.getByRole("button", { name: "One viewport" }));
-  expect(onSplit).toHaveBeenLastCalledWith(false);
+  expect(onSplit).toHaveBeenLastCalledWith("split");
 });
 
 test("the Manage tab has Audit, Purge, Options, Customize and Aliases", () => {
   const handlers = {
-    onAudit: vi.fn(),
-    onPurge: vi.fn(),
-    onOptions: vi.fn(),
-    onCustomize: vi.fn(),
-    onAliases: vi.fn(),
+    audit: vi.fn(),
+    purge: vi.fn(),
+    options: vi.fn(),
+    customize: vi.fn(),
+    aliases: vi.fn(),
   };
-  render(<Ribbon {...props} {...handlers} />);
+  render(<Ribbon {...ribbonProps({ ...handlers }, undefined, {  })} />);
   go("Manage");
   for (const [name, handler] of [
-    ["Audit…", handlers.onAudit],
-    ["Purge…", handlers.onPurge],
-    ["Options…", handlers.onOptions],
-    ["Customize…", handlers.onCustomize],
-    ["Aliases…", handlers.onAliases],
+    ["Audit…", handlers.audit],
+    ["Purge…", handlers.purge],
+    ["Options…", handlers.options],
+    ["Customize…", handlers.customize],
+    ["Aliases…", handlers.aliases],
   ] as const) {
     fireEvent.click(screen.getByRole("button", { name }));
     expect(handler).toHaveBeenCalled();
@@ -388,10 +382,7 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
   const onTool = vi.fn();
   const onCompare = vi.fn();
   render(
-    <Ribbon
-      {...props}
-      onTool={onTool}
-      onCompare={onCompare}
+    <Ribbon {...ribbonProps({ compare: onCompare }, onTool, {  })}
       layout={{
         tabs: [
           {
@@ -416,8 +407,7 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
             ],
           },
         ],
-      }}
-    />,
+      }} />,
   );
   expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["View", "Home"]);
   // The first tab is on screen.
@@ -436,15 +426,12 @@ test("a saved layout is drawn as it is: its tabs, groups and buttons in their or
 });
 
 test("the quick-access bar sits after the app name, before the tabs: New, Open (with recents), Save, Save as, Undo, Redo", () => {
-  const handlers = { onNew: vi.fn(), onOpen: vi.fn(), onSave: vi.fn(), onSaveAs: vi.fn(), onUndo: vi.fn(), onRedo: vi.fn() };
+  const handlers = { new: vi.fn(), open: vi.fn(), save: vi.fn(), saveAs: vi.fn(), undo: vi.fn(), redo: vi.fn() };
   render(
-    <Ribbon
-      {...props}
-      {...handlers}
+    <Ribbon {...ribbonProps({ ...handlers }, undefined, {  })}
       loadRecents={async () => []}
       onOpenRecent={() => {}}
-      onClearRecents={async () => {}}
-    />,
+      onClearRecents={async () => {}} />,
   );
   const bar = screen.getByRole("toolbar", { name: "Quick access" });
   expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
@@ -457,12 +444,12 @@ test("the quick-access bar sits after the app name, before the tabs: New, Open (
     "Redo",
   ]);
   for (const [name, handler] of [
-    ["New…", handlers.onNew],
-    ["Open…", handlers.onOpen],
-    ["Save", handlers.onSave],
-    ["Save as", handlers.onSaveAs],
-    ["Undo", handlers.onUndo],
-    ["Redo", handlers.onRedo],
+    ["New…", handlers.new],
+    ["Open…", handlers.open],
+    ["Save", handlers.save],
+    ["Save as", handlers.saveAs],
+    ["Undo", handlers.undo],
+    ["Redo", handlers.redo],
   ] as const) {
     fireEvent.click(within(bar).getByRole("button", { name }));
     expect(handler).toHaveBeenCalledTimes(1);
@@ -522,8 +509,8 @@ test("Draw is Draw, Modify, Edit, Annotation, Clipboard and Layers; each group i
 });
 
 test("the Measure tab is first: Measure, Inquiry, Take-off, Dimensions and Markup", () => {
-  const handlers = { onExport: vi.fn(), onImportBoq: vi.fn(), onCompare: vi.fn(), onExportConflicts: vi.fn() };
-  render(<Ribbon {...props} {...handlers} />);
+  const handlers = { exportTakeoff: vi.fn(), importBoq: vi.fn(), compare: vi.fn(), exportConflicts: vi.fn() };
+  render(<Ribbon {...ribbonProps({ ...handlers }, undefined, {  })} />);
   expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
     "Measure",
     "Inquiry",
@@ -628,15 +615,12 @@ test("the tabs' row scrolls sideways and stops short of the preferences instead 
 });
 
 test("the quick-access bar is a toolbar: one tab stop, arrows, Home and End move between its buttons", () => {
-  const handlers = { onNew() {}, onSave() {}, onSaveAs() {}, onUndo() {}, onRedo() {} };
+  const handlers = { new() {}, save() {}, saveAs() {}, undo() {}, redo() {} };
   render(
-    <Ribbon
-      {...props}
-      {...handlers}
+    <Ribbon {...ribbonProps({ ...handlers }, undefined, {  })}
       loadRecents={async () => []}
       onOpenRecent={() => {}}
-      onClearRecents={async () => {}}
-    />,
+      onClearRecents={async () => {}} />,
   );
   const bar = screen.getByRole("toolbar", { name: "Quick access" });
   const names = () => within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
@@ -669,7 +653,7 @@ test("the quick-access bar is a toolbar: one tab stop, arrows, Home and End move
 
 test("the quick-access arrows skip a disabled button and mirror in Arabic", () => {
   // Only Open and Undo have handlers here; Save, Save as and Redo are disabled.
-  render(<Ribbon {...props} onUndo={() => {}} />);
+  render(<Ribbon {...ribbonProps({ undo: () => {} }, undefined, {  })} />);
   const bar = screen.getByRole("toolbar", { name: "Quick access" });
   const button = (name: string) => within(bar).getByRole("button", { name });
   button("Open…").focus();
@@ -719,7 +703,7 @@ test("a collapsed ribbon shows a tab's panel when the tab is clicked, and Escape
 test("a tool chosen from the shown panel puts the panel away again", () => {
   localStorage.setItem("qiyas.ribbon.collapsed", "1");
   const onTool = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} />);
+  render(<Ribbon {...ribbonProps({  }, onTool, {  })} />);
   fireEvent.click(screen.getByRole("tab", { name: "Measure" }));
   fireEvent.click(screen.getByRole("button", { name: "Distance" }));
   expect(onTool).toHaveBeenCalledWith("distance");
@@ -806,5 +790,24 @@ test.each(["en", "ar"])("measured tab overflow shrinks and grows with the row in
     vi.stubGlobal("ResizeObserver", Observer);
     localStorage.removeItem("qiyas.lang");
     document.documentElement.dir = "ltr";
+  }
+});
+
+test.each(DEFAULT_RIBBON.tabs)("every button in $id dispatches its data command", (tab) => {
+  const onAction = vi.fn();
+  render(<Ribbon onAction={onAction} isEnabled={() => true} isPressed={() => false}
+    layout={{ tabs: [{ ...tab, groups: tab.groups.map((group) => ({ ...group, main: undefined })) }] }} />);
+  for (const group of tab.groups) {
+    const buttons = within(screen.getByRole("group", { name: en[group.label as keyof typeof en] ?? group.label }));
+    for (const button of group.buttons) {
+      if (!isRibbonCommand(button.command)) continue;
+      fireEvent.click(buttons.getByRole("button", { name: en[button.label as keyof typeof en] ?? button.label }));
+      expect(onAction).toHaveBeenLastCalledWith(button.command);
+    }
+  }
+  const quick = within(screen.getByRole("toolbar", { name: "Quick access" }));
+  for (const button of QUICK_ACCESS) {
+    fireEvent.click(quick.getByRole("button", { name: en[button.label as keyof typeof en] }));
+    expect(onAction).toHaveBeenLastCalledWith(button.command);
   }
 });

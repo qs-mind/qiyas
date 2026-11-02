@@ -1,3 +1,4 @@
+import { useDialogOpen, useDialogState } from "./useDialogs";
 import { uiError } from "../i18n/errors";
 /** The layers panel and what goes with it: hiding and isolating layers, their properties, layer
  *  states and the translator, groups, and what new entities are drawn with. */
@@ -43,10 +44,10 @@ export function useLayers({
   setHidden,
 }: Deps) {
   /** LAYSTATE's and LAYTRANS's dialogs are open. */
-  const [layerStatesOpen, setLayerStatesOpen] = useState(false);
-  const [translatorOpen, setTranslatorOpen] = useState(false);
+  const [, setLayerStatesOpen] = useDialogOpen("layerStates");
+  const [, setTranslatorOpen] = useDialogOpen("translator");
   /** GROUP's entities are picked: the command waiting for the group's name. */
-  const [groupAsk, setGroupAsk] = useState<Extract<Command, { type: "create_group" }> | null>(null);
+  const [groupAsk, setGroupAsk] = useDialogState("group");
   /** Clicking a grouped entity selects its group (AutoCAD's PICKSTYLE); Ctrl picks one alone. */
   const [groupSelect, setGroupSelect] = useState(true);
   /** True while a layer change talks to the core; clicks meanwhile are dropped (the panel shows its
@@ -246,9 +247,7 @@ export function useLayers({
   );
 
   return {
-    layerStatesOpen,
     setLayerStatesOpen,
-    translatorOpen,
     setTranslatorOpen,
     groupAsk,
     setGroupAsk,

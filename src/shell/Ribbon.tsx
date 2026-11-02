@@ -10,7 +10,7 @@ import { RibbonFlyout } from "./RibbonFlyout";
 import { RibbonIcon } from "./ribbonIcons";
 import { useStableCallbacks } from "./stableCallbacks";
 import { aliasesFor, isPrimaryGroup } from "./ribbonInfo";
-import { DEFAULT_RIBBON, QUICK_ACCESS, fittingTabs } from "./ribbonLayout";
+import { DEFAULT_RIBBON, QUICK_ACCESS, fittingTabs, isRibbonCommand, type RibbonCommand } from "./ribbonLayout";
 import { Tip, TooltipLayer, type TipInfo } from "./Tooltip";
 import { Toolbar } from "@base-ui/react/toolbar";
 import type { BaseUIEvent } from "@base-ui/react/types";
@@ -19,99 +19,20 @@ import { ViewsMenu } from "./ViewsMenu";
 
 export type { Tool };
 
-/** A missing handler shows its button disabled as "coming soon". */
 type Props = {
-  active: Tool;
-  onTool(t: Tool): void;
-  /** A registry command added through Customize, read by the core's typed prompt machine. */
+  onAction(command: RibbonCommand): void;
+  isEnabled(command: RibbonCommand): boolean;
+  isPressed(command: RibbonCommand): boolean;
+  /** Commands added through Customize use the core's prompt machine. */
   onCommandLine?(line: string): void;
-  /** New drawing (asks its units); disabled when left out. */
-  onNew?(): void;
-  onOpen(): void;
-  /** The recent drawings beside Open (see `RecentsMenu`); without them Open is a plain button. */
   loadRecents?(): Promise<Recent[]>;
   onOpenRecent?(path: string): void;
   onClearRecents?(): Promise<void>;
-  onSave?(): void;
-  onSaveAs?(): void;
-  onExport?(): void;
-  onImportBoq?(): void;
-  onCompare?(): void;
-  onExportConflicts?(): void;
-  /** The Output tab: the Plot dialog (PLOT), quick print of the view (QUICKPRINT), every layout
-   *  printed (PUBLISH) and the plot style editor (STYLESMANAGER). */
-  onPlot?(): void;
-  onQuickPrint?(): void;
-  onPrintAll?(): void;
-  onPlotStyles?(): void;
-  onZoomExtents(): void;
-  /** Opens the external references (xrefs) dialog. */
-  onXrefs?(): void;
-  /** Opens the Attach PDF dialog. */
-  onAttachPdf?(): void;
-  /** Opens the Attach image dialog. */
-  onAttachImage?(): void;
-  /** Starts calibrating a PDF underlay or image: two points, then their real distance. */
-  onCalibrate?(): void;
-  /** Opens the Extract data dialog. */
-  onExtract?(): void;
-  /** Opens the Find and replace dialog. */
-  onFind?(): void;
-  /** Opens the dimension style panel. */
-  onDimStyle?(): void;
-  /** Works every field out again (UPDATEFIELD). */
-  onUpdateFields?(): void;
-  /** The Parametric tab: the parameters manager (PARAMETERS) and showing the constraint bar. */
-  onParameters?(): void;
-  onConstraintBar?(): void;
-  /** The Insert tab: the block palette to insert from (INSERT) or write a block (WBLOCK), the
-   *  attribute manager (BATTMAN), the Design Center and the tool palette. */
-  onInsertBlock?(): void;
-  onWriteBlock?(): void;
-  onAttributeManager?(): void;
-  onDesignCenter?(): void;
-  onToolPalettes?(): void;
-  onUndo?(): void;
-  onRedo?(): void;
-  /** The drawing holds its Arabic text backwards; the checkbox is disabled without a handler. */
-  arabicReversed?: boolean;
-  onArabicReversed?(on: boolean): void;
-  /** The UCS icon shows on the canvas (UCSICON); the toggle is disabled without a handler. */
-  ucsIcon?: boolean;
-  onUcsIcon?(on: boolean): void;
-  /** The View tab's named views (see `ViewsMenu`); without them Views is disabled. */
   loadViews?(): Promise<NamedView[]>;
   onGoToView?(view: NamedView): void;
   onSaveView?(name: string): Promise<void>;
   onDeleteView?(name: string): Promise<void>;
-  /** The Home tab's Layers group: layer states (LAYSTATE) and the layer translator (LAYTRANS). */
-  onLayerStates?(): void;
-  onTranslateLayers?(): void;
-  /** Clicking a grouped entity selects its group (PICKSTYLE); the checkbox is disabled without a
-   *  handler. */
-  groupSelect?: boolean;
-  onGroupSelect?(on: boolean): void;
-  /** VPORTS: two views side by side (`split`) or one. */
-  split?: boolean;
-  onSplit?(two: boolean): void;
-  /** UCS W: back to the world coordinate system. */
-  onUcsWorld?(): void;
-  /** Opens the sheet set manager (SHEETSET). */
-  onSheetSet?(): void;
-  /** RECOVER: opens a damaged drawing and says what was dropped. */
-  onRecover?(): void;
-  /** The Manage tab: SCRIPT asks for a `.scr` command script and runs it. */
-  onRunScript?(): void;
-  /** The Manage tab's AUDIT and PURGE dialogs, and OPTIONS, CUI (Customize) and ALIASEDIT. */
-  onAudit?(): void;
-  onPurge?(): void;
-  onOptions?(): void;
-  onCustomize?(): void;
-  onAliases?(): void;
-  /** The tabs, groups and buttons to draw (`ribbonLayout`); the default when null. */
   layout?: RibbonLayout | null;
-  /** The command line's aliases (the built-in ones and the user's) for the tooltips; the built-in
-   *  ones when left out. */
   aliases?: Record<string, string>;
 };
 
@@ -122,55 +43,6 @@ const ignoreSpace = (e: KeyboardEvent & Partial<Pick<BaseUIEvent<KeyboardEvent>,
     e.preventBaseUIHandler?.();
   }
 };
-
-/** The handler each action button runs, by its command; a missing one shows it disabled. */
-function actions(props: Props): Record<string, (() => void) | undefined> {
-  return {
-    new: props.onNew,
-    open: props.onOpen,
-    save: props.onSave,
-    saveAs: props.onSaveAs,
-    recover: props.onRecover,
-    audit: props.onAudit,
-    purge: props.onPurge,
-    exportTakeoff: props.onExport,
-    importBoq: props.onImportBoq,
-    compare: props.onCompare,
-    exportConflicts: props.onExportConflicts,
-    undo: props.onUndo,
-    redo: props.onRedo,
-    find: props.onFind,
-    layerStates: props.onLayerStates,
-    translateLayers: props.onTranslateLayers,
-    extract: props.onExtract,
-    dimStyle: props.onDimStyle,
-    updateFields: props.onUpdateFields,
-    parameters: props.onParameters,
-    constraintBar: props.onConstraintBar,
-    blockPalette: props.onInsertBlock,
-    writeBlock: props.onWriteBlock,
-    attributeManager: props.onAttributeManager,
-    designCenter: props.onDesignCenter,
-    toolPalettes: props.onToolPalettes,
-    zoomExtents: props.onZoomExtents,
-    xrefs: props.onXrefs,
-    attachPdf: props.onAttachPdf,
-    attachImage: props.onAttachImage,
-    calibrate: props.onCalibrate,
-    split: props.onSplit && (() => props.onSplit!(!props.split)),
-    ucsWorld: props.onUcsWorld,
-    sheetSet: props.onSheetSet,
-    runScript: props.onRunScript,
-    plot: props.onPlot,
-    quickPrint: props.onQuickPrint,
-    printAll: props.onPrintAll,
-    plotStyles: props.onPlotStyles,
-    options: props.onOptions,
-    customize: props.onCustomize,
-    aliases: props.onAliases,
-  };
-}
-
 
 /** The ribbon's collapsed state is kept on this computer. Collapsed, only the tabs' row shows; a tab
  *  clicked shows its panel over the drawing until something else is done (Esc, a click elsewhere, a
@@ -191,15 +63,20 @@ const MORE = "\u0000more";
 
 export function Ribbon(props: Props) {
   // The handlers are the app's, new on every render of it: the body re-renders for a changed value.
-  const stable = useStableCallbacks(props);
+  const { isEnabled, isPressed, ...callbacks } = props;
+  const stable = useStableCallbacks(callbacks);
+  const commands = [...QUICK_ACCESS, ...(props.layout ?? DEFAULT_RIBBON).tabs.flatMap((t) => t.groups.flatMap((g) => g.buttons))];
+  const enabled = commands.map((b) => isRibbonCommand(b.command) && isEnabled(b.command)).join(",");
+  const pressed = commands.map((b) => isRibbonCommand(b.command) && isPressed(b.command)).join(",");
+  const lookups = useStableCallbacks({ isEnabled, isPressed });
   return (
     <TooltipLayer>
-      <RibbonBodyMemo {...stable} />
+      <RibbonBodyMemo {...stable} {...lookups} enabled={enabled} pressed={pressed} />
     </TooltipLayer>
   );
 }
 
-function RibbonBody(props: Props) {
+function RibbonBody(props: Props & { enabled: string; pressed: string }) {
   const t = useT();
   const layout = props.layout ?? DEFAULT_RIBBON;
   const tabs = layout.tabs;
@@ -243,7 +120,6 @@ function RibbonBody(props: Props) {
     return () => { alive = false; observer.disconnect(); };
   }, [tabs, t, tab?.label]);
   const quick = useToolbarRoving();
-  const handlers = actions(props);
   /** The flyout open: the key of a group's "⋯" list, or `MORE` for the tabs' menu. */
   const [open, setOpen] = useState<string | null>(null);
   const [collapsed, setCollapsedNow] = useState(storedCollapsed);
@@ -272,28 +148,18 @@ function RibbonBody(props: Props) {
     if (b.kind === "command") {
       return { label: b.label, run: props.onCommandLine && (() => props.onCommandLine!(b.command)) };
     }
-    if (b.kind === "tool") {
-      const name = b.command as Tool;
-      return {
-        label: b.label,
-        pressed: props.active === name,
-        run: () => {
-          props.onTool(props.active === name && name !== "select" ? "select" : name);
-          if (collapsed) setPeek(false);
-        },
-      };
-    }
-    if (b.kind === "toggle") {
-      const toggles: Record<string, [boolean, ((on: boolean) => void) | undefined]> = {
-        groupSelect: [props.groupSelect ?? true, props.onGroupSelect],
-        ucsIcon: [props.ucsIcon ?? true, props.onUcsIcon],
-      };
-      const [on, set] = toggles[b.command] ?? [props.arabicReversed ?? false, props.onArabicReversed];
-      return { label: b.label, pressed: on, run: set && (() => set(!on)) };
-    }
-    // Two viewports, or back to one: the default label says which.
-    const label = b.command === "split" && b.label === "vport.two" && props.split ? "vport.one" : b.label;
-    return { label, run: handlers[b.command] };
+    if (!isRibbonCommand(b.command)) return { label: b.label };
+    const command = b.command;
+    const pressed = props.isPressed(command);
+    const label = command === "split" && b.label === "vport.two" && pressed ? "vport.one" : b.label;
+    return {
+      label,
+      pressed,
+      run: props.isEnabled(command) ? () => {
+        props.onAction(b.kind === "tool" && pressed && command !== "select" ? "select" : command);
+        if (b.kind === "tool" && collapsed) setPeek(false);
+      } : undefined,
+    };
   }
 
   /** The tooltip of a command: its name, what it does, its alias; "coming soon" when disabled. */
@@ -344,7 +210,7 @@ function RibbonBody(props: Props) {
         <RecentsMenu
           key={key}
           toolbar={toolbar}
-          onOpen={props.onOpen}
+          onOpen={() => props.onAction("open")}
           load={props.loadRecents}
           onOpenRecent={props.onOpenRecent}
           onClear={props.onClearRecents}

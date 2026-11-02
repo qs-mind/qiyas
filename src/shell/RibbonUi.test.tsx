@@ -2,9 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Ribbon } from "./Ribbon";
+import { ribbonProps } from "./ribbonTestProps";
 import { HOVER_DELAY } from "./Tooltip";
 
-const props = { active: "select" as const, onTool() {}, onOpen() {}, onZoomExtents() {} };
+const props = ribbonProps();
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -54,7 +55,7 @@ test("the pointer resting on a button shows a tooltip: name, what it does, its a
 });
 
 test("a command without an alias has no alias line; the ellipsis is not in the name", () => {
-  render(<Ribbon {...props} onOpen={() => {}} />);
+  render(<Ribbon {...ribbonProps({ open: () => {} }, undefined, {  })} />);
   hover(screen.getByRole("button", { name: "Select" }));
   expect(screen.getByRole("tooltip").querySelector("kbd")).toBeNull();
   leave(screen.getByRole("button", { name: "Select" }));
@@ -63,7 +64,8 @@ test("a command without an alias has no alias line; the ellipsis is not in the n
 });
 
 test("the user's own alias shows in the tooltip", () => {
-  render(<Ribbon {...props} aliases={{ L: "LINE", LN: "LINE" }} />);
+  render(<Ribbon {...props}
+      aliases={{ L: "LINE", LN: "LINE" }} />);
   fireEvent.click(screen.getByRole("tab", { name: "Draw" }));
   hover(screen.getByRole("button", { name: "Line" }));
   expect(screen.getByRole("tooltip").querySelector("kbd")!.textContent).toBe("Alias · L · LN");
@@ -207,16 +209,14 @@ test("a click outside closes a flyout", () => {
 
 test("a tab layout with four tabs or fewer shows them all, with no More", () => {
   render(
-    <Ribbon
-      {...props}
+    <Ribbon {...props}
       layout={{
         tabs: ["a", "b", "c", "d"].map((id) => ({
           id,
           label: id,
           groups: [{ id: "g", label: "g", buttons: [{ kind: "tool", command: "line", label: "draw.line" }] }],
         })),
-      }}
-    />,
+      }} />,
   );
   expect(screen.getAllByRole("tab")).toHaveLength(4);
   expect(screen.queryByRole("tab", { name: "More" })).toBeNull();
@@ -225,7 +225,7 @@ test("a tab layout with four tabs or fewer shows them all, with no More", () => 
 test("Measure's Dimensions shows its first five; the rest, and the style, are behind its ⋯ with their icons and names", () => {
   const onTool = vi.fn();
   const onDimStyle = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} onDimStyle={onDimStyle} />);
+  render(<Ribbon {...ribbonProps({ dimStyle: onDimStyle }, onTool, {  })} />);
   const dims = screen.getByRole("group", { name: "Dimensions" });
   expect(within(dims).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
     "Linear",
@@ -268,7 +268,7 @@ test("Measure's Dimensions shows its first five; the rest, and the style, are be
 });
 
 test("a flyout's tool shows pressed, and Escape closes it back onto its ⋯", async () => {
-  render(<Ribbon {...props} active="dimArc" />);
+  render(<Ribbon {...ribbonProps({  }, undefined, { ["dimArc"]: true, select: false })} />);
   const more = screen.getByRole("button", { name: "More in Dimensions" });
   act(() => more.focus());
   fireEvent.keyDown(more, { key: "ArrowDown" });
@@ -367,13 +367,11 @@ test("a panel too narrow even for that keeps its scrollbar rather than losing bu
 test("the views menu stays on the bar however narrow it is, and a group's ⋯ never holds it", () => {
   withRoom(3, () => {
     render(
-      <Ribbon
-        {...props}
-        loadViews={async () => []}
-        onGoToView={() => {}}
-        onSaveView={async () => {}}
-        onDeleteView={async () => {}}
-      />,
+      <Ribbon {...props}
+      loadViews={async () => []}
+      onGoToView={() => {}}
+      onSaveView={async () => {}}
+      onDeleteView={async () => {}} />,
     );
     fireEvent.click(screen.getByRole("tab", { name: "More" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "View" }));
@@ -383,17 +381,17 @@ test("the views menu stays on the bar however narrow it is, and a group's ⋯ ne
 
 test("the toggles are icon buttons with a pressed state", () => {
   const onGroupSelect = vi.fn();
-  render(<Ribbon {...props} groupSelect onGroupSelect={onGroupSelect} />);
+  render(<Ribbon {...ribbonProps({ groupSelect: onGroupSelect }, undefined, { groupSelect: true })} />);
   fireEvent.click(screen.getByRole("tab", { name: "Draw" }));
   const toggle = screen.getByRole("button", { name: "Group selection" });
   expect(toggle.getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(toggle);
-  expect(onGroupSelect).toHaveBeenCalledWith(false);
+  expect(onGroupSelect).toHaveBeenCalledWith("groupSelect");
 });
 
 test("Space never presses a focused ribbon button", () => {
   const onTool = vi.fn();
-  render(<Ribbon {...props} onTool={onTool} />);
+  render(<Ribbon {...ribbonProps({  }, onTool, {  })} />);
   const select = screen.getByRole("button", { name: "Select" });
   const down = fireEvent.keyDown(select, { key: " " });
   const up = fireEvent.keyUp(select, { key: " " });

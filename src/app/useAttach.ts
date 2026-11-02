@@ -1,5 +1,6 @@
 /** PDF pages and images attached from their dialogs, the insert point or calibration points a
  *  click in the drawing gives them, and the view fitted to a picture just attached. */
+import { useDialogOpen, useDialogState } from "./useDialogs";
 import { useState, type RefObject } from "react";
 import { attachImage, attachPdf, drawingInfo, type DrawingInfo } from "../api";
 import type { AttachImageRequest } from "../shell/AttachImageDialog";
@@ -19,13 +20,13 @@ type Deps = Pick<Sheets, "redraw" | "syncPictures"> & {
 };
 
 export function useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, syncPictures }: Deps) {
-  const [attachOpen, setAttachOpen] = useState(false);
-  const [attachImageOpen, setAttachImageOpen] = useState(false);
+  const [attachOpen, setAttachOpen] = useDialogOpen("attach");
+  const [, setAttachImageOpen] = useDialogOpen("attachImage");
   /** A click the window waits for (see `Pending`), the insert point it gave, and the two
    *  calibration points once both are picked. */
   const [pending, setPending] = useState<Pending | null>(null);
   const [pickedInsert, setPickedInsert] = useState<Point | null>(null);
-  const [calibration, setCalibration] = useState<[Point, Point] | null>(null);
+  const [calibration, setCalibration] = useDialogState("calibration");
 
   /** Attaches a PDF page from the dialog, then draws it: an underlay's picture is fetched before
    *  the dialog closes, so its progress shows there. Errors go to the dialog. */
@@ -91,7 +92,6 @@ export function useAttach({ t, setInfo, setNotice, viewport, batchHeld, redraw, 
   return {
     attachOpen,
     setAttachOpen,
-    attachImageOpen,
     setAttachImageOpen,
     pending,
     setPending,

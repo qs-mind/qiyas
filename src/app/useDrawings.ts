@@ -1,3 +1,4 @@
+import { useDialogOpen, useDialogState } from "./useDialogs";
 import { refreshInBackground } from "./background";
 import { displayedWorkspace } from "../workspaceIpc";
 import { extractAll } from "./extractRows";
@@ -51,7 +52,6 @@ import {
   type EntityFilter,
   type Field,
   type NewUnits,
-  type ReadReport,
   type ScriptResult,
   type TabInfo,
   type WorkspaceEvent,
@@ -189,17 +189,17 @@ export function useDrawings({
   const { lang } = useLanguage();
   const recovery = recoveries[0] ?? null;
   /** What RECOVER read and dropped from a damaged drawing. */
-  const [recoverReport, setRecoverReport] = useState<{ path: string; report: ReadReport } | null>(null);
+  const [recoverReport, setRecoverReport] = useDialogState("recoverReport");
   /** What the last Run script did, for its dialog. */
-  const [scriptRun, setScriptRun] = useState<{ path: string; result: ScriptResult } | null>(null);
+  const [scriptRun, setScriptRun] = useDialogState("scriptRun");
   /** The line the running script is on (0 before its first), null when none runs: the ribbon and
    *  the command line wait meanwhile, and Stop ends it. */
   const [scriptLine, setScriptLine] = useState<number | null>(null);
-  const [sheetSetShown, setSheetSetShown] = useState(false);
+  const [, setSheetSetShown] = useDialogOpen("sheetSet");
   const [opening, setOpening] = useState(false);
-  const [xrefsOpen, setXrefsOpen] = useState(false);
-  const [extractOpen, setExtractOpen] = useState(false);
-  const [newOpen, setNewOpen] = useState(false);
+  const [, setXrefsOpen] = useDialogOpen("xrefs");
+  const [, setExtractOpen] = useDialogOpen("extract");
+  const [newOpen, setNewOpen] = useDialogOpen("new");
   /** Drawing changes waiting or running; while any is, clicks and tool input on the canvas are
    *  ignored (they would land on a drawing about to go). */
   const switching = useRef(0);
@@ -871,11 +871,8 @@ export function useDrawings({
     setScriptRun,
     scriptLine,
     stopRunningScript: () => stopScript().catch(() => {}),
-    sheetSetShown,
     setSheetSetShown,
-    xrefsOpen,
     setXrefsOpen,
-    extractOpen,
     setExtractOpen,
     switching,
     openPath,

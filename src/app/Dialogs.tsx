@@ -1,7 +1,8 @@
 /** The window's dialogs: those over the drawing (xrefs, attach, calibrate, extract, find, text,
  *  layers, blocks, dimensions, tables, fields, drafting, settings, About) and the file ones after
  *  the status bar (recovery, RECOVER's report, the sheet set manager). Each renders only while
- *  its hook says it is open, in the same place among the window's children as before. */
+ *  the shared dialog state says it is open, in the same place among the window's children as before. */
+import { useDialogs } from "./useDialogs";
 import { open } from "../fileDialogs";
 import {
   blocks as readBlocks,
@@ -83,7 +84,7 @@ type Props = {
   drawings: Drawings;
   plot: Plot;
   options: Options;
-  parametric: Pick<Parametric, "parametersOpen" | "parameters" | "setParameter" | "closeParameters" | "deleteConstraint">;
+  parametric: Pick<Parametric, "parameters" | "setParameter" | "closeParameters" | "deleteConstraint">;
   /** Takes the last step back (the app's undo): the toast after a purge offers it. */
   onUndo(): void;
 };
@@ -106,24 +107,21 @@ export function Dialogs({
   onUndo,
 }: Props) {
   const t = useT();
-  const { theme, aboutOpen, setAboutOpen, settingsOpen, setSettingsOpen, connectOpen, setConnectOpen, shortcutsOpen, setShortcutsOpen, loadAliases, run, setNotice, focusDrawing } =
+  const dialogs = useDialogs();
+  const { theme, setAboutOpen, setSettingsOpen, setConnectOpen, setShortcutsOpen, loadAliases, run, setNotice, focusDrawing } =
     shell;
-  const { drafting, draftingOpen, setDraftingOpen, saveDrafting } = draftingState;
+  const { drafting, setDraftingOpen, saveDrafting } = draftingState;
   const { batch, renderProgress, redraw } = sheets;
   const {
     groupAsk,
     setGroupAsk,
-    layerStatesOpen,
     setLayerStatesOpen,
-    translatorOpen,
     setTranslatorOpen,
     runDrawingCommand,
     loadLayerStandard,
   } = layers;
   const {
-    attachOpen,
     setAttachOpen,
-    attachImageOpen,
     setAttachImageOpen,
     pending,
     setPending,
@@ -140,7 +138,6 @@ export function Dialogs({
     setAttributesAsk,
     attDefAt,
     setAttDefAt,
-    blockPaletteOpen,
     blockPicture,
     closeBlockPalette,
     startInsert,
@@ -156,7 +153,6 @@ export function Dialogs({
     runBlock,
   } = blocks;
   const {
-    findOpen,
     setFindOpen,
     findTexts,
     replaceTexts,
@@ -168,7 +164,6 @@ export function Dialogs({
     setTextHeight,
     setTextStyle,
     runText,
-    dimStyleOpen,
     setDimStyleOpen,
     runDimStyle,
     dimText,
@@ -184,13 +179,13 @@ export function Dialogs({
     setFieldTarget,
     insertField,
   } = annotate;
-  const { xrefsOpen, setXrefsOpen, xrefsChanged, locateXref, extractOpen, setExtractOpen, extractRows, exportExtract } =
+  const { setXrefsOpen, xrefsChanged, locateXref, setExtractOpen, extractRows, exportExtract } =
     drawings;
 
   return (
     <>
-      {aboutOpen && <About theme={theme} onClose={() => setAboutOpen(false)} />}
-      {xrefsOpen && info && (
+      {dialogs.isOpen("about") && <About theme={theme} onClose={() => setAboutOpen(false)} />}
+      {dialogs.isOpen("xrefs") && info && (
         <XrefManager
           xrefs={info.xrefs}
           onReload={async () => xrefsChanged(await reloadXrefs())}
@@ -199,7 +194,7 @@ export function Dialogs({
           onClose={() => setXrefsOpen(false)}
         />
       )}
-      {attachOpen && info && (
+      {dialogs.isOpen("attach") && info && (
         <AttachPdfDialog
           units={info.units}
           picked={pickedInsert}
@@ -222,7 +217,7 @@ export function Dialogs({
           }}
         />
       )}
-      {attachImageOpen && info && (
+      {dialogs.isOpen("attachImage") && info && (
         <AttachImageDialog
           units={info.units}
           defaultWidth={defaultImageWidth(batch?.bounds ?? null, metresPerUnit(info.units))}
@@ -286,7 +281,7 @@ export function Dialogs({
           onClose={plot.closeStyles}
         />
       )}
-      {extractOpen && info && (
+      {dialogs.isOpen("extract") && info && (
         <ExtractDialog
           layers={info.layers.map((l) => l.name)}
           onRun={extractRows}
@@ -294,7 +289,7 @@ export function Dialogs({
           onClose={() => setExtractOpen(false)}
         />
       )}
-      {findOpen && info && (
+      {dialogs.isOpen("find") && info && (
         <FindReplaceDialog
           onFind={findTexts}
           onReplaceAll={replaceTexts}
@@ -356,7 +351,7 @@ export function Dialogs({
           }}
         />
       )}
-      {layerStatesOpen && info && (
+      {dialogs.isOpen("layerStates") && info && (
         <LayerStatesDialog
           states={info.layer_states ?? []}
           onSave={async (name) => {
@@ -377,7 +372,7 @@ export function Dialogs({
           }}
         />
       )}
-      {translatorOpen && info && (
+      {dialogs.isOpen("translator") && info && (
         <LayerTranslator
           layers={info.layers}
           loadStandard={loadLayerStandard}
@@ -433,7 +428,7 @@ export function Dialogs({
           }}
         />
       )}
-      {blockPaletteOpen && info && (
+      {dialogs.isOpen("blockPalette") && info && (
         <BlockPalette
           load={readBlocks}
           thumbnail={blockPicture}
@@ -503,7 +498,7 @@ export function Dialogs({
           }}
         />
       )}
-      {dimStyleOpen && info && (
+      {dialogs.isOpen("dimStyle") && info && (
         <DimStylePanel
           styles={info.dim_styles}
           current={info.dim_style}
@@ -575,7 +570,7 @@ export function Dialogs({
           }}
         />
       )}
-      {parametric.parametersOpen && (
+      {dialogs.isOpen("parameters") && (
         <ParametersManager
           parameters={parametric.parameters}
           precision={draftingState.drafting?.precision ?? 3}
@@ -610,14 +605,14 @@ export function Dialogs({
           }}
         />
       )}
-      {draftingOpen && drafting && (
+      {dialogs.isOpen("drafting") && drafting && (
         <DraftingSettings
           drafting={drafting}
           onSave={saveDrafting}
           onClose={() => setDraftingOpen(false)}
         />
       )}
-      {settingsOpen && (
+      {dialogs.isOpen("settings") && (
         <SettingsDialog
           onSaved={options.takeSettings}
           onClose={() => {
@@ -627,20 +622,20 @@ export function Dialogs({
           }}
         />
       )}
-      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
-      {connectOpen && <ConnectAiDialog onSettings={() => setSettingsOpen(true)} onClose={() => setConnectOpen(false)} />}
-      {options.optionsOpen && (
+      {dialogs.isOpen("shortcuts") && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {dialogs.isOpen("connect") && <ConnectAiDialog onSettings={() => setSettingsOpen(true)} onClose={() => setConnectOpen(false)} />}
+      {dialogs.isOpen("options") && (
         <OptionsDialog
           onSaved={options.takeSettings}
           onSettings={() => setSettingsOpen(true)}
           onClose={() => options.setOptionsOpen(false)}
         />
       )}
-      {options.customizeOpen && (
+      {dialogs.isOpen("customize") && (
         <CustomizeUi onSaved={options.setRibbon} onClose={() => options.setCustomizeOpen(false)} />
       )}
-      {options.aliasesOpen && <AliasEditor onSaved={loadAliases} onClose={() => options.setAliasesOpen(false)} />}
-      {options.purgeOpen && info && (
+      {dialogs.isOpen("aliases") && <AliasEditor onSaved={loadAliases} onClose={() => options.setAliasesOpen(false)} />}
+      {dialogs.isOpen("purge") && info && (
         <PurgeDialog
           look={runCommand}
           apply={runDrawingCommand}
@@ -651,7 +646,7 @@ export function Dialogs({
           }}
         />
       )}
-      {options.auditOpen && info && (
+      {dialogs.isOpen("audit") && info && (
         <AuditDialog
           look={runCommand}
           apply={runDrawingCommand}
@@ -669,6 +664,7 @@ export function Dialogs({
  *  manager. */
 export function FileDialogs({ drawings }: { drawings: Drawings }) {
   const t = useT();
+  const dialogs = useDialogs();
   const {
     recovery,
     recoverFrom,
@@ -681,18 +677,16 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
     setScriptRun,
     scriptLine,
     stopRunningScript,
-    sheetSetShown,
     setSheetSetShown,
     sheetSetApi,
     openAll,
-    newOpen,
     setNewOpen,
     newDrawing,
   } = drawings;
 
   return (
     <>
-      {newOpen && <NewDrawingDialog onCreate={newDrawing} onClose={() => setNewOpen(false)} />}
+      {dialogs.isOpen("new") && <NewDrawingDialog onCreate={newDrawing} onClose={() => setNewOpen(false)} />}
       {recovery && (
         <RecoveryDialog
           key={recovery.id}
@@ -724,7 +718,7 @@ export function FileDialogs({ drawings }: { drawings: Drawings }) {
       {scriptRun && (
         <ScriptResultDialog path={scriptRun.path} result={scriptRun.result} onClose={() => setScriptRun(null)} />
       )}
-      {sheetSetShown && (
+      {dialogs.isOpen("sheetSet") && (
         <SheetSetManager api={sheetSetApi} onOpenAll={openAll} onClose={() => setSheetSetShown(false)} />
       )}
     </>

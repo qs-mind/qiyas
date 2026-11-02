@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { RibbonLayout } from "../api";
 import { Ribbon } from "./Ribbon";
+import { ribbonProps } from "./ribbonTestProps";
 
 afterEach(cleanup);
 
@@ -16,8 +17,9 @@ test("a registry command added in Customize starts typed prompts without a windo
   };
   const onCommandLine = vi.fn();
   const onTool = vi.fn();
-  render(<Ribbon active="select" onOpen={() => {}} onZoomExtents={() => {}} onTool={onTool}
-    layout={layout} onCommandLine={onCommandLine} />);
+  render(<Ribbon {...ribbonProps({ open: () => {}, zoomExtents: () => {} }, onTool, { select: true })}
+      layout={layout}
+      onCommandLine={onCommandLine} />);
   fireEvent.click(screen.getByRole("tab", { name: "Registry" }));
   const button = screen.getByRole("button", { name: "WIDGET" });
   expect(button.querySelector("svg rect")).not.toBeNull();

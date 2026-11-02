@@ -2,6 +2,7 @@
  *  drawing on screen is drawn again: every change, undo, redo and sheet), the parameters manager
  *  (PARAMETERS) and its edits, and deleting a constraint from the bar. The tools themselves are
  *  `src/tools/constraintTools.ts`, run through `useTool`. */
+import { useDialogOpen } from "./useDialogs";
 import { useEffect, useState, type RefObject } from "react";
 import {
   listConstraints,
@@ -43,7 +44,7 @@ export function useParametric({
 }: Deps) {
   const [constraints, setConstraints] = useState<ConstraintInfo[]>([]);
   const [parameters, setParameters] = useState<ParameterInfo[]>([]);
-  const [parametersOpen, setParametersOpen] = useState(false);
+  const [parametersOpen, setParametersOpen] = useDialogOpen("parameters");
   /** The bar hidden until it is asked for again (its × , or the ribbon's button). */
   const [barHidden, setBarHidden] = useState(false);
   /** The drawing on screen may hold constraints: it had some when read, or a parametric tool

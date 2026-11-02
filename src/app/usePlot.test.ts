@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 /** The plot hook over a faked core: `calls` is every IPC call, in order, with its arguments. */
+import { DialogsProvider } from "./useDialogs";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DrawingInfo, Paper, PlotStyle } from "../api";
@@ -80,7 +81,7 @@ function setup(over: { info?: DrawingInfo | null; sheet?: string; visible?: Boun
       }
     },
   };
-  const hook = renderHook((d: typeof deps) => usePlot(d), { initialProps: deps });
+  const hook = renderHook((d: typeof deps) => usePlot(d), { initialProps: deps, wrapper: DialogsProvider });
   return { deps, hook, result: hook.result };
 }
 

@@ -1,6 +1,7 @@
 /** Blocks: BLOCK's name dialog, INSERT (the palette, the Design Center, attribute prompts),
  *  WBLOCK, ATTDEF and ATTEDIT, the attribute manager, the tool palette, and the end of an edit in
  *  place. */
+import { useDialogOpen, useDialogState } from "./useDialogs";
 import { useRef, useState, type RefObject } from "react";
 import { save } from "../fileDialogs";
 import {
@@ -16,11 +17,10 @@ import {
   type DrawingInfo,
   type PaletteItem,
 } from "../api";
-import { promptsFor, type AttributeField } from "../shell/BlockDialogs";
+import { promptsFor } from "../shell/BlockDialogs";
 import { isStale } from "../shell/switcher";
 import { parse, type Action } from "../tools/commandParser";
 import type { TextRequest } from "../tools/textTools";
-import type { Point } from "../viewport/camera";
 import type { T } from "./shared";
 import type { Commands, ToolChoice } from "./useCommands";
 import type { Shell } from "./useShell";
@@ -60,27 +60,20 @@ export function useBlocks({
 }: Deps) {
   /** BLOCK's base point is clicked: the command waiting for the new block's name, and the names
    *  taken. */
-  const [createBlockAsk, setCreateBlockAsk] = useState<{
-    cmd: Extract<Command, { type: "create_block" }>;
-    names: string[];
-  } | null>(null);
+  const [createBlockAsk, setCreateBlockAsk] = useDialogState("createBlock");
   /** The block INSERT places, and the drawing its definition comes from when this one lacks it. */
   const [insertChoice, setInsertChoice] = useState<{ block: BlockInfo; fromPath: string | null } | null>(null);
   /** Attribute values asked for (INSERT's prompts, ATTEDIT): the command they make, if any. */
-  const [attributesAsk, setAttributesAsk] = useState<{
-    heading: string;
-    fields: AttributeField[];
-    command(values: Record<string, string>): Command | null;
-  } | null>(null);
+  const [attributesAsk, setAttributesAsk] = useDialogState("attributes");
   /** ATTDEF's click, waiting for the definition. */
-  const [attDefAt, setAttDefAt] = useState<{ at: Point; height: number | null } | null>(null);
-  const [blockPaletteOpen, setBlockPaletteOpen] = useState(false);
+  const [attDefAt, setAttDefAt] = useDialogState("attDefAt");
+  const [, setBlockPaletteOpen] = useDialogOpen("blockPalette");
   /** The Design Center is open; the drawing's own block names (upper case). */
-  const [designCenter, setDesignCenter] = useState<string[] | null>(null);
+  const [designCenter, setDesignCenter] = useDialogState("designCenter");
   /** The tool palette is open, with its buttons. */
-  const [palette, setPalette] = useState<PaletteItem[] | null>(null);
+  const [palette, setPalette] = useDialogState("palette");
   /** BATTMAN is open on these blocks. */
-  const [managerBlocks, setManagerBlocks] = useState<BlockInfo[] | null>(null);
+  const [managerBlocks, setManagerBlocks] = useDialogState("managerBlocks");
   /** The block palette's thumbnails, revoked when it closes. */
   const thumbUrls = useRef<string[]>([]);
 
@@ -213,7 +206,6 @@ export function useBlocks({
     setAttributesAsk,
     attDefAt,
     setAttDefAt,
-    blockPaletteOpen,
     setBlockPaletteOpen,
     designCenter,
     setDesignCenter,

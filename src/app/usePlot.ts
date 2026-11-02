@@ -1,3 +1,4 @@
+import { useDialogState } from "./useDialogs";
 import { uiError, userError, UserFacingError } from "../i18n/errors";
 /** Plotting: the Plot dialog (the sheet on screen, its page setup and the drawing's plot style,
  *  kept per drawing in the window's storage: the project file has no place for them yet), the
@@ -16,7 +17,6 @@ import {
   type Paper,
   type PlotJob,
   type PlotStyle,
-  type Sheet,
 } from "../api";
 import { defaultSetup, jobFor, normalized, type PageSetup } from "../shell/PlotDialog";
 import { isStale } from "../shell/switcher";
@@ -107,9 +107,9 @@ function printedNotice(t: T, said: string, printer: string | null): string {
 
 export function usePlot({ t, switchGen, info, sheet, viewport, run, setError, setNotice, focusDrawing, measure }: Deps) {
   /** The Plot dialog's sheet and where it starts; null while it is closed. */
-  const [plotAsk, setPlotAsk] = useState<{ sheet: Sheet; setup: PageSetup; stylePath: string | null } | null>(null);
+  const [plotAsk, setPlotAsk] = useDialogState("plot");
   /** The plot style editor and the file it opens first; null while it is closed. */
-  const [stylesAsk, setStylesAsk] = useState<{ initialPath: string | null } | null>(null);
+  const [stylesAsk, setStylesAsk] = useDialogState("styles");
   /** The plot window being clicked, with its first corner once given; null when none is. */
   const [windowPick, setWindowPick] = useState<{ first: Point | null } | null>(null);
   /** The last plot window clicked, for the dialog. */

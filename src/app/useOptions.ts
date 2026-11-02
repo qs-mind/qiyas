@@ -1,6 +1,7 @@
 /** The Manage tab's dialogs (Options, Customize, Aliases, Purge, Audit) and the window-wide
  *  options they keep in `settings.json`: decimals with no drawing open, the snap aperture and pick
  *  box, the keyboard shortcuts and the ribbon layout. Read at start and after a dialog saves. */
+import { useDialogOpen } from "./useDialogs";
 import { useEffect, useMemo, useState } from "react";
 import { getSettings, type DrawingInfo, type RibbonLayout, type Settings } from "../api";
 import { SHORTCUT_COMMANDS } from "../shell/OptionsDialog";
@@ -14,11 +15,11 @@ type Deps = Pick<Shell, "setError"> & { t: T; info: DrawingInfo | null };
 
 export function useOptions({ t, info, setError }: Deps) {
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [aliasesOpen, setAliasesOpen] = useState(false);
-  const [purgeOpen, setPurgeOpen] = useState(false);
-  const [auditOpen, setAuditOpen] = useState(false);
+  const [, setOptionsOpen] = useDialogOpen("options");
+  const [, setCustomizeOpen] = useDialogOpen("customize");
+  const [, setAliasesOpen] = useDialogOpen("aliases");
+  const [, setPurgeOpen] = useDialogOpen("purge");
+  const [, setAuditOpen] = useDialogOpen("audit");
   /** Decimals where no drawing is open; a drawing's drafting precision wins while it is. */
   const [displayPrecision, setDisplayPrecision] = useState(3);
   /** CSS pixels around the cursor snaps and picks reach. */
@@ -65,16 +66,11 @@ export function useOptions({ t, info, setError }: Deps) {
 
   return {
     showTechnicalDetails,
-    optionsOpen,
     setOptionsOpen,
-    customizeOpen,
     setCustomizeOpen,
-    aliasesOpen,
     setAliasesOpen,
-    purgeOpen,
     setPurgeOpen,
     openPurge,
-    auditOpen,
     setAuditOpen,
     openAudit,
     displayPrecision,

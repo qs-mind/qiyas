@@ -3,6 +3,7 @@ import { clearRecents, recents as readRecents, redo, undo, views as readViews, t
 import { useLanguage, useT } from "../i18n";
 import { Glyph } from "../shell/glyphs";
 import { Ribbon } from "../shell/Ribbon";
+import { isRibbonTool, type RibbonHandlers } from "../shell/ribbonLayout";
 import { RibbonIcon } from "../shell/ribbonIcons";
 import type { Measure } from "./shared";
 import type { Annotate } from "./useAnnotate";
@@ -88,92 +89,73 @@ export function Header({
   } = drawings;
   const { importBoqFile, compareNow, exportConflictsFile } = takeoff;
 
+  const actions: RibbonHandlers = {
+    new: { run: () => setNewOpen(true) },
+    open: { run: openFile },
+    save: { run: saveFile, enabled: !!info },
+    saveAs: { run: saveFileAs, enabled: !!info },
+    exportTakeoff: { run: exportFile, enabled: !!info },
+    importBoq: { run: importBoqFile, enabled: !!info },
+    compare: { run: compareNow, enabled: !!info },
+    exportConflicts: { run: exportConflictsFile, enabled: !!info },
+    plot: { run: plot.openPlot, enabled: !!info },
+    quickPrint: { run: plot.quickPrint, enabled: !!info },
+    printAll: { run: plot.printAll, enabled: !!info?.sheets.some((s) => !s.is_model) },
+    plotStyles: { run: plot.openStyles },
+    undo: { run: () => history(undo) },
+    redo: { run: () => history(redo) },
+    zoomExtents: { run: () => { viewport.current?.fitExtents(); focusDrawing(); } },
+    xrefs: { run: () => setXrefsOpen(true), enabled: !!info },
+    attachPdf: { run: () => { setPickedInsert(null); setAttachOpen(true); }, enabled: !!info },
+    attachImage: { run: () => { setPickedInsert(null); setAttachImageOpen(true); }, enabled: !!info },
+    calibrate: {
+      run: () => { measure.cancel(); setPending({ kind: "calibrate", first: null }); focusDrawing(); },
+      enabled: !!batch && batch.imageTable.length > 0,
+    },
+    extract: { run: () => setExtractOpen(true), enabled: !!info },
+    find: { run: () => setFindOpen(true), enabled: !!info },
+    dimStyle: { run: openDimStyle, enabled: !!info },
+    updateFields: { run: updateFields, enabled: !!info },
+    parameters: { run: parametric.openParameters, enabled: !!info },
+    constraintBar: { run: () => parametric.setBarHidden(false), enabled: !!info },
+    blockPalette: { run: () => setBlockPaletteOpen(true), enabled: !!info },
+    writeBlock: { run: () => setBlockPaletteOpen(true), enabled: !!info },
+    attributeManager: { run: openAttributeManager, enabled: !!info },
+    designCenter: { run: openDesignCenter, enabled: !!info },
+    toolPalettes: { run: openToolPalettes, enabled: !!info },
+    layerStates: { run: () => setLayerStatesOpen(true), enabled: !!info },
+    translateLayers: { run: () => setTranslatorOpen(true), enabled: !!info },
+    groupSelect: { run: () => setGroupSelect(!groupSelect), pressed: groupSelect },
+    split: { run: () => setSplit(!split), enabled: !!info, pressed: split },
+    ucsWorld: { run: () => apply({ type: "ucs", origin: [0, 0], x_axis: [1, 0] }), enabled: !!info },
+    sheetSet: { run: () => setSheetSetShown(true) },
+    recover: { run: recoverFile },
+    runScript: { run: runScriptFile },
+    audit: { run: options.openAudit, enabled: !!info },
+    purge: { run: options.openPurge, enabled: !!info },
+    options: { run: () => options.setOptionsOpen(true) },
+    customize: { run: () => options.setCustomizeOpen(true) },
+    aliases: { run: () => options.setAliasesOpen(true) },
+    arabicReversed: { run: () => chooseArabicReversed(!arabicReversed), enabled: !!info, pressed: arabicReversed },
+    ucsIcon: { run: () => chooseUcsIcon(!ucsIcon), pressed: ucsIcon },
+  };
+
   return (
     // A running script: the ribbon waits (its Stop is beside the status bar).
     <header className="top" inert={scriptLine !== null}>
       <Ribbon
-        active={tool}
-        onTool={chooseTool}
+        onAction={(command) => {
+          if (isRibbonTool(command)) chooseTool(command);
+          else actions[command].run();
+        }}
+        isEnabled={(command) => isRibbonTool(command) || actions[command].enabled !== false}
+        isPressed={(command) => isRibbonTool(command) ? tool === command : actions[command].pressed === true}
         onCommandLine={onCommandLine}
-        onNew={() => setNewOpen(true)}
-        onOpen={openFile}
         loadRecents={readRecents}
         onOpenRecent={openPath}
         onClearRecents={clearRecents}
-        onSave={info ? saveFile : undefined}
-        onSaveAs={info ? saveFileAs : undefined}
-        onExport={info ? exportFile : undefined}
-        onImportBoq={info ? importBoqFile : undefined}
-        onCompare={info ? compareNow : undefined}
-        onExportConflicts={info ? exportConflictsFile : undefined}
-        onPlot={info ? plot.openPlot : undefined}
-        onQuickPrint={info ? plot.quickPrint : undefined}
-        onPrintAll={info?.sheets.some((s) => !s.is_model) ? plot.printAll : undefined}
-        onPlotStyles={plot.openStyles}
-        onUndo={() => history(undo)}
-        onRedo={() => history(redo)}
-        onZoomExtents={() => {
-          viewport.current?.fitExtents();
-          focusDrawing();
-        }}
-        onXrefs={info ? () => setXrefsOpen(true) : undefined}
-        onAttachPdf={
-          info
-            ? () => {
-                setPickedInsert(null);
-                setAttachOpen(true);
-              }
-            : undefined
-        }
-        onAttachImage={
-          info
-            ? () => {
-                setPickedInsert(null);
-                setAttachImageOpen(true);
-              }
-            : undefined
-        }
-        onCalibrate={
-          batch && batch.imageTable.length > 0
-            ? () => {
-                measure.cancel();
-                setPending({ kind: "calibrate", first: null });
-                focusDrawing();
-              }
-            : undefined
-        }
-        onExtract={info ? () => setExtractOpen(true) : undefined}
-        onFind={info ? () => setFindOpen(true) : undefined}
-        onDimStyle={info ? openDimStyle : undefined}
-        onUpdateFields={info ? updateFields : undefined}
-        onParameters={info ? parametric.openParameters : undefined}
-        onConstraintBar={info ? () => parametric.setBarHidden(false) : undefined}
-        onInsertBlock={info ? () => setBlockPaletteOpen(true) : undefined}
-        onWriteBlock={info ? () => setBlockPaletteOpen(true) : undefined}
-        onAttributeManager={info ? openAttributeManager : undefined}
-        onDesignCenter={info ? openDesignCenter : undefined}
-        onToolPalettes={info ? openToolPalettes : undefined}
-        onLayerStates={info ? () => setLayerStatesOpen(true) : undefined}
-        onTranslateLayers={info ? () => setTranslatorOpen(true) : undefined}
-        groupSelect={groupSelect}
-        onGroupSelect={setGroupSelect}
-        split={split}
-        onSplit={info ? setSplit : undefined}
-        onUcsWorld={info ? () => apply({ type: "ucs", origin: [0, 0], x_axis: [1, 0] }) : undefined}
-        onSheetSet={() => setSheetSetShown(true)}
-        onRecover={recoverFile}
-        onRunScript={runScriptFile}
-        onAudit={info ? options.openAudit : undefined}
-        onPurge={info ? options.openPurge : undefined}
-        onOptions={() => options.setOptionsOpen(true)}
-        onCustomize={() => options.setCustomizeOpen(true)}
-        onAliases={() => options.setAliasesOpen(true)}
         layout={options.ribbon}
         aliases={shell.commandAliases}
-        arabicReversed={arabicReversed}
-        onArabicReversed={info ? chooseArabicReversed : undefined}
-        ucsIcon={ucsIcon}
-        onUcsIcon={chooseUcsIcon}
         {...(onModel && {
           loadViews: readViews,
           onGoToView: (v: NamedView) => {

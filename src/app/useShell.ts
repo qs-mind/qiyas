@@ -1,3 +1,4 @@
+import { useDialogOpen } from "./useDialogs";
 import { uiError } from "../i18n/errors";
 /** The window's own chrome: theme, the notices and errors (toasts), the settings and About
  *  dialogs' switches, the side panel's tab, the command line aliases, and the viewport refs. */
@@ -17,12 +18,12 @@ export type SideTab = "assistant" | "takeoff" | "boq" | "conflicts" | "review";
 
 export function useShell() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [, setAboutOpen] = useDialogOpen("about");
+  const [settingsOpen, setSettingsOpen] = useDialogOpen("settings");
   /** The "Connect an AI app" dialog. */
-  const [connectOpen, setConnectOpen] = useState(false);
+  const [, setConnectOpen] = useDialogOpen("connect");
   /** The shortcuts cheat sheet (Ctrl+/). */
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [, setShortcutsOpen] = useDialogOpen("shortcuts");
   /** Counts up when a key asks for Mizan's box (`/`, Ctrl+K): the box takes the focus, and `text`
    *  goes in it when it is empty (a slash opens his commands). */
   const [mizanAsk, setMizanAsk] = useState<{ n: number; text: string }>({ n: 0, text: "" });
@@ -97,13 +98,10 @@ export function useShell() {
   return {
     theme,
     chooseTheme,
-    aboutOpen,
     setAboutOpen,
     settingsOpen,
     setSettingsOpen,
-    connectOpen,
     setConnectOpen,
-    shortcutsOpen,
     setShortcutsOpen,
     mizanAsk,
     askMizan,

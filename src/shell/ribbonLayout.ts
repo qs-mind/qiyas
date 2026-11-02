@@ -4,16 +4,15 @@
  *  layout against it: a saved layout may only hold the core default's buttons. */
 import type { RibbonButton, RibbonButtonKind, RibbonGroup, RibbonLayout, RibbonTab } from "../api";
 
-const button = (kind: RibbonButtonKind, command: string, label: string): RibbonButton => ({ kind, command, label });
-const tool = (command: string, label = command) => button("tool", command, label);
-const action = (command: string, label = command) => button("action", command, label);
-const toggle = (command: string, label = command) => button("toggle", command, label);
-/** Tools labelled `<prefix>.<name>`. */
-const tools = (prefix: string, names: string[]) => names.map((n) => tool(n, `${prefix}.${n}`));
-/** `main`: how many of the buttons show; the rest are behind the group's "⋯" button. */
-const group = (id: string, label: string, buttons: RibbonButton[], main?: number): RibbonGroup =>
+const button = <K extends RibbonButtonKind, const C extends string>(kind: K, command: C, label: string) => ({ kind, command, label });
+const tool = <const C extends string>(command: C, label: string = command) => button("tool", command, label);
+const action = <const C extends string>(command: C, label: string = command) => button("action", command, label);
+const toggle = <const C extends string>(command: C, label: string = command) => button("toggle", command, label);
+const tools = <const C extends string>(prefix: string, names: C[]) => names.map((n) => tool(n, `${prefix}.${n}`));
+/** `main`: how many buttons show before the group's menu. */
+const group = <B extends RibbonButton>(id: string, label: string, buttons: B[], main?: number) =>
   main === undefined ? { id, label, buttons } : { id, label, buttons, main };
-const tab = (id: string, groups: RibbonGroup[], label = id): RibbonTab => ({ id, label, groups });
+const tab = <G extends RibbonGroup>(id: string, groups: G[], label = id) => ({ id, label, groups });
 
 /** The dimension tools, every kind, then the dimension style: the Dimensions group of Measure
  *  (its first five on show, the rest behind "⋯") and of Annotate (all of them). */
@@ -39,19 +38,19 @@ const dimensions = () => [
 
 /** The quick-access bar on the ribbon's tabs row (`Ribbon.tsx`): New, Open, Save, Save as, Undo
  *  and Redo, always shown, never part of a layout. */
-export const QUICK_ACCESS: RibbonButton[] = [action("new"), action("open"), action("save"), action("saveAs"), action("undo"), action("redo")];
+export const QUICK_ACCESS = [action("new"), action("open"), action("save"), action("saveAs"), action("undo"), action("redo")];
 
 /** The ribbon Qiyas ships: the same as the core's `default_ribbon` (`qiyas-desktop/src/ribbon.rs`);
  *  `ribbon.default.json` pins both (`ribbonLayout.test.ts` and the core's `tests/options.rs`).
  *  Measure first, then Draw (the tab with id "home"), then Annotate; `Ribbon.tsx` shows the
  *  tabs that fit and puts the remainder under "More". New, Open, Save, Save as, Undo and Redo are not
  *  in it: `Ribbon.tsx` keeps them in the quick-access bar beside the tabs. */
-export const DEFAULT_RIBBON: RibbonLayout = {
+const defaultRibbon = {
   tabs: [
     tab("measure", [
-      group("measure", "ribbon.measure", ["select", "distance", "area", "count"].map((n) => tool(n))),
+      group("measure", "ribbon.measure", (["select", "distance", "area", "count"] as const).map((n) => tool(n))),
       group("inquiry", "ribbon.inquiry", [
-        ...["geometry", "divide", "measureAlong", "idPoint"].map((n) => tool(n)),
+        ...(["geometry", "divide", "measureAlong", "idPoint"] as const).map((n) => tool(n)),
         action("extract"),
       ]),
       group("takeoff", "ribbon.takeoff", [action("exportTakeoff"), action("importBoq"), action("compare"), action("exportConflicts")]),
@@ -197,6 +196,25 @@ export const DEFAULT_RIBBON: RibbonLayout = {
     ]),
   ],
 };
+
+export const DEFAULT_RIBBON: RibbonLayout = defaultRibbon;
+
+type DefaultButton = (typeof defaultRibbon)["tabs"][number]["groups"][number]["buttons"][number];
+// Views opens a menu with its own load/save/delete interface.
+export type RibbonCommand = Exclude<DefaultButton["command"], "views"> | (typeof QUICK_ACCESS)[number]["command"];
+export type RibbonTool = Extract<DefaultButton, { kind: "tool" }>["command"];
+export type RibbonAction = Exclude<RibbonCommand, RibbonTool | "views">;
+export type RibbonHandlers = Record<RibbonAction, { run(): void; enabled?: boolean; pressed?: boolean }>;
+
+const knownCommands = new Set<string>([
+  ...QUICK_ACCESS.map((b) => b.command),
+  ...DEFAULT_RIBBON.tabs.flatMap((t) => t.groups.flatMap((g) => g.buttons.map((b) => b.command))),
+]);
+export const isRibbonCommand = (command: string): command is RibbonCommand => command !== "views" && knownCommands.has(command);
+
+const toolCommands = new Set<string>(DEFAULT_RIBBON.tabs.flatMap((t) =>
+  t.groups.flatMap((g) => g.buttons.filter((b) => b.kind === "tool").map((b) => b.command))));
+export const isRibbonTool = (command: RibbonCommand): command is RibbonTool => toolCommands.has(command);
 
 /** A button's identity: what it runs (a layout may hold one twice). */
 export const buttonKey = (b: Pick<RibbonButton, "kind" | "command">) => `${b.kind}:${b.command}`;

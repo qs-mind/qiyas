@@ -1,4 +1,5 @@
 /** The drawing's drafting settings (snaps, ortho, polar, grid, precision) and their dialog. */
+import { useDialogOpen } from "./useDialogs";
 import { useState } from "react";
 import { setDrafting, type Drafting } from "../api";
 import type { DraftingToggle } from "../tools/shortcuts";
@@ -15,7 +16,7 @@ type Deps = {
 export function useDrafting({ run, autosave, setNotice, t }: Deps) {
   /** The drawing's snaps, ortho, polar, grid and display precision; null with no drawing. */
   const [drafting, setDraftingState] = useState<Drafting | null>(null);
-  const [draftingOpen, setDraftingOpen] = useState(false);
+  const [, setDraftingOpen] = useDialogOpen("drafting");
 
   /** Makes `next` the drawing's drafting settings and saves them with the project. Throws when the
    *  core refuses them. */
@@ -40,7 +41,7 @@ export function useDrafting({ run, autosave, setNotice, t }: Deps) {
     });
   }
 
-  return { drafting, setDraftingState, draftingOpen, setDraftingOpen, saveDrafting, toggleDrafting };
+  return { drafting, setDraftingState, setDraftingOpen, saveDrafting, toggleDrafting };
 }
 
 export type DraftingState = ReturnType<typeof useDrafting>;

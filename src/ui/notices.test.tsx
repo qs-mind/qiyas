@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { DialogsProvider } from "../app/useDialogs";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LanguageProvider, translate } from "../i18n";
@@ -82,7 +83,7 @@ test("an error stays until it is closed or taken away; it has a close button", a
 
 test("the shell says one notice at a time, null takes it away, and an error goes with the next success", async () => {
   mount();
-  const { result } = renderHook(() => useShell());
+  const { result } = renderHook(() => useShell(), { wrapper: DialogsProvider });
   await advance(50);
   act(() => result.current.setNotice("First"));
   await advance(400);
@@ -186,7 +187,7 @@ test.each(["en", "ar"] as const)("busy edits show one %s notice and Stop keeps t
   localStorage.setItem("qiyas.lang", lang);
   mount();
   const stop = vi.spyOn(api, "aiCancel").mockResolvedValue();
-  const { result } = renderHook(useShell);
+  const { result } = renderHook(useShell, { wrapper: DialogsProvider });
   await advance(50);
   setWorkspace(7);
   for (const code of ["workspace_busy", "mizan_working", "workspace_busy"]) {

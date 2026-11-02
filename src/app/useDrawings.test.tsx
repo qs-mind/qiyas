@@ -2,14 +2,19 @@
 /** `useDrawings`' recovery flows with the core (`invoke`) and the file dialogs faked: what reaches
  *  the core, what Save As is asked with, and the status bar notice. */
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import { useRef, useState, type SetStateAction } from "react";
+import { useRef, useState, type ReactNode, type SetStateAction } from "react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { setWorkspace } from "../workspaceIpc";
 import type { DrawingInfo, Recoverable } from "../api";
 import { LanguageProvider, useT } from "../i18n";
 import { enqueue, laterOpens, localTime } from "../shell/recoveryQueue";
+import { DialogsProvider } from "./useDialogs";
 import { FileDialogs } from "./Dialogs";
 import { useDrawings, type Drawings } from "./useDrawings";
+
+const WindowProviders = ({ children }: { children: ReactNode }) => (
+  <LanguageProvider><DialogsProvider>{children}</DialogsProvider></LanguageProvider>
+);
 
 const VILLA = "/jobs/villa.dwg";
 const RECOVERED = "/jobs/villa (recovered).dwg";
@@ -172,7 +177,7 @@ function useWindow(notices: string[], viewport?: Parameters<typeof useDrawings>[
 }
 
 async function launch(notices: string[] = []) {
-  const view = renderHook(() => useWindow(notices), { wrapper: LanguageProvider });
+  const view = renderHook(() => useWindow(notices), { wrapper: WindowProviders });
   // The launch effects (recents, settings, open requests) settle.
   await act(async () => {});
   return view;
@@ -325,9 +330,9 @@ function Window({ grab }: { grab(drawings: Drawings): void }) {
 async function openWithLater(found: Recoverable[]) {
   let latest: Drawings | null = null;
   render(
-    <LanguageProvider>
+    <WindowProviders>
       <Window grab={(d) => (latest = d)} />
-    </LanguageProvider>,
+    </WindowProviders>,
   );
   await act(async () => {});
   recoverable.found = found;
@@ -467,7 +472,7 @@ test("Save As keeps its workspace when the visible tab changes during the file d
 
 test("a file tool's tab switch saves the outgoing canvas view to its original workspace", async () => {
   const viewport = { current: { visible: () => [[10, 20], [30, 40]] } } as unknown as Parameters<typeof useDrawings>[0]["viewport"];
-  renderHook(() => useWindow([], viewport), { wrapper: LanguageProvider });
+  renderHook(() => useWindow([], viewport), { wrapper: WindowProviders });
   await act(async () => {});
   core.calls.length = 0;
   core.active = 3; // The native file tool switches before notifying the webview.

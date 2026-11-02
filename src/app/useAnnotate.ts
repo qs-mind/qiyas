@@ -1,6 +1,7 @@
 /** Text, dimensions, tables and fields: what the annotate tools ask for (the in-place text
  *  editor, the MText and text edit dialogs, a leader's or a tolerance's text, the table and field
  *  dialogs), the dimension style panel, UPDATEFIELD, and find and replace. */
+import { useDialogOpen, useDialogState } from "./useDialogs";
 import { useState, type RefObject } from "react";
 import {
   blocks as readBlocks,
@@ -11,7 +12,6 @@ import {
   type Command,
   type DrawingInfo,
   type FieldKind,
-  type TableInfo,
   type TextMatch,
 } from "../api";
 import { metresPerUnit } from "../shell/AttachPdfDialog";
@@ -19,7 +19,6 @@ import { fieldCode } from "../shell/FieldDialog";
 import type { FindQuery } from "../shell/FindReplaceDialog";
 import { isStale } from "../shell/switcher";
 import type { TextDraft } from "../shell/TextEditor";
-import type { DimRequest } from "../tools/dimTools";
 import { matchBounds } from "../tools/overlay";
 import type { TextRequest } from "../tools/textTools";
 import type { Point } from "../viewport/camera";
@@ -64,23 +63,17 @@ export function useAnnotate({
   setAttributesAsk,
   apply,
 }: Deps) {
-  const [findOpen, setFindOpen] = useState(false);
-  const [dimStyleOpen, setDimStyleOpen] = useState(false);
+  const [, setFindOpen] = useDialogOpen("find");
+  const [, setDimStyleOpen] = useDialogOpen("dimStyle");
   /** What an annotate tool asked the user to type: a leader's text, a tolerance, a dimension's. */
-  const [dimText, setDimText] = useState<DimRequest | null>(null);
+  const [dimText, setDimText] = useDialogState("dimText");
   /** TABLE's click: where the new table's top left corner goes. */
-  const [newTableAt, setNewTableAt] = useState<Point | null>(null);
+  const [newTableAt, setNewTableAt] = useDialogState("newTableAt");
   /** The table being edited: its handle, its cells as they are now, and the cell chosen first. */
-  const [tableEditing, setTableEditing] = useState<{
-    handle: number;
-    table: TableInfo;
-    cell: [number, number];
-  } | null>(null);
+  const [tableEditing, setTableEditing] = useDialogState("tableEditing");
   /** The field dialog: into a new text at a click, or into a cell of the table being edited; and
    *  the entity an area or a length field reads, once picked. */
-  const [fieldAsk, setFieldAsk] = useState<
-    { mode: "text"; at: Point; height: number | null } | { mode: "cell"; cell: [number, number] } | null
-  >(null);
+  const [fieldAsk, setFieldAsk] = useDialogState("field");
   const [fieldTarget, setFieldTarget] = useState<{ handle: number; kind: string } | null>(null);
   /** The text height and style new text takes: the last ones used; null until then (2.5 mm in
    *  drawing units, and the drawing's current style). The height is a length in one drawing's
@@ -102,11 +95,7 @@ export function useAnnotate({
     key: number;
   } | null>(null);
   /** The MText dialog (a new MText's box), or the text edit dialog (an entity's text). */
-  const [textDialog, setTextDialog] = useState<
-    | { kind: "mtext"; request: Extract<TextRequest, { kind: "mtext" }> }
-    | { kind: "edit"; handle: number; value: string; multiline: boolean }
-    | null
-  >(null);
+  const [textDialog, setTextDialog] = useDialogState("textDialog");
 
   /** The height new text takes: the last one used, else 2.5 mm on paper in drawing units at the
    *  annotation scale. */
@@ -293,9 +282,7 @@ export function useAnnotate({
   }
 
   return {
-    findOpen,
     setFindOpen,
-    dimStyleOpen,
     setDimStyleOpen,
     dimText,
     setDimText,

@@ -98,6 +98,17 @@ three late refs are `measureRef` (`useSheets` cancels the tool when the sheet ch
 (`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
 with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
 
+The ribbon dispatches built-in command IDs through `onAction`, with `isEnabled` and `isPressed`
+lookups. `ribbonLayout.ts` derives their types from the default data; `app/Header.tsx` supplies
+one checked action table and the common tool handler. Recent drawings, named views and user-added
+command lines retain their own menu and registry interfaces. The memoized ribbon compares lookup
+results so enablement and pressed states update without re-rendering for new handler closures.
+`app/useDialogs.ts` owns one typed dialog state and its payloads, shared by the app's hooks.
+Existing modeless dialogs and nested editors remain stacked (a field over the table editor, block
+attribute prompts over palettes, Plot and its style editor). Explicit close handlers still control
+handoffs and drawing resets; Connect and Options close when they open Settings. The autosave
+recovery queue remains in `useDrawings` because it also queues file-open requests.
+
 Mizan's waiting (the panel head's mark and a running tool card; there is no "Working…" line) is the Qiyas mark
 itself, `src/ai/MizanMark.tsx`: the brand drawing, its mesh drawn line by line round the centre, then
 wiped and drawn again (CSS, still and drawn under reduced motion). Waiting is shown by `src/shell/DotLoader.tsx` (clean-room, our own design: do not copy code from any

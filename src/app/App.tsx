@@ -1,3 +1,4 @@
+import { DialogsProvider } from "./useDialogs";
 import { uiError } from "../i18n/errors";
 /** The window: the composition root. It calls the hooks in an order that keeps their effects
  *  where they were (shell, sheets' fit, the tool, the assistant, the drawings, the command line,
@@ -43,6 +44,10 @@ import { useTrace } from "./useTrace";
 import { useTakeoff, useTakeoffState } from "./useTakeoff";
 
 export default function App() {
+  return <DialogsProvider><AppContent /></DialogsProvider>;
+}
+
+function AppContent() {
   const t = useT();
   const { lang } = useLanguage();
   const [info, setInfo] = useState<DrawingInfo | null>(null);
