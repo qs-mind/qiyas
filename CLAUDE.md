@@ -35,6 +35,11 @@ Founder's rulings, 2 November 2026:
   (each concept's English term and Arabic term; prose rules in `docs/arabic-glossary.md`). The
   window, Mizan's prompts and answers, exports, docs and code comments follow it; a new term is
   added there first.
+- The window's IPC commands are locked to a small allowlist, and commands that take a path are
+  limited by folder and extension. Arabic reads right to left in PDFs and panels: Arabic text
+  gets a right-to-left base direction even when it starts with a Latin code or name.
+- No code-signing certificates and no spending: every tool the work needs is free. The download
+  pages explain the operating system's warning instead.
 
 ## Layout
 
