@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { translate, type Lang } from "../i18n";
 import { DotLoader } from "../shell/DotLoader";
-import { ExpertFrameSection, PlanChecklist, planPhaseTitle } from "./PlanChecklist";
+import { PlanChecklist, planPhaseTitle } from "./PlanChecklist";
 import type { Item } from "./messages";
 import "./plan.css";
 
@@ -89,7 +89,6 @@ function Dock({ plan, busy, language, threadItemId, awaitingApproval = plan.awai
         toggle(false);
       }
     }}>
-    {plan.frame && <ExpertFrameSection frame={plan.frame} language={language} />}
     <button type="button" ref={button} className="plan-dock-toggle" aria-expanded={expanded} aria-controls={bodyId}
       onClick={() => toggle(!expanded)}>
       <span className="plan-mark" aria-hidden="true">{done ? "✓" : "☷"}</span>

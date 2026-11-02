@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { PlanDock, StatusBlock, latestDockPlan } from "./PlanDock";
 import { EMPTY, reduce, replay, type Item } from "./messages";
@@ -26,7 +26,6 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem("qiyas.planDock.frameExpanded");
 });
 
 test("collapsed tower plan shows done plus skipped, the active title, and small dots", () => {
@@ -205,31 +204,16 @@ const frame = {
   methods: "Measure the enclosure", outside_check: "No door outside the boundary",
 };
 
-test.each(["en", "ar"] as const)("expert frame has its own remembered fold and never counts as work in %s", async (language) => {
+test.each(["en", "ar"] as const)("the expert frame stays out of the dock and never counts as work in %s", (language) => {
   const framed = { ...plan, frame, phases: plan.phases.map((phase, i) => i === 3 ? { ...phase, note: "Review 60 doors on A1 sheets" } : phase) };
   const view = render(<PlanDock {...props} plan={framed} language={language} />);
-  const title = language === "en" ? "Expert frame" : "إطار الخبير";
-  const details = screen.getByText(title).closest("details")!;
-  expect(details.open).toBe(false);
+  expect(screen.queryByText(language === "en" ? "Expert frame" : "إطار الخبير")).toBeNull();
+  expect(screen.queryByText(frame.outside_check)).toBeNull();
   expect(view.container.querySelector(".plan-dock-count")?.textContent).toMatch(/\u20663\/8\u2069/);
-  fireEvent.click(screen.getByText(title));
-  await waitFor(() => expect(details.open).toBe(true));
-  await waitFor(() => expect(localStorage.getItem("qiyas.planDock.frameExpanded")).toBe("true"));
-  expect(screen.getByText(frame.outside_check)).toBeTruthy();
   fireEvent.click(view.container.querySelector(".plan-dock-toggle")!);
   expect(screen.getAllByRole("listitem")).toHaveLength(8);
   expect(screen.getByText("Review 60 doors on A1 sheets")).toBeTruthy();
-  view.unmount();
-  render(<PlanDock {...props} plan={framed} language={language} />);
-  expect(screen.getByText(title).closest("details")?.open).toBe(true);
-});
-
-test("a single work step can still show its expert frame", () => {
-  const single = { ...plan, frame, phases: [plan.phases[3]] };
-  expect(latestDockPlan([single])?.plan).toEqual(single);
-  render(<PlanDock {...props} plan={single} />);
-  expect(screen.getByText("Expert frame")).toBeTruthy();
-  expect(screen.getByRole("button", { name: /Plan \u20660\/1\u2069/ })).toBeTruthy();
+  expect(screen.queryByText(frame.expert_checks)).toBeNull();
 });
 
 test("frame and phase notes survive plan updates, approval and history replay", () => {

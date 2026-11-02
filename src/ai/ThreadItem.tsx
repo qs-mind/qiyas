@@ -65,7 +65,7 @@ export const ThreadItem = memo(function ThreadItem({ item, i, cx, id }: { item: 
         <p>{t("ai.cacheUsage", { percent: (100 * item.cached / item.total).toFixed(1), cached: item.cached, total: item.total })}</p>
       </details> : null;
     case "plan": {
-      return <PlanChecklist frame={item.frame} id={id} phases={item.phases} stale={item.stale} language={cx.chatLang} showTechnicalDetails={cx.showTechnicalDetails}
+      return <PlanChecklist id={id} phases={item.phases} stale={item.stale} language={cx.chatLang} showTechnicalDetails={cx.showTechnicalDetails}
         {...(cx.dockedPlanIndex === i ? {} : planActions(item, i, cx))} />;
     }
     case "question": {
