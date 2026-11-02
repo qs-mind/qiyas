@@ -1902,6 +1902,18 @@ mod tests {
     }
 
     #[test]
+    fn ipc_context_enforces_the_main_window_allowlist() {
+        ai_test("ipc_allowlist", || {
+            // Opening the drawing already proves an allowed command reaches its handler.
+            let ipc = Ipc::open();
+            for command in ["plot_pdf", "print_pdf", "workspace_events"] {
+                let error = ipc.call(command, json!({})).unwrap_err();
+                assert!(error.as_str().unwrap().contains("not allowed"), "{error}");
+            }
+        });
+    }
+
+    #[test]
     fn window_browsing_preserves_the_assistants_sheet() {
         ai_test("window_browsing", || {
             let ipc = Ipc::open();
@@ -1987,6 +1999,23 @@ mod tests {
             std::env::set_var("QIYAS_AI_MOCK", "1");
             let dir = tempfile::tempdir().unwrap();
             let path = qiyas_core::fixtures::write_sample(dir.path(), "dxf");
+            // mock_context has no app ACL. Resolve the real capability against the build's
+            // generated manifests so IPC tests exercise the same boundary as the main window.
+            let manifests = serde_json::from_str(include_str!(concat!(
+                env!("OUT_DIR"),
+                "/acl-manifests.json"
+            )))
+            .unwrap();
+            let capability: tauri::utils::acl::capability::Capability =
+                serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+            let resolved = tauri::utils::acl::resolved::Resolved::resolve(
+                &manifests,
+                [(capability.identifier.clone(), capability)].into(),
+                tauri::utils::platform::Target::current(),
+            )
+            .unwrap();
+            let mut context = mock_context(noop_assets());
+            *context.runtime_authority_mut() = tauri::runtime_authority!(manifests, resolved);
             let app = mock_builder()
                 .invoke_handler(tauri::generate_handler![
                     crate::output_files::open_output_file,
@@ -2068,7 +2097,7 @@ mod tests {
                     crate::projects::project_command,
                     crate::projects::project_history
                 ])
-                .build(mock_context(noop_assets()))
+                .build(context)
                 .unwrap();
             let mut state = AppState::new(dir.path().join("config"));
             state.available_memory = available_memory;
@@ -2110,7 +2139,7 @@ mod tests {
                 cmd: cmd.into(),
                 callback: CallbackFn(0),
                 error: CallbackFn(1),
-                // The app's own origin, so the commands are allowed.
+                // The app's own origin; the main window's capability still gates commands.
                 url: if cfg!(windows) {
                     "http://tauri.localhost"
                 } else {

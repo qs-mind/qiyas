@@ -351,19 +351,149 @@ mod tests {
     }
 
     #[test]
+    fn window_ipc_permissions_match_handlers_and_frontend_calls() {
+        use std::collections::BTreeSet;
+
+        // Deliberately parse the literal lists, so adding a handler without declaring its
+        // permission cannot silently leave it outside the app manifest.
+        let handlers: BTreeSet<_> = include_str!("lib.rs")
+            .split_once("tauri::generate_handler![")
+            .unwrap()
+            .1
+            .split_once(']')
+            .unwrap()
+            .0
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.rsplit("::").next().unwrap())
+            .collect();
+        let manifest: BTreeSet<_> = include_str!("../build.rs")
+            .split_once(".commands(&[")
+            .unwrap()
+            .1
+            .split_once(']')
+            .unwrap()
+            .0
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.strip_prefix('"').unwrap().strip_suffix('"').unwrap())
+            .collect();
+        assert!(!handlers.is_empty());
+        assert_eq!(
+            handlers, manifest,
+            "build.rs must declare every app handler"
+        );
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let allowed: BTreeSet<_> = capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|permission| permission.as_str().unwrap().strip_prefix("allow-"))
+            .map(|command| command.replace('-', "_"))
+            .collect();
+        for command in &allowed {
+            assert!(
+                handlers.contains(command.as_str()),
+                "capability allows an unregistered handler: {command}"
+            );
+        }
+
+        fn window_calls(dir: &Path, calls: &mut BTreeSet<String>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    window_calls(&path, calls);
+                    continue;
+                }
+                if !matches!(
+                    path.extension().and_then(|s| s.to_str()),
+                    Some("ts" | "tsx")
+                ) || path
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .contains(".test.")
+                {
+                    continue;
+                }
+                let source = fs::read_to_string(&path).unwrap();
+                // Both direct invoke("name") and typed invoke<Result>("name") calls,
+                // including nested generic types and calls split across lines.
+                for (offset, _) in source.match_indices("invoke") {
+                    let before = &source[..offset];
+                    if before.ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+                        || before.trim_end().ends_with("function")
+                    {
+                        continue;
+                    }
+                    let mut tail = source[offset + "invoke".len()..].trim_start();
+                    if tail.starts_with('<') {
+                        let mut depth = 0;
+                        let end = tail.char_indices().find_map(|(index, ch)| {
+                            match ch {
+                                '<' => depth += 1,
+                                '>' => depth -= 1,
+                                _ => {}
+                            }
+                            (depth == 0).then_some(index)
+                        });
+                        tail = tail[end.expect("unclosed invoke type argument") + 1..].trim_start();
+                    }
+                    let Some(arguments) = tail.strip_prefix('(') else {
+                        continue;
+                    };
+                    let arguments = arguments.trim_start();
+                    let quote = arguments.chars().next().unwrap();
+                    assert!(
+                        matches!(quote, '\'' | '"' | '`'),
+                        "{}: invoke command must be a literal for the permission audit",
+                        path.display()
+                    );
+                    let command = arguments[1..].split(quote).next().unwrap();
+                    assert!(!command.contains("${"), "dynamic invoke command: {command}");
+                    calls.insert(command.to_string());
+                }
+            }
+        }
+
+        let mut calls = BTreeSet::new();
+        window_calls(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src"),
+            &mut calls,
+        );
+        assert!(!calls.is_empty(), "frontend IPC audit found no calls");
+        assert_eq!(
+            calls, allowed,
+            "allow exactly the commands invoked by the window (including typed wrappers)"
+        );
+    }
+
+    #[test]
     fn default_capability_is_limited_to_the_main_window_and_known_permissions() {
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         assert_eq!(capability["windows"], serde_json::json!(["main"]));
         assert_eq!(
-            capability["permissions"],
-            serde_json::json!([
+            capability["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|permission| permission.as_str().unwrap())
+                // App permissions are checked against handlers and frontend calls above.
+                .filter(|permission| !permission.starts_with("allow-"))
+                .collect::<Vec<_>>(),
+            [
                 "core:default",
                 "dialog:default",
                 "dialog:allow-open",
                 "dialog:allow-save",
                 "core:window:allow-destroy"
-            ])
+            ]
         );
     }
 
